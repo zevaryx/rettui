@@ -11,7 +11,11 @@ configuration. It is built on:
 - [ratatui](https://github.com/ratatui/ratatui): the terminal UI
 
 > [!WARNING]
-> **This project is an experiment in AI-assisted development.** Most of its code
+> **This project is an experiment in AI-assisted development.** I am not great
+> at writing user interfaces, and focus mostly on backend code. This project is
+> me experimenting at offloading frontend work to AI assistance using known-good
+> Rust-based Reticulum stacks, which will be similar to future projects that I am
+> working on, where the backend is written by me. This means most of rettui's code
 > was written by an AI coding assistant (Anthropic's Claude), with a human
 > directing the work and checking the results. It has been tested, including
 > end to end on a private Reticulum network, but it has not had an independent
@@ -40,8 +44,8 @@ configuration. It is built on:
   narrower than 110 columns get a sidebar of icons and narrower side lists, so
   80×24 works well.
 - **Web UI:** `rettui --web` runs the same client in a browser, with the same
-  sections and features. It updates live, works on phones, and is protected by
-  a login link (see [Web UI](#web-ui)).
+  sections and features. It updates live, works on phones, uses a bundled
+  Fira Code Nerd Font, and is protected by a login link (see [Web UI](#web-ui)).
 - **Docker:** a Dockerfile and a Compose file run the web UI in a container
   (see [Docker](#docker)).
 - **Command line:** send a message, listen for messages, sync, fetch a page,
@@ -215,10 +219,19 @@ or the folder set in `node_dir`.
     file Reticulum couldn't load is never saved. The previous version is kept
     as `config.backup`. Interfaces that will fail to start (a missing port,
     say) are shown as warnings.
-  - **Applying:** Reticulum reads the file when it starts, so restart rettui
-    (or rnsd, if it runs the shared instance) to apply changes.
+  - **Applying:** Reticulum reads the file when it starts. Restart the
+    Reticulum stack from inside rettui to apply changes (see below). If
+    another program such as rnsd runs the shared instance, the interfaces are
+    that program's, and they change when it restarts; rettui says so.
   - **Web UI:** the same editor, except that pipe interface commands (which
     run programs) can only be added or changed from the terminal.
+- **Restarting Reticulum:** `Ctrl-R` in the Status or Reticulum tab (after a
+  confirmation), or **Restart Reticulum** in the web UI, stops rettui's
+  Reticulum stack and starts it again with the same identity, without
+  quitting. Use it to apply config changes or to recover from a network
+  problem. Links and transfers in progress stop (unsent messages are marked
+  failed, to send again), hubs that were connected reconnect, and your node
+  starts again.
 - **Line wrapping:** the "Wrap editor lines" setting makes long lines in the
   page and config editors wrap instead of scrolling sideways, in both UIs.
 
@@ -320,6 +333,8 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   leaves a text box.
 - **Phones:** on narrow screens the sections stack in one column (lists above
   what they open).
+- **Font:** all text uses Fira Code Nerd Font, which rettui serves itself
+  (browsers never fetch fonts from a third party).
 - **Stopping:** Ctrl-C or SIGTERM stops it cleanly, leaving hubs and saving
   everything.
 - The TUI and the web UI can't use the same data directory at the same time.
@@ -345,7 +360,7 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   network by multicast, which doesn't leave Docker's default network. Either
   add an interface to `./data/reticulum/config` (for example a
   `TCPClientInterface` to a transport node, which the Reticulum section of the
-  web UI can do) and restart, or use `network_mode: host` (commented out in
+  web UI can do) and restart Reticulum, or use `network_mode: host` (commented out in
   the compose file) instead of `ports:`.
 - **Access:** port 8740 is published on every interface of the host, and the
   login link is still required. Change it to `"127.0.0.1:8740:8740"` to allow
@@ -369,8 +384,8 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
 | Browser, page | `Tab`/`Shift-Tab` move between links and fields, `Enter` follow a link or edit a field, `L` copy the selected link, `Y` copy the whole page (the raw source when viewing source), `Ctrl-V` paste into the selected field, `Esc` clear the selection or leave the source view, `↑↓` / `PgUp`/`PgDn` scroll |
 | Node | `Enter` edit the selected page, `n` new page, `r` rename, `x` delete, `h` start or stop hosting, `a` announce the node, `b` open it in the Browser, `y` copy its address, `p` switch view (editor and preview, editor only, preview only) |
 | Editing a page | `Ctrl-S` save (live on the node), `Esc` back to the pages, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-P` switch view, `Ctrl-V` paste; with the preview alone, `↑↓` / `PgUp` / `PgDn` scroll it |
-| Status | `↑↓` select a setting, `Enter` edit it (or toggle), `e` edit display name, `y` copy your LXMF address |
-| Reticulum | `Tab` sections / options, `↑↓` select, `Enter` edit (toggles flip, choices open a list), `d` back to the default, `a` add an interface, `Space` enable or disable it, `r` rename, `x` delete, `t` edit the file as text, `R` reload |
+| Status | `↑↓` select a setting, `Enter` edit it (or toggle), `e` edit display name, `y` copy your LXMF address, `Ctrl-R` restart Reticulum |
+| Reticulum | `Tab` sections / options, `↑↓` select, `Enter` edit (toggles flip, choices open a list), `d` back to the default, `a` add an interface, `Space` enable or disable it, `r` rename, `x` delete, `t` edit the file as text, `R` reload the file, `Ctrl-R` restart Reticulum |
 | Reticulum as text | `Ctrl-S` save (refused while the file can't load), `Esc` close, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-V` paste |
 
 The footer confirms what keys did: ✓ (green) when something is done, ! (yellow)
@@ -443,7 +458,7 @@ state as the TUI.
 | `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`) and input routing | |
 | `ui/` | Drawing per tab, plus the sidebar, footer and prompt (`chrome`) and the text editors | ratatui |
 | `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty or half blocks) | ratatui-image |
-| `web/` | Web UI: HTTP API, login, live updates, and the page's HTML/CSS/JS (`web/assets`) | axum |
+| `web/` | Web UI: HTTP API, login, live updates, and the page's HTML/CSS/JS and font (`web/assets`) | axum |
 
 `cli.rs` has the shell commands (`send`, `listen`, `sync`, `fetch`), and
 `store.rs` and `config.rs` hold what is saved to disk.
@@ -451,3 +466,7 @@ state as the TUI.
 ## License
 
 AGPL-3.0-or-later, the same as the libraries it links.
+
+The web UI bundles [Fira Code](https://github.com/tonsky/FiraCode) as patched by
+[Nerd Fonts](https://github.com/ryanoasis/nerd-fonts), under the SIL Open Font
+License 1.1 (see [src/web/assets/fonts](src/web/assets/fonts)).

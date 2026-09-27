@@ -19,8 +19,11 @@ use rns_runtime::reticulum::ReticulumConfig;
 use doc::{Doc, format_list, format_value};
 use schema::{Group, Kind, Opt};
 
-pub const RESTART_NOTE: &str =
-    "Reticulum reads this file when it starts: restart rettui (or the program running the shared instance) to apply changes";
+pub const RESTART_NOTE: &str = "Reticulum reads this file when it starts: restart Reticulum to apply changes";
+
+/// Shown when rettui uses another program's shared instance.
+pub const EXTERNAL_NOTE: &str =
+    "rettui uses another program's shared instance (such as rnsd): its interfaces change when that program restarts";
 
 /// The config file for a Reticulum config directory setting.
 pub fn config_path(rns_config: Option<&str>) -> PathBuf {

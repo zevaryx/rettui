@@ -464,6 +464,23 @@ impl App {
     }
 
     /// Connect auto-connect hubs once the network is up.
+    /// Before Reticulum restarts: every hub session ends with the old stack.
+    /// Returns the hubs that were connected (or connecting), to reconnect
+    /// once the new stack is up, and marks them all disconnected.
+    pub(crate) fn channels_before_restart(&mut self) -> Vec<Hash> {
+        let mut rejoin = Vec::new();
+        for hub in &mut self.channels.hubs {
+            if matches!(hub.status, HubStatus::Connected | HubStatus::Connecting(_)) || hub.reconnect_at.is_some() {
+                rejoin.push(hub.hash);
+            }
+            hub.status = HubStatus::Disconnected;
+            hub.reconnect_at = None;
+            hub.attempts = 0;
+            hub.members.clear();
+        }
+        rejoin
+    }
+
     pub fn start_channels(&mut self) {
         for index in 0..self.channels.hubs.len() {
             if self.channels.hubs[index].auto_connect {

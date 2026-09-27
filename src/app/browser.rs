@@ -77,7 +77,7 @@ pub struct Browser {
     /// Decoded page images keyed by their Micron URL.
     pub images: HashMap<String, Picture>,
     /// In-flight media requests: request id -> (Micron URL, where it lives).
-    media_requests: HashMap<u64, (String, Location, bool)>,
+    pub(super) media_requests: HashMap<u64, (String, Location, bool)>,
     /// Age of the shown page when it came from the cache.
     pub cached_age: Option<std::time::Duration>,
     pub pane: BrowserPane,

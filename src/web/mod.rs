@@ -240,7 +240,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         tracing::warn!("could not load store, starting empty: {e}");
         Store::default()
     });
-    let (net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity));
+    let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone()));
     let mut app = App::new(settings, paths.clone(), store, net_tx.clone(), None, identity_hash);
     // No tab is "on screen" in the web UI: unread counts are cleared by
     // browsers when they show a conversation or room.
@@ -309,9 +309,21 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         if server.is_finished() {
             break Err(anyhow::anyhow!("the web server stopped"));
         }
+        if owner.app.take_rns_restart() {
+            // Browsers see "starting" while the old stack stops; page loads
+            // in flight belong to it.
+            notify(&changes);
+            for (_, pending) in owner.fetches.drain() {
+                let _ = pending.reply.send(Err("Reticulum restarted while loading; load the page again".into()));
+            }
+            net::shutdown(&net_tx, &mut net_rx, net::Stop::Restart).await;
+            (net_tx, net_rx) = net::spawn(crate::net_options(&owner.app.settings, &owner.app.paths, identity.clone()));
+            owner.app.set_network(net_tx.clone());
+            notify(&changes);
+        }
     };
     owner.app.save_if_dirty();
     server.abort();
-    net::shutdown(&net_tx, &mut net_rx).await;
+    net::shutdown(&net_tx, &mut net_rx, net::Stop::Quit).await;
     result
 }

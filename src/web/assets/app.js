@@ -1255,7 +1255,8 @@ app.views.status = {
       el('div', { class: 'column grow' },
         el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Identity' }),
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
-          el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') })), this.info),
+          el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+          el('button', { text: 'Restart Reticulum', onclick: () => restartReticulum() })), this.info),
         el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
           this.revertButton, this.saveButton), el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
       el('div', { class: 'column', style: 'width:42%' },
@@ -1410,7 +1411,8 @@ app.views.reticulum = {
     applyWrap(this.text);
     root.append(
       el('div', { class: 'column side' },
-        el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Config file' })), this.fileCard),
+        el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Config file' }),
+          el('button', { text: 'Restart Reticulum', title: 'Apply saved changes now', onclick: () => restartReticulum() })), this.fileCard),
         el('section', { class: 'panel grow' },
           el('header', {}, el('span', { class: 'title grow', text: 'Sections' }),
             el('button', { text: '+ Interface', onclick: () => this.showAdd() })),
@@ -1460,6 +1462,7 @@ app.views.reticulum = {
         : el('div', { class: 'state-ok', text: '✓ The file loads' }),
       ...data.warnings.map((w) => el('div', { class: 'state-warn', text: '! ' + w })),
       el('div', { class: 'dim', text: data.note }),
+      data.external_note ? el('div', { class: 'state-warn', text: data.external_note }) : null,
     ].filter(Boolean));
     const item = (s) => el('div', {
       class: 'list-item' + (s.id === this.section && !this.textMode ? ' selected' : '') + (s.interface ? ' rns-iface' : ''),
@@ -1692,6 +1695,15 @@ app.views.reticulum = {
     }
   },
 };
+
+// Restart the Reticulum stack (from the Status and Reticulum sections).
+async function restartReticulum() {
+  const question = app.status?.external_shared_instance
+    ? 'Reconnect to the shared instance?\nIts own program (such as rnsd) applies interface changes when it restarts.'
+    : 'Restart Reticulum?\nLinks and transfers in progress stop; hubs reconnect and your node starts again.';
+  if (!confirm(question)) return;
+  attempt(() => api.post('/reticulum/restart'), 'Restarting Reticulum');
+}
 
 // ---- start ------------------------------------------------------------------
 

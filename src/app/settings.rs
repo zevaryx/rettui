@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Position;
 
 use super::{App, PromptKind};
@@ -119,6 +119,7 @@ impl App {
 
     pub(super) fn status_key(&mut self, key: KeyEvent) {
         match key.code {
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_restart_prompt(),
             KeyCode::Down | KeyCode::Char('j') => self.move_setting(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_setting(-1),
             KeyCode::Enter | KeyCode::Char(' ') => self.edit_setting(),

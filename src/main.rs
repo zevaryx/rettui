@@ -179,7 +179,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
         tracing::warn!("could not load store, starting empty: {e}");
         Store::default()
     });
-    let (net_tx, mut net_rx) = net::spawn(net_options(&settings, &paths, identity));
+    let (mut net_tx, mut net_rx) = net::spawn(net_options(&settings, &paths, identity.clone()));
     let mut terminal = ratatui::init();
     // Probe for Kitty graphics while in raw mode, before EventStream starts
     // reading stdin (it would swallow the terminal's replies).
@@ -224,12 +224,19 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
         if app.should_quit {
             break Ok(());
         }
+        if app.take_rns_restart() {
+            // Show "restarting" while the old stack stops.
+            let _ = terminal.draw(|frame| ui::draw(frame, &mut app));
+            net::shutdown(&net_tx, &mut net_rx, net::Stop::Restart).await;
+            (net_tx, net_rx) = net::spawn(net_options(&app.settings, &app.paths, identity.clone()));
+            app.set_network(net_tx.clone());
+        }
     };
 
     let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
     app.save_if_dirty();
     // Leave hubs and stop Reticulum properly (a few seconds at most).
-    net::shutdown(&net_tx, &mut net_rx).await;
+    net::shutdown(&net_tx, &mut net_rx, net::Stop::Quit).await;
     result
 }

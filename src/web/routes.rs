@@ -109,11 +109,13 @@ pub fn router(state: WebState) -> Router {
         .route("/reticulum/interfaces", post(reticulum_interfaces))
         .route("/reticulum/text", post(reticulum_text))
         .route("/reticulum/check", post(reticulum_check))
+        .route("/reticulum/restart", post(reticulum_restart))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
     Router::new()
         .route("/", get(index))
         .route("/app.js", get(script))
         .route("/style.css", get(style))
+        .route("/fonts/{name}", get(font))
         .nest("/api", api)
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
@@ -194,6 +196,17 @@ async fn script() -> Response {
 
 async fn style() -> Response {
     asset("text/css; charset=utf-8", include_str!("assets/style.css"))
+}
+
+/// The bundled Fira Code Nerd Font (see `assets/fonts/README.md`). The files
+/// never change for a build, so browsers may cache them for good.
+async fn font(Path(name): Path<String>) -> Response {
+    let body: &'static [u8] = match name.as_str() {
+        "FiraCodeNerdFont-Regular.woff2" => include_bytes!("assets/fonts/FiraCodeNerdFont-Regular.woff2"),
+        "FiraCodeNerdFont-Bold.woff2" => include_bytes!("assets/fonts/FiraCodeNerdFont-Bold.woff2"),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    ([(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")], body).into_response()
 }
 
 // ---- state and live updates ----------------------------------------------
@@ -837,6 +850,13 @@ async fn reticulum_interfaces(State(state): State<WebState>, axum::Json(body): a
 #[derive(Deserialize)]
 struct RnsTextBody {
     text: String,
+}
+
+/// Restart the Reticulum stack. It happens right after this request, in the
+/// owner loop; browsers follow it through the usual state updates.
+async fn reticulum_restart(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.request_rns_restart()).await?;
+    ok()
 }
 
 /// Check text without saving it (the text editor's live status).

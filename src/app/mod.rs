@@ -113,6 +113,8 @@ pub enum PromptKind {
     ConfirmDeleteInterface(String),
     RnsOption(crate::reticulum::Section, String),
     ConfirmDiscardRns,
+    /// Restart the Reticulum stack.
+    ConfirmRestartRns,
 }
 
 pub struct Prompt {
@@ -252,6 +254,10 @@ pub struct App {
     /// Time and cell of the previous left click, for double-click detection.
     last_click: Option<(Instant, Position)>,
     next_request: u64,
+    /// A Reticulum restart the event loop should carry out.
+    restart_pending: bool,
+    /// Hubs to reconnect once Reticulum is back after a restart.
+    rejoin_hubs: Vec<Hash>,
 }
 
 fn now() -> f64 {
@@ -325,6 +331,8 @@ impl App {
             cache,
             last_click: None,
             next_request: 1,
+            restart_pending: false,
+            rejoin_hubs: Vec::new(),
         };
         if !app.store.conversations.is_empty() {
             app.conversations.select(Some(0));
@@ -460,6 +468,12 @@ impl App {
                 self.lxmf_hash = Some(lxmf_hash);
                 self.log(format!("Reticulum ready; LXMF address {}", hex::encode(lxmf_hash)));
                 self.start_channels();
+                // Hubs that were connected before a restart, auto or not.
+                for hash in std::mem::take(&mut self.rejoin_hubs) {
+                    if let Some(index) = self.channels.hub_index(hash) {
+                        self.connect_hub(index);
+                    }
+                }
             }
             NetEvent::Rrc { hub, event } => self.on_rrc(hub, event),
             NetEvent::Host(event) => self.on_host(event),
@@ -569,6 +583,11 @@ impl App {
                     self.discard_and_open(&path);
                 }
             }
+            PromptKind::ConfirmRestartRns => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    self.request_rns_restart();
+                }
+            }
             kind @ (PromptKind::NewInterface
             | PromptKind::RenameInterface(_)
             | PromptKind::ConfirmDeleteInterface(_)
@@ -609,6 +628,69 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Restart the Reticulum stack (to apply config changes, or recover): the
+    /// event loop stops the network actor and starts a new one with the same
+    /// identity. Links and transfers in progress end; hubs reconnect and the
+    /// hosted node starts again once it is back.
+    pub fn request_rns_restart(&mut self) {
+        if self.restart_pending {
+            return;
+        }
+        self.restart_pending = true;
+        self.log("Restarting Reticulum…");
+        self.net_state = NetState::Starting;
+        self.interfaces.clear();
+        if matches!(self.sync, SyncState::Running(_)) {
+            self.sync = SyncState::Idle;
+        }
+        self.rejoin_hubs = self.channels_before_restart();
+        if self.settings.node_enabled {
+            self.node.status = node::NodeStatus::Starting;
+        }
+        self.node.stats = None;
+        if self.browser.loading.take().is_some() {
+            self.browser.error = Some("Reticulum restarted while loading; load the page again".into());
+        }
+        self.browser.media_requests.clear();
+        // Deliveries in progress belong to the old stack.
+        for conversation in self.store.conversations.values_mut() {
+            for message in &mut conversation.messages {
+                if message.state == MessageState::Sending {
+                    message.state = MessageState::Failed("interrupted by a Reticulum restart; send it again".into());
+                    self.store_dirty = true;
+                }
+            }
+        }
+        self.confirm("Restarting Reticulum…");
+    }
+
+    /// Whether a restart was asked for (the event loop carries it out).
+    pub fn take_rns_restart(&mut self) -> bool {
+        std::mem::take(&mut self.restart_pending)
+    }
+
+    /// Ask before restarting Reticulum (Ctrl-R in the Status and Reticulum tabs).
+    pub(super) fn open_restart_prompt(&mut self) {
+        let title = if self.uses_external_shared_instance() {
+            "Reconnect to the shared instance? (Its own program applies interface changes.) Type y"
+        } else {
+            "Restart Reticulum? Links and transfers stop, hubs reconnect. Type y"
+        };
+        self.open_prompt(PromptKind::ConfirmRestartRns, title, "");
+    }
+
+    /// The new network actor after a restart.
+    pub fn set_network(&mut self, net: UnboundedSender<NetCommand>) {
+        self.net = net;
+    }
+
+    /// rettui is a client of another program's shared instance (rnsd,
+    /// NomadNet…): interfaces in the config belong to that program, and a
+    /// restart here only reconnects to it.
+    pub fn uses_external_shared_instance(&self) -> bool {
+        self.interfaces.iter().any(|i| i.name.starts_with("Shared Instance["))
     }
 
     /// Where background image decodes report back; the event loop owns it.

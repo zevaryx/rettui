@@ -291,6 +291,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("d", "default"),
                 ("a", "add interface"),
                 ("t", "edit as text"),
+                ("^R", "restart Reticulum"),
                 ("R", "reload"),
             ],
             Tab::Status => &[
@@ -298,6 +299,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("Enter", "edit / toggle"),
                 ("e", "edit name"),
                 ("y", "copy my address"),
+                ("^R", "restart Reticulum"),
                 ("S", "sync"),
                 ("A", "announce"),
                 ("q", "quit"),

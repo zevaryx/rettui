@@ -224,6 +224,10 @@ impl App {
     }
 
     pub(super) fn rns_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && key.code == KeyCode::Char('r') {
+            return self.open_restart_prompt();
+        }
         if self.rns.load_error.is_some() && key.code != KeyCode::Char('R') {
             return;
         }

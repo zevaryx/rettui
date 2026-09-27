@@ -40,6 +40,7 @@ pub fn state(app: &App) -> Value {
     let online = app.interfaces.iter().filter(|i| i.online).count();
     json!({
         "display_name": app.settings.display_name,
+        "external_shared_instance": app.uses_external_shared_instance(),
         "wrap_lines": app.settings.wrap_lines,
         "lxmf_address": app.lxmf_hash.map(hex::encode),
         "net": net,
@@ -366,6 +367,7 @@ pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
         "error": check.error,
         "warnings": check.warnings,
         "note": rns::RESTART_NOTE,
+        "external_note": app.uses_external_shared_instance().then_some(rns::EXTERNAL_NOTE),
         "sections": sections.iter().map(describe).collect::<Vec<_>>(),
         "section": current.id(),
         "options": options,

@@ -12,7 +12,7 @@ use super::{ACCENT, DIM, SELECTED_BG, block};
 use crate::app::App;
 use crate::app::reticulum::{RnsFocus, RnsRow, rns_truthy};
 use crate::reticulum::schema::Kind;
-use crate::reticulum::{self as rns, RESTART_NOTE, Section};
+use crate::reticulum::{self as rns, EXTERNAL_NOTE, RESTART_NOTE, Section};
 
 const KEY: Color = Color::LightBlue;
 
@@ -34,7 +34,9 @@ pub(super) fn draw_reticulum(frame: &mut Frame, app: &mut App, area: Rect) {
         draw_text(frame, app, area);
         return;
     }
-    let status_height = 4 + app.rns.check.warnings.len().min(3) as u16;
+    // Borders, the file, the check, the restart note, warnings, and the
+    // note about another program's shared instance.
+    let status_height = 5 + app.rns.check.warnings.len().min(3) as u16 + u16::from(app.uses_external_shared_instance());
     let [status, body] = Layout::vertical([Constraint::Length(status_height), Constraint::Min(5)]).areas(area);
     draw_file_status(frame, app, status);
     let [sections, options] = Layout::horizontal([Constraint::Length(super::side_width(body.width, 34)), Constraint::Min(20)]).areas(body);
@@ -69,7 +71,10 @@ fn draw_file_status(frame: &mut Frame, app: &App, area: Rect) {
     for warning in state.check.warnings.iter().take(3) {
         lines.push(Line::styled(format!("! {warning}"), Style::default().fg(Color::Yellow)));
     }
-    lines.push(Line::styled(RESTART_NOTE, Style::default().fg(DIM).italic()));
+    lines.push(Line::styled(format!("{RESTART_NOTE} (Ctrl-R)"), Style::default().fg(DIM).italic()));
+    if app.uses_external_shared_instance() {
+        lines.push(Line::styled(EXTERNAL_NOTE, Style::default().fg(Color::Yellow).italic()));
+    }
     frame.render_widget(Paragraph::new(lines).block(block("Reticulum config", false)), area);
 }
 

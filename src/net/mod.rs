@@ -97,7 +97,33 @@ pub enum NetCommand {
     HostReload,
     HostAnnounce,
     /// Close hub links and stop Reticulum; [`NetEvent::Stopped`] follows.
-    Shutdown,
+    Shutdown(Stop),
+}
+
+/// Why the actor is stopping, which sets how long it may take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// rettui is quitting: keep it short.
+    Quit,
+    /// Reticulum is being restarted in place: let it release its sockets
+    /// (a shared instance's port), so the new instance can take them.
+    Restart,
+}
+
+impl Stop {
+    fn runtime_wait(self) -> Duration {
+        match self {
+            Stop::Quit => Duration::from_millis(1500),
+            Stop::Restart => Duration::from_secs(6),
+        }
+    }
+
+    fn total_wait(self) -> Duration {
+        match self {
+            Stop::Quit => Duration::from_secs(3),
+            Stop::Restart => Duration::from_secs(12),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +261,7 @@ async fn run(
         launch(host_generation, config);
     }
     let mut rrc_sessions = rrc_session::Sessions::default();
+    let mut stop = Stop::Quit;
     let syncer = lxmf::Syncer::new(runtime.clone(), known.clone(), identity.clone(), lxmf_hash, ev.clone());
 
     // Give interfaces a moment to come up before announcing or syncing.
@@ -291,7 +318,10 @@ async fn run(
             command = cmd_rx.recv() => {
                 let Some(command) = command else { break };
                 match command {
-                    NetCommand::Shutdown => break,
+                    NetCommand::Shutdown(why) => {
+                        stop = why;
+                        break;
+                    }
                     NetCommand::Announce => announce(&delivery.handle, &display_name, &ev).await,
                     NetCommand::SetDisplayName(name) => {
                         display_name = name;
@@ -453,14 +483,18 @@ async fn run(
     })
     .await;
     let _ = tokio::time::timeout(quick, delivery.close()).await;
-    let _ = tokio::time::timeout(Duration::from_millis(1500), runtime.shutdown_and_wait()).await;
+    let _ = tokio::time::timeout(stop.runtime_wait(), runtime.shutdown_and_wait()).await;
     let _ = ev.send(NetEvent::Stopped);
     Ok(())
 }
 
-/// Ask the actor to shut down and wait (a few seconds at most) until it has.
-pub async fn shutdown(commands: &mpsc::UnboundedSender<NetCommand>, events: &mut mpsc::UnboundedReceiver<NetEvent>) {
-    if commands.send(NetCommand::Shutdown).is_err() {
+/// Ask the actor to shut down and wait until it has (bounded; see [`Stop`]).
+pub async fn shutdown(
+    commands: &mpsc::UnboundedSender<NetCommand>,
+    events: &mut mpsc::UnboundedReceiver<NetEvent>,
+    why: Stop,
+) {
+    if commands.send(NetCommand::Shutdown(why)).is_err() {
         return;
     }
     let stopped = async {
@@ -470,7 +504,7 @@ pub async fn shutdown(commands: &mpsc::UnboundedSender<NetCommand>, events: &mut
             }
         }
     };
-    let _ = tokio::time::timeout(Duration::from_secs(3), stopped).await;
+    let _ = tokio::time::timeout(why.total_wait(), stopped).await;
 }
 
 async fn announce(

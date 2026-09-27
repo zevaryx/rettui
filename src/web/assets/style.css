@@ -1,3 +1,18 @@
+@font-face {
+  font-family: "FiraCode Nerd Font";
+  src: url("/fonts/FiraCodeNerdFont-Regular.woff2") format("woff2");
+  font-weight: 300 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "FiraCode Nerd Font";
+  src: url("/fonts/FiraCodeNerdFont-Bold.woff2") format("woff2");
+  font-weight: 600 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* rettui web UI: the terminal UI's look, in a browser. */
 
 :root {
@@ -14,8 +29,10 @@
   --red: #f26d6d;
   --magenta: #d670d6;
   --cyan: #6fd3e8;
-  --mono: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* The bundled Fira Code Nerd Font for all text; system fonts only as a
+     fallback for characters it lacks. */
+  --mono: "FiraCode Nerd Font", ui-monospace, Menlo, Consolas, monospace;
+  --sans: "FiraCode Nerd Font", system-ui, -apple-system, "Segoe UI", sans-serif;
   color-scheme: dark;
 }
 
