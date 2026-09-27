@@ -1,0 +1,9 @@
+# Build outputs (the submodules keep their own, too).
+target/
+deps/*/target/
+
+# Runtime data from docker compose.
+data/
+
+.git/
+deps/*/.git

@@ -1,0 +1,338 @@
+//! Around the tabs: the navigation sidebar, the key-hint footer and the
+//! prompt dialog.
+
+use ratatui::Frame;
+use ratatui::layout::{Position, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use unicode_width::UnicodeWidthStr;
+
+use super::{ACCENT, DIM, SELECTED_BG, block};
+use crate::app::{App, BrowserFocus, NetState, NoticeKind, SyncState, Tab};
+use crate::app::node::PageView;
+
+/// The sidebar's width: full, or a rail of icons on narrow terminals.
+pub(super) fn sidebar_width(total: u16) -> u16 {
+    if total >= 110 { 22 } else { 6 }
+}
+
+/// Vertical navigation rail, chat-client style. On narrow terminals it is
+/// icons only, with a dot for unread messages.
+pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
+    let rail = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(DIM));
+    let inner = rail.inner(area);
+    frame.render_widget(rail, area);
+    let width = inner.width as usize;
+    let compact = width < 10;
+
+    let brand = if compact {
+        Line::styled(" ◆", Style::default().fg(ACCENT))
+    } else {
+        Line::from(vec![Span::styled(" ◆ ", Style::default().fg(ACCENT)), Span::styled("rettui", Style::default().bold())])
+    };
+    frame.render_widget(Paragraph::new(brand), Rect { height: 1, ..inner });
+    // Tabs a row apart when there is room, else packed.
+    let spacing = if inner.height >= 2 + Tab::ALL.len() as u16 * 2 + 3 { 2 } else { 1 };
+
+    let unread: usize = app.store.conversations.values().map(|c| c.unread).sum();
+    let (channel_unread, mentioned) = app.channels.total_unread();
+    app.regions.tabs.clear();
+    for (i, tab) in Tab::ALL.iter().enumerate() {
+        let y = inner.y + 2 + i as u16 * spacing;
+        if y >= inner.bottom() {
+            break;
+        }
+        let row = Rect::new(inner.x, y, inner.width, 1);
+        app.regions.tabs.push((row, *tab));
+        let icon = match tab {
+            Tab::Messages => "✉",
+            Tab::Channels => "#",
+            Tab::Network => "◎",
+            Tab::Browser => "◈",
+            Tab::Node => "⌂",
+            Tab::Status => "⚙",
+            Tab::Reticulum => "⛭",
+        };
+        let selected = *tab == app.tab;
+        let base = if selected {
+            Style::default().bg(SELECTED_BG).bold()
+        } else {
+            Style::default()
+        };
+        let mut spans = vec![
+            Span::styled(if selected { "▌" } else { " " }, base.fg(ACCENT)),
+            Span::styled(if compact { format!(" {icon} ") } else { format!(" {icon}  {}", tab.title()) }, base),
+        ];
+        let badge = match tab {
+            Tab::Messages if unread > 0 => Some(format!(" {unread} ")),
+            Tab::Channels if channel_unread > 0 => Some(format!(" {channel_unread} ")),
+            _ => None,
+        };
+        // Mentions stand out from ordinary unread chat.
+        let badge_bg = if *tab == Tab::Channels && mentioned { Color::LightRed } else { Color::Yellow };
+        if compact {
+            if badge.is_some() {
+                spans.push(Span::styled("●", base.fg(badge_bg)));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)).style(base), row);
+            continue;
+        }
+        let used: usize = spans.iter().map(Span::width).sum::<usize>()
+            + badge.as_ref().map_or(0, |b| b.width() + 1);
+        spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), base));
+        if let Some(badge) = badge {
+            spans.push(Span::styled(badge, Style::default().fg(Color::Black).bg(badge_bg).bold()));
+            spans.push(Span::styled(" ", base));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
+    }
+
+    // Identity and connection status at the bottom of the rail.
+    if compact {
+        let color = match &app.net_state {
+            NetState::Starting => Color::Yellow,
+            NetState::Online if app.interfaces.iter().any(|i| i.online) => Color::Green,
+            NetState::Online => Color::Yellow,
+            NetState::Failed(_) => Color::Red,
+        };
+        if inner.height > spacing * Tab::ALL.len() as u16 + 3 {
+            let area = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+            frame.render_widget(Paragraph::new(Span::styled(" ●", Style::default().fg(color))), area);
+        }
+        return;
+    }
+    let mut status = vec![Line::styled(
+        format!(" {}", app.settings.display_name),
+        Style::default().fg(DIM),
+    )];
+    status.push(Line::from(match &app.net_state {
+        NetState::Starting => Span::styled(" ● starting", Style::default().fg(Color::Yellow)),
+        NetState::Online => {
+            let online = app.interfaces.iter().filter(|i| i.online).count();
+            let color = if online > 0 { Color::Green } else { Color::Yellow };
+            Span::styled(
+                format!(" ● {online}/{} interfaces", app.interfaces.len()),
+                Style::default().fg(color),
+            )
+        }
+        NetState::Failed(_) => Span::styled(" ● offline", Style::default().fg(Color::Red)),
+    }));
+    if let SyncState::Running(_) = app.sync {
+        status.push(Line::styled(" ⇅ syncing", Style::default().fg(Color::Yellow)));
+    }
+    let height = status.len() as u16;
+    if inner.height > height + 10 {
+        let area = Rect::new(inner.x, inner.bottom() - height, inner.width, height);
+        frame.render_widget(Paragraph::new(status), area);
+    }
+}
+
+pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
+    // Problems stay up a little longer than confirmations.
+    if let Some(notice) = &app.notice
+        && notice.at.elapsed() < std::time::Duration::from_secs(if notice.kind == NoticeKind::Done { 3 } else { 6 })
+    {
+        let (mark, style) = match notice.kind {
+            NoticeKind::Done => (" ✓ ", Style::default().fg(Color::Black).bg(Color::Green)),
+            NoticeKind::Warn => (" ! ", Style::default().fg(Color::Black).bg(Color::Yellow).bold()),
+            NoticeKind::Error => (" ✗ ", Style::default().fg(Color::White).bg(Color::Red).bold()),
+        };
+        let text_style = if notice.kind == NoticeKind::Error { Style::default().fg(Color::LightRed) } else { Style::default() };
+        let line = Line::from(vec![Span::styled(mark, style), Span::styled(format!(" {}", notice.text), text_style)]);
+        frame.render_widget(Paragraph::new(line), area);
+        return;
+    }
+    let hints: &[(&str, &str)] = if app.prompt.is_some() {
+        &[("Enter", "confirm"), ("Esc", "cancel"), ("^V", "paste")]
+    } else {
+        match app.tab {
+            Tab::Channels if app.channels.typing => &[
+                ("Enter", "send"),
+                ("Esc", "done"),
+                ("/help", "commands"),
+                ("^V", "paste"),
+                ("PgUp/PgDn", "scroll"),
+            ],
+            Tab::Channels if app.channels.menu.is_some() => &[
+                ("↑↓", "select"),
+                ("Enter", "do"),
+                ("w", "whisper"),
+                ("l", "LXMF"),
+                ("Esc", "close"),
+            ],
+            Tab::Channels if app.channels.picker.is_some() => &[("↑↓", "select"), ("Enter", "pick"), ("Esc", "close")],
+            Tab::Channels => &[
+                ("↑↓", "select"),
+                ("Enter", "write"),
+                ("m", "message user"),
+                ("n", "add hub"),
+                ("c", "connect"),
+                ("a", "auto-connect"),
+                ("x", "remove"),
+                ("y", "copy link"),
+            ],
+            Tab::Messages if app.composing => &[
+                ("Enter", "send"),
+                ("Esc", "done"),
+                ("^V", "paste"),
+                ("^O", "attach"),
+                ("^X", "clear files"),
+                ("^P", "delivery mode"),
+                ("PgUp/PgDn", "scroll"),
+            ],
+            Tab::Messages => &[
+                ("Enter", "write"),
+                ("n", "new"),
+                ("y", "copy address"),
+                ("a", "attach"),
+                ("o", "open file"),
+                ("d", "delivery"),
+                ("S", "sync"),
+                ("A", "announce"),
+                ("q", "quit"),
+            ],
+            Tab::Network if app.net_search.typing => &[
+                ("Enter", "done"),
+                ("Esc", "clear"),
+                ("↑↓", "select"),
+                ("^V", "paste"),
+            ],
+            Tab::Network if !app.net_search.input.text().is_empty() => &[
+                ("Enter", "open"),
+                ("/", "edit search"),
+                ("Esc", "clear search"),
+                ("y", "copy address"),
+                ("p", "use as propagation node"),
+                ("f", "filter"),
+            ],
+            Tab::Network => &[
+                ("/", "search"),
+                ("Enter", "open"),
+                ("y", "copy address"),
+                ("p", "use as propagation node"),
+                ("f", "filter"),
+                ("S", "sync"),
+                ("A", "announce"),
+                ("q", "quit"),
+            ],
+            Tab::Browser if app.browser.focus == BrowserFocus::Pane => &[
+                ("↑↓", "select"),
+                ("Enter", "open"),
+                ("t", "saved/nodes"),
+                ("x", "remove saved"),
+                ("→", "page"),
+                ("y", "copy address"),
+                ("g", "go to"),
+                ("R", "clear cache"),
+            ],
+            Tab::Browser if app.browser.view_source => &[
+                ("u", "back to page"),
+                ("drag", "copy text"),
+                ("Y", "copy source"),
+                ("y", "copy address"),
+                ("↑↓", "scroll"),
+                ("r", "refresh"),
+                ("b", "back"),
+                ("←", "nodes"),
+            ],
+            Tab::Browser => &[
+                ("drag", "copy text"),
+                ("u", "view source"),
+                ("y", "copy address"),
+                ("Y", "copy page"),
+                ("L", "copy link"),
+                ("Tab", "next link"),
+                ("Enter", "open"),
+                ("b", "back"),
+                ("r", "refresh"),
+                ("R", "clear cache"),
+                ("s", "save"),
+                ("I", "identify"),
+                ("←", "nodes"),
+            ],
+            Tab::Node if app.node.editing && app.node.editor.is_some() && app.node.view == PageView::Preview => &[
+                ("↑↓", "scroll"),
+                ("PgUp/PgDn", "page"),
+                ("^P", "view"),
+                ("^S", "save"),
+                ("Esc", "pages"),
+            ],
+            Tab::Node if app.node.editing && app.node.editor.is_some() => &[
+                ("^S", "save"),
+                ("Esc", "pages"),
+                ("^Z/^Y", "undo/redo"),
+                ("^P", "view"),
+                ("^V", "paste"),
+            ],
+            Tab::Node => &[
+                ("Enter", "edit"),
+                ("n", "new"),
+                ("r", "rename"),
+                ("x", "delete"),
+                ("h", "host on/off"),
+                ("a", "announce"),
+                ("b", "browse"),
+                ("y", "copy address"),
+                ("p", "view"),
+            ],
+            Tab::Reticulum if app.rns.picker.is_some() => &[("↑↓", "select"), ("Enter", "pick"), ("Esc", "cancel")],
+            Tab::Reticulum if app.rns.editor.is_some() => &[
+                ("^S", "save"),
+                ("Esc", "close"),
+                ("^Z/^Y", "undo/redo"),
+                ("^V", "paste"),
+            ],
+            Tab::Reticulum => &[
+                ("Tab", "sections/options"),
+                ("Enter", "edit"),
+                ("d", "default"),
+                ("a", "add interface"),
+                ("t", "edit as text"),
+                ("R", "reload"),
+            ],
+            Tab::Status => &[
+                ("↑↓", "select setting"),
+                ("Enter", "edit / toggle"),
+                ("e", "edit name"),
+                ("y", "copy my address"),
+                ("S", "sync"),
+                ("A", "announce"),
+                ("q", "quit"),
+            ],
+        }
+    };
+    let mut spans = Vec::new();
+    for (key, action) in hints {
+        spans.push(Span::styled(format!(" {key} "), Style::default().fg(Color::Black).bg(DIM)));
+        spans.push(Span::raw(format!(" {action}  ")));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+pub(super) fn draw_prompt(frame: &mut Frame, app: &App) {
+    let Some(prompt) = &app.prompt else { return };
+    let area = frame.area();
+    let width = area.width.saturating_sub(4).min(76);
+    let rect = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + area.height / 3,
+        width,
+        height: 3,
+    };
+    frame.render_widget(Clear, rect);
+    let prompt_block = block(&prompt.title, true);
+    let inner = prompt_block.inner(rect);
+    let cursor = prompt.input.cursor_column();
+    let offset = cursor.saturating_sub(inner.width.saturating_sub(1) as usize);
+    frame.render_widget(
+        Paragraph::new(prompt.input.text())
+            .scroll((0, offset as u16))
+            .style(Style::default().add_modifier(Modifier::BOLD))
+            .block(prompt_block),
+        rect,
+    );
+    frame.set_cursor_position(Position::new(inner.x + (cursor - offset) as u16, inner.y));
+}

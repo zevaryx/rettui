@@ -1,0 +1,374 @@
+//! JSON snapshots of the app state, shaped for the web UI's screens.
+
+use std::collections::BTreeMap;
+
+use serde_json::{Value, json};
+
+use crate::app::channels::{Hub, HubStatus, LineKind};
+use crate::app::{App, NetState, SyncState};
+use crate::config::{Effect, FIELDS, FieldKind, Settings};
+use crate::net::PeerKind;
+use crate::rrc;
+use crate::store::{Message, MessageState};
+
+fn kind_name(kind: PeerKind) -> &'static str {
+    match kind {
+        PeerKind::Lxmf => "lxmf",
+        PeerKind::Nomad => "nomad",
+        PeerKind::Propagation => "propagation",
+    }
+}
+
+/// Identity, network and sync state, the log, and the sidebar badges.
+pub fn state(app: &App) -> Value {
+    let net = match &app.net_state {
+        NetState::Starting => json!({ "state": "starting" }),
+        NetState::Online => json!({ "state": "online" }),
+        NetState::Failed(e) => json!({ "state": "failed", "error": e }),
+    };
+    let sync = match &app.sync {
+        SyncState::Idle => json!({ "state": "idle" }),
+        SyncState::Running(started) => json!({ "state": "running", "secs": started.elapsed().as_secs() }),
+        SyncState::Done(at, Ok(n)) => json!({ "state": "done", "at": at.format("%H:%M").to_string(), "count": n }),
+        SyncState::Done(at, Err(e)) => json!({ "state": "failed", "at": at.format("%H:%M").to_string(), "error": e }),
+    };
+    let propagation = app.settings.propagation_node.as_ref().map(|hash| {
+        json!({ "hash": hash, "name": app.store.display_name(hash) })
+    });
+    let message_unread: usize = app.store.conversations.values().map(|c| c.unread).sum();
+    let (channel_unread, mention) = app.channels.total_unread();
+    let online = app.interfaces.iter().filter(|i| i.online).count();
+    json!({
+        "display_name": app.settings.display_name,
+        "wrap_lines": app.settings.wrap_lines,
+        "lxmf_address": app.lxmf_hash.map(hex::encode),
+        "net": net,
+        "sync": sync,
+        "propagation_node": propagation,
+        "rns_config": app.settings.rns_config,
+        "data_dir": app.paths.store.parent().map(|p| p.display().to_string()),
+        "known": app.store.peers.len(),
+        "interfaces": app.interfaces.iter().map(|i| json!({
+            "name": i.name, "online": i.online, "rx": i.rx_bytes, "tx": i.tx_bytes,
+        })).collect::<Vec<_>>(),
+        "interfaces_online": online,
+        "log": app.log.iter().collect::<Vec<_>>(),
+        "unread": { "messages": message_unread, "channels": channel_unread, "mention": mention },
+    })
+}
+
+pub fn conversations(app: &App) -> Value {
+    let list: Vec<Value> = app
+        .store
+        .conversation_order()
+        .into_iter()
+        .map(|key| {
+            let conversation = &app.store.conversations[&key];
+            let last = conversation.messages.last().map(|m| {
+                let text = if m.content.is_empty() && !m.attachments.is_empty() {
+                    format!("📎 {}", m.attachments[0].name)
+                } else {
+                    m.content.clone()
+                };
+                json!({ "text": text, "timestamp": m.timestamp, "incoming": m.incoming })
+            });
+            json!({
+                "key": key,
+                "name": app.store.display_name(&key),
+                "named": app.store.peers.get(&key).is_some_and(|p| p.name.is_some()),
+                "unread": conversation.unread,
+                "last": last,
+            })
+        })
+        .collect();
+    json!(list)
+}
+
+fn message(m: &Message) -> Value {
+    let state = match &m.state {
+        MessageState::Received { verified } => json!({ "kind": "received", "verified": verified }),
+        MessageState::Sending => json!({ "kind": "sending" }),
+        MessageState::Delivered => json!({ "kind": "delivered" }),
+        MessageState::Propagated => json!({ "kind": "propagated" }),
+        MessageState::Failed(e) => json!({ "kind": "failed", "error": e }),
+    };
+    json!({
+        "id": m.id,
+        "incoming": m.incoming,
+        "title": m.title,
+        "content": m.content,
+        "timestamp": m.timestamp,
+        "state": state,
+        "attachments": m.attachments.iter().enumerate().map(|(index, a)| json!({
+            "index": index, "name": a.name, "size": a.size, "image": a.image,
+            "exists": a.path.exists(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+pub fn conversation(app: &App, key: &str) -> Value {
+    let messages: Vec<Value> = app
+        .store
+        .conversations
+        .get(key)
+        .map(|c| c.messages.iter().map(message).collect())
+        .unwrap_or_default();
+    json!({
+        "key": key,
+        "name": app.store.display_name(key),
+        "unread": app.store.conversations.get(key).map_or(0, |c| c.unread),
+        "messages": messages,
+    })
+}
+
+pub fn peers(app: &App) -> Value {
+    let mut peers: Vec<_> = app.store.peers.iter().collect();
+    peers.sort_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
+    json!({
+        "propagation_node": app.settings.propagation_node,
+        "peers": peers.into_iter().map(|(hash, p)| json!({
+            "hash": hash, "kind": kind_name(p.kind), "name": p.name, "hops": p.hops, "last_seen": p.last_seen,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn hub_status(status: &HubStatus) -> Value {
+    match status {
+        HubStatus::Connected => json!({ "kind": "connected" }),
+        HubStatus::Connecting(step) => json!({ "kind": "connecting", "text": step }),
+        HubStatus::Failed(e) => json!({ "kind": "failed", "text": e }),
+        HubStatus::Disconnected => json!({ "kind": "disconnected" }),
+    }
+}
+
+fn link(hub: &Hub, room: &str) -> String {
+    let mut link = format!("rrc://{}", hex::encode(hub.hash));
+    if hub.aspect != rrc::DEFAULT_ASPECT {
+        link.push(':');
+        link.push_str(&hub.aspect);
+    }
+    if !room.is_empty() {
+        link.push('/');
+        link.push_str(room);
+    }
+    link
+}
+
+/// Hubs and their rooms, for the channel list and hub views.
+pub fn channels(app: &App) -> Value {
+    let hubs: Vec<Value> = app
+        .channels
+        .hubs
+        .iter()
+        .map(|hub| {
+            let rooms: Vec<Value> = hub
+                .listed_rooms()
+                .into_iter()
+                .map(|room| {
+                    json!({
+                        "name": room,
+                        "joined": hub.rooms.contains(&room),
+                        "unread": hub.unread.get(&room).copied().unwrap_or(0),
+                        "mention": hub.mentions.contains(&room),
+                        "link": link(hub, &room),
+                    })
+                })
+                .collect();
+            json!({
+                "hash": hex::encode(hub.hash),
+                "aspect": hub.aspect,
+                "name": hub.hub_name.clone().unwrap_or_else(|| hub.name.clone()),
+                "status": hub_status(&hub.status),
+                "nick": hub.nick,
+                "display_name": app.settings.display_name,
+                "auto_connect": hub.auto_connect,
+                "limits": { "message_bytes": hub.limits.max_msg_bytes, "rooms": hub.limits.max_rooms },
+                "motd": hub.motd,
+                "available": hub.available.as_ref().map(|rooms| rooms.iter().map(|(name, topic)| json!({
+                    "name": name, "topic": topic, "joined": hub.rooms.contains(name),
+                })).collect::<Vec<_>>()),
+                "unread": hub.unread.get("").copied().unwrap_or(0),
+                "mention": hub.mentions.contains(""),
+                "link": link(hub, ""),
+                "rooms": rooms,
+            })
+        })
+        .collect();
+    json!(hubs)
+}
+
+fn line_kind(kind: LineKind) -> &'static str {
+    match kind {
+        LineKind::Msg => "msg",
+        LineKind::Action => "action",
+        LineKind::Notice => "notice",
+        LineKind::Private => "private",
+        LineKind::Error => "error",
+        LineKind::System => "system",
+    }
+}
+
+/// Byte ranges of `text` as UTF-16 offsets (what JavaScript strings index).
+fn utf16_ranges(text: &str, ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let at = |byte: usize| text.get(..byte).map_or(0, |t| t.encode_utf16().count());
+    ranges.iter().map(|&(start, end)| (at(start), at(end))).collect()
+}
+
+/// One room's (or the hub buffer's, `room` empty) messages and members.
+pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
+    use crate::app::channels::users::lxmf_address;
+    let own_nick = hub.nick.clone().unwrap_or_else(|| app.settings.display_name.clone());
+    let buffer = hub.buffers.get(room).map(Vec::as_slice).unwrap_or_default();
+    let lines: Vec<Value> = buffer
+        .iter()
+        .map(|line| {
+            json!({
+                "kind": line_kind(line.kind),
+                "src": line.src,
+                "nick": line.nick.clone().or_else(|| {
+                    line.src.as_deref().and_then(|s| hex::decode(s).ok()).map(|h| hub.name_of(&h))
+                }),
+                "text": line.text,
+                "ts": line.ts,
+                "mention": line.mention,
+                "highlights": utf16_ranges(&line.text, &line.highlights(&own_nick)),
+                "own": line.own,
+                "pending": line.pending.is_some(),
+            })
+        })
+        .collect();
+    let own = app.identity_hash.to_vec();
+    let members = hub.members_of(room);
+    // Everyone shown (members and senders), for the user menu.
+    let mut ids: BTreeMap<String, Vec<u8>> = members.iter().map(|(_, id)| (hex::encode(id), id.clone())).collect();
+    ids.extend(buffer.iter().filter_map(|l| l.src.clone()).filter_map(|s| hex::decode(&s).ok().map(|id| (s, id))));
+    let users: serde_json::Map<String, Value> = ids
+        .into_iter()
+        .filter(|(_, id)| *id != own)
+        .filter_map(|(key, id)| {
+            let lxmf = hex::encode(lxmf_address(&id)?);
+            let known = app.store.peers.get(&lxmf).is_some_and(|p| p.kind == crate::net::PeerKind::Lxmf)
+                || app.store.conversations.contains_key(&lxmf);
+            Some((key, json!({ "name": hub.name_of(&id), "lxmf": lxmf, "lxmf_known": known })))
+        })
+        .collect();
+    json!({
+        "hub": hex::encode(hub.hash),
+        "room": room,
+        "joined": hub.rooms.contains(room),
+        "topic": hub.topics.get(room),
+        "members": members.iter().map(|(name, id)| json!({ "name": name, "src": hex::encode(id), "own": *id == own })).collect::<Vec<_>>(),
+        "users": users,
+        "whisper": hub.direct_notices,
+        "nick": own_nick,
+        "lines": lines,
+    })
+}
+
+pub fn saved(app: &App) -> Value {
+    json!(app.store.saved.iter().map(|b| json!({ "name": b.name, "url": b.url })).collect::<Vec<_>>())
+}
+
+/// `settings.json` for the settings editor, with what each field is.
+pub fn settings(app: &App, saved: &Settings) -> Value {
+    let fields: Vec<Value> = FIELDS
+        .iter()
+        .map(|f| {
+            json!({
+                "key": f.key,
+                "label": f.label,
+                "help": f.help,
+                "kind": match f.kind {
+                    FieldKind::Text => "text",
+                    FieldKind::Optional => "optional",
+                    FieldKind::Toggle => "toggle",
+                    FieldKind::Number => "number",
+                },
+                "next_start": f.effect == Effect::NextStart,
+                "value": saved.field_value(f.key),
+            })
+        })
+        .collect();
+    json!({
+        "path": app.paths.settings.display().to_string(),
+        "fields": fields,
+        // What this session actually uses (may come from --rns-config or
+        // the standard locations).
+        "session_rns_config": app.settings.rns_config,
+    })
+}
+
+/// The hosted node and its pages.
+pub fn node(app: &App) -> Value {
+    use crate::app::node::NodeStatus;
+    let (status, error) = match &app.node.status {
+        NodeStatus::Off => ("off", None),
+        NodeStatus::Starting => ("starting", None),
+        NodeStatus::Running => ("running", None),
+        NodeStatus::Failed(e) => ("failed", Some(e.clone())),
+    };
+    json!({
+        "status": status,
+        "error": error,
+        "address": hex::encode(app.node.hash),
+        "name": app.settings.node_name.clone().unwrap_or_else(|| app.settings.display_name.clone()),
+        "dir": crate::nomad::host::HostConfig::dir(&app.settings, &app.paths).display().to_string(),
+        "scripts": app.settings.node_executable_pages,
+        "stats": app.node.stats.as_ref().map(|s| json!({
+            "requests": s.request_count, "pages": s.page_hits, "files": s.file_hits, "not_found": s.not_found_count,
+        })),
+        "list_error": app.node.error,
+        "pages": app.node.pages.iter().map(|p| json!({
+            "path": p.path, "size": p.size, "modified_ms": p.modified_ms, "executable": p.executable, "text": p.text,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+
+/// The Reticulum config for the web editor: file state, sections, and the
+/// options of one section (the first when `section` is not found).
+pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
+    use crate::reticulum::{self as rns, Section, schema};
+    let path = app.rns_path();
+    let (text, exists) = rns::load(&path)?;
+    let (config, check) = rns::check(&text);
+    let sections = rns::sections(&text);
+    let current = section
+        .and_then(Section::from_id)
+        .filter(|s| sections.contains(s))
+        .unwrap_or(Section::Reticulum);
+    let describe = |s: &Section| {
+        let values = match s {
+            Section::Interface(name) => config.as_ref().and_then(|c| c.subsection("interfaces", name)),
+            _ => None,
+        };
+        json!({
+            "id": s.id(),
+            "title": s.title(),
+            "interface": matches!(s, Section::Interface(_)),
+            "type": values.and_then(|v| v.get("type")),
+            "enabled": values.map(|v| v.get("enabled").or_else(|| v.get("interface_enabled")).is_none_or(crate::app::reticulum::rns_truthy)),
+        })
+    };
+    let options: Vec<Value> = rns::options(config.as_ref(), &current)
+        .into_iter()
+        .map(|o| {
+            json!({
+                "group": o.group, "key": o.key, "label": o.label, "kind": o.kind.name(),
+                "choices": o.kind.choices(), "default": o.default, "help": o.help, "value": o.value,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "path": path.display().to_string(),
+        "exists": exists,
+        "text": text,
+        "error": check.error,
+        "warnings": check.warnings,
+        "note": rns::RESTART_NOTE,
+        "sections": sections.iter().map(describe).collect::<Vec<_>>(),
+        "section": current.id(),
+        "options": options,
+        "types": schema::INTERFACE_TYPES.iter().map(|t| json!({ "name": t.name, "label": t.label })).collect::<Vec<_>>(),
+    }))
+}

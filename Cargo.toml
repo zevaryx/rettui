@@ -1,0 +1,68 @@
+[package]
+name = "rettui"
+version = "0.1.0"
+edition = "2024"
+description = "Terminal Reticulum client: LXMF messaging and NomadNet browsing"
+# rsReticulum, rsLXMF and rsNomad are AGPL-3.0-or-later.
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+# Reticulum / LXMF / NomadNet, vendored as git submodules under deps/
+# (the libraries expect rsReticulum as a sibling of rsLXMF and rsNomad).
+rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime" }
+rns-identity = { path = "deps/rsReticulum/crates/rns-identity" }
+rns-crypto = { path = "deps/rsReticulum/crates/rns-crypto" }
+lxmf-core = { path = "deps/rsLXMF/crates/lxmf-core" }
+nomad-core = { path = "deps/rsNomad/crates/nomad-core" }
+
+# TUI
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures-util = "0.3"
+unicode-width = "0.2"
+# Same decoders nomad-core already builds (NomadNet serves WebP media).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+rmpv = "1"
+# Terminal graphics (Kitty) with capability detection.
+ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
+# System clipboard (X11 and Wayland); OSC 52 covers SSH sessions.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+base64 = "0.22"
+# RRC (Reticulum Relay Chat) wire format.
+ciborium = "0.2"
+rand = "0.8"
+# Web UI (`--web`).
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+
+# Runtime and support
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+directories = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(unix)'.dependencies]
+# Bounded terminal capability probe (poll/read on stdin).
+libc = "0.2"
+
+# Image decoding is very slow unoptimised (seconds per picture), so debug
+# builds optimise the decoders.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.image-webp]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.gif]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.moxcms]
+opt-level = 3

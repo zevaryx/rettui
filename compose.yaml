@@ -1,0 +1,31 @@
+# rettui web UI.
+#
+#   git submodule update --init   # the Reticulum/LXMF/NomadNet libraries
+#   docker compose up -d --build
+#   docker compose logs rettui    # shows the login link (?token=...)
+#
+# Everything rettui keeps is in ./data next to this file, including the
+# Reticulum config in ./data/reticulum/config (created on first start).
+
+services:
+  rettui:
+    build: .
+    image: rettui:latest
+    container_name: rettui
+    restart: unless-stopped
+    environment:
+      # Files in ./data are owned by this user and group on the host
+      # (see `id -u` and `id -g`).
+      PUID: "1000"
+      PGID: "1000"
+    volumes:
+      - ./data:/data
+    ports:
+      # Anyone who can reach this port still needs the login link. Use
+      # "127.0.0.1:8740:8740" to only allow connections from this machine.
+      - "8740:8740"
+    # Reticulum's default AutoInterface finds peers on the local network by
+    # multicast, which does not leave Docker's default network. Either add
+    # an interface to ./data/reticulum/config (for example a TCPClientInterface
+    # to a transport node), or share the host's network instead of `ports:`:
+    # network_mode: host

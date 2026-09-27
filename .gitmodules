@@ -1,0 +1,9 @@
+[submodule "deps/rsReticulum"]
+	path = deps/rsReticulum
+	url = https://github.com/ratspeak/rsReticulum
+[submodule "deps/rsLXMF"]
+	path = deps/rsLXMF
+	url = https://github.com/ratspeak/rsLXMF
+[submodule "deps/rsNomad"]
+	path = deps/rsNomad
+	url = https://github.com/Colorado-Mesh/rsNomad
