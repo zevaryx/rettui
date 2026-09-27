@@ -269,26 +269,22 @@ impl Hub {
         dir.join(format!("{name}.json"))
     }
 
-    /// Chat lines worth keeping across restarts.
-    fn save_history(&mut self, dir: &Path) -> std::io::Result<()> {
-        let keep: BTreeMap<&String, Vec<&ChatLine>> = self
-            .buffers
+    /// Chat lines worth keeping across restarts, as the history file's
+    /// contents (encoded later, off the event loop).
+    fn history_snapshot(&mut self) -> BTreeMap<String, Vec<ChatLine>> {
+        self.history_dirty = false;
+        self.buffers
             .iter()
             .filter(|(room, _)| !room.is_empty())
             .map(|(room, lines)| {
                 let lines = lines
                     .iter()
                     .filter(|l| matches!(l.kind, LineKind::Msg | LineKind::Action | LineKind::Private))
+                    .cloned()
                     .collect();
-                (room, lines)
+                (room.clone(), lines)
             })
-            .collect();
-        std::fs::create_dir_all(dir)?;
-        let json = serde_json::to_string(&keep).map_err(std::io::Error::other)?;
-        crate::config::write_atomic(&self.history_path(dir), json.as_bytes())
-            .map_err(std::io::Error::other)?;
-        self.history_dirty = false;
-        Ok(())
+            .collect()
     }
 
     fn load_history(&mut self, dir: &Path) {
@@ -474,16 +470,16 @@ impl App {
         self.store_dirty = true;
     }
 
+    /// Queue the chat history of hubs with new lines for saving.
     pub fn save_rrc_history(&mut self) {
         let dir = self.paths.rrc_history.clone();
-        let mut failed = Vec::new();
         for hub in self.channels.hubs.iter_mut().filter(|h| h.history_dirty) {
-            if let Err(e) = hub.save_history(&dir) {
-                failed.push(format!("Could not save chat history for {}: {e}", hub.name));
-            }
-        }
-        for line in failed {
-            self.log(line);
+            let keep = hub.history_snapshot();
+            let dir = dir.clone();
+            self.saver.write(hub.history_path(&dir), format!("chat history for {}", hub.name), move || {
+                std::fs::create_dir_all(&dir)?;
+                Ok(serde_json::to_vec(&keep)?)
+            });
         }
     }
 

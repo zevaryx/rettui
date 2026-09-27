@@ -810,19 +810,23 @@ app.views.network = {
       oninput: () => {
         this.query = this.search.value;
         this.limit = 200;
-        this.render();
+        // Searched by rettui; wait for a pause in typing.
+        clearTimeout(this.typing);
+        this.typing = setTimeout(() => this.update(), 120);
       },
       onkeydown: (e) => {
         if (e.key === 'Escape') {
           this.search.value = '';
           this.query = '';
-          this.render();
+          this.limit = 200;
+          this.update();
         }
       },
     });
     const filter = el('select', { onchange: (e) => {
       this.filter = e.target.value;
-      this.render();
+      this.limit = 200;
+      this.update();
     } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes']]
       .map(([value, text]) => el('option', { value, text, selected: value === this.filter })));
     this.title = el('span', { class: 'title grow' });
@@ -835,9 +839,18 @@ app.views.network = {
   },
 
   limit: 200,
+  request: 0,
 
+  // Only the rows shown are fetched (there can be thousands of peers);
+  // rettui filters, searches and counts the rest.
   async update() {
-    const data = await api.get('/peers');
+    const request = ++this.request;
+    const params = new URLSearchParams({ q: this.query, limit: this.limit });
+    if (this.filter !== 'all') params.set('kind', this.filter);
+    const data = await api.get('/peers?' + params);
+    // A newer search or filter was asked for while this one loaded.
+    if (request !== this.request) return;
+    data.query = this.query;
     if (!changed(this, 'peers', data)) return;
     this.data = data;
     this.render();
@@ -845,22 +858,22 @@ app.views.network = {
 
   render() {
     if (!this.data) return;
-    const terms = searchTerms(this.query);
+    // Highlight what the rows were found by, not what has been typed since.
+    const terms = searchTerms(this.data.query);
     const filterName = { all: 'all', lxmf: 'LXMF peers', nomad: 'NomadNet nodes', propagation: 'propagation nodes' }[this.filter];
-    let rows = this.data.peers.filter((p) => (this.filter === 'all' || p.kind === this.filter) &&
-      terms.every((t) => (p.name || '').toLowerCase().includes(t) || p.hash.includes(t)));
-    this.title.textContent = `Heard announces · ${filterName} · ${rows.length}${terms.length ? ' matching' : ''}`;
+    const rows = this.data.peers;
+    const total = this.data.total;
+    this.title.textContent = `Heard announces · ${filterName} · ${total}${terms.length ? ' matching' : ''}`;
     if (!rows.length) {
       this.table.replaceChildren(el('div', { class: 'empty', text: terms.length
-        ? `Nothing heard matches “${this.query.trim()}”. Esc clears the search.`
+        ? `Nothing heard matches “${this.data.query.trim()}”. Esc clears the search.`
         : 'Listening for announces… peers, NomadNet nodes and propagation nodes appear here as they are heard.' }));
       return;
     }
     const tag = { lxmf: 'PEER', nomad: 'NODE', propagation: 'PROP' };
     const outbound = this.data.propagation_node;
-    // The newest rows only (there can be thousands); more on request.
-    const more = rows.length - this.limit;
-    rows = rows.slice(0, this.limit);
+    // The newest rows only; more on request.
+    const more = total - rows.length;
     this.table.replaceChildren(el('table', { class: 'net-table' },
       el('thead', {}, el('tr', {}, ['', 'Name', 'Address', 'Hops', 'Heard', ''].map((h) => el('th', { text: h })))),
       el('tbody', {}, rows.map((p) => el('tr', {
@@ -887,10 +900,10 @@ app.views.network = {
           copy(p.hash, 'address');
         } })))))),
       more > 0 ? el('div', { class: 'show-more' },
-        el('span', { class: 'dim', text: `Showing the ${this.limit} most recently heard of ${this.limit + more}. Search or filter to find others, or ` }),
+        el('span', { class: 'dim', text: `Showing the ${rows.length} most recently heard of ${total}. Search or filter to find others, or ` }),
         el('button', { text: `show ${Math.min(more, 200)} more`, onclick: () => {
           this.limit += 200;
-          this.render();
+          this.update();
         } })) : null));
   },
 
@@ -947,9 +960,9 @@ app.views.browser = {
   },
 
   async update() {
-    const [saved, peers] = await Promise.all([api.get('/saved'), api.get('/peers')]);
+    const [saved, peers] = await Promise.all([api.get('/saved'), api.get('/peers?kind=nomad')]);
     this.saved = saved;
-    this.nodes = peers.peers.filter((p) => p.kind === 'nomad');
+    this.nodes = peers.peers;
     this.renderPane();
     if (this.page) {
       const url = this.page.url;

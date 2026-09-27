@@ -300,9 +300,11 @@ rettui keeps its data in `~/.local/share/rettui/`:
   `zcat store.json.gz | jq`). Earlier versions kept it as plain `store.json`,
   about five times larger. The first launch after upgrading converts it,
   checks that the new file reads back the same, and only then removes the
-  old one.
+  old one. Changes are saved every 10 seconds on a background thread, so a
+  large store doesn't pause the UI, and once more when rettui exits.
 - `known_identities.json`: public keys from LXMF and propagation-node
-  announces, so you can reach peers that are offline now
+  announces, so you can reach peers that are offline now. Saved every few
+  seconds and when rettui exits.
 - `cache/`: cached NomadNet pages and images
 - `rrc/`: RRC chat history, one file per hub
 - `rettui.log`: logging, set with `RETTUI_LOG=debug`
@@ -462,7 +464,7 @@ state as the TUI.
 
 | Module | What it does | Built on |
 | --- | --- | --- |
-| `net/` | Network actor: runtime, announces, paths and keys, commands and events | rsReticulum |
+| `net/` | Network actor, on its own threads so heavy traffic can't hold up either UI: runtime, announces, paths and keys, commands and events | rsReticulum |
 | `lxmf/` | Sending, receiving and propagation node sync | rsLXMF |
 | `nomad/` | Page and file fetching, Micron parsing and layout, page cache, hosting a node and its pages | rsNomad |
 | `rrc/` | RRC wire format, hub replies, hub sessions | rsReticulum |
@@ -473,7 +475,8 @@ state as the TUI.
 | `web/` | Web UI: HTTP API, login, live updates, and the page's HTML/CSS/JS and font (`web/assets`) | axum |
 
 `cli.rs` has the shell commands (`send`, `listen`, `sync`, `fetch`), and
-`store.rs` and `config.rs` hold what is saved to disk.
+`store.rs` and `config.rs` hold what is saved to disk, and `app/saver.rs`
+writes the store and chat history in the background.
 
 ## License
 

@@ -29,6 +29,21 @@ pub use remote::{Known, KnownIdentities, ensure_path, link_options, lookup};
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How long an event loop applies a burst of network events before it
+/// draws or answers requests again; the rest wait for the next turn.
+pub const BURST_BUDGET: Duration = Duration::from_millis(8);
+
+/// Take waiting events until the queue is empty or the burst budget is spent.
+pub fn drain_burst(events: &mut mpsc::UnboundedReceiver<NetEvent>, mut apply: impl FnMut(NetEvent)) {
+    let started = std::time::Instant::now();
+    while started.elapsed() < BURST_BUDGET {
+        match events.try_recv() {
+            Ok(event) => apply(event),
+            Err(_) => break,
+        }
+    }
+}
+
 pub type Hash = [u8; 16];
 
 /// The display name in an LXMF delivery announce: the msgpack format, or
@@ -180,14 +195,38 @@ pub struct NetOptions {
     pub host: Option<HostConfig>,
 }
 
+/// Start the network actor on a runtime of its own, so heavy traffic
+/// (thousands of announces to verify) never holds up the threads that
+/// run the interface: the TUI's timers, or the web server's requests.
 pub fn spawn(options: NetOptions) -> (mpsc::UnboundedSender<NetCommand>, mpsc::UnboundedReceiver<NetEvent>) {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
-        if let Err(error) = run(options, cmd_rx, ev_tx.clone()).await {
-            let _ = ev_tx.send(NetEvent::StartFailed(error));
+    let started = std::thread::Builder::new().name("rettui-net".into()).spawn({
+        let ev_tx = ev_tx.clone();
+        move || {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .thread_name("rettui-net-worker")
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(e) => {
+                    let _ = ev_tx.send(NetEvent::StartFailed(format!("Could not start the network runtime: {e}")));
+                    return;
+                }
+            };
+            runtime.block_on(async {
+                if let Err(error) = run(options, cmd_rx, ev_tx.clone()).await {
+                    let _ = ev_tx.send(NetEvent::StartFailed(error));
+                }
+            });
+            // Tasks still running (links, fetches) belonged to this stack.
+            runtime.shutdown_timeout(Duration::from_secs(1));
         }
     });
+    if let Err(e) = started {
+        let _ = ev_tx.send(NetEvent::StartFailed(format!("Could not start the network thread: {e}")));
+    }
     (cmd_tx, ev_rx)
 }
 
@@ -203,9 +242,14 @@ pub async fn start_runtime(rns_config: Option<&str>) -> Result<ReticulumHandle, 
     .map_err(|e| format!("Reticulum failed to start: {e}"))
 }
 
+/// Announces a subscription holds while the actor is busy. Busy networks
+/// (or a node coming online) deliver hundreds at once; the runtime drops
+/// what doesn't fit.
+const ANNOUNCE_BUFFER: usize = 8192;
+
 async fn subscribe(runtime: &ReticulumHandle, aspect: &str) -> Result<AnnounceSubscription, String> {
     runtime
-        .subscribe_announces(Some(aspect.to_string()), false)
+        .subscribe_announces_with_capacity(Some(aspect.to_string()), false, ANNOUNCE_BUFFER)
         .await
         .map_err(|e| format!("Could not subscribe to {aspect} announces: {e}"))
 }
@@ -263,6 +307,9 @@ async fn run(
     let mut rrc_sessions = rrc_session::Sessions::default();
     let mut stop = Stop::Quit;
     let syncer = lxmf::Syncer::new(runtime.clone(), known.clone(), identity.clone(), lxmf_hash, ev.clone());
+    // Known identities are saved every few seconds, one save at a time.
+    let mut known_save: Option<tokio::task::JoinHandle<()>> = None;
+    let mut announces_missed = 0u64;
 
     // Give interfaces a moment to come up before announcing or syncing.
     let startup = tokio::time::sleep(Duration::from_secs(3));
@@ -298,6 +345,18 @@ async fn run(
                 syncer.start(propagation_node);
             }
             _ = stats_timer.tick() => {
+                if known_save.as_ref().is_none_or(|save| save.is_finished()) {
+                    let known = known.clone();
+                    known_save = Some(tokio::spawn(async move { KnownIdentities::save_in_background(&known).await }));
+                }
+                let missed = lxmf_announces.dropped_events() + nomad_announces.dropped_events() + pn_announces.dropped_events();
+                if missed > announces_missed {
+                    let _ = ev.send(NetEvent::Log(format!(
+                        "Missed {} announce(s): more arrived at once than could be taken in",
+                        missed - announces_missed
+                    )));
+                    announces_missed = missed;
+                }
                 if let Ok(stats) = runtime.interface_stats().await {
                     let interfaces = stats
                         .interfaces
@@ -471,6 +530,16 @@ async fn run(
         }
     }
 
+    // Save known identities while hubs are told we are leaving.
+    let final_save = {
+        let (known, previous) = (known.clone(), known_save.take());
+        tokio::spawn(async move {
+            if let Some(save) = previous {
+                let _ = save.await;
+            }
+            KnownIdentities::save_in_background(&known).await;
+        })
+    };
     // Hubs first, so they see us leave at once. The rest is tidying up: it
     // can wait on open links (e.g. a peer's LXMF link), so it is bounded.
     rrc_sessions.close_all().await;
@@ -483,6 +552,7 @@ async fn run(
     })
     .await;
     let _ = tokio::time::timeout(quick, delivery.close()).await;
+    let _ = tokio::time::timeout(quick, final_save).await;
     let _ = tokio::time::timeout(stop.runtime_wait(), runtime.shutdown_and_wait()).await;
     let _ = ev.send(NetEvent::Stopped);
     Ok(())

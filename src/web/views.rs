@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use crate::app::channels::{Hub, HubStatus, LineKind};
-use crate::app::{App, NetState, SyncState};
+use crate::app::{App, NetState, SyncState, network};
 use crate::config::{Effect, FIELDS, FieldKind, Settings};
 use crate::net::PeerKind;
 use crate::rrc;
@@ -122,11 +122,23 @@ pub fn conversation(app: &App, key: &str) -> Value {
     })
 }
 
-pub fn peers(app: &App) -> Value {
-    let mut peers: Vec<_> = app.store.peers.iter().collect();
-    peers.sort_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
+/// Heard peers, most recent first: those of one kind (`lxmf`, `nomad`,
+/// `propagation`) if asked, matching the search words, at most `limit`.
+/// `total` counts every match, so the page can offer more.
+pub fn peers(app: &App, kind: Option<&str>, query: &str, limit: Option<usize>) -> Value {
+    let terms = network::search_terms(query);
+    let mut peers: Vec<_> = app
+        .store
+        .peers
+        .iter()
+        .filter(|(hash, p)| kind.is_none_or(|kind| kind_name(p.kind) == kind) && network::matches(&terms, hash, p))
+        .collect();
+    let total = peers.len();
+    peers.sort_unstable_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
+    peers.truncate(limit.unwrap_or(usize::MAX));
     json!({
         "propagation_node": app.settings.propagation_node,
+        "total": total,
         "peers": peers.into_iter().map(|(hash, p)| json!({
             "hash": hash, "kind": kind_name(p.kind), "name": p.name, "hops": p.hops, "last_seen": p.last_seen,
         })).collect::<Vec<_>>(),

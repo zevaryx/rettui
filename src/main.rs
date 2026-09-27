@@ -212,10 +212,8 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
             },
             Some(event) = net_rx.recv() => {
                 app.on_net(event);
-                // Apply any burst of network events before redrawing.
-                while let Ok(event) = net_rx.try_recv() {
-                    app.on_net(event);
-                }
+                // Apply a burst of network events before redrawing.
+                net::drain_burst(&mut net_rx, |event| app.on_net(event));
             }
             Some(image) = decoded.recv() => app.on_decoded(image),
             _ = tick.tick() => app.on_tick(),
@@ -238,5 +236,6 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     app.save_if_dirty();
     // Leave hubs and stop Reticulum properly (a few seconds at most).
     net::shutdown(&net_tx, &mut net_rx, net::Stop::Quit).await;
+    app.finish_saves();
     result
 }

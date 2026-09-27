@@ -1,6 +1,6 @@
 [package]
 name = "rettui"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 description = "Terminal Reticulum client: LXMF messaging and NomadNet browsing"
 # rsReticulum, rsLXMF and rsNomad are AGPL-3.0-or-later.
@@ -66,4 +66,40 @@ opt-level = 3
 [profile.dev.package.fdeflate]
 opt-level = 3
 [profile.dev.package.moxcms]
+opt-level = 3
+# Store compression (saved in the background, but still quicker to finish).
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+# Reticulum's crypto and packet handling. Unoptimised, a debug build can't
+# keep up with bursts of announces: a shared instance (rnsd) stops sending
+# to clients that fall behind, and announces are lost.
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+[profile.dev.package.ed25519-dalek]
+opt-level = 3
+[profile.dev.package.x25519-dalek]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
+[profile.dev.package.aes]
+opt-level = 3
+[profile.dev.package.cbc]
+opt-level = 3
+[profile.dev.package.hkdf]
+opt-level = 3
+[profile.dev.package.rns-crypto]
+opt-level = 3
+[profile.dev.package.rns-identity]
+opt-level = 3
+[profile.dev.package.rns-wire]
+opt-level = 3
+[profile.dev.package.rns-transport]
+opt-level = 3
+[profile.dev.package.rns-interface]
 opt-level = 3

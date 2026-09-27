@@ -65,7 +65,7 @@ pub struct Conversation {
     pub unread: usize,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Store {
     /// Keyed by destination hash (hex).
@@ -161,7 +161,8 @@ impl Store {
         }
     }
 
-    fn encode(&self) -> Result<Vec<u8>> {
+    /// The file's contents: compressed JSON.
+    pub fn encode(&self) -> Result<Vec<u8>> {
         // Serialising first and compressing in one go is several times
         // faster than streaming serde's many small writes through gzip.
         let json = serde_json::to_vec(self)?;

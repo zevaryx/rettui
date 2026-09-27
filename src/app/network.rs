@@ -30,24 +30,29 @@ impl NetSearch {
     /// address. Addresses may be pasted as `<hash>`, `lxmf@hash` or
     /// `hash:/page/index.mu`.
     pub fn terms(&self) -> Vec<Vec<char>> {
-        self.input
-            .text()
-            .split_whitespace()
-            .map(|word| {
-                let word = word.trim_start_matches('<').trim_end_matches('>');
-                let word = ["lxmf@", "lxmf://", "nomadnetwork://"]
-                    .iter()
-                    .find_map(|prefix| word.strip_prefix(prefix))
-                    .unwrap_or(word);
-                let word = match word.split_once(':') {
-                    Some((hash, _)) if !hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()) => hash,
-                    _ => word,
-                };
-                fold(word)
-            })
-            .filter(|term| !term.is_empty())
-            .collect()
+        search_terms(self.input.text())
     }
+}
+
+/// Case-folded search words (see [`NetSearch::terms`]); the web UI's
+/// Network search uses the same rules.
+pub fn search_terms(query: &str) -> Vec<Vec<char>> {
+    query
+        .split_whitespace()
+        .map(|word| {
+            let word = word.trim_start_matches('<').trim_end_matches('>');
+            let word = ["lxmf@", "lxmf://", "nomadnetwork://"]
+                .iter()
+                .find_map(|prefix| word.strip_prefix(prefix))
+                .unwrap_or(word);
+            let word = match word.split_once(':') {
+                Some((hash, _)) if !hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()) => hash,
+                _ => word,
+            };
+            fold(word)
+        })
+        .filter(|term| !term.is_empty())
+        .collect()
 }
 
 /// Lowercase one char per char, so match positions line up with the text.
@@ -76,7 +81,8 @@ pub fn match_mask(text: &str, terms: &[Vec<char>]) -> Vec<bool> {
     mask
 }
 
-fn matches(terms: &[Vec<char>], hash: &str, peer: &Peer) -> bool {
+/// Whether a peer's name or address contains every search word.
+pub fn matches(terms: &[Vec<char>], hash: &str, peer: &Peer) -> bool {
     if terms.is_empty() {
         return true;
     }

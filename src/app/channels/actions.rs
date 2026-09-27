@@ -67,7 +67,7 @@ impl App {
         let Some(index) = self.channels.hub_index(hash) else { return };
         self.disconnect_hub(index);
         let hub = self.channels.hubs.remove(index);
-        let _ = std::fs::remove_file(hub.history_path(&self.paths.rrc_history));
+        self.saver.remove(hub.history_path(&self.paths.rrc_history));
         self.channels.selected = self.channels.hubs.first().map(|h| Target { hub: h.hash, room: None });
         self.save_hubs();
         self.notify(format!("Removed hub {}", hub.name));

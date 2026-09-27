@@ -16,7 +16,8 @@ pub mod channels;
 pub(crate) mod files;
 mod input;
 mod messages;
-mod network;
+pub mod network;
+mod saver;
 pub mod node;
 pub mod reticulum;
 mod settings;
@@ -237,6 +238,8 @@ pub struct App {
     decoding: std::collections::HashSet<PathBuf>,
     decoded_tx: tokio::sync::mpsc::UnboundedSender<Decoded>,
     decoded_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Decoded>>,
+    /// Writes the store and chat history in the background.
+    saver: saver::Saver,
 
     pub peers: ListState,
     pub net_filter: NetFilter,
@@ -319,6 +322,7 @@ impl App {
             decoding: std::collections::HashSet::new(),
             decoded_tx,
             decoded_rx: Some(decoded_rx),
+            saver: saver::Saver::new(),
             peers: ListState::default(),
             net_filter: NetFilter::All,
             net_search: NetSearch::default(),
@@ -352,14 +356,21 @@ impl App {
         }
     }
 
+    /// Queue saves of whatever changed; they are written in the background
+    /// (only the snapshot is taken here, a millisecond or two).
     pub fn save_if_dirty(&mut self) {
         self.save_rrc_history();
         if self.store_dirty {
-            if let Err(e) = self.store.save(&self.paths.store) {
-                self.log(format!("Could not save store: {e}"));
-            }
+            let snapshot = self.store.clone();
+            self.saver.write(self.paths.store.clone(), "store", move || snapshot.encode());
             self.store_dirty = false;
         }
+    }
+
+    /// Save what changed and wait until everything is written, before exiting.
+    pub fn finish_saves(&mut self) {
+        self.save_if_dirty();
+        self.saver.finish();
     }
 
     /// Save a new display name and announce it.
@@ -719,5 +730,8 @@ impl App {
     /// Periodic work (called about twice a second).
     pub fn on_tick(&mut self) {
         self.channels_tick();
+        for failure in self.saver.failures() {
+            self.fail(failure);
+        }
     }
 }

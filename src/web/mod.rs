@@ -295,10 +295,8 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
             }
             Some(event) = net_rx.recv() => {
                 owner.on_net(event);
-                // Apply any burst of events before telling browsers.
-                while let Ok(event) = net_rx.try_recv() {
-                    owner.on_net(event);
-                }
+                // Apply a burst of events before telling browsers.
+                net::drain_burst(&mut net_rx, |event| owner.on_net(event));
                 notify(&changes);
             }
             Some(image) = decoded.recv() => owner.app.on_decoded(image),
@@ -325,5 +323,6 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     owner.app.save_if_dirty();
     server.abort();
     net::shutdown(&net_tx, &mut net_rx, net::Stop::Quit).await;
+    owner.app.finish_saves();
     result
 }

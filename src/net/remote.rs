@@ -17,7 +17,7 @@ pub const PATH_TIMEOUT: Duration = Duration::from_secs(30);
 /// Public keys and announce data heard from LXMF and propagation node
 /// announces, kept across runs so messages can be encrypted, stamped and
 /// verified without first hearing the peer again.
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct KnownEntry {
     key: String,
     app_data: Option<String>,
@@ -27,6 +27,11 @@ struct KnownEntry {
 pub struct KnownIdentities {
     path: PathBuf,
     entries: HashMap<String, KnownEntry>,
+    /// Changed since the last save. Saving is batched (see
+    /// [`KnownIdentities::save_in_background`]): rewriting the whole file for
+    /// every announce slowed the network actor to a crawl during bursts, and
+    /// announces were dropped.
+    dirty: bool,
 }
 
 pub type Known = Arc<std::sync::Mutex<KnownIdentities>>;
@@ -40,24 +45,48 @@ impl KnownIdentities {
         Arc::new(std::sync::Mutex::new(Self {
             path: path.to_path_buf(),
             entries,
+            dirty: false,
         }))
     }
 
-    pub(super) fn remember(&mut self, destination: Hash, key: &[u8; 64], app_data: Option<&[u8]>) {
-        let entry = KnownEntry {
-            key: hex::encode(key),
-            app_data: app_data.map(hex::encode),
+    /// Write the file if anything changed, off the async threads.
+    pub async fn save_in_background(known: &Known) {
+        let snapshot = {
+            let mut known = known.lock().unwrap();
+            if !known.dirty {
+                return;
+            }
+            known.dirty = false;
+            (known.path.clone(), known.entries.clone())
         };
+        let (path, entries) = snapshot;
+        let saved = tokio::task::spawn_blocking(move || {
+            let text = serde_json::to_string(&entries)?;
+            crate::config::write_atomic(&path, text.as_bytes())
+        })
+        .await;
+        match saved {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!("could not save known identities: {e}"),
+            Err(e) => tracing::warn!("could not save known identities: {e}"),
+        }
+    }
+
+    pub(super) fn remember(&mut self, destination: Hash, key: &[u8; 64], app_data: Option<&[u8]>) {
         let slot = self.entries.entry(hex::encode(destination)).or_default();
-        if slot.key == entry.key && slot.app_data == entry.app_data {
+        let key = hex::encode(key);
+        // Announces without app data (such as the automatic path responses
+        // of Python shared-instance clients) keep what an earlier one said.
+        let app_data = match app_data {
+            Some(data) => Some(hex::encode(data)),
+            None if slot.key == key => slot.app_data.clone(),
+            None => None,
+        };
+        if slot.key == key && slot.app_data == app_data {
             return;
         }
-        *slot = entry;
-        if let Ok(text) = serde_json::to_string(&self.entries)
-            && let Err(e) = crate::config::write_atomic(&self.path, text.as_bytes())
-        {
-            tracing::warn!("could not save known identities: {e}");
-        }
+        *slot = KnownEntry { key, app_data };
+        self.dirty = true;
     }
 
     fn get(&self, destination: Hash) -> Option<Remote> {
@@ -127,5 +156,32 @@ pub fn link_options(label: &str, identify: bool) -> LinkConnectOptions {
         client_label: label.to_string(),
         identify,
         ..LinkConnectOptions::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remembers_in_memory_and_keeps_app_data_from_named_announces() {
+        let mut known = KnownIdentities::default();
+        let (dest, key, other_key) = ([1u8; 16], [2u8; 64], [3u8; 64]);
+        known.remember(dest, &key, Some(b"named"));
+        assert!(known.dirty);
+        known.dirty = false;
+        // The same announce again changes nothing.
+        known.remember(dest, &key, Some(b"named"));
+        assert!(!known.dirty);
+        // A nameless announce (an automatic path response) keeps the data.
+        known.remember(dest, &key, None);
+        assert!(!known.dirty);
+        assert_eq!(known.entries[&hex::encode(dest)].app_data, Some(hex::encode(b"named")));
+        // New data replaces it; a different key starts over.
+        known.remember(dest, &key, Some(b"renamed"));
+        assert!(known.dirty);
+        assert_eq!(known.entries[&hex::encode(dest)].app_data, Some(hex::encode(b"renamed")));
+        known.remember(dest, &other_key, None);
+        assert_eq!(known.entries[&hex::encode(dest)].app_data, None);
     }
 }

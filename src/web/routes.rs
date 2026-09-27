@@ -373,8 +373,19 @@ async fn attachment(
 
 // ---- network and status ---------------------------------------------------
 
-async fn peers(State(state): State<WebState>) -> ApiResult {
-    Ok(axum::Json(state.read(|o| views::peers(&o.app)).await?))
+#[derive(Deserialize)]
+struct PeersQuery {
+    /// `lxmf`, `nomad` or `propagation`; every kind when left out.
+    kind: Option<String>,
+    #[serde(default)]
+    q: String,
+    limit: Option<usize>,
+}
+
+async fn peers(State(state): State<WebState>, Query(query): Query<PeersQuery>) -> ApiResult {
+    Ok(axum::Json(
+        state.read(move |o| views::peers(&o.app, query.kind.as_deref(), &query.q, query.limit)).await?,
+    ))
 }
 
 #[derive(Deserialize)]
