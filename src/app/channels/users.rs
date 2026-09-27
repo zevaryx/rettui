@@ -12,7 +12,7 @@ use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 use rns_identity::destination::Destination;
 
-use super::{ChatLine, LineKind};
+use super::{ChatLine, LineKind, whisper_key};
 use crate::app::App;
 use crate::lxmf::{DeliveryMode, LXMF_ASPECT};
 use crate::net::{Hash, PeerKind};
@@ -99,8 +99,9 @@ impl App {
         }
     }
 
-    /// Send a private notice to a user through the hub.
-    pub fn rrc_whisper(&mut self, index: usize, room: &str, target: &[u8], text: &str) -> Result<(), String> {
+    /// Send a private notice (a whisper) to a user through the hub. It goes
+    /// in the whisper conversation with them.
+    pub fn rrc_whisper(&mut self, index: usize, target: &[u8], text: &str) -> Result<(), String> {
         let hub = self.channels.hubs.get(index).ok_or("No such hub")?;
         if !hub.direct_notices {
             return Err("This hub does not support private notices".into());
@@ -109,14 +110,26 @@ impl App {
         if text.is_empty() {
             return Err("Nothing to send".into());
         }
-        let name = hub.name_of(target);
         let env = self.envelope(index, t::NOTICE).text(text).dst(target);
         self.send_env(index, &env);
         let mut line = ChatLine::new(LineKind::Private, text);
-        line.nick = Some(name);
+        line.nick = self.effective_nick(index);
         line.own = true;
-        self.record(index, room, line);
+        self.record(index, &whisper_key(target), line);
         Ok(())
+    }
+
+    /// Open (creating if needed) the whisper conversation with a user and
+    /// show it. Returns its buffer key.
+    pub fn open_whisper(&mut self, index: usize, target: &[u8]) -> String {
+        let key = whisper_key(target);
+        let hub = self.hub_mut(index);
+        hub.buffers.entry(key.clone()).or_default();
+        let hash = hub.hash;
+        self.channels.selected = Some(super::Target { hub: hash, room: Some(key.clone()) });
+        self.channels.scroll = 0;
+        self.mark_channel_read();
+        key
     }
 
     /// Send an LXMF message to a hub user's address, noting it in the room.
@@ -238,10 +251,11 @@ impl App {
                 self.channels.menu = Some(UserMenu { user, list: menu.list });
             }
             UserAction::Whisper => {
-                // Start a /msg in the input, ready for the text.
-                let nick = if user.name.contains(char::is_whitespace) { hex::encode(&user.identity) } else { user.name.clone() };
-                self.channels.input = crate::term::input::TextInput::with_text(&format!("/msg {nick} "));
-                self.channels.typing = true;
+                // Their whisper conversation, ready to write in.
+                if let Some((index, _)) = self.channels.active() {
+                    self.open_whisper(index, &user.identity);
+                    self.channels.typing = true;
+                }
             }
             UserAction::Lxmf => {
                 if !user.lxmf_known {

@@ -188,11 +188,11 @@ impl App {
                     if let Some(nick) = &env.nick {
                         hub.nicks.insert(env.src.clone(), nick.clone());
                     }
+                    // It goes in the whisper conversation with them.
                     let mut line = ChatLine::new(LineKind::Private, text);
                     line.src = Some(hex::encode(&env.src));
                     line.nick = env.nick.clone();
-                    let target = self.reply_room(index);
-                    self.record(index, &target, line);
+                    self.record(index, &super::whisper_key(&env.src), line);
                     return;
                 }
                 if self.consume_notice(index, &text) {

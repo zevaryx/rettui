@@ -97,16 +97,24 @@ tab.
   tells the hub who you are.
 - **Views:** the hub view shows its status, limits, MOTD, and public rooms,
   which you can click to join. Rooms show the topic, members (on wide
-  screens), `/me` actions, notices and private notices, with times to the
-  second. Your own messages show `…` until the hub echoes them back.
+  screens), `/me` actions and notices, with times to the second. Your own
+  messages show `…` until the hub echoes them back.
+- **Whispers:** private notices ("whispers") with another user have their own
+  conversation under the hub, marked `@` where rooms have `#`, instead of
+  appearing in rooms. Writing there whispers to that user; incoming whispers
+  count as unread there and stand out like mentions. When two users share a
+  nick, the list adds the start of their identity. `x` (or **Close** in the
+  web UI) closes a conversation. Whispers saved in rooms by older versions
+  are moved to their conversations.
 - **Commands:** the same set as NomadNet: `/join`, `/part`, `/me`, `/nick`
   (per hub, defaulting to your display name), `/who`, `/list`, `/topic`,
   `/ping`, `/clear`, `/connect`, `/disconnect`, and hub moderation commands
-  such as `/mode`, `/kick` and `/op`. `/msg <nick> <text>` (also `/w`) sends a
-  private notice on hubs that support it, and `/dm <nick> [text]` sends an
-  LXMF message instead. `/help` lists them all.
+  such as `/mode`, `/kick` and `/op`. `/msg <nick> [text]` (also `/w`)
+  whispers on hubs that support it (with no text, it opens the
+  conversation), and `/dm <nick> [text]` sends an LXMF message instead.
+  `/help` lists them all.
 - **Messaging a user:** click a name in the chat or the members list (or press
-  `m`) for a menu: whisper through the hub, send an LXMF message, or copy
+  `m`) for a menu: open your whisper conversation, send an LXMF message, or copy
   their LXMF address or identity. Their LXMF address comes from the identity
   the hub shows, and the menu says whether they have announced it. A message
   to an address that was never announced waits until a path is found.
@@ -287,8 +295,12 @@ rettui keeps its data in `~/.local/share/rettui/`:
   of either UI (or by hand). Changes apply straight away, except the
   Reticulum config and "announce at start", which are used the next time
   rettui starts.
-- `store.json`: peers, conversations, saved pages, RRC hubs, and nodes you
-  identify to
+- `store.json.gz`: peers, conversations, saved pages, RRC hubs, and nodes you
+  identify to, as gzip-compressed JSON (read it with
+  `zcat store.json.gz | jq`). Earlier versions kept it as plain `store.json`,
+  about five times larger. The first launch after upgrading converts it,
+  checks that the new file reads back the same, and only then removes the
+  old one.
 - `known_identities.json`: public keys from LXMF and propagation-node
   announces, so you can reach peers that are offline now
 - `cache/`: cached NomadNet pages and images
@@ -376,8 +388,8 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
 | All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `q` / `Ctrl-C` quit |
 | Messages | `↑↓` pick a conversation, `Enter` write, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `PgUp/PgDn` scroll |
 | Writing a message | `Enter` send, `Esc` stop writing, `Ctrl-V` paste, `Ctrl-O` attach, `Ctrl-X` clear attachments, `Ctrl-P` cycle delivery mode |
-| Channels | `↑↓` pick a hub or room, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `x` leave a room or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll |
-| User menu (click a name, or `m`) | `w` whisper through the hub (`/msg`), `l` LXMF message, `Enter` pick (also copy their LXMF address or identity), `Esc` close |
+| Channels | `↑↓` pick a hub, room or whisper conversation, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `x` leave a room, close a whisper conversation, or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll |
+| User menu (click a name, or `m`) | `w` open your whisper conversation, `l` LXMF message, `Enter` pick (also copy their LXMF address or identity), `Esc` close |
 | Network | `↑↓` select, `y` copy the selected address, `Enter` message a peer, browse a node, or pick a propagation node; `p` use the selected propagation node; `f` filter; `/` search by name or address (`Enter` done, `Esc` clear) |
 | Browser (both panes) | `←`/`→` move between the node pane and the page, `t` switch Saved/Nodes, `g` go to an address, `y` copy the current address, `s` save the current page, `b` back, `r` refresh from the network, `R` clear the whole cache, `I` identify to this node (toggle), `H` home, `u` view the page's Micron source (toggle), `Esc` cancel loading |
 | Browser, node pane | `↑↓` select, `Enter` open beside the list, `x` remove a saved page |

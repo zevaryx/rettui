@@ -15,7 +15,7 @@ pub const HELP: &[&str] = &[
     "/join <room> [key]    join a room (also /j)",
     "/part [room]          leave a room (also /leave)",
     "/me <text>            send an action",
-    "/msg <nick> <text>    private notice (if the hub supports it)",
+    "/msg <nick> [text]    whisper (a private notice, if the hub supports it); no text opens the conversation",
     "/dm <nick> [text]     LXMF message to the user's address (no text: open the conversation)",
     "/nick [name]          show or set your nick on this hub",
     "/who [room]           list users (also /names)",
@@ -78,6 +78,16 @@ impl App {
             self.record(index, "", ChatLine::new(LineKind::Error, "Join a room first: /join <room>"));
             return None;
         }
+        if let Some(peer) = super::whisper_peer(room) {
+            let limit = self.channels.hubs[index].limits.max_msg_bytes;
+            if text.len() > limit {
+                return Some(rrc::split_message(text, limit));
+            }
+            if let Err(e) = self.rrc_whisper(index, &peer, text) {
+                self.record(index, room, ChatLine::new(LineKind::Error, e));
+            }
+            return None;
+        }
         if !self.channels.hubs[index].is_connected() {
             self.record(index, room, ChatLine::new(LineKind::Error, "Not connected; connecting now"));
             self.connect_hub(index);
@@ -114,6 +124,10 @@ impl App {
         let error = |app: &mut App, text: String| {
             app.record(index, room, ChatLine::new(LineKind::Error, text));
         };
+        // Room commands make no sense in a whisper conversation.
+        if super::whisper_peer(room).is_some() && matches!(name.as_str(), "me" | "part" | "leave" | "topic" | "who" | "names") {
+            return error(self, format!("/{name} is for rooms; this is a whisper conversation (x closes it)"));
+        }
         let needs_connection = matches!(name.as_str(), "me" | "msg" | "ping" | "list")
             || HUB_COMMANDS.contains(&name.as_str());
         if needs_connection && !connected {
@@ -211,22 +225,40 @@ impl App {
         if !self.channels.hubs[index].direct_notices {
             return fail(self, "This hub does not support private notices");
         }
-        let Some((who, text)) = arg.split_once(char::is_whitespace) else {
-            return fail(self, "Usage: /msg <nick> <text>");
-        };
+        let (who, text) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+        if who.is_empty() {
+            return fail(self, "Usage: /msg <nick> [text]");
+        }
         let target = match self.find_rrc_user(index, who) {
             Ok(target) => target,
             Err(e) => return fail(self, e),
         };
-        if let Err(e) = self.rrc_whisper(index, room, &target, text) {
-            fail(self, &e);
+        // No text: open the conversation to write in.
+        if text.trim().is_empty() {
+            self.open_whisper(index, &target);
+            return;
+        }
+        if let Err(e) = self.rrc_whisper(index, &target, text) {
+            return fail(self, &e);
+        }
+        if super::whisper_key(&target) != room {
+            let name = self.channels.hubs[index].name_of(&target);
+            let note = format!("Whispered to {name}; your conversation is under the hub as @ {name}");
+            self.record(index, room, ChatLine::new(LineKind::System, note));
         }
     }
 
     pub fn confirm_split(&mut self, hub: Hash, room: &str, parts: &[String]) {
         let Some(index) = self.channels.hub_index(hub) else { return };
         for part in parts {
-            self.send_chat(index, room, t::MSG, part);
+            match super::whisper_peer(room) {
+                Some(peer) => {
+                    if let Err(e) = self.rrc_whisper(index, &peer, part) {
+                        self.record(index, room, ChatLine::new(LineKind::Error, e));
+                    }
+                }
+                None => self.send_chat(index, room, t::MSG, part),
+            }
         }
     }
 }

@@ -468,6 +468,9 @@ struct HubBody {
     text: String,
     #[serde(default)]
     parts: Vec<String>,
+    /// A user's identity (hex), for `whisper`.
+    #[serde(default)]
+    src: String,
 }
 
 async fn hub_action(
@@ -495,6 +498,12 @@ async fn hub_action(
                     return Ok(json!({ "split": split }));
                 }
                 "split" => app.confirm_split(hash, &room, &body.parts),
+                // Open the whisper conversation with a user.
+                "whisper" => {
+                    let identity = hex::decode(body.src.trim()).ok().filter(|id| id.len() == 16).ok_or_else(|| bad("not a user identity"))?;
+                    let key = app.open_whisper(index, &identity);
+                    return Ok(json!({ "ok": true, "room": key }));
+                }
                 _ => return Err(bad(format!("unknown hub action {action}"))),
             }
             Ok(json!({ "ok": true, "room": room }))

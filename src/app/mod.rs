@@ -334,6 +334,9 @@ impl App {
             restart_pending: false,
             rejoin_hubs: Vec::new(),
         };
+        if let Some(note) = app.store.migration_note.take() {
+            app.log(note);
+        }
         if !app.store.conversations.is_empty() {
             app.conversations.select(Some(0));
             app.sync_active_conversation();

@@ -347,6 +347,8 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
   .members { display: none; }
 }
 .list-item .online { color: var(--green); }
+.whisper-icon { color: var(--magenta); font-weight: 700; }
+.show-more { padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 
 /* ---- phones ------------------------------------------------------------- */
 /* One column: lists above the view they open, the page scrolls. */

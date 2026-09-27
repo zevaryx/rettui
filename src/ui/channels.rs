@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{ACCENT, DIM, SELECTED_BG, block, wrap};
 use crate::app::App;
 use crate::app::channels::users::UserAction;
-use crate::app::channels::{ChatLine, HubStatus, LineKind, Row};
+use crate::app::channels::{ChatLine, HubStatus, LineKind, Row, whisper_peer};
 
 /// A stable colour per identity, so nicks are easy to tell apart.
 fn nick_color(src: Option<&str>) -> Color {
@@ -64,13 +64,14 @@ fn chat_lines(
     hub: &crate::app::channels::Hub,
     width: usize,
     own_nick: &str,
+    whisper: bool,
 ) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
     let time = Local
         .timestamp_millis_opt(line.ts as i64)
         .single()
         .map(|t| t.format("%H:%M:%S ").to_string())
         .unwrap_or_default();
-    let name = line.nick.clone().unwrap_or_else(|| {
+    let name = line.nick.clone().or_else(|| line.own.then(|| own_nick.to_string())).unwrap_or_else(|| {
         line.src
             .as_deref()
             .and_then(|s| hex::decode(s).ok())
@@ -78,7 +79,9 @@ fn chat_lines(
             .unwrap_or_default()
     });
     let color = if line.own { ACCENT } else { nick_color(line.src.as_deref()) };
-    let (prefix, text_style): (Vec<Span<'static>>, Style) = match line.kind {
+    // In a whisper conversation, whispers read like ordinary chat.
+    let kind = if whisper && line.kind == LineKind::Private { LineKind::Msg } else { line.kind };
+    let (prefix, text_style): (Vec<Span<'static>>, Style) = match kind {
         LineKind::Msg => (
             vec![Span::styled(format!("<{name}> "), Style::default().fg(color).bold())],
             Style::default(),
@@ -164,7 +167,8 @@ fn chat_lines(
 
 pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     let active = app.channels.active();
-    let show_members = area.width >= 90 && active.as_ref().is_some_and(|(_, room)| !room.is_empty());
+    let show_members =
+        area.width >= 90 && active.as_ref().is_some_and(|(_, room)| !room.is_empty() && whisper_peer(room).is_none());
     let [list_area, chat_area, members_area] = Layout::horizontal([
         Constraint::Length(super::side_width(area.width, 30)),
         Constraint::Min(20),
@@ -214,6 +218,20 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
                     }
                     ListItem::new(Line::from(spans))
                 }
+                Row::Whisper(i, key) => {
+                    // Whisper conversations: "@" where rooms have "#".
+                    let hub = &app.channels.hubs[*i];
+                    let name = hub.whispers().into_iter().find(|(k, _)| k == key).map_or_else(|| hub.whisper_name(key), |(_, n)| n);
+                    let mut spans = vec![
+                        Span::styled("  @ ", Style::default().fg(Color::LightMagenta)),
+                        Span::raw(name),
+                    ];
+                    if let Some(count) = hub.unread.get(key).filter(|c| **c > 0) {
+                        spans.push(Span::raw(" "));
+                        spans.push(Span::styled(format!(" {count} "), Style::default().fg(Color::Black).bg(Color::LightRed).bold()));
+                    }
+                    ListItem::new(Line::from(spans))
+                }
             })
             .collect();
         let selected = app.channel_row_index(&rows);
@@ -234,7 +252,11 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
     let hub = &app.channels.hubs[index];
-    let title = if room.is_empty() {
+    let whisper = whisper_peer(&room);
+    let title = if whisper.is_some() {
+        let caveat = if hub.direct_notices { "" } else { " (this hub doesn't pass whispers)" };
+        format!("@ {} · whisper{caveat}", hub.whisper_name(&room))
+    } else if room.is_empty() {
         let name = hub.hub_name.clone().unwrap_or_else(|| hub.name.clone());
         format!("{name}  {}", hex::encode(hub.hash))
     } else {
@@ -299,18 +321,34 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         lines.push((Line::raw(""), Link::None));
     }
     let own_nick = hub.nick.clone().unwrap_or_else(|| app.settings.display_name.clone());
-    for line in hub.buffers.get(&room).map(Vec::as_slice).unwrap_or_default() {
-        let (rendered, name_cols) = chat_lines(line, hub, width, &own_nick);
+    let height = inner.height as usize;
+    // Only the rows that can be on screen: wrap messages from the newest back
+    // until the view (and however far it is scrolled up) is full.
+    let needed = app.channels.scroll + height;
+    let mut tail: Vec<(Line, Link)> = Vec::new();
+    let mut whole = true;
+    for line in hub.buffers.get(&room).map(Vec::as_slice).unwrap_or_default().iter().rev() {
+        if tail.len() >= needed {
+            whole = false;
+            break;
+        }
+        let (rendered, name_cols) = chat_lines(line, hub, width, &own_nick, whisper.is_some());
         let user = line.src.as_deref().and_then(|s| hex::decode(s).ok());
-        for (i, row) in rendered.into_iter().enumerate() {
+        for (i, row) in rendered.into_iter().enumerate().rev() {
             let link = match (i, name_cols, &user) {
                 (0, Some((from, to)), Some(id)) => Link::User(id.clone(), from, to),
                 _ => Link::None,
             };
-            lines.push((row, link));
+            tail.push((row, link));
         }
     }
-    let height = inner.height as usize;
+    tail.reverse();
+    // The hub's own info sits above its history, so it shows only once the
+    // whole history is in view.
+    if !whole {
+        lines.clear();
+    }
+    lines.extend(tail);
     let max_scroll = lines.len().saturating_sub(height);
     app.channels.scroll = app.channels.scroll.min(max_scroll);
     let top = max_scroll - app.channels.scroll;
@@ -334,7 +372,11 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     // Input.
     let hub = &app.channels.hubs[index];
     let nick = hub.nick.clone().unwrap_or_else(|| app.settings.display_name.clone());
-    let target = if room.is_empty() { "commands".to_string() } else { format!("#{room}") };
+    let target = match (&whisper, room.is_empty()) {
+        (Some(_), _) => format!("whisper to {}", hub.whisper_name(&room)),
+        (None, true) => "commands".to_string(),
+        (None, false) => format!("#{room}"),
+    };
     let input_title = if app.channels.typing {
         format!("{target} as {nick}")
     } else {

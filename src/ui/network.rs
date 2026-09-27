@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
 use super::{DIM, SELECTED_BG, ago, block};
 use crate::app::{App, NetFilter, match_mask};
@@ -65,13 +65,26 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let propagation = app.settings.propagation_node.clone();
     let rows = app.network_rows();
+    let total = rows.len();
     let title = if terms.is_empty() {
         format!("Heard announces · {filter} · {}", rows.len())
     } else {
         format!("Heard announces · {filter} · {} matching", rows.len())
     };
+    // Only the rows on screen get drawn (there can be thousands): keep the
+    // selection in view, then build items for that window.
+    let height = area.height.saturating_sub(2) as usize;
+    let selected = app.peers.selected().unwrap_or(0).min(total.saturating_sub(1));
+    let mut offset = app.peers.offset().min(total.saturating_sub(height.max(1)));
+    if selected < offset {
+        offset = selected;
+    } else if height > 0 && selected >= offset + height {
+        offset = selected + 1 - height;
+    }
     let items: Vec<ListItem> = rows
         .iter()
+        .skip(offset)
+        .take(height)
         .map(|(hash, peer)| {
             let (tag, color) = match peer.kind {
                 PeerKind::Lxmf => ("PEER", Color::LightMagenta),
@@ -126,12 +139,13 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     }
-    if app.peers.selected().is_none() {
-        app.peers.select(Some(0));
-    }
+    app.peers.select(Some(selected));
+    *app.peers.offset_mut() = offset;
+    // The window's own state: the selection relative to its first row.
+    let mut window = ListState::default().with_selected(Some(selected - offset));
     let list = List::new(items)
         .block(list_block)
         .highlight_style(Style::default().bg(SELECTED_BG).bold())
         .highlight_symbol("▌");
-    frame.render_stateful_widget(list, area, &mut app.peers);
+    frame.render_stateful_widget(list, area, &mut window);
 }

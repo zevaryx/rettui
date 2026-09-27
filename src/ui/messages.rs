@@ -17,6 +17,9 @@ use crate::term::images::{ImageRows, Placement, draw_placements};
 const MAX_PREVIEW_COLS: usize = 48;
 const MAX_PREVIEW_ROWS: usize = 12;
 
+/// A history row, with the attachment it belongs to (for clicks).
+type HistoryRow = (Line<'static>, Option<PathBuf>);
+
 pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let [list_area, chat_area] =
         Layout::horizontal([Constraint::Length(super::side_width(area.width, 30)), Constraint::Min(20)]).areas(area);
@@ -80,18 +83,23 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
     let history_inner = history_block.inner(history_area);
     let inner_width = history_inner.width as usize;
-    let messages: Vec<Message> = app
-        .store
-        .conversations
-        .get(&key)
-        .map(|c| c.messages.clone())
-        .unwrap_or_default();
-
-    // Each history line carries the attachment it belongs to (for clicks).
-    let mut lines: Vec<(Line, Option<PathBuf>)> = Vec::new();
+    let count = app.store.conversations.get(&key).map_or(0, |c| c.messages.len());
+    let height = history_inner.height as usize;
+    // Only the messages that can be on screen: build from the newest back
+    // until the view (and however far it is scrolled up) is full. Each
+    // message's rows, with image placements relative to its first row.
+    let needed = app.message_scroll + height;
     let graphics = app.graphics.clone();
-    let mut placements: Vec<Placement<PathBuf>> = Vec::new();
-    for message in &messages {
+    let mut groups: Vec<(Vec<HistoryRow>, Vec<Placement<PathBuf>>)> = Vec::new();
+    let mut built = 0;
+    for index in (0..count).rev() {
+        if built >= needed {
+            break;
+        }
+        let message: Message = app.store.conversations[&key].messages[index].clone();
+        // Each history line carries the attachment it belongs to (for clicks).
+        let mut lines: Vec<HistoryRow> = Vec::new();
+        let mut placements: Vec<Placement<PathBuf>> = Vec::new();
         let (who, color) = if message.incoming {
             (name.as_str(), Color::LightMagenta)
         } else {
@@ -165,8 +173,17 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             ));
         }
         lines.push((Line::raw(""), None));
+        built += lines.len();
+        groups.push((lines, placements));
     }
-    let height = history_inner.height as usize;
+    // Oldest first, with placements at their rows in the whole list.
+    let mut lines: Vec<HistoryRow> = Vec::with_capacity(built);
+    let mut placements: Vec<Placement<PathBuf>> = Vec::new();
+    for (group, group_placements) in groups.into_iter().rev() {
+        let base = lines.len();
+        placements.extend(group_placements.into_iter().map(|p| Placement { row: base + p.row, ..p }));
+        lines.extend(group);
+    }
     let max_scroll = lines.len().saturating_sub(height);
     app.message_scroll = app.message_scroll.min(max_scroll);
     let top = max_scroll - app.message_scroll;

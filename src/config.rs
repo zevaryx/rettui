@@ -94,7 +94,7 @@ impl Paths {
         Ok(Self {
             settings: base.join("settings.json"),
             identity: base.join("identity"),
-            store: base.join("store.json"),
+            store: base.join("store.json.gz"),
             log: base.join("rettui.log"),
             downloads: base.join("downloads"),
             known_identities: base.join("known_identities.json"),

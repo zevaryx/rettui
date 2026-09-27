@@ -171,7 +171,7 @@ impl App {
         let (index, room) = self.channels.active()?;
         rows.iter().position(|row| match row {
             Row::Hub(i) => *i == index && room.is_empty(),
-            Row::Room(i, r) => *i == index && *r == room,
+            Row::Room(i, r) | Row::Whisper(i, r) => *i == index && *r == room,
         })
     }
 

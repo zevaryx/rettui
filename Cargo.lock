@@ -2463,6 +2463,7 @@ dependencies = [
  "clap",
  "crossterm",
  "directories",
+ "flate2",
  "futures-util",
  "hex",
  "image",

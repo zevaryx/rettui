@@ -77,6 +77,9 @@ pub fn match_mask(text: &str, terms: &[Vec<char>]) -> Vec<bool> {
 }
 
 fn matches(terms: &[Vec<char>], hash: &str, peer: &Peer) -> bool {
+    if terms.is_empty() {
+        return true;
+    }
     let name = fold(peer.name.as_deref().unwrap_or_default());
     let hash = fold(hash);
     terms
@@ -162,8 +165,12 @@ impl App {
     }
 
     pub(super) fn network_key(&mut self, key: KeyEvent) {
-        let count = self.network_rows().len();
-        let selected = self.selected_peer();
+        // One pass over the (possibly thousands of) rows for both.
+        let (count, selected) = {
+            let rows = self.network_rows();
+            let selected = self.peers.selected().and_then(|i| rows.get(i)).map(|(k, p)| ((*k).clone(), p.kind));
+            (rows.len(), selected)
+        };
         match key.code {
             KeyCode::Down | KeyCode::Char('j') if count > 0 => {
                 let i = self.peers.selected().map_or(0, |i| (i + 1).min(count - 1));

@@ -25,6 +25,18 @@ use crate::term::input::TextInput;
 /// Lines kept per room (NomadNet keeps 500).
 const MAX_LINES: usize = 500;
 
+/// The buffer of a whisper conversation (private notices) with a user:
+/// `@` and their identity in hex. Rooms can't take this form.
+pub fn whisper_key(identity: &[u8]) -> String {
+    format!("@{}", hex::encode(identity))
+}
+
+/// The other user of a whisper buffer, if `key` is one.
+pub fn whisper_peer(key: &str) -> Option<Vec<u8>> {
+    let hex = key.strip_prefix('@')?;
+    (hex.len() == 32).then(|| hex::decode(hex).ok()).flatten()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineKind {
     Msg,
@@ -192,8 +204,40 @@ impl Hub {
     /// Rooms shown in the list: joined ones plus parted rooms with history.
     pub fn listed_rooms(&self) -> Vec<String> {
         let mut rooms: BTreeSet<String> = self.rooms.clone();
-        rooms.extend(self.buffers.keys().filter(|k| !k.is_empty()).cloned());
+        rooms.extend(self.buffers.keys().filter(|k| !k.is_empty() && whisper_peer(k).is_none()).cloned());
         rooms.into_iter().collect()
+    }
+
+    /// The other user's name in a whisper conversation: their nick if known
+    /// now, else the one on their latest whisper (nicks aren't saved).
+    pub fn whisper_name(&self, key: &str) -> String {
+        let Some(peer) = whisper_peer(key) else { return key.to_string() };
+        if let Some(nick) = self.nicks.get(&peer) {
+            return nick.clone();
+        }
+        self.buffers
+            .get(key)
+            .and_then(|lines| lines.iter().rev().find(|l| !l.own).and_then(|l| l.nick.clone()))
+            .unwrap_or_else(|| self.name_of(&peer))
+    }
+
+    /// Whisper conversations, as (buffer key, the other user's name), by name.
+    pub fn whispers(&self) -> Vec<(String, String)> {
+        let mut whispers: Vec<(String, String)> = self
+            .buffers
+            .keys()
+            .filter(|key| whisper_peer(key).is_some())
+            .map(|key| (key.clone(), self.whisper_name(key)))
+            .collect();
+        // Several people can share a nick: tell them apart by identity.
+        let names: Vec<String> = whispers.iter().map(|(_, name)| name.to_lowercase()).collect();
+        for (key, name) in &mut whispers {
+            if names.iter().filter(|n| **n == name.to_lowercase()).count() > 1 {
+                name.push_str(&format!(" ({})", &key[1..7]));
+            }
+        }
+        whispers.sort_by_key(|(_, name)| name.to_lowercase());
+        whispers
     }
 
     /// A room's members as (name, identity), sorted by name.
@@ -256,6 +300,63 @@ impl Hub {
                 self.buffers.insert(room, lines);
             }
         }
+        self.move_whispers_out_of_rooms();
+    }
+
+    /// History from before whispers had their own conversations kept them in
+    /// rooms: move them to the conversation with the other user. Received
+    /// whispers name their sender; sent ones only the recipient's name, so
+    /// they move when that name belongs to someone who whispered to us.
+    fn move_whispers_out_of_rooms(&mut self) {
+        let is_old_whisper = |key: &str, line: &ChatLine| line.kind == LineKind::Private && whisper_peer(key).is_none();
+        let mut senders: HashMap<String, Vec<u8>> = HashMap::new();
+        for (key, lines) in &self.buffers {
+            for line in lines.iter().filter(|l| is_old_whisper(key, l) && !l.own) {
+                if let (Some(nick), Some(src)) = (&line.nick, line.src.as_deref().and_then(|s| hex::decode(s).ok())) {
+                    senders.insert(nick.clone(), src);
+                }
+            }
+        }
+        let mut moved: Vec<(String, ChatLine)> = Vec::new();
+        for (key, lines) in &mut self.buffers {
+            if whisper_peer(key).is_some() {
+                continue;
+            }
+            lines.retain(|line| {
+                if line.kind != LineKind::Private {
+                    return true;
+                }
+                let peer = if line.own {
+                    line.nick.as_ref().and_then(|nick| senders.get(nick).cloned())
+                } else {
+                    line.src.as_deref().and_then(|s| hex::decode(s).ok())
+                };
+                let Some(peer) = peer.filter(|p| p.len() == 16) else { return true };
+                let mut line = line.clone();
+                if line.own {
+                    // Sent lines kept the recipient's name; in the
+                    // conversation they are ours.
+                    line.nick = None;
+                }
+                moved.push((whisper_key(&peer), line));
+                false
+            });
+        }
+        if moved.is_empty() {
+            return;
+        }
+        for (key, line) in moved {
+            self.buffers.entry(key).or_default().push(line);
+        }
+        for (key, lines) in &mut self.buffers {
+            if whisper_peer(key).is_some() {
+                lines.sort_by_key(|l| l.ts);
+            }
+        }
+        // Parted rooms that held nothing but whispers go from the list.
+        let joined = &self.rooms;
+        self.buffers.retain(|key, lines| !lines.is_empty() || key.is_empty() || joined.contains(key));
+        self.history_dirty = true;
     }
 }
 
@@ -285,6 +386,8 @@ pub struct Channels {
 pub enum Row {
     Hub(usize),
     Room(usize, String),
+    /// A whisper conversation: hub, buffer key (see [`whisper_key`]).
+    Whisper(usize, String),
 }
 
 impl Channels {
@@ -293,6 +396,7 @@ impl Channels {
         for (i, hub) in self.hubs.iter().enumerate() {
             rows.push(Row::Hub(i));
             rows.extend(hub.listed_rooms().into_iter().map(|r| Row::Room(i, r)));
+            rows.extend(hub.whispers().into_iter().map(|(key, _)| Row::Whisper(i, key)));
         }
         rows
     }
@@ -320,7 +424,7 @@ impl Channels {
                 hub: self.hubs[*i].hash,
                 room: None,
             },
-            Row::Room(i, room) => Target {
+            Row::Room(i, room) | Row::Whisper(i, room) => Target {
                 hub: self.hubs[*i].hash,
                 room: Some(room.clone()),
             },
@@ -588,5 +692,60 @@ mod tests {
             channels.rows(),
             vec![Row::Hub(0), Row::Room(0, "a".into()), Row::Room(0, "b".into())]
         );
+    }
+
+    #[test]
+    fn whispers_are_their_own_rows() {
+        let (zed, amy) = ([0xaa; 16], [0x11; 16]);
+        assert_eq!(whisper_peer(&whisper_key(&zed)), Some(zed.to_vec()));
+        assert_eq!(whisper_peer("general"), None);
+        assert_eq!(whisper_peer("@short"), None);
+        let mut channels = Channels::default();
+        let mut hub = Hub::new([1; 16], rrc::DEFAULT_ASPECT.into(), "Hub".into());
+        hub.rooms.insert("general".into());
+        hub.nicks.insert(zed.to_vec(), "zed".into());
+        hub.nicks.insert(amy.to_vec(), "Amy".into());
+        hub.buffers.insert(whisper_key(&zed), Vec::new());
+        hub.buffers.insert(whisper_key(&amy), Vec::new());
+        channels.hubs.push(hub);
+        // Rooms first, then whispers by name; whispers are never rooms.
+        assert_eq!(
+            channels.rows(),
+            vec![
+                Row::Hub(0),
+                Row::Room(0, "general".into()),
+                Row::Whisper(0, whisper_key(&amy)),
+                Row::Whisper(0, whisper_key(&zed)),
+            ]
+        );
+        assert_eq!(channels.hubs[0].listed_rooms(), ["general"]);
+    }
+
+    #[test]
+    fn old_whispers_move_out_of_rooms() {
+        let zed = [0xaa; 16];
+        let mut hub = Hub::new([1; 16], rrc::DEFAULT_ASPECT.into(), "Hub".into());
+        hub.rooms.insert("general".into());
+        let mut incoming = ChatLine::new(LineKind::Private, "psst");
+        incoming.src = Some(hex::encode(zed));
+        incoming.nick = Some("zed".into());
+        incoming.ts = 1;
+        let mut sent = ChatLine::new(LineKind::Private, "hi zed");
+        sent.nick = Some("zed".into());
+        sent.own = true;
+        sent.ts = 2;
+        let mut unknown = ChatLine::new(LineKind::Private, "hi stranger");
+        unknown.nick = Some("stranger".into());
+        unknown.own = true;
+        let chat = ChatLine::new(LineKind::Msg, "hello room");
+        hub.buffers.insert("general".into(), vec![chat, incoming]);
+        hub.buffers.insert("parted".into(), vec![sent, unknown]);
+        hub.move_whispers_out_of_rooms();
+        let texts = |key: &str| hub.buffers.get(key).map(|l| l.iter().map(|l| l.text.clone()).collect::<Vec<_>>());
+        assert_eq!(texts(&whisper_key(&zed)), Some(vec!["psst".into(), "hi zed".into()]));
+        assert_eq!(texts("general"), Some(vec!["hello room".into()]));
+        // A sent whisper whose recipient can't be told stays where it was.
+        assert_eq!(texts("parted"), Some(vec!["hi stranger".into()]));
+        assert!(hub.history_dirty);
     }
 }

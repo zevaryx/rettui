@@ -192,6 +192,11 @@ pub fn channels(app: &App) -> Value {
                 "mention": hub.mentions.contains(""),
                 "link": link(hub, ""),
                 "rooms": rooms,
+                "whispers": hub.whispers().into_iter().map(|(key, name)| json!({
+                    "key": key,
+                    "name": name,
+                    "unread": hub.unread.get(&key).copied().unwrap_or(0),
+                })).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -226,7 +231,7 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
             json!({
                 "kind": line_kind(line.kind),
                 "src": line.src,
-                "nick": line.nick.clone().or_else(|| {
+                "nick": line.nick.clone().or_else(|| line.own.then(|| own_nick.clone())).or_else(|| {
                     line.src.as_deref().and_then(|s| hex::decode(s).ok()).map(|h| hub.name_of(&h))
                 }),
                 "text": line.text,
@@ -261,6 +266,10 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
         "members": members.iter().map(|(name, id)| json!({ "name": name, "src": hex::encode(id), "own": *id == own })).collect::<Vec<_>>(),
         "users": users,
         "whisper": hub.direct_notices,
+        // This view is a whisper conversation: who with.
+        "whisper_with": crate::app::channels::whisper_peer(room).map(|peer| json!({
+            "src": hex::encode(&peer), "name": hub.whisper_name(room),
+        })),
         "nick": own_nick,
         "lines": lines,
     })

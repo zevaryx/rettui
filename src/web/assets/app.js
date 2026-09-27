@@ -179,8 +179,10 @@ function switchTab(id, options = {}) {
   const main = $('#main');
   app.views.channels.closeMenu();
   main.replaceChildren();
+  // A fresh section has drawn nothing yet.
+  app.views[id].snapshots = {};
   app.views[id].mount(main, options);
-  refresh(0);
+  loadNow();
 }
 
 // Wrap long lines in the text editors, per the "Wrap editor lines" setting.
@@ -200,13 +202,30 @@ async function refreshStatus() {
   }
 }
 
-// Refetch what is on screen. Bursts of change events are coalesced.
-let refreshTimer = null;
-function refresh(delay = 120) {
+// Refetch what is on screen: the status and the section's data, together.
+function loadNow() {
   clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => {
-    refreshStatus().then(() => app.views[app.tab]?.update());
-  }, typeof delay === 'number' ? delay : 120);
+  refreshTimer = null;
+  refreshStatus();
+  app.views[app.tab]?.update();
+}
+
+// Live updates: the first change schedules one refetch and later ones join
+// it, so a steady stream of events can't keep postponing it.
+let refreshTimer = null;
+function refresh() {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(loadNow, 150);
+}
+
+// Whether a view's data changed since it was last drawn (live updates
+// refetch often; unchanged data needs no redraw).
+function changed(view, slot, data) {
+  const snapshot = JSON.stringify(data);
+  view.snapshots ||= {};
+  if (view.snapshots[slot] === snapshot) return false;
+  view.snapshots[slot] = snapshot;
+  return true;
 }
 
 function listen() {
@@ -320,9 +339,14 @@ app.views.messages = {
   },
 
   async update() {
-    const conversations = await api.get('/conversations');
+    // The list and the open conversation, fetched together when known.
+    const known = this.selected;
+    const [conversations, early] = await Promise.all([
+      api.get('/conversations'),
+      known ? api.get('/conversations/' + known).catch(() => null) : null,
+    ]);
     if (!this.selected && conversations.length) this.selected = conversations[0].key;
-    this.list.replaceChildren(...(conversations.length ? conversations.map((c) => el('div', {
+    if (changed(this, 'list:' + this.selected, conversations)) this.list.replaceChildren(...(conversations.length ? conversations.map((c) => el('div', {
       class: 'list-item' + (c.key === this.selected ? ' selected' : ''),
       onclick: () => {
         this.selected = c.key;
@@ -343,14 +367,23 @@ app.views.messages = {
       return;
     }
     const key = this.selected;
-    const conversation = await api.get('/conversations/' + key);
+    const conversation = key === known && early ? early : await api.get('/conversations/' + key);
     if (key !== this.selected) return;
+    if (conversation.unread) api.post(`/conversations/${key}/read`).catch(() => {});
+    if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key })) return;
     this.header.replaceChildren(
       el('span', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }),
       el('button', { text: 'Copy address', onclick: () => copy(key, 'LXMF address') }));
+    // The newest messages only, unless asked for all.
+    const LIMIT = 100;
+    const hidden = this.showAll === key ? 0 : Math.max(0, conversation.messages.length - LIMIT);
+    const earlier = hidden ? el('div', { class: 'show-more' }, el('button', { text: `Show ${hidden} earlier messages`, onclick: () => {
+      this.showAll = key;
+      this.update();
+    } })) : null;
     const render = () => this.history.replaceChildren(...(conversation.messages.length
-      ? conversation.messages.map((m) => this.message(m, conversation))
+      ? [earlier, ...conversation.messages.slice(hidden).map((m) => this.message(m, conversation))].filter(Boolean)
       : [el('div', { class: 'empty', text: 'No messages yet. Say hello!' })]));
     if (this.lastKey !== key) {
       render();
@@ -359,7 +392,6 @@ app.views.messages = {
     } else {
       stickToBottom(this.history, render);
     }
-    if (conversation.unread) api.post(`/conversations/${key}/read`).catch(() => {});
   },
 
   message(m, conversation) {
@@ -452,7 +484,13 @@ app.views.channels = {
   },
 
   async update() {
-    const hubs = await api.get('/channels');
+    // The hub list and the open room, fetched together when known.
+    const known = this.selected && { ...this.selected };
+    const roomUrl = (s) => `/channels/${s.hub}/room?name=${encodeURIComponent(s.room)}`;
+    const [hubs, early] = await Promise.all([
+      api.get('/channels'),
+      known ? api.get(roomUrl(known)).catch(() => null) : null,
+    ]);
     this.hubs = hubs;
     if (this.selected && !hubs.some((h) => h.hash === this.selected.hub)) this.selected = null;
     if (!this.selected && hubs.length) {
@@ -475,8 +513,16 @@ app.views.channels = {
           el('span', { class: 'main name', text: '# ' + room.name }),
           room.unread ? el('span', { class: 'badge' + (room.mention ? ' mention' : ''), text: room.unread }) : null));
       }
+      // Whisper conversations: "@" where rooms have "#".
+      for (const whisper of hub.whispers) {
+        items.push(el('div', { class: 'list-item room-item whisper-item' + (isSelected(whisper.key) ? ' selected' : ''), onclick: select(whisper.key), title: 'Whisper conversation' },
+          el('span', { class: 'main name' }, el('span', { class: 'whisper-icon', text: '@ ' }), whisper.name),
+          whisper.unread ? el('span', { class: 'badge mention', text: whisper.unread }) : null));
+      }
     }
-    this.list.replaceChildren(...(items.length ? items : [el('div', { class: 'empty', text: 'No hubs yet. Add one by address or rrc:// link; NomadNet pages can also link to hubs.' })]));
+    if (changed(this, 'list', { hubs, selected: this.selected })) {
+      this.list.replaceChildren(...(items.length ? items : [el('div', { class: 'empty', text: 'No hubs yet. Add one by address or rrc:// link; NomadNet pages can also link to hubs.' })]));
+    }
 
     if (!this.selected) {
       this.header.replaceChildren(el('span', { class: 'title', text: 'Channels' }));
@@ -487,13 +533,28 @@ app.views.channels = {
     }
     const { hub: hash, room } = this.selected;
     const hub = hubs.find((h) => h.hash === hash);
-    const view = await api.get(`/channels/${hash}/room?name=${encodeURIComponent(room)}`);
+    const same = known && known.hub === hash && known.room === room;
+    const view = same && early ? early : await api.get(roomUrl(this.selected));
     if (!this.selected || this.selected.hub !== hash || this.selected.room !== room) return;
+    const current = this.hubs.find((h) => h.hash === hash);
+    const whisperEntry = view.whisper_with && current?.whispers.find((w) => w.key === room);
+    const unreadNow = view.whisper_with ? whisperEntry?.unread : room ? current?.rooms.find((r) => r.name === room)?.unread : current?.unread;
+    if (current && unreadNow) api.post(`/channels/${hash}/read`, { room }).catch(() => {});
+    if (!changed(this, 'room', { hash, room, view, hub, all: this.showAll === hash + '/' + room })) return;
     this.inputBar.classList.remove('hidden');
-    this.input.placeholder = room ? `Message #${room} as ${view.nick}  (/help for commands)` : `Commands for ${hub.name}  (/join, /nick, /list, /help)`;
+    const whisper = view.whisper_with;
+    this.input.placeholder = whisper ? `Whisper to ${whisper.name}` + (view.whisper ? '' : '  (this hub doesn\'t pass whispers)')
+      : room ? `Message #${room} as ${view.nick}  (/help for commands)` : `Commands for ${hub.name}  (/join, /nick, /list, /help)`;
     const viewKey = hash + '/' + room;
     this.view = view;
-    const render = () => this.body.replaceChildren(...(room ? [] : this.hubInfo(hub)), this.chat(view.lines));
+    // The newest lines only, unless asked for all.
+    const LIMIT = 200;
+    const hidden = this.showAll === viewKey ? 0 : Math.max(0, view.lines.length - LIMIT);
+    const earlier = hidden ? el('div', { class: 'show-more' }, el('button', { text: `Show ${hidden} earlier lines`, onclick: () => {
+      this.showAll = viewKey;
+      this.update();
+    } })) : null;
+    const render = () => this.body.replaceChildren(...(room || hidden ? [] : this.hubInfo(hub)), ...(earlier ? [earlier] : []), this.chat(view.lines.slice(hidden)));
     if (this.lastView !== viewKey) {
       render();
       this.body.scrollTop = this.body.scrollHeight;
@@ -502,7 +563,19 @@ app.views.channels = {
       stickToBottom(this.body, render);
     }
 
-    if (room) {
+    if (whisper) {
+      this.membersPanel.classList.add('hidden');
+      this.header.replaceChildren(
+        el('span', { class: 'title grow' }, el('span', { class: 'whisper-icon', text: '@ ' }), whisper.name,
+          el('span', { class: 'dim', style: 'font-weight:400', text: ' · whisper' + (view.whisper ? '' : ' (this hub doesn\'t pass whispers)') })),
+        el('button', { text: 'Actions', onclick: (e) => this.userMenu(e, whisper.src) }),
+        el('button', { class: 'danger', text: 'Close', title: 'Close the conversation and delete its messages', onclick: async () => {
+          if (!confirm(`Close the whisper conversation with ${whisper.name} and delete its messages?`)) return;
+          await this.hubAction(hash, 'forget', { room });
+          this.selected = { hub: hash, room: '' };
+          this.update();
+        } }));
+    } else if (room) {
       const entry = hub.rooms.find((r) => r.name === room);
       this.header.replaceChildren(
         el('span', { class: 'title grow' }, '#' + room, view.topic ? el('span', { class: 'dim', style: 'font-weight:400', text: ' — ' + view.topic }) : null),
@@ -537,10 +610,6 @@ app.views.channels = {
           this.selected = null;
           this.update();
         } }));
-    }
-    const current = this.hubs.find((h) => h.hash === hash);
-    if (current && (room ? current.rooms.find((r) => r.name === room)?.unread : current.unread)) {
-      api.post(`/channels/${hash}/read`, { room }).catch(() => {});
     }
   },
 
@@ -585,13 +654,15 @@ app.views.channels = {
       const time = new Date(line.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
       // Other people's names open the user menu.
       const user = !line.own && line.src && this.view?.users[line.src] && ['msg', 'action', 'private'].includes(line.kind);
+      // In a whisper conversation, whispers read like ordinary chat.
+      const kind = this.view?.whisper_with && line.kind === 'private' ? 'msg' : line.kind;
       const attrs = (text, style) => ({
         class: 'prefix' + (user ? ' clickable' : ''), style, text,
         title: user ? 'Message this user' : null,
         onclick: user ? (e) => this.userMenu(e, line.src) : null,
       });
       let prefix;
-      switch (line.kind) {
+      switch (kind) {
         case 'msg': prefix = el('span', attrs(`<${name}> `, `color:${color}`)); break;
         case 'action': prefix = el('span', attrs(`* ${name} `, `color:${color}`)); break;
         case 'private': prefix = el('span', attrs(line.own ? `» to ${name}: ` : `» ${name} (private): `)); break;
@@ -599,7 +670,7 @@ app.views.channels = {
         case 'error': prefix = el('span', { class: 'prefix', text: '! ' }); break;
         default: prefix = el('span', { class: 'prefix', text: '— ' });
       }
-      return el('div', { class: 'chat-line ' + line.kind },
+      return el('div', { class: 'chat-line ' + kind },
         el('span', { class: 'time', text: time }),
         el('span', { class: 'body' }, prefix,
           el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [])),
@@ -627,15 +698,17 @@ app.views.channels = {
     const user = this.view?.users[src];
     if (!user) return;
     this.closeMenu();
-    const nick = /\s/.test(user.name) ? src : user.name;
     const close = () => this.closeMenu();
     const item = (text, sub, action, disabled = false) => el('button', {
       class: 'menu-item', disabled, onclick: () => { close(); action(); },
     }, el('span', { text }), sub ? el('span', { class: 'dim mono', text: sub }) : null);
     const menu = el('div', { class: 'user-menu', role: 'menu' },
       el('div', { class: 'menu-title', text: user.name }),
-      item(this.view.whisper ? 'Whisper through the hub' : 'Whisper (this hub does not pass them)', '/msg', () => {
-        this.input.value = `/msg ${nick} `;
+      item(this.view.whisper ? 'Whisper through the hub' : 'Whisper (this hub does not pass them)', 'opens your conversation', async () => {
+        const result = await this.hubAction(this.selected.hub, 'whisper', { src });
+        if (!result) return;
+        this.selected = { hub: this.selected.hub, room: result.room };
+        await this.update();
         this.input.focus();
       }, !this.view.whisper),
       item('LXMF message', user.lxmf_known ? user.lxmf : 'no announce seen yet', () => openConversation(user.lxmf)),
@@ -736,6 +809,7 @@ app.views.network = {
       value: this.query,
       oninput: () => {
         this.query = this.search.value;
+        this.limit = 200;
         this.render();
       },
       onkeydown: (e) => {
@@ -760,8 +834,12 @@ app.views.network = {
       el('section', { class: 'panel grow' }, el('header', {}, this.title), this.table)));
   },
 
+  limit: 200,
+
   async update() {
-    this.data = await api.get('/peers');
+    const data = await api.get('/peers');
+    if (!changed(this, 'peers', data)) return;
+    this.data = data;
     this.render();
   },
 
@@ -769,7 +847,7 @@ app.views.network = {
     if (!this.data) return;
     const terms = searchTerms(this.query);
     const filterName = { all: 'all', lxmf: 'LXMF peers', nomad: 'NomadNet nodes', propagation: 'propagation nodes' }[this.filter];
-    const rows = this.data.peers.filter((p) => (this.filter === 'all' || p.kind === this.filter) &&
+    let rows = this.data.peers.filter((p) => (this.filter === 'all' || p.kind === this.filter) &&
       terms.every((t) => (p.name || '').toLowerCase().includes(t) || p.hash.includes(t)));
     this.title.textContent = `Heard announces · ${filterName} · ${rows.length}${terms.length ? ' matching' : ''}`;
     if (!rows.length) {
@@ -780,6 +858,9 @@ app.views.network = {
     }
     const tag = { lxmf: 'PEER', nomad: 'NODE', propagation: 'PROP' };
     const outbound = this.data.propagation_node;
+    // The newest rows only (there can be thousands); more on request.
+    const more = rows.length - this.limit;
+    rows = rows.slice(0, this.limit);
     this.table.replaceChildren(el('table', { class: 'net-table' },
       el('thead', {}, el('tr', {}, ['', 'Name', 'Address', 'Hops', 'Heard', ''].map((h) => el('th', { text: h })))),
       el('tbody', {}, rows.map((p) => el('tr', {
@@ -804,7 +885,13 @@ app.views.network = {
         el('button', { text: 'Copy', onclick: (e) => {
           e.stopPropagation();
           copy(p.hash, 'address');
-        } }))))))));
+        } })))))),
+      more > 0 ? el('div', { class: 'show-more' },
+        el('span', { class: 'dim', text: `Showing the ${this.limit} most recently heard of ${this.limit + more}. Search or filter to find others, or ` }),
+        el('button', { text: `show ${Math.min(more, 200)} more`, onclick: () => {
+          this.limit += 200;
+          this.render();
+        } })) : null));
   },
 
   open(peer) {
