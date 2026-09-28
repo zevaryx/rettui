@@ -4,17 +4,39 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use super::DIM;
 use crate::nomad::micron::source::visible;
+pub(super) use crate::term::textarea::Highlighted;
 use crate::term::textarea::{TextArea, display_width};
 
-/// Styled pieces of each line of a text.
-pub(super) type Highlighted = Vec<Vec<(Style, String)>>;
+
+/// Whether the char at `(line, col)` is inside the selection.
+fn is_selected(selection: Option<((usize, usize), (usize, usize))>, line: usize, col: usize) -> bool {
+    selection.is_some_and(|(start, end)| (line, col) >= start && (line, col) < end)
+}
+
+fn selected(style: Style) -> Style {
+    style.add_modifier(Modifier::REVERSED)
+}
+
+/// The text and its highlighting: the last draw's while the text is the
+/// same. Put back in `area.highlight_cache` once drawn.
+fn take_highlighted(area: &mut TextArea, highlight: impl Fn(&str) -> Highlighted) -> (String, Highlighted) {
+    let text = area.text();
+    match area.highlight_cache.take() {
+        Some((cached, styled)) if cached == text => (text, styled),
+        _ => {
+            let styled = highlight(&text);
+            (text, styled)
+        }
+    }
+}
 
 /// Draw the editor into `inner` (inside its block) and return the text area
 /// (for mouse clicks), or an empty rect when there is no room. With `wrap`,
@@ -40,30 +62,38 @@ pub(super) fn draw_text_editor(
     area.scroll_to_cursor(height, width);
     let (top, left) = (area.top, area.left);
 
-    let styled = highlight(&area.text());
+    let (text, styled) = take_highlighted(area, highlight);
+    let selection = area.selection();
     let mut numbers = Vec::new();
     let mut rows = Vec::new();
     for (index, pieces) in styled.iter().enumerate().skip(top).take(height) {
         numbers.push(Line::styled(format!("{:>w$}", index + 1, w = gutter_width as usize - 1), Style::default().fg(DIM)));
-        // Styled chars, cut to the visible columns.
+        // Styled graphemes (measured as the terminal draws them), cut to the
+        // visible columns, with the selection shown reversed.
         let mut spans: Vec<Span> = Vec::new();
-        let mut column = 0;
+        let (mut column, mut char_index) = (0, 0);
         for (style, text) in pieces {
-            let mut chunk = String::new();
-            for c in text.chars() {
-                let c = visible(c);
-                let w = c.width().unwrap_or(1);
+            let shown: String = text.chars().map(visible).collect();
+            for g in shown.graphemes(true) {
+                let w = g.width();
                 if column >= left && column + w <= left + width {
-                    chunk.push(c);
+                    let style = if is_selected(selection, index, char_index) { selected(*style) } else { *style };
+                    match spans.last_mut() {
+                        Some(span) if span.style == style => span.content.to_mut().push_str(g),
+                        _ => spans.push(Span::styled(g.to_string(), style)),
+                    }
                 }
                 column += w;
+                char_index += g.chars().count();
             }
-            if !chunk.is_empty() {
-                spans.push(Span::styled(chunk, *style));
-            }
+        }
+        // A selected line break shows as one selected cell.
+        if is_selected(selection, index, char_index) && column >= left && column < left + width {
+            spans.push(Span::styled(" ", selected(Style::default())));
         }
         rows.push(Line::from(spans));
     }
+    area.highlight_cache = Some((text, styled));
     frame.render_widget(Paragraph::new(numbers), gutter);
     frame.render_widget(Paragraph::new(rows), text_area);
     if focused {
@@ -85,12 +115,21 @@ fn draw_wrapped(
     let (height, width) = (text_area.height as usize, text_area.width as usize);
     area.scroll_wrapped(height, width);
     let wrap = width.saturating_sub(1).max(1);
-    let styled = highlight(&area.text());
-    // Each line's chars with their styles, to cut into wrapped rows.
+    let (text, styled) = take_highlighted(area, highlight);
+    let selection = area.selection();
+    // Each line's chars with their styles (the selection reversed), to cut
+    // into wrapped rows.
     let cells = |line: usize| -> Vec<(char, Style)> {
         styled
             .get(line)
-            .map(|pieces| pieces.iter().flat_map(|(style, text)| text.chars().map(move |c| (visible(c), *style))).collect())
+            .map(|pieces| {
+                pieces
+                    .iter()
+                    .flat_map(|(style, text)| text.chars().map(move |c| (visible(c), *style)))
+                    .enumerate()
+                    .map(|(i, (c, style))| (c, if is_selected(selection, line, i) { selected(style) } else { style }))
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let gutter_width = gutter.width as usize;
@@ -116,6 +155,7 @@ fn draw_wrapped(
         }
         rows.push(Line::from(spans));
     }
+    area.highlight_cache = Some((text, styled));
     frame.render_widget(Paragraph::new(numbers), gutter);
     frame.render_widget(Paragraph::new(rows), text_area);
     if focused {

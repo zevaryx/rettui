@@ -21,6 +21,7 @@ use crossterm::event::{
     EventStream, KeyEventKind,
 };
 use crossterm::execute;
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use futures_util::StreamExt;
 
 use crate::app::App;
@@ -184,7 +185,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     // Probe for Kitty graphics while in raw mode, before EventStream starts
     // reading stdin (it would swallow the terminal's replies).
     let graphics = term::images::Graphics::detect();
-    let mut app = App::new(settings, paths, store, net_tx.clone(), graphics, identity_hash);
+    let mut app = App::new(settings, paths, store, net_tx.clone(), Some(graphics), identity_hash);
     execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
     // ratatui's panic hook restores the terminal; also release the mouse.
     let hook = std::panic::take_hook();
@@ -198,7 +199,23 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
 
     let mut decoded = app.take_decoded();
     let result = loop {
-        if let Err(e) = terminal.draw(|frame| ui::draw(frame, &mut app)) {
+        // A full repaint is sent as one synchronized update, so terminals
+        // that support it show no blank frame in between.
+        let full = app.take_full_redraw();
+        if full {
+            let _ = execute!(std::io::stdout(), BeginSynchronizedUpdate);
+            // Resizing to the same size clears the screen and forgets what
+            // was drawn, so every cell is sent. (`clear` would first ask the
+            // terminal for the cursor position, racing the input reader.)
+            if let Ok(size) = terminal.size() {
+                let _ = terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height));
+            }
+        }
+        let drawn = terminal.draw(|frame| ui::draw(frame, &mut app));
+        if full {
+            let _ = execute!(std::io::stdout(), EndSynchronizedUpdate);
+        }
+        if let Err(e) = drawn {
             break Err(e.into());
         }
         tokio::select! {

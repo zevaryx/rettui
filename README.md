@@ -157,14 +157,23 @@ tab.
     once the new one arrives, so it still works while a node is unreachable.
   - `R` clears the whole cache.
 - **Images:**
-  - Page images and image attachments are shown as real pictures in terminals
-    that support the Kitty graphics protocol (Kitty, Ghostty and others). They
-    scroll and clip like text, and are decoded in the background so the UI
-    never waits for them.
-  - rettui checks for support at startup with a short, bounded query (at most
-    1.5 s, and only if the terminal doesn't answer).
-  - Other terminals get half-block drawings. Set `RETTUI_GRAPHICS=halfblocks`
-    to force them.
+  - Page images and image attachments are drawn with
+    [ratatui-image](https://crates.io/crates/ratatui-image) in the best
+    protocol the terminal has: Kitty graphics (Kitty, Ghostty and others),
+    Sixel, iTerm2 inline images (iTerm2, WezTerm), or half blocks everywhere
+    else. They scroll and clip like text, and are decoded in the background so
+    the UI never waits for them.
+  - **Windows Terminal** (detected by `WT_SESSION`, which is also set inside
+    WSL) always gets Sixel. It may not report its cell size, which Sixel needs
+    to size pictures: if they come out too big or small, set
+    `RETTUI_CELL_SIZE` to your font's cell size in pixels, for example
+    `RETTUI_CELL_SIZE=9x19`.
+  - rettui asks the terminal what it supports at startup with a short,
+    bounded query (at most 1.5 s, and only if the terminal doesn't answer).
+    Konsole's Sixel and Kitty support and WezTerm's Kitty support are skipped,
+    as ratatui-image recommends.
+  - `RETTUI_GRAPHICS` forces a protocol: `kitty`, `sixel`, `iterm2` or
+    `halfblocks`.
 
 ### Hosting a NomadNet node
 
@@ -184,6 +193,20 @@ or the folder set in `node_dir`.
   the file, and visitors get the new version straight away. New, renamed and
   deleted pages are picked up without a restart. You can also edit the files
   with any editor.
+- **Formatting ribbon:** above the page editor, in both UIs, buttons put
+  Micron markup around the selection, on the selected lines, or at the
+  cursor: bold, italic, underline and normal (removes formatting), text and
+  background colour, left/centre/right alignment, three heading levels,
+  divider, literal block, comment, and inserting links, images, text fields,
+  checkboxes and radio buttons. Each has an Alt shortcut, the letter
+  underlined on its button: `Alt+B` `I` `U` `N`, `F` `G` (colours), `L` `C`
+  `R`, `1` `2` `3`, `V` (divider) `T` (literal) `O` (comment), `K` (link) `M`
+  (image) `D` (field) `H` (checkbox) `A` (radio). Bold, italic and underline
+  toggle, as do headings and comments. The web UI also takes `Ctrl+B`, `I`,
+  `U` and `K`, and picks colours from a palette.
+- **Selecting text in the editors:** Shift with the arrows, Home/End or
+  PgUp/PgDn, `Ctrl-A` for everything, or drag with the mouse. Typing, pasting
+  or deleting replaces the selection.
 - **Starter page:** a new node gets an index page with a short Micron guide.
 - **Your own node in the Browser:** a client can't reach a node it hosts over
   Reticulum, so rettui reads your own pages straight from the folder (never
@@ -389,7 +412,7 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
 
 | Tab | Keys |
 | --- | ---- |
-| All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `q` / `Ctrl-C` quit |
+| All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
 | Messages | `↑↓` pick a conversation, `Enter` write, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `PgUp/PgDn` scroll |
 | Writing a message | `Enter` send, `Esc` stop writing, `Ctrl-V` paste, `Ctrl-O` attach, `Ctrl-X` clear attachments, `Ctrl-P` cycle delivery mode |
 | Channels | `↑↓` pick a hub, room or whisper conversation, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `x` leave a room, close a whisper conversation, or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll |
@@ -399,7 +422,7 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
 | Browser, node pane | `↑↓` select, `Enter` open beside the list, `x` remove a saved page |
 | Browser, page | `Tab`/`Shift-Tab` move between links and fields, `Enter` follow a link or edit a field, `L` copy the selected link, `Y` copy the whole page (the raw source when viewing source), `Ctrl-V` paste into the selected field, `Esc` clear the selection or leave the source view, `↑↓` / `PgUp`/`PgDn` scroll |
 | Node | `Enter` edit the selected page, `n` new page, `r` rename, `x` delete, `h` start or stop hosting, `a` announce the node, `b` open it in the Browser, `y` copy its address, `p` switch view (editor and preview, editor only, preview only) |
-| Editing a page | `Ctrl-S` save (live on the node), `Esc` back to the pages, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-P` switch view, `Ctrl-V` paste; with the preview alone, `↑↓` / `PgUp` / `PgDn` scroll it |
+| Editing a page | `Ctrl-S` save (live on the node), `Esc` back to the pages, `Alt` + the underlined letter formats (see the ribbon), `Shift`+arrows select, `Ctrl-A` select all, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-P` switch view, `Ctrl-V` paste; with the preview alone, `↑↓` / `PgUp` / `PgDn` scroll it |
 | Status | `↑↓` select a setting, `Enter` edit it (or toggle), `e` edit display name, `y` copy your LXMF address, `Ctrl-R` restart Reticulum |
 | Reticulum | `Tab` sections / options, `↑↓` select, `Enter` edit (toggles flip, choices open a list), `d` back to the default, `a` add an interface, `Space` enable or disable it, `r` rename, `x` delete, `t` edit the file as text, `R` reload the file, `Ctrl-R` restart Reticulum |
 | Reticulum as text | `Ctrl-S` save (refused while the file can't load), `Esc` close, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-V` paste |
@@ -426,7 +449,8 @@ a little longer.
 - Drag across page text to select it. It's copied when you release the
   button, and dragging past the top or bottom edge scrolls the page.
 - In the Status and Reticulum tabs, click a row to select it and double-click
-  to edit it. In the editors, click to place the cursor.
+  to edit it. In the editors, click to place the cursor and drag to select;
+  click a ribbon button to format.
 - The scroll wheel scrolls whatever is under the pointer.
 
 ### Copy and paste
@@ -452,6 +476,15 @@ instance, so the local daemon learns the path. This happens even when
 daemon doesn't rebroadcast it to the network, but apps using the same shared
 instance will see it.
 
+### Characters left on screen
+
+Terminals differ on how wide they draw some emoji (such as ❤️ or joined
+family emoji), and the TUI only sends the cells that change. Where a terminal
+draws one wider or narrower than expected, stray characters could stay behind,
+so rettui repaints the whole screen when you switch tabs or panes, and
+`Ctrl-L` repaints it at any time. Its own icons avoid symbols that terminals
+may draw as emoji.
+
 ### Older LXMF clients
 
 Some clients announce their name in LXMF's original format (the name itself,
@@ -471,9 +504,9 @@ state as the TUI.
 | `nomad/` | Page and file fetching, Micron parsing and layout, page cache, hosting a node and its pages | rsNomad |
 | `rrc/` | RRC wire format, hub replies, hub sessions | rsReticulum |
 | `reticulum/` | Reticulum config file: the options it has, editing it in place, and checking it | rsReticulum |
-| `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`) and input routing | |
+| `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`), the page editor's formatting (`format`) and input routing | |
 | `ui/` | Drawing per tab, plus the sidebar, footer and prompt (`chrome`) and the text editors | ratatui |
-| `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty or half blocks) | ratatui-image |
+| `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty, Sixel, iTerm2 or half blocks) | ratatui-image |
 | `web/` | Web UI: HTTP API, login, live updates, and the page's HTML/CSS/JS and font (`web/assets`) | axum |
 
 `cli.rs` has the shell commands (`send`, `listen`, `sync`, `fetch`), and

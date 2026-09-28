@@ -19,6 +19,12 @@ impl App {
             self.should_quit = true;
             return;
         }
+        // Repaint the whole screen, for anything a terminal drew differently
+        // from what was sent (an emoji drawn wider than it should be).
+        if key.code == KeyCode::Char('l') && ctrl {
+            self.full_redraw = true;
+            return;
+        }
         if let Some(mut prompt) = self.prompt.take() {
             if key.code == KeyCode::Char('v') && ctrl {
                 self.prompt = Some(prompt);
@@ -172,6 +178,9 @@ impl App {
                     None => {}
                 }
             }
+            // In the page editor, dragging selects text.
+            MouseEventKind::Drag(MouseButton::Left) if self.tab == Tab::Node && self.node.dragging => self.drag_node(at),
+            MouseEventKind::Up(MouseButton::Left) if self.node.dragging => self.node.dragging = false,
             MouseEventKind::Down(MouseButton::Left) => {
                 let double = self.last_click.is_some_and(|(when, pos)| {
                     pos.y == at.y && when.elapsed() < DOUBLE_CLICK

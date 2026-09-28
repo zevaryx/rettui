@@ -6,10 +6,11 @@ use std::collections::HashMap;
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{FieldKind, Interactive, MLine, Page};
-use crate::term::images::{Graphics, ImageRows, Picture, Placement};
+use crate::term::images::{Graphics, Picture, Placement};
 
 pub struct Layout {
     pub lines: Vec<Line<'static>>,
@@ -47,23 +48,29 @@ type Row = Vec<(Span<'static>, Option<usize>)>;
 /// at spaces, which are dropped at the break; a word wider than a whole row
 /// is split. Returns the rows and the row each piece starts on.
 fn wrap(pieces: &[(String, Style, Option<usize>)], avail: usize) -> (Vec<Row>, Vec<usize>) {
-    // Each char with its display width and piece, split into words and
-    // runs of spaces.
-    let mut chars: Vec<(char, usize, usize)> = Vec::new();
+    // Each character as shown (a grapheme: an emoji with its modifiers or
+    // joined parts is one, measured whole as the terminal draws it) with its
+    // display width and piece, split into words and runs of spaces.
+    let mut chars: Vec<(&str, usize, usize)> = Vec::new();
     let mut starts_at = Vec::with_capacity(pieces.len());
     for (index, (text, ..)) in pieces.iter().enumerate() {
         starts_at.push(chars.len());
-        chars.extend(text.chars().map(|c| (c, c.width().unwrap_or(0), index)));
+        if text.is_ascii() {
+            // Each ASCII char is its own grapheme (most text; much quicker).
+            chars.extend(text.char_indices().map(|(i, c)| (&text[i..=i], c.width().unwrap_or(0), index)));
+        } else {
+            chars.extend(text.graphemes(true).map(|g| (g, g.width(), index)));
+        }
     }
-    let mut rows: Vec<Vec<(char, usize)>> = vec![Vec::new()];
+    let mut rows: Vec<Vec<(&str, usize)>> = vec![Vec::new()];
     // Row of each char (for where pieces start).
     let mut char_rows = vec![0; chars.len() + 1];
     let mut used = 0;
     let mut i = 0;
     while i < chars.len() {
-        let space = chars[i].0 == ' ';
+        let space = chars[i].0 == " ";
         let mut end = i;
-        while end < chars.len() && (chars[end].0 == ' ') == space {
+        while end < chars.len() && (chars[end].0 == " ") == space {
             end += 1;
         }
         let run_width: usize = chars[i..end].iter().map(|c| c.1).sum();
@@ -84,7 +91,7 @@ fn wrap(pieces: &[(String, Style, Option<usize>)], avail: usize) -> (Vec<Row>, V
             if used + run_width > avail && used > 0 {
                 // Move the word down, without the spaces before it.
                 let row = rows.last_mut().unwrap();
-                while row.last().is_some_and(|(c, _)| *c == ' ') {
+                while row.last().is_some_and(|(c, _)| *c == " ") {
                     row.pop();
                 }
                 rows.push(Vec::new());
@@ -116,7 +123,7 @@ fn wrap(pieces: &[(String, Style, Option<usize>)], avail: usize) -> (Vec<Row>, V
                     spans.push((Span::styled(std::mem::take(&mut text), *style), *item));
                 }
                 current = Some(piece);
-                text.push(c);
+                text.push_str(c);
             }
             if let Some(p) = current {
                 let (_, style, item) = &pieces[p];
@@ -138,7 +145,7 @@ impl Page {
                 } else {
                     field.value.clone()
                 };
-                let pad = field.width.saturating_sub(shown.chars().count());
+                let pad = field.width.saturating_sub(shown.width());
                 format!("{shown}{}", "_".repeat(pad))
             }
             FieldKind::Checkbox => {
@@ -183,8 +190,8 @@ impl Page {
                 } => {
                     let indent = (*indent).min(width - 1);
                     let avail = wanted.unwrap_or(width).min(width - indent);
-                    match images.get(url).map(|p| p.rows(graphics, avail, MAX_IMAGE_ROWS)) {
-                        Some(ImageRows::Graphic(size)) => {
+                    match images.get(url).and_then(|p| p.rows(graphics, avail, MAX_IMAGE_ROWS)) {
+                        Some(size) => {
                             let used = usize::from(size.width);
                             placements.push(Placement {
                                 row: lines.len(),
@@ -194,17 +201,6 @@ impl Page {
                             });
                             for _ in 0..size.height {
                                 lines.push(Line::raw(""));
-                            }
-                        }
-                        Some(ImageRows::Text(rows)) => {
-                            for row in rows {
-                                let pad = match align {
-                                    Alignment::Left => indent,
-                                    _ => indent + align_offset(*align, width - indent, row.width()),
-                                };
-                                let mut spans = vec![Span::raw(" ".repeat(pad))];
-                                spans.extend(row.spans);
-                                lines.push(Line::from(spans));
                             }
                         }
                         None => lines.push(

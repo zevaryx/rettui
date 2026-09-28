@@ -11,8 +11,10 @@ use ratatui::style::{Color, Modifier, Style};
 use super::source::{Token, tokenize, visible};
 use super::{FieldKind, Interactive, MLine, Page};
 
-/// Divider lines repeat their character; CSS clips the excess.
-const DIVIDER_CHARS: usize = 300;
+/// Divider lines repeat their character; CSS clips the excess. Enough for
+/// the widest panes: about 9,700 px at the page's font size, wider than a
+/// browser window on an ultrawide or 8K screen.
+const DIVIDER_CHARS: usize = 1200;
 
 pub fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());

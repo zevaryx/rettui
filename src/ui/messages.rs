@@ -11,7 +11,7 @@ use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use super::{ACCENT, DIM, SELECTED_BG, block, human_bytes, time_label, wrap};
 use crate::app::App;
 use crate::store::{Message, MessageState};
-use crate::term::images::{ImageRows, Placement, draw_placements};
+use crate::term::images::{Placement, draw_placements};
 
 /// Widest inline image preview in the message history.
 const MAX_PREVIEW_COLS: usize = 48;
@@ -141,22 +141,15 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 && let Some(picture) = app.picture(&attachment.path)
             {
                 let max_cols = inner_width.min(MAX_PREVIEW_COLS);
-                match picture.rows(graphics.as_ref(), max_cols, MAX_PREVIEW_ROWS) {
-                    ImageRows::Graphic(size) => {
-                        placements.push(Placement {
-                            row: lines.len(),
-                            col: 0,
-                            size,
-                            key: attachment.path.clone(),
-                        });
-                        for _ in 0..size.height {
-                            lines.push((Line::raw(""), path.clone()));
-                        }
-                    }
-                    ImageRows::Text(rows) => {
-                        for row in rows {
-                            lines.push((row, path.clone()));
-                        }
+                if let Some(size) = picture.rows(graphics.as_ref(), max_cols, MAX_PREVIEW_ROWS) {
+                    placements.push(Placement {
+                        row: lines.len(),
+                        col: 0,
+                        size,
+                        key: attachment.path.clone(),
+                    });
+                    for _ in 0..size.height {
+                        lines.push((Line::raw(""), path.clone()));
                     }
                 }
             }

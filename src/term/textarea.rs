@@ -1,10 +1,12 @@
 //! Multi-line text editor state (the page and config editors): cursor
-//! movement, editing, paste, undo/redo, and optional soft wrapping. Drawing
+//! movement, selection, editing, paste, undo/redo, and optional soft
+//! wrapping. Drawing
 //! is left to the UI, which calls [`TextArea::scroll_to_cursor`] (or
 //! [`TextArea::scroll_wrapped`]) with the visible size first.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Undo steps kept.
 const MAX_UNDO: usize = 200;
@@ -28,6 +30,9 @@ pub struct TextArea {
     /// Cursor line and position in chars.
     row: usize,
     col: usize,
+    /// The other end of the selection, when there is one (the cursor is
+    /// the end that moves).
+    anchor: Option<(usize, usize)>,
     /// First visible line (or wrapped row, when wrapping) and first
     /// visible display column (always 0 when wrapping).
     pub top: usize,
@@ -39,15 +44,48 @@ pub struct TextArea {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     last_edit: Option<EditKind>,
+    /// The text's highlighting at the last draw, and the text it was for:
+    /// the editor reuses it while the text is unchanged (cursor moves,
+    /// ticks), instead of highlighting the whole text on every frame.
+    pub highlight_cache: Option<(String, Highlighted)>,
 }
 
 fn byte_at(line: &str, col: usize) -> usize {
     line.char_indices().nth(col).map_or(line.len(), |(i, _)| i)
 }
 
-/// Display width of the first `col` chars.
+/// Styled pieces of each line of a text.
+pub type Highlighted = Vec<Vec<(ratatui::style::Style, String)>>;
+
+/// Display width of the first `col` chars (a grapheme counts once started).
 pub fn display_width(line: &str, col: usize) -> usize {
-    line.chars().take(col).map(|c| c.width().unwrap_or(1)).sum()
+    graphemes(line).iter().take_while(|g| g.0 < col).map(|g| g.2).sum()
+}
+
+/// A line's characters as drawn: each grapheme (an emoji with its modifiers
+/// or joined parts is one) as its first char index, its length in chars and
+/// its display width. Terminals draw a grapheme as one unit, so widths are
+/// measured per grapheme; control characters are shown as one-column
+/// symbols.
+pub fn graphemes(line: &str) -> Vec<(usize, usize, usize)> {
+    if line.is_ascii() {
+        // Each ASCII char is its own grapheme (most lines; much quicker).
+        return line.chars().enumerate().map(|(i, c)| (i, 1, c.width().unwrap_or(1))).collect();
+    }
+    let mut at = 0;
+    line.graphemes(true)
+        .map(|g| {
+            let chars = g.chars().count();
+            let width = if g.chars().any(char::is_control) {
+                g.chars().map(|c| c.width().unwrap_or(1)).sum()
+            } else {
+                g.width()
+            };
+            let entry = (at, chars, width);
+            at += chars;
+            entry
+        })
+        .collect()
 }
 
 impl TextArea {
@@ -60,6 +98,7 @@ impl TextArea {
             lines,
             row: 0,
             col: 0,
+            anchor: None,
             top: 0,
             left: 0,
             height: 1,
@@ -67,6 +106,7 @@ impl TextArea {
             undo: Vec::new(),
             redo: Vec::new(),
             last_edit: None,
+            highlight_cache: None,
         }
     }
 
@@ -87,6 +127,92 @@ impl TextArea {
         self.lines[row].chars().count()
     }
 
+    /// The selected range as (start, end), start first; `None` when
+    /// nothing is selected.
+    pub fn selection(&self) -> Option<((usize, usize), (usize, usize))> {
+        let anchor = self.anchor?;
+        let cursor = (self.row, self.col);
+        match anchor.cmp(&cursor) {
+            std::cmp::Ordering::Less => Some((anchor, cursor)),
+            std::cmp::Ordering::Greater => Some((cursor, anchor)),
+            std::cmp::Ordering::Equal => None,
+        }
+    }
+
+    pub fn selected_text(&self) -> String {
+        let Some(((r0, c0), (r1, c1))) = self.selection() else { return String::new() };
+        if r0 == r1 {
+            return self.lines[r0].chars().skip(c0).take(c1 - c0).collect();
+        }
+        let mut out: String = self.lines[r0].chars().skip(c0).collect();
+        for line in &self.lines[r0 + 1..r1] {
+            out.push('\n');
+            out.push_str(line);
+        }
+        out.push('\n');
+        out.extend(self.lines[r1].chars().take(c1));
+        out
+    }
+
+    /// Select from `from` to `to` (the cursor goes to `to`); both clamped.
+    pub fn select(&mut self, from: (usize, usize), to: (usize, usize)) {
+        self.set_cursor(from.0, from.1);
+        let anchor = (self.row, self.col);
+        self.set_cursor(to.0, to.1);
+        self.anchor = Some(anchor);
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.anchor = None;
+    }
+
+    /// Drag the cursor to a place, selecting from where it was (for mouse
+    /// drags: the press placed the cursor).
+    pub fn extend_to(&mut self, row: usize, col: usize) {
+        if self.anchor.is_none() {
+            self.anchor = Some((self.row, self.col));
+        }
+        self.set_cursor(row, col);
+    }
+
+    /// Remove the selected text (no undo step of its own).
+    fn remove_selection(&mut self) -> bool {
+        let Some(((r0, c0), (r1, c1))) = self.selection() else {
+            self.anchor = None;
+            return false;
+        };
+        let tail: String = self.lines[r1].chars().skip(c1).collect();
+        let head: String = self.lines[r0].chars().take(c0).collect();
+        self.lines.splice(r0..=r1, [format!("{head}{tail}")]);
+        self.row = r0;
+        self.col = c0;
+        self.anchor = None;
+        true
+    }
+
+    /// Replace the selection (or insert at the cursor) with `text`, as one
+    /// undo step; the cursor ends after it.
+    pub fn replace_selection(&mut self, text: &str) {
+        self.checkpoint(EditKind::Other);
+        self.remove_selection();
+        self.insert_text(text);
+        self.last_edit = Some(EditKind::Other);
+    }
+
+    /// Replace lines `first..=last` with `lines`, as one undo step. The
+    /// selection is dropped and the cursor kept on its line where it can be.
+    pub fn replace_lines(&mut self, first: usize, last: usize, lines: Vec<String>) {
+        self.checkpoint(EditKind::Other);
+        let last = last.min(self.lines.len() - 1);
+        self.lines.splice(first..=last, lines);
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        self.anchor = None;
+        self.set_cursor(self.row, self.col);
+        self.last_edit = Some(EditKind::Other);
+    }
+
     /// Place the cursor (clamped), e.g. from a mouse click.
     pub fn set_cursor(&mut self, row: usize, col: usize) {
         self.row = row.min(self.lines.len() - 1);
@@ -98,10 +224,10 @@ impl TextArea {
     pub fn col_at(&self, row: usize, display_col: usize) -> usize {
         let Some(line) = self.lines.get(row) else { return 0 };
         let mut width = 0;
-        for (i, c) in line.chars().enumerate() {
-            width += c.width().unwrap_or(1);
+        for (start, _, w) in graphemes(line) {
+            width += w;
             if width > display_col {
-                return i;
+                return start;
             }
         }
         line.chars().count()
@@ -147,29 +273,31 @@ impl TextArea {
         let width = width.max(1);
         let mut rows = Vec::new();
         for (index, line) in self.lines.iter().enumerate() {
+            // Rows start and end at char indexes, between graphemes.
+            let cells = graphemes(line);
             let chars: Vec<char> = line.chars().collect();
-            let mut start = 0;
-            let mut used = 0;
+            let total = chars.len();
+            let (mut start, mut used) = (0, 0);
             // Char index just after the last space in the current row.
             let mut after_space = None;
             let mut i = 0;
-            while i < chars.len() {
-                let w = chars[i].width().unwrap_or(1);
-                if used + w > width && i > start {
-                    let end = after_space.filter(|&e| e > start).unwrap_or(i);
+            while i < cells.len() {
+                let (at, len, w) = cells[i];
+                if used + w > width && at > start {
+                    let end = after_space.filter(|&e| e > start).unwrap_or(at);
                     rows.push((index, start, end));
                     start = end;
-                    used = chars[start..i].iter().map(|c| c.width().unwrap_or(1)).sum();
+                    used = cells.iter().filter(|c| c.0 >= start && c.0 < at).map(|c| c.2).sum();
                     after_space = None;
                     continue;
                 }
                 used += w;
-                if chars[i] == ' ' {
-                    after_space = Some(i + 1);
+                if len == 1 && chars[at] == ' ' {
+                    after_space = Some(at + 1);
                 }
                 i += 1;
             }
-            rows.push((index, start, chars.len()));
+            rows.push((index, start, total));
         }
         rows
     }
@@ -266,6 +394,7 @@ impl TextArea {
         });
         self.row = snapshot.row;
         self.col = snapshot.col;
+        self.anchor = None;
         self.last_edit = None;
         true
     }
@@ -284,10 +413,13 @@ impl TextArea {
         self.col = 0;
     }
 
-    /// Insert pasted text at the cursor (line breaks kept, tabs expanded,
-    /// other control characters dropped).
+    /// Insert pasted text at the cursor, over any selection (line breaks
+    /// kept, tabs expanded, other control characters dropped).
     pub fn insert_str(&mut self, text: &str) {
-        self.checkpoint(EditKind::Other);
+        self.replace_selection(text);
+    }
+
+    fn insert_text(&mut self, text: &str) {
         let text = text.replace("\r\n", "\n").replace('\t', TAB);
         for c in text.chars() {
             match c {
@@ -296,14 +428,40 @@ impl TextArea {
                 c => self.insert_char(c),
             }
         }
-        self.last_edit = Some(EditKind::Other);
     }
 
     /// Handle a key. Returns true when it was an editor key.
     pub fn handle(&mut self, key: KeyEvent) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let last = self.lines.len() - 1;
+        // Moving with Shift selects; moving without it drops the selection.
+        let moving = matches!(
+            key.code,
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
+        );
+        if moving {
+            if !key.modifiers.contains(KeyModifiers::SHIFT) {
+                self.anchor = None;
+            } else if self.anchor.is_none() {
+                self.anchor = Some((self.row, self.col));
+            }
+        }
+        // Typing, Enter and deleting replace a selection.
+        let editing = matches!(key.code, KeyCode::Char(_) | KeyCode::Tab | KeyCode::Enter) && !ctrl
+            || matches!(key.code, KeyCode::Backspace | KeyCode::Delete);
+        if editing && self.selection().is_some() {
+            self.checkpoint(EditKind::Other);
+            self.remove_selection();
+            if matches!(key.code, KeyCode::Backspace | KeyCode::Delete) {
+                return true;
+            }
+            self.last_edit = Some(EditKind::Typing);
+        }
         match key.code {
+            KeyCode::Char('a') if ctrl => {
+                let end = self.line_len(last);
+                self.select((0, 0), (last, end));
+            }
             KeyCode::Char('z') if ctrl => {
                 self.restore(true);
             }
@@ -506,5 +664,64 @@ mod tests {
         wide.set_cursor(0, 90);
         wide.scroll_to_cursor(5, 40);
         assert!(wide.left <= 90 && 90 < wide.left + 40);
+    }
+
+    #[test]
+    fn widths_follow_drawn_graphemes() {
+        // a ❤️ b: the heart and its selector are two chars drawn two wide.
+        let line = "a❤\u{fe0f}b";
+        assert_eq!(display_width(line, 1), 1);
+        assert_eq!(display_width(line, 3), 3);
+        assert_eq!(display_width(line, 4), 4);
+        let area = TextArea::new(line);
+        assert_eq!(area.col_at(0, 0), 0);
+        assert_eq!(area.col_at(0, 1), 1);
+        assert_eq!(area.col_at(0, 2), 1);
+        assert_eq!(area.col_at(0, 3), 3);
+        // Soft wrap breaks between graphemes, by drawn width.
+        let area = TextArea::new("👍🏽👍🏽👍🏽");
+        assert_eq!(area.wrapped_rows(4), vec![(0, 0, 4), (0, 4, 6)]);
+        // Tabs and control characters are one column, as they are shown.
+        assert_eq!(display_width("\tx\u{1}", 3), 3);
+    }
+
+    #[test]
+    fn selecting_and_replacing() {
+        let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+        let mut area = TextArea::new("hello world\nsecond");
+        area.set_cursor(0, 6);
+        for _ in 0..5 {
+            area.handle(shift(KeyCode::Right));
+        }
+        assert_eq!(area.selected_text(), "world");
+        // Typing replaces it, as one undo step with the typing.
+        typed(&mut area, "there");
+        assert_eq!(area.text(), "hello there\nsecond");
+        assert_eq!(area.selection(), None);
+        area.handle(ctrl('z'));
+        assert_eq!(area.text(), "hello world\nsecond");
+        // Across lines, and Backspace removes it.
+        area.set_cursor(0, 5);
+        area.handle(shift(KeyCode::Down));
+        assert_eq!(area.selected_text(), " world\nsecon");
+        area.handle(key(KeyCode::Backspace));
+        assert_eq!(area.text(), "hellod");
+        // Moving without Shift drops the selection.
+        area.handle(shift(KeyCode::Home));
+        assert!(area.selection().is_some());
+        area.handle(key(KeyCode::End));
+        assert_eq!(area.selection(), None);
+        // Ctrl-A selects everything; a paste replaces it.
+        area.handle(ctrl('a'));
+        assert_eq!(area.selected_text(), "hellod");
+        area.insert_str("new\ntext");
+        assert_eq!(area.text(), "new\ntext");
+        // A drag from the cursor.
+        area.set_cursor(0, 0);
+        area.extend_to(1, 2);
+        assert_eq!(area.selected_text(), "new\nte");
+        // Uppercase letters (typed with Shift) still type.
+        area.handle(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT));
+        assert_eq!(area.text(), "Xxt");
     }
 }

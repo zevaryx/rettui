@@ -275,6 +275,19 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
 /* ---- node --------------------------------------------------------------- */
 
 .editor-split { display: flex; flex: 1; min-height: 0; }
+.ribbon { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.ribbon .group { display: flex; gap: 3px; padding-right: 6px; border-right: 1px solid var(--border); }
+.ribbon .group:last-child { border-right: none; }
+.ribbon button { padding: 2px 7px; font-size: 12.5px; }
+.ribbon .key { text-decoration: underline; color: var(--accent); }
+.ribbon .fmt-bold { font-weight: 700; }
+.ribbon .fmt-italic { font-style: italic; }
+.ribbon .fmt-underline { text-decoration: underline; }
+.palette { padding-bottom: 8px; }
+.palette .swatches { display: grid; grid-template-columns: repeat(7, 22px); gap: 5px; padding: 6px 10px; }
+.palette .swatch { width: 22px; height: 22px; padding: 0; border-radius: 4px; border: 1px solid var(--border); }
+.palette .row { padding: 0 10px; gap: 6px; }
+.palette input { width: 12ch; }
 .page-editor {
   flex: 1;
   min-width: 0;

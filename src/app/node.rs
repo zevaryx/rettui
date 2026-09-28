@@ -9,7 +9,7 @@ use nomad_core::NomadServeStats;
 use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 
-use super::{App, PromptKind};
+use super::{App, PromptKind, format};
 use crate::net::{Hash, HostEvent, NetCommand};
 use crate::nomad::host::HostConfig;
 use crate::nomad::pages::{self, PageInfo, Pages};
@@ -67,6 +67,15 @@ impl Editor {
     }
 }
 
+/// The preview as last laid out, and for what text and width: drawn again as
+/// it is until either changes (not parsed and laid out on every frame).
+pub struct Preview {
+    pub text: String,
+    pub width: usize,
+    pub lines: Vec<ratatui::text::Line<'static>>,
+    pub style: ratatui::style::Style,
+}
+
 pub struct Node {
     pub status: NodeStatus,
     /// This client's node address (the same identity as LXMF).
@@ -79,10 +88,13 @@ pub struct Node {
     pub editor: Option<Editor>,
     /// Keys go to the editor.
     pub editing: bool,
+    /// A mouse press in the editor, selecting as it drags.
+    pub dragging: bool,
     /// Editor, preview, or both side by side.
     pub view: PageView,
     /// First row shown by the preview when it is shown alone.
     pub preview_scroll: usize,
+    pub preview: Option<Preview>,
 }
 
 impl Node {
@@ -96,8 +108,10 @@ impl Node {
             list: ListState::default(),
             editor: None,
             editing: false,
+            dragging: false,
             view: PageView::Split,
             preview_scroll: 0,
+            preview: None,
         }
     }
 }
@@ -322,8 +336,15 @@ impl App {
 
     pub(super) fn node_editor_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
             KeyCode::Esc => self.node.editing = false,
+            // Formatting: Alt and the key underlined in the ribbon.
+            KeyCode::Char(c) if alt && !ctrl && format::Action::from_key(c).is_some() => {
+                if let Some(action) = format::Action::from_key(c) {
+                    self.node_format(action);
+                }
+            }
             KeyCode::Char('s') if ctrl => self.save_editor(),
             KeyCode::Char('p') if ctrl => self.cycle_page_view(),
             // The preview alone: keys scroll it, nothing is typed unseen.
@@ -341,6 +362,32 @@ impl App {
                     editor.area.handle(key);
                 }
             }
+        }
+    }
+
+    /// A formatting action from the ribbon or its key: applied at once, or
+    /// after asking for what it needs.
+    pub(super) fn node_format(&mut self, action: format::Action) {
+        if self.node.view == PageView::Preview {
+            return self.warn("Switch to the editor (Ctrl-P) to format");
+        }
+        let Some(editor) = &mut self.node.editor else { return };
+        self.node.editing = true;
+        match action.question() {
+            Some(question) => self.open_prompt(PromptKind::Format(action), question, ""),
+            None => {
+                if let Err(e) = format::apply(&mut editor.area, action, "") {
+                    self.warn(e);
+                }
+            }
+        }
+    }
+
+    pub(super) fn node_format_answer(&mut self, action: format::Action, answer: &str) {
+        let Some(editor) = &mut self.node.editor else { return };
+        self.node.editing = true;
+        if let Err(e) = format::apply(&mut editor.area, action, answer) {
+            self.warn(e);
         }
     }
 
@@ -423,7 +470,9 @@ impl App {
     pub(super) fn click_node(&mut self, at: Position, double: bool) {
         let list = self.regions.node_pages;
         let editor = self.regions.node_editor;
-        if list.contains(at) {
+        if let Some(&(_, action)) = self.regions.node_ribbon.iter().find(|(area, _)| area.contains(at)) {
+            self.node_format(action);
+        } else if list.contains(at) {
             self.node.editing = false;
             let index = self.node.list.offset() + (at.y - list.y) as usize;
             if index < self.node.pages.len() {
@@ -436,9 +485,30 @@ impl App {
             && let Some(state) = &mut self.node.editor
         {
             self.node.editing = true;
+            self.node.dragging = true;
             let (row, col) = state.area.position_at((at.y - editor.y) as usize, (at.x - editor.x) as usize);
+            state.area.clear_selection();
             state.area.set_cursor(row, col);
         }
+    }
+
+    /// Select from where the press was to the pointer (held inside the text).
+    pub(super) fn drag_node(&mut self, at: Position) {
+        let editor = self.regions.node_editor;
+        let Some(state) = &mut self.node.editor else { return };
+        if editor.is_empty() {
+            return;
+        }
+        let x = at.x.clamp(editor.x, editor.right() - 1) - editor.x;
+        let y = at.y.clamp(editor.y, editor.bottom() - 1) - editor.y;
+        let (mut row, col) = state.area.position_at(y as usize, x as usize);
+        // Past the top or bottom: a line further, so the view scrolls on.
+        if at.y < editor.y {
+            row = row.saturating_sub(1);
+        } else if at.y >= editor.bottom() {
+            row += 1;
+        }
+        state.area.extend_to(row, col);
     }
 
     pub(super) fn scroll_node(&mut self, at: Position, delta: isize) {

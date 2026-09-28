@@ -105,6 +105,33 @@ function humanBytes(bytes) {
   return unit === 0 ? `${bytes} B` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
+// Put new server-rendered HTML into `container`, replacing only the lines
+// that differ: typing changes a line or two, and redrawing the rest would
+// reload its images (they flash and push the page about) for nothing.
+function patchHtml(container, html) {
+  const next = document.createElement('template');
+  next.innerHTML = html;
+  const fresh = next.content.firstElementChild;
+  const current = container.firstElementChild;
+  const sameShell = current && fresh && container.childElementCount === 1 && next.content.childElementCount === 1
+    && current.tagName === fresh.tagName && current.className === fresh.className
+    && current.getAttribute('style') === fresh.getAttribute('style');
+  if (!sameShell) {
+    container.replaceChildren(next.content);
+    return;
+  }
+  const old = [...current.children];
+  const neu = [...fresh.children];
+  let head = 0;
+  while (head < old.length && head < neu.length && old[head].isEqualNode(neu[head])) head++;
+  let tail = 0;
+  while (tail < old.length - head && tail < neu.length - head
+    && old[old.length - 1 - tail].isEqualNode(neu[neu.length - 1 - tail])) tail++;
+  const anchor = tail ? old[old.length - tail] : null;
+  for (const node of old.slice(head, old.length - tail)) node.remove();
+  for (const node of neu.slice(head, neu.length - tail)) current.insertBefore(node, anchor);
+}
+
 // Fetch into `cache` (a Map) under `key`, sharing a request already under
 // way, so a click can use what a prefetch started.
 function loadInto(view, key, url) {
@@ -160,7 +187,7 @@ const TABS = [
   { id: 'network', icon: '◎', title: 'Network' },
   { id: 'browser', icon: '◈', title: 'Browser' },
   { id: 'node', icon: '⌂', title: 'Node' },
-  { id: 'status', icon: '⚙', title: 'Status' },
+  { id: 'status', icon: 'ⓘ', title: 'Status' },
   { id: 'reticulum', icon: '⛭', title: 'Reticulum' },
 ];
 
@@ -1331,6 +1358,219 @@ app.views.browser = {
 // (executable pages) are read-only here.
 const PAGE_VIEWS = [['editor', 'Editor'], ['split', 'Both'], ['preview', 'Preview']];
 
+// ---- Micron formatting (the page editor's ribbon) ---------------------------
+//
+// The same actions and Alt keys as the terminal UI's editor: markup put
+// around the selection, on the selected lines, or at the cursor.
+
+const MICRON_RIBBON = [
+  [['bold', 'Bold', 'b', 'Bold (Alt+B, Ctrl+B)'], ['italic', 'Italic', 'i', 'Italic (Alt+I, Ctrl+I)'],
+    ['underline', 'Underline', 'u', 'Underline (Alt+U, Ctrl+U)'], ['normal', 'Normal', 'n', 'Remove formatting from the selection, or reset it here (Alt+N)']],
+  [['fg', 'Fg', 'f', 'Text colour (Alt+F)'], ['bg', 'Bg', 'g', 'Background colour (Alt+G)']],
+  [['left', 'Left', 'l', 'Align left (Alt+L)'], ['center', 'Centre', 'c', 'Centre (Alt+C)'], ['right', 'Right', 'r', 'Align right (Alt+R)']],
+  [['h1', 'H1', '1', 'Heading (Alt+1)'], ['h2', 'H2', '2', 'Subheading (Alt+2)'], ['h3', 'H3', '3', 'Third-level heading (Alt+3)']],
+  [['divider', 'Divider', 'v', 'Divider line (Alt+V)'], ['literal', 'Literal', 't', 'Literal block, shown as written (Alt+T)'],
+    ['comment', 'Comment', 'o', 'Comment lines out, or back in (Alt+O)']],
+  [['link', 'Link', 'k', 'Link (Alt+K, Ctrl+K)'], ['image', 'Image', 'm', 'Image (Alt+M)'], ['field', 'Field', 'd', 'Text field (Alt+D)'],
+    ['checkbox', 'Check', 'h', 'Checkbox (Alt+H)'], ['radio', 'Radio', 'a', 'Radio button (Alt+A)']],
+];
+const MICRON_KEYS = Object.fromEntries(MICRON_RIBBON.flat().map(([id, , key]) => [key, id]));
+const MICRON_COLOURS = ['f00', 'f80', 'ff0', '8f0', '0f0', '0fc', '0af', '00f', '80f', 'f0f', 'fff', 'aaa', '555', '000'];
+
+const micron = {
+  // Replace a range of the text box, keeping the browser's undo.
+  replace(t, start, end, text) {
+    t.focus();
+    t.setSelectionRange(start, end);
+    if (!document.execCommand('insertText', false, text)) {
+      t.setRangeText(text, start, end, 'end');
+      t.dispatchEvent(new Event('input'));
+    }
+  },
+
+  // Put open and close around the selection (kept selected), or both at the
+  // cursor with the cursor between.
+  wrap(t, open, close) {
+    const { selectionStart: start, selectionEnd: end, value } = t;
+    const text = value.slice(start, end);
+    this.replace(t, start, end, open + text + close);
+    if (text) t.setSelectionRange(start + open.length, start + open.length + text.length);
+    else t.setSelectionRange(start + open.length, start + open.length);
+  },
+
+  // Bold, italic and underline switch with the same tag: wrap, or unwrap.
+  toggle(t, tag) {
+    const { selectionStart: start, selectionEnd: end, value } = t;
+    const text = value.slice(start, end);
+    const n = tag.length;
+    if (text.length >= 2 * n && text.startsWith(tag) && text.endsWith(tag)) {
+      const inner = text.slice(n, -n);
+      this.replace(t, start, end, inner);
+      t.setSelectionRange(start, start + inner.length);
+    } else if (text && value.slice(start - n, start) === tag && value.slice(end, end + n) === tag) {
+      this.replace(t, start - n, end + n, text);
+      t.setSelectionRange(start - n, start - n + text.length);
+    } else {
+      this.wrap(t, tag, tag);
+    }
+  },
+
+  strip(text) {
+    return text.replace(/`(?:[!*_fb`]|[FB]T[0-9a-fA-F]{6}|[FB][0-9a-fA-F]{3})/g, '');
+  },
+
+  colour(text) {
+    const hex = text.trim().replace(/^#/, '').toLowerCase();
+    if (/^[0-9a-f]{3}$/.test(hex)) return hex;
+    if (/^[0-9a-f]{6}$/.test(hex)) return 'T' + hex;
+    return null;
+  },
+
+  // The lines an action on lines applies to (not the last when the
+  // selection ends at its very start), as offsets and text.
+  lines(t) {
+    const { value } = t;
+    let { selectionStart: start, selectionEnd: end } = t;
+    if (end > start && value[end - 1] === '\n') end -= 1;
+    const from = value.lastIndexOf('\n', start - 1) + 1;
+    let to = value.indexOf('\n', end);
+    if (to === -1) to = value.length;
+    return { from, to, lines: value.slice(from, to).split('\n') };
+  },
+
+  setLines(t, from, to, lines, cursorLine = 0, cursorEnd = true) {
+    const text = lines.join('\n');
+    this.replace(t, from, to, text);
+    let at = from;
+    for (let i = 0; i < cursorLine; i++) at += lines[i].length + 1;
+    at += cursorEnd ? lines[cursorLine].length : 0;
+    t.setSelectionRange(at, at);
+  },
+
+  heading: (line) => line.match(/^>*/)[0],
+  unaligned: (text) => text.replace(/^(`[clra])+/, ''),
+
+  align(t, tag) {
+    const { from, to, lines } = this.lines(t);
+    const out = lines.map((line, i) => {
+      const marks = this.heading(line);
+      return marks + (i === 0 ? '`' + tag : '') + this.unaligned(line.slice(marks.length));
+    });
+    let end = to;
+    // Alignment carries on in Micron: the next line goes back to the left.
+    if (tag !== 'a' && to < t.value.length) {
+      let nextEnd = t.value.indexOf('\n', to + 1);
+      if (nextEnd === -1) nextEnd = t.value.length;
+      const next = t.value.slice(to + 1, nextEnd);
+      const marks = this.heading(next);
+      const rest = next.slice(marks.length);
+      if (this.unaligned(rest) === rest) {
+        out.push(marks + '`a' + rest);
+        end = nextEnd;
+      }
+    }
+    this.setLines(t, from, end, out);
+  },
+
+  toggleHeading(t, level) {
+    const { from, to, lines } = this.lines(t);
+    const already = lines.every((line) => this.heading(line).length === level);
+    const out = lines.map((line) => {
+      const rest = line.slice(this.heading(line).length);
+      return already ? rest : '>'.repeat(level) + rest;
+    });
+    this.setLines(t, from, to, out, out.length - 1);
+  },
+
+  clean: (text) => text.replace(/[`[\]()<>|]/g, ''),
+
+  // Apply an action; asks for what it needs (colours come from the palette).
+  run(t, action, answer) {
+    const { selectionStart: start, selectionEnd: end, value } = t;
+    const selected = value.slice(start, end);
+    const oneLine = selected && !selected.includes('\n') ? this.clean(selected) : '';
+    const ask = (question) => {
+      const reply = prompt(question);
+      return reply === null ? null : reply.trim();
+    };
+    const name = (question) => {
+      const reply = ask(question);
+      if (reply === null) return null;
+      if (!/^[\p{L}\p{N}_-]+$/u.test(reply)) {
+        toast('Field names use letters, digits, - and _', true);
+        return null;
+      }
+      return reply;
+    };
+    switch (action) {
+      case 'bold': return this.toggle(t, '`!');
+      case 'italic': return this.toggle(t, '`*');
+      case 'underline': return this.toggle(t, '`_');
+      case 'normal':
+        if (!selected) return this.replace(t, start, end, '``');
+        this.replace(t, start, end, this.strip(selected));
+        return t.setSelectionRange(start, start + this.strip(selected).length);
+      case 'fg':
+      case 'bg': {
+        const code = this.colour(answer || '');
+        if (!code) return toast(`"${answer}" is not a colour: use 3 or 6 hex digits, like f80`, true);
+        return action === 'fg' ? this.wrap(t, '`F' + code, '`f') : this.wrap(t, '`B' + code, '`b');
+      }
+      case 'left': return this.align(t, 'a');
+      case 'center': return this.align(t, 'c');
+      case 'right': return this.align(t, 'r');
+      case 'h1': return this.toggleHeading(t, 1);
+      case 'h2': return this.toggleHeading(t, 2);
+      case 'h3': return this.toggleHeading(t, 3);
+      case 'divider': {
+        const { from, to, lines } = this.lines(t);
+        const line = lines[lines.length - 1];
+        const start = from + lines.slice(0, -1).reduce((n, l) => n + l.length + 1, 0);
+        if (!line.trim()) return this.setLines(t, start, to, ['-']);
+        return this.setLines(t, start, to, [line, '-'], 1);
+      }
+      case 'literal': {
+        const { from, to, lines } = this.lines(t);
+        if (!selected && lines.length === 1 && !lines[0].trim()) return this.setLines(t, from, to, ['`=', '', '`='], 1);
+        return this.setLines(t, from, to, ['`=', ...lines, '`='], lines.length);
+      }
+      case 'comment': {
+        const { from, to, lines } = this.lines(t);
+        const commented = (l) => l.startsWith('#') && !l.startsWith('#!');
+        const all = lines.every(commented);
+        const out = lines.map((l) => (all ? l.replace(/^# ?/, '') : '# ' + l));
+        return this.setLines(t, from, to, out, out.length - 1);
+      }
+      case 'link': {
+        const url = ask('Link to (a page like :/page/about.mu, node:/page/…, lxmf@…, rrc://…)');
+        if (!url) return;
+        return this.replace(t, start, end, `\`[${oneLine || url}\`${url}]`);
+      }
+      case 'image': {
+        const url = ask('Image address (like :/media/logo.png)');
+        if (!url) return;
+        return this.replace(t, start, end, `\`(${oneLine || 'image'}\`${url})`);
+      }
+      case 'field': {
+        const field = name('Field name');
+        if (field) this.replace(t, start, end, `\`<24|${field}\`${oneLine}>`);
+        return;
+      }
+      case 'checkbox': {
+        const field = name('Checkbox name');
+        if (field) this.replace(t, start, end, `\`<?|${field}|yes\`${oneLine || field}>`);
+        return;
+      }
+      case 'radio': {
+        const field = name('Radio group name');
+        const label = oneLine || 'Option';
+        if (field) this.replace(t, start, end, `\`<^|${field}|${label}\`${label}>`);
+        return;
+      }
+    }
+  },
+};
+
 app.views.node = {
   open: null, // { path, saved, executable, url }
   view: (() => {
@@ -1350,7 +1590,17 @@ app.views.node = {
       placeholder: 'Pick a page on the left, or create one with + New',
       oninput: () => this.changed(),
       onkeydown: (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        // Formatting: Alt and the key underlined in the ribbon (by the key's
+        // place, so it works with any layout's Alt characters), and the
+        // usual Ctrl+B / I / U / K.
+        const code = e.code.startsWith('Key') ? e.code.slice(3).toLowerCase() : e.code.startsWith('Digit') ? e.code.slice(5) : '';
+        const common = { b: 'bold', i: 'italic', u: 'underline', k: 'link' };
+        const action = e.altKey && !e.ctrlKey && !e.metaKey ? MICRON_KEYS[code]
+          : (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey ? common[code] : null;
+        if (action && !this.text.readOnly) {
+          e.preventDefault();
+          this.format(action, e.currentTarget);
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
           e.preventDefault();
           this.save();
         } else if (e.key === 'Tab' && !e.shiftKey && !this.text.readOnly) {
@@ -1366,6 +1616,16 @@ app.views.node = {
     } });
     this.viewButtons = el('div', { class: 'subtabs', title: 'Show the editor, the preview, or both' });
     this.split = el('div', { class: 'editor-split' }, this.text, this.preview);
+    this.ribbon = el('div', { class: 'ribbon', role: 'toolbar', 'aria-label': 'Formatting' },
+      MICRON_RIBBON.map((group) => el('div', { class: 'group' }, group.map(([action, label, key, title]) => {
+        const at = label.toLowerCase().indexOf(key);
+        return el('button', {
+          class: 'fmt fmt-' + action, title,
+          // Keep the selection in the text box while clicking.
+          onmousedown: (e) => e.preventDefault(),
+          onclick: (e) => this.format(action, e.currentTarget),
+        }, label.slice(0, at), el('span', { class: 'key', text: label[at] }), label.slice(at + 1));
+      }))));
     applyWrap(this.text);
     root.append(
       el('div', { class: 'column side' },
@@ -1377,6 +1637,7 @@ app.views.node = {
       el('section', { class: 'panel grow' },
         el('header', {}, this.title, this.buttons),
         this.banner,
+        this.ribbon,
         this.split));
     this.renderEditor();
     if (!this.unloadGuard) {
@@ -1389,6 +1650,60 @@ app.views.node = {
 
   dirty() {
     return !!this.open && this.text && this.text.value !== this.open.saved;
+  },
+
+  // A ribbon action: colours pick from a palette first.
+  format(action, from) {
+    if (!this.open || this.text.readOnly) return;
+    if (action === 'fg' || action === 'bg') return this.palette(action, from);
+    micron.run(this.text, action);
+  },
+
+  palette(action, from) {
+    this.closePalette();
+    const pick = (code) => {
+      this.closePalette();
+      micron.run(this.text, action, code);
+    };
+    const hex = el('input', {
+      type: 'text', placeholder: 'or hex: f80, 00aaff', maxlength: 7, class: 'mono',
+      onkeydown: (e) => {
+        if (e.key === 'Enter') {
+          // Not also typed into the editor, which has the focus next.
+          e.preventDefault();
+          pick(hex.value);
+        }
+        if (e.key === 'Escape') {
+          this.closePalette();
+          this.text.focus();
+        }
+      },
+    });
+    const menu = el('div', { class: 'user-menu palette', role: 'dialog' },
+      el('div', { class: 'menu-title', text: action === 'fg' ? 'Text colour' : 'Background colour' }),
+      el('div', { class: 'swatches' }, MICRON_COLOURS.map((code) => el('button', {
+        class: 'swatch', title: code, style: `background:#${code}`, onclick: () => pick(code),
+      }))),
+      el('div', { class: 'row' }, hex, el('button', { text: 'Apply', onclick: () => pick(hex.value) })));
+    document.body.append(menu);
+    const rect = (from || this.ribbon).getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = rect.bottom + 4 + 'px';
+    this.paletteMenu = menu;
+    this.paletteCloser = (e) => {
+      if (!menu.contains(e.target)) this.closePalette();
+    };
+    setTimeout(() => document.addEventListener('mousedown', this.paletteCloser));
+    hex.focus();
+  },
+
+  closePalette() {
+    this.paletteMenu?.remove();
+    this.paletteMenu = null;
+    if (this.paletteCloser) {
+      document.removeEventListener('mousedown', this.paletteCloser);
+      this.paletteCloser = null;
+    }
   },
 
   async update() {
@@ -1446,20 +1761,45 @@ app.views.node = {
     this.view = view;
     try { localStorage.setItem('rettui.pageView', view); } catch { /* per-browser convenience only */ }
     this.renderEditor();
+    this.renderPreview();
     if (view !== 'preview') this.text.focus();
   },
 
   changed() {
-    this.renderEditor();
-    clearTimeout(this.previewTimer);
-    this.previewTimer = setTimeout(() => this.renderPreview(), 250);
+    // The title and buttons only change when the page becomes (un)modified.
+    if (this.dirty() !== this.shownDirty) this.renderEditor();
+    this.renderPreview();
   },
 
+  // One preview request at a time: a change is sent at once, and changes
+  // made while it is out go together when it returns (no fixed delay, and
+  // an older reply can never land after a newer one).
   async renderPreview() {
-    if (!this.open) return this.preview.replaceChildren();
-    const result = await api.post('/node/preview', { content: this.text.value }).catch(() => null);
-    // Server-rendered like browsed pages: escaped, and scripts are blocked.
-    if (result) this.preview.innerHTML = result.html;
+    this.previewWanted = true;
+    if (this.previewBusy) return;
+    this.previewBusy = true;
+    try {
+      while (this.previewWanted) {
+        this.previewWanted = false;
+        if (!this.open) {
+          this.preview.replaceChildren();
+          this.previewed = null;
+          continue;
+        }
+        // Nothing to draw while only the editor shows; setView catches up.
+        if (this.view === 'editor') continue;
+        const { path } = this.open;
+        const content = this.text.value;
+        if (this.previewed === path + '\0' + content) continue;
+        const result = await api.post('/node/preview', { content }).catch(() => null);
+        if (!result || this.open?.path !== path) continue;
+        // Server-rendered like browsed pages: escaped, and scripts are blocked.
+        patchHtml(this.preview, result.html);
+        this.previewed = path + '\0' + content;
+      }
+    } finally {
+      this.previewBusy = false;
+    }
   },
 
   renderEditor() {
@@ -1469,6 +1809,7 @@ app.views.node = {
     this.banner.classList.toggle('hidden', !open?.executable);
     this.banner.textContent = 'This page is a script. Scripts can only be changed on the host, not from the web UI.';
     this.split.className = 'editor-split view-' + this.view;
+    this.ribbon.classList.toggle('hidden', !open || !!open.executable || this.view === 'preview');
     this.viewButtons.replaceChildren(...PAGE_VIEWS.map(([view, label]) => el('button', {
       text: label, class: view === this.view ? 'active' : '', onclick: () => this.setView(view),
     })));
@@ -1479,6 +1820,7 @@ app.views.node = {
       return;
     }
     const dirty = this.dirty();
+    this.shownDirty = dirty;
     this.title.replaceChildren(el('span', { class: 'mono', text: open.path }),
       ...(dirty ? [el('span', { class: 'state-warn', style: 'font-weight:400', text: '  ● modified' })] : []));
     this.buttons.replaceChildren(

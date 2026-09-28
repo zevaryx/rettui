@@ -47,13 +47,15 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         let row = Rect::new(inner.x, y, inner.width, 1);
         app.regions.tabs.push((row, *tab));
+        // No emoji-capable symbols (✉, ⚙): some terminals draw those two
+        // columns wide, which shifts the rest of the row.
         let icon = match tab {
-            Tab::Messages => "✉",
+            Tab::Messages => "✎",
             Tab::Channels => "#",
             Tab::Network => "◎",
             Tab::Browser => "◈",
             Tab::Node => "⌂",
-            Tab::Status => "⚙",
+            Tab::Status => "ⓘ",
             Tab::Reticulum => "⛭",
         };
         let selected = *tab == app.tab;
@@ -263,6 +265,8 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             Tab::Node if app.node.editing && app.node.editor.is_some() => &[
                 ("^S", "save"),
                 ("Esc", "pages"),
+                ("Alt+key", "format (underlined)"),
+                ("Shift+move", "select"),
                 ("^Z/^Y", "undo/redo"),
                 ("^P", "view"),
                 ("^V", "paste"),

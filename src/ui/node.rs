@@ -13,7 +13,8 @@ use super::browser::token_style;
 use super::editor::draw_text_editor;
 use super::{ACCENT, DIM, SELECTED_BG, block, human_bytes};
 use crate::app::App;
-use crate::app::node::{NodeStatus, PageView};
+use crate::app::format::{Action, RIBBON};
+use crate::app::node::{NodeStatus, PageView, Preview};
 use crate::nomad::micron;
 use crate::nomad::micron::source::tokenize;
 use crate::nomad::host::HostConfig;
@@ -147,8 +148,14 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         // Key hints only when they fit beside the page name.
         let room = editor_area.width as usize > title.chars().count() + hints.width() + 6;
         let editor_block = if room { block(&title, editing).title_top(hints.clone().right_aligned()) } else { block(&title, editing) };
-        let inner = editor_block.inner(editor_area);
+        let mut inner = editor_block.inner(editor_area);
         frame.render_widget(editor_block, editor_area);
+        app.regions.node_ribbon.clear();
+        if inner.height >= 4 {
+            let [ribbon, text] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
+            draw_ribbon(frame, ribbon, &mut app.regions.node_ribbon);
+            inner = text;
+        }
         app.regions.node_editor = draw_text_editor(frame, &mut editor.area, inner, editing, wrap, |text| {
             tokenize(text)
                 .into_iter()
@@ -168,9 +175,14 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     let preview_inner = preview_block.inner(preview_area);
     frame.render_widget(preview_block, preview_area);
     app.regions.node_preview = preview_inner;
-    let page = micron::parse(&text);
-    let layout = page.layout(preview_inner.width as usize, None, &HashMap::new(), None);
-    let total = layout.lines.len();
+    let width = preview_inner.width as usize;
+    if !app.node.preview.as_ref().is_some_and(|p| p.width == width && p.text == text) {
+        let page = micron::parse(&text);
+        let layout = page.layout(width, None, &HashMap::new(), None);
+        app.node.preview = Some(Preview { text, width, lines: layout.lines, style: page.base_style });
+    }
+    let preview = app.node.preview.as_ref().expect("laid out above");
+    let total = preview.lines.len();
     let height = preview_inner.height as usize;
     let most = total.saturating_sub(height);
     let scroll = if editor_area.is_none() {
@@ -181,6 +193,44 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         let (top, lines) = (editor.area.top, editor.area.row_count());
         (if lines > 1 { top * total / lines } else { 0 }).min(most)
     };
-    let visible: Vec<Line> = layout.lines.into_iter().skip(scroll).take(height).collect();
-    frame.render_widget(Paragraph::new(visible).style(page.base_style), preview_inner);
+    let visible: Vec<Line> = preview.lines.iter().skip(scroll).take(height).cloned().collect();
+    frame.render_widget(Paragraph::new(visible).style(preview.style), preview_inner);
+}
+
+/// The formatting ribbon: its buttons, each with its Alt-key letter
+/// underlined, in groups. Short labels when the full ones don't fit, and
+/// whatever fits after that.
+fn draw_ribbon(frame: &mut Frame, area: Rect, buttons: &mut Vec<(Rect, Action)>) {
+    const SEPARATOR: &str = " │ ";
+    let width = |short: bool| -> usize {
+        RIBBON
+            .iter()
+            .map(|group| group.iter().map(|a| if short { a.short() } else { a.label() }.len() + 1).sum::<usize>() - 1)
+            .sum::<usize>()
+            + SEPARATOR.len() * (RIBBON.len() - 1)
+    };
+    let short = width(false) > area.width as usize;
+    let key_style = Style::default().fg(ACCENT).add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+    let mut spans = Vec::new();
+    let mut x = area.x;
+    'groups: for (g, group) in RIBBON.iter().enumerate() {
+        for (i, action) in group.iter().enumerate() {
+            let gap = if i > 0 { " " } else if g > 0 { SEPARATOR } else { "" };
+            let label = if short { action.short() } else { action.label() };
+            let needed = (gap.chars().count() + label.len()) as u16;
+            if x + needed > area.right() {
+                break 'groups;
+            }
+            spans.push(Span::styled(gap, Style::default().fg(DIM)));
+            x += gap.chars().count() as u16;
+            // The shortcut's letter, underlined (labels are ASCII).
+            let at = label.to_ascii_lowercase().find(action.key()).unwrap_or(0);
+            spans.push(Span::raw(&label[..at]));
+            spans.push(Span::styled(&label[at..=at], key_style));
+            spans.push(Span::raw(&label[at + 1..]));
+            buttons.push((Rect::new(x, area.y, label.len() as u16, 1), *action));
+            x += label.len() as u16;
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

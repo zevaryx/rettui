@@ -90,7 +90,7 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     if let Some(error) = &app.browser.error {
         let [err, rest] = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(inner);
         frame.render_widget(
-            Paragraph::new(format!("⚠ {error}")).style(Style::default().fg(Color::Red)),
+            Paragraph::new(format!("✗ {error}")).style(Style::default().fg(Color::Red)),
             err,
         );
         page_area = rest;

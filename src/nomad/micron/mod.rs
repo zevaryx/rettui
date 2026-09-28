@@ -707,7 +707,7 @@ mod tests {
             .unwrap();
         let page = parse("top\n`c`(Pic`:/media/p.png)\nbottom");
         let images = HashMap::from([(":/media/p.png".to_string(), Picture::decode(&png).unwrap())]);
-        let gfx = Graphics::kitty_for_tests();
+        let gfx = Graphics::for_tests(ratatui_image::picker::ProtocolType::Kitty);
         let layout = page.layout(40, None, &images, Some(&gfx));
         let placement = &layout.placements[0];
         assert_eq!(placement.row, 1);
@@ -789,4 +789,22 @@ mod tests {
         let page = parse("全全 全全");
         assert_eq!(text(&page.layout(5, None, &HashMap::new(), None)), vec!["全全", "全全"]);
     }
+
+    #[test]
+    fn emoji_sequences_are_measured_as_drawn() {
+        // ❤️ (with its emoji selector), 👍🏽 and a family are two columns each,
+        // as terminals draw them, not the sum of their parts (1, 4 and 6).
+        // (Counted by parts, "ab ❤️❤️" was 5 columns and drawn 7 wide in 6.)
+        let page = parse("ab ❤️❤️ cd");
+        assert_eq!(text(&page.layout(6, None, &HashMap::new(), None)), vec!["ab", "❤️❤️", "cd"]);
+        let page = parse("👍🏽 👨‍👩‍👧");
+        assert_eq!(text(&page.layout(5, None, &HashMap::new(), None)), vec!["👍🏽 👨‍👩‍👧"]);
+        // Its drawn width is what centring uses, and it is never split.
+        let page = parse("`c❤️");
+        let layout = page.layout(10, None, &HashMap::new(), None);
+        assert_eq!(layout.lines[0].width(), 2);
+        let page = parse("👨‍👩‍👧👨‍👩‍👧");
+        assert_eq!(text(&page.layout(3, None, &HashMap::new(), None)), vec!["👨‍👩‍👧", "👨‍👩‍👧"]);
+    }
 }
+

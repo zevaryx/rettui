@@ -12,6 +12,7 @@
 //! - [`input`]: routing keys and mouse events to the above.
 
 mod browser;
+pub mod format;
 pub mod channels;
 pub(crate) mod files;
 mod input;
@@ -116,6 +117,9 @@ pub enum PromptKind {
     ConfirmDiscardRns,
     /// Restart the Reticulum stack.
     ConfirmRestartRns,
+    /// The page editor's formatting that needs an answer (a colour, an
+    /// address, a field name).
+    Format(format::Action),
 }
 
 pub struct Prompt {
@@ -159,6 +163,8 @@ pub struct Regions {
     pub node_pages: Rect,
     pub node_editor: Rect,
     pub node_preview: Rect,
+    /// The page editor's formatting ribbon: each button and its action.
+    pub node_ribbon: Vec<(Rect, format::Action)>,
     /// Reticulum tab: sections, options, the text editor and the picker.
     pub rns_sections: Rect,
     pub rns_options: Rect,
@@ -222,6 +228,10 @@ pub struct App {
     pub interfaces: Vec<crate::net::InterfaceInfo>,
     pub log: VecDeque<String>,
     pub should_quit: bool,
+    /// Repaint the whole screen at the next draw (Ctrl-L).
+    pub full_redraw: bool,
+    /// What the screen was showing at the last draw (see [`App::view_key`]).
+    shown_view: u64,
     pub sync: SyncState,
 
     pub conversations: ListState,
@@ -310,6 +320,8 @@ impl App {
             interfaces: Vec::new(),
             log: VecDeque::new(),
             should_quit: false,
+            full_redraw: false,
+            shown_view: 0,
             sync: SyncState::Idle,
             conversations: ListState::default(),
             active_conversation: None,
@@ -597,6 +609,7 @@ impl App {
                     self.discard_and_open(&path);
                 }
             }
+            PromptKind::Format(action) => self.node_format_answer(action, &text),
             PromptKind::ConfirmRestartRns => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
                     self.request_rns_restart();
@@ -725,6 +738,32 @@ impl App {
             }
             DecodeFor::Page(url) => self.on_page_image(url, decoded.picture),
         }
+    }
+
+    /// Which view is on screen: the tab and its panes, focus, menus and
+    /// prompts (not list positions). When it changes, most of the screen does.
+    fn view_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::mem::discriminant;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        discriminant(&self.tab).hash(&mut h);
+        (self.composing, self.prompt.is_some(), self.net_search.typing).hash(&mut h);
+        (self.channels.typing, self.channels.menu.is_some(), self.channels.picker.is_some()).hash(&mut h);
+        (discriminant(&self.browser.pane), discriminant(&self.browser.focus), self.browser.source.is_some()).hash(&mut h);
+        (self.node.editing, discriminant(&self.node.view), self.node.editor.is_some()).hash(&mut h);
+        (discriminant(&self.rns.focus), self.rns.picker.is_some(), self.rns.editor.is_some()).hash(&mut h);
+        h.finish()
+    }
+
+    /// Whether to repaint the whole screen before this draw: asked for
+    /// (Ctrl-L), or on switching tabs and panes. Only changed cells are sent
+    /// otherwise, so a character a terminal drew wider than expected (some
+    /// emoji) could be left behind as the view changes.
+    pub fn take_full_redraw(&mut self) -> bool {
+        let view = self.view_key();
+        let changed = view != self.shown_view;
+        self.shown_view = view;
+        std::mem::take(&mut self.full_redraw) || changed
     }
 
     /// Periodic work (called about twice a second).

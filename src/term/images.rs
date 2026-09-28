@@ -1,21 +1,23 @@
-//! Terminal image rendering.
+//! Terminal image rendering, with ratatui-image.
 //!
-//! With a terminal that speaks the Kitty graphics protocol, images are shown
-//! as real pictures (via ratatui-image's unicode-placeholder mode, so they
-//! scroll and clip like text). Otherwise they fall back to half blocks: each
-//! cell shows two stacked pixels (`▀` with the top pixel as foreground and
-//! the bottom pixel as background).
+//! Every image is drawn by ratatui-image in the best protocol the terminal
+//! has: Kitty graphics (unicode placeholders), Sixel, iTerm2 inline images,
+//! or half blocks (each cell two stacked pixels) everywhere else. Its
+//! "sliced" images scroll and clip row by row like text. Windows Terminal
+//! always gets Sixel.
+//!
+//! The terminal is probed by us rather than by ratatui-image: its query
+//! leaves a thread reading stdin when a terminal never answers, which would
+//! swallow the first key presses.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::time::Duration;
 
-use image::imageops::FilterType;
 use image::{DynamicImage, RgbaImage};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Rect, Size};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use ratatui_image::FontSize;
 use ratatui_image::picker::{Picker, ProtocolType};
@@ -25,6 +27,8 @@ use ratatui_image::sliced::{SignedPosition, SlicedImage, SlicedProtocol};
 const MAX_SOURCE_PX: u32 = 1024;
 /// Decoding is refused above this size to bound memory use.
 pub const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+/// Cell size when the terminal doesn't say (the usual 1:2 shape).
+const DEFAULT_CELL: FontSize = FontSize::new(10, 20);
 
 /// Terminal graphics support, detected once at startup.
 #[derive(Clone, Debug)]
@@ -32,46 +36,129 @@ pub struct Graphics {
     picker: Picker,
 }
 
-impl Graphics {
-    /// Query the terminal; `None` unless it supports the Kitty protocol.
-    /// Must run in raw mode, before anything else reads stdin.
-    /// `RETTUI_GRAPHICS=halfblocks` forces the fallback.
-    pub fn detect() -> Option<Self> {
-        if std::env::var("RETTUI_GRAPHICS").is_ok_and(|v| v == "halfblocks") {
-            return None;
+/// Half blocks, for layouts drawn without a terminal's answers (tests).
+static HALFBLOCKS: LazyLock<Graphics> = LazyLock::new(Graphics::halfblocks);
+
+/// What a terminal says it can do, and where it runs.
+#[derive(Debug, Default, Clone)]
+pub struct Terminal {
+    /// Answered the Kitty graphics query.
+    pub kitty: bool,
+    /// Lists Sixel (4) in its device attributes.
+    pub sixel: bool,
+    /// Cell size in pixels, when known.
+    pub cell: Option<FontSize>,
+    /// `WT_SESSION` is set (Windows Terminal, also inside WSL).
+    pub windows_terminal: bool,
+    /// iTerm2 or WezTerm (`TERM_PROGRAM`): iTerm2 inline images.
+    pub iterm2: bool,
+    /// Konsole: its Sixel and Kitty placeholders are unreliable.
+    pub konsole: bool,
+    /// `RETTUI_GRAPHICS`: `kitty`, `sixel`, `iterm2` or `halfblocks`.
+    pub forced: Option<ProtocolType>,
+}
+
+impl Terminal {
+    fn from_env() -> Self {
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        let program = var("TERM_PROGRAM").unwrap_or_default();
+        Self {
+            windows_terminal: var("WT_SESSION").is_some(),
+            iterm2: program == "iTerm.app" || program == "WezTerm" || var("WEZTERM_EXECUTABLE").is_some(),
+            konsole: var("KONSOLE_VERSION").is_some(),
+            forced: var("RETTUI_GRAPHICS").and_then(|v| match v.to_ascii_lowercase().as_str() {
+                "kitty" => Some(ProtocolType::Kitty),
+                "sixel" => Some(ProtocolType::Sixel),
+                "iterm2" => Some(ProtocolType::Iterm2),
+                "halfblocks" | "none" | "off" => Some(ProtocolType::Halfblocks),
+                _ => None,
+            }),
+            cell: var("RETTUI_CELL_SIZE").and_then(|v| parse_cell_size(&v)),
+            ..Self::default()
         }
-        // Built first: it detects tmux and enables passthrough, which the
-        // probe needs. (Deprecated upstream in favour of its own stdio query,
-        // which leaves a thread reading stdin when a terminal never answers.)
-        #[allow(deprecated)]
-        let mut picker = Picker::from_fontsize(FontSize::new(10, 20));
-        let font = probe::kitty(picker.tmux_detected(), Duration::from_millis(1500))?;
-        #[allow(deprecated)]
-        {
-            let tmux = picker.tmux_detected();
-            picker = Picker::from_fontsize(font);
-            debug_assert_eq!(tmux, picker.tmux_detected());
-        }
-        picker.set_protocol_type(ProtocolType::Kitty);
-        tracing::info!("Kitty graphics enabled, cell {}x{} px", font.width, font.height);
-        Some(Self { picker })
     }
 
-    #[cfg(test)]
-    pub fn kitty_for_tests() -> Self {
-        #[allow(deprecated)]
-        let mut picker = Picker::from_fontsize(FontSize::new(10, 20));
-        picker.set_protocol_type(ProtocolType::Kitty);
-        Self { picker }
+    /// The protocol to draw with: a forced one; Sixel in Windows Terminal;
+    /// then Kitty, iTerm2 and Sixel as the terminal supports them (not
+    /// Konsole's Kitty or Sixel, nor WezTerm's Kitty); else half blocks.
+    pub fn protocol(&self) -> ProtocolType {
+        if let Some(forced) = self.forced {
+            return forced;
+        }
+        if self.windows_terminal {
+            return ProtocolType::Sixel;
+        }
+        if self.kitty && !self.konsole && !self.iterm2 {
+            return ProtocolType::Kitty;
+        }
+        if self.iterm2 {
+            return ProtocolType::Iterm2;
+        }
+        if self.sixel && !self.konsole {
+            return ProtocolType::Sixel;
+        }
+        ProtocolType::Halfblocks
     }
 }
 
-/// How an image occupies rows in a text layout.
-pub enum ImageRows {
-    /// Half-block text rows.
-    Text(Vec<Line<'static>>),
-    /// Blank rows reserved for a graphic of this size (drawn afterwards).
-    Graphic(Size),
+/// `9x19` as a cell size.
+fn parse_cell_size(text: &str) -> Option<FontSize> {
+    let (w, h) = text.trim().split_once(['x', 'X'])?;
+    let (w, h): (u16, u16) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    (w > 0 && h > 0).then(|| FontSize::new(w, h))
+}
+
+impl Graphics {
+    /// Probe the terminal and pick how to draw images. Must run in raw
+    /// mode, before anything else reads stdin.
+    pub fn detect() -> Self {
+        let mut terminal = Terminal::from_env();
+        // Skip the probe when the answer is already decided.
+        let decided = terminal.forced.is_some() || terminal.windows_terminal;
+        #[allow(deprecated)]
+        let tmux = Picker::from_fontsize(DEFAULT_CELL).tmux_detected();
+        if let Some(answers) = probe::query(tmux, Duration::from_millis(if decided { 400 } else { 1500 })) {
+            terminal.kitty = answers.kitty;
+            terminal.sixel = answers.sixel;
+            terminal.cell = terminal.cell.or(answers.cell);
+        }
+        let graphics = Self::for_terminal(&terminal);
+        tracing::info!(
+            "terminal graphics: {:?}, cell {}x{} px ({terminal:?})",
+            graphics.picker.protocol_type(),
+            graphics.picker.font_size().width,
+            graphics.picker.font_size().height,
+        );
+        graphics
+    }
+
+    pub fn for_terminal(terminal: &Terminal) -> Self {
+        let protocol = terminal.protocol();
+        if protocol == ProtocolType::Halfblocks {
+            return Self::halfblocks();
+        }
+        #[allow(deprecated)]
+        let mut picker = Picker::from_fontsize(terminal.cell.unwrap_or(DEFAULT_CELL));
+        picker.set_protocol_type(protocol);
+        Self { picker }
+    }
+
+    pub fn halfblocks() -> Self {
+        Self { picker: Picker::halfblocks() }
+    }
+
+    pub fn protocol(&self) -> ProtocolType {
+        self.picker.protocol_type()
+    }
+
+    #[cfg(test)]
+    pub fn for_tests(protocol: ProtocolType) -> Self {
+        Self::for_terminal(&Terminal {
+            forced: Some(protocol),
+            cell: Some(DEFAULT_CELL),
+            ..Terminal::default()
+        })
+    }
 }
 
 /// What an image being decoded in the background is for.
@@ -105,10 +192,8 @@ pub fn decode_in_background(what: DecodeFor, bytes: Option<Vec<u8>>, done: tokio
 
 pub struct Picture {
     image: RgbaImage,
-    /// Last half-block rendering, keyed by column count.
-    text_cache: RefCell<Option<(usize, Vec<Line<'static>>)>>,
-    /// Last encoded graphic, keyed by the requested cell size.
-    graphic_cache: RefCell<Option<(Size, SlicedProtocol)>>,
+    /// Last encoded graphic, keyed by protocol and cell size.
+    graphic_cache: RefCell<Option<(ProtocolType, Size, SlicedProtocol)>>,
 }
 
 impl std::fmt::Debug for Picture {
@@ -130,23 +215,23 @@ impl Picture {
         };
         Some(Self {
             image: DynamicImage::into_rgba8(image),
-            text_cache: RefCell::new(None),
             graphic_cache: RefCell::new(None),
         })
     }
 
-    /// Lay out within `max_cols` x `max_rows` cells, keeping the aspect ratio.
-    pub fn rows(&self, graphics: Option<&Graphics>, max_cols: usize, max_rows: usize) -> ImageRows {
-        match graphics.and_then(|g| self.graphic_size(g, max_cols, max_rows)) {
-            Some(size) => ImageRows::Graphic(size),
-            None => ImageRows::Text(self.lines_within(max_cols, max_rows)),
-        }
-    }
-
-    /// Encode (or reuse) the graphic for the largest fitting size and
-    /// return its actual cell size.
-    fn graphic_size(&self, graphics: &Graphics, max_cols: usize, max_rows: usize) -> Option<Size> {
-        let font = graphics.picker.font_size();
+    /// Lay out within `max_cols` x `max_rows` cells, keeping the aspect
+    /// ratio: encode (or reuse) the graphic and return its size in cells,
+    /// or `None` if it can't be encoded. Without `graphics`, half blocks.
+    pub fn rows(&self, graphics: Option<&Graphics>, max_cols: usize, max_rows: usize) -> Option<Size> {
+        let graphics = graphics.unwrap_or(&HALFBLOCKS);
+        let protocol = graphics.protocol();
+        // A half-block cell shows 1x2 pixels, so pictures can be as many
+        // cells wide as they have pixels; real graphics use the cell size.
+        let font = if protocol == ProtocolType::Halfblocks {
+            FontSize::new(1, 2)
+        } else {
+            graphics.picker.font_size()
+        };
         let (fw, fh) = (f64::from(font.width.max(1)), f64::from(font.height.max(1)));
         let (w, h) = (f64::from(self.image.width()), f64::from(self.image.height().max(1)));
         // Natural size in cells, then shrink to fit both limits.
@@ -158,85 +243,47 @@ impl Picture {
         }
         let wanted = Size::new(cols as u16, rows as u16);
         let mut cache = self.graphic_cache.borrow_mut();
-        if cache.as_ref().is_none_or(|(size, _)| *size != wanted) {
-            let protocol = SlicedProtocol::new(
-                &graphics.picker,
-                DynamicImage::ImageRgba8(self.image.clone()),
-                Some(wanted),
-            )
-            .ok()?;
-            *cache = Some((wanted, protocol));
+        if cache.as_ref().is_none_or(|(p, size, _)| *p != protocol || *size != wanted) {
+            let sliced = SlicedProtocol::new(&graphics.picker, DynamicImage::ImageRgba8(self.image.clone()), Some(wanted)).ok()?;
+            *cache = Some((protocol, wanted, sliced));
         }
-        cache.as_ref().map(|(_, protocol)| protocol.size())
+        cache.as_ref().map(|(_, _, sliced)| sliced.size())
     }
 
     /// Draw the graphic laid out by [`Picture::rows`] with its top-left at
-    /// `position` relative to `area` (rows above the area are clipped).
+    /// `position` relative to `area` (rows outside the area are clipped).
     pub fn render_graphic(&self, area: Rect, position: SignedPosition, buf: &mut Buffer) {
-        if let Some((_, protocol)) = &*self.graphic_cache.borrow() {
-            SlicedImage::new(protocol, position).render(area, buf);
+        if let Some((_, _, sliced)) = &*self.graphic_cache.borrow() {
+            SlicedImage::new(sliced, position).render(area, buf);
         }
-    }
-
-    /// Half blocks within `max_cols` columns and `max_rows` rows, keeping the
-    /// aspect ratio (never upscaled past the source width).
-    pub fn lines_within(&self, max_cols: usize, max_rows: usize) -> Vec<Line<'static>> {
-        let (w, h) = self.image.dimensions();
-        // Each row shows two pixel rows.
-        let cols_for_rows = (max_rows.max(1) * 2) as f64 * w as f64 / h.max(1) as f64;
-        self.lines(max_cols.min(cols_for_rows.floor().max(1.0) as usize))
-    }
-
-    /// Half blocks at most `max_cols` wide (never upscaled past the source width).
-    pub fn lines(&self, max_cols: usize) -> Vec<Line<'static>> {
-        let (w, h) = self.image.dimensions();
-        let cols = max_cols.min(w as usize).max(1);
-        if let Some((cached_cols, lines)) = &*self.text_cache.borrow()
-            && *cached_cols == cols
-        {
-            return lines.clone();
-        }
-        let px_h = ((h as f64 * cols as f64 / w as f64).round() as u32).max(2);
-        let rows = px_h.div_ceil(2);
-        let scaled = image::imageops::resize(&self.image, cols as u32, rows * 2, FilterType::Triangle);
-
-        let pixel = |x: u32, y: u32| {
-            let p = scaled.get_pixel(x, y);
-            (p[3] >= 128).then_some(Color::Rgb(p[0], p[1], p[2]))
-        };
-        let lines: Vec<Line<'static>> = (0..rows)
-            .map(|row| {
-                Line::from(
-                    (0..cols as u32)
-                        .map(|x| match (pixel(x, row * 2), pixel(x, row * 2 + 1)) {
-                            (Some(top), Some(bottom)) => {
-                                Span::styled("▀", Style::default().fg(top).bg(bottom))
-                            }
-                            (Some(top), None) => Span::styled("▀", Style::default().fg(top)),
-                            (None, Some(bottom)) => Span::styled("▄", Style::default().fg(bottom)),
-                            (None, None) => Span::raw(" "),
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect();
-        *self.text_cache.borrow_mut() = Some((cols, lines.clone()));
-        lines
     }
 }
 
 /// Terminal capability probe with a hard deadline and no helper thread,
 /// so nothing keeps reading stdin once the application starts.
 mod probe {
-    use std::time::{Duration, Instant};
+    // Replies are only read on Unix; elsewhere the environment decides.
+    #![cfg_attr(not(unix), allow(dead_code))]
+
+    use std::time::Duration;
+    #[cfg(unix)]
+    use std::time::Instant;
 
     use ratatui_image::FontSize;
 
-    /// Ask for Kitty graphics support, the cell size, and a status report
-    /// (which every terminal answers, so we know when replies are complete).
-    /// Returns the cell size when the terminal speaks the Kitty protocol.
+    /// What the terminal answered.
+    #[derive(Debug, Default)]
+    pub struct Answers {
+        pub kitty: bool,
+        pub sixel: bool,
+        pub cell: Option<FontSize>,
+    }
+
+    /// Ask for Kitty graphics support, the cell size and the device
+    /// attributes (which list Sixel), then a status report that every
+    /// terminal answers, so we know when the replies are complete.
     #[cfg(unix)]
-    pub fn kitty(tmux: bool, timeout: Duration) -> Option<FontSize> {
+    pub fn query(tmux: bool, timeout: Duration) -> Option<Answers> {
         use std::io::Write;
 
         let graphics_query = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\";
@@ -247,20 +294,41 @@ mod probe {
             graphics_query.to_string()
         };
         let mut out = std::io::stdout();
-        out.write_all(format!("{query}\x1b[16t\x1b[5n").as_bytes()).ok()?;
+        out.write_all(format!("{query}\x1b[16t\x1b[c\x1b[5n").as_bytes()).ok()?;
         out.flush().ok()?;
 
         let replies = read_until(b"\x1b[0n", timeout);
         let text = String::from_utf8_lossy(&replies);
-        if !text.contains("_Gi=31;OK") {
-            return None;
-        }
-        cell_size_reply(&text).or_else(cell_size_ioctl)
+        Some(parse(&text).with_cell_fallback(cell_size_ioctl))
     }
 
     #[cfg(not(unix))]
-    pub fn kitty(_tmux: bool, _timeout: Duration) -> Option<FontSize> {
+    pub fn query(_tmux: bool, _timeout: Duration) -> Option<Answers> {
         None
+    }
+
+    impl Answers {
+        fn with_cell_fallback(mut self, fallback: impl FnOnce() -> Option<FontSize>) -> Self {
+            self.cell = self.cell.or_else(fallback);
+            self
+        }
+    }
+
+    /// The replies to the queries.
+    pub fn parse(text: &str) -> Answers {
+        Answers {
+            kitty: text.contains("_Gi=31;OK"),
+            sixel: device_attributes(text).is_some_and(|attrs| attrs.contains(&"4")),
+            cell: cell_size_reply(text),
+        }
+    }
+
+    /// `ESC [ ? 62 ; 4 ; … c`: the primary device attributes.
+    fn device_attributes(text: &str) -> Option<Vec<&str>> {
+        let start = text.find("\x1b[?")? + 3;
+        let end = start + text[start..].find('c')?;
+        let body = &text[start..end];
+        body.chars().all(|c| c.is_ascii_digit() || c == ';').then(|| body.split(';').collect())
     }
 
     /// Read stdin until `end` arrives or the deadline passes.
@@ -316,10 +384,14 @@ mod probe {
     #[cfg(test)]
     mod tests {
         #[test]
-        fn parses_cell_size_reply() {
-            let reply = "\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[0n";
-            let size = super::cell_size_reply(reply).unwrap();
-            assert_eq!((size.width, size.height), (10, 20));
+        fn parses_replies() {
+            let answers = super::parse("\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[?62;4;22c\x1b[0n");
+            assert!(answers.kitty && answers.sixel);
+            let cell = answers.cell.unwrap();
+            assert_eq!((cell.width, cell.height), (10, 20));
+            // A terminal without Sixel (no 4) or Kitty.
+            let answers = super::parse("\x1b[?62;22;42c\x1b[0n");
+            assert!(!answers.kitty && !answers.sixel && answers.cell.is_none());
             assert!(super::cell_size_reply("\x1b[0n").is_none());
         }
     }
@@ -363,6 +435,7 @@ pub fn draw_placements<'a, K: 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Color;
 
     fn png(w: u32, h: u32) -> Vec<u8> {
         let mut img = RgbaImage::new(w, h);
@@ -376,39 +449,78 @@ mod tests {
         out
     }
 
-    #[test]
-    fn renders_half_blocks_at_requested_width() {
-        let picture = Picture::decode(&png(8, 8)).unwrap();
-        let lines = picture.lines(4);
-        assert_eq!(lines.len(), 2); // 4 cols -> 4x4 px -> 2 rows
-        assert_eq!(lines[0].spans.len(), 4);
-        assert_eq!(lines[0].spans[0].style.fg, Some(Color::Rgb(255, 0, 0)));
-        assert_eq!(lines[1].spans[0].style.bg, Some(Color::Rgb(0, 0, 0)));
-        // Height-bound: 1 row = 2 px tall -> 2 px wide for a square image.
-        assert_eq!(picture.lines_within(8, 1)[0].spans.len(), 2);
-        assert!(matches!(picture.rows(None, 4, 10), ImageRows::Text(_)));
-    }
-
-    #[test]
-    fn kitty_graphics_reserve_rows_and_draw_placeholders() {
-        let gfx = Graphics::kitty_for_tests();
-        // 200x100 px with 10x20 px cells: natural 20 cols; limited to 10 cols
-        // -> 100x50 px -> 3 rows (rounded up).
+    /// Lay out a 200x100 px picture in at most 10 columns and draw it one
+    /// row scrolled off the top of a 20x5 area at column 2.
+    fn drawn(graphics: Option<&Graphics>) -> (Size, Buffer) {
         let picture = Picture::decode(&png(200, 100)).unwrap();
-        let ImageRows::Graphic(size) = picture.rows(Some(&gfx), 10, 30) else {
-            panic!("expected a graphic");
-        };
-        assert_eq!(size.width, 10);
-        assert!((2..=3).contains(&size.height), "{size:?}");
-
-        // Scrolled one row past the image's top: only the remaining rows draw.
+        let size = picture.rows(graphics, 10, 30).expect("laid out");
         let area = Rect::new(0, 0, 20, 5);
         let mut buf = Buffer::empty(area);
         let placement = Placement { row: 0, col: 2, size, key: () };
         draw_placements([&placement], 1, area, &mut buf, |_| Some(&picture));
+        (size, buf)
+    }
+
+    #[test]
+    fn half_blocks_without_terminal_graphics() {
+        // 1x2 px per cell: 10 columns show 10x5 px, in 3 rows (rounded up).
+        let (size, buf) = drawn(None);
+        assert_eq!(size.width, 10);
+        assert!((2..=3).contains(&size.height), "{size:?}");
+        let cell = &buf[(2, 0)];
+        assert!(["▀", "▄", "█"].contains(&cell.symbol()) || cell.bg != Color::Reset, "{cell:?}");
+        assert_eq!(buf[(1, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn kitty_graphics_draw_placeholders() {
+        // 10x20 px cells: natural 20 cols, limited to 10 -> 100x50 px -> 3 rows.
+        let (size, buf) = drawn(Some(&Graphics::for_tests(ProtocolType::Kitty)));
+        assert_eq!(size.width, 10);
+        assert!((2..=3).contains(&size.height), "{size:?}");
         let placeholder = |x, y| buf[(x, y)].symbol().contains('\u{10EEEE}');
         assert!(placeholder(2, 0));
         assert!(!placeholder(1, 0));
         assert!(!placeholder(2, size.height - 1)); // clipped row not drawn
+    }
+
+    #[test]
+    fn sixel_and_iterm2_graphics() {
+        let all = |buf: &Buffer| buf.content().iter().map(|c| c.symbol()).collect::<String>();
+        let (_, buf) = drawn(Some(&Graphics::for_tests(ProtocolType::Sixel)));
+        assert!(all(&buf).contains("\x1bP"), "a sixel sequence is drawn");
+        let (_, buf) = drawn(Some(&Graphics::for_tests(ProtocolType::Iterm2)));
+        assert!(all(&buf).contains("\x1b]1337;File="), "an iTerm2 image is drawn");
+    }
+
+    #[test]
+    fn protocol_choice() {
+        let t = |f: fn(&mut Terminal)| {
+            let mut terminal = Terminal::default();
+            f(&mut terminal);
+            terminal.protocol()
+        };
+        assert_eq!(t(|_| {}), ProtocolType::Halfblocks);
+        assert_eq!(t(|t| t.kitty = true), ProtocolType::Kitty);
+        assert_eq!(t(|t| t.sixel = true), ProtocolType::Sixel);
+        assert_eq!(t(|t| t.iterm2 = true), ProtocolType::Iterm2);
+        // Windows Terminal always gets Sixel, whatever it answered.
+        assert_eq!(t(|t| t.windows_terminal = true), ProtocolType::Sixel);
+        assert_eq!(t(|t| { t.windows_terminal = true; t.kitty = true }), ProtocolType::Sixel);
+        // WezTerm: iTerm2 rather than its Kitty; Konsole: neither of its own.
+        assert_eq!(t(|t| { t.iterm2 = true; t.kitty = true }), ProtocolType::Iterm2);
+        assert_eq!(t(|t| { t.konsole = true; t.kitty = true; t.sixel = true }), ProtocolType::Halfblocks);
+        // RETTUI_GRAPHICS wins.
+        assert_eq!(t(|t| { t.windows_terminal = true; t.forced = Some(ProtocolType::Halfblocks) }), ProtocolType::Halfblocks);
+        let graphics = Graphics::for_terminal(&Terminal { windows_terminal: true, ..Terminal::default() });
+        assert_eq!(graphics.protocol(), ProtocolType::Sixel);
+    }
+
+    #[test]
+    fn cell_size_setting() {
+        let size = parse_cell_size("9x19").unwrap();
+        assert_eq!((size.width, size.height), (9, 19));
+        assert!(parse_cell_size("9").is_none());
+        assert!(parse_cell_size("0x19").is_none());
     }
 }
