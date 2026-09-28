@@ -18,10 +18,11 @@ configuration. It is built on:
 > working on, where the backend is written by me. This means most of rettui's code
 > was written by an AI coding assistant (Anthropic's Claude), with a human
 > directing the work and checking the results. It has been tested, including
-> end to end on a private Reticulum network, but it has not had an independent
-> code review or a security audit. Expect bugs. Don't rely on it for anything
-> where privacy, security or delivery really matters, and check the code
-> yourself before trusting it. The same applies to any fork or copy of it.
+> end to end on a private Reticulum network and I personally use it for most of my
+> Reticulum usage, but it has not had an independent code review or a security audit.
+> Expect bugs. Don't rely on it for anything where privacy, security or delivery really
+> matters, and check the code yourself before trusting it. The same applies to any fork
+> or copy of it.
 
 ## Contents
 
