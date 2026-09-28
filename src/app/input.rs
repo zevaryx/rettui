@@ -51,6 +51,9 @@ impl App {
             return;
         }
         if self.channels.typing && self.tab == Tab::Channels {
+            if self.mention_key(key) {
+                return;
+            }
             match key.code {
                 KeyCode::Esc => self.channels.typing = false,
                 KeyCode::Enter => self.submit_channel_input(),
@@ -59,6 +62,7 @@ impl App {
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
                 _ => {
                     self.channels.input.handle(key);
+                    self.mention_typed();
                 }
             }
             return;

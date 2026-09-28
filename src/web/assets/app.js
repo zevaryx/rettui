@@ -720,10 +720,18 @@ app.views.channels = {
     this.input = el('input', {
       type: 'text',
       onkeydown: (e) => {
+        if (this.mentionKey(e)) return;
         if (e.key === 'Enter' && !e.isComposing) this.send();
       },
+      oninput: () => this.updateMentions(),
+      // The cursor moved: the name being typed may have changed.
+      onkeyup: (e) => ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key) && this.updateMentions(),
+      onclick: () => this.updateMentions(),
+      onblur: () => this.hideMentions(),
     });
-    this.inputBar = el('div', { class: 'chat-input' }, this.input,
+    // Who `@` can mention, narrowed as the name is typed.
+    this.mentionList = el('div', { class: 'mention-list hidden', role: 'listbox' });
+    this.inputBar = el('div', { class: 'chat-input' }, this.mentionList, this.input,
       el('button', { class: 'primary', text: 'Send', onclick: () => this.send() }));
     this.members = el('div', { class: 'scroll' });
     this.membersPanel = el('section', { class: 'panel members' }, el('header', { text: 'Members' }), this.members);
@@ -821,6 +829,7 @@ app.views.channels = {
   // name while it loads), then fresh.
   select(hash, room) {
     this.selected = { hub: hash, room };
+    this.hideMentions();
     for (const item of this.list.children) item.classList.toggle('selected', item.dataset.key === hash + '/' + room);
     const cached = this.cache.get(hash + '/' + room);
     if (cached && this.hubs?.some((h) => h.hash === hash)) this.renderRoom(hash, room, cached);
@@ -864,6 +873,8 @@ app.views.channels = {
       : room ? `Message #${room} as ${view.nick}  (/help for commands)` : `Commands for ${hub.name}  (/join, /nick, /list, /help)`;
     const viewKey = hash + '/' + room;
     this.view = view;
+    // Someone joined or left while choosing whom to mention.
+    if (this.mentionMatches) this.updateMentions();
     // The newest lines only, unless asked for all.
     const LIMIT = 200;
     const hidden = this.showAll === viewKey ? 0 : Math.max(0, view.lines.length - LIMIT);
@@ -995,19 +1006,116 @@ app.views.channels = {
       return el('div', { class: 'chat-line ' + kind },
         el('span', { class: 'time', text: time }),
         el('span', { class: 'body' }, prefix,
-          el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [])),
+          el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [], line.mentions || [])),
           line.pending ? el('span', { class: 'pending', text: ' …' }) : null));
     }));
   },
 
-  // Text with only the mentions of us highlighted.
-  marked(text, ranges) {
+  // The `@name` being typed before the cursor: where its `@` is and what
+  // follows (as the server's `mention_prefix`). The `@` starts a word (not
+  // an address like a@b). Names can have spaces (`@ann b`), so what follows
+  // may too, but not at its end: after a space it's up to the next letter
+  // whether a longer name is meant.
+  mentionQuery() {
+    const input = this.input;
+    const caret = input.selectionStart ?? input.value.length;
+    if (input.selectionEnd !== caret) return null;
+    const before = input.value.slice(0, caret);
+    // The last `@` that starts a word: an `@` inside a name (`@a@b`) doesn't.
+    let at = before.lastIndexOf('@');
+    while (at >= 0 && /[\p{Alphabetic}\p{N}_]$/u.test(before.slice(0, at))) at = before.lastIndexOf('@', at - 1);
+    if (at < 0) return null;
+    const partial = before.slice(at + 1);
+    if (/\s$/u.test(partial)) return null;
+    return { start: at, end: caret, partial };
+  },
+
+  // Show who matches what is typed after `@`: names starting with it first,
+  // then names containing it.
+  updateMentions() {
+    const query = this.mentionQuery();
+    const people = this.selected?.room ? (this.view?.mentionable || []).filter((u) => !u.own) : [];
+    if (!query || query.start === this.mentionDismissed) {
+      if (!query) this.mentionDismissed = null;
+      return this.hideMentions();
+    }
+    // Once it has a space it's a name being finished, not a search.
+    const partial = query.partial.toLowerCase();
+    const search = !/\s/u.test(partial);
+    const starts = people.filter((u) => u.name.toLowerCase().startsWith(partial));
+    const contains = search ? people.filter((u) => !u.name.toLowerCase().startsWith(partial) && u.name.toLowerCase().includes(partial)) : [];
+    const matches = [...starts, ...contains].slice(0, 8);
+    if (!matches.length) return this.hideMentions();
+    const same = this.mentionMatches?.map((u) => u.src).join() === matches.map((u) => u.src).join();
+    this.mentionMatches = matches;
+    if (!same) this.mentionIndex = 0;
+    this.renderMentions();
+  },
+
+  renderMentions() {
+    this.mentionList.replaceChildren(...this.mentionMatches.map((user, i) => el('div', {
+      class: 'mention-item' + (i === this.mentionIndex ? ' selected' : ''),
+      role: 'option',
+      // Keep the focus (and the cursor) in the input.
+      onmousedown: (e) => e.preventDefault(),
+      onclick: () => this.pickMention(user),
+    }, el('span', { class: 'at', text: '@' }), el('span', { style: `color:${nickColor(user.src)}`, text: user.name }))));
+    this.mentionList.classList.remove('hidden');
+  },
+
+  hideMentions() {
+    this.mentionMatches = null;
+    this.mentionList.classList.add('hidden');
+  },
+
+  // Up and Down choose, Tab or Enter picks, Esc closes (until the next @).
+  mentionKey(e) {
+    if (!this.mentionMatches || e.isComposing) return false;
+    const count = this.mentionMatches.length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      this.mentionIndex = (this.mentionIndex + (e.key === 'ArrowDown' ? 1 : count - 1)) % count;
+      this.renderMentions();
+    } else if (e.key === 'Tab' || e.key === 'Enter') {
+      this.pickMention(this.mentionMatches[this.mentionIndex]);
+    } else if (e.key === 'Escape') {
+      this.mentionDismissed = this.mentionQuery()?.start ?? null;
+      this.hideMentions();
+    } else {
+      return false;
+    }
+    e.preventDefault();
+    return true;
+  },
+
+  // Put `@name ` in place of what was typed after the `@`.
+  pickMention(user) {
+    const query = this.mentionQuery();
+    if (!query) return this.hideMentions();
+    const input = this.input;
+    const inserted = `@${user.name} `;
+    input.value = input.value.slice(0, query.start) + inserted + input.value.slice(query.end).replace(/^ /, '');
+    const caret = query.start + inserted.length;
+    input.setSelectionRange(caret, caret);
+    input.focus();
+    this.hideMentions();
+  },
+
+  // Text with the mentions of us highlighted, and `@name` mentions of
+  // others in their colour (both as UTF-16 ranges from the server).
+  marked(text, highlights, mentions = []) {
+    const ranges = [
+      ...highlights.map(([start, end]) => [start, end, { class: 'mention' }]),
+      ...mentions.map(([start, end, src]) => [start, end, {
+        class: 'user-mention',
+        style: `color:${src === this.view?.own_src ? 'var(--accent)' : nickColor(src)}`,
+      }]),
+    ].sort((a, b) => a[0] - b[0]);
     const out = [];
     let at = 0;
-    for (const [start, end] of ranges) {
+    for (const [start, end, attrs] of ranges) {
       if (start < at || end <= start) continue;
       if (start > at) out.push(text.slice(at, start));
-      out.push(el('span', { class: 'mention', text: text.slice(start, end) }));
+      out.push(el('span', { ...attrs, text: text.slice(start, end) }));
       at = end;
     }
     if (at < text.length) out.push(text.slice(at));
@@ -1070,6 +1178,7 @@ app.views.channels = {
     // click) while this one is on its way has nothing to send, and anything
     // typed meanwhile is kept.
     this.input.value = '';
+    this.hideMentions();
     // Put it back (before anything typed since) to try again or edit.
     const restore = () => {
       this.input.value = this.input.value ? `${text} ${this.input.value}` : text;
@@ -2465,8 +2574,9 @@ async function restartReticulum() {
 
 document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
-  // As in the terminal UI, Esc stops writing (the shortcuts work again).
-  if (typing && e.key === 'Escape') return document.activeElement.blur();
+  // As in the terminal UI, Esc stops writing (the shortcuts work again),
+  // unless it closed something first (the list @ opens).
+  if (typing && e.key === 'Escape' && !e.defaultPrevented) return document.activeElement.blur();
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key >= '1' && e.key <= String(TABS.length)) switchTab(TABS[Number(e.key) - 1].id);
   else if (e.key === '/' && app.tab === 'network') {

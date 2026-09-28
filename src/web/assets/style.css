@@ -229,7 +229,19 @@ a { color: var(--accent); }
 .user-menu .menu-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: 6px; }
 .user-menu .menu-item:hover:not(:disabled) { background: var(--selected); }
 .user-menu .menu-item .dim { font-size: 11.5px; overflow-wrap: anywhere; }
-.chat-input { border-top: 1px solid var(--border); padding: 8px; display: flex; gap: 8px; }
+.chat-input { border-top: 1px solid var(--border); padding: 8px; display: flex; gap: 8px; position: relative; }
+/* Who `@` can mention, just above the input. */
+.mention-list {
+  position: absolute; left: 8px; bottom: calc(100% - 2px); z-index: 5;
+  min-width: 180px; max-width: calc(100% - 16px); max-height: 260px; overflow-y: auto;
+  background: var(--raised); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 16px #0008; padding: 4px 0; font-family: var(--mono);
+}
+.mention-item { padding: 4px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mention-item .at { color: var(--dim); }
+.mention-item:hover { background: var(--selected); }
+.mention-item.selected { background: #36365a; box-shadow: inset 3px 0 var(--accent); }
+.user-mention { font-weight: 700; }
 .chat-input input { flex: 1; font-family: var(--mono); }
 
 /* ---- network ------------------------------------------------------------ */

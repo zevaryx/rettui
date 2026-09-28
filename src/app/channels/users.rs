@@ -272,6 +272,74 @@ impl App {
     }
 }
 
+/// Most names the `@` list shows at once.
+pub const MENTION_ROWS: usize = 8;
+
+/// The `@` being typed (its byte in the input) and who it could be, as
+/// (name, identity).
+pub type MentionMatches = (usize, Vec<(String, Vec<u8>)>);
+
+impl App {
+    /// While typing in a room: the `@name` being typed (the byte of its `@`
+    /// in the input) and who it could be, best matches first. `None` when
+    /// no name is being typed, nobody matches, or Esc closed the list for
+    /// this `@`.
+    pub fn mention_matches(&self) -> Option<MentionMatches> {
+        if !self.channels.typing {
+            return None;
+        }
+        let (index, room) = self.channels.active()?;
+        if room.is_empty() {
+            return None;
+        }
+        let (at, partial) = crate::rrc::mention_prefix(self.channels.input.before_cursor())?;
+        if self.channels.mention_dismissed == Some(at) {
+            return None;
+        }
+        let own = self.identity_hash.to_vec();
+        let people: Vec<(String, Vec<u8>)> =
+            self.channels.hubs[index].mentionable(&room).into_iter().filter(|(_, id)| *id != own).collect();
+        let matches: Vec<(String, Vec<u8>)> =
+            crate::rrc::complete_names(&people, partial).into_iter().take(MENTION_ROWS).cloned().collect();
+        (!matches.is_empty()).then_some((at, matches))
+    }
+
+    /// Keys for the `@` list while it is open (Up and Down choose, Tab or
+    /// Enter picks, Esc closes it); true when the key was one of those.
+    pub(crate) fn mention_key(&mut self, key: KeyEvent) -> bool {
+        let Some((at, matches)) = self.mention_matches() else { return false };
+        let count = matches.len();
+        let pick = self.channels.mention_pick.min(count - 1);
+        match key.code {
+            KeyCode::Down => self.channels.mention_pick = (pick + 1) % count,
+            KeyCode::Up => self.channels.mention_pick = (pick + count - 1) % count,
+            KeyCode::Tab | KeyCode::Enter => self.pick_mention(at, &matches[pick].0),
+            KeyCode::Esc => self.channels.mention_dismissed = Some(at),
+            _ => return false,
+        }
+        true
+    }
+
+    /// After typing: a new `@` gets its list back.
+    pub(crate) fn mention_typed(&mut self) {
+        self.channels.mention_pick = 0;
+        let at = crate::rrc::mention_prefix(self.channels.input.before_cursor()).map(|(at, _)| at);
+        if at != self.channels.mention_dismissed {
+            self.channels.mention_dismissed = None;
+        }
+    }
+
+    /// Put `@name ` in place of what was typed after the `@` at byte `at`.
+    pub fn pick_mention(&mut self, at: usize, name: &str) {
+        let input = &mut self.channels.input;
+        let cursor = input.before_cursor().len();
+        // One space after the name, even if one follows already.
+        let end = if input.text()[cursor..].starts_with(' ') { cursor + 1 } else { cursor };
+        input.replace(at, end, &format!("@{name} "));
+        self.channels.mention_pick = 0;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

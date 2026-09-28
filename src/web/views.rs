@@ -237,9 +237,20 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
     use crate::app::channels::users::lxmf_address;
     let own_nick = hub.nick.clone().unwrap_or_else(|| app.settings.display_name.clone());
     let buffer = hub.buffers.get(room).map(Vec::as_slice).unwrap_or_default();
+    let people = hub.mentionable(room);
     let lines: Vec<Value> = buffer
         .iter()
         .map(|line| {
+            let highlights = line.highlights(&own_nick);
+            // `@name` mentions of others, drawn in that person's colour.
+            let mentions: Vec<Value> = line
+                .user_mentions(&people, &highlights)
+                .into_iter()
+                .map(|(start, end, id)| {
+                    let (start, end) = utf16_ranges(&line.text, &[(start, end)])[0];
+                    json!([start, end, hex::encode(id)])
+                })
+                .collect();
             json!({
                 "kind": line_kind(line.kind),
                 "src": line.src,
@@ -249,7 +260,8 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
                 "text": line.text,
                 "ts": line.ts,
                 "mention": line.mention,
-                "highlights": utf16_ranges(&line.text, &line.highlights(&own_nick)),
+                "highlights": utf16_ranges(&line.text, &highlights),
+                "mentions": mentions,
                 "own": line.own,
                 "pending": line.pending.is_some(),
             })
@@ -277,12 +289,15 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
         "topic": hub.topics.get(room),
         "members": members.iter().map(|(name, id)| json!({ "name": name, "src": hex::encode(id), "own": *id == own })).collect::<Vec<_>>(),
         "users": users,
+        // Who `@` offers (members and whoever has spoken here).
+        "mentionable": people.iter().map(|(name, id)| json!({ "name": name, "src": hex::encode(id), "own": *id == own })).collect::<Vec<_>>(),
         "whisper": hub.direct_notices,
         // This view is a whisper conversation: who with.
         "whisper_with": crate::app::channels::whisper_peer(room).map(|peer| json!({
             "src": hex::encode(&peer), "name": hub.whisper_name(room),
         })),
         "nick": own_nick,
+        "own_src": hex::encode(&own),
         "lines": lines,
     })
 }

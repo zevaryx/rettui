@@ -182,6 +182,8 @@ pub struct Regions {
     pub channel_users: Vec<(Rect, Vec<u8>)>,
     /// The user menu or member picker's list.
     pub channel_popup: Rect,
+    /// Names in the list `@` opens while typing.
+    pub channel_mentions: Vec<(Rect, String)>,
 }
 
 /// How a footer notice reads: done, a hint that something can't be done

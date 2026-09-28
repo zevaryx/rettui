@@ -93,6 +93,25 @@ impl ChatLine {
             (true, true) => rrc::mention_ranges(&self.text, nick),
         }
     }
+
+    /// Byte ranges of `@name` mentions of `people` (a room's
+    /// [`Hub::mentionable`]), each with who is mentioned; ranges inside
+    /// `highlights` (mentions of us, shown their own way) are left out.
+    pub fn user_mentions<'a>(
+        &self,
+        people: &'a [(String, Vec<u8>)],
+        highlights: &[(usize, usize)],
+    ) -> Vec<(usize, usize, &'a [u8])> {
+        if !matches!(self.kind, LineKind::Msg | LineKind::Action | LineKind::Private) || !self.text.contains('@') {
+            return Vec::new();
+        }
+        let names: Vec<&str> = people.iter().map(|(name, _)| name.as_str()).collect();
+        rrc::user_mentions(&self.text, &names)
+            .into_iter()
+            .filter(|&(start, end, _)| !highlights.iter().any(|&(s, e)| start < e && s < end))
+            .map(|(start, end, i)| (start, end, people[i].1.as_slice()))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,6 +270,36 @@ impl Hub {
         members
     }
 
+    /// Who can be mentioned in `room`: its members and anyone who has
+    /// spoken there, as (name, identity), sorted by name. Someone no
+    /// longer here goes by the nick on their latest line. Each name is
+    /// listed once (nicks aren't unique): a member first, else whoever
+    /// used it last.
+    pub fn mentionable(&self, room: &str) -> Vec<(String, Vec<u8>)> {
+        let mut people = Vec::new();
+        let mut ids = HashSet::new();
+        let mut names = HashSet::new();
+        let mut add = |name: String, id: Vec<u8>| {
+            if !ids.contains(&id) && names.insert(name.to_lowercase()) {
+                ids.insert(id.clone());
+                people.push((name, id));
+            }
+        };
+        for (name, id) in self.members_of(room) {
+            add(name, id);
+        }
+        for line in self.buffers.get(room).map(Vec::as_slice).unwrap_or_default().iter().rev() {
+            let Some(id) = line.src.as_deref().and_then(|s| hex::decode(s).ok()) else { continue };
+            let name = match (self.nicks.get(&id), &line.nick) {
+                (Some(nick), _) | (None, Some(nick)) => nick.clone(),
+                (None, None) => self.name_of(&id),
+            };
+            add(name, id);
+        }
+        people.sort_by_key(|(n, _)| n.to_lowercase());
+        people
+    }
+
     fn push(&mut self, room: &str, line: ChatLine) {
         let buffer = self.buffers.entry(room.to_string()).or_default();
         buffer.push(line);
@@ -375,6 +424,10 @@ pub struct Channels {
     /// Popups: actions for a user, or picking one of the room's members.
     pub menu: Option<users::UserMenu>,
     pub picker: Option<users::MemberPicker>,
+    /// The list `@` opens while typing: which name is chosen, and the `@`
+    /// (byte in the input) it was closed for with Esc.
+    pub mention_pick: usize,
+    pub mention_dismissed: Option<usize>,
 }
 
 /// A row of the Channels list.
@@ -715,6 +768,37 @@ mod tests {
             ]
         );
         assert_eq!(channels.hubs[0].listed_rooms(), ["general"]);
+    }
+
+    #[test]
+    fn mentionable_people_are_listed_once_each() {
+        let (bot, old_bot, amy, gone) = ([0xb0; 16], [0xb1; 16], [0x11; 16], [0x22; 16]);
+        let mut hub = Hub::new([1; 16], rrc::DEFAULT_ASPECT.into(), "Hub".into());
+        hub.members.insert("general".into(), [bot.to_vec(), amy.to_vec()].into());
+        hub.nicks.insert(bot.to_vec(), "pybot".into());
+        hub.nicks.insert(amy.to_vec(), "Amy".into());
+        let said = |id: [u8; 16], nick: &str, text: &str| {
+            let mut line = ChatLine::new(LineKind::Msg, text);
+            line.src = Some(hex::encode(id));
+            line.nick = Some(nick.into());
+            line
+        };
+        // An earlier pybot (another identity, same nick) and someone who left.
+        hub.buffers.insert(
+            "general".into(),
+            vec![said(old_bot, "PyBot", "old"), said(gone, "zed", "bye"), said(amy, "Amy", "hi @pybot and @zed")],
+        );
+        let people = hub.mentionable("general");
+        let names: Vec<&str> = people.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["Amy", "pybot", "zed"]);
+        // The member keeps the name, so a mention is theirs.
+        assert_eq!(people[1].1, bot.to_vec());
+        let line = &hub.buffers["general"][2];
+        let mentions: Vec<(usize, usize, Vec<u8>)> =
+            line.user_mentions(&people, &[]).into_iter().map(|(s, e, id)| (s, e, id.to_vec())).collect();
+        assert_eq!(mentions, [(3, 9, bot.to_vec()), (14, 18, gone.to_vec())]);
+        // A mention of us (highlighted another way) isn't coloured as well.
+        assert_eq!(line.user_mentions(&people, &[(3, 9)]).len(), 1);
     }
 
     #[test]

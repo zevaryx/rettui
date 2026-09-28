@@ -53,6 +53,18 @@ impl TextInput {
         self.text[..self.byte_index(self.cursor)].width()
     }
 
+    /// The text before the cursor.
+    pub fn before_cursor(&self) -> &str {
+        &self.text[..self.byte_index(self.cursor)]
+    }
+
+    /// Replace the bytes `start..end` with `with`, leaving the cursor
+    /// after it.
+    pub fn replace(&mut self, start: usize, end: usize, with: &str) {
+        self.text.replace_range(start..end, with);
+        self.cursor = self.text[..start + with.len()].chars().count();
+    }
+
     /// Returns true when the key was consumed.
     pub fn handle(&mut self, key: KeyEvent) -> bool {
         let len = self.text.chars().count();

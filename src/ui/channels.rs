@@ -34,12 +34,12 @@ fn nick_color(src: Option<&str>) -> Color {
 }
 
 /// Split a piece of text (starting at byte `offset` of the message) into
-/// spans, with the parts inside `highlights` in `mark`.
-fn marked(piece: &str, offset: usize, highlights: &[(usize, usize)], style: Style, mark: Style) -> Vec<Span<'static>> {
+/// spans, with the parts inside `marks` (sorted byte ranges) in their style.
+fn marked(piece: &str, offset: usize, marks: &[(usize, usize, Style)], style: Style) -> Vec<Span<'static>> {
     let end = offset + piece.len();
     let mut spans = Vec::new();
     let mut at = offset;
-    for &(start, stop) in highlights {
+    for &(start, stop, mark) in marks {
         let (start, stop) = (start.max(at), stop.min(end));
         if start >= stop || !piece.is_char_boundary(start - offset) || !piece.is_char_boundary(stop - offset) {
             continue;
@@ -63,9 +63,11 @@ fn chat_lines(
     line: &ChatLine,
     hub: &crate::app::channels::Hub,
     width: usize,
-    own_nick: &str,
+    own: (&str, &[u8]),
+    people: &[(String, Vec<u8>)],
     whisper: bool,
 ) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
+    let (own_nick, own_id) = own;
     let time = Local
         .timestamp_millis_opt(line.ts as i64)
         .single()
@@ -112,9 +114,16 @@ fn chat_lines(
     if line.pending.is_some() {
         text_style = text_style.fg(DIM);
     }
-    // Only the mention itself stands out, not the whole message.
+    // Only a mention of us stands out, not the whole message; `@name`
+    // mentions of others are in that person's colour.
     let mark = Style::default().fg(Color::Black).bg(Color::Yellow).bold();
     let highlights = line.highlights(own_nick);
+    let mut marks: Vec<(usize, usize, Style)> = highlights.iter().map(|&(start, end)| (start, end, mark)).collect();
+    for (start, end, id) in line.user_mentions(people, &highlights) {
+        let color = if id == own_id { ACCENT } else { nick_color(Some(&hex::encode(id))) };
+        marks.push((start, end, text_style.fg(color).bold()));
+    }
+    marks.sort_by_key(|&(start, ..)| start);
     let prefix_width = prefix.iter().map(Span::width).sum::<usize>();
     let lead = time.width() + prefix_width;
     // Other people's names can be clicked (for the user menu).
@@ -152,7 +161,7 @@ fn chat_lines(
                 vec![Span::raw(" ".repeat(indent))]
             };
             first = false;
-            spans.extend(marked(&piece, paragraph_start + at, &highlights, text_style, mark));
+            spans.extend(marked(&piece, paragraph_start + at, &marks, text_style));
             out.push(Line::from(spans));
         }
         paragraph_start += raw.len() + 1;
@@ -321,6 +330,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         lines.push((Line::raw(""), Link::None));
     }
     let own_nick = hub.nick.clone().unwrap_or_else(|| app.settings.display_name.clone());
+    let people = hub.mentionable(&room);
     let height = inner.height as usize;
     // Only the rows that can be on screen: wrap messages from the newest back
     // until the view (and however far it is scrolled up) is full.
@@ -332,7 +342,8 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             whole = false;
             break;
         }
-        let (rendered, name_cols) = chat_lines(line, hub, width, &own_nick, whisper.is_some());
+        let (rendered, name_cols) =
+            chat_lines(line, hub, width, (&own_nick, &app.identity_hash), &people, whisper.is_some());
         let user = line.src.as_deref().and_then(|s| hex::decode(s).ok());
         for (i, row) in rendered.into_iter().enumerate().rev() {
             let link = match (i, name_cols, &user) {
@@ -418,7 +429,45 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             .collect();
         frame.render_widget(List::new(items).block(members_block), members_area);
     }
+    draw_mentions(frame, app, input_inner, offset, chat_area);
     draw_popup(frame, app, area);
+}
+
+/// While typing `@name`: who it could be, in a box just above the input
+/// (`input`, scrolled `scroll` columns), under the `@`, inside `bounds`.
+fn draw_mentions(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bounds: Rect) {
+    app.regions.channel_mentions.clear();
+    let Some((at, matches)) = app.mention_matches() else { return };
+    let pick = app.channels.mention_pick.min(matches.len() - 1);
+    let column = app.channels.input.text()[..at].width().saturating_sub(scroll) as u16;
+    let width = (matches.iter().map(|(name, _)| name.width() + 4).max().unwrap_or(0).max(18) as u16 + 2).min(bounds.width);
+    let height = matches.len() as u16 + 2;
+    // The input's box starts a row above its text.
+    let bottom = input.y.saturating_sub(1);
+    let x = (input.x + column).saturating_sub(1).min(bounds.right().saturating_sub(width)).max(bounds.x);
+    let area = Rect::new(x, bottom.saturating_sub(height), width, height).intersection(bounds);
+    if area.height < 3 {
+        return;
+    }
+    let items: Vec<ListItem> = matches
+        .iter()
+        .enumerate()
+        .map(|(i, (name, id))| {
+            let line = Line::from(vec![
+                Span::styled(" @", Style::default().fg(DIM)),
+                Span::styled(name.clone(), Style::default().fg(nick_color(Some(&hex::encode(id)))).bold()),
+            ]);
+            let style = if i == pick { Style::default().bg(SELECTED_BG) } else { Style::default() };
+            ListItem::new(line).style(style)
+        })
+        .collect();
+    let list_block = block("Mention", true).title_bottom(Line::styled(" Tab pick ", Style::default().fg(DIM)));
+    let inner = list_block.inner(area);
+    for (row, (name, _)) in matches.iter().enumerate().take(inner.height as usize) {
+        app.regions.channel_mentions.push((Rect::new(inner.x, inner.y + row as u16, inner.width, 1), name.clone()));
+    }
+    frame.render_widget(ratatui::widgets::Clear, area);
+    frame.render_widget(List::new(items).block(list_block), area);
 }
 
 /// What a history row links to.

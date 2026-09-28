@@ -162,9 +162,15 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         &[("Enter", "confirm"), ("Esc", "cancel"), ("^V", "paste")]
     } else {
         match app.tab {
+            Tab::Channels if app.channels.typing && app.mention_matches().is_some() => &[
+                ("↑↓", "choose"),
+                ("Tab/Enter", "mention"),
+                ("Esc", "close list"),
+            ],
             Tab::Channels if app.channels.typing => &[
                 ("Enter", "send"),
                 ("Esc", "done"),
+                ("@", "mention"),
                 ("/help", "commands"),
                 ("^V", "paste"),
                 ("PgUp/PgDn", "scroll"),

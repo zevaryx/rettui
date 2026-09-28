@@ -123,6 +123,12 @@ tab.
   their LXMF address or identity. Their LXMF address comes from the identity
   the hub shows, and the menu says whether they have announced it. A message
   to an address that was never announced waits until a path is found.
+- **Mentioning someone:** typing `@` in a room lists who is there, plus
+  anyone who has spoken there. The list narrows as you type: names starting
+  with what you typed come first, then names containing it. Up and Down
+  choose, Tab or Enter puts in `@name`, a click does too, and Esc closes the
+  list. A mention of someone else shows in the same colour as their name
+  in the chat.
 - **Mentions and unread:** `@yournick` mentions are highlighted (just the
   mention, not the whole message). Unread counts show on each room and in the
   sidebar, and mentions stand out from ordinary unread messages.
