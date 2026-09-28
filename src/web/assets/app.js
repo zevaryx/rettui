@@ -105,9 +105,34 @@ function humanBytes(bytes) {
   return unit === 0 ? `${bytes} B` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
+// Fetch into `cache` (a Map) under `key`, sharing a request already under
+// way, so a click can use what a prefetch started.
+function loadInto(view, key, url) {
+  view.loading ||= new Map();
+  if (!view.loading.has(key)) {
+    const request = api.get(url)
+      .then((data) => {
+        view.cache.set(key, data);
+        return data;
+      })
+      .finally(() => view.loading.delete(key));
+    view.loading.set(key, request);
+  }
+  return view.loading.get(key);
+}
+
+// Load a few things at a time in the background, skipping failures.
+async function warm(loads, parallel = 4) {
+  const queue = [...loads];
+  const worker = async () => {
+    while (queue.length) await queue.shift()().catch(() => {});
+  };
+  await Promise.all(Array.from({ length: parallel }, worker));
+}
+
 // Keep a scrolled list at the bottom if it was there before an update.
 function stickToBottom(node, update) {
-  const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 40;
+  const atBottom = node.pinned ?? node.scrollHeight - node.scrollTop - node.clientHeight < 40;
   update();
   if (atBottom) node.scrollTop = node.scrollHeight;
 }
@@ -206,11 +231,18 @@ function mountView(id, options = {}) {
 }
 
 // A chat-style area stays at the newest line while it is there, even as
-// images finish loading and push the content down; scrolling up stops it.
+// images finish loading and push the content down. Only the reader moves
+// it off (wheel, touch, keys or the scrollbar): scroll events alone can't
+// tell that apart from content growing under an earlier jump to the end.
 function followBottom(node) {
   node.pinned = true;
+  let touched = 0;
+  const reader = () => { touched = performance.now(); };
+  for (const type of ['wheel', 'touchmove', 'keydown', 'pointerdown']) node.addEventListener(type, reader, { passive: true });
   node.addEventListener('scroll', () => {
-    if (node.clientHeight) node.pinned = node.scrollHeight - node.scrollTop - node.clientHeight < 40;
+    if (!node.clientHeight) return;
+    if (node.scrollHeight - node.scrollTop - node.clientHeight < 40) node.pinned = true;
+    else if (performance.now() - touched < 1000) node.pinned = false;
   });
   node.addEventListener('load', () => {
     if (node.pinned && node.clientHeight) node.scrollTop = node.scrollHeight;
@@ -223,7 +255,7 @@ function followBottom(node) {
 // if they were there, or if they were drawn while hidden.
 function saveScroll(root) {
   for (const node of root.querySelectorAll('.scroll')) {
-    node.savedScroll = { top: node.scrollTop, atBottom: node.scrollHeight - node.scrollTop - node.clientHeight < 40 };
+    node.savedScroll = { top: node.scrollTop, atBottom: node.pinned ?? node.scrollHeight - node.scrollTop - node.clientHeight < 40 };
   }
 }
 
@@ -335,6 +367,11 @@ function browse(url) {
 app.views.messages = {
   selected: null,
   pending: [],
+  // Conversations loaded so far, by key: a click draws one at once and
+  // refreshes it behind.
+  cache: new Map(),
+  // How many of the most recent conversations are loaded ahead.
+  WARM: 10,
   mode: localStorage.getItem('rettui.mode') || 'auto',
 
   mount(root, options = {}) {
@@ -410,15 +447,17 @@ app.views.messages = {
     const known = this.selected;
     const [conversations, early] = await Promise.all([
       api.get('/conversations'),
-      known ? api.get('/conversations/' + known).catch(() => null) : null,
+      known ? this.load(known).catch(() => null) : null,
     ]);
     if (!this.selected && conversations.length) this.selected = conversations[0].key;
+    this.names = new Map(conversations.map((c) => [c.key, c.name]));
+    this.warmRecent(conversations);
     if (changed(this, 'list:' + this.selected, conversations)) this.list.replaceChildren(...(conversations.length ? conversations.map((c) => el('div', {
       class: 'list-item' + (c.key === this.selected ? ' selected' : ''),
-      onclick: () => {
-        this.selected = c.key;
-        this.update();
-      },
+      dataset: { key: c.key },
+      // Start loading as the button goes down; the click shows it.
+      onpointerdown: () => this.load(c.key).catch(() => {}),
+      onclick: () => this.select(c.key),
     },
     el('div', { class: 'main' },
       el('div', { class: 'name', text: c.name }),
@@ -434,9 +473,43 @@ app.views.messages = {
       return;
     }
     const key = this.selected;
-    const conversation = key === known && early ? early : await api.get('/conversations/' + key);
+    const conversation = key === known && early ? early : await this.load(key);
     if (key !== this.selected) return;
     if (conversation.unread && app.tab === 'messages') api.post(`/conversations/${key}/read`).catch(() => {});
+    this.renderConversation(key, conversation);
+  },
+
+  load(key) {
+    return loadInto(this, key, '/conversations/' + key);
+  },
+
+  // Open a conversation: at once from what is loaded (or its name while it
+  // loads), then fresh.
+  select(key) {
+    this.selected = key;
+    for (const item of this.list.children) item.classList.toggle('selected', item.dataset.key === key);
+    const cached = this.cache.get(key);
+    if (cached) this.renderConversation(key, cached);
+    else {
+      (this.snapshots ||= {}).conversation = null;
+      this.lastKey = null;
+      this.header.replaceChildren(el('span', { class: 'title', text: this.names?.get(key) || key }),
+        el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }));
+      this.history.replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
+    }
+    this.update();
+  },
+
+  // Load the most recent conversations ahead, and again when they change.
+  warmRecent(conversations) {
+    const stale = conversations.slice(0, this.WARM).filter((c) => {
+      const cached = this.cache.get(c.key);
+      return !cached || cached.messages.at(-1)?.timestamp !== c.last?.timestamp;
+    });
+    if (stale.length) warm(stale.map((c) => () => this.load(c.key)));
+  },
+
+  renderConversation(key, conversation) {
     if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key })) return;
     this.header.replaceChildren(
       el('span', { class: 'title', text: conversation.name }),
@@ -455,6 +528,7 @@ app.views.messages = {
     if (this.lastKey !== key) {
       render();
       this.history.scrollTop = this.history.scrollHeight;
+      this.history.pinned = true;
       this.lastKey = key;
     } else {
       stickToBottom(this.history, render);
@@ -503,6 +577,7 @@ app.views.messages = {
       this.pending = [];
       this.renderChips();
       this.history.scrollTop = this.history.scrollHeight;
+      this.history.pinned = true;
     }
   },
 };
@@ -510,6 +585,9 @@ app.views.messages = {
 // ---- Channels ---------------------------------------------------------------
 
 app.views.channels = {
+  // Rooms, whispers and hub pages loaded so far, by "hub/room": a click
+  // draws one at once and refreshes it behind.
+  cache: new Map(),
   selected: null, // { hub, room } — room '' is the hub itself
 
   mount(root) {
@@ -553,12 +631,12 @@ app.views.channels = {
   async update() {
     // The hub list and the open room, fetched together when known.
     const known = this.selected && { ...this.selected };
-    const roomUrl = (s) => `/channels/${s.hub}/room?name=${encodeURIComponent(s.room)}`;
     const [hubs, early] = await Promise.all([
       api.get('/channels'),
-      known ? api.get(roomUrl(known)).catch(() => null) : null,
+      known ? this.load(known.hub, known.room).catch(() => null) : null,
     ]);
     this.hubs = hubs;
+    this.warmRooms(hubs);
     if (this.selected && !hubs.some((h) => h.hash === this.selected.hub)) this.selected = null;
     if (!this.selected && hubs.length) {
       const first = hubs[0];
@@ -567,22 +645,21 @@ app.views.channels = {
     const items = [];
     for (const hub of hubs) {
       const isSelected = (room) => this.selected && this.selected.hub === hub.hash && this.selected.room === room;
-      const select = (room) => () => {
-        this.selected = { hub: hub.hash, room };
-        this.update();
-      };
-      items.push(el('div', { class: 'list-item' + (isSelected('') ? ' selected' : ''), onclick: select('') },
+      const select = (room) => () => this.select(hub.hash, room);
+      // Start loading as the button goes down; the click shows it.
+      const press = (room) => () => this.load(hub.hash, room).catch(() => {});
+      items.push(el('div', { class: 'list-item' + (isSelected('') ? ' selected' : ''), dataset: { key: hub.hash + '/' }, onpointerdown: press(''), onclick: select('') },
         el('span', { class: 'dot ' + hub.status.kind, text: hub.status.kind === 'disconnected' ? '○' : hub.status.kind === 'connecting' ? '◌' : '●' }),
         el('span', { class: 'main name', text: hub.name }),
         hub.unread ? el('span', { class: 'badge' + (hub.mention ? ' mention' : ''), text: hub.unread }) : null));
       for (const room of hub.rooms) {
-        items.push(el('div', { class: 'list-item room-item' + (room.joined ? '' : ' parted') + (isSelected(room.name) ? ' selected' : ''), onclick: select(room.name) },
+        items.push(el('div', { class: 'list-item room-item' + (room.joined ? '' : ' parted') + (isSelected(room.name) ? ' selected' : ''), dataset: { key: hub.hash + '/' + room.name }, onpointerdown: press(room.name), onclick: select(room.name) },
           el('span', { class: 'main name', text: '# ' + room.name }),
           room.unread ? el('span', { class: 'badge' + (room.mention ? ' mention' : ''), text: room.unread }) : null));
       }
       // Whisper conversations: "@" where rooms have "#".
       for (const whisper of hub.whispers) {
-        items.push(el('div', { class: 'list-item room-item whisper-item' + (isSelected(whisper.key) ? ' selected' : ''), onclick: select(whisper.key), title: 'Whisper conversation' },
+        items.push(el('div', { class: 'list-item room-item whisper-item' + (isSelected(whisper.key) ? ' selected' : ''), dataset: { key: hub.hash + '/' + whisper.key }, onpointerdown: press(whisper.key), onclick: select(whisper.key), title: 'Whisper conversation' },
           el('span', { class: 'main name' }, el('span', { class: 'whisper-icon', text: '@ ' }), whisper.name),
           whisper.unread ? el('span', { class: 'badge mention', text: whisper.unread }) : null));
       }
@@ -599,14 +676,60 @@ app.views.channels = {
       return;
     }
     const { hub: hash, room } = this.selected;
-    const hub = hubs.find((h) => h.hash === hash);
     const same = known && known.hub === hash && known.room === room;
-    const view = same && early ? early : await api.get(roomUrl(this.selected));
+    const view = same && early ? early : await this.load(hash, room);
     if (!this.selected || this.selected.hub !== hash || this.selected.room !== room) return;
     const current = this.hubs.find((h) => h.hash === hash);
     const whisperEntry = view.whisper_with && current?.whispers.find((w) => w.key === room);
     const unreadNow = view.whisper_with ? whisperEntry?.unread : room ? current?.rooms.find((r) => r.name === room)?.unread : current?.unread;
     if (current && unreadNow && app.tab === 'channels') api.post(`/channels/${hash}/read`, { room }).catch(() => {});
+    this.renderRoom(hash, room, view);
+  },
+
+  load(hub, room) {
+    return loadInto(this, hub + '/' + room, `/channels/${hub}/room?name=${encodeURIComponent(room)}`);
+  },
+
+  // Open a room, whisper or hub page: at once from what is loaded (or its
+  // name while it loads), then fresh.
+  select(hash, room) {
+    this.selected = { hub: hash, room };
+    for (const item of this.list.children) item.classList.toggle('selected', item.dataset.key === hash + '/' + room);
+    const cached = this.cache.get(hash + '/' + room);
+    if (cached && this.hubs?.some((h) => h.hash === hash)) this.renderRoom(hash, room, cached);
+    else {
+      (this.snapshots ||= {}).room = null;
+      this.lastView = null;
+      const hub = this.hubs?.find((h) => h.hash === hash);
+      const whisper = hub?.whispers.find((w) => w.key === room);
+      this.header.replaceChildren(el('span', { class: 'title grow', text: whisper ? '@ ' + whisper.name : room ? '#' + room : hub?.name || '' }));
+      this.membersPanel.classList.add('hidden');
+      this.body.replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
+    }
+    this.update();
+  },
+
+  // Load every room, whisper and hub page ahead (hubs have few), and again
+  // when one has new lines (its unread count changed).
+  warmRooms(hubs) {
+    this.seenUnread ||= new Map();
+    const loads = [];
+    for (const hub of hubs) {
+      const entries = [{ key: '', unread: hub.unread }, ...hub.rooms.map((r) => ({ key: r.name, unread: r.unread })), ...hub.whispers.map((w) => ({ key: w.key, unread: w.unread }))];
+      for (const { key, unread } of entries) {
+        const cacheKey = hub.hash + '/' + key;
+        const selected = this.selected && this.selected.hub === hub.hash && this.selected.room === key;
+        const moved = (this.seenUnread.get(cacheKey) || 0) !== (unread || 0);
+        this.seenUnread.set(cacheKey, unread || 0);
+        if (!selected && (!this.cache.has(cacheKey) || moved)) loads.push(() => this.load(hub.hash, key));
+      }
+    }
+    if (loads.length) warm(loads);
+  },
+
+  renderRoom(hash, room, view) {
+    const hub = this.hubs.find((h) => h.hash === hash);
+    if (!hub) return;
     if (!changed(this, 'room', { hash, room, view, hub, all: this.showAll === hash + '/' + room })) return;
     this.inputBar.classList.remove('hidden');
     const whisper = view.whisper_with;
@@ -625,6 +748,7 @@ app.views.channels = {
     if (this.lastView !== viewKey) {
       render();
       this.body.scrollTop = this.body.scrollHeight;
+      this.body.pinned = true;
       this.lastView = viewKey;
     } else {
       stickToBottom(this.body, render);
