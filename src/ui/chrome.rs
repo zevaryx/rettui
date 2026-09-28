@@ -29,11 +29,13 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     let compact = width < 10;
 
     app.regions.version = Rect::default();
+    // The logo: `rettui>_` with a cyan prompt, or just the prompt on the rail.
+    let prompt = Span::styled(">_", Style::default().fg(ACCENT).bold());
     let brand = if compact {
-        Line::styled(" ◆", Style::default().fg(ACCENT))
+        Line::from(vec![Span::raw(" "), prompt])
     } else {
-        let mut spans = vec![Span::styled(" ◆ ", Style::default().fg(ACCENT)), Span::styled("rettui", Style::default().bold())];
-        // The version when it fits (" ◆ rettui " is 10 columns); clicking
+        let mut spans = vec![Span::styled(" rettui", Style::default().bold()), prompt];
+        // The version when it fits (" rettui>_ " is 10 columns); clicking
         // it opens the project page.
         let version = env!("CARGO_PKG_VERSION");
         if width >= 10 + 1 + version.len() {

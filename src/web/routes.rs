@@ -116,6 +116,7 @@ pub fn router(state: WebState) -> Router {
         .route("/app.js", get(script))
         .route("/style.css", get(style))
         .route("/fonts/{name}", get(font))
+        .route("/brand/{name}", get(brand))
         .nest("/api", api)
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
@@ -127,8 +128,12 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 const LOGIN_PAGE: &str = "<!doctype html><meta charset=utf-8><title>rettui</title>\
+<link rel=icon type=image/png href=/brand/icon.png>\
 <body style=\"font-family:sans-serif;background:#16161e;color:#ddd;padding:3em\">\
-<h1>rettui</h1><p>Open the link that <code>rettui --web</code> printed (it ends in <code>?token=…</code>) to log in.</p>";
+<h1><img src=/brand/wordmark.png alt=rettui height=36></h1><p>Open the link that <code>rettui --web</code> printed (it ends in <code>?token=…</code>) to log in.</p>";
+
+/// Served without logging in: the logo and icon, for the login page.
+const PUBLIC: [&str; 2] = ["/brand/wordmark.png", "/brand/icon.png"];
 
 /// Tokens a request carries: in the login cookie, an `Authorization: Bearer`
 /// header or an `X-Rettui-Token` header.
@@ -160,7 +165,7 @@ async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Re
         }
     } else {
         let logged_in = presented_tokens(request.headers()).any(|t| same(t, &state.token));
-        if logged_in {
+        if logged_in || PUBLIC.contains(&path.as_str()) {
             next.run(request).await
         } else if path.starts_with("/api/") {
             let mut response = ApiError(StatusCode::UNAUTHORIZED, "not logged in".into()).into_response();
@@ -215,6 +220,16 @@ async fn font(Path(name): Path<String>) -> Response {
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     ([(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")], body).into_response()
+}
+
+/// The logo (`assets/brand/`, made from `assets/logo.png`).
+async fn brand(Path(name): Path<String>) -> Response {
+    let body: &'static [u8] = match name.as_str() {
+        "wordmark.png" => include_bytes!("assets/brand/wordmark.png"),
+        "icon.png" => include_bytes!("assets/brand/icon.png"),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")], body).into_response()
 }
 
 // ---- state and live updates ----------------------------------------------

@@ -1,0 +1,81 @@
+name: Build
+
+# Binaries for every platform, without making a release: Actions > Build >
+# Run workflow, then download them from the run's Artifacts. The release
+# workflow builds with this too.
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Version in the archive names (the tag, for a release)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds use the oldest runner for the widest glibc support
+          # (2.35). The vendored Reticulum library does not build for musl.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        id: package
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          # Run by hand: name it after Cargo.toml's version and the commit.
+          if [ -z "$VERSION" ]; then
+            VERSION="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)-${GITHUB_SHA::7}"
+          fi
+          name="rettui-$VERSION-$TARGET"
+          mkdir -p "dist/$name"
+          cp README.md "dist/$name/"
+          cd dist
+          if [[ "$TARGET" == *windows* ]]; then
+            cp "../target/$TARGET/release/rettui.exe" "$name/"
+            7z a -tzip "$name.zip" "$name" > /dev/null
+            echo "file=dist/$name.zip" >> "$GITHUB_OUTPUT"
+          else
+            cp "../target/$TARGET/release/rettui" "$name/"
+            tar -czf "$name.tar.gz" "$name"
+            echo "file=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rettui-${{ matrix.target }}
+          path: ${{ steps.package.outputs.file }}
+          if-no-files-found: error

@@ -27,6 +27,7 @@ configuration. It is built on:
 ## Contents
 
 - [Features](#features)
+- [Install](#install)
 - [Build](#build)
 - [Run](#run)
 - [Web UI](#web-ui)
@@ -34,6 +35,7 @@ configuration. It is built on:
 - [Using the TUI](#using-the-tui)
 - [Notes](#notes)
 - [Code layout](#code-layout)
+- [Releases and CI](#releases-and-ci)
 - [License](#license)
 
 ## Features
@@ -269,6 +271,28 @@ or the folder set in `node_dir`.
 - **Line wrapping:** the "Wrap editor lines" setting makes long lines in the
   page and config editors wrap instead of scrolling sideways, in both UIs.
 
+## Install
+
+Each [release](https://github.com/zevaryx/rettui/releases) has a
+ready-built `rettui` for:
+
+| System | Archive |
+| --- | --- |
+| Linux, x86-64 | `rettui-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, ARM64 | `rettui-<version>-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows, x86-64 | `rettui-<version>-x86_64-pc-windows-msvc.zip` |
+| macOS, Apple silicon | `rettui-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `rettui-<version>-x86_64-apple-darwin.tar.gz` |
+
+Unpack it and put `rettui` somewhere on your `PATH`. `SHA256SUMS` has
+the checksums.
+
+- **Linux:** the binaries need glibc 2.35 or newer (Ubuntu 22.04,
+  Debian 12 or later).
+- **macOS:** the binaries aren't notarised. If macOS won't open one,
+  run `xattr -d com.apple.quarantine rettui`.
+- **Docker:** see [Docker](#docker) for the image.
+
 ## Build
 
 ```sh
@@ -381,7 +405,13 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 
 ## Docker
 
-The web UI can run in a container. From a checkout with its submodules:
+The web UI can run in a container. Each release publishes an image for
+x86-64 and ARM64 to `ghcr.io/zevaryx/rettui`, tagged with the version (`1.2.0`,
+`1.2`, `1`) and `latest`. To use it, remove `build: .` from
+[compose.yaml](compose.yaml) and set `image: ghcr.io/zevaryx/rettui:latest`,
+then `docker compose up -d`.
+
+To build the image yourself instead, from a checkout with its submodules:
 
 ```sh
 git submodule update --init
@@ -510,11 +540,44 @@ state as the TUI.
 | `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`), the page editor's formatting (`format`) and input routing | |
 | `ui/` | Drawing per tab, plus the sidebar, footer and prompt (`chrome`) and the text editors | ratatui |
 | `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty, Sixel, iTerm2 or half blocks) | ratatui-image |
-| `web/` | Web UI: HTTP API, login, live updates, and the page's HTML/CSS/JS and font (`web/assets`) | axum |
+| `web/` | Web UI: HTTP API, login, live updates, and the page's HTML/CSS/JS, font and logo (`web/assets`) | axum |
 
 `cli.rs` has the shell commands (`send`, `listen`, `sync`, `fetch`), and
 `store.rs` and `config.rs` hold what is saved to disk, and `app/saver.rs`
 writes the store and chat history in the background.
+
+## Releases and CI
+
+The workflows are in [.github/workflows](.github/workflows):
+
+- **CI** ([ci.yml](.github/workflows/ci.yml)) runs on every pull request:
+  - Clippy, with warnings as errors;
+  - the tests on Linux, Windows and macOS.
+- **Build** ([build.yml](.github/workflows/build.yml)) builds the binaries
+  for every platform in the [Install](#install) table without making a
+  release:
+  - Run it from *Actions > Build > Run workflow*.
+  - Download the archives from the run's *Artifacts*.
+  - They're named after the version and commit, for example
+    `rettui-v1.2.0-a4e545b-x86_64-unknown-linux-gnu.tar.gz`.
+- **Release** ([release.yml](.github/workflows/release.yml)) runs when a
+  tag starting with `v` is pushed. It:
+  1. checks the tag matches the version in `Cargo.toml`;
+  2. builds every platform with the Build workflow;
+  3. pushes the Docker image to `ghcr.io`, using those Linux binaries
+     (the Dockerfile's `prebuilt` stage);
+  4. creates a GitHub release with the archives, `SHA256SUMS` and
+     generated notes.
+
+  A tag containing a hyphen (`v1.3.0-rc.1`) makes a prerelease. Its image
+  gets only the version tag, not `latest`.
+
+To release, bump `version` in `Cargo.toml`, commit, then:
+
+```sh
+git tag v1.2.1
+git push origin v1.2.1
+```
 
 ## License
 

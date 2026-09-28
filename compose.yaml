@@ -9,6 +9,8 @@
 
 services:
   rettui:
+    # To use a release image instead of building one, remove `build: .` and
+    # set `image: ghcr.io/zevaryx/rettui:latest`.
     build: .
     image: rettui:latest
     container_name: rettui

@@ -9,3 +9,6 @@
 
 # Data from docker compose (see compose.yaml).
 /data
+
+# Local packaging output (the release workflow builds these in CI).
+/dist/

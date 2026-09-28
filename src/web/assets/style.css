@@ -90,8 +90,10 @@ a { color: var(--accent); }
   border-right: 1px solid var(--border);
   background: var(--bg);
 }
-.brand { padding: 14px 16px; font-weight: 700; color: var(--accent); letter-spacing: .5px; }
-.brand .version { color: var(--dim); font-weight: 400; font-size: 12px; letter-spacing: 0; text-decoration: none; }
+.brand { padding: 14px 16px; display: flex; align-items: flex-end; gap: 8px; }
+.brand .wordmark { display: block; height: 20px; width: auto; }
+.mark { display: none; width: 34px; height: 34px; margin: 12px auto 6px; }
+.brand .version { color: var(--dim); font-size: 12px; line-height: 1; text-decoration: none; }
 .brand .version:hover { color: var(--accent); text-decoration: underline; }
 #tabs { flex: 1; }
 .tab {
@@ -360,6 +362,7 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
 @media (max-width: 900px) {
   #sidebar { width: 58px; }
   .tab .label, .brand, .who { display: none; }
+  .mark { display: block; }
   .side { width: 220px; }
   .members { display: none; }
 }

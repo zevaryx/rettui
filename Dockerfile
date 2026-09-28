@@ -2,6 +2,10 @@
 #   git submodule update --init
 #   docker compose up -d --build
 # The login link is in the logs: docker compose logs rettui
+#
+# Release images (.github/workflows/release.yml) use `--target prebuilt`
+# with binaries the workflow has already built, at dist/rettui-<arch>
+# (amd64, arm64), so nothing is compiled under emulation.
 
 FROM rust:1-slim-bookworm AS build
 WORKDIR /src
@@ -16,12 +20,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo build --release --locked \
     && cp target/release/rettui /rettui
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 # setpriv (util-linux, already in the image) drops to PUID/PGID at start.
-COPY --from=build /rettui /usr/local/bin/rettui
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/rettui \
-    && command -v setpriv >/dev/null
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Everything rettui keeps (identity, settings, messages, Reticulum config)
 # lives in /data; HOME points there too so nothing is written elsewhere.
@@ -31,3 +32,11 @@ ENV HOME=/data
 VOLUME /data
 EXPOSE 8740
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+FROM runtime AS prebuilt
+ARG TARGETARCH
+COPY --chmod=0755 dist/rettui-${TARGETARCH} /usr/local/bin/rettui
+
+# The default: build from source.
+FROM runtime
+COPY --chmod=0755 --from=build /rettui /usr/local/bin/rettui
