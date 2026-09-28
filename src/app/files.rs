@@ -35,8 +35,8 @@ pub(super) fn expand_home(path: &str) -> PathBuf {
     }
 }
 
-/// Open a file with the desktop's default application.
-fn open_external(path: &Path) -> std::io::Result<()> {
+/// Open a file or web address with the desktop's default application.
+fn open_external(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(windows) {
@@ -45,7 +45,7 @@ fn open_external(path: &Path) -> std::io::Result<()> {
         "xdg-open"
     };
     std::process::Command::new(opener)
-        .arg(path)
+        .arg(target)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -58,6 +58,14 @@ impl App {
         match open_external(path) {
             Ok(()) => self.log(format!("Opened {}", path.display())),
             Err(e) => self.log(format!("Could not open {}: {e}", path.display())),
+        }
+    }
+
+    /// Open a web address in the desktop's browser.
+    pub(super) fn open_url(&mut self, url: &str) {
+        match open_external(url) {
+            Ok(()) => self.notify(format!("Opened {url} in your browser")),
+            Err(e) => self.fail(format!("Could not open {url}: {e}")),
         }
     }
 }

@@ -28,10 +28,19 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     let width = inner.width as usize;
     let compact = width < 10;
 
+    app.regions.version = Rect::default();
     let brand = if compact {
         Line::styled(" ◆", Style::default().fg(ACCENT))
     } else {
-        Line::from(vec![Span::styled(" ◆ ", Style::default().fg(ACCENT)), Span::styled("rettui", Style::default().bold())])
+        let mut spans = vec![Span::styled(" ◆ ", Style::default().fg(ACCENT)), Span::styled("rettui", Style::default().bold())];
+        // The version when it fits (" ◆ rettui " is 10 columns); clicking
+        // it opens the project page.
+        let version = env!("CARGO_PKG_VERSION");
+        if width >= 10 + 1 + version.len() {
+            spans.push(Span::styled(format!(" {version}"), Style::default().fg(DIM)));
+            app.regions.version = Rect::new(inner.x + 10, inner.y, version.len() as u16, 1);
+        }
+        Line::from(spans)
     };
     frame.render_widget(Paragraph::new(brand), Rect { height: 1, ..inner });
     // Tabs a row apart when there is room, else packed.

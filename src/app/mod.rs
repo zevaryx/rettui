@@ -138,6 +138,8 @@ pub enum NetState {
 #[derive(Default)]
 pub struct Regions {
     pub tabs: Vec<(Rect, Tab)>,
+    /// The version beside the name, top left (opens the project page).
+    pub version: Rect,
     /// Browser pane sub-tabs and list.
     pub browser_tabs: Vec<(Rect, BrowserPane)>,
     pub browser_list: Rect,

@@ -150,6 +150,9 @@ pub struct Field {
     pub effect: Effect,
 }
 
+/// Where rettui lives (opened by clicking the version in either UI).
+pub const PROJECT_URL: &str = "https://github.com/zevaryx/rettui";
+
 pub const FIELDS: &[Field] = &[
     Field {
         key: "display_name",

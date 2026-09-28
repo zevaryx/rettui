@@ -186,8 +186,16 @@ fn asset(content_type: &'static str, body: &'static str) -> Response {
     ([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-cache")], body).into_response()
 }
 
+/// The page, with this build's version beside the name (a link to the
+/// project page).
+static INDEX: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    include_str!("assets/index.html")
+        .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+        .replace("{{PROJECT_URL}}", crate::config::PROJECT_URL)
+});
+
 async fn index() -> Response {
-    asset("text/html; charset=utf-8", include_str!("assets/index.html"))
+    asset("text/html; charset=utf-8", INDEX.as_str())
 }
 
 async fn script() -> Response {

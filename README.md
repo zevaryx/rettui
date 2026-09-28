@@ -452,6 +452,8 @@ a little longer.
   to edit it. In the editors, click to place the cursor and drag to select;
   click a ribbon button to format.
 - The scroll wheel scrolls whatever is under the pointer.
+- Click the version beside the name (top left) to open rettui's project page
+  in your browser. In the web UI it opens in a new tab.
 
 ### Copy and paste
 
