@@ -1,6 +1,6 @@
 //! JSON snapshots of the app state, shaped for the web UI's screens.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
@@ -272,6 +272,8 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
     // Everyone shown (members and senders), for the user menu.
     let mut ids: BTreeMap<String, Vec<u8>> = members.iter().map(|(_, id)| (hex::encode(id), id.clone())).collect();
     ids.extend(buffer.iter().filter_map(|l| l.src.clone()).filter_map(|s| hex::decode(&s).ok().map(|id| (s, id))));
+    let seen: HashMap<&str, &String> =
+        buffer.iter().filter(|l| !l.own).filter_map(|l| Some((l.src.as_deref()?, l.nick.as_ref()?))).collect();
     let users: serde_json::Map<String, Value> = ids
         .into_iter()
         .filter(|(_, id)| *id != own)
@@ -279,7 +281,9 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
             let lxmf = hex::encode(lxmf_address(&id)?);
             let known = app.store.peers.get(&lxmf).is_some_and(|p| p.kind == crate::net::PeerKind::Lxmf)
                 || app.store.conversations.contains_key(&lxmf);
-            Some((key, json!({ "name": hub.name_of(&id), "lxmf": lxmf, "lxmf_known": known })))
+            // Their nick now, else the one on their latest line here.
+            let name = hub.nicks.get(&id).or_else(|| seen.get(key.as_str()).copied()).cloned().unwrap_or_else(|| hub.name_of(&id));
+            Some((key, json!({ "name": name, "lxmf": lxmf, "lxmf_known": known })))
         })
         .collect();
     json!({

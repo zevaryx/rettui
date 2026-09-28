@@ -35,6 +35,7 @@ pub struct UserInfo {
 /// Something to do for a user, from the user menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserAction {
+    Mention,
     Whisper,
     Lxmf,
     CopyLxmf,
@@ -42,7 +43,8 @@ pub enum UserAction {
 }
 
 impl UserAction {
-    pub const ALL: [UserAction; 4] = [UserAction::Whisper, UserAction::Lxmf, UserAction::CopyLxmf, UserAction::CopyIdentity];
+    pub const ALL: [UserAction; 5] =
+        [UserAction::Mention, UserAction::Whisper, UserAction::Lxmf, UserAction::CopyLxmf, UserAction::CopyIdentity];
 }
 
 /// The TUI's popup for a user.
@@ -73,7 +75,7 @@ impl App {
         let announced = self.store.peers.get(&key).is_some_and(|p| p.kind == PeerKind::Lxmf);
         Some(UserInfo {
             identity: identity.to_vec(),
-            name: hub.name_of(identity),
+            name: hub.display_name(identity),
             lxmf,
             lxmf_known: announced || self.store.conversations.contains_key(&key),
             whisper: hub.direct_notices,
@@ -216,6 +218,7 @@ impl App {
             KeyCode::Esc => self.channels.menu = None,
             KeyCode::Down | KeyCode::Char('j') => menu.list.select(Some((i + 1).min(UserAction::ALL.len() - 1))),
             KeyCode::Up | KeyCode::Char('k') => menu.list.select(Some(i.saturating_sub(1))),
+            KeyCode::Char('@') => self.user_action(UserAction::Mention),
             KeyCode::Char('w') => self.user_action(UserAction::Whisper),
             KeyCode::Char('l') => self.user_action(UserAction::Lxmf),
             KeyCode::Enter => self.user_action(UserAction::ALL[i]),
@@ -246,6 +249,11 @@ impl App {
         let Some(menu) = self.channels.menu.take() else { return };
         let user = menu.user;
         match action {
+            UserAction::Mention if !self.in_room() => {
+                self.warn("Mentions are for rooms");
+                self.channels.menu = Some(UserMenu { user, list: menu.list });
+            }
+            UserAction::Mention => self.insert_mention(&user.name),
             UserAction::Whisper if !user.whisper => {
                 self.warn("This hub does not pass private notices");
                 self.channels.menu = Some(UserMenu { user, list: menu.list });
@@ -327,6 +335,23 @@ impl App {
         if at != self.channels.mention_dismissed {
             self.channels.mention_dismissed = None;
         }
+    }
+
+    /// Whether a room is open (not the hub's page or a whisper conversation).
+    pub fn in_room(&self) -> bool {
+        self.channels.active().is_some_and(|(_, room)| !room.is_empty() && super::whisper_peer(&room).is_none())
+    }
+
+    /// Add `@name ` to what is being written, at the cursor, and carry on
+    /// writing.
+    pub fn insert_mention(&mut self, name: &str) {
+        let input = &mut self.channels.input;
+        let before = input.before_cursor();
+        let space = if before.is_empty() || before.ends_with(char::is_whitespace) { "" } else { " " };
+        let after_has_space = input.text()[before.len()..].starts_with(' ');
+        input.insert_str(&format!("{space}@{name}{}", if after_has_space { "" } else { " " }));
+        self.channels.mention_dismissed = None;
+        self.channels.typing = true;
     }
 
     /// Put `@name ` in place of what was typed after the `@` at byte `at`.

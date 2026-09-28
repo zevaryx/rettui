@@ -1132,8 +1132,10 @@ app.views.channels = {
     const item = (text, sub, action, disabled = false) => el('button', {
       class: 'menu-item', disabled, onclick: () => { close(); action(); },
     }, el('span', { text }), sub ? el('span', { class: 'dim mono', text: sub }) : null);
+    const inRoom = !!this.selected?.room && !this.view.whisper_with;
     const menu = el('div', { class: 'user-menu', role: 'menu' },
       el('div', { class: 'menu-title', text: user.name }),
+      item(inRoom ? 'Mention' : 'Mention (in rooms only)', inRoom ? `@${user.name}` : null, () => this.mention(user.name), !inRoom),
       item(this.view.whisper ? 'Whisper through the hub' : 'Whisper (this hub does not pass them)', 'opens your conversation', async () => {
         const result = await this.hubAction(this.selected.hub, 'whisper', { src });
         if (!result) return;
@@ -1158,6 +1160,22 @@ app.views.channels = {
       document.addEventListener('click', this.menuCloser);
       document.addEventListener('keydown', this.menuCloser);
     });
+  },
+
+  // Add `@name ` to what is being written, at the cursor, and carry on
+  // writing.
+  mention(name) {
+    const input = this.input;
+    const caret = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, caret);
+    const after = input.value.slice(input.selectionEnd ?? caret);
+    const inserted = `${before && !/\s$/u.test(before) ? ' ' : ''}@${name}${after.startsWith(' ') ? '' : ' '}`;
+    input.value = before + inserted + after;
+    const at = before.length + inserted.length;
+    input.focus();
+    input.setSelectionRange(at, at);
+    this.mentionDismissed = null;
+    this.hideMentions();
   },
 
   closeMenu() {

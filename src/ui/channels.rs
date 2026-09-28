@@ -481,6 +481,7 @@ enum Link {
 /// The member picker or the user menu, over the chat.
 fn draw_popup(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.channel_popup = Rect::default();
+    let in_room = app.in_room();
     let (title, items, list, bottom): (String, Vec<ListItem>, &mut ratatui::widgets::ListState, &str) =
         if let Some(menu) = &mut app.channels.menu {
             let user = &menu.user;
@@ -490,6 +491,10 @@ fn draw_popup(frame: &mut Frame, app: &mut App, area: Rect) {
                 .iter()
                 .map(|action| {
                     let line = match action {
+                        UserAction::Mention if in_room => {
+                            Line::from(vec![Span::raw(" Mention  "), Span::styled(format!("@{}", user.name), dim)])
+                        }
+                        UserAction::Mention => Line::styled(" Mention (in rooms only)", dim),
                         UserAction::Whisper if user.whisper => Line::from(vec![Span::raw(" Whisper through the hub  "), Span::styled("/msg", dim)]),
                         UserAction::Whisper => Line::styled(" Whisper (this hub does not pass them)", dim),
                         UserAction::Lxmf if user.lxmf_known => Line::from(vec![Span::raw(" LXMF message  "), Span::styled(lxmf.clone(), dim)]),
@@ -500,7 +505,7 @@ fn draw_popup(frame: &mut Frame, app: &mut App, area: Rect) {
                     ListItem::new(line)
                 })
                 .collect();
-            (user.name.clone(), items, &mut menu.list, " w whisper · l LXMF · Esc close ")
+            (user.name.clone(), items, &mut menu.list, " @ mention · w whisper · l LXMF · Esc close ")
         } else if let Some(picker) = &mut app.channels.picker {
             let items = picker.members.iter().map(|(name, _)| ListItem::new(format!(" {name}"))).collect();
             let title = if picker.room.is_empty() { "Message a user".to_string() } else { format!("Message someone in #{}", picker.room) };

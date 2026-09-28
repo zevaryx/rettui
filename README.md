@@ -119,8 +119,9 @@ tab.
   conversation), and `/dm <nick> [text]` sends an LXMF message instead.
   `/help` lists them all.
 - **Messaging a user:** click a name in the chat or the members list (or press
-  `m`) for a menu: open your whisper conversation, send an LXMF message, or copy
-  their LXMF address or identity. Their LXMF address comes from the identity
+  `m`) for a menu: mention them (adds `@name` to what you're writing), open
+  your whisper conversation, send an LXMF message, or copy their LXMF
+  address or identity. Their LXMF address comes from the identity
   the hub shows, and the menu says whether they have announced it. A message
   to an address that was never announced waits until a path is found.
 - **Mentioning someone:** typing `@` in a room lists who is there, plus

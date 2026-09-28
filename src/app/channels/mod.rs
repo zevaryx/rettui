@@ -220,6 +220,22 @@ impl Hub {
             .unwrap_or_else(|| hex::encode(hash).chars().take(12).collect())
     }
 
+    /// What a user goes by here: their nick now, else the one on their
+    /// latest line (someone who has left), else the start of their identity.
+    pub fn display_name(&self, hash: &[u8]) -> String {
+        if let Some(nick) = self.nicks.get(hash) {
+            return nick.clone();
+        }
+        let src = hex::encode(hash);
+        self.buffers
+            .values()
+            .flat_map(|lines| lines.iter())
+            .filter(|l| l.src.as_deref() == Some(src.as_str()) && !l.own)
+            .max_by_key(|l| l.ts)
+            .and_then(|l| l.nick.clone())
+            .unwrap_or_else(|| self.name_of(hash))
+    }
+
     /// Rooms shown in the list: joined ones plus parted rooms with history.
     pub fn listed_rooms(&self) -> Vec<String> {
         let mut rooms: BTreeSet<String> = self.rooms.clone();
