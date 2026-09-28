@@ -255,7 +255,10 @@ const app = {
 function renderSidebar() {
   const unread = app.status?.unread || {};
   const tabs = $('#tabs');
-  tabs.replaceChildren(...TABS.map((tab) => {
+  // Only when something on them changed: a tab redrawn under a finger
+  // loses its tap.
+  const drawn = JSON.stringify([app.tab, unread.messages, unread.channels, unread.mention]);
+  if (tabs.dataset.drawn !== drawn) tabs.replaceChildren(...TABS.map((tab) => {
     let badge = null;
     if (tab.id === 'messages' && unread.messages) badge = el('span', { class: 'badge', text: unread.messages });
     if (tab.id === 'channels' && unread.channels) {
@@ -272,6 +275,7 @@ function renderSidebar() {
       },
     }, el('span', { class: 'icon', text: tab.icon }), el('span', { class: 'label', text: tab.title }), badge);
   }));
+  tabs.dataset.drawn = drawn;
   renderAppbar();
   if (app.status) {
     $('#who-name').textContent = app.status.display_name;
@@ -287,8 +291,12 @@ function renderSidebar() {
     const known = app.status.net.state === 'online' && traffic?.rx_rate != null;
     flow.classList.toggle('hidden', !known);
     if (known) {
-      flow.replaceChildren(el('span', { class: 'state-ok', text: '↓ ' }), rate(traffic.rx_rate),
-        el('span', { class: 'flow-out', text: '  ↑ ' }), rate(traffic.tx_rate));
+      const drawn = `${traffic.rx_rate} ${traffic.tx_rate}`;
+      if (flow.dataset.drawn !== drawn) {
+        flow.dataset.drawn = drawn;
+        flow.replaceChildren(el('span', { class: 'state-ok', text: '↓ ' }), rate(traffic.rx_rate),
+          el('span', { class: 'flow-out', text: '  ↑ ' }), rate(traffic.tx_rate));
+      }
       flow.title = `Received ${humanBytes(traffic.rx)}, sent ${humanBytes(traffic.tx)} (all interfaces)`;
     }
   }
@@ -467,16 +475,234 @@ function closeSheet() {
 $('#nav-menu').addEventListener('click', () => setDrawer(true));
 $('#nav-back').addEventListener('click', paneBack);
 $('#scrim').addEventListener('click', () => setDrawer(false));
-// Swiping the drawer to the left closes it.
-{
-  let start = null;
-  const sidebar = $('#sidebar');
-  sidebar.addEventListener('touchstart', (e) => { start = e.touches[0].clientX; }, { passive: true });
-  sidebar.addEventListener('touchend', (e) => {
-    if (start !== null && e.changedTouches[0].clientX - start < -60) setDrawer(false);
-    start = null;
-  }, { passive: true });
+// ---- swipes (phones) --------------------------------------------------------
+//
+// A swipe follows the finger, and finishes or springs back when it lifts:
+// right from a list opens the drawer, and left closes it; right from what
+// was picked goes back to the list (left from a room shows its members);
+// down on a sheet closes it. A swipe that starts where something scrolls
+// sideways, or in a text field, is left to that, and so is the screen's
+// very edge, where phones have a back gesture of their own.
+
+const SWIPE_EDGE = 20; // px from the screen's sides left to the phone
+const SWIPE_SLOP = 10; // px moved before a touch is a swipe (or a scroll)
+const SWIPE_FLICK = 0.4; // px/ms: a quick flick finishes a short swipe
+const SWIPE_TIME = 200; // ms to finish (or spring back) after lifting
+
+let swipe = null; // the touch being followed
+let swiped = 0; // when a swipe last ended (the click after it is dropped)
+
+document.addEventListener('touchstart', (e) => {
+  // A second finger ends a swipe; one still finishing ignores new touches.
+  if (swipe?.gesture) return swipeDone(false);
+  if (swipe?.busy && performance.now() - swipe.busy < 1000) return;
+  swipe?.unfollow?.();
+  swipe = null;
+  if (!phone.matches || e.touches.length !== 1) return;
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  const { clientX: x, clientY: y } = e.touches[0];
+  swipe = { x, y, target: e.target, edge: x < SWIPE_EDGE || x > window.innerWidth - SWIPE_EDGE, samples: [[performance.now(), 0]] };
+  swipe.unfollow = followTouch(e.target);
+}, { passive: true, capture: true });
+
+// A touch's moves and lift go to where it started, even once that's taken
+// off the page (redrawn under the finger), when they no longer reach the
+// document: so they're followed there.
+function followTouch(target) {
+  const end = (e) => swipeDone(e.type === 'touchend');
+  target.addEventListener('touchmove', swipeMove, { passive: false });
+  target.addEventListener('touchend', end);
+  target.addEventListener('touchcancel', end);
+  return () => {
+    target.removeEventListener('touchmove', swipeMove);
+    target.removeEventListener('touchend', end);
+    target.removeEventListener('touchcancel', end);
+  };
 }
+
+function swipeMove(e) {
+  if (!swipe || swipe.busy || swipe.dropped) return;
+  if (e.touches.length !== 1) return swipeDone(false);
+  const dx = e.touches[0].clientX - swipe.x;
+  const dy = e.touches[0].clientY - swipe.y;
+  if (!swipe.gesture) {
+    if (Math.abs(dx) < SWIPE_SLOP && Math.abs(dy) < SWIPE_SLOP) return;
+    swipe.gesture = pickSwipe(dx, dy);
+    if (!swipe.gesture) {
+      swipe.dropped = true;
+      return;
+    }
+  }
+  if (e.cancelable) e.preventDefault();
+  const { axis, dir } = swipe.gesture;
+  const along = (axis === 'x' ? dx : dy) * dir;
+  swipe.samples.push([performance.now(), along]);
+  if (swipe.samples.length > 6) swipe.samples.shift();
+  swipe.gesture.move(Math.max(0, along));
+}
+
+// A swipe ends in a tap-sized click on some browsers: not a tap.
+document.addEventListener('click', (e) => {
+  if (performance.now() - swiped < 400) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+}, true);
+
+// The finger lifted (or the phone took the touch): finish if it went a
+// third of the way (and isn't flicking back), or was flicked on; spring
+// back if not.
+function swipeDone(lifted) {
+  if (!swipe || swipe.busy) return;
+  const current = swipe;
+  swipe = null;
+  current.unfollow?.();
+  if (!current.gesture) return;
+  const gesture = current.gesture;
+  // How fast it was going as it lifted: over its last tenth of a second
+  // of moving (none if it rested before lifting).
+  const now = performance.now();
+  const [t1, p1] = current.samples.at(-1);
+  const [t0, p0] = current.samples.find(([t]) => t1 - t < 100);
+  const speed = now - t1 < 100 && t1 > t0 ? (p1 - p0) / (t1 - t0) : 0;
+  const done = lifted && (p1 > gesture.size / 3 ? speed > -SWIPE_FLICK : p1 > SWIPE_SLOP && speed > SWIPE_FLICK);
+  swiped = now;
+  swipe = { busy: now };
+  gesture.end(done, () => { swipe = null; });
+}
+
+// Which swipe a touch that has started moving is, if any: its axis, the
+// direction that finishes it, how far is all the way, and what it moves
+// (`move` with how far it has gone, `end` when it lifts).
+function pickSwipe(dx, dy) {
+  const sideways = Math.abs(dx) > Math.abs(dy);
+  const target = swipe.target;
+  const menu = app.views.channels.menu;
+  const open = sheet?.node || menu;
+  if (!sideways) {
+    // Down on a sheet (unless it's scrolled down) closes it.
+    if (dy < 0 || !open?.contains(target) || scrollsFrom(target, 'y', 1, open)) return null;
+    return { axis: 'y', dir: 1, size: open.offsetHeight, ...sheetSwipe(open, open === menu ? () => app.views.channels.closeMenu() : closeSheet) };
+  }
+  if (open || swipe.edge || (window.visualViewport?.scale ?? 1) > 1.01) return null;
+  if (scrollsFrom(target, 'x', Math.sign(dx), document.body)) return null;
+  const drawer = document.body.classList.contains('drawer-open');
+  if (drawer) return dx < 0 ? { axis: 'x', dir: -1, size: $('#sidebar').offsetWidth, ...drawerSwipe(false) } : null;
+  const view = app.views[app.tab];
+  const pane = view?.panes ? view.pane || 'list' : 'list';
+  if (dx > 0) {
+    if (pane === 'list') return { axis: 'x', dir: 1, size: $('#sidebar').offsetWidth, ...drawerSwipe(true) };
+    return { axis: 'x', dir: 1, size: view.root.clientWidth, ...paneSwipe(view, PANE_UP[pane], false) };
+  }
+  if (pane === 'detail' && view.root.querySelector(':scope > .members:not(.hidden)')) {
+    return { axis: 'x', dir: -1, size: view.root.clientWidth, ...paneSwipe(view, 'members', true) };
+  }
+  return null;
+}
+
+// Whether something from `target` up to `stop` would scroll along `axis`
+// for a finger moving in direction `dir` (content moves the other way).
+function scrollsFrom(target, axis, dir, stop) {
+  for (let node = target; node && node !== stop.parentElement; node = node.parentElement) {
+    const [pos, size, view, overflow] = axis === 'x'
+      ? [node.scrollLeft, node.scrollWidth, node.clientWidth, getComputedStyle(node).overflowX]
+      : [node.scrollTop, node.scrollHeight, node.clientHeight, getComputedStyle(node).overflowY];
+    if (size <= view + 1 || !/auto|scroll/.test(overflow)) continue;
+    if (dir > 0 ? pos > 0 : pos < size - view - 1) return true;
+  }
+  return false;
+}
+
+// Run `then` once `node` has finished moving.
+function afterMove(node, then) {
+  let ran = false;
+  const run = (e) => {
+    if (ran || (e && e.target !== node)) return;
+    ran = true;
+    node.removeEventListener('transitionend', run);
+    then();
+  };
+  node.addEventListener('transitionend', run);
+  setTimeout(run, SWIPE_TIME + 60);
+}
+
+// The drawer, sliding out with the finger (or back in).
+function drawerSwipe(opening) {
+  const sidebar = $('#sidebar');
+  const scrim = $('#scrim');
+  const width = sidebar.offsetWidth;
+  for (const node of [sidebar, scrim]) node.style.transition = 'none';
+  sidebar.style.visibility = 'visible';
+  sidebar.style.boxShadow = '8px 0 32px #000c';
+  return {
+    move(along) {
+      const shown = Math.min(1, opening ? along / width : 1 - along / width);
+      sidebar.style.transform = `translateX(${(shown - 1) * 102}%)`;
+      scrim.style.opacity = shown;
+    },
+    // The stylesheet's own transitions take it from where the finger left it.
+    end(done, finished) {
+      for (const node of [sidebar, scrim]) node.style.transition = '';
+      sidebar.style.transform = sidebar.style.visibility = sidebar.style.boxShadow = scrim.style.opacity = '';
+      setDrawer(opening === done);
+      setTimeout(finished, SWIPE_TIME);
+    },
+  };
+}
+
+// One pane sliding over another: going back, the pane on screen slides
+// off to the right over the one it came from; to a room's members, they
+// slide in from the right over the chat.
+function paneSwipe(view, to, forward) {
+  const root = view.root;
+  const from = view.pane || 'list';
+  const node = (pane) => root.querySelector(`:scope > ${{ list: '.side', detail: '.pane-main', members: '.members' }[pane]}`);
+  root.dataset.peek = to;
+  // Where the pane showing up was scrolled to (as swapPanes puts it back).
+  for (const scroll of node(to).querySelectorAll('.scroll')) {
+    const saved = scroll.paneScroll;
+    if (scroll.dataset.stick === 'bottom' && (!saved || saved.atBottom)) scroll.scrollTop = scroll.scrollHeight;
+    else if (saved) scroll.scrollTop = saved.top;
+  }
+  const moving = node(forward ? to : from);
+  const width = root.clientWidth;
+  moving.classList.add('swiping');
+  moving.style.transition = 'none';
+  const place = (along) => { moving.style.transform = `translateX(${forward ? width - along : along}px)`; };
+  place(0);
+  return {
+    move: (along) => place(Math.min(width, along)),
+    end(done, finished) {
+      moving.style.transition = `transform ${SWIPE_TIME}ms ease-out`;
+      place(done ? width : 0);
+      afterMove(moving, () => {
+        moving.classList.remove('swiping');
+        moving.style.transition = moving.style.transform = '';
+        delete root.dataset.peek;
+        if (done && view.pane === from) setPane(view, to);
+        finished();
+      });
+    },
+  };
+}
+
+// A sheet going down with the finger.
+function sheetSwipe(node, close) {
+  node.style.transition = 'none';
+  return {
+    move(along) { node.style.transform = `translateY(${along}px)`; },
+    end(done, finished) {
+      node.style.transition = `transform ${SWIPE_TIME}ms ease-out`;
+      node.style.transform = done ? 'translateY(100%)' : '';
+      afterMove(node, () => {
+        if (done) close();
+        else node.style.transition = '';
+        finished();
+      });
+    },
+  };
+}
+
 phone.addEventListener('change', () => {
   setDrawer(false);
   closeSheet();

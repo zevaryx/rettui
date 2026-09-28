@@ -477,6 +477,13 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
   .view.panes[data-pane=list] > .side { display: flex; }
   .view.panes[data-pane=detail] > .pane-main { display: flex; }
   .view.panes[data-pane=members] > .members:not(.hidden) { display: flex; }
+  /* During a swipe between panes both show: the one coming into view
+     fills the section, and the one the finger moves goes over it. */
+  .view.panes[data-peek] { position: relative; overflow: hidden; }
+  .view.panes[data-peek=list] > .side,
+  .view.panes[data-peek=detail] > .pane-main,
+  .view.panes[data-peek=members] > .members:not(.hidden) { display: flex; position: absolute; inset: 0; }
+  .view.panes > .swiping { position: relative; z-index: 1; box-shadow: -10px 0 28px #0009; will-change: transform; }
 
   /* A list pane made of a card and a list (Node, Reticulum) scrolls as
      one page, so a short screen doesn't squeeze the list away. */

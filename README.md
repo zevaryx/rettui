@@ -243,6 +243,13 @@ or the folder set in `node_dir`.
   node for sync, and copy any address.
 - **Status:** the Status tab shows your identity and LXMF address, the
   network state, each interface with its traffic, the last sync, and a log.
+- **Interface trouble:** the log shows why an interface won't connect or
+  dropped, as the Reticulum libraries report it (for example
+  `Interface Dead Link: TCP connect failed: Connection refused`). It also
+  shows when an interface goes offline or comes back online. The same
+  trouble again within five minutes (a connection retrying) is counted
+  rather than logged again, and a Reticulum restart starts the count
+  afresh. `rettui.log` keeps everything.
 - **Traffic:** the corner of the sidebar, under the interface count, shows how
   fast data is coming in (↓) and going out (↑) over all interfaces, updated
   every few seconds. In the web UI, hovering over it shows the totals.
@@ -426,6 +433,13 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   - **Fewer buttons:** less used buttons (such as Copy link, Forget, Rename,
     Delete) wait behind ⋯. It and a user's actions open as a sheet from the
     bottom of the screen.
+  - **Swipes:** swipe right from a list to open the drawer, and left to close
+    it. Swipe right from what you opened to go back to the list, and left in
+    a room to see its members. Swipe a sheet down to close it. A swipe
+    follows your finger, finishes once it is a third of the way (or
+    flicked), and springs back otherwise. Swipes are left alone in text
+    boxes, in rows that scroll sideways and at the very edge of the screen,
+    where the phone has its own back gesture.
 - **Font:** all text uses Fira Code Nerd Font, which rettui serves itself
   (browsers never fetch fonts from a third party).
 - **Stopping:** Ctrl-C or SIGTERM stops it cleanly, leaving hubs and saving

@@ -6,6 +6,7 @@
 //! on the network. The protocol work itself lives in [`crate::lxmf`],
 //! [`crate::nomad`] and [`crate::rrc`].
 
+pub mod iface_log;
 mod remote;
 
 use std::collections::{BTreeMap, HashMap};
@@ -201,6 +202,7 @@ pub struct NetOptions {
 pub fn spawn(options: NetOptions) -> (mpsc::UnboundedSender<NetCommand>, mpsc::UnboundedReceiver<NetEvent>) {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+    iface_log::attach(ev_tx.clone());
     let started = std::thread::Builder::new().name("rettui-net".into()).spawn({
         let ev_tx = ev_tx.clone();
         move || {
@@ -358,6 +360,7 @@ async fn run(
                     announces_missed = missed;
                 }
                 if let Ok(stats) = runtime.interface_stats().await {
+                    iface_log::set_names(stats.interfaces.iter().map(|i| (i.id, i.name.clone())));
                     let interfaces = stats
                         .interfaces
                         .into_iter()

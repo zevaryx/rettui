@@ -4,9 +4,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph};
 
-use super::{ACCENT, DIM, SELECTED_BG, block, human_bytes};
+use super::{ACCENT, DIM, SELECTED_BG, block, human_bytes, wrap};
 use crate::app::{App, NetState, SyncState};
 use crate::config::{Effect, FIELDS, FieldKind};
 
@@ -116,17 +116,55 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         ifaces,
     );
 
-    let height = log.height.saturating_sub(2) as usize;
-    let log_lines: Vec<Line> = app
-        .log
-        .iter()
-        .skip(app.log.len().saturating_sub(height))
-        .map(|l| Line::raw(l.clone()))
-        .collect();
-    frame.render_widget(
-        Paragraph::new(log_lines)
-            .wrap(Wrap { trim: false })
-            .block(block("Log", false)),
-        log,
-    );
+    let rows = log_rows(app.log.iter(), log.width.saturating_sub(2) as usize, log.height.saturating_sub(2) as usize);
+    frame.render_widget(Paragraph::new(rows).block(block("Log", false)), log);
+}
+
+/// The newest log lines that fit, wrapped under their times (long ones,
+/// such as an interface's error, take a few rows without pushing the
+/// newest off the bottom).
+fn log_rows<'a>(log: impl DoubleEndedIterator<Item = &'a String>, width: usize, height: usize) -> Vec<Line<'static>> {
+    // Lines start with the time: "HH:MM:SS  ".
+    const TIME: usize = 10;
+    let mut rows = Vec::new();
+    for entry in log.rev() {
+        if rows.len() >= height {
+            break;
+        }
+        let pieces = match entry.get(..TIME).zip(entry.get(TIME..)) {
+            Some((time, text)) if width > TIME * 2 => {
+                let mut pieces = wrap(text, width - TIME).into_iter();
+                let first = format!("{time}{}", pieces.next().unwrap_or_default());
+                std::iter::once(first).chain(pieces.map(|p| format!("{:TIME$}{p}", ""))).collect()
+            }
+            _ => wrap(entry, width),
+        };
+        rows.extend(pieces.into_iter().rev().map(Line::raw));
+    }
+    rows.truncate(height);
+    rows.reverse();
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_log_lines_wrap_under_their_time_and_keep_the_newest_in_view() {
+        let log: Vec<String> = [
+            "12:00:00  Old line that should scroll away",
+            "12:00:01  Interface Dead Link: TCP connect failed: Connection refused (os error 111)",
+            "12:00:02  Newest",
+        ]
+        .map(String::from)
+        .to_vec();
+        let rows: Vec<String> = log_rows(log.iter(), 40, 4).iter().map(|l| l.to_string()).collect();
+        assert_eq!(rows, [
+            "12:00:01  Interface Dead Link: TCP",
+            "          connect failed: Connection",
+            "          refused (os error 111)",
+            "12:00:02  Newest",
+        ]);
+    }
 }

@@ -376,6 +376,25 @@ impl App {
         }
     }
 
+    /// Interfaces going offline or coming online get a line in the log (why
+    /// one dropped is usually the line before, from the interface itself).
+    fn log_interface_changes(&mut self, interfaces: &[crate::net::InterfaceInfo]) {
+        let changes: Vec<String> = interfaces
+            .iter()
+            .filter_map(|now| {
+                let before = self.interfaces.iter().find(|i| i.name == now.name)?;
+                match (before.online, now.online) {
+                    (true, false) => Some(format!("Interface {} went offline", now.name)),
+                    (false, true) => Some(format!("Interface {} is online", now.name)),
+                    _ => None,
+                }
+            })
+            .collect();
+        for line in changes {
+            self.log(line);
+        }
+    }
+
     /// Queue saves of whatever changed; they are written in the background
     /// (only the snapshot is taken here, a millisecond or two).
     pub fn save_if_dirty(&mut self) {
@@ -561,6 +580,7 @@ impl App {
             }
             NetEvent::Interfaces(interfaces) => {
                 self.traffic.update(&interfaces, Instant::now());
+                self.log_interface_changes(&interfaces);
                 self.interfaces = interfaces;
             }
             NetEvent::Log(line) => self.log(line),

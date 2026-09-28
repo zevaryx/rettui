@@ -23,6 +23,9 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use futures_util::StreamExt;
+use tracing_subscriber::Layer as _;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::app::App;
 use crate::config::{Paths, Settings};
@@ -104,13 +107,19 @@ async fn main() -> Result<()> {
         .append(true)
         .open(&paths.log)
         .with_context(|| format!("opening {}", paths.log.display()))?;
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("RETTUI_LOG")
-                .unwrap_or_else(|_| "warn".into()),
+    // Everything goes to the log file; interface trouble also goes to the
+    // log on screen.
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::sync::Mutex::new(log_file))
+                .with_ansi(false)
+                .with_filter(
+                    tracing_subscriber::EnvFilter::try_from_env("RETTUI_LOG")
+                        .unwrap_or_else(|_| "warn".into()),
+                ),
         )
-        .with_writer(std::sync::Mutex::new(log_file))
-        .with_ansi(false)
+        .with(net::iface_log::layer())
         .init();
 
     let identity = config::load_identity(&paths.identity)?;
