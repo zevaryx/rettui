@@ -44,8 +44,10 @@ configuration. It is built on:
   narrower than 110 columns get a sidebar of icons and narrower side lists, so
   80×24 works well.
 - **Web UI:** `rettui --web` runs the same client in a browser, with the same
-  sections and features. It updates live, works on phones, uses a bundled
-  Fira Code Nerd Font, and is protected by a login link (see [Web UI](#web-ui)).
+  sections and features. It updates live, switches sections instantly (each
+  keeps its content and refreshes behind the scenes, even over a slow link),
+  works on phones, uses a bundled Fira Code Nerd Font, and is protected by a
+  login link (see [Web UI](#web-ui)).
 - **Docker:** a Dockerfile and a Compose file run the web UI in a container
   (see [Docker](#docker)).
 - **Command line:** send a message, listen for messages, sync, fetch a page,

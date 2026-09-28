@@ -171,18 +171,81 @@ function renderSidebar() {
   }
 }
 
+// Sections are built once and kept: switching shows one at once, as it
+// was left (like the terminal UI, which has everything in memory), and its
+// data is refreshed behind it. Only the section on screen is in the page;
+// the others wait, detached, with their content and state.
 function switchTab(id, options = {}) {
-  if (!app.views[id]) return;
+  const view = app.views[id];
+  if (!view) return;
+  const previous = app.views[app.tab];
   app.tab = id;
   if (location.hash !== '#' + id) history.replaceState(null, '', '#' + id);
   renderSidebar();
-  const main = $('#main');
   app.views.channels.closeMenu();
-  main.replaceChildren();
-  // A fresh section has drawn nothing yet.
-  app.views[id].snapshots = {};
-  app.views[id].mount(main, options);
+  if (previous && previous !== view && previous.root?.isConnected) {
+    saveScroll(previous.root);
+    previous.root.remove();
+  }
+  const fresh = mountView(id, options);
+  if (!view.root.isConnected) $('#main').append(view.root);
+  view.root.querySelectorAll('textarea.page-editor').forEach(applyWrap);
+  restoreScroll(view.root);
+  if (!fresh) view.shown?.(options);
   loadNow();
+}
+
+// Build a section (off the page until shown); true if it was new.
+function mountView(id, options = {}) {
+  const view = app.views[id];
+  if (view.root) return false;
+  view.root = el('div', { class: 'view' });
+  view.mount(view.root, options);
+  view.root.querySelectorAll('[data-stick="bottom"]').forEach(followBottom);
+  return true;
+}
+
+// A chat-style area stays at the newest line while it is there, even as
+// images finish loading and push the content down; scrolling up stops it.
+function followBottom(node) {
+  node.pinned = true;
+  node.addEventListener('scroll', () => {
+    if (node.clientHeight) node.pinned = node.scrollHeight - node.scrollTop - node.clientHeight < 40;
+  });
+  node.addEventListener('load', () => {
+    if (node.pinned && node.clientHeight) node.scrollTop = node.scrollHeight;
+  }, true);
+}
+
+// Elements off the page lose their scroll position and can't be scrolled,
+// so it is kept when a section is hidden and put back when it is shown. Areas
+// that follow the newest line (data-stick="bottom") go back to the bottom
+// if they were there, or if they were drawn while hidden.
+function saveScroll(root) {
+  for (const node of root.querySelectorAll('.scroll')) {
+    node.savedScroll = { top: node.scrollTop, atBottom: node.scrollHeight - node.scrollTop - node.clientHeight < 40 };
+  }
+}
+
+function restoreScroll(root) {
+  for (const node of root.querySelectorAll('.scroll')) {
+    const saved = node.savedScroll;
+    node.savedScroll = null;
+    if (node.dataset.stick === 'bottom' && (!saved || saved.atBottom)) {
+      node.scrollTop = node.scrollHeight;
+      node.pinned = true;
+    } else if (saved) node.scrollTop = saved.top;
+  }
+}
+
+// Load every other section in the background once the first is up, so
+// even a first visit shows data straight away.
+function prefetch() {
+  for (const [id, view] of Object.entries(app.views)) {
+    if (id === app.tab || view.root) continue;
+    mountView(id);
+    Promise.resolve().then(() => view.update()).catch((e) => console.warn(e));
+  }
 }
 
 // Wrap long lines in the text editors, per the "Wrap editor lines" setting.
@@ -277,7 +340,7 @@ app.views.messages = {
   mount(root, options = {}) {
     this.list = el('div', { class: 'scroll' });
     this.header = el('header');
-    this.history = el('div', { class: 'scroll history' });
+    this.history = el('div', { class: 'scroll history', dataset: { stick: 'bottom' } });
     this.chips = el('div', { class: 'chips' });
     this.text = el('textarea', {
       placeholder: 'Write a message… (Enter sends, Shift+Enter for a new line)',
@@ -321,6 +384,10 @@ app.views.messages = {
       el('section', { class: 'panel grow' }, this.header, this.history, this.compose));
     this.renderChips();
     this.lastKey = null;
+    this.shown(options);
+  },
+
+  shown(options = {}) {
     if (options.focus) setTimeout(() => this.text.focus(), 50);
   },
 
@@ -369,7 +436,7 @@ app.views.messages = {
     const key = this.selected;
     const conversation = key === known && early ? early : await api.get('/conversations/' + key);
     if (key !== this.selected) return;
-    if (conversation.unread) api.post(`/conversations/${key}/read`).catch(() => {});
+    if (conversation.unread && app.tab === 'messages') api.post(`/conversations/${key}/read`).catch(() => {});
     if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key })) return;
     this.header.replaceChildren(
       el('span', { class: 'title', text: conversation.name }),
@@ -448,7 +515,7 @@ app.views.channels = {
   mount(root) {
     this.list = el('div', { class: 'scroll' });
     this.header = el('header');
-    this.body = el('div', { class: 'scroll' });
+    this.body = el('div', { class: 'scroll', dataset: { stick: 'bottom' } });
     this.input = el('input', {
       type: 'text',
       onkeydown: (e) => {
@@ -539,7 +606,7 @@ app.views.channels = {
     const current = this.hubs.find((h) => h.hash === hash);
     const whisperEntry = view.whisper_with && current?.whispers.find((w) => w.key === room);
     const unreadNow = view.whisper_with ? whisperEntry?.unread : room ? current?.rooms.find((r) => r.name === room)?.unread : current?.unread;
-    if (current && unreadNow) api.post(`/channels/${hash}/read`, { room }).catch(() => {});
+    if (current && unreadNow && app.tab === 'channels') api.post(`/channels/${hash}/read`, { room }).catch(() => {});
     if (!changed(this, 'room', { hash, room, view, hub, all: this.showAll === hash + '/' + room })) return;
     this.inputBar.classList.remove('hidden');
     const whisper = view.whisper_with;
@@ -1828,4 +1895,5 @@ refreshStatus().then(() => {
   const initial = location.hash.slice(1);
   switchTab(app.views[initial] ? initial : 'messages');
   listen();
+  setTimeout(prefetch, 300);
 });

@@ -1,6 +1,6 @@
 [package]
 name = "rettui"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2024"
 description = "Terminal Reticulum client: LXMF messaging and NomadNet browsing"
 # rsReticulum, rsLXMF and rsNomad are AGPL-3.0-or-later.

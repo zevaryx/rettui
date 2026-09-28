@@ -120,6 +120,8 @@ a { color: var(--accent); }
 /* ---- layout ------------------------------------------------------------- */
 
 #main { flex: 1; min-width: 0; display: flex; padding: 10px; gap: 10px; }
+/* Each section keeps its own wrapper; its panels lay out as #main's own. */
+.view { display: contents; }
 
 .panel {
   background: var(--panel);
@@ -354,9 +356,9 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
 /* One column: lists above the view they open, the page scrolls. */
 @media (max-width: 640px) {
   #main { flex-direction: column; padding: 6px; gap: 6px; overflow-y: auto; }
-  #main > * { width: auto !important; flex: 1 0 auto; min-height: 55vh; }
-  #main > .side { flex: none; min-height: 0; }
-  #main > .side > .panel.grow, #main > section.side { max-height: 40vh; }
+  #main > .view > * { width: auto !important; flex: 1 0 auto; min-height: 55vh; }
+  #main > .view > .side { flex: none; min-height: 0; }
+  #main > .view > .side > .panel.grow, #main > .view > section.side { max-height: 40vh; }
   .column > .panel { min-height: 0; }
   .panel > header { flex-wrap: wrap; min-height: 0; row-gap: 6px; }
   .panel > header .title { flex-basis: 100%; }
