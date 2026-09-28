@@ -2,15 +2,24 @@ name: Build
 
 # Binaries for every platform, without making a release: Actions > Build >
 # Run workflow, then download them from the run's Artifacts. The release
-# workflow builds with this too.
+# and branch image workflows build with this too.
 on:
   workflow_dispatch:
+    inputs:
+      linux-only:
+        description: Only the Linux binaries
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       version:
-        description: Version in the archive names (the tag, for a release)
+        description: Version in the archive names (the tag, for a release; else Cargo.toml's and the commit)
         type: string
-        required: true
+        default: ""
+      linux-only:
+        description: Only the Linux binaries (all a Docker image needs)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,18 +30,20 @@ env:
 jobs:
   build:
     name: ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
+    # Linux builds use the oldest runners for the widest glibc support
+    # (2.35). The vendored Reticulum library does not build for musl.
+    runs-on: >-
+      ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'ubuntu-22.04-arm'
+      || contains(matrix.target, 'linux') && 'ubuntu-22.04'
+      || contains(matrix.target, 'windows') && 'windows-latest'
+      || 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Linux builds use the oldest runner for the widest glibc support
-          # (2.35). The vendored Reticulum library does not build for musl.
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest }
-          - { target: aarch64-apple-darwin, os: macos-latest }
-          - { target: x86_64-apple-darwin, os: macos-latest }
+        target: >-
+          ${{ fromJSON(inputs.linux-only
+          && '["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]'
+          || '["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -56,10 +67,11 @@ jobs:
           VERSION: ${{ inputs.version }}
           TARGET: ${{ matrix.target }}
         run: |
-          # Run by hand: name it after Cargo.toml's version and the commit.
+          # Not a release: name it after Cargo.toml's version and the commit.
           if [ -z "$VERSION" ]; then
             VERSION="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)-${GITHUB_SHA::7}"
           fi
+          VERSION="${VERSION//\//-}"
           name="rettui-$VERSION-$TARGET"
           mkdir -p "dist/$name"
           cp README.md "dist/$name/"

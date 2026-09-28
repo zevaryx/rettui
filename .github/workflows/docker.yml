@@ -1,0 +1,67 @@
+name: Docker image
+
+# Push rettui's image to GitHub's container registry, for x86-64 and ARM64,
+# from the Linux binaries the calling workflow built (with build.yml). The
+# release and branch image workflows use this.
+on:
+  workflow_call:
+    inputs:
+      tags:
+        description: The image's tags, as docker/metadata-action's `tags`
+        type: string
+        required: true
+      flavor:
+        description: docker/metadata-action's `flavor` (for example latest=false)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Docker image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: rettui-*-linux-gnu
+          path: artifacts
+          merge-multiple: true
+
+      # The image copies these in (the Dockerfile's `prebuilt` stage), so
+      # both architectures build quickly and without emulation.
+      - name: Unpack the Linux binaries
+        run: |
+          mkdir -p dist
+          tar -xzOf artifacts/*-x86_64-unknown-linux-gnu.tar.gz --wildcards '*/rettui' > dist/rettui-amd64
+          tar -xzOf artifacts/*-aarch64-unknown-linux-gnu.tar.gz --wildcards '*/rettui' > dist/rettui-arm64
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: ${{ inputs.tags }}
+          flavor: ${{ inputs.flavor }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: prebuilt
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

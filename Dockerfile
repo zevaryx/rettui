@@ -3,9 +3,10 @@
 #   docker compose up -d --build
 # The login link is in the logs: docker compose logs rettui
 #
-# Release images (.github/workflows/release.yml) use `--target prebuilt`
-# with binaries the workflow has already built, at dist/rettui-<arch>
-# (amd64, arm64), so nothing is compiled under emulation.
+# Published images (.github/workflows/docker.yml, for releases and
+# branches) use `--target prebuilt` with binaries the workflow has already
+# built, at dist/rettui-<arch> (amd64, arm64), so nothing is compiled under
+# emulation.
 
 FROM rust:1-slim-bookworm AS build
 WORKDIR /src

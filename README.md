@@ -415,7 +415,9 @@ The web UI can run in a container. Each release publishes an image for
 x86-64 and ARM64 to `ghcr.io/zevaryx/rettui`, tagged with the version (`1.2.0`,
 `1.2`, `1`) and `latest`. To use it, remove `build: .` from
 [compose.yaml](compose.yaml) and set `image: ghcr.io/zevaryx/rettui:latest`,
-then `docker compose up -d`.
+then `docker compose up -d`. Every other branch has an image too, named
+after the branch (`ghcr.io/zevaryx/rettui:dev` for `dev`); see
+[Releases and CI](#releases-and-ci).
 
 To build the image yourself instead, from a checkout with its submodules:
 
@@ -562,7 +564,8 @@ The workflows are in [.github/workflows](.github/workflows):
 - **Build** ([build.yml](.github/workflows/build.yml)) builds the binaries
   for every platform in the [Install](#install) table without making a
   release:
-  - Run it from *Actions > Build > Run workflow*.
+  - Run it from *Actions > Build > Run workflow* (tick *Linux only* for
+    just the Linux binaries).
   - Download the archives from the run's *Artifacts*.
   - They're named after the version and commit, for example
     `rettui-v1.2.0-a4e545b-x86_64-unknown-linux-gnu.tar.gz`.
@@ -577,6 +580,14 @@ The workflows are in [.github/workflows](.github/workflows):
 
   A tag containing a hyphen (`v1.3.0-rc.1`) makes a prerelease. Its image
   gets only the version tag, not `latest`.
+- **Branch image** ([docker-branch.yml](.github/workflows/docker-branch.yml))
+  runs on every push to a branch other than `main`. It builds the Linux
+  binaries and pushes an image tagged with the branch name: pushing to
+  `dev` gives `ghcr.io/zevaryx/rettui:dev`, and `feature/x` gives
+  `:feature-x`. A newer push to the same branch cancels an unfinished run.
+
+Both image workflows push through
+[docker.yml](.github/workflows/docker.yml).
 
 To release, bump `version` in `Cargo.toml`, commit, then:
 
