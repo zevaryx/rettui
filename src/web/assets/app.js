@@ -136,16 +136,59 @@ function patchHtml(container, html) {
 // way, so a click can use what a prefetch started.
 function loadInto(view, key, url) {
   view.loading ||= new Map();
-  if (!view.loading.has(key)) {
-    const request = api.get(url)
-      .then((data) => {
+  view.loaded ||= new Map();
+  const inFlight = view.loading.get(key);
+  // One started before the latest change may not have it: load again.
+  if (inFlight && inFlight.epoch === loadEpoch) return inFlight.request;
+  const epoch = loadEpoch;
+  const request = api.get(url)
+    .then((data) => {
+      // An older load finishing late must not replace newer data.
+      if ((view.loaded.get(key) ?? -1) <= epoch) {
+        view.loaded.set(key, epoch);
         view.cache.set(key, data);
-        return data;
-      })
-      .finally(() => view.loading.delete(key));
-    view.loading.set(key, request);
+      }
+      return view.cache.get(key);
+    })
+    .finally(() => {
+      if (view.loading.get(key)?.request === request) view.loading.delete(key);
+    });
+  view.loading.set(key, { request, epoch });
+  return request;
+}
+// Counts refetches for live updates (see `loadNow`).
+let loadEpoch = 0;
+
+// Something just sent, drawn at once as sending (`node`, added to `parent`
+// when `key` is what `view` shows), before the server's copy arrives. Redraws
+// keep it (see `echoesFor`) until the send is answered; then it goes, or is
+// replaced by the real one on a redraw that isn't skipped as unchanged.
+function echoSent(view, { key, node, parent, scroller, slot }) {
+  view.echoes ||= [];
+  const echo = {
+    key,
+    node,
+    done(failed) {
+      view.echoes = view.echoes.filter((e) => e !== echo);
+      if (failed) node.remove();
+      else {
+        (view.snapshots ||= {})[slot] = null;
+        refresh();
+      }
+    },
+  };
+  view.echoes.push(echo);
+  node.classList.add('echo');
+  if (parent) {
+    parent.append(node);
+    scroller.scrollTop = scroller.scrollHeight;
+    scroller.pinned = true;
   }
-  return view.loading.get(key);
+  return echo;
+}
+
+function echoesFor(view, key) {
+  return (view.echoes || []).filter((e) => e.key === key).map((e) => e.node);
 }
 
 // Load a few things at a time in the background, skipping failures.
@@ -325,17 +368,42 @@ async function refreshStatus() {
 }
 
 // Refetch what is on screen: the status and the section's data, together.
+// Only one refetch runs at a time; asking during one runs another after it.
 function loadNow() {
   clearTimeout(refreshTimer);
   refreshTimer = null;
-  refreshStatus();
-  app.views[app.tab]?.update();
+  if (refreshing) {
+    refreshAgain = true;
+    return;
+  }
+  // Loads started before now may miss the change being fetched for.
+  loadEpoch++;
+  refreshing = Promise.allSettled([
+    refreshStatus(),
+    Promise.resolve().then(() => app.views[app.tab]?.update()).catch((e) => console.warn(e)),
+  ]).finally(() => {
+    refreshing = null;
+    if (refreshAgain) {
+      refreshAgain = false;
+      refresh();
+    }
+  });
 }
 
 // Live updates: the first change schedules one refetch and later ones join
-// it, so a steady stream of events can't keep postponing it.
+// it, so a steady stream of events can't keep postponing it. Changes during
+// a refetch are fetched once it is done: over a slow link, refetches started
+// on a timer would queue up in the browser faster than they finish (it
+// opens only a few connections to one server), and what was just sent
+// would wait behind them.
 let refreshTimer = null;
+let refreshing = null;
+let refreshAgain = false;
 function refresh() {
+  if (refreshing) {
+    refreshAgain = true;
+    return;
+  }
   if (refreshTimer) return;
   refreshTimer = setTimeout(loadNow, 150);
 }
@@ -352,7 +420,7 @@ function changed(view, slot, data) {
 
 function listen() {
   const events = new EventSource('/api/events');
-  events.onmessage = refresh;
+  events.onmessage = () => refresh();
   events.onerror = () => {
     // The browser reconnects by itself; refresh once it is back.
     events.onopen = () => {
@@ -471,12 +539,15 @@ app.views.messages = {
   },
 
   async update() {
-    // The list and the open conversation, fetched together when known.
+    // The list and the open conversation, fetched together when known. The
+    // conversation is drawn as soon as it arrives (what was just sent shows
+    // without waiting for the list).
     const known = this.selected;
-    const [conversations, early] = await Promise.all([
-      api.get('/conversations'),
-      known ? this.load(known).catch(() => null) : null,
-    ]);
+    const early = known ? this.load(known).catch(() => null) : null;
+    early?.then((conversation) => {
+      if (conversation && this.selected === known) this.renderConversation(known, conversation);
+    });
+    const conversations = await api.get('/conversations');
     if (!this.selected && conversations.length) this.selected = conversations[0].key;
     this.names = new Map(conversations.map((c) => [c.key, c.name]));
     this.warmRecent(conversations);
@@ -501,7 +572,7 @@ app.views.messages = {
       return;
     }
     const key = this.selected;
-    const conversation = key === known && early ? early : await this.load(key);
+    const conversation = (key === known && await early) || await this.load(key);
     if (key !== this.selected) return;
     if (conversation.unread && app.tab === 'messages') api.post(`/conversations/${key}/read`).catch(() => {});
     this.renderConversation(key, conversation);
@@ -509,6 +580,11 @@ app.views.messages = {
 
   load(key) {
     return loadInto(this, key, '/conversations/' + key);
+  },
+
+  echo(key, node) {
+    const shown = this.lastKey === key;
+    return echoSent(this, { key, node, parent: shown && this.history, scroller: this.history, slot: 'conversation' });
   },
 
   // Open a conversation: at once from what is loaded (or its name while it
@@ -550,9 +626,10 @@ app.views.messages = {
       this.showAll = key;
       this.update();
     } })) : null;
-    const render = () => this.history.replaceChildren(...(conversation.messages.length
+    const echoes = echoesFor(this, key);
+    const render = () => this.history.replaceChildren(...(conversation.messages.length || echoes.length
       ? [earlier, ...conversation.messages.slice(hidden).map((m) => this.message(m, conversation))].filter(Boolean)
-      : [el('div', { class: 'empty', text: 'No messages yet. Say hello!' })]));
+      : [el('div', { class: 'empty', text: 'No messages yet. Say hello!' })]), ...echoes);
     if (this.lastKey !== key) {
       render();
       this.history.scrollTop = this.history.scrollHeight;
@@ -602,11 +679,20 @@ app.views.messages = {
     this.text.value = '';
     this.pending = [];
     this.renderChips();
+    // Show it straight away as sending; the next update draws the real one.
+    const echo = this.echo(this.selected, el('div', { class: 'message echo' },
+      el('div', { class: 'meta' },
+        el('span', { class: 'author out', text: 'You' }),
+        el('span', { class: 'dim', text: '  ' + timeLabel(Date.now() / 1000) }),
+        el('span', { class: 'dim', text: ' sending…' })),
+      content ? el('div', { class: 'content', text: content }) : null,
+      pending.map((f) => el('div', { class: 'attachment dim', text: `📎 ${f.name}` }))));
     const files = [];
     for (const file of pending) files.push({ name: file.name, data: await readFile(file) });
     const total = pending.reduce((n, f) => n + f.size, 0);
     if (total > 1_000_000) toast(`Sending ${humanBytes(total)} of attachments; many clients reject direct transfers over 1 MB`);
-    const sent = await attempt(() => api.post(`/conversations/${this.selected}/send`, { content, mode: this.mode, files }));
+    const sent = await attempt(() => api.post(`/conversations/${echo.key}/send`, { content, mode: this.mode, files }));
+    echo.done(!sent);
     if (!sent) {
       // Put it back (before anything typed since) to try again.
       this.text.value = this.text.value ? `${content}\n${this.text.value}` : content;
@@ -667,11 +753,15 @@ app.views.channels = {
 
   async update() {
     // The hub list and the open room, fetched together when known.
+    // The room is drawn as soon as it arrives, with the hubs from last time
+    // (what was just sent shows without waiting for the hub list).
     const known = this.selected && { ...this.selected };
-    const [hubs, early] = await Promise.all([
-      api.get('/channels'),
-      known ? this.load(known.hub, known.room).catch(() => null) : null,
-    ]);
+    const early = known ? this.load(known.hub, known.room).catch(() => null) : null;
+    early?.then((view) => {
+      const { hub, room } = this.selected || {};
+      if (view && this.hubs && hub === known.hub && room === known.room) this.renderRoom(hub, room, view);
+    });
+    const hubs = await api.get('/channels');
     this.hubs = hubs;
     this.warmRooms(hubs);
     if (this.selected && !hubs.some((h) => h.hash === this.selected.hub)) this.selected = null;
@@ -714,7 +804,7 @@ app.views.channels = {
     }
     const { hub: hash, room } = this.selected;
     const same = known && known.hub === hash && known.room === room;
-    const view = same && early ? early : await this.load(hash, room);
+    const view = (same && await early) || await this.load(hash, room);
     if (!this.selected || this.selected.hub !== hash || this.selected.room !== room) return;
     const current = this.hubs.find((h) => h.hash === hash);
     const whisperEntry = view.whisper_with && current?.whispers.find((w) => w.key === room);
@@ -781,7 +871,11 @@ app.views.channels = {
       this.showAll = viewKey;
       this.update();
     } })) : null;
-    const render = () => this.body.replaceChildren(...(room || hidden ? [] : this.hubInfo(hub)), ...(earlier ? [earlier] : []), this.chat(view.lines.slice(hidden)));
+    const render = () => {
+      const chat = this.chat(view.lines.slice(hidden));
+      chat.append(...echoesFor(this, viewKey));
+      this.body.replaceChildren(...(room || hidden ? [] : this.hubInfo(hub)), ...(earlier ? [earlier] : []), chat);
+    };
     if (this.lastView !== viewKey) {
       render();
       this.body.scrollTop = this.body.scrollHeight;
@@ -980,7 +1074,19 @@ app.views.channels = {
     const restore = () => {
       this.input.value = this.input.value ? `${text} ${this.input.value}` : text;
     };
+    // A chat line (not a command) shows straight away as sending; the next
+    // update draws the real one.
+    const key = hub + '/' + room;
+    const echo = !room || text.trim().startsWith('/') ? null : echoSent(this, {
+      key,
+      node: this.chat([{ kind: 'msg', nick: this.view?.nick, own: true, text: text.trim(), ts: Date.now(), pending: true }]).firstChild,
+      parent: this.lastView === key && this.body.querySelector('.chat'),
+      scroller: this.body,
+      slot: 'room',
+    });
     const result = await this.hubAction(hub, 'send', { room, text });
+    // Over the hub's limit, nothing was sent (yet).
+    echo?.done(!result || !!result.split);
     if (!result) return restore();
     if (result.split) {
       const limit = this.hubs.find((h) => h.hash === hub)?.limits.message_bytes;
