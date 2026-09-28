@@ -410,7 +410,8 @@ app.views.messages = {
       placeholder: 'Write a message… (Enter sends, Shift+Enter for a new line)',
       rows: 2,
       onkeydown: (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        // Enter while an input method is composing confirms the text.
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
           e.preventDefault();
           this.send();
         }
@@ -593,19 +594,28 @@ app.views.messages = {
 
   async send() {
     const content = this.text.value;
-    if (!content.trim() && !this.pending.length) return;
+    const pending = this.pending;
+    if (!content.trim() && !pending.length) return;
+    // Take the message out of the box at once, so a second Enter (or a
+    // double click) while this one is on its way has nothing to send, and
+    // anything typed meanwhile is kept.
+    this.text.value = '';
+    this.pending = [];
+    this.renderChips();
     const files = [];
-    for (const file of this.pending) files.push({ name: file.name, data: await readFile(file) });
-    const total = this.pending.reduce((n, f) => n + f.size, 0);
+    for (const file of pending) files.push({ name: file.name, data: await readFile(file) });
+    const total = pending.reduce((n, f) => n + f.size, 0);
     if (total > 1_000_000) toast(`Sending ${humanBytes(total)} of attachments; many clients reject direct transfers over 1 MB`);
     const sent = await attempt(() => api.post(`/conversations/${this.selected}/send`, { content, mode: this.mode, files }));
-    if (sent) {
-      this.text.value = '';
-      this.pending = [];
+    if (!sent) {
+      // Put it back (before anything typed since) to try again.
+      this.text.value = this.text.value ? `${content}\n${this.text.value}` : content;
+      this.pending = [...pending, ...this.pending];
       this.renderChips();
-      this.history.scrollTop = this.history.scrollHeight;
-      this.history.pinned = true;
+      return;
     }
+    this.history.scrollTop = this.history.scrollHeight;
+    this.history.pinned = true;
   },
 };
 
@@ -624,7 +634,7 @@ app.views.channels = {
     this.input = el('input', {
       type: 'text',
       onkeydown: (e) => {
-        if (e.key === 'Enter') this.send();
+        if (e.key === 'Enter' && !e.isComposing) this.send();
       },
     });
     this.inputBar = el('div', { class: 'chat-input' }, this.input,
@@ -962,15 +972,22 @@ app.views.channels = {
     const text = this.input.value;
     if (!text.trim() || !this.selected) return;
     const { hub, room } = this.selected;
-    const result = await this.hubAction(hub, 'send', { room, text });
-    if (!result) return;
+    // Take the line out of the box at once, so a second Enter (or a double
+    // click) while this one is on its way has nothing to send, and anything
+    // typed meanwhile is kept.
     this.input.value = '';
+    // Put it back (before anything typed since) to try again or edit.
+    const restore = () => {
+      this.input.value = this.input.value ? `${text} ${this.input.value}` : text;
+    };
+    const result = await this.hubAction(hub, 'send', { room, text });
+    if (!result) return restore();
     if (result.split) {
       const limit = this.hubs.find((h) => h.hash === hub)?.limits.message_bytes;
       if (confirm(`That is over this hub's ${limit}-byte limit. Send it as ${result.split.length} messages?`)) {
-        await this.hubAction(hub, 'split', { room, parts: result.split });
+        if (!await this.hubAction(hub, 'split', { room, parts: result.split })) restore();
       } else {
-        this.input.value = text;
+        restore();
       }
     }
     this.body.scrollTop = this.body.scrollHeight;
