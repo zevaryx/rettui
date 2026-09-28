@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use super::{ACCENT, DIM, SELECTED_BG, block, wrap};
+use super::{ACCENT, DIM, PICKED, SELECTED_BG, block, wrap};
 use crate::app::App;
 use crate::app::channels::users::UserAction;
 use crate::app::channels::{ChatLine, HubStatus, LineKind, Row, whisper_peer};
@@ -429,6 +429,15 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             .collect();
         frame.render_widget(List::new(items).block(members_block), members_area);
     }
+    // Whose menu is open: their name wherever it shows, in the chat and the
+    // members list.
+    if let Some(menu) = &app.channels.menu {
+        for (rect, id) in &app.regions.channel_users {
+            if *id == menu.user.identity {
+                frame.buffer_mut().set_style(*rect, PICKED);
+            }
+        }
+    }
     draw_mentions(frame, app, input_inner, offset, chat_area);
     draw_popup(frame, app, area);
 }
@@ -453,12 +462,15 @@ fn draw_mentions(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, b
         .iter()
         .enumerate()
         .map(|(i, (name, id))| {
-            let line = Line::from(vec![
-                Span::styled(" @", Style::default().fg(DIM)),
-                Span::styled(name.clone(), Style::default().fg(nick_color(Some(&hex::encode(id)))).bold()),
-            ]);
-            let style = if i == pick { Style::default().bg(SELECTED_BG) } else { Style::default() };
-            ListItem::new(line).style(style)
+            let color = nick_color(Some(&hex::encode(id)));
+            // The chosen name stands out in its own colour, with a marker.
+            let line = if i == pick {
+                let chosen = Style::default().fg(Color::Black).bg(color).bold();
+                Line::from(vec![Span::styled("›@", chosen), Span::styled(format!("{name} "), chosen)])
+            } else {
+                Line::from(vec![Span::styled(" @", Style::default().fg(DIM)), Span::styled(name.clone(), Style::default().fg(color).bold())])
+            };
+            ListItem::new(line)
         })
         .collect();
     let list_block = block("Mention", true).title_bottom(Line::styled(" Tab pick ", Style::default().fg(DIM)));
@@ -524,6 +536,6 @@ fn draw_popup(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(ratatui::widgets::Clear, rect);
     let popup_block = block(&title, true).title_bottom(Line::styled(bottom, Style::default().fg(DIM)));
     app.regions.channel_popup = popup_block.inner(rect);
-    let widget = List::new(items).block(popup_block).highlight_style(Style::default().bg(SELECTED_BG).bold());
+    let widget = List::new(items).block(popup_block).highlight_style(PICKED);
     frame.render_stateful_widget(widget, rect, list);
 }

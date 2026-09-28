@@ -17,7 +17,7 @@ mod status;
 use chrono::{Local, TimeZone};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders};
 use unicode_width::UnicodeWidthStr;
@@ -35,6 +35,10 @@ use status::draw_status;
 const ACCENT: Color = Color::Cyan;
 const DIM: Color = Color::DarkGray;
 const SELECTED_BG: Color = Color::Rgb(0x2a, 0x2a, 0x3a);
+/// The chosen row of a popup (a user's menu, the member picker): solid, so
+/// it shows on any terminal theme (`SELECTED_BG` can be close to its
+/// background).
+const PICKED: Style = Style::new().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD);
 
 /// Width for a side pane (a list beside the main view): `preferred` when
 /// there is room, else about a third of `total`, and never below 16.
