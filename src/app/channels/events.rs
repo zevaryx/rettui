@@ -120,7 +120,7 @@ impl App {
                     self.send_env(index, &env);
                 } else if let Some(joiner) = joiner {
                     let name = self.channels.hubs[index].name_of(&joiner);
-                    self.record(index, &room, ChatLine::new(LineKind::System, format!("{name} joined")));
+                    self.record(index, &room, ChatLine::presence(format!("{name} joined")));
                 }
             }
             t::PARTED => {
@@ -139,7 +139,7 @@ impl App {
                 }
                 if let Some(parter) = parter {
                     let name = self.channels.hubs[index].name_of(&parter);
-                    self.record(index, &room, ChatLine::new(LineKind::System, format!("{name} left")));
+                    self.record(index, &room, ChatLine::presence(format!("{name} left")));
                 }
             }
             t::MSG | t::ACTION => {

@@ -64,6 +64,10 @@ pub struct ChatLine {
     pub mention_at: Vec<(usize, usize)>,
     #[serde(default)]
     pub own: bool,
+    /// Someone else joining or leaving the room (hidden when joins and
+    /// leaves are turned off). System lines aren't saved, so neither is this.
+    #[serde(skip)]
+    pub presence: bool,
     /// Our message id until the hub echoes it back.
     #[serde(skip)]
     pub pending: Option<Vec<u8>>,
@@ -80,8 +84,19 @@ impl ChatLine {
             mention: false,
             mention_at: Vec::new(),
             own: false,
+            presence: false,
             pending: None,
         }
+    }
+
+    /// Someone else joining or leaving: `name joined` / `name left`.
+    pub fn presence(text: String) -> Self {
+        Self { presence: true, ..Self::new(LineKind::System, text) }
+    }
+
+    /// Whether to show it, given the "Show joins and leaves" setting.
+    pub fn shown(&self, show_joins: bool) -> bool {
+        show_joins || !self.presence
     }
 
     /// Byte ranges of `text` to highlight as mentions of us. Lines saved

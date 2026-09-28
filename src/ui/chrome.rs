@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use super::{ACCENT, DIM, SELECTED_BG, block};
+use crate::app::traffic::rate;
 use crate::app::{App, BrowserFocus, NetState, NoticeKind, SyncState, Tab};
 use crate::app::node::PageView;
 
@@ -133,6 +134,15 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         NetState::Failed(_) => Span::styled(" ● offline", Style::default().fg(Color::Red)),
     }));
+    // Traffic over all interfaces, once there is a rate to show.
+    if let (NetState::Online, Some((rx, tx))) = (&app.net_state, app.traffic.rates) {
+        status.push(Line::from(vec![
+            Span::styled(" ↓", Style::default().fg(Color::Green)),
+            Span::styled(rate(rx), Style::default().fg(DIM)),
+            Span::styled(" ↑", Style::default().fg(ACCENT)),
+            Span::styled(rate(tx), Style::default().fg(DIM)),
+        ]));
+    }
     if let SyncState::Running(_) = app.sync {
         status.push(Line::styled(" ⇅ syncing", Style::default().fg(Color::Yellow)));
     }
@@ -190,6 +200,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("n", "add hub"),
                 ("c", "connect"),
                 ("a", "auto-connect"),
+                ("J", "joins/leaves"),
                 ("x", "remove"),
                 ("y", "copy link"),
             ],

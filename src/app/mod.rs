@@ -22,6 +22,7 @@ mod saver;
 pub mod node;
 pub mod reticulum;
 mod settings;
+pub mod traffic;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -230,6 +231,8 @@ pub struct App {
     pub net_state: NetState,
     pub lxmf_hash: Option<Hash>,
     pub interfaces: Vec<crate::net::InterfaceInfo>,
+    /// Bytes in and out over all interfaces, and their rates.
+    pub traffic: traffic::Traffic,
     pub log: VecDeque<String>,
     pub should_quit: bool,
     /// Repaint the whole screen at the next draw (Ctrl-L).
@@ -322,6 +325,7 @@ impl App {
             net_state: NetState::Starting,
             lxmf_hash: None,
             interfaces: Vec::new(),
+            traffic: traffic::Traffic::default(),
             log: VecDeque::new(),
             should_quit: false,
             full_redraw: false,
@@ -555,7 +559,10 @@ impl App {
                 }
                 self.sync = SyncState::Done(chrono::Local::now(), result);
             }
-            NetEvent::Interfaces(interfaces) => self.interfaces = interfaces,
+            NetEvent::Interfaces(interfaces) => {
+                self.traffic.update(&interfaces, Instant::now());
+                self.interfaces = interfaces;
+            }
             NetEvent::Log(line) => self.log(line),
             NetEvent::Stopped => {}
         }

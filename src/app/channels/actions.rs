@@ -201,6 +201,7 @@ impl App {
             KeyCode::Char('m') => self.open_member_picker(),
             KeyCode::Char('c') => self.toggle_selected_connection(),
             KeyCode::Char('a') => self.toggle_auto_connect(),
+            KeyCode::Char('J') => self.toggle_show_joins(),
             KeyCode::Char('x') | KeyCode::Delete => self.remove_selected_channel(),
             KeyCode::Char('y') => {
                 if let Some(link) = self.channel_link() {
@@ -210,6 +211,16 @@ impl App {
             KeyCode::PageUp => self.channels.scroll += 5,
             KeyCode::PageDown => self.channels.scroll = self.channels.scroll.saturating_sub(5),
             _ => {}
+        }
+    }
+
+    /// `J` (or the web UI's room toggle): show or hide people joining and
+    /// leaving rooms. It's a setting ("Show joins and leaves").
+    pub fn toggle_show_joins(&mut self) {
+        let show = !self.settings.show_joins;
+        match self.update_settings(&[("show_joins", if show { "true" } else { "false" })]) {
+            Ok(_) => self.notify(if show { "Showing people joining and leaving" } else { "Hiding people joining and leaving" }),
+            Err(e) => self.fail(e),
         }
     }
 

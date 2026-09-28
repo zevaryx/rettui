@@ -274,7 +274,10 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             None => format!("#{room}"),
         }
     };
-    let history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
+    let mut history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
+    if !app.settings.show_joins && !room.is_empty() && whisper.is_none() {
+        history_block = history_block.title_bottom(Line::styled(" joins and leaves hidden · J shows them ", Style::default().fg(DIM)));
+    }
     let inner = history_block.inner(history_area);
     let width = inner.width as usize;
 
@@ -337,7 +340,8 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     let needed = app.channels.scroll + height;
     let mut tail: Vec<(Line, Link)> = Vec::new();
     let mut whole = true;
-    for line in hub.buffers.get(&room).map(Vec::as_slice).unwrap_or_default().iter().rev() {
+    let show_joins = app.settings.show_joins;
+    for line in hub.buffers.get(&room).map(Vec::as_slice).unwrap_or_default().iter().rev().filter(|l| l.shown(show_joins)) {
         if tail.len() >= needed {
             whole = false;
             break;

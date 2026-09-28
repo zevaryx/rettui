@@ -130,6 +130,11 @@ tab.
   choose, Tab or Enter puts in `@name`, a click does too, and Esc closes the
   list. A mention of someone else shows in the same colour as their name
   in the chat.
+- **Joins and leaves:** people joining and leaving a room show in its
+  chat. `J` (TUI), or **Show joins** in a room's header (web UI), hides or
+  shows them. It's one setting for every room ("Show joins and leaves"
+  under Status), and hiding them loses nothing: they come back when turned
+  on again.
 - **Mentions and unread:** `@yournick` mentions are highlighted (just the
   mention, not the whole message). Unread counts show on each room and in the
   sidebar, and mentions stand out from ordinary unread messages.
@@ -238,6 +243,9 @@ or the folder set in `node_dir`.
   node for sync, and copy any address.
 - **Status:** the Status tab shows your identity and LXMF address, the
   network state, each interface with its traffic, the last sync, and a log.
+- **Traffic:** the corner of the sidebar, under the interface count, shows how
+  fast data is coming in (↓) and going out (↑) over all interfaces, updated
+  every few seconds. In the web UI, hovering over it shows the totals.
 
 ### Settings and the Reticulum config
 
@@ -402,8 +410,22 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   through the browser.
 - **Keys:** `1`–`7` switch sections, `/` searches the Network list, and `Esc`
   leaves a text box.
-- **Phones:** on narrow screens the sections stack in one column (lists above
-  what they open).
+- **Phones:** on a phone (or any window up to 760px wide, and phones held
+  sideways) the web UI changes layout. Larger screens keep the side-by-side
+  layout:
+  - **Drawer:** the sections are in a drawer, opened with ☰ in the top bar. A
+    dot on ☰ means something is unread in another section. Picking a section,
+    tapping outside the drawer, swiping it left or `Esc` closes it.
+  - **One pane at a time:** a section shows its list (conversations, rooms,
+    saved pages, node pages, config sections), then what you open from it,
+    full screen. ← in the top bar, or the phone's back button, goes back. A
+    room's members are a pane of their own (**Members**).
+  - **Larger text and targets:** text is bigger, and rows and buttons are
+    easier to tap. Messages show as bubbles, yours on the right, and Network
+    rows are cards.
+  - **Fewer buttons:** less used buttons (such as Copy link, Forget, Rename,
+    Delete) wait behind ⋯. It and a user's actions open as a sheet from the
+    bottom of the screen.
 - **Font:** all text uses Fira Code Nerd Font, which rettui serves itself
   (browsers never fetch fonts from a third party).
 - **Stopping:** Ctrl-C or SIGTERM stops it cleanly, leaving hubs and saving
@@ -455,7 +477,7 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
 | All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
 | Messages | `↑↓` pick a conversation, `Enter` write, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `PgUp/PgDn` scroll |
 | Writing a message | `Enter` send, `Esc` stop writing, `Ctrl-V` paste, `Ctrl-O` attach, `Ctrl-X` clear attachments, `Ctrl-P` cycle delivery mode |
-| Channels | `↑↓` pick a hub, room or whisper conversation, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `x` leave a room, close a whisper conversation, or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll |
+| Channels | `↑↓` pick a hub, room or whisper conversation, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `J` show or hide joins and leaves, `x` leave a room, close a whisper conversation, or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll |
 | User menu (click a name, or `m`) | `w` open your whisper conversation, `l` LXMF message, `Enter` pick (also copy their LXMF address or identity), `Esc` close |
 | Network | `↑↓` select, `y` copy the selected address, `Enter` message a peer, browse a node, or pick a propagation node; `p` use the selected propagation node; `f` filter; `/` search by name or address (`Enter` done, `Esc` clear) |
 | Browser (both panes) | `←`/`→` move between the node pane and the page, `t` switch Saved/Nodes, `g` go to an address, `y` copy the current address, `s` save the current page, `b` back, `r` refresh from the network, `R` clear the whole cache, `I` identify to this node (toggle), `H` home, `u` view the page's Micron source (toggle), `Esc` cancel loading |

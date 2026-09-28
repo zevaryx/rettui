@@ -40,6 +40,8 @@ pub struct Settings {
     pub node_executable_pages: bool,
     /// Wrap long lines in the text editors instead of scrolling sideways.
     pub wrap_lines: bool,
+    /// Show people joining and leaving RRC rooms in the chat.
+    pub show_joins: bool,
 }
 
 impl Default for Settings {
@@ -58,6 +60,7 @@ impl Default for Settings {
             node_announce_interval_mins: 360,
             node_dir: None,
             node_executable_pages: false,
+            show_joins: true,
             wrap_lines: false,
         }
     }
@@ -246,6 +249,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "show_joins",
+        label: "Show joins and leaves",
+        help: "Show people joining and leaving RRC rooms in the chat (also on each room page)",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "rns_config",
         label: "Reticulum config",
         help: "Reticulum config directory; empty uses the standard one (and joins a running rnsd)",
@@ -316,6 +326,7 @@ impl Settings {
             "node_dir" => self.node_dir.clone().unwrap_or_default(),
             "node_executable_pages" => self.node_executable_pages.to_string(),
             "wrap_lines" => self.wrap_lines.to_string(),
+            "show_joins" => self.show_joins.to_string(),
             _ => String::new(),
         }
     }
@@ -339,6 +350,7 @@ impl Settings {
             "node_enabled" => self.node_enabled = toggle(value).map_err(fail)?,
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
+            "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
             "node_announce_interval_mins" => {
                 self.node_announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?;
             }

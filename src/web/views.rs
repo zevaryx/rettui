@@ -53,6 +53,13 @@ pub fn state(app: &App) -> Value {
             "name": i.name, "online": i.online, "rx": i.rx_bytes, "tx": i.tx_bytes,
         })).collect::<Vec<_>>(),
         "interfaces_online": online,
+        // Over all interfaces: totals, and bytes per second once known.
+        "traffic": {
+            "rx": app.traffic.rx_total,
+            "tx": app.traffic.tx_total,
+            "rx_rate": app.traffic.rates.map(|r| r.0),
+            "tx_rate": app.traffic.rates.map(|r| r.1),
+        },
         "log": app.log.iter().collect::<Vec<_>>(),
         "unread": { "messages": message_unread, "channels": channel_unread, "mention": mention },
     })
@@ -240,6 +247,7 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
     let people = hub.mentionable(room);
     let lines: Vec<Value> = buffer
         .iter()
+        .filter(|line| line.shown(app.settings.show_joins))
         .map(|line| {
             let highlights = line.highlights(&own_nick);
             // `@name` mentions of others, drawn in that person's colour.
@@ -302,6 +310,8 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
         })),
         "nick": own_nick,
         "own_src": hex::encode(&own),
+        // People joining and leaving are left out when this is off.
+        "show_joins": app.settings.show_joins,
         "lines": lines,
     })
 }

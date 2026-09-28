@@ -94,6 +94,18 @@ function ago(unixSeconds) {
   return `${Math.floor(secs / 86400)}d`;
 }
 
+// Bytes per second, short (as the terminal UI shows it).
+function rate(bytesPerSec) {
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  let value = Math.max(0, bytesPerSec);
+  let unit = 0;
+  while (value >= 999.5 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+  return `${unit === 0 || value >= 9.95 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
+}
+
 function humanBytes(bytes) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let value = bytes;
@@ -252,9 +264,15 @@ function renderSidebar() {
     return el('div', {
       class: 'tab' + (tab.id === app.tab ? ' active' : ''),
       title: tab.title,
-      onclick: () => switchTab(tab.id),
+      onclick: () => {
+        // On a phone, the section on screen goes back to its list.
+        if (tab.id === app.tab && phone.matches) setPane(app.views[tab.id], 'list', { record: false });
+        switchTab(tab.id);
+        setDrawer(false);
+      },
     }, el('span', { class: 'icon', text: tab.icon }), el('span', { class: 'label', text: tab.title }), badge);
   }));
+  renderAppbar();
   if (app.status) {
     $('#who-name').textContent = app.status.display_name;
     const total = app.status.interfaces.length;
@@ -263,6 +281,16 @@ function renderSidebar() {
       : app.status.net.state === 'failed' ? '● network failed' : '◌ starting…';
     $('#who-net').textContent = net;
     $('#who-net').className = app.status.net.state === 'online' && app.status.interfaces_online ? 'state-ok' : 'dim';
+    // Traffic over all interfaces, once there is a rate to show.
+    const traffic = app.status.traffic;
+    const flow = $('#who-flow');
+    const known = app.status.net.state === 'online' && traffic?.rx_rate != null;
+    flow.classList.toggle('hidden', !known);
+    if (known) {
+      flow.replaceChildren(el('span', { class: 'state-ok', text: '↓ ' }), rate(traffic.rx_rate),
+        el('span', { class: 'flow-out', text: '  ↑ ' }), rate(traffic.tx_rate));
+      flow.title = `Received ${humanBytes(traffic.rx)}, sent ${humanBytes(traffic.tx)} (all interfaces)`;
+    }
   }
 }
 
@@ -278,6 +306,7 @@ function switchTab(id, options = {}) {
   if (location.hash !== '#' + id) history.replaceState(null, '', '#' + id);
   renderSidebar();
   app.views.channels.closeMenu();
+  closeSheet();
   if (previous && previous !== view && previous.root?.isConnected) {
     saveScroll(previous.root);
     previous.root.remove();
@@ -294,10 +323,170 @@ function switchTab(id, options = {}) {
 function mountView(id, options = {}) {
   const view = app.views[id];
   if (view.root) return false;
-  view.root = el('div', { class: 'view' });
+  view.root = el('div', { class: 'view' + (view.panes ? ' panes' : ''), dataset: { view: id, pane: view.pane || 'list' } });
   view.mount(view.root, options);
   view.root.querySelectorAll('[data-stick="bottom"]').forEach(followBottom);
   return true;
+}
+
+// ---- phones -----------------------------------------------------------------
+//
+// On a small screen a section shows one pane at a time: its list, or what
+// was picked from it, with a back button in the top bar (the phone's own
+// back button works too). The sidebar is a drawer. Larger screens show
+// everything side by side, and none of this changes them.
+
+// Keep in step with the phone `@media` in style.css.
+const phone = matchMedia('(max-width: 760px), (pointer: coarse) and (max-height: 500px)');
+
+// Back goes up one pane.
+const PANE_UP = { members: 'detail', detail: 'list', list: 'list' };
+const PANE_DEPTH = { list: 0, detail: 1, members: 2 };
+
+// Show a pane of a section with a list (`view.panes`): 'list', 'detail'
+// (what was picked) or 'members' (a room's). Going deeper on a phone adds
+// a history entry, so the phone's back button comes back.
+function setPane(view, pane, { record = true } = {}) {
+  const from = view.pane || 'list';
+  if (!view.panes || from === pane) return;
+  view.pane = pane;
+  if (view.root) swapPanes(view.root, () => { view.root.dataset.pane = pane; });
+  if (view === app.views[app.tab]) {
+    if (record && phone.matches) {
+      if (PANE_DEPTH[pane] > PANE_DEPTH[from]) history.pushState({ tab: app.tab, pane }, '', location.hash);
+      // Back up by an action (not the back button): drop the entry for the
+      // pane left, so back doesn't return to it.
+      else if (history.state?.tab === app.tab && history.state.pane === from) history.back();
+    }
+    renderAppbar();
+  }
+}
+
+// A pane that is hidden loses its scroll position: keep what is on screen
+// and put it back when it shows again (a chat goes to its newest line).
+function swapPanes(root, change) {
+  const shown = (node) => node.offsetParent !== null;
+  for (const node of root.querySelectorAll('.scroll')) {
+    if (shown(node)) node.paneScroll = { top: node.scrollTop, atBottom: node.pinned ?? node.scrollHeight - node.scrollTop - node.clientHeight < 40 };
+  }
+  change();
+  for (const node of root.querySelectorAll('.scroll')) {
+    if (!shown(node)) continue;
+    const saved = node.paneScroll;
+    node.paneScroll = null;
+    if (node.dataset.stick === 'bottom' && (!saved || saved.atBottom)) {
+      node.scrollTop = node.scrollHeight;
+      node.pinned = true;
+    } else if (saved) node.scrollTop = saved.top;
+  }
+}
+
+function paneBack() {
+  const view = app.views[app.tab];
+  if (!view) return;
+  if (history.state?.tab === app.tab && history.state.pane) history.back();
+  else setPane(view, PANE_UP[view.pane || 'list'], { record: false });
+}
+
+window.addEventListener('popstate', (e) => {
+  const view = app.views[app.tab];
+  if (!view?.panes) return;
+  setPane(view, e.state?.tab === app.tab ? e.state.pane : 'list', { record: false });
+});
+
+// The top bar: the section's name, and the menu (in a list) or back (deeper).
+function renderAppbar() {
+  const view = app.views[app.tab];
+  const deeper = !!view?.panes && (view.pane || 'list') !== 'list';
+  $('#nav-menu').classList.toggle('hidden', deeper);
+  $('#nav-back').classList.toggle('hidden', !deeper);
+  $('#appbar-title').textContent = TABS.find((t) => t.id === app.tab)?.title || '';
+  // Unread in another section shows on the menu button.
+  const unread = app.status?.unread || {};
+  const elsewhere = (app.tab !== 'messages' && unread.messages) || (app.tab !== 'channels' && unread.channels);
+  $('#nav-menu').classList.toggle('unread', !!elsewhere);
+  $('#nav-menu').classList.toggle('mention', app.tab !== 'channels' && !!unread.mention);
+}
+
+function setDrawer(open) {
+  document.body.classList.toggle('drawer-open', open);
+  $('#nav-menu').setAttribute('aria-expanded', String(open));
+}
+
+// A header's less used buttons (class "more") go behind this on a phone,
+// where there's no room for them all: it lists them in a sheet from the
+// bottom of the screen, and picking one clicks the real button.
+function moreButton() {
+  return el('button', { class: 'phone-only more-button', text: '⋯', title: 'More', 'aria-label': 'More actions', onclick: (e) => {
+    e.stopPropagation();
+    const header = e.currentTarget.closest('header');
+    const buttons = [...header.querySelectorAll('button.more')];
+    openSheet(header.querySelector('.title')?.textContent || '', buttons.map((button) => ({
+      text: button.textContent, danger: button.classList.contains('danger'), disabled: button.disabled, action: () => button.click(),
+    })));
+  } });
+}
+
+let sheet = null;
+function openSheet(title, items) {
+  closeSheet();
+  const node = el('div', { class: 'user-menu sheet', role: 'menu' },
+    title ? el('div', { class: 'menu-title', text: title }) : null,
+    items.map(({ text, danger, disabled, action }) => el('button', {
+      class: 'menu-item' + (danger ? ' danger' : ''), disabled, onclick: () => {
+        closeSheet();
+        action();
+      },
+    }, el('span', { text }))));
+  document.body.append(node);
+  const closer = (e) => {
+    if (e.type === 'keydown') {
+      if (e.key === 'Escape') closeSheet();
+    } else if (!node.contains(e.target)) {
+      // A tap outside only closes it, not also presses what's under it.
+      e.preventDefault();
+      e.stopPropagation();
+      closeSheet();
+    }
+  };
+  sheet = { node, closer };
+  setTimeout(() => {
+    document.addEventListener('click', closer, true);
+    document.addEventListener('keydown', closer);
+  });
+}
+
+function closeSheet() {
+  if (!sheet) return;
+  sheet.node.remove();
+  document.removeEventListener('click', sheet.closer, true);
+  document.removeEventListener('keydown', sheet.closer);
+  sheet = null;
+}
+
+$('#nav-menu').addEventListener('click', () => setDrawer(true));
+$('#nav-back').addEventListener('click', paneBack);
+$('#scrim').addEventListener('click', () => setDrawer(false));
+// Swiping the drawer to the left closes it.
+{
+  let start = null;
+  const sidebar = $('#sidebar');
+  sidebar.addEventListener('touchstart', (e) => { start = e.touches[0].clientX; }, { passive: true });
+  sidebar.addEventListener('touchend', (e) => {
+    if (start !== null && e.changedTouches[0].clientX - start < -60) setDrawer(false);
+    start = null;
+  }, { passive: true });
+}
+phone.addEventListener('change', () => {
+  setDrawer(false);
+  closeSheet();
+  renderAppbar();
+  if (app.views.messages.text) app.views.messages.text.placeholder = composePlaceholder();
+});
+
+// Keys a phone's keyboard doesn't have aren't worth mentioning there.
+function composePlaceholder() {
+  return phone.matches ? 'Write a message…' : 'Write a message… (Enter sends, Shift+Enter for a new line)';
 }
 
 // A chat-style area stays at the newest line while it is there, even as
@@ -436,6 +625,7 @@ function openConversation(address) {
     const { key } = await api.post('/conversations', { address });
     app.views.messages.selected = key;
     switchTab('messages', { focus: true });
+    setPane(app.views.messages, 'detail');
   });
 }
 
@@ -460,6 +650,7 @@ function browse(url) {
 // ---- Messages ---------------------------------------------------------------
 
 app.views.messages = {
+  panes: true,
   selected: null,
   pending: [],
   // Conversations loaded so far, by key: a click draws one at once and
@@ -475,7 +666,8 @@ app.views.messages = {
     this.history = el('div', { class: 'scroll history', dataset: { stick: 'bottom' } });
     this.chips = el('div', { class: 'chips' });
     this.text = el('textarea', {
-      placeholder: 'Write a message… (Enter sends, Shift+Enter for a new line)',
+      placeholder: composePlaceholder(),
+      enterkeyhint: 'send',
       rows: 2,
       onkeydown: (e) => {
         // Enter while an input method is composing confirms the text.
@@ -514,7 +706,7 @@ app.views.messages = {
         el('header', {}, el('span', { class: 'title grow', text: 'Conversations' }),
           el('button', { text: '+ New', onclick: () => this.newConversation() })),
         this.list),
-      el('section', { class: 'panel grow' }, this.header, this.history, this.compose));
+      el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose));
     this.renderChips();
     this.lastKey = null;
     this.shown(options);
@@ -591,6 +783,7 @@ app.views.messages = {
   // loads), then fresh.
   select(key) {
     this.selected = key;
+    setPane(this, 'detail');
     for (const item of this.list.children) item.classList.toggle('selected', item.dataset.key === key);
     const cached = this.cache.get(key);
     if (cached) this.renderConversation(key, cached);
@@ -649,7 +842,7 @@ app.views.messages = {
       failed: el('span', { class: 'state-bad', text: ` failed: ${m.state.error}` }),
     }[m.state.kind];
     const base = `/api/conversations/${conversation.key}/attachments/${encodeURIComponent(m.id)}/`;
-    return el('div', { class: 'message' },
+    return el('div', { class: 'message ' + (m.incoming ? 'in' : 'out') },
       el('div', { class: 'meta' },
         el('span', { class: 'author ' + (m.incoming ? 'in' : 'out'), text: m.incoming ? conversation.name : 'You' }),
         el('span', { class: 'dim', text: '  ' + timeLabel(m.timestamp) }),
@@ -680,7 +873,7 @@ app.views.messages = {
     this.pending = [];
     this.renderChips();
     // Show it straight away as sending; the next update draws the real one.
-    const echo = this.echo(this.selected, el('div', { class: 'message echo' },
+    const echo = this.echo(this.selected, el('div', { class: 'message out echo' },
       el('div', { class: 'meta' },
         el('span', { class: 'author out', text: 'You' }),
         el('span', { class: 'dim', text: '  ' + timeLabel(Date.now() / 1000) }),
@@ -708,6 +901,7 @@ app.views.messages = {
 // ---- Channels ---------------------------------------------------------------
 
 app.views.channels = {
+  panes: true,
   // Rooms, whispers and hub pages loaded so far, by "hub/room": a click
   // draws one at once and refreshes it behind.
   cache: new Map(),
@@ -719,6 +913,7 @@ app.views.channels = {
     this.body = el('div', { class: 'scroll', dataset: { stick: 'bottom' } });
     this.input = el('input', {
       type: 'text',
+      enterkeyhint: 'send',
       onkeydown: (e) => {
         if (this.mentionKey(e)) return;
         if (e.key === 'Enter' && !e.isComposing) this.send();
@@ -740,7 +935,7 @@ app.views.channels = {
         el('header', {}, el('span', { class: 'title grow', text: 'Channels' }),
           el('button', { text: '+ Add hub', onclick: () => this.addHub() })),
         this.list),
-      el('section', { class: 'panel grow' }, this.header, this.body, this.inputBar),
+      el('section', { class: 'panel grow pane-main' }, this.header, this.body, this.inputBar),
       this.membersPanel);
     this.lastView = null;
   },
@@ -751,6 +946,7 @@ app.views.channels = {
     const result = await attempt(() => api.post('/channels', { address }));
     if (result) {
       this.selected = { hub: result.hub, room: result.room || '' };
+      setPane(this, 'detail');
       this.update();
     }
   },
@@ -829,6 +1025,7 @@ app.views.channels = {
   // name while it loads), then fresh.
   select(hash, room) {
     this.selected = { hub: hash, room };
+    setPane(this, 'detail');
     this.hideMentions();
     for (const item of this.list.children) item.classList.toggle('selected', item.dataset.key === hash + '/' + room);
     const cached = this.cache.get(hash + '/' + room);
@@ -902,12 +1099,12 @@ app.views.channels = {
         el('span', { class: 'title grow' }, el('span', { class: 'whisper-icon', text: '@ ' }), whisper.name,
           el('span', { class: 'dim', style: 'font-weight:400', text: ' · whisper' + (view.whisper ? '' : ' (this hub doesn\'t pass whispers)') })),
         el('button', { text: 'Actions', onclick: (e) => this.userMenu(e, whisper.src) }),
-        el('button', { class: 'danger', text: 'Close', title: 'Close the conversation and delete its messages', onclick: async () => {
+        el('button', { class: 'danger more', text: 'Close', title: 'Close the conversation and delete its messages', onclick: async () => {
           if (!confirm(`Close the whisper conversation with ${whisper.name} and delete its messages?`)) return;
           await this.hubAction(hash, 'forget', { room });
           this.selected = { hub: hash, room: '' };
           this.update();
-        } }));
+        } }), moreButton());
     } else if (room) {
       const entry = hub.rooms.find((r) => r.name === room);
       this.header.replaceChildren(
@@ -915,13 +1112,20 @@ app.views.channels = {
         view.joined
           ? el('button', { text: 'Leave', onclick: () => this.hubAction(hash, 'leave', { room }) })
           : el('button', { text: 'Join', onclick: () => this.hubAction(hash, 'join', { room }) }),
-        el('button', { text: 'Copy link', onclick: () => copy(entry?.link, 'link') }),
-        el('button', { class: 'danger', text: 'Forget', title: 'Leave and delete the messages', onclick: async () => {
+        el('button', { class: 'phone-only', text: `Members ${view.members.length}`, onclick: () => setPane(this, 'members') }),
+        // A setting ("Show joins and leaves"), here where it matters.
+        el('label', { class: 'toggle', title: 'Show people joining and leaving the room in the chat' },
+          el('input', { type: 'checkbox', checked: view.show_joins, onchange: (e) => attempt(
+            () => api.post('/settings', { values: { show_joins: String(e.target.checked) } }),
+            e.target.checked ? 'Showing people joining and leaving' : 'Hiding people joining and leaving') }),
+          ' Show joins'),
+        el('button', { class: 'more', text: 'Copy link', onclick: () => copy(entry?.link, 'link') }),
+        el('button', { class: 'danger more', text: 'Forget', title: 'Leave and delete the messages', onclick: async () => {
           if (!confirm(`Leave #${room} and delete its messages?`)) return;
           await this.hubAction(hash, 'forget', { room });
           this.selected = { hub: hash, room: '' };
           this.update();
-        } }));
+        } }), moreButton());
       this.membersPanel.classList.remove('hidden');
       $('header', this.membersPanel).textContent = `Members ${view.members.length}`;
       this.members.replaceChildren(...view.members.map((member) => el('div', {
@@ -936,13 +1140,14 @@ app.views.channels = {
       this.header.replaceChildren(
         el('span', { class: 'title grow', text: hub.name }),
         el('button', { text: busy ? 'Disconnect' : 'Connect', onclick: () => this.hubAction(hash, 'connect') }),
-        el('button', { text: 'Copy link', onclick: () => copy(hub.link, 'link') }),
-        el('button', { class: 'danger', text: 'Remove hub', onclick: async () => {
+        el('button', { class: 'more', text: 'Copy link', onclick: () => copy(hub.link, 'link') }),
+        el('button', { class: 'danger more', text: 'Remove hub', onclick: async () => {
           if (!confirm(`Remove hub ${hub.name} and its history?`)) return;
           await this.hubAction(hash, 'remove');
           this.selected = null;
+          setPane(this, 'list');
           this.update();
-        } }));
+        } }), moreButton());
     }
   },
 
@@ -1140,6 +1345,7 @@ app.views.channels = {
         const result = await this.hubAction(this.selected.hub, 'whisper', { src });
         if (!result) return;
         this.selected = { hub: this.selected.hub, room: result.room };
+        setPane(this, 'detail');
         await this.update();
         this.input.focus();
       }, !this.view.whisper),
@@ -1154,10 +1360,19 @@ app.views.channels = {
     menu.style.top = Math.max(8, top) + 'px';
     this.menu = menu;
     this.menuCloser = (e) => {
-      if (e.type === 'keydown' ? e.key === 'Escape' : !menu.contains(e.target)) close();
+      if (e.type === 'keydown') {
+        if (e.key === 'Escape') close();
+      } else if (!menu.contains(e.target)) {
+        // On a phone it's a sheet: a tap outside only closes it.
+        if (phone.matches) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        close();
+      }
     };
     setTimeout(() => {
-      document.addEventListener('click', this.menuCloser);
+      document.addEventListener('click', this.menuCloser, true);
       document.addEventListener('keydown', this.menuCloser);
     });
   },
@@ -1165,6 +1380,7 @@ app.views.channels = {
   // Add `@name ` to what is being written, at the cursor, and carry on
   // writing.
   mention(name) {
+    setPane(this, 'detail');
     const input = this.input;
     const caret = input.selectionStart ?? input.value.length;
     const before = input.value.slice(0, caret);
@@ -1182,7 +1398,7 @@ app.views.channels = {
     this.menu?.remove();
     this.menu = null;
     if (this.menuCloser) {
-      document.removeEventListener('click', this.menuCloser);
+      document.removeEventListener('click', this.menuCloser, true);
       document.removeEventListener('keydown', this.menuCloser);
       this.menuCloser = null;
     }
@@ -1385,7 +1601,9 @@ app.views.network = {
 // ---- Browser ----------------------------------------------------------------
 
 app.views.browser = {
-  pane: 'saved',
+  panes: true,
+  // The list beside the page: saved pages or heard nodes.
+  listing: 'saved',
   page: null,
   history: [],
   viewSource: false,
@@ -1418,10 +1636,15 @@ app.views.browser = {
     this.status = el('div', { class: 'page-status' });
     this.content = el('div', { class: 'scroll page', onclick: (e) => this.click(e) });
     root.append(
-      el('section', { class: 'panel side' }, el('header', {}, this.paneTabs), this.paneList),
-      el('section', { class: 'panel grow' },
+      el('section', { class: 'panel side' }, el('header', {}, this.paneTabs,
+        el('button', { class: 'phone-only', text: 'Address…', onclick: () => {
+          setPane(this, 'detail');
+          this.address.focus();
+        } })), this.paneList),
+      el('section', { class: 'panel grow pane-main' },
         el('div', { class: 'toolbar' }, this.buttons.back, this.address, el('button', { class: 'primary', text: 'Go', onclick: () => this.go(this.address.value) }),
-          this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.clear),
+          // Their own row on a phone.
+          el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.clear)),
         this.status, this.content));
     this.renderPane();
     this.renderPage();
@@ -1441,17 +1664,17 @@ app.views.browser = {
 
   renderPane() {
     this.paneTabs.replaceChildren(
-      el('button', { class: this.pane === 'saved' ? 'active' : '', text: `Saved ${this.saved?.length ?? ''}`, onclick: () => {
-        this.pane = 'saved';
+      el('button', { class: this.listing === 'saved' ? 'active' : '', text: `Saved ${this.saved?.length ?? ''}`, onclick: () => {
+        this.listing = 'saved';
         this.renderPane();
       } }),
-      el('button', { class: this.pane === 'nodes' ? 'active' : '', text: `Nodes ${this.nodes?.length ?? ''}`, onclick: () => {
-        this.pane = 'nodes';
+      el('button', { class: this.listing === 'nodes' ? 'active' : '', text: `Nodes ${this.nodes?.length ?? ''}`, onclick: () => {
+        this.listing = 'nodes';
         this.renderPane();
       } }));
     const current = this.page?.url;
     const currentNode = this.page?.node;
-    if (this.pane === 'saved') {
+    if (this.listing === 'saved') {
       this.paneList.replaceChildren(...((this.saved || []).length ? this.saved.map((s) => el('div', {
         class: 'list-item' + (s.url === current ? ' selected' : ''),
         onclick: () => this.go(s.url),
@@ -1523,6 +1746,7 @@ app.views.browser = {
       toast('Downloading…');
       return;
     }
+    setPane(this, 'detail');
     const loading = { url, cancelled: false };
     this.loading = loading;
     this.error = null;
@@ -1822,6 +2046,7 @@ const micron = {
 };
 
 app.views.node = {
+  panes: true,
   open: null, // { path, saved, executable, url }
   view: (() => {
     try { return localStorage.getItem('rettui.pageView') || 'split'; } catch { return 'split'; }
@@ -1884,7 +2109,7 @@ app.views.node = {
             el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/node/announce'), 'Announcing the node') }))),
         el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Pages' }),
           el('button', { text: '+ New', onclick: () => this.create() })), this.list)),
-      el('section', { class: 'panel grow' },
+      el('section', { class: 'panel grow pane-main' },
         el('header', {}, this.title, this.buttons),
         this.banner,
         this.ribbon,
@@ -1996,8 +2221,9 @@ app.views.node = {
   },
 
   async load(path) {
-    if (this.open?.path === path) return;
+    if (this.open?.path === path) return setPane(this, 'detail');
     if (this.dirty() && !confirm(`Discard unsaved changes to ${this.open.path}?`)) return;
+    setPane(this, 'detail');
     const page = await attempt(() => api.get('/node/page?path=' + encodeURIComponent(path)));
     if (!page) return;
     this.open = { path: page.path, saved: page.content, executable: page.executable, url: page.url };
@@ -2076,9 +2302,10 @@ app.views.node = {
     this.buttons.replaceChildren(
       this.viewButtons,
       el('button', { class: 'primary', text: 'Save', title: 'Ctrl+S', disabled: !dirty || open.executable, onclick: () => this.save() }),
-      el('button', { text: 'Open in Browser', onclick: () => browse(open.url) }),
-      el('button', { text: 'Rename', disabled: open.executable, onclick: () => this.rename() }),
-      el('button', { class: 'danger', text: 'Delete', onclick: () => this.remove() }));
+      el('button', { class: 'more', text: 'Open in Browser', onclick: () => browse(open.url) }),
+      el('button', { class: 'more', text: 'Rename', disabled: open.executable, onclick: () => this.rename() }),
+      el('button', { class: 'danger more', text: 'Delete', onclick: () => this.remove() }),
+      moreButton());
   },
 
   async save() {
@@ -2139,7 +2366,7 @@ app.views.status = {
         el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Identity' }),
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
           el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
-          el('button', { text: 'Restart Reticulum', onclick: () => restartReticulum() })), this.info),
+          el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }), moreButton()), this.info),
         el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
           this.revertButton, this.saveButton), el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
       el('div', { class: 'column', style: 'width:42%' },
@@ -2264,6 +2491,7 @@ app.views.status = {
 // to the file and apply when Reticulum restarts. Pipe interface commands
 // (programs Reticulum runs) can only be changed from the terminal.
 app.views.reticulum = {
+  panes: true,
   section: 'reticulum',
   textMode: false,
 
@@ -2300,7 +2528,7 @@ app.views.reticulum = {
           el('header', {}, el('span', { class: 'title grow', text: 'Sections' }),
             el('button', { text: '+ Interface', onclick: () => this.showAdd() })),
           this.addForm, this.sections)),
-      el('section', { class: 'panel grow' },
+      el('section', { class: 'panel grow pane-main' },
         el('header', {}, this.title, this.buttons),
         this.formScroll, this.text, this.textStatus));
     this.inputs = {};
@@ -2376,6 +2604,7 @@ app.views.reticulum = {
 
   async select(id) {
     if (this.dirty() && !confirm('Discard unsaved changes?')) return;
+    setPane(this, 'detail');
     this.textMode = false;
     this.section = id;
     this.snapshot = null;
@@ -2389,10 +2618,10 @@ app.views.reticulum = {
     this.revertButton = el('button', { text: 'Revert', disabled: true, onclick: () => this.load(true) });
     this.buttons.replaceChildren(
       ...(section.interface ? [
-        el('button', { text: 'Rename', onclick: () => this.rename(section.title) }),
-        el('button', { class: 'danger', text: 'Delete', onclick: () => this.remove(section.title) }),
+        el('button', { class: 'more', text: 'Rename', onclick: () => this.rename(section.title) }),
+        el('button', { class: 'danger more', text: 'Delete', onclick: () => this.remove(section.title) }),
       ] : []),
-      this.revertButton, this.saveButton);
+      this.revertButton, this.saveButton, ...(section.interface ? [moreButton()] : []));
     this.inputs = {};
     let group = null;
     const rows = [];
@@ -2528,8 +2757,9 @@ app.views.reticulum = {
   // ---- the file as text ----
 
   async openText() {
-    if (this.textMode) return;
+    if (this.textMode) return setPane(this, 'detail');
     if (this.dirty() && !confirm('Discard unsaved changes?')) return;
+    setPane(this, 'detail');
     this.textMode = true;
     await this.load(true);
     this.text.value = this.data.text;
@@ -2591,6 +2821,7 @@ async function restartReticulum() {
 // ---- start ------------------------------------------------------------------
 
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) return setDrawer(false);
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
   // As in the terminal UI, Esc stops writing (the shortcuts work again),
   // unless it closed something first (the list @ opens).

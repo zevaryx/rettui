@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>rettui</title>
 <link rel="icon" type="image/png" href="/brand/icon.png">
 <link rel="apple-touch-icon" href="/brand/icon.png">
@@ -11,6 +11,12 @@
 <script src="/app.js" defer></script>
 </head>
 <body>
+<header id="appbar">
+  <button id="nav-menu" type="button" aria-label="Sections" aria-controls="sidebar" aria-expanded="false">☰</button>
+  <button id="nav-back" type="button" aria-label="Back" class="hidden">←</button>
+  <div id="appbar-title"></div>
+</header>
+<div id="scrim"></div>
 <nav id="sidebar">
   <div class="brand"><img class="wordmark" src="/brand/wordmark.png" alt="rettui" width="91" height="20"> <a class="version" href="{{PROJECT_URL}}" target="_blank" rel="noopener noreferrer" title="rettui on GitHub">{{VERSION}}</a></div>
   <img class="mark" src="/brand/icon.png" alt="rettui" width="34" height="34">
@@ -18,6 +24,7 @@
   <div class="who">
     <div id="who-name"></div>
     <div id="who-net"></div>
+    <div id="who-flow" class="hidden"></div>
   </div>
 </nav>
 <main id="main"></main>
