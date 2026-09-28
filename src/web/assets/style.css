@@ -144,8 +144,13 @@ a { color: var(--accent); }
   border-bottom: 1px solid var(--border);
   font-weight: 600;
   min-height: 44px;
+  /* Buttons go onto another line rather than push the pane wider than
+     the window (and its pictures with it). */
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 .panel > header .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel > header .row { flex-wrap: wrap; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; }
 .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 10px; }
 .side { width: 290px; flex: none; }
@@ -378,7 +383,7 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
   #main > .view > .side { flex: none; min-height: 0; }
   #main > .view > .side > .panel.grow, #main > .view > section.side { max-height: 40vh; }
   .column > .panel { min-height: 0; }
-  .panel > header { flex-wrap: wrap; min-height: 0; row-gap: 6px; }
+  .panel > header { min-height: 0; }
   .panel > header .title { flex-basis: 100%; }
   .toolbar input { min-width: 0; flex-basis: 100%; }
   .compose .row { flex-wrap: wrap; }
@@ -392,7 +397,7 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
   .net-table td { white-space: normal; overflow-wrap: anywhere; }
   .editor-split { min-height: 60vh; }
   .user-menu { max-width: calc(100vw - 16px); }
-  .panel > header .row, .info .row { flex-wrap: wrap; }
+  .info .row { flex-wrap: wrap; }
   .info .mono, .info span { overflow-wrap: anywhere; min-width: 0; }
   .info { grid-template-columns: 1fr; }
 }

@@ -158,7 +158,9 @@ impl Page {
                     let place = format!("padding-left:{indent}ch;text-align:{}", align_css(*align));
                     match media(url) {
                         Some(src) => {
-                            let size = width.map(|w| format!("max-width:{w}ch;")).unwrap_or_default();
+                            // The page's width when there is room, else the
+                            // pane's (the stylesheet's 100%, which this replaces).
+                            let size = width.map(|w| format!("max-width:min({w}ch,100%);")).unwrap_or_default();
                             out.push_str(&format!(
                                 "<div class=\"m-image\" style=\"{place}\"><img src=\"{}\" alt=\"{}\" title=\"{}\" loading=\"lazy\" style=\"{size}\"></div>",
                                 escape(&src),
@@ -248,6 +250,15 @@ mod tests {
         assert!(html.contains("<input class=\"m-field\" type=\"text\" name=\"name\" size=\"8\""));
         assert!(html.contains("type=\"checkbox\" name=\"agree\" value=\"yes\""));
         assert!(html.contains("src=\"/api/media?u=:/media/l.png\""));
+    }
+
+    #[test]
+    fn image_widths_never_exceed_the_pane() {
+        let page = parse("`(Logo`w=100`:/media/l.png)\n`(Any`:/media/l.png)");
+        let html = page.to_html(|url| url.to_string(), |url| Some(url.to_string()));
+        assert!(html.contains("style=\"max-width:min(100ch,100%);\""));
+        // Without a width the stylesheet's 100% applies.
+        assert!(html.contains("loading=\"lazy\" style=\"\""));
     }
 
     #[test]
