@@ -8,6 +8,8 @@ network.
 - **Micron:** most of it is supported, including 24-bit colour, alignment,
   dividers, literal blocks, links, forms (text fields, checkboxes and radio
   buttons), inline images and page colours. Long lines wrap between words.
+  Pages look as they do in NomadNet: a line's background colour fills its
+  row, and headings have NomadNet's colours.
 - **Links:** page links, `lxmf@` links (open a conversation), `rrc://` links
   (open a hub room), and `/file/` downloads, which are saved to `downloads/`.
 - **Identifying:** pages that personalise content need you to identify.

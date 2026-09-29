@@ -548,7 +548,9 @@ impl App {
                 return self.copy(&source, "page source");
             }
             KeyCode::Char('Y') => {
-                let text = self.regions.page_text.join("\n").trim_end().to_string();
+                // Rows with a background are padded across; the padding isn't text.
+                let rows: Vec<&str> = self.regions.page_text.iter().map(|row| row.trim_end()).collect();
+                let text = rows.join("\n").trim_end().to_string();
                 return self.copy(&text, "page text");
             }
             KeyCode::Char('L') => return self.copy_selected_link(),

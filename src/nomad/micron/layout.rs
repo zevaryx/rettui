@@ -175,10 +175,14 @@ impl Page {
                 MLine::Divider { indent, ch, style } => {
                     let indent = (*indent).min(width - 1);
                     let cw = ch.width().unwrap_or(1).max(1);
-                    let rule: String = std::iter::repeat_n(*ch, (width - indent) / cw).collect();
+                    let count = (width - indent) / cw;
+                    let rule: String = std::iter::repeat_n(*ch, count).collect();
+                    // Its background spans the row, indent included.
+                    let fill = style.bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
                     lines.push(Line::from(vec![
-                        Span::raw(" ".repeat(indent)),
+                        Span::styled(" ".repeat(indent), fill),
                         Span::styled(rule, *style),
+                        Span::styled(" ".repeat(width - indent - count * cw), fill),
                     ]));
                 }
                 MLine::Image {
@@ -249,6 +253,10 @@ impl Page {
                             }
                             None => span.text.clone(),
                         };
+                        // Text without a background of its own shows the row's.
+                        if style.bg.is_none() {
+                            style.bg = fill.and_then(|f| f.bg);
+                        }
                         pieces.push((text, style, span.item));
                     }
                     let (rows, starts) = wrap(&pieces, avail);
@@ -258,19 +266,25 @@ impl Page {
                         }
                     }
                     for mut row in rows {
-                        if let Some(fill) = fill {
-                            // Filled rows span the full width, so place the
-                            // text by padding instead of by line alignment.
-                            let row_width: usize = row.iter().map(|(s, _)| s.width()).sum();
-                            let gap = avail.saturating_sub(row_width);
-                            let before = align_offset(*align, avail, row_width);
-                            row.insert(0, (Span::styled(" ".repeat(before), *fill), None));
-                            row.push((Span::styled(" ".repeat(gap - before), *fill), None));
-                        }
-                        let align = if fill.is_some() { Alignment::Left } else { *align };
-                        if align == Alignment::Left && indent > 0 {
-                            row.insert(0, (Span::raw(" ".repeat(indent)), None));
-                        }
+                        let align = match fill {
+                            Some(fill) => {
+                                // Filled rows span the full width, indent
+                                // included, so place the text by padding
+                                // instead of by line alignment.
+                                let row_width: usize = row.iter().map(|(s, _)| s.width()).sum();
+                                let gap = avail.saturating_sub(row_width);
+                                let before = align_offset(*align, avail, row_width);
+                                row.insert(0, (Span::styled(" ".repeat(indent + before), *fill), None));
+                                row.push((Span::styled(" ".repeat(gap - before), *fill), None));
+                                Alignment::Left
+                            }
+                            None => {
+                                if *align == Alignment::Left && indent > 0 {
+                                    row.insert(0, (Span::raw(" ".repeat(indent)), None));
+                                }
+                                *align
+                            }
+                        };
                         let row_width: usize = row.iter().map(|(s, _)| s.width()).sum();
                         let mut x = align_offset(align, width, row_width);
                         for (span, item) in &row {
