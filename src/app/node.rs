@@ -146,7 +146,7 @@ impl App {
                         last_seen: chrono::Utc::now().timestamp(),
                     },
                 );
-                self.store_dirty = true;
+                self.peers_dirty = true;
                 self.log(format!("Hosting NomadNet node {}", hex::encode(hash)));
             }
             HostEvent::Stopped => {

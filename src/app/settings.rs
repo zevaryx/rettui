@@ -47,6 +47,7 @@ impl App {
         let mut notes = Vec::new();
         let mut intervals = false;
         let mut node = false;
+        let mut archive = false;
         for field in &changed {
             match field.key {
                 "display_name" => {
@@ -65,6 +66,11 @@ impl App {
                     intervals = true;
                 }
                 "home" => self.settings.home = after.home.clone(),
+                "messages_kept" | "message_storage_mb" => {
+                    self.settings.messages_kept = after.messages_kept;
+                    self.settings.message_storage_mb = after.message_storage_mb;
+                    archive = true;
+                }
                 "cache_hours" => {
                     self.settings.cache_hours = after.cache_hours;
                     self.cache.set_default_ttl(Duration::from_secs(after.cache_hours * 3600));
@@ -93,6 +99,9 @@ impl App {
         let renamed = changed.iter().any(|f| f.key == "display_name") && after.node_name.is_none();
         if node || (renamed && after.node_enabled) {
             self.apply_node_settings();
+        }
+        if archive {
+            self.archive_overflow_now();
         }
         if intervals {
             self.send(NetCommand::SetIntervals {

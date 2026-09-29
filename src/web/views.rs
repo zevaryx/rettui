@@ -126,6 +126,9 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
         "name": app.store.display_name(key),
         "unread": app.store.conversations.get(key).map_or(0, |c| c.unread),
         "muted": app.store.conversations.get(key).is_some_and(|c| c.muted),
+        // Older messages moved to the archive (not in `total`).
+        "archived": app.store.conversations.get(key).map_or(0, |c| c.archived),
+        "archive": app.paths.archive.display().to_string(),
         "messages": messages,
     })
 }

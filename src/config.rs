@@ -24,6 +24,12 @@ pub struct Settings {
     pub propagation_node: Option<String>,
     /// Minutes between automatic propagation node syncs; 0 disables them.
     pub sync_interval_mins: u64,
+    /// Newest messages each conversation keeps in the store; older ones go
+    /// to the archive. 0 keeps them all in the store.
+    pub messages_kept: u64,
+    /// Megabytes the store and the archive may use together; the oldest
+    /// archived months are deleted to stay within it. 0 is no limit.
+    pub message_storage_mb: u64,
     /// How long NomadNet pages and images stay cached (pages can ask for
     /// less with `#!c=`).
     pub cache_hours: u64,
@@ -58,6 +64,8 @@ impl Default for Settings {
             home: None,
             propagation_node: None,
             sync_interval_mins: 30,
+            messages_kept: 1000,
+            message_storage_mb: 0,
             cache_hours: 24,
             node_enabled: false,
             node_name: None,
@@ -82,6 +90,8 @@ pub struct Paths {
     pub known_identities: PathBuf,
     pub cache: PathBuf,
     pub rrc_history: PathBuf,
+    /// Messages older than the newest each conversation keeps.
+    pub archive: PathBuf,
     /// Files attached to messages sent from the web UI.
     pub uploads: PathBuf,
     /// Secret for the web UI's login link.
@@ -109,6 +119,7 @@ impl Paths {
             known_identities: base.join("known_identities.json"),
             cache: base.join("cache"),
             rrc_history: base.join("rrc"),
+            archive: base.join("archive"),
             uploads: base.join("uploads"),
             web_token: base.join("web_token"),
             node: base.join("node"),
@@ -195,6 +206,20 @@ pub const FIELDS: &[Field] = &[
         key: "sync_interval_mins",
         label: "Sync every (min)",
         help: "Minutes between propagation node syncs; 0 turns them off",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "messages_kept",
+        label: "Messages kept",
+        help: "Newest messages each conversation keeps and shows; older ones move to the archive (archive/ in the data directory). 0 keeps all",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "message_storage_mb",
+        label: "Message storage (MB)",
+        help: "Most disk messages may use (the store and the archive together); the oldest archived months are deleted to stay within it. Attachments aren't counted. 0 is no limit",
         kind: FieldKind::Number,
         effect: Effect::Now,
     },
@@ -289,6 +314,10 @@ const MAX_DISPLAY_NAME: usize = 128;
 /// Upper bounds for numbers (a year), so durations cannot overflow.
 const MAX_MINUTES: u64 = 525_600;
 const MAX_HOURS: u64 = 8_760;
+/// Most messages a conversation may be set to keep.
+const MAX_MESSAGES_KEPT: u64 = 1_000_000;
+/// Largest storage limit, in megabytes (a petabyte, so bytes can't overflow).
+const MAX_STORAGE_MB: u64 = 1_000_000_000;
 
 pub fn field(key: &str) -> Option<&'static Field> {
     FIELDS.iter().find(|f| f.key == key)
@@ -339,6 +368,8 @@ impl Settings {
             "home" => self.home.clone().unwrap_or_default(),
             "propagation_node" => self.propagation_node.clone().unwrap_or_default(),
             "sync_interval_mins" => self.sync_interval_mins.to_string(),
+            "messages_kept" => self.messages_kept.to_string(),
+            "message_storage_mb" => self.message_storage_mb.to_string(),
             "cache_hours" => self.cache_hours.to_string(),
             "node_enabled" => self.node_enabled.to_string(),
             "node_name" => self.node_name.clone().unwrap_or_default(),
@@ -395,6 +426,8 @@ impl Settings {
             }
             "announce_interval_mins" => self.announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?,
             "sync_interval_mins" => self.sync_interval_mins = number(value, MAX_MINUTES).map_err(fail)?,
+            "messages_kept" => self.messages_kept = number(value, MAX_MESSAGES_KEPT).map_err(fail)?,
+            "message_storage_mb" => self.message_storage_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
             "cache_hours" => self.cache_hours = number(value, MAX_HOURS).map_err(fail)?,
             "propagation_node" => {
                 self.propagation_node = match optional(value) {

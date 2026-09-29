@@ -223,6 +223,8 @@ pub struct App {
     pub paths: Paths,
     pub store: Store,
     pub(crate) store_dirty: bool,
+    /// The peers heard changed (they're saved apart from the store).
+    pub(crate) peers_dirty: bool,
     net: UnboundedSender<NetCommand>,
     /// This client's identity hash (RRC sender id).
     pub identity_hash: Hash,
@@ -325,8 +327,9 @@ impl App {
             settings_file,
             settings_list: ListState::default().with_selected(Some(0)),
             paths,
+            store_dirty: store.rewrite_store,
+            peers_dirty: store.rewrite_peers,
             store,
-            store_dirty: false,
             net,
             identity_hash,
             channels,
@@ -371,9 +374,12 @@ impl App {
             notifications: Vec::new(),
             focused: true,
         };
-        if let Some(note) = app.store.migration_note.take() {
+        for note in std::mem::take(&mut app.store.migration_notes) {
             app.log(note);
         }
+        // Stores of earlier versions (or a lower "Messages kept") may hold
+        // more than each conversation keeps.
+        app.archive_overflow_now();
         if !app.store.conversations.is_empty() {
             app.conversations.select(Some(0));
             app.sync_active_conversation();
@@ -412,10 +418,25 @@ impl App {
     /// (only the snapshot is taken here, a millisecond or two).
     pub fn save_if_dirty(&mut self) {
         self.save_rrc_history();
+        // Peers first: a store of an earlier version still holds them until
+        // it's written again.
+        if self.peers_dirty {
+            let peers = self.store.peers.clone();
+            let path = crate::store::peers_path(&self.paths.store);
+            self.saver.write(path, "peers", move || crate::store::encode_peers(&peers));
+            self.peers_dirty = false;
+        }
         if self.store_dirty {
-            let snapshot = self.store.clone();
+            // Only messages change the store's size: archive what's over
+            // the limit first (it's queued before the store, so a message
+            // is never only in memory).
+            let (archived, _) = self.archive_overflow();
+            let snapshot = self.store.snapshot();
             self.saver.write(self.paths.store.clone(), "store", move || snapshot.encode());
             self.store_dirty = false;
+            if archived > 0 {
+                self.keep_within_storage(false);
+            }
         }
     }
 
@@ -561,7 +582,7 @@ impl App {
                 if name.is_some() {
                     peer.name = name;
                 }
-                self.store_dirty = true;
+                self.peers_dirty = true;
             }
             NetEvent::Announced => self.log("Announced LXMF destination"),
             NetEvent::Message(message) => self.on_message(message),
@@ -813,8 +834,11 @@ impl App {
     /// Periodic work (called about twice a second).
     pub fn on_tick(&mut self) {
         self.channels_tick();
-        for failure in self.saver.failures() {
-            self.fail(failure);
+        for report in self.saver.reports() {
+            match report {
+                saver::Report::Failed(e) => self.fail(e),
+                saver::Report::Note(note) => self.log(note),
+            }
         }
     }
 }

@@ -175,6 +175,19 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         built += lines.len();
         groups.push((lines, placements));
     }
+    // Scrolled back to the oldest message kept: say where older ones went.
+    let archived = app.store.conversations.get(&key).map_or(0, |c| c.archived);
+    if groups.len() == count && archived > 0 {
+        let note = format!(
+            "{archived} older {} moved to the archive ({})",
+            if archived == 1 { "message was" } else { "messages were" },
+            app.paths.archive.display()
+        );
+        let mut rows: Vec<HistoryRow> =
+            wrap(&note, inner_width).into_iter().map(|l| (Line::styled(l, Style::default().fg(DIM)), None)).collect();
+        rows.push((Line::raw(""), None));
+        groups.push((rows, Vec::new()));
+    }
     // Oldest first, with placements at their rows in the whole list.
     let mut lines: Vec<HistoryRow> = Vec::with_capacity(built);
     let mut placements: Vec<Placement<PathBuf>> = Vec::new();

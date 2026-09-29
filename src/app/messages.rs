@@ -1,5 +1,6 @@
 //! Messages tab: LXMF conversations, composing, and attachments.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent};
@@ -10,7 +11,7 @@ use super::notify::{self, Notification, Target};
 use super::{App, PromptKind, Tab, now};
 use crate::lxmf::DeliveryMode;
 use crate::net::{NetCommand, parse_hash};
-use crate::store::{Message, MessageState, StoredAttachment};
+use crate::store::{Archived, Message, MessageState, StoredAttachment};
 use crate::term::images::{DecodeFor, Picture};
 use crate::term::input::TextInput;
 
@@ -277,6 +278,81 @@ impl App {
         Ok(())
     }
 
+    /// Move each conversation's messages beyond the newest "Messages kept"
+    /// to the archive, by the month they were sent (written by the saver,
+    /// before the store: if rettui stops in between, a message is in both,
+    /// never neither). How many messages, from how many conversations.
+    pub(super) fn archive_overflow(&mut self) -> (usize, usize) {
+        let keep = usize::try_from(self.settings.messages_kept).unwrap_or(usize::MAX);
+        if keep == 0 {
+            return (0, 0);
+        }
+        let mut months: BTreeMap<PathBuf, Vec<Archived>> = BTreeMap::new();
+        let (mut messages, mut conversations) = (0, 0);
+        for (key, conversation) in &mut self.store.conversations {
+            let over = conversation.messages.len().saturating_sub(keep);
+            if over == 0 {
+                continue;
+            }
+            // Oldest first (conversations are kept in time order).
+            for message in conversation.messages.drain(..over) {
+                let path = crate::store::archive_month(&self.paths.archive, message.timestamp);
+                months.entry(path).or_default().push(Archived { conversation: key.clone(), message });
+            }
+            conversation.archived += over;
+            // Unread ones among them can't be shown any more.
+            conversation.unread = conversation.unread.min(conversation.messages.len());
+            messages += over;
+            conversations += 1;
+        }
+        for (path, archived) in months {
+            let dir = self.paths.archive.clone();
+            self.saver.append(path, "the message archive", move || {
+                std::fs::create_dir_all(&dir)?;
+                crate::store::encode_archive(&archived)
+            });
+        }
+        if messages > 0 {
+            self.store_dirty = true;
+        }
+        (messages, conversations)
+    }
+
+    /// Delete the archive's oldest months while messages use more than
+    /// "Message storage" allows (after what's queued to save). `warn`: say
+    /// so when the store alone is over it.
+    pub(super) fn keep_within_storage(&mut self, warn: bool) {
+        let limit = self.settings.message_storage_mb;
+        if limit == 0 {
+            return;
+        }
+        let (store, archive) = (self.paths.store.clone(), self.paths.archive.clone());
+        self.saver.run("keep messages within the storage limit", move || {
+            let (mut notes, over) = crate::store::keep_within(&store, &archive, limit * 1_000_000)?;
+            if over && warn {
+                notes.push(format!(
+                    "The messages kept use more than the {limit} MB allowed for messages: lower \"Messages kept\" to use less"
+                ));
+            }
+            Ok(notes)
+        });
+    }
+
+    /// Archive what's over the limit, save straight away and keep within
+    /// the storage limit, saying so in the log (at start, and when either
+    /// limit changes).
+    pub(super) fn archive_overflow_now(&mut self) {
+        let (messages, conversations) = self.archive_overflow();
+        if messages > 0 {
+            self.log(format!(
+                "Archived {messages} older message(s) from {conversations} conversation(s) to {}",
+                self.paths.archive.display()
+            ));
+            self.save_if_dirty();
+        }
+        self.keep_within_storage(true);
+    }
+
     pub fn mark_conversation_read(&mut self, key: &str) {
         if let Some(conversation) = self.store.conversations.get_mut(key)
             && conversation.unread > 0
@@ -365,5 +441,180 @@ impl App {
                 self.open_file(&path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+
+    use super::*;
+    use crate::config::{Paths, Settings};
+    use crate::store::{Conversation, Store};
+
+    fn key() -> String {
+        "ab".repeat(16)
+    }
+
+    /// Message `n`, a month after message `n - 1`.
+    fn message(n: usize, content: String) -> Message {
+        Message {
+            id: format!("m{n}"),
+            incoming: true,
+            title: String::new(),
+            content,
+            timestamp: 1_700_000_000.0 + n as f64 * 31.0 * 86_400.0,
+            state: MessageState::Received { verified: true },
+            attachments: Vec::new(),
+        }
+    }
+
+    /// Text that barely compresses, so file sizes are predictable.
+    fn noise(seed: usize, len: usize) -> String {
+        let mut x = seed as u64 + 1;
+        (0..len)
+            .map(|_| {
+                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                char::from(b'a' + ((x >> 59) as u8 % 26))
+            })
+            .collect()
+    }
+
+    fn store_of(messages: Vec<Message>) -> Store {
+        let mut store = Store::default();
+        let unread = messages.len();
+        store.conversations.insert(key(), Conversation { messages, unread, ..Default::default() });
+        store
+    }
+
+    fn app(dir: &Path, store: Store, kept: u64, storage_mb: u64) -> App {
+        let paths = Paths::new(Some(dir.to_path_buf())).unwrap();
+        let settings = Settings { messages_kept: kept, message_storage_mb: storage_mb, ..Settings::default() };
+        settings.save(&paths.settings).unwrap();
+        let (net, _) = tokio::sync::mpsc::unbounded_channel();
+        App::new(settings, paths, store, net, None, [0; 16])
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rettui-archive-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// The archive's messages (ids), oldest month first.
+    fn archived_ids(dir: &Path) -> Vec<String> {
+        let mut files: Vec<PathBuf> =
+            std::fs::read_dir(dir).map(|e| e.filter_map(|e| e.ok().map(|e| e.path())).collect()).unwrap_or_default();
+        files.sort();
+        files
+            .iter()
+            .flat_map(|path| {
+                let mut text = String::new();
+                flate2::read::MultiGzDecoder::new(std::fs::File::open(path).unwrap()).read_to_string(&mut text).unwrap();
+                text.lines()
+                    .map(|line| serde_json::from_str::<Archived>(line).unwrap())
+                    .inspect(|a| assert_eq!(a.conversation, key()))
+                    .map(|a| a.message.id)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn ids(from: usize, to: usize) -> Vec<String> {
+        (from..to).map(|n| format!("m{n}")).collect()
+    }
+
+    #[test]
+    fn older_messages_move_to_the_archive() {
+        let dir = temp_dir("kept");
+        let messages = (0..25).map(|n| message(n, format!("hello {n}"))).collect();
+        let mut app = app(&dir, store_of(messages), 10, 0);
+        // At start, the newest 10 stay.
+        let conversation = &app.store.conversations[&key()];
+        assert_eq!(conversation.messages.len(), 10);
+        assert_eq!(conversation.messages[0].id, "m15");
+        assert_eq!(conversation.archived, 15);
+        assert!(app.log.iter().any(|l| l.contains("Archived 15 older message(s) from 1 conversation(s)")));
+        // New ones push older ones out with the next save.
+        let conversation = app.store.conversations.get_mut(&key()).unwrap();
+        conversation.messages.extend((25..28).map(|n| message(n, format!("hello {n}"))));
+        app.store_dirty = true;
+        app.save_if_dirty();
+        assert_eq!(app.store.conversations[&key()].archived, 18);
+        // Keeping fewer archives more at once.
+        app.update_settings(&[("messages_kept", "5")]).unwrap();
+        let conversation = &app.store.conversations[&key()];
+        assert_eq!((conversation.messages.len(), conversation.archived), (5, 23));
+        let paths = app.paths.clone();
+        app.finish_saves();
+        // Every archived message, once, in order; the store has the rest.
+        assert_eq!(archived_ids(&paths.archive), ids(0, 23));
+        let saved = Store::load(&paths.store).unwrap();
+        let conversation = &saved.conversations[&key()];
+        assert_eq!(conversation.messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>(), ids(23, 28));
+        assert_eq!(conversation.archived, 23);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn zero_keeps_every_message() {
+        let dir = temp_dir("all");
+        let messages = (0..25).map(|n| message(n, format!("hello {n}"))).collect();
+        let mut app = app(&dir, store_of(messages), 0, 0);
+        assert_eq!(app.store.conversations[&key()].messages.len(), 25);
+        let paths = app.paths.clone();
+        app.finish_saves();
+        assert!(!paths.archive.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_storage_limit_deletes_the_oldest_archived_months() {
+        let dir = temp_dir("limit");
+        // 25 messages of 100 KB of text that barely compresses.
+        let messages = (0..25).map(|n| message(n, noise(n, 100_000))).collect();
+        let mut app = app(&dir, store_of(messages), 2, 1);
+        let paths = app.paths.clone();
+        app.finish_saves();
+        app.on_tick();
+        let size = |path: &Path| std::fs::metadata(path).map_or(0, |m| m.len());
+        let archive: u64 = std::fs::read_dir(&paths.archive).unwrap().map(|e| size(&e.unwrap().path())).sum();
+        assert!(size(&paths.store) + archive <= 1_000_000, "{} + {archive}: {:?}", size(&paths.store), app.log);
+        // The newest archived months are the ones left.
+        let left = archived_ids(&paths.archive);
+        assert!(!left.is_empty() && left.len() < 23, "{left:?}");
+        assert_eq!(left, ids(23 - left.len(), 23));
+        assert!(app.log.iter().any(|l| l.contains("Deleted the archived messages of")));
+        assert!(!app.log.iter().any(|l| l.contains("lower \"Messages kept\"")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_store_bigger_than_the_limit_is_reported() {
+        let dir = temp_dir("over");
+        let messages = (0..25).map(|n| message(n, noise(n, 100_000))).collect();
+        // Keeping 20 of them is about 1.3 MB, over the 1 MB allowed.
+        let mut app = app(&dir, store_of(messages), 20, 1);
+        let paths = app.paths.clone();
+        app.finish_saves();
+        app.on_tick();
+        assert!(archived_ids(&paths.archive).is_empty(), "every archived month went");
+        assert!(app.log.iter().any(|l| l.contains("lower \"Messages kept\"")), "{:?}", app.log);
+        assert_eq!(Store::load(&paths.store).unwrap().conversations[&key()].messages.len(), 20);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn announces_save_the_peers_not_the_store() {
+        let dir = temp_dir("announce");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        let announce = crate::net::NetEvent::Announce { kind: crate::net::PeerKind::Lxmf, hash: [7; 16], name: Some("Bob".into()), hops: 2 };
+        app.on_net(announce);
+        assert!(app.peers_dirty && !app.store_dirty);
+        let paths = app.paths.clone();
+        app.finish_saves();
+        assert!(!paths.store.exists(), "no conversation changed");
+        let loaded = Store::load(&paths.store).unwrap();
+        assert_eq!(loaded.display_name(&"07".repeat(16)), "Bob");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

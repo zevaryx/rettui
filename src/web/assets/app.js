@@ -1293,10 +1293,14 @@ app.views.messages = {
     // any loaded but not shown.
     const from = this.showAll === key ? 0 : Math.max(0, conversation.messages.length - this.LIMIT);
     const hidden = from + (conversation.total ?? conversation.messages.length) - conversation.messages.length;
+    // Older still are in the archive, which rettui doesn't show.
+    const archived = conversation.archived
+      ? el('div', { class: 'show-more' }, el('span', { class: 'dim', style: 'overflow-wrap:anywhere', text: `${conversation.archived} older ${conversation.archived === 1 ? 'message was' : 'messages were'} moved to the archive (${conversation.archive})` }))
+      : null;
     const earlier = hidden ? el('div', { class: 'show-more' }, el('button', { text: `Show ${hidden} earlier messages`, onclick: () => {
       this.showAll = key;
       this.update();
-    } })) : null;
+    } })) : archived;
     const echoes = echoesFor(this, key);
     const render = () => this.history.replaceChildren(...(conversation.messages.length || echoes.length
       ? [earlier, ...conversation.messages.slice(from).map((m) => this.message(m, conversation))].filter(Boolean)
