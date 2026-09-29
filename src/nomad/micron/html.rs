@@ -262,6 +262,14 @@ mod tests {
     }
 
     #[test]
+    fn line_backgrounds_fill_their_rows() {
+        let html = parse("`B000\n`c\nx\n`b").to_html(|url| url.to_string(), |_| None);
+        // Only "x" is a row, and it takes the background across.
+        assert_eq!(html.matches("m-line").count(), 1);
+        assert!(html.contains("<div class=\"m-line\" style=\"padding-left:0ch;text-align:center;background:#000000;\">"));
+    }
+
+    #[test]
     fn control_characters_are_shown_not_sent() {
         let html = source_html("a\u{1b}[31mb\n`!x");
         assert!(!html.contains('\u{1b}'));

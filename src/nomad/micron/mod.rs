@@ -130,21 +130,16 @@ fn image_body_len(chars: &[char]) -> Option<usize> {
     first
 }
 
+/// NomadNet's heading colours (its dark theme), which pages are made for.
 fn heading_style(level: usize) -> Style {
-    match level {
-        1 => Style::default()
-            .fg(Color::Black)
-            .bg(Color::Rgb(0xbb, 0xbb, 0xbb))
-            .add_modifier(Modifier::BOLD),
-        2 => Style::default()
-            .fg(Color::Black)
-            .bg(Color::Rgb(0x99, 0x99, 0x99))
-            .add_modifier(Modifier::BOLD),
-        _ => Style::default()
-            .fg(Color::Rgb(0xee, 0xee, 0xee))
-            .bg(Color::Rgb(0x55, 0x55, 0x55))
-            .add_modifier(Modifier::BOLD),
-    }
+    let (fg, bg) = match level {
+        1 => (0x22, 0xbb),
+        2 => (0x11, 0x99),
+        _ => (0x00, 0x77),
+    };
+    Style::default()
+        .fg(Color::Rgb(fg, fg, fg))
+        .bg(Color::Rgb(bg, bg, bg))
 }
 
 /// Parse a Micron colour: three hex digits (`f80`), grayscale (`g50`), or
@@ -198,6 +193,12 @@ impl Parser {
         self.depth.saturating_sub(1) * INDENT
     }
 
+    /// A row takes the background in effect where its line ends, across the
+    /// whole width (as NomadNet), so `B000 on a line colours all of it.
+    fn row_fill(&self) -> Option<Style> {
+        self.format.bg.map(|bg| Style::default().bg(bg))
+    }
+
     fn line(&mut self, line: &str) {
         let before = self.page.lines.len();
         self.parse_line(line);
@@ -223,7 +224,7 @@ impl Parser {
             self.page.lines.push(MLine::Text {
                 indent: self.content_indent(),
                 align: Alignment::Left,
-                fill: None,
+                fill: self.row_fill(),
                 spans: vec![MSpan {
                     text: line.replace('\t', "    "),
                     style: self.format.style(),
@@ -266,21 +267,32 @@ impl Parser {
                 return;
             }
             let style = heading_style(level);
-            let saved = self.format;
+            // Headings have their own colours, whatever the lines before set;
+            // codes inside one apply to it alone.
+            let saved = std::mem::take(&mut self.format);
             let spans = self.inline(text, style);
             self.format = saved;
+            // The row takes the background its text starts with.
+            let fill = match spans.first().and_then(|s| s.style.bg) {
+                Some(bg) => style.bg(bg),
+                None => style,
+            };
             self.page.lines.push(MLine::Text {
                 indent: level.saturating_sub(1) * INDENT,
                 align: self.align,
-                fill: Some(style),
+                fill: Some(fill),
                 spans,
             });
             return;
         }
         if let Some(rest) = line.strip_prefix('-') {
-            let ch = rest.chars().next().unwrap_or('\u{2500}');
-            // A lone "-" is a thin rule; "-=" etc. repeat the given character.
-            let ch = if ch.is_whitespace() { '\u{2500}' } else { ch };
+            // "-=" etc. repeat the given character; anything else ("-",
+            // "---") is a thin rule.
+            let mut chars = rest.chars();
+            let ch = match (chars.next(), chars.next()) {
+                (Some(ch), None) if !ch.is_control() => ch,
+                _ => '\u{2500}',
+            };
             self.page.lines.push(MLine::Divider {
                 indent: self.content_indent(),
                 ch,
@@ -289,10 +301,15 @@ impl Parser {
             return;
         }
         let spans = self.inline(line, Style::default());
+        // A line of only codes (`c, `Bddd) sets them for the lines after it
+        // but isn't shown; an empty line is a blank row.
+        if spans.is_empty() && !line.is_empty() {
+            return;
+        }
         self.page.lines.push(MLine::Text {
             indent: self.content_indent(),
             align: self.align,
-            fill: None,
+            fill: self.row_fill(),
             spans,
         });
     }
@@ -601,13 +618,47 @@ mod tests {
 
     #[test]
     fn headings_dividers_and_comments() {
-        let page = parse("#!c=0\n>Title\nbody\n-\n>>Sub\nmore");
+        let page = parse("#!c=0\n>Title\nbody\n-\n>>Sub\nmore\n<---\n-=");
         let out = text(&page.layout(10, None, &HashMap::new(), None));
         assert_eq!(out[0], "Title     ");
         assert_eq!(out[1], "body");
         assert_eq!(out[2], "\u{2500}".repeat(10));
         assert_eq!(out[3], "  Sub     ");
         assert_eq!(out[4], "  more");
+        // "---" is a thin rule too; "-=" repeats "=".
+        assert_eq!(out[5], "\u{2500}".repeat(10));
+        assert_eq!(out[6], "=".repeat(10));
+    }
+
+    /// As NomadNet draws them (a page banner: a black band, a centred
+    /// title, then a heading).
+    #[test]
+    fn rows_take_the_background_their_line_ends_with() {
+        let black = Some(Color::Rgb(0, 0, 0));
+        let page = parse("`Fddd`B000\n---\n`c\nLogo\n`a\n\n>>Head\nbody`b\n<plain");
+        let layout = page.layout(10, None, &HashMap::new(), None);
+        // Lines of only codes are not rows; an empty line is.
+        let out = text(&layout);
+        let rule = "\u{2500}".repeat(10);
+        let blank = " ".repeat(10);
+        assert_eq!(out, [&rule, "   Logo   ", &blank, "  Head    ", "  body", "plain"]);
+        // The background fills the whole row, the rule's too.
+        for row in 0..3 {
+            assert!(layout.lines[row].spans.iter().all(|s| s.style.bg == black), "row {row}");
+        }
+        // A heading keeps its own colours over the page's, across the
+        // row and its indent.
+        let head = &layout.lines[3].spans;
+        assert!(head.iter().all(|s| s.style.bg == Some(Color::Rgb(0x99, 0x99, 0x99))));
+        assert_eq!(head[1].style.fg, Some(Color::Rgb(0x11, 0x11, 0x11)));
+        // The background ended with the line, so only the text has it.
+        assert_eq!(layout.lines[4].spans[1].style.bg, black);
+        assert_eq!(layout.lines[4].width(), 6);
+        // Text with no background of its own shows its row's.
+        let page = parse(" `Ff00x`B00fy");
+        let layout = page.layout(4, None, &HashMap::new(), None);
+        let blue = Some(Color::Rgb(0, 0, 255));
+        assert!(layout.lines[0].spans.iter().all(|s| s.style.bg == blue));
     }
 
     #[test]
