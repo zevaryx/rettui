@@ -390,10 +390,6 @@ impl App {
         // Stores of earlier versions (or a lower "Messages kept") may hold
         // more than each conversation keeps.
         app.archive_overflow_now();
-        if !app.store.conversations.is_empty() {
-            app.conversations.select(Some(0));
-            app.sync_active_conversation();
-        }
         app
     }
 
@@ -454,6 +450,20 @@ impl App {
     pub fn finish_saves(&mut self) {
         self.save_if_dirty();
         self.saver.finish();
+    }
+
+    /// The window gained or lost the focus (in terminals that say). Coming
+    /// back reads the conversation or room on screen: what arrived there
+    /// meanwhile counted as unread.
+    pub fn set_focus(&mut self, focused: bool) {
+        self.focused = focused;
+        if focused {
+            match self.tab {
+                Tab::Messages => self.sync_active_conversation(),
+                Tab::Channels => self.mark_channel_read(),
+                _ => {}
+            }
+        }
     }
 
     /// Save a new display name and announce it.

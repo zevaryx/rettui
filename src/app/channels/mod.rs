@@ -634,9 +634,11 @@ impl App {
         }
     }
 
-    /// Whether a buffer is on screen right now.
+    /// Whether a buffer is on screen right now, in a window that has the
+    /// focus (what arrives while the user is away counts as unread).
     fn is_viewing(&self, index: usize, room: &str) -> bool {
-        self.tab == Tab::Channels
+        self.focused
+            && self.tab == Tab::Channels
             && self.channels.active().is_some_and(|(i, r)| i == index && r == room)
     }
 

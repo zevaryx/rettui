@@ -940,15 +940,13 @@ const notifications = {
 
   // Whether what it's about is on screen, in a window that has the focus.
   onScreen(target) {
-    if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
-    const detail = (view) => !phone.matches || view.pane === 'detail';
+    if (!document.hasFocus()) return false;
     if (target.kind === 'conversation') {
-      const view = app.views.messages;
-      return app.tab === 'messages' && view.selected === target.key && detail(view);
+      return showing('messages') && app.views.messages.selected === target.key;
     }
     if (target.kind === 'room') {
-      const view = app.views.channels;
-      return app.tab === 'channels' && view.selected?.hub === target.hub && view.selected.room === target.room && detail(view);
+      const selected = app.views.channels.selected;
+      return showing('channels') && selected?.hub === target.hub && selected.room === target.room;
     }
     return false;
   },
@@ -995,6 +993,15 @@ const notifications = {
       state === 'default' ? el('button', { text: 'Allow', onclick: () => this.allow() }) : null);
   },
 };
+
+// Whether a section's open conversation or room is in front of the user: the
+// section is open in a page that shows (not a background tab, or a phone's
+// app in the background), and on a phone it shows the conversation, not the
+// list. Only then does what arrives there count as read.
+function showing(tab) {
+  if (app.tab !== tab || document.visibilityState !== 'visible') return false;
+  return !phone.matches || app.views[tab].pane === 'detail';
+}
 
 // A muted conversation, room or hub, in its list.
 function mutedMark() {
@@ -1240,7 +1247,7 @@ app.views.messages = {
     const key = this.selected;
     const conversation = (key === known && await early) || await this.load(key);
     if (key !== this.selected) return;
-    if (conversation.unread && app.tab === 'messages') api.post(`/conversations/${key}/read`).catch(() => {});
+    if (conversation.unread && showing('messages')) api.post(`/conversations/${key}/read`).catch(() => {});
     this.renderConversation(key, conversation);
   },
 
@@ -1519,7 +1526,7 @@ app.views.channels = {
     const current = this.hubs.find((h) => h.hash === hash);
     const whisperEntry = view.whisper_with && current?.whispers.find((w) => w.key === room);
     const unreadNow = view.whisper_with ? whisperEntry?.unread : room ? current?.rooms.find((r) => r.name === room)?.unread : current?.unread;
-    if (current && unreadNow && app.tab === 'channels') api.post(`/channels/${hash}/read`, { room }).catch(() => {});
+    if (current && unreadNow && showing('channels')) api.post(`/channels/${hash}/read`, { room }).catch(() => {});
     this.renderRoom(hash, room, view);
   },
 

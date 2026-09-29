@@ -68,8 +68,11 @@ impl App {
             }
         }
 
-        let is_active =
-            self.tab == Tab::Messages && self.active_conversation.as_deref() == Some(key.as_str());
+        // On screen, in a window that has the focus: what arrives while the
+        // user is away counts as unread.
+        let is_active = self.focused
+            && self.tab == Tab::Messages
+            && self.active_conversation.as_deref() == Some(key.as_str());
         // What the notification says: the text, else what came with it.
         let preview = if !message.content.trim().is_empty() {
             notify::body(&message.content)
@@ -164,6 +167,15 @@ impl App {
     pub(super) fn select_conversation(&mut self, index: usize) {
         self.conversations.select(Some(index));
         self.sync_active_conversation();
+    }
+
+    /// Open the most recent conversation, as the terminal UI starts (the
+    /// web UI doesn't: browsers mark what they show read).
+    pub fn open_newest_conversation(&mut self) {
+        if !self.store.conversations.is_empty() {
+            self.conversations.select(Some(0));
+            self.sync_active_conversation();
+        }
     }
 
     pub(super) fn sync_active_conversation(&mut self) {
@@ -612,6 +624,38 @@ mod tests {
         assert!(!paths.store.exists(), "no conversation changed");
         let loaded = Store::load(&paths.store).unwrap();
         assert_eq!(loaded.display_name(&"07".repeat(16)), "Bob");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn messages_arriving_while_away_are_unread_until_back() {
+        let dir = temp_dir("focus");
+        let mut app = app(&dir, store_of(vec![message(0, "hi".into())]), 1000, 0);
+        // Nothing is read just by starting (the web UI starts like this).
+        assert_eq!(app.store.conversations[&key()].unread, 1);
+        // The terminal UI opens the conversation in the Messages tab.
+        app.open_newest_conversation();
+        assert_eq!(app.active_conversation.as_deref(), Some(key().as_str()));
+        let arrive = |app: &mut App, n: u8| {
+            app.on_message(crate::lxmf::InboundMessage {
+                id: Some([n; 32]),
+                source: [0xab; 16],
+                title: String::new(),
+                content: format!("message {n}"),
+                timestamp: 1_800_000_000.0 + f64::from(n),
+                verified: true,
+                attachments: Vec::new(),
+            });
+        };
+        let unread = |app: &App| app.store.conversations[&key()].unread;
+        arrive(&mut app, 1);
+        assert_eq!(unread(&app), 0, "read: on screen, and looked at");
+        app.set_focus(false);
+        arrive(&mut app, 2);
+        arrive(&mut app, 3);
+        assert_eq!(unread(&app), 2, "on screen, but nobody there");
+        app.set_focus(true);
+        assert_eq!(unread(&app), 0, "read on coming back");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

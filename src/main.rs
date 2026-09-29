@@ -195,6 +195,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     // reading stdin (it would swallow the terminal's replies).
     let graphics = term::images::Graphics::detect();
     let mut app = App::new(settings, paths, store, net_tx.clone(), Some(graphics), identity_hash);
+    app.open_newest_conversation();
     // Focus reports (where the terminal sends them) tell notifications
     // whether the user is looking.
     execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste, EnableFocusChange)?;
@@ -235,8 +236,8 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => app.on_key(key),
                 Some(Ok(Event::Mouse(mouse))) => app.on_mouse(mouse),
                 Some(Ok(Event::Paste(text))) => app.on_paste(&text),
-                Some(Ok(Event::FocusGained)) => app.focused = true,
-                Some(Ok(Event::FocusLost)) => app.focused = false,
+                Some(Ok(Event::FocusGained)) => app.set_focus(true),
+                Some(Ok(Event::FocusLost)) => app.set_focus(false),
                 Some(Ok(_)) => {}
                 Some(Err(e)) => break Err(e.into()),
                 None => break Ok(()),

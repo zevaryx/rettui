@@ -6,6 +6,12 @@ both UIs.
   while rettui's window has the focus. Many at once (a sync bringing in a
   backlog) become one notification, and a newer one about the same
   conversation or room replaces the older one.
+- **What counts as read:** a conversation or room is read only while it's in
+  front of you: on screen in a window that has the focus (in the TUI, where
+  the terminal reports focus), or in a browser tab that's showing (on a phone,
+  with the conversation open, not just its list). A background tab, or a
+  phone with rettui in the background, leaves new messages unread, on every
+  device.
 - **Terminal UI:** notifications are the desktop's own: D-Bus notifications
   on Linux and the BSDs, Notification Center on macOS, toasts on Windows.
   Terminals that report focus (most do; in tmux, turn on `focus-events`) let
