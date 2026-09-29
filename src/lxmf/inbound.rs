@@ -53,6 +53,25 @@ fn signing_key(identity: &Identity) -> Option<Ed25519PublicKey> {
     Ed25519PublicKey::from_bytes(&bytes).ok()
 }
 
+/// Whether a message is from who it says: `Ok(true)` if its signature
+/// matches the sender's key, `Ok(false)` if the key isn't known (kept, shown
+/// as unverified), and an error if the key is known and the signature
+/// doesn't match: someone else wrote it, so it's dropped, as Python LXMF
+/// does.
+fn check_signature(message: &mut LxMessage, sender: Option<&Identity>) -> Result<bool, String> {
+    let Some(key) = sender.and_then(signing_key) else {
+        return Ok(false);
+    };
+    if message.verify(&key) {
+        Ok(true)
+    } else {
+        Err(format!(
+            "Dropped a message claiming to be from {}: its signature doesn't match their key",
+            hex::encode(message.source_hash)
+        ))
+    }
+}
+
 /// Unpack and verify one complete LXMF message (destination hash included).
 pub async fn parse_inbound(
     runtime: &ReticulumHandle,
@@ -68,18 +87,12 @@ pub async fn parse_inbound(
     )
     .await
     .unwrap_or_else(|_| Err("timed out".to_string()));
-    let verified = match sender {
-        Ok(remote) => signing_key(&remote.identity)
-            .map(|key| message.verify(&key))
-            .unwrap_or(false),
-        Err(e) => {
-            tracing::debug!(
-                "sender {} not known ({e}); cannot verify signature",
-                hex::encode(message.source_hash)
-            );
-            false
-        }
-    };
+    let sender = sender
+        .inspect_err(|e| {
+            tracing::debug!("sender {} not known ({e}); cannot verify signature", hex::encode(message.source_hash));
+        })
+        .ok();
+    let verified = check_signature(&mut message, sender.as_ref().map(|remote| &remote.identity))?;
     tracing::debug!("message from {} verified={verified}", hex::encode(message.source_hash));
     let attachments = attachments_of(&message);
     Ok(InboundMessage {
@@ -111,6 +124,7 @@ pub(super) async fn deliver_inbound(
 ) {
     let event = match parse_inbound(runtime, known, data).await {
         Ok(message) => NetEvent::Message(message),
+        Err(e) if e.starts_with("Dropped") => NetEvent::Log(e),
         Err(e) => NetEvent::Log(format!("Dropped malformed LXMF message: {e}")),
     };
     let _ = ev.send(event);
@@ -124,4 +138,34 @@ pub fn spawn_inbound(
 ) {
     let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
     tokio::spawn(async move { deliver_inbound(&runtime, &known, &data, &ev).await });
+}
+
+#[cfg(test)]
+mod tests {
+    use lxmf_core::message_api::DeliveryMethod;
+
+    use super::*;
+
+    /// A message from `sender`, signed, as it arrives.
+    fn signed_by(sender: &Identity, content: &str) -> Vec<u8> {
+        let mut message = LxMessage::new([1; 16], [2; 16], "", content, DeliveryMethod::Direct);
+        message.sign(&sender.get_signing_key().unwrap()).unwrap();
+        message.pack().unwrap()
+    }
+
+    #[test]
+    fn forged_messages_are_dropped_and_unknown_senders_unverified() {
+        let (alice, mallory) = (Identity::new(), Identity::new());
+        let data = signed_by(&alice, "hello");
+        let check = |data: &[u8], sender: Option<&Identity>| check_signature(&mut LxMessage::unpack(data).unwrap(), sender);
+        assert_eq!(check(&data, Some(&alice)), Ok(true));
+        // Not known yet: kept, as unverified.
+        assert_eq!(check(&data, None), Ok(false));
+        // Signed by someone else, or changed on the way: dropped.
+        assert!(check(&data, Some(&mallory)).unwrap_err().starts_with("Dropped a message claiming to be from 02020202"));
+        let at = data.windows(5).position(|w| w == b"hello").unwrap();
+        let mut changed = data.clone();
+        changed[at..at + 5].copy_from_slice(b"jello");
+        assert!(check(&changed, Some(&alice)).is_err());
+    }
 }

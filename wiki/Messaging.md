@@ -30,7 +30,9 @@ MeshChat, NomadNet and other LXMF clients).
     before sending that much.
 - **Signatures:** incoming messages are checked against the sender's key. If
   the key isn't known, rettui looks it up first (up to 10 s). Messages that
-  still can't be checked are marked *unverified*.
+  still can't be checked are marked *unverified*. A message whose signature
+  doesn't match its sender's known key was written by someone else: it's
+  dropped, and the log says so (as Python LXMF does).
 - **Peers who are offline:** public keys from announces are kept, so you can
   write to a peer you heard earlier even while they're away.
 - **Announces:** rettui announces your LXMF address when it starts (unless
