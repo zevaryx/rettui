@@ -1,0 +1,35 @@
+rettui tells you about new messages even while you're somewhere else, in
+both UIs.
+
+- **What notifies:** a new LXMF message, and in RRC a mention of your nick or
+  a whisper. Nothing notifies for the conversation or room you're looking at
+  while rettui's window has the focus. Many at once (a sync bringing in a
+  backlog) become one notification, and a newer one about the same
+  conversation or room replaces the older one.
+- **Terminal UI:** notifications are the desktop's own: D-Bus notifications
+  on Linux and the BSDs, Notification Center on macOS, toasts on Windows.
+  Terminals that report focus (most do; in tmux, turn on `focus-events`) let
+  rettui tell when you're looking. Where there's no desktop to show them (over
+  SSH, for example), the log says so once.
+- **Web UI:** notifications are the browser's own. Allow them under Status
+  (the **Notifications** row). Clicking one opens its conversation or room,
+  and the tab's title counts what's unread. Browsers only allow notifications
+  on HTTPS or on the same computer (`localhost`). Elsewhere, and until you
+  allow them, a note shows in the page while you're looking at it. On an
+  iPhone (iOS 16.4 or later), add rettui to the Home Screen first (see
+  **Installing** under [Web UI](Web-UI)).
+- **Muting a conversation:** `N` (TUI), or the 🔔 bell in its header (web
+  UI), turns a conversation's notifications off or back on. Muted
+  conversations show *muted* (TUI) or 🔕 (web UI) in the list.
+- **Hubs and rooms:**
+  - **Hub default:** a hub notifies of mentions and whispers. It can notify
+    of every message in its rooms instead, or of nothing.
+  - **Rooms:** each room and whisper conversation follows its hub unless it
+    is set on its own: all messages, mentions only, or off.
+  - **Changing them:** `N` (TUI) steps through the choices for the hub, room
+    or whisper conversation on screen. In the web UI, the bell in its header
+    opens a menu.
+  - **Showing them:** rooms and hubs that are off show *muted* (TUI) or 🔕
+    (web UI).
+- **Settings:** "Notify on messages" and "Notify from RRC" (under Status)
+  turn each kind off everywhere.

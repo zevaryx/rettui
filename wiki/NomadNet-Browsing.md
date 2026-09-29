@@ -1,0 +1,45 @@
+The Browser tab opens NomadNet pages (written in Micron) from nodes on the
+network.
+
+- **Finding nodes:** the Browser tab has a pane with two lists: Saved (pages
+  you saved with `s`) and Nodes (every NomadNet node heard). Pages open beside
+  the pane. You can also go to any address (`g`), or to your home page (`H`,
+  set in the settings).
+- **Micron:** most of it is supported, including 24-bit colour, alignment,
+  dividers, literal blocks, links, forms (text fields, checkboxes and radio
+  buttons), inline images and page colours. Long lines wrap between words.
+- **Links:** page links, `lxmf@` links (open a conversation), `rrc://` links
+  (open a hub room), and `/file/` downloads, which are saved to `downloads/`.
+- **Identifying:** pages that personalise content need you to identify.
+  Toggle it per node with `I`.
+- **View source:** `u` (or the button in the page's title bar) shows the
+  page's Micron with line numbers and the markup coloured. Refreshing keeps
+  the source view, and `Y` copies the source exactly as the node sent it.
+- **Copying:** drag across page text to copy it, `Y` copies the whole page,
+  and `L` copies the selected link.
+- **History:** `b` (or a right-click) goes back.
+- **Cache:** pages and images are cached on disk for `cache_hours` (24 by
+  default). A page's `#!c=` directive can shorten that, and `#!c=0` pages are
+  never cached. Form submissions and file downloads always go to the network.
+  - The address bar shows when a page came from the cache.
+  - `r` refetches the page and its images. The cached copy is only replaced
+    once the new one arrives, so it still works while a node is unreachable.
+  - `R` clears the whole cache.
+- **Images:**
+  - Page images and image attachments are drawn with
+    [ratatui-image](https://crates.io/crates/ratatui-image) in the best
+    protocol the terminal has: Kitty graphics (Kitty, Ghostty and others),
+    Sixel, iTerm2 inline images (iTerm2, WezTerm), or half blocks everywhere
+    else. They scroll and clip like text, and are decoded in the background so
+    the UI never waits for them.
+  - **Windows Terminal** (detected by `WT_SESSION`, which is also set inside
+    WSL) always gets Sixel. It may not report its cell size, which Sixel needs
+    to size pictures: if they come out too big or small, set
+    `RETTUI_CELL_SIZE` to your font's cell size in pixels, for example
+    `RETTUI_CELL_SIZE=9x19`.
+  - rettui asks the terminal what it supports at startup with a short,
+    bounded query (at most 1.5 s, and only if the terminal doesn't answer).
+    Konsole's Sixel and Kitty support and WezTerm's Kitty support are skipped,
+    as ratatui-image recommends.
+  - `RETTUI_GRAPHICS` forces a protocol: `kitty`, `sixel`, `iterm2` or
+    `halfblocks`.

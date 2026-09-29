@@ -1,0 +1,50 @@
+name: Wiki
+
+# Publishes wiki/ to the repository's GitHub wiki. The pages are written and
+# reviewed here, beside the code they describe; the wiki becomes a copy of
+# wiki/ (pages removed here are removed there).
+#
+# The wiki must exist first: turn on Wikis (Settings > General > Features)
+# and create its first page (any text; this replaces it).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "wiki/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One publish at a time, in order.
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Copy wiki/ to the wiki
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" published; then
+            echo "::error::No wiki to publish to. Turn on Wikis (Settings > General > Features), create its first page, then run this again."
+            exit 1
+          fi
+          find published -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -r wiki/. published/
+          cd published
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The wiki is up to date."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Update from ${GITHUB_REPOSITORY}@${GITHUB_SHA::7}"
+          git push
