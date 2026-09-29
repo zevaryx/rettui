@@ -474,6 +474,56 @@ pub struct Channels {
     /// (byte in the input) it was closed for with Esc.
     pub mention_pick: usize,
     pub mention_dismissed: Option<usize>,
+    /// Unsent lines of the rooms not on screen, and the room the line in
+    /// `input` belongs to (see [`Channels::sync_draft`]).
+    drafts: HashMap<String, TextInput>,
+    draft_for: Option<String>,
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::*;
+
+    #[test]
+    fn each_room_keeps_its_own_unsent_line() {
+        let mut channels = Channels::default();
+        let room = |name: &str| Some(Target { hub: [1; 16], room: Some(name.to_string()) });
+        channels.selected = room("general");
+        channels.sync_draft();
+        channels.input.insert_str("half a thought");
+        channels.selected = room("random");
+        channels.sync_draft();
+        assert_eq!(channels.input.text(), "", "the line doesn't follow to another room");
+        channels.input.insert_str("hello random");
+        channels.selected = room("general");
+        channels.sync_draft();
+        assert_eq!(channels.input.text(), "half a thought");
+        channels.selected = room("random");
+        channels.sync_draft();
+        assert_eq!(channels.input.text(), "hello random");
+    }
+}
+
+impl Channels {
+    /// Keep what's written with the room it was written in: once the
+    /// selection has moved (it moves from many places), put the line away and
+    /// bring back the new room's, rather than carry it over to be sent there.
+    pub fn sync_draft(&mut self) {
+        let key = self.selected.as_ref().map(|t| format!("{}/{}", hex::encode(t.hub), t.room.as_deref().unwrap_or("")));
+        if key == self.draft_for {
+            return;
+        }
+        let line = std::mem::take(&mut self.input);
+        if let Some(old) = self.draft_for.take()
+            && !line.text().is_empty()
+        {
+            self.drafts.insert(old, line);
+        }
+        self.input = key.as_ref().and_then(|k| self.drafts.remove(k)).unwrap_or_default();
+        self.draft_for = key;
+        self.mention_pick = 0;
+        self.mention_dismissed = None;
+    }
 }
 
 /// A row of the Channels list.

@@ -250,6 +250,8 @@ pub struct App {
     pub composing: bool,
     pub message_scroll: usize,
     pub attachments: Vec<PathBuf>,
+    /// What's written and attached in the conversations not open.
+    drafts: HashMap<String, (TextInput, Vec<PathBuf>)>,
     pub delivery_mode: DeliveryMode,
     /// Decoded image attachments by file path (`None` if undecodable).
     pictures: HashMap<PathBuf, Option<Picture>>,
@@ -345,6 +347,7 @@ impl App {
             composing: false,
             message_scroll: 0,
             attachments: Vec::new(),
+            drafts: HashMap::new(),
             delivery_mode: DeliveryMode::Auto,
             pictures: HashMap::new(),
             decoding: std::collections::HashSet::new(),

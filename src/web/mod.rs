@@ -148,43 +148,44 @@ struct Job {
 }
 
 /// What a change touched, so browsers refetch only what shows it: the
-/// interface counters every few seconds would otherwise refetch whatever is
-/// on screen (a long conversation is hundreds of kilobytes).
+/// interface counters every few seconds, or announces arriving several a
+/// second, would otherwise refetch whatever is on screen (a long
+/// conversation is hundreds of kilobytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope {
-    /// The status only (the sidebar, and Status): interface counters and
-    /// the log.
-    Status,
-    /// The hosted node's counters, and the status.
-    Node,
-    /// Anything.
-    All,
-}
+pub struct Scope(u8);
 
 impl Scope {
+    /// The status (the sidebar, and Status): interface counters, the log.
+    pub const STATUS: Scope = Scope(1);
+    /// The hosted node's counters.
+    pub const NODE: Scope = Scope(2);
+    /// Peers heard (announces): the Network list, the Browser's nodes, and
+    /// how many are known.
+    pub const PEERS: Scope = Scope(4);
+    /// Anything.
+    pub const ALL: Scope = Scope(u8::MAX);
+
     fn of(event: &NetEvent) -> Self {
         match event {
-            NetEvent::Interfaces(_) | NetEvent::Log(_) => Scope::Status,
-            NetEvent::Host(net::HostEvent::Stats(_)) => Scope::Node,
-            _ => Scope::All,
+            NetEvent::Interfaces(_) | NetEvent::Log(_) => Scope::STATUS,
+            NetEvent::Host(net::HostEvent::Stats(_)) => Scope::NODE,
+            NetEvent::Announce { .. } => Scope::PEERS,
+            _ => Scope::ALL,
         }
     }
 
     /// What two changes touched together.
     fn and(self, other: Self) -> Self {
-        match (self, other) {
-            (Scope::Status, scope) | (scope, Scope::Status) => scope,
-            (Scope::Node, Scope::Node) => Scope::Node,
-            _ => Scope::All,
-        }
+        Scope(self.0 | other.0)
     }
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Scope::Status => "status",
-            Scope::Node => "node",
-            Scope::All => "all",
+    /// As browsers get it: `all`, or the parts, such as `status,peers`.
+    pub fn name(self) -> String {
+        if self == Scope::ALL {
+            return "all".into();
         }
+        let parts = [(Scope::STATUS, "status"), (Scope::NODE, "node"), (Scope::PEERS, "peers")];
+        parts.iter().filter(|(part, _)| self.0 & part.0 != 0).map(|(_, name)| *name).collect::<Vec<_>>().join(",")
     }
 }
 
@@ -193,18 +194,19 @@ mod scope_tests {
     use super::*;
 
     #[test]
-    fn counters_and_the_log_touch_only_the_status() {
-        assert_eq!(Scope::of(&NetEvent::Interfaces(Vec::new())), Scope::Status);
-        assert_eq!(Scope::of(&NetEvent::Log("Interface x went offline".into())), Scope::Status);
-        assert_eq!(Scope::of(&NetEvent::Announced), Scope::All);
-        assert_eq!(Scope::of(&NetEvent::SyncStarted), Scope::All);
+    fn counters_the_log_and_announces_touch_only_their_part() {
+        assert_eq!(Scope::of(&NetEvent::Interfaces(Vec::new())), Scope::STATUS);
+        assert_eq!(Scope::of(&NetEvent::Log("Interface x went offline".into())), Scope::STATUS);
+        let announce = NetEvent::Announce { kind: net::PeerKind::Lxmf, hash: [0; 16], name: None, hops: 1 };
+        assert_eq!(Scope::of(&announce), Scope::PEERS);
+        assert_eq!(Scope::of(&NetEvent::Announced), Scope::ALL);
+        assert_eq!(Scope::of(&NetEvent::SyncStarted), Scope::ALL);
         // A burst touches what any of it did.
-        assert_eq!(Scope::Status.and(Scope::Status), Scope::Status);
-        assert_eq!(Scope::Status.and(Scope::Node), Scope::Node);
-        assert_eq!(Scope::Node.and(Scope::Status), Scope::Node);
-        assert_eq!(Scope::Node.and(Scope::Node), Scope::Node);
-        assert_eq!(Scope::Status.and(Scope::All), Scope::All);
-        assert_eq!(Scope::All.and(Scope::Node), Scope::All);
+        assert_eq!(Scope::STATUS.and(Scope::STATUS).name(), "status");
+        assert_eq!(Scope::STATUS.and(Scope::PEERS).name(), "status,peers");
+        assert_eq!(Scope::PEERS.and(Scope::NODE).and(Scope::STATUS).name(), "status,node,peers");
+        assert_eq!(Scope::STATUS.and(Scope::ALL).name(), "all");
+        assert_eq!(Scope::ALL.and(Scope::NODE), Scope::ALL);
     }
 }
 
@@ -360,7 +362,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 (job.run)(&mut owner);
                 owner.app.tab = Tab::Status;
                 if job.changes {
-                    notify(&changes, Scope::All);
+                    notify(&changes, Scope::ALL);
                 }
             }
             Some(event) = net_rx.recv() => {
@@ -387,14 +389,14 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         if owner.app.take_rns_restart() {
             // Browsers see "starting" while the old stack stops; page loads
             // in flight belong to it.
-            notify(&changes, Scope::All);
+            notify(&changes, Scope::ALL);
             for (_, pending) in owner.fetches.drain() {
                 let _ = pending.reply.send(Err("Reticulum restarted while loading; load the page again".into()));
             }
             net::shutdown(&net_tx, &mut net_rx, net::Stop::Restart).await;
             (net_tx, net_rx) = net::spawn(crate::net_options(&owner.app.settings, &owner.app.paths, identity.clone()));
             owner.app.set_network(net_tx.clone());
-            notify(&changes, Scope::All);
+            notify(&changes, Scope::ALL);
         }
     };
     owner.app.save_if_dirty();

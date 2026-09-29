@@ -176,6 +176,8 @@ fn chat_lines(
 }
 
 pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
+    // The line being written is the room's on screen.
+    app.channels.sync_draft();
     let active = app.channels.active();
     let show_members =
         area.width >= 90 && active.as_ref().is_some_and(|(_, room)| !room.is_empty() && whisper_peer(room).is_none());

@@ -42,7 +42,7 @@ const TOKEN_HEADER: &str = "x-rettui-token";
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 /// Scripts only from this server; page content is inert HTML. Inline style
 /// attributes carry Micron colours.
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 pub struct ApiError(StatusCode, String);
 
@@ -117,6 +117,7 @@ pub fn router(state: WebState) -> Router {
         .route("/app.js", get(script))
         .route("/style.css", get(style))
         .route("/sw.js", get(service_worker))
+        .route("/manifest.webmanifest", get(manifest))
         .route("/fonts/{name}", get(font))
         .route("/brand/{name}", get(brand))
         .nest("/api", api)
@@ -130,15 +131,22 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// Asks for the link, or its token: an app added to a phone's home screen
+/// keeps its own cookies and has no address bar to open the link in.
 const LOGIN_PAGE: &str = "<!doctype html><meta charset=utf-8><title>rettui</title>\
-<link rel=icon type=image/png href=/brand/icon.png>\
-<body style=\"font-family:sans-serif;background:#16161e;color:#ddd;padding:3em\">\
-<h1><img src=/brand/wordmark.png alt=rettui height=36></h1><p>Open the link that <code>rettui --web</code> printed (it ends in <code>?token=…</code>) to log in.</p>";
+<meta name=viewport content=\"width=device-width, initial-scale=1\">\
+<link rel=icon type=image/png href=/brand/icon.png><link rel=manifest href=/manifest.webmanifest>\
+<body style=\"font-family:sans-serif;background:#16161e;color:#ddd;padding:2em;line-height:1.5\">\
+<h1><img src=/brand/wordmark.png alt=rettui height=36></h1><p>Open the link that <code>rettui --web</code> printed (it ends in <code>?token=…</code>) to log in.</p>\
+<form method=get action=/><p><label>Or paste its token (after <code>token=</code>):<br>\
+<input name=token type=password autocomplete=current-password required \
+style=\"font:inherit;padding:.4em;width:min(28em,100%);box-sizing:border-box\"></label></p><p><button style=\"font:inherit;padding:.4em 1.2em\">Log in</button></p></form>";
 
-/// Served without logging in: the logo and icon, for the login page, and
-/// the service worker (it holds nothing private, and browsers fetch it again
-/// on their own).
-const PUBLIC: [&str; 3] = ["/brand/wordmark.png", "/brand/icon.png", "/sw.js"];
+/// Served without logging in: the logo and icons, for the login page and an
+/// app added to a home screen; the manifest (browsers fetch it without the
+/// login cookie); and the service worker (browsers fetch it again on their
+/// own). None of them hold anything private.
+const PUBLIC: [&str; 5] = ["/brand/wordmark.png", "/brand/icon.png", "/brand/icon-512.png", "/manifest.webmanifest", "/sw.js"];
 
 /// Tokens a request carries: in the login cookie, an `Authorization: Bearer`
 /// header or an `X-Rettui-Token` header.
@@ -207,7 +215,9 @@ async fn compress(request: Request, next: Next) -> Response {
         return response;
     }
     // Caches keep each encoding apart.
-    response.headers_mut().append(header::VARY, HeaderValue::from_static("accept-encoding"));
+    if !response.headers().contains_key(header::VARY) {
+        response.headers_mut().insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    }
     if !gzip {
         return response;
     }
@@ -249,42 +259,103 @@ fn accepts_gzip(headers: &axum::http::HeaderMap) -> bool {
 
 // ---- static files -------------------------------------------------------
 
-fn asset(content_type: &'static str, body: &'static str) -> Response {
-    ([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-cache")], body).into_response()
+/// A text file served from the build. Browsers check it's current on each
+/// load (`no-cache`), and one that has it gets "not modified" by its ETag
+/// rather than the file again; others get a copy gzipped once, at the best
+/// level (it shrinks the script to about a quarter).
+struct Asset {
+    content_type: &'static str,
+    body: String,
+    gzip: Vec<u8>,
+    etag: String,
+}
+
+impl Asset {
+    fn new(content_type: &'static str, body: impl Into<String>) -> Self {
+        use std::hash::{Hash, Hasher};
+        use std::io::Write;
+        let body = body.into();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        body.hash(&mut hasher);
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        let gzip = encoder.write_all(body.as_bytes()).and_then(|()| encoder.finish()).unwrap_or_default();
+        // Weak: the gzipped copy and the plain one are the same file.
+        Self { content_type, body, gzip, etag: format!("W/\"{:016x}\"", hasher.finish()) }
+    }
+
+    fn serve(&self, headers: &axum::http::HeaderMap) -> Response {
+        let current = headers
+            .get_all(header::IF_NONE_MATCH)
+            .into_iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(','))
+            .any(|tag| tag.trim() == self.etag || tag.trim() == "*");
+        let mut response = if current {
+            StatusCode::NOT_MODIFIED.into_response()
+        } else if accepts_gzip(headers) && !self.gzip.is_empty() {
+            ([(header::CONTENT_TYPE, self.content_type), (header::CONTENT_ENCODING, "gzip")], self.gzip.clone()).into_response()
+        } else {
+            ([(header::CONTENT_TYPE, self.content_type)], self.body.clone()).into_response()
+        };
+        let headers = response.headers_mut();
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        headers.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+        if let Ok(etag) = HeaderValue::from_str(&self.etag) {
+            headers.insert(header::ETAG, etag);
+        }
+        response
+    }
 }
 
 /// The page, with this build's version beside the name (a link to the
 /// project page).
-static INDEX: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    include_str!("assets/index.html")
+static INDEX: std::sync::LazyLock<Asset> = std::sync::LazyLock::new(|| {
+    let page = include_str!("assets/index.html")
         .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
-        .replace("{{PROJECT_URL}}", crate::config::PROJECT_URL)
+        .replace("{{PROJECT_URL}}", crate::config::PROJECT_URL);
+    Asset::new("text/html; charset=utf-8", page)
 });
+static SCRIPT: std::sync::LazyLock<Asset> =
+    std::sync::LazyLock::new(|| Asset::new("text/javascript; charset=utf-8", include_str!("assets/app.js")));
+static STYLE: std::sync::LazyLock<Asset> =
+    std::sync::LazyLock::new(|| Asset::new("text/css; charset=utf-8", include_str!("assets/style.css")));
+/// Makes the web UI an app a phone can add to its home screen (and so show
+/// notifications, on an iPhone).
+static MANIFEST: std::sync::LazyLock<Asset> =
+    std::sync::LazyLock::new(|| Asset::new("application/manifest+json", include_str!("assets/manifest.webmanifest")));
 
-async fn index() -> Response {
-    asset("text/html; charset=utf-8", INDEX.as_str())
+async fn manifest(headers: axum::http::HeaderMap) -> Response {
+    MANIFEST.serve(&headers)
 }
 
-async fn script() -> Response {
-    asset("text/javascript; charset=utf-8", include_str!("assets/app.js"))
+static SERVICE_WORKER: std::sync::LazyLock<Asset> =
+    std::sync::LazyLock::new(|| Asset::new("text/javascript; charset=utf-8", include_str!("assets/sw.js")));
+
+async fn index(headers: axum::http::HeaderMap) -> Response {
+    INDEX.serve(&headers)
 }
 
-async fn style() -> Response {
-    asset("text/css; charset=utf-8", include_str!("assets/style.css"))
+async fn script(headers: axum::http::HeaderMap) -> Response {
+    SCRIPT.serve(&headers)
+}
+
+async fn style(headers: axum::http::HeaderMap) -> Response {
+    STYLE.serve(&headers)
 }
 
 /// Shows notifications for the page (phone browsers only let a service
 /// worker show them) and opens what one is about when it's tapped.
-async fn service_worker() -> Response {
-    asset("text/javascript; charset=utf-8", include_str!("assets/sw.js"))
+async fn service_worker(headers: axum::http::HeaderMap) -> Response {
+    SERVICE_WORKER.serve(&headers)
 }
 
 /// The bundled Fira Code Nerd Font (see `assets/fonts/README.md`). The files
 /// never change for a build, so browsers may cache them for good.
 async fn font(Path(name): Path<String>) -> Response {
     let body: &'static [u8] = match name.as_str() {
-        "FiraCodeNerdFont-Regular.woff2" => include_bytes!("assets/fonts/FiraCodeNerdFont-Regular.woff2"),
-        "FiraCodeNerdFont-Bold.woff2" => include_bytes!("assets/fonts/FiraCodeNerdFont-Bold.woff2"),
+        "FiraCodeNerdFont-Regular-Text.woff2" => include_bytes!("assets/fonts/FiraCodeNerdFont-Regular-Text.woff2"),
+        "FiraCodeNerdFont-Bold-Text.woff2" => include_bytes!("assets/fonts/FiraCodeNerdFont-Bold-Text.woff2"),
+        "FiraCodeNerdFont-Icons.woff2" => include_bytes!("assets/fonts/FiraCodeNerdFont-Icons.woff2"),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     ([(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")], body).into_response()
@@ -295,6 +366,7 @@ async fn brand(Path(name): Path<String>) -> Response {
     let body: &'static [u8] = match name.as_str() {
         "wordmark.png" => include_bytes!("assets/brand/wordmark.png"),
         "icon.png" => include_bytes!("assets/brand/icon.png"),
+        "icon-512.png" => include_bytes!("assets/brand/icon-512.png"),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")], body).into_response()
@@ -1118,6 +1190,31 @@ mod tests {
             body = out;
         }
         (headers, body)
+    }
+
+    #[test]
+    fn the_script_is_not_sent_again_to_a_browser_that_has_it() {
+        let asset = Asset::new("text/javascript", "console.log('rettui');".repeat(200));
+        let request = |pairs: &[(&'static str, &str)]| {
+            let mut headers = HeaderMap::new();
+            for (name, value) in pairs {
+                headers.append(*name, HeaderValue::from_str(value).unwrap());
+            }
+            asset.serve(&headers)
+        };
+        let first = request(&[("accept-encoding", "gzip")]);
+        let etag = first.headers()[header::ETAG].to_str().unwrap().to_string();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[header::CONTENT_ENCODING], "gzip");
+        assert!(etag.starts_with("W/\""));
+        // A browser that has this one gets "not modified"; one with another
+        // (an older build) gets the file.
+        assert_eq!(request(&[("if-none-match", &etag)]).status(), StatusCode::NOT_MODIFIED);
+        let other = request(&[("if-none-match", "W/\"0123\"")]);
+        assert_eq!(other.status(), StatusCode::OK);
+        assert!(!other.headers().contains_key(header::CONTENT_ENCODING));
+        // A changed file has another tag.
+        assert_ne!(Asset::new("text/javascript", "something else").etag, etag);
     }
 
     #[tokio::test]

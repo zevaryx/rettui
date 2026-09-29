@@ -1,16 +1,39 @@
+/* The font in two parts: its text (small, for every page), and Nerd Font's
+   icons (most of its size), which browsers fetch only for a page that
+   shows one: a NomadNet page made for a Nerd Font terminal, say. */
 @font-face {
   font-family: "FiraCode Nerd Font";
-  src: url("/fonts/FiraCodeNerdFont-Regular.woff2") format("woff2");
+  src: url("/fonts/FiraCodeNerdFont-Regular-Text.woff2") format("woff2");
   font-weight: 300 500;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0-DFFF, U+F900-EFFFF;
 }
 @font-face {
   font-family: "FiraCode Nerd Font";
-  src: url("/fonts/FiraCodeNerdFont-Bold.woff2") format("woff2");
+  src: url("/fonts/FiraCodeNerdFont-Bold-Text.woff2") format("woff2");
   font-weight: 600 800;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0-DFFF, U+F900-EFFFF;
+}
+/* The icons once per weight, so each weight's faces match exactly and
+   browsers take them as one font (one file, fetched once). */
+@font-face {
+  font-family: "FiraCode Nerd Font";
+  src: url("/fonts/FiraCodeNerdFont-Icons.woff2") format("woff2");
+  font-weight: 300 500;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+E000-F8FF, U+F0000-10FFFF;
+}
+@font-face {
+  font-family: "FiraCode Nerd Font";
+  src: url("/fonts/FiraCodeNerdFont-Icons.woff2") format("woff2");
+  font-weight: 600 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+E000-F8FF, U+F0000-10FFFF;
 }
 
 /* rettui web UI: the terminal UI's look, in a browser. */
@@ -383,6 +406,14 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
 /* ---- toasts ------------------------------------------------------------- */
 
 #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+/* The live connection is down: the page may be out of date. */
+#connection {
+  position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 50;
+  display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 32px);
+  padding: 6px 8px 6px 14px; border-radius: 8px; border: 1px solid var(--yellow);
+  background: var(--raised); color: var(--text); box-shadow: 0 4px 16px #0008; font-size: 13px;
+}
+#connection button { padding: 2px 10px; }
 .toast { background: var(--raised); border: 1px solid var(--border); border-left: 4px solid var(--green); border-radius: 8px; padding: 8px 14px; max-width: 420px; box-shadow: 0 4px 16px #0008; }
 .toast.error { border-left-color: var(--red); }
 
@@ -620,5 +651,6 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
 
   /* Notices go at the top, clear of the writing box. */
   #toasts { left: 10px; right: 10px; bottom: auto; top: calc(62px + env(safe-area-inset-top)); z-index: 45; }
+  #connection { top: calc(62px + env(safe-area-inset-top)); font-size: 14px; }
   .toast { max-width: none; }
 }

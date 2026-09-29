@@ -178,6 +178,18 @@ impl App {
         }
         if previous != self.active_conversation {
             self.message_scroll = 0;
+            // What's written (and attached) stays with the conversation it
+            // was written in, rather than going to the one opened.
+            let draft = (std::mem::take(&mut self.compose), std::mem::take(&mut self.attachments));
+            if let Some(previous) = previous
+                && (!draft.0.text().is_empty() || !draft.1.is_empty())
+            {
+                self.drafts.insert(previous, draft);
+            }
+            if let Some((text, files)) = self.active_conversation.as_ref().and_then(|key| self.drafts.remove(key)) {
+                self.compose = text;
+                self.attachments = files;
+            }
         }
     }
 

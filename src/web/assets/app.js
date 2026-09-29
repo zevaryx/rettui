@@ -199,6 +199,31 @@ function echoSent(view, { key, node, parent, scroller, slot }) {
   return echo;
 }
 
+// Unsent writing for each conversation or room, kept where it was written:
+// switching puts away what's in the box (a view's `takeDraft`) and brings
+// back what was left in the one opened (`putDraft`), rather than carrying
+// it over to be sent to someone else.
+function draftSwitch(view, key) {
+  if (key == null || view.draftKey === key) return;
+  view.drafts ||= new Map();
+  if (view.draftKey != null) {
+    const draft = view.takeDraft();
+    if (draft) view.drafts.set(view.draftKey, draft);
+    else view.drafts.delete(view.draftKey);
+  }
+  view.draftKey = key;
+  view.putDraft(view.drafts.get(key) || null);
+  view.drafts.delete(key);
+}
+
+// Put back what failed to send, before anything written since, in the
+// conversation or room it was sent to.
+function draftRestore(view, key, draft) {
+  view.drafts ||= new Map();
+  if (view.draftKey === key) view.putDraft(view.joinDrafts(draft, view.takeDraft()));
+  else view.drafts.set(key, view.joinDrafts(draft, view.drafts.get(key) || null));
+}
+
 function echoesFor(view, key) {
   return (view.echoes || []).filter((e) => e.key === key).map((e) => e.node);
 }
@@ -831,6 +856,22 @@ function refresh() {
   loadNow();
 }
 
+// Peers heard: the Network list and the Browser's nodes show them, and the
+// sidebar counts them. A busy network announces several a second, so they
+// refetch at most once every PEERS_EVERY ms (the latest included).
+const PEERS_EVERY = 2000;
+let peersTimer = null;
+let peersFetched = 0;
+function refreshPeers() {
+  if (peersTimer) return;
+  peersTimer = setTimeout(() => {
+    peersTimer = null;
+    peersFetched = Date.now();
+    if (app.tab === 'network' || app.tab === 'browser') refresh();
+    else refreshSidebar();
+  }, Math.max(0, peersFetched + PEERS_EVERY - Date.now()));
+}
+
 // Just the status (counters and the log, every few seconds): the sidebar,
 // and Status if it's on screen. A full refetch under way has it already.
 let sidebarLoading = null;
@@ -984,13 +1025,17 @@ function openTarget(target) {
   }
 }
 
+let events = null;
 function listen() {
-  const events = new EventSource('/api/events');
-  // Each change says what it touched: "status" (the counters, the log),
-  // "node" (the hosted node's counters, and the status) or "all".
+  events?.close();
+  events = new EventSource('/api/events');
+  // Each change says what it touched: "all", or parts such as
+  // "status,peers": the counters and the log ("status"), the hosted node's
+  // counters ("node"), peers heard ("peers").
   events.onmessage = (e) => {
-    const scope = e.data.split(' ')[1] || 'all';
-    if (scope === 'all' || (scope === 'node' && app.tab === 'node')) refresh();
+    const parts = new Set((e.data.split(' ')[1] || 'all').split(','));
+    if (parts.has('all') || (parts.has('node') && app.tab === 'node')) refresh();
+    else if (parts.has('peers')) refreshPeers();
     else refreshSidebar();
   };
   events.addEventListener('notify', (e) => {
@@ -1000,14 +1045,49 @@ function listen() {
       console.warn(error);
     }
   });
-  events.onerror = () => {
-    // The browser reconnects by itself; refresh once it is back.
-    events.onopen = () => {
-      events.onopen = null;
-      refresh();
-    };
+  // The browser reconnects by itself (unless the server refused, as it does
+  // once the login token has changed); until then, the page may be out of
+  // date, and says so.
+  events.onerror = () => connectionLost(events.readyState === EventSource.CLOSED);
+  events.onopen = () => {
+    if (connectionBack()) refresh();
   };
 }
+
+// The banner for a lost connection, shown once it has been down a moment (a
+// restart needn't flash it).
+let connectionTimer = null;
+let connectionDown = false;
+function connectionLost(closed) {
+  connectionDown = true;
+  clearTimeout(connectionTimer);
+  connectionTimer = setTimeout(() => {
+    $('#connection').replaceChildren(...[
+      el('span', { text: closed ? 'Disconnected from rettui' : navigator.onLine ? 'Connection lost: reconnecting…' : 'Offline: reconnecting when back online…' }),
+      closed ? el('button', { text: 'Reload', onclick: () => location.reload() }) : null,
+    ].filter(Boolean));
+    $('#connection').classList.remove('hidden');
+  }, closed ? 0 : 2000);
+}
+
+// Connected again: true if it had been lost (what changed meanwhile needs
+// fetching).
+function connectionBack() {
+  clearTimeout(connectionTimer);
+  $('#connection').classList.add('hidden');
+  const was = connectionDown;
+  connectionDown = false;
+  return was;
+}
+
+window.addEventListener('offline', () => connectionLost(false));
+// Back to the page (a phone waking, a tab brought forward): catch up, and
+// start again if the connection gave up meanwhile.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !events) return;
+  if (events.readyState === EventSource.CLOSED) listen();
+  refresh();
+});
 
 // Cross-tab links (from pages and the network list).
 function openConversation(address) {
@@ -1126,6 +1206,7 @@ app.views.messages = {
     // The list and the open conversation, fetched together when known. The
     // conversation is drawn as soon as it arrives (what was just sent shows
     // without waiting for the list).
+    draftSwitch(this, this.selected);
     const known = this.selected;
     const early = known ? this.load(known).catch(() => null) : null;
     early?.then((conversation) => {
@@ -1133,6 +1214,7 @@ app.views.messages = {
     });
     const conversations = await api.get('/conversations');
     if (!this.selected && conversations.length) this.selected = conversations[0].key;
+    draftSwitch(this, this.selected);
     this.names = new Map(conversations.map((c) => [c.key, c.name]));
     this.warmRecent(conversations);
     if (changed(this, 'list:' + this.selected, conversations)) this.list.replaceChildren(...(conversations.length ? conversations.map((c) => el('div', {
@@ -1176,6 +1258,7 @@ app.views.messages = {
   // loads), then fresh.
   select(key) {
     this.selected = key;
+    draftSwitch(this, key);
     setPane(this, 'detail');
     for (const item of this.list.children) item.classList.toggle('selected', item.dataset.key === key);
     const cached = this.cache.get(key);
@@ -1263,6 +1346,22 @@ app.views.messages = {
       }));
   },
 
+  // What's written (and attached) in the box, if anything (see draftSwitch).
+  takeDraft() {
+    return this.text.value || this.pending.length ? { text: this.text.value, files: this.pending } : null;
+  },
+
+  putDraft(draft) {
+    this.text.value = draft?.text || '';
+    this.pending = draft?.files || [];
+    this.renderChips();
+  },
+
+  joinDrafts(first, second) {
+    if (!second) return first;
+    return { text: [first.text, second.text].filter(Boolean).join('\n'), files: [...first.files, ...second.files] };
+  },
+
   async send() {
     const content = this.text.value;
     const pending = this.pending;
@@ -1288,10 +1387,8 @@ app.views.messages = {
     const sent = await attempt(() => api.post(`/conversations/${echo.key}/send`, { content, mode: this.mode, files }));
     echo.done(!sent);
     if (!sent) {
-      // Put it back (before anything typed since) to try again.
-      this.text.value = this.text.value ? `${content}\n${this.text.value}` : content;
-      this.pending = [...pending, ...this.pending];
-      this.renderChips();
+      // Put it back to try again, in the conversation it was for.
+      draftRestore(this, echo.key, { text: content, files: pending });
       return;
     }
     this.history.scrollTop = this.history.scrollHeight;
@@ -1363,6 +1460,7 @@ app.views.channels = {
     // The room is drawn as soon as it arrives, with the hubs from last time
     // (what was just sent shows without waiting for the hub list).
     const known = this.selected && { ...this.selected };
+    if (known) draftSwitch(this, known.hub + '/' + known.room);
     const early = known ? this.load(known.hub, known.room).catch(() => null) : null;
     early?.then((view) => {
       const { hub, room } = this.selected || {};
@@ -1376,6 +1474,7 @@ app.views.channels = {
       const first = hubs[0];
       this.selected = { hub: first.hash, room: first.rooms.find((r) => r.joined)?.name || '' };
     }
+    if (this.selected) draftSwitch(this, this.selected.hub + '/' + this.selected.room);
     const items = [];
     for (const hub of hubs) {
       const isSelected = (room) => this.selected && this.selected.hub === hub.hash && this.selected.room === room;
@@ -1430,6 +1529,7 @@ app.views.channels = {
   // name while it loads), then fresh.
   select(hash, room) {
     this.selected = { hub: hash, room };
+    draftSwitch(this, hash + '/' + room);
     setPane(this, 'detail');
     this.hideMentions();
     for (const item of this.list.children) item.classList.toggle('selected', item.dataset.key === hash + '/' + room);
@@ -1840,6 +1940,20 @@ app.views.channels = {
     }
   },
 
+  // What's written in the line, if anything (see draftSwitch).
+  takeDraft() {
+    return this.input.value ? { text: this.input.value } : null;
+  },
+
+  putDraft(draft) {
+    this.input.value = draft?.text || '';
+    this.hideMentions();
+  },
+
+  joinDrafts(first, second) {
+    return second ? { text: `${first.text} ${second.text}` } : first;
+  },
+
   async send() {
     const text = this.input.value;
     if (!text.trim() || !this.selected) return;
@@ -1849,10 +1963,8 @@ app.views.channels = {
     // typed meanwhile is kept.
     this.input.value = '';
     this.hideMentions();
-    // Put it back (before anything typed since) to try again or edit.
-    const restore = () => {
-      this.input.value = this.input.value ? `${text} ${this.input.value}` : text;
-    };
+    // Put it back to try again or edit, in the room it was for.
+    const restore = () => draftRestore(this, hub + '/' + room, { text });
     // A chat line (not a command) shows straight away as sending; the next
     // update draws the real one.
     const key = hub + '/' + room;

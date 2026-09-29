@@ -1,0 +1,14 @@
+{
+  "name": "rettui",
+  "short_name": "rettui",
+  "description": "Reticulum client: LXMF messages, RRC chat and NomadNet pages",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#16161e",
+  "theme_color": "#16161e",
+  "icons": [
+    { "src": "/brand/icon.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/brand/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

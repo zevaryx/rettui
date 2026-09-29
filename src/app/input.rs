@@ -42,6 +42,9 @@ impl App {
             }
             return;
         }
+        if self.tab == Tab::Channels {
+            self.channels.sync_draft();
+        }
         if self.tab == Tab::Channels && self.channels.menu.is_some() {
             self.user_menu_key(key);
             return;

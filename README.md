@@ -61,6 +61,9 @@ configuration. It is built on:
 - **Conversations:** a conversation per peer, with unread counts in the
   list and the sidebar. Start one by address (`n`), from the Network tab, or
   from an `lxmf@` link on a page.
+- **Drafts:** what you write (and attach) stays with its conversation.
+  Opening another one doesn't carry it over, and coming back brings it back.
+  A message that fails to send goes back to the conversation it was for.
 - **Message states:** your messages show *sending…*, ✓ (delivered), *✓ via
   propagation node*, or *failed* with the reason.
 - **Delivery modes:**
@@ -141,6 +144,8 @@ tab.
 - **History:** each hub's messages are kept on disk between runs.
 - **Long messages:** messages over the hub's size limit are offered as a
   split into several messages.
+- **Drafts:** what you write stays with its room or whisper conversation,
+  as in Messaging.
 - **Connections:** hubs reconnect automatically with backoff (toggle with
   `a`) and rejoin your rooms quietly. Quitting leaves hubs properly, so others
   see you go at once.
@@ -162,7 +167,8 @@ tab.
   and the tab's title counts what's unread. Browsers only allow notifications
   on HTTPS or on the same computer (`localhost`). Elsewhere, and until you
   allow them, a note shows in the page while you're looking at it. On an
-  iPhone, add rettui to the Home Screen first (iOS 16.4 or later).
+  iPhone (iOS 16.4 or later), add rettui to the Home Screen first (see
+  **Installing** under [Web UI](#web-ui)).
 - **Muting a conversation:** `N` (TUI), or the 🔔 bell in its header (web
   UI), turns a conversation's notifications off or back on. Muted
   conversations show *muted* (TUI) or 🔕 (web UI) in the list.
@@ -431,7 +437,15 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 
 - **Logging in:** the link logs that browser in with a cookie, and stays valid
   across restarts. Keep it private. Anyone with the link can read and send your
-  messages as you.
+  messages as you. The login page also takes the token (the part after
+  `token=`) pasted in.
+- **Installing:** phones and desktop browsers can install the web UI as an
+  app of its own (on an iPhone, Share → Add to Home Screen), which opens full
+  screen. An iPhone's Home Screen app keeps its own login: paste the token
+  there once.
+- **Connection:** if the live connection to rettui drops (a phone asleep, a
+  network change, a restart), a banner says so until it's back, and the page
+  catches up.
 - **Scripts and proxies:** send the token in a header instead of using the
   link: `Authorization: Bearer <token>`, or `X-Rettui-Token: <token>` if
   `Authorization` is already taken (for example by a proxy's own login). The
@@ -453,9 +467,15 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   slow or distant connection:
   - **Only what changed:** the interface counters, which change every few
     seconds, refresh only the sidebar and Status, not the rest of the page.
+    Announces, several a second on a busy network, refresh the Network list
+    and the Browser's nodes at most every 2 seconds, and nothing else.
   - **Only what shows:** a conversation loads its newest 100 messages and a
     room its newest 200 lines, until you ask for the earlier ones.
   - **Compressed:** answers are gzip-compressed.
+  - **Cached:** the script and stylesheet are fetched again only when they've
+    changed. The font's text (about 90 KB for each weight) loads on the first
+    visit, and Nerd Font's icons (about 1 MB) only for a page that shows
+    one.
   - **For scripts:** `?last=N` on `/api/conversations/<address>` and on
     `/api/channels/<hub>/room` asks for just the newest N, and `total` or
     `total_lines` says how many there are in all.
