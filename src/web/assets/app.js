@@ -1574,6 +1574,11 @@ app.views.messages = {
     return echoSent(this, { key, node, parent: shown && this.history, scroller: this.history, slot: 'conversation' });
   },
 
+  echo(key, node) {
+    const shown = this.lastKey === key;
+    return echoSent(this, { key, node, parent: shown && this.history, scroller: this.history, slot: 'conversation' });
+  },
+
   // Open a conversation: at once from what is loaded (or its name while it
   // loads), then fresh.
   select(key) {
