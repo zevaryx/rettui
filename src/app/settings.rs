@@ -72,6 +72,8 @@ impl App {
                 "announce_at_start" => self.settings.announce_at_start = after.announce_at_start,
                 "wrap_lines" => self.settings.wrap_lines = after.wrap_lines,
                 "show_joins" => self.settings.show_joins = after.show_joins,
+                "notify_messages" => self.settings.notify_messages = after.notify_messages,
+                "notify_rrc" => self.settings.notify_rrc = after.notify_rrc,
                 "node_enabled" | "node_name" | "node_announce_interval_mins" | "node_dir" | "node_executable_pages" => {
                     self.settings.node_enabled = after.node_enabled;
                     self.settings.node_name = after.node_name.clone();

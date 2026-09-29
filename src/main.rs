@@ -17,8 +17,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-    EventStream, KeyEventKind,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
+    EnableMouseCapture, Event, EventStream, KeyEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
@@ -195,13 +195,16 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     // reading stdin (it would swallow the terminal's replies).
     let graphics = term::images::Graphics::detect();
     let mut app = App::new(settings, paths, store, net_tx.clone(), Some(graphics), identity_hash);
-    execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
+    // Focus reports (where the terminal sends them) tell notifications
+    // whether the user is looking.
+    execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste, EnableFocusChange)?;
     // ratatui's panic hook restores the terminal; also release the mouse.
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
         hook(info);
     }));
+    let desktop = term::desktop::Desktop::start(&app.paths.cache);
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let mut save = tokio::time::interval(Duration::from_secs(10));
@@ -232,6 +235,8 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => app.on_key(key),
                 Some(Ok(Event::Mouse(mouse))) => app.on_mouse(mouse),
                 Some(Ok(Event::Paste(text))) => app.on_paste(&text),
+                Some(Ok(Event::FocusGained)) => app.focused = true,
+                Some(Ok(Event::FocusLost)) => app.focused = false,
                 Some(Ok(_)) => {}
                 Some(Err(e)) => break Err(e.into()),
                 None => break Ok(()),
@@ -245,6 +250,12 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
             _ = tick.tick() => app.on_tick(),
             _ = save.tick() => app.save_if_dirty(),
         }
+        for notification in app.take_notifications() {
+            desktop.show(notification);
+        }
+        if let Some(e) = desktop.failure() {
+            app.log(format!("Could not show a desktop notification: {e}"));
+        }
         if app.should_quit {
             break Ok(());
         }
@@ -257,7 +268,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
         }
     };
 
-    let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+    let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
     ratatui::restore();
     app.save_if_dirty();
     // Leave hubs and stop Reticulum properly (a few seconds at most).

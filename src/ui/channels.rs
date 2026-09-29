@@ -12,6 +12,7 @@ use super::{ACCENT, DIM, PICKED, SELECTED_BG, block, wrap};
 use crate::app::App;
 use crate::app::channels::users::UserAction;
 use crate::app::channels::{ChatLine, HubStatus, LineKind, Row, whisper_peer};
+use crate::store::NotifyLevel;
 
 /// A stable colour per identity, so nicks are easy to tell apart.
 fn nick_color(src: Option<&str>) -> Color {
@@ -210,10 +211,14 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
                         HubStatus::Disconnected => ("○", DIM),
                     };
                     let name = hub.hub_name.clone().unwrap_or_else(|| hub.name.clone());
-                    ListItem::new(Line::from(vec![
+                    let mut spans = vec![
                         Span::styled(format!("{dot} "), Style::default().fg(color)),
                         Span::styled(name, Style::default().bold()),
-                    ]))
+                    ];
+                    if hub.notify == Some(NotifyLevel::Off) {
+                        spans.push(Span::styled(" muted", Style::default().fg(DIM)));
+                    }
+                    ListItem::new(Line::from(spans))
                 }
                 Row::Room(i, room) => {
                     let hub = &app.channels.hubs[*i];
@@ -224,6 +229,9 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
                         let bg = if hub.mentions.contains(room) { Color::LightRed } else { Color::Yellow };
                         spans.push(Span::raw(" "));
                         spans.push(Span::styled(format!(" {count} "), Style::default().fg(Color::Black).bg(bg).bold()));
+                    }
+                    if hub.notify_level(room) == NotifyLevel::Off {
+                        spans.push(Span::styled(" muted", Style::default().fg(DIM)));
                     }
                     ListItem::new(Line::from(spans))
                 }
@@ -238,6 +246,9 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
                     if let Some(count) = hub.unread.get(key).filter(|c| **c > 0) {
                         spans.push(Span::raw(" "));
                         spans.push(Span::styled(format!(" {count} "), Style::default().fg(Color::Black).bg(Color::LightRed).bold()));
+                    }
+                    if hub.notify_level(key) == NotifyLevel::Off {
+                        spans.push(Span::styled(" muted", Style::default().fg(DIM)));
                     }
                     ListItem::new(Line::from(spans))
                 }
@@ -275,8 +286,20 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     };
     let mut history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
+    // Under the chat: what differs from the usual, and the key to change it.
+    let mut notes = Vec::new();
     if !app.settings.show_joins && !room.is_empty() && whisper.is_none() {
-        history_block = history_block.title_bottom(Line::styled(" joins and leaves hidden · J shows them ", Style::default().fg(DIM)));
+        notes.push("joins and leaves hidden · J shows them");
+    }
+    if !room.is_empty() {
+        match hub.notify_level(&room) {
+            NotifyLevel::Off => notes.push("notifications off · N changes"),
+            NotifyLevel::All if whisper.is_none() => notes.push("notifying every message · N changes"),
+            _ => {}
+        }
+    }
+    if !notes.is_empty() {
+        history_block = history_block.title_bottom(Line::styled(format!(" {} ", notes.join(" · ")), Style::default().fg(DIM)));
     }
     let inner = history_block.inner(history_area);
     let width = inner.width as usize;
@@ -298,6 +321,10 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             Line::from(vec![label("Address"), Span::raw(hex::encode(hub.hash)), Span::styled(format!("  {}", hub.aspect), Style::default().fg(DIM))]),
             Line::from(vec![label("Nick"), Span::raw(nick)]),
             Line::from(vec![label("Auto"), Span::raw(format!("reconnect {auto} (a to toggle)"))]),
+            Line::from(vec![
+                label("Notify"),
+                Span::raw(format!("{} (N to change; each room can differ)", hub.notify.unwrap_or(NotifyLevel::Mentions).label())),
+            ]),
             Line::from(vec![
                 label("Limits"),
                 Span::raw(format!("{} bytes per message, {} rooms", hub.limits.max_msg_bytes, hub.limits.max_rooms)),

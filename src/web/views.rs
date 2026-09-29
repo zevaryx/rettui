@@ -9,7 +9,7 @@ use crate::app::{App, NetState, SyncState, network};
 use crate::config::{Effect, FIELDS, FieldKind, Settings};
 use crate::net::PeerKind;
 use crate::rrc;
-use crate::store::{Message, MessageState};
+use crate::store::{Message, MessageState, NotifyLevel};
 
 fn kind_name(kind: PeerKind) -> &'static str {
     match kind {
@@ -85,6 +85,7 @@ pub fn conversations(app: &App) -> Value {
                 "name": app.store.display_name(&key),
                 "named": app.store.peers.get(&key).is_some_and(|p| p.name.is_some()),
                 "unread": conversation.unread,
+                "muted": conversation.muted,
                 "last": last,
             })
         })
@@ -125,6 +126,7 @@ pub fn conversation(app: &App, key: &str) -> Value {
         "key": key,
         "name": app.store.display_name(key),
         "unread": app.store.conversations.get(key).map_or(0, |c| c.unread),
+        "muted": app.store.conversations.get(key).is_some_and(|c| c.muted),
         "messages": messages,
     })
 }
@@ -191,6 +193,7 @@ pub fn channels(app: &App) -> Value {
                         "unread": hub.unread.get(&room).copied().unwrap_or(0),
                         "mention": hub.mentions.contains(&room),
                         "link": link(hub, &room),
+                        "notify": hub.notify_level(&room).key(),
                     })
                 })
                 .collect();
@@ -210,11 +213,14 @@ pub fn channels(app: &App) -> Value {
                 "unread": hub.unread.get("").copied().unwrap_or(0),
                 "mention": hub.mentions.contains(""),
                 "link": link(hub, ""),
+                // What its rooms notify of, unless set otherwise.
+                "notify": hub.notify.unwrap_or(NotifyLevel::Mentions).key(),
                 "rooms": rooms,
                 "whispers": hub.whispers().into_iter().map(|(key, name)| json!({
                     "key": key,
                     "name": name,
                     "unread": hub.unread.get(&key).copied().unwrap_or(0),
+                    "notify": hub.notify_level(&key).key(),
                 })).collect::<Vec<_>>(),
             })
         })
@@ -310,6 +316,11 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
         })),
         "nick": own_nick,
         "own_src": hex::encode(&own),
+        // Notifications here: its own level ("default" follows the hub's),
+        // and what that comes to.
+        "notify": hub.room_notify.get(room).map_or("default", |level| level.key()),
+        "notify_level": hub.notify_level(room).key(),
+        "hub_notify": hub.notify.unwrap_or(NotifyLevel::Mentions).key(),
         // People joining and leaving are left out when this is off.
         "show_joins": app.settings.show_joins,
         "lines": lines,

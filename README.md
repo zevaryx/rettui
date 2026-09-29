@@ -145,6 +145,40 @@ tab.
   `a`) and rejoin your rooms quietly. Quitting leaves hubs properly, so others
   see you go at once.
 
+### Notifications
+
+- **What notifies:** a new LXMF message, and in RRC a mention of your nick or
+  a whisper. Nothing notifies for the conversation or room you're looking at
+  while rettui's window has the focus. Many at once (a sync bringing in a
+  backlog) become one notification, and a newer one about the same
+  conversation or room replaces the older one.
+- **Terminal UI:** notifications are the desktop's own: D-Bus notifications
+  on Linux and the BSDs, Notification Center on macOS, toasts on Windows.
+  Terminals that report focus (most do; in tmux, turn on `focus-events`) let
+  rettui tell when you're looking. Where there's no desktop to show them (over
+  SSH, for example), the log says so once.
+- **Web UI:** notifications are the browser's own. Allow them under Status
+  (the **Notifications** row). Clicking one opens its conversation or room,
+  and the tab's title counts what's unread. Browsers only allow notifications
+  on HTTPS or on the same computer (`localhost`). Elsewhere, and until you
+  allow them, a note shows in the page while you're looking at it. On an
+  iPhone, add rettui to the Home Screen first (iOS 16.4 or later).
+- **Muting a conversation:** `N` (TUI), or the 🔔 bell in its header (web
+  UI), turns a conversation's notifications off or back on. Muted
+  conversations show *muted* (TUI) or 🔕 (web UI) in the list.
+- **Hubs and rooms:**
+  - **Hub default:** a hub notifies of mentions and whispers. It can notify
+    of every message in its rooms instead, or of nothing.
+  - **Rooms:** each room and whisper conversation follows its hub unless it
+    is set on its own: all messages, mentions only, or off.
+  - **Changing them:** `N` (TUI) steps through the choices for the hub, room
+    or whisper conversation on screen. In the web UI, the bell in its header
+    opens a menu.
+  - **Showing them:** rooms and hubs that are off show *muted* (TUI) or 🔕
+    (web UI).
+- **Settings:** "Notify on messages" and "Notify from RRC" (under Status)
+  turn each kind off everywhere.
+
 ### NomadNet browsing
 
 - **Finding nodes:** the Browser tab has a pane with two lists: Saved (pages
@@ -489,9 +523,9 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
 | Tab | Keys |
 | --- | ---- |
 | All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
-| Messages | `↑↓` pick a conversation, `Enter` write, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `PgUp/PgDn` scroll |
+| Messages | `↑↓` pick a conversation, `Enter` write, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `N` turn the conversation's notifications off or on, `PgUp/PgDn` scroll |
 | Writing a message | `Enter` send, `Esc` stop writing, `Ctrl-V` paste, `Ctrl-O` attach, `Ctrl-X` clear attachments, `Ctrl-P` cycle delivery mode |
-| Channels | `↑↓` pick a hub, room or whisper conversation, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `J` show or hide joins and leaves, `x` leave a room, close a whisper conversation, or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll |
+| Channels | `↑↓` pick a hub, room or whisper conversation, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `J` show or hide joins and leaves, `N` next notification choice for the hub, room or whisper conversation, `x` leave a room, close a whisper conversation, or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll |
 | User menu (click a name, or `m`) | `w` open your whisper conversation, `l` LXMF message, `Enter` pick (also copy their LXMF address or identity), `Esc` close |
 | Network | `↑↓` select, `y` copy the selected address, `Enter` message a peer, browse a node, or pick a propagation node; `p` use the selected propagation node; `f` filter; `/` search by name or address (`Enter` done, `Esc` clear) |
 | Browser (both panes) | `←`/`→` move between the node pane and the page, `t` switch Saved/Nodes, `g` go to an address, `y` copy the current address, `s` save the current page, `b` back, `r` refresh from the network, `R` clear the whole cache, `I` identify to this node (toggle), `H` home, `u` view the page's Micron source (toggle), `Esc` cancel loading |
@@ -582,10 +616,10 @@ state as the TUI.
 | `nomad/` | Page and file fetching, Micron parsing and layout, page cache, hosting a node and its pages | rsNomad |
 | `rrc/` | RRC wire format, hub replies, hub sessions | rsReticulum |
 | `reticulum/` | Reticulum config file: the options it has, editing it in place, and checking it | rsReticulum |
-| `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`), the page editor's formatting (`format`) and input routing | |
+| `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`), the page editor's formatting (`format`), notifications (`notify`) and input routing | |
 | `ui/` | Drawing per tab, plus the sidebar, footer and prompt (`chrome`) and the text editors | ratatui |
-| `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty, Sixel, iTerm2 or half blocks) | ratatui-image |
-| `web/` | Web UI: HTTP API, login, live updates, and the page's HTML/CSS/JS, font and logo (`web/assets`) | axum |
+| `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty, Sixel, iTerm2 or half blocks), desktop notifications (`desktop`) | ratatui-image, notify-rust |
+| `web/` | Web UI: HTTP API, login, live updates and notifications, and the page's HTML/CSS/JS, service worker, font and logo (`web/assets`) | axum |
 
 `cli.rs` has the shell commands (`send`, `listen`, `sync`, `fetch`), and
 `store.rs` and `config.rs` hold what is saved to disk, and `app/saver.rs`

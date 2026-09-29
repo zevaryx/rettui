@@ -6,6 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
 
 use super::files::{expand_home, unique_path};
+use super::notify::{self, Notification, Target};
 use super::{App, PromptKind, Tab, now};
 use crate::lxmf::DeliveryMode;
 use crate::net::{NetCommand, parse_hash};
@@ -68,7 +69,20 @@ impl App {
 
         let is_active =
             self.tab == Tab::Messages && self.active_conversation.as_deref() == Some(key.as_str());
+        // What the notification says: the text, else what came with it.
+        let preview = if !message.content.trim().is_empty() {
+            notify::body(&message.content)
+        } else if !message.title.trim().is_empty() {
+            notify::body(&message.title)
+        } else {
+            match attachments.as_slice() {
+                [] => "(empty message)".to_string(),
+                [one] => format!("📎 {}", one.name),
+                many => format!("📎 {} files", many.len()),
+            }
+        };
         let conversation = self.store.conversations.entry(key.clone()).or_default();
+        let muted = conversation.muted;
         conversation.messages.push(Message {
             id,
             incoming: true,
@@ -91,6 +105,32 @@ impl App {
         let name = self.store.display_name(&key);
         self.log(format!("Message from {name}"));
         self.keep_conversation_selection();
+        if self.settings.notify_messages && !muted {
+            let target = Target::Conversation { key };
+            self.push_notification(is_active, Notification { title: name, body: preview, target });
+        }
+    }
+
+    /// Turn a conversation's notifications off or back on (`N`, or the web
+    /// UI's bell). False if there is no such conversation.
+    pub fn set_conversation_muted(&mut self, key: &str, muted: bool) -> bool {
+        let Some(conversation) = self.store.conversations.get_mut(key) else { return false };
+        conversation.muted = muted;
+        self.store_dirty = true;
+        true
+    }
+
+    fn toggle_active_muted(&mut self) {
+        let Some(key) = self.active_conversation.clone() else { return };
+        let muted = !self.store.conversations.get(&key).is_some_and(|c| c.muted);
+        if self.set_conversation_muted(&key, muted) {
+            let name = self.store.display_name(&key);
+            self.notify(if muted {
+                format!("No notifications from {name}")
+            } else {
+                format!("Notifications from {name} are on")
+            });
+        }
     }
 
     pub(super) fn open_conversation(&mut self, key: String) {
@@ -284,6 +324,7 @@ impl App {
             KeyCode::Char('a') => self.open_attach_prompt(),
             KeyCode::Char('o') => self.open_latest_attachment(),
             KeyCode::Char('d') => self.delivery_mode = self.delivery_mode.next(),
+            KeyCode::Char('N') => self.toggle_active_muted(),
             KeyCode::PageUp => self.message_scroll += 5,
             KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(5),
             KeyCode::Char('n') => self.open_prompt(PromptKind::NewConversation, "LXMF address", ""),

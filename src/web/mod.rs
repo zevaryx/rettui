@@ -5,6 +5,8 @@
 //! HTTP handlers never touch it directly: they send it jobs (closures run
 //! on `&mut Owner`) and await the answer. Browsers are told when something
 //! changed over a Server-Sent Events stream, and fetch what they show.
+//! Notifications go out on the same stream; each browser shows them unless
+//! it's showing what they're about.
 //!
 //! - [`routes`]: the HTTP API, login and static files.
 //! - [`views`]: JSON snapshots of the app state.
@@ -20,6 +22,7 @@ use anyhow::{Context, Result};
 use rns_identity::identity::Identity;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
+use crate::app::notify::Notification;
 use crate::app::{App, Location, Tab};
 use crate::config::{Paths, Settings};
 use crate::net::{self, NetCommand, NetEvent};
@@ -148,6 +151,8 @@ struct Job {
 pub struct WebState {
     jobs: mpsc::UnboundedSender<Job>,
     changes: broadcast::Sender<u64>,
+    /// Notifications, for every open browser.
+    notices: broadcast::Sender<Notification>,
     token: String,
     paths: std::sync::Arc<Paths>,
 }
@@ -253,9 +258,11 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
 
     let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
     let (changes, _) = broadcast::channel(64);
+    let (notices, _) = broadcast::channel(64);
     let state = WebState {
         jobs: jobs_tx,
         changes: changes.clone(),
+        notices: notices.clone(),
         token: token.clone(),
         paths: std::sync::Arc::new(paths),
     };
@@ -303,6 +310,9 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
             _ = tick.tick() => owner.app.on_tick(),
             _ = save.tick() => owner.app.save_if_dirty(),
             () = &mut shutdown => break Ok(()),
+        }
+        for notification in owner.app.take_notifications() {
+            let _ = notices.send(notification);
         }
         if server.is_finished() {
             break Err(anyhow::anyhow!("the web server stopped"));

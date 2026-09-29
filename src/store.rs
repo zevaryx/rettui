@@ -4,7 +4,7 @@
 //! size of the plain JSON (`store.json`) that earlier versions wrote. The
 //! first launch after upgrading converts the old file (see [`Store::load`]).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -63,6 +63,9 @@ pub struct Message {
 pub struct Conversation {
     pub messages: Vec<Message>,
     pub unread: usize,
+    /// No notifications for new messages here.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -113,6 +116,47 @@ pub struct HubConfig {
     /// Nick for this hub; the display name is used when unset.
     pub nick: Option<String>,
     pub auto_connect: bool,
+    /// Notifications for the hub's rooms and whispers; mentions (and
+    /// whispers) when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify: Option<NotifyLevel>,
+    /// Rooms and whisper conversations whose notifications differ from the
+    /// hub's.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub room_notify: BTreeMap<String, NotifyLevel>,
+}
+
+/// What in an RRC room (or a hub's rooms) gets a notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotifyLevel {
+    /// Every message.
+    All,
+    /// Messages that mention you, and whispers.
+    Mentions,
+    Off,
+}
+
+impl NotifyLevel {
+    pub fn key(self) -> &'static str {
+        match self {
+            NotifyLevel::All => "all",
+            NotifyLevel::Mentions => "mentions",
+            NotifyLevel::Off => "off",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            NotifyLevel::All => "all messages",
+            NotifyLevel::Mentions => "mentions and whispers",
+            NotifyLevel::Off => "off",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [NotifyLevel::All, NotifyLevel::Mentions, NotifyLevel::Off].into_iter().find(|level| level.key() == text)
+    }
 }
 
 impl Store {
@@ -227,6 +271,22 @@ impl Store {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hubs_and_conversations_saved_before_notifications_load_with_the_defaults() {
+        let old = r#"{"hash":"ab","aspect":"rrc.hub","name":"Hub","rooms":["general"],"nick":null,"auto_connect":true}"#;
+        let mut hub: HubConfig = serde_json::from_str(old).unwrap();
+        assert_eq!((hub.notify, hub.room_notify.len()), (None, 0));
+        assert_eq!(serde_json::to_string(&hub).unwrap(), old, "nothing new is written until something is set");
+        hub.notify = Some(NotifyLevel::All);
+        hub.room_notify.insert("general".into(), NotifyLevel::Off);
+        let saved = serde_json::to_string(&hub).unwrap();
+        assert!(saved.contains(r#""notify":"all""#) && saved.contains(r#""room_notify":{"general":"off"}"#), "{saved}");
+        let conversation: Conversation = serde_json::from_str(r#"{"messages":[],"unread":2}"#).unwrap();
+        assert!(!conversation.muted);
+        assert_eq!(NotifyLevel::parse("mentions"), Some(NotifyLevel::Mentions));
+        assert_eq!(NotifyLevel::parse("loud"), None);
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("rettui-store-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -254,7 +314,7 @@ mod tests {
             state: MessageState::Delivered,
             attachments: Vec::new(),
         };
-        store.conversations.insert("ab".repeat(16), Conversation { messages: vec![message], unread: 1 });
+        store.conversations.insert("ab".repeat(16), Conversation { messages: vec![message], unread: 1, muted: false });
         store.next_local_id = 2;
         store
     }

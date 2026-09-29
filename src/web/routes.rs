@@ -33,7 +33,7 @@ use crate::lxmf::DeliveryMode;
 use crate::net::{Hash, NetCommand, parse_hash};
 use crate::nomad::micron::{self, html};
 use crate::rrc;
-use crate::store::Bookmark;
+use crate::store::{Bookmark, NotifyLevel};
 
 const COOKIE: &str = "rettui_token";
 /// Header for clients that already use `Authorization` for something else.
@@ -79,6 +79,7 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations", get(conversations).post(new_conversation))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/read", post(read_conversation))
+        .route("/conversations/{key}/notify", post(mute_conversation))
         .route("/conversations/{key}/send", post(send_message))
         .route("/conversations/{key}/attachments/{id}/{index}", get(attachment))
         .route("/peers", get(peers))
@@ -115,6 +116,7 @@ pub fn router(state: WebState) -> Router {
         .route("/", get(index))
         .route("/app.js", get(script))
         .route("/style.css", get(style))
+        .route("/sw.js", get(service_worker))
         .route("/fonts/{name}", get(font))
         .route("/brand/{name}", get(brand))
         .nest("/api", api)
@@ -132,8 +134,10 @@ const LOGIN_PAGE: &str = "<!doctype html><meta charset=utf-8><title>rettui</titl
 <body style=\"font-family:sans-serif;background:#16161e;color:#ddd;padding:3em\">\
 <h1><img src=/brand/wordmark.png alt=rettui height=36></h1><p>Open the link that <code>rettui --web</code> printed (it ends in <code>?token=…</code>) to log in.</p>";
 
-/// Served without logging in: the logo and icon, for the login page.
-const PUBLIC: [&str; 2] = ["/brand/wordmark.png", "/brand/icon.png"];
+/// Served without logging in: the logo and icon, for the login page, and
+/// the service worker (it holds nothing private, and browsers fetch it again
+/// on their own).
+const PUBLIC: [&str; 3] = ["/brand/wordmark.png", "/brand/icon.png", "/sw.js"];
 
 /// Tokens a request carries: in the login cookie, an `Authorization: Bearer`
 /// header or an `X-Rettui-Token` header.
@@ -211,6 +215,12 @@ async fn style() -> Response {
     asset("text/css; charset=utf-8", include_str!("assets/style.css"))
 }
 
+/// Shows notifications for the page (phone browsers only let a service
+/// worker show them) and opens what one is about when it's tapped.
+async fn service_worker() -> Response {
+    asset("text/javascript; charset=utf-8", include_str!("assets/sw.js"))
+}
+
 /// The bundled Fira Code Nerd Font (see `assets/fonts/README.md`). The files
 /// never change for a build, so browsers may cache them for good.
 async fn font(Path(name): Path<String>) -> Response {
@@ -238,18 +248,38 @@ async fn get_state(State(state): State<WebState>) -> ApiResult {
     Ok(axum::Json(state.read(|o| views::state(&o.app)).await?))
 }
 
-/// One event per change; browsers refetch what they show.
+/// One event per change (browsers refetch what they show), and a `notify`
+/// event per notification (each browser decides whether to show it).
 async fn events(State(state): State<WebState>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let changes = state.changes.subscribe();
-    let stream = futures_util::stream::unfold(changes, |mut changes| async move {
+    let receivers = (state.changes.subscribe(), state.notices.subscribe());
+    let stream = futures_util::stream::unfold(receivers, |(mut changes, mut notices)| async move {
         use tokio::sync::broadcast::error::RecvError;
-        let version = match changes.recv().await {
-            Ok(version) => version,
-            // Missed some: one event covers them.
-            Err(RecvError::Lagged(_)) => 0,
-            Err(RecvError::Closed) => return None,
+        let event = loop {
+            tokio::select! {
+                change = changes.recv() => break match change {
+                    Ok(version) => Event::default().data(version.to_string()),
+                    // Missed some: one event covers them.
+                    Err(RecvError::Lagged(_)) => Event::default().data("0"),
+                    Err(RecvError::Closed) => return None,
+                },
+                notice = notices.recv() => match notice {
+                    Ok(notification) => match Event::default().event("notify").json_data(json!({
+                        "title": notification.title,
+                        "body": notification.body,
+                        "target": notification.target,
+                        // Newer ones with the same tag replace older ones.
+                        "tag": notification.target.tag(),
+                    })) {
+                        Ok(event) => break event,
+                        Err(_) => continue,
+                    },
+                    // Old news by now.
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => return None,
+                },
+            }
         };
-        Some((Ok(Event::default().data(version.to_string())), changes))
+        Some((Ok(event), (changes, notices)))
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
@@ -291,6 +321,20 @@ async fn conversation(State(state): State<WebState>, Path(key): Path<String>) ->
 
 async fn read_conversation(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
     state.write(move |o| o.app.mark_conversation_read(&key)).await?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct MuteBody {
+    muted: bool,
+}
+
+/// Turn a conversation's notifications off or back on.
+async fn mute_conversation(State(state): State<WebState>, Path(key): Path<String>, body: axum::Json<MuteBody>) -> ApiResult {
+    let muted = body.muted;
+    if !state.write(move |o| o.app.set_conversation_muted(&key, muted)).await? {
+        return Err(not_found("conversation"));
+    }
     ok()
 }
 
@@ -505,6 +549,10 @@ struct HubBody {
     /// A user's identity (hex), for `whisper`.
     #[serde(default)]
     src: String,
+    /// For `notify`: `all`, `mentions`, `off`, or `default` (a room follows
+    /// its hub; a hub notifies of mentions and whispers).
+    #[serde(default)]
+    level: String,
 }
 
 async fn hub_action(
@@ -532,6 +580,13 @@ async fn hub_action(
                     return Ok(json!({ "split": split }));
                 }
                 "split" => app.confirm_split(hash, &room, &body.parts),
+                "notify" => {
+                    let level = match body.level.as_str() {
+                        "default" => None,
+                        other => Some(NotifyLevel::parse(other).ok_or_else(|| bad(format!("unknown notification level {other}")))?),
+                    };
+                    app.set_notify_level(index, &room, level);
+                }
                 // Open the whisper conversation with a user.
                 "whisper" => {
                     let identity = hex::decode(body.src.trim()).ok().filter(|id| id.len() == 16).ok_or_else(|| bad("not a user identity"))?;

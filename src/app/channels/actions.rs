@@ -4,10 +4,11 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
 
-use super::{Hub, HubStatus, Row, Target};
+use super::{Hub, HubStatus, Row, Target, whisper_peer};
 use crate::app::{App, Prompt, PromptKind, Tab};
 use crate::net::Hash;
 use crate::rrc;
+use crate::store::NotifyLevel;
 use crate::term::input::TextInput;
 
 impl App {
@@ -202,6 +203,7 @@ impl App {
             KeyCode::Char('c') => self.toggle_selected_connection(),
             KeyCode::Char('a') => self.toggle_auto_connect(),
             KeyCode::Char('J') => self.toggle_show_joins(),
+            KeyCode::Char('N') => self.cycle_notify_level(),
             KeyCode::Char('x') | KeyCode::Delete => self.remove_selected_channel(),
             KeyCode::Char('y') => {
                 if let Some(link) = self.channel_link() {
@@ -222,6 +224,59 @@ impl App {
             Ok(_) => self.notify(if show { "Showing people joining and leaving" } else { "Hiding people joining and leaving" }),
             Err(e) => self.fail(e),
         }
+    }
+
+    /// A hub's notifications (`room` empty), or a room's or whisper
+    /// conversation's. `None` puts it back: mentions and whispers for a
+    /// hub, the hub's level for a room.
+    pub fn set_notify_level(&mut self, index: usize, room: &str, level: Option<NotifyLevel>) {
+        let hub = self.hub_mut(index);
+        if room.is_empty() {
+            hub.notify = level.filter(|l| *l != NotifyLevel::Mentions);
+        } else {
+            match level {
+                Some(level) => hub.room_notify.insert(room.to_string(), level),
+                None => hub.room_notify.remove(room),
+            };
+        }
+        self.save_hubs();
+    }
+
+    /// `N`: the next notification level for the hub, room or whisper
+    /// conversation on screen. A room goes through the levels other than
+    /// its hub's, then back to the hub's.
+    fn cycle_notify_level(&mut self) {
+        let Some((index, room)) = self.channels.active() else { return };
+        let hub = &self.channels.hubs[index];
+        let whisper = whisper_peer(&room).is_some();
+        // Whispers notify at either level but off.
+        let order: &[NotifyLevel] =
+            if whisper { &[NotifyLevel::Mentions, NotifyLevel::Off] } else { &[NotifyLevel::Mentions, NotifyLevel::All, NotifyLevel::Off] };
+        let same = |a: NotifyLevel, b: NotifyLevel| a == b || (whisper && a != NotifyLevel::Off && b != NotifyLevel::Off);
+        let hub_level = hub.notify.unwrap_or(NotifyLevel::Mentions);
+        let next = if room.is_empty() {
+            let at = order.iter().position(|l| *l == hub_level).unwrap_or(0);
+            Some(order[(at + 1) % order.len()])
+        } else {
+            let choices: Vec<Option<NotifyLevel>> =
+                std::iter::once(None).chain(order.iter().copied().filter(|l| !same(*l, hub_level)).map(Some)).collect();
+            let current = hub.room_notify.get(&room).copied().filter(|l| !same(*l, hub_level));
+            let at = choices.iter().position(|c| *c == current).unwrap_or(0);
+            choices[(at + 1) % choices.len()]
+        };
+        self.set_notify_level(index, &room, next);
+        let hub = &self.channels.hubs[index];
+        let level = hub.notify_level(&room);
+        let what = if room.is_empty() {
+            hub.hub_name.clone().unwrap_or_else(|| hub.name.clone())
+        } else if whisper {
+            format!("@{}", hub.whisper_name(&room))
+        } else {
+            format!("#{room}")
+        };
+        let label = if whisper && level != NotifyLevel::Off { "on" } else { level.label() };
+        let inherited = if !room.is_empty() && next.is_none() { " (as the hub)" } else { "" };
+        self.notify(format!("Notifications in {what}: {label}{inherited}"));
     }
 
     pub(crate) fn click_channels(&mut self, at: Position) {

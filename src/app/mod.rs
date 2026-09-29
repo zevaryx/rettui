@@ -10,6 +10,8 @@
 //! - [`node`]: hosting a NomadNet node and editing its pages.
 //! - [`reticulum`]: editing the Reticulum config file.
 //! - [`input`]: routing keys and mouse events to the above.
+//! - [`notify`]: notifications for what arrives while the user looks
+//!   elsewhere.
 
 mod browser;
 pub mod format;
@@ -18,6 +20,7 @@ pub(crate) mod files;
 mod input;
 mod messages;
 pub mod network;
+pub mod notify;
 mod saver;
 pub mod node;
 pub mod reticulum;
@@ -278,6 +281,11 @@ pub struct App {
     restart_pending: bool,
     /// Hubs to reconnect once Reticulum is back after a restart.
     rejoin_hubs: Vec<Hash>,
+    /// Notifications waiting to be shown (see [`App::take_notifications`]).
+    notifications: Vec<notify::Notification>,
+    /// Whether the window has the focus (as far as the terminal says; the
+    /// web UI's browsers each know their own).
+    pub focused: bool,
 }
 
 fn now() -> f64 {
@@ -357,6 +365,8 @@ impl App {
             next_request: 1,
             restart_pending: false,
             rejoin_hubs: Vec::new(),
+            notifications: Vec::new(),
+            focused: true,
         };
         if let Some(note) = app.store.migration_note.take() {
             app.log(note);

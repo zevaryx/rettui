@@ -227,6 +227,12 @@ a { color: var(--accent); }
 .clickable { cursor: pointer; }
 .toggle { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; font-size: 13px; color: var(--dim); cursor: pointer; white-space: nowrap; user-select: none; }
 .toggle input { margin: 0; accent-color: var(--accent); }
+/* Notifications: the header bell, and muted items in lists. */
+.bell { white-space: nowrap; }
+.bell.off { color: var(--dim); }
+.muted-mark { font-size: .85em; opacity: .75; }
+/* A menu of choices: the tick in a column of its own. */
+.user-menu .menu-item .check { display: inline-block; width: 1.5em; color: var(--accent); }
 .members .member.clickable:hover, .chat-line .prefix.clickable:hover { text-decoration: underline; }
 .user-menu { position: fixed; z-index: 20; min-width: 240px; background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 6px 24px #0008; display: flex; flex-direction: column; }
 .user-menu .menu-title { padding: 6px 10px; font-weight: 700; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
@@ -420,6 +426,7 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
   .view[data-view=network] .panel > header select { flex: 1 1 0; min-width: 0; }
   .toggle { font-size: 14px; min-height: 40px; }
   .toggle input { width: 20px; height: 20px; }
+  .bell .bell-label { display: none; }
 
   /* The top bar: menu (or back), and the section's name. */
   #appbar {

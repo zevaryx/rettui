@@ -276,6 +276,9 @@ function renderSidebar() {
     }, el('span', { class: 'icon', text: tab.icon }), el('span', { class: 'label', text: tab.title }), badge);
   }));
   tabs.dataset.drawn = drawn;
+  // Unread in the tab's title, for when the page is in the background.
+  const count = (unread.messages || 0) + (unread.channels || 0);
+  document.title = count ? `(${count}) rettui` : 'rettui';
   renderAppbar();
   if (app.status) {
     $('#who-name').textContent = app.status.display_name;
@@ -435,18 +438,28 @@ function moreButton() {
   } });
 }
 
+// A menu of `items` ({ text, danger, disabled, checked, action }): a sheet
+// from the bottom on a phone, else under `anchor` (the button that opened
+// it).
 let sheet = null;
-function openSheet(title, items) {
+function openSheet(title, items, anchor = null) {
   closeSheet();
   const node = el('div', { class: 'user-menu sheet', role: 'menu' },
     title ? el('div', { class: 'menu-title', text: title }) : null,
-    items.map(({ text, danger, disabled, action }) => el('button', {
-      class: 'menu-item' + (danger ? ' danger' : ''), disabled, onclick: () => {
+    items.map(({ text, danger, disabled, checked, action }) => el('button', {
+      class: 'menu-item' + (danger ? ' danger' : ''), disabled, role: checked === undefined ? 'menuitem' : 'menuitemradio',
+      'aria-checked': checked === undefined ? null : String(checked), onclick: () => {
         closeSheet();
         action();
       },
-    }, el('span', { text }))));
+    }, checked === undefined ? el('span', { text })
+      : el('span', {}, el('span', { class: 'check', text: checked ? '✓' : '' }), text))));
   document.body.append(node);
+  if (anchor && !phone.matches) {
+    const rect = anchor.getBoundingClientRect();
+    node.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - node.offsetWidth - 8)) + 'px';
+    node.style.top = Math.max(8, rect.bottom + node.offsetHeight + 8 > window.innerHeight ? rect.top - node.offsetHeight - 4 : rect.bottom + 4) + 'px';
+  }
   const closer = (e) => {
     if (e.type === 'keydown') {
       if (e.key === 'Escape') closeSheet();
@@ -833,9 +846,145 @@ function changed(view, slot, data) {
   return true;
 }
 
+// ---- notifications ----------------------------------------------------------
+//
+// rettui sends a notification for each new message, mention or whisper
+// (as the settings, and each conversation's, hub's and room's own, say).
+// This browser shows it with its own notifications once they're allowed,
+// unless it's showing that conversation or room right now. Browsers only
+// allow them on HTTPS or this computer (localhost): elsewhere, and until
+// they're allowed, a note in the page stands in while it's being looked at.
+
+const notifications = {
+  // The service worker (phone browsers only show notifications through
+  // one), once registered.
+  worker: null,
+  hinted: false,
+
+  // 'granted', 'default', 'denied', 'insecure' (plain HTTP from elsewhere)
+  // or 'unsupported'.
+  state() {
+    if (!window.isSecureContext) return 'insecure';
+    if (!('Notification' in window)) return 'unsupported';
+    return Notification.permission;
+  },
+
+  async start() {
+    if (this.state() === 'insecure' || !('serviceWorker' in navigator)) return;
+    try {
+      this.worker = await navigator.serviceWorker.register('/sw.js');
+      navigator.serviceWorker.addEventListener('message', (e) => {
+        if (e.data && 'open' in e.data) openTarget(e.data.open);
+      });
+    } catch (e) {
+      console.warn('No service worker:', e);
+    }
+  },
+
+  async allow() {
+    await Notification.requestPermission();
+    if (this.state() === 'granted') toast('Notifications are on in this browser');
+    else if (this.state() === 'denied') toast('Notifications are blocked: allow them in this site\'s settings', true);
+    app.views.status.update?.();
+  },
+
+  // Whether what it's about is on screen, in a window that has the focus.
+  onScreen(target) {
+    if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
+    const detail = (view) => !phone.matches || view.pane === 'detail';
+    if (target.kind === 'conversation') {
+      const view = app.views.messages;
+      return app.tab === 'messages' && view.selected === target.key && detail(view);
+    }
+    if (target.kind === 'room') {
+      const view = app.views.channels;
+      return app.tab === 'channels' && view.selected?.hub === target.hub && view.selected.room === target.room && detail(view);
+    }
+    return false;
+  },
+
+  async show(notification) {
+    const { title, body, target, tag } = notification;
+    if (this.onScreen(target)) return;
+    if (this.state() === 'granted') {
+      // A newer one about the same conversation or room replaces it.
+      const options = { body, tag, renotify: true, icon: '/brand/icon.png', data: { target } };
+      try {
+        if (this.worker) return await (await navigator.serviceWorker.ready).showNotification(title, options);
+        const shown = new Notification(title, options);
+        shown.onclick = () => {
+          window.focus();
+          openTarget(target);
+          shown.close();
+        };
+        return;
+      } catch (e) {
+        console.warn('Could not show a notification:', e);
+      }
+    }
+    if (document.visibilityState !== 'visible') return;
+    toast(`${title}: ${body}`);
+    if (!this.hinted && this.state() === 'default') {
+      this.hinted = true;
+      toast('To be notified while rettui is in the background, allow notifications under Status');
+    }
+  },
+
+  // For the Status page: how things stand here, and a button to allow them.
+  describe() {
+    const state = this.state();
+    const text = {
+      granted: 'on in this browser',
+      default: 'not allowed in this browser yet',
+      denied: 'blocked in this browser (allow them in this site\'s settings)',
+      insecure: 'not available: browsers only allow them on HTTPS or on this computer (localhost)',
+      unsupported: 'not supported by this browser (on an iPhone, add rettui to the Home Screen first)',
+    }[state];
+    return el('div', { class: 'row' },
+      el('span', { class: state === 'granted' ? 'state-ok' : 'dim', text }),
+      state === 'default' ? el('button', { text: 'Allow', onclick: () => this.allow() }) : null);
+  },
+};
+
+// A muted conversation, room or hub, in its list.
+function mutedMark() {
+  return el('span', { class: 'muted-mark', title: 'Notifications off', 'aria-label': 'notifications off', text: ' 🔕' });
+}
+
+// The header button for a conversation's, room's or hub's notifications,
+// showing where they stand ('on', 'off', 'all' or 'mentions'): a bell,
+// crossed out when they're off, and "All" beside it when every message
+// notifies (not on a phone, which has no room for it).
+function bellButton(level, title, onclick) {
+  const labels = { on: 'on', off: 'off', all: 'all messages', mentions: 'mentions and whispers' };
+  const said = `${title}: ${labels[level]}`;
+  return el('button', { class: 'bell' + (level === 'off' ? ' off' : ''), title: said, 'aria-label': said, onclick },
+    el('span', { text: level === 'off' ? '🔕' : '🔔' }), level === 'all' ? el('span', { class: 'bell-label', text: ' All' }) : null);
+}
+
+// Go to what a notification is about.
+function openTarget(target) {
+  if (target?.kind === 'conversation') {
+    switchTab('messages');
+    app.views.messages.select(target.key);
+  } else if (target?.kind === 'room') {
+    switchTab('channels');
+    app.views.channels.select(target.hub, target.room);
+  } else {
+    switchTab('messages');
+  }
+}
+
 function listen() {
   const events = new EventSource('/api/events');
   events.onmessage = () => refresh();
+  events.addEventListener('notify', (e) => {
+    try {
+      notifications.show(JSON.parse(e.data));
+    } catch (error) {
+      console.warn(error);
+    }
+  });
   events.onerror = () => {
     // The browser reconnects by itself; refresh once it is back.
     events.onopen = () => {
@@ -977,7 +1126,7 @@ app.views.messages = {
       onclick: () => this.select(c.key),
     },
     el('div', { class: 'main' },
-      el('div', { class: 'name', text: c.name }),
+      el('div', { class: 'name' }, c.name, c.muted ? mutedMark() : null),
       el('div', { class: 'sub', text: c.last ? `${c.last.incoming ? '' : 'You: '}${c.last.text}` : 'No messages yet' })),
     el('div', { class: 'dim', style: 'font-size:12px;text-align:right' },
       c.last ? timeLabel(c.last.timestamp) : '',
@@ -1037,6 +1186,7 @@ app.views.messages = {
     this.header.replaceChildren(
       el('span', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }),
+      bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
       el('button', { text: 'Copy address', onclick: () => copy(key, 'LXMF address') }));
     // The newest messages only, unless asked for all.
     const LIMIT = 100;
@@ -1057,6 +1207,12 @@ app.views.messages = {
     } else {
       stickToBottom(this.history, render);
     }
+  },
+
+  async setMuted(key, muted) {
+    const done = await attempt(() => api.post(`/conversations/${key}/notify`, { muted }),
+      muted ? 'No notifications from this conversation' : 'Notifications from this conversation are on');
+    if (done) this.update();
   },
 
   message(m, conversation) {
@@ -1207,17 +1363,17 @@ app.views.channels = {
       const press = (room) => () => this.load(hub.hash, room).catch(() => {});
       items.push(el('div', { class: 'list-item' + (isSelected('') ? ' selected' : ''), dataset: { key: hub.hash + '/' }, onpointerdown: press(''), onclick: select('') },
         el('span', { class: 'dot ' + hub.status.kind, text: hub.status.kind === 'disconnected' ? '○' : hub.status.kind === 'connecting' ? '◌' : '●' }),
-        el('span', { class: 'main name', text: hub.name }),
+        el('span', { class: 'main name' }, hub.name, hub.notify === 'off' ? mutedMark() : null),
         hub.unread ? el('span', { class: 'badge' + (hub.mention ? ' mention' : ''), text: hub.unread }) : null));
       for (const room of hub.rooms) {
         items.push(el('div', { class: 'list-item room-item' + (room.joined ? '' : ' parted') + (isSelected(room.name) ? ' selected' : ''), dataset: { key: hub.hash + '/' + room.name }, onpointerdown: press(room.name), onclick: select(room.name) },
-          el('span', { class: 'main name', text: '# ' + room.name }),
+          el('span', { class: 'main name' }, '# ' + room.name, room.notify === 'off' ? mutedMark() : null),
           room.unread ? el('span', { class: 'badge' + (room.mention ? ' mention' : ''), text: room.unread }) : null));
       }
       // Whisper conversations: "@" where rooms have "#".
       for (const whisper of hub.whispers) {
         items.push(el('div', { class: 'list-item room-item whisper-item' + (isSelected(whisper.key) ? ' selected' : ''), dataset: { key: hub.hash + '/' + whisper.key }, onpointerdown: press(whisper.key), onclick: select(whisper.key), title: 'Whisper conversation' },
-          el('span', { class: 'main name' }, el('span', { class: 'whisper-icon', text: '@ ' }), whisper.name),
+          el('span', { class: 'main name' }, el('span', { class: 'whisper-icon', text: '@ ' }), whisper.name, whisper.notify === 'off' ? mutedMark() : null),
           whisper.unread ? el('span', { class: 'badge mention', text: whisper.unread }) : null));
       }
     }
@@ -1325,6 +1481,7 @@ app.views.channels = {
         el('span', { class: 'title grow' }, el('span', { class: 'whisper-icon', text: '@ ' }), whisper.name,
           el('span', { class: 'dim', style: 'font-weight:400', text: ' · whisper' + (view.whisper ? '' : ' (this hub doesn\'t pass whispers)') })),
         el('button', { text: 'Actions', onclick: (e) => this.userMenu(e, whisper.src) }),
+        bellButton(view.notify_level === 'off' ? 'off' : 'on', `Notifications from ${whisper.name}`, (e) => this.notifyMenu(e, hub, room, view)),
         el('button', { class: 'danger more', text: 'Close', title: 'Close the conversation and delete its messages', onclick: async () => {
           if (!confirm(`Close the whisper conversation with ${whisper.name} and delete its messages?`)) return;
           await this.hubAction(hash, 'forget', { room });
@@ -1339,6 +1496,7 @@ app.views.channels = {
           ? el('button', { text: 'Leave', onclick: () => this.hubAction(hash, 'leave', { room }) })
           : el('button', { text: 'Join', onclick: () => this.hubAction(hash, 'join', { room }) }),
         el('button', { class: 'phone-only', text: `Members ${view.members.length}`, onclick: () => setPane(this, 'members') }),
+        bellButton(view.notify_level, `Notifications in #${room}`, (e) => this.notifyMenu(e, hub, room, view)),
         // A setting ("Show joins and leaves"), here where it matters.
         el('label', { class: 'toggle', title: 'Show people joining and leaving the room in the chat' },
           el('input', { type: 'checkbox', checked: view.show_joins, onchange: (e) => attempt(
@@ -1366,6 +1524,7 @@ app.views.channels = {
       this.header.replaceChildren(
         el('span', { class: 'title grow', text: hub.name }),
         el('button', { text: busy ? 'Disconnect' : 'Connect', onclick: () => this.hubAction(hash, 'connect') }),
+        bellButton(hub.notify, `Notifications from ${hub.name}`, (e) => this.notifyMenu(e, hub, '', view)),
         el('button', { class: 'more', text: 'Copy link', onclick: () => copy(hub.link, 'link') }),
         el('button', { class: 'danger more', text: 'Remove hub', onclick: async () => {
           if (!confirm(`Remove hub ${hub.name} and its history?`)) return;
@@ -1375,6 +1534,32 @@ app.views.channels = {
           this.update();
         } }), moreButton());
     }
+  },
+
+  // What gets a notification: in a room or whisper conversation, or (with
+  // `room` empty) in a hub's rooms unless they're set otherwise.
+  notifyMenu(event, hub, room, view) {
+    event.stopPropagation();
+    const labels = { all: 'all messages', mentions: 'mentions and whispers', off: 'off' };
+    const whisper = !!view?.whisper_with;
+    const hubLevel = whisper ? (hub.notify === 'off' ? 'off' : 'on') : labels[hub.notify];
+    const choices = !room ? [['all', 'All messages in its rooms'], ['mentions', 'Mentions and whispers'], ['off', 'Off']]
+      : whisper ? [['default', `As the hub (${hubLevel})`], ['mentions', 'On'], ['off', 'Off']]
+        : [['default', `As the hub (${hubLevel})`], ['all', 'All messages'], ['mentions', 'Mentions and whispers'], ['off', 'Off']];
+    // Whispers notify at either level but off.
+    const current = !room ? hub.notify : whisper && view.notify === 'all' ? 'mentions' : view.notify;
+    const where = !room ? `from ${hub.name}` : whisper ? `from ${view.whisper_with.name}` : `in #${room}`;
+    const title = `Notifications ${where}` + (room ? '' : ' (each room can differ)');
+    openSheet(title, choices.map(([level, text]) => ({
+      text,
+      checked: level === current,
+      action: async () => {
+        if (!await this.hubAction(hub.hash, 'notify', { room, level })) return;
+        const now = level === 'default' ? `as the hub (${hubLevel})` : whisper ? (level === 'off' ? 'off' : 'on') : labels[level];
+        toast(`Notifications ${where}: ${now}`);
+        this.update();
+      },
+    })), event.currentTarget);
   },
 
   hubInfo(hub) {
@@ -1390,7 +1575,8 @@ app.views.channels = {
       el('span', { class: 'label', text: 'Nick' }), el('span', { text: hub.nick || `${hub.display_name} (display name)` }),
       el('span', { class: 'label', text: 'Auto' }), el('span', {},
         el('label', {}, el('input', { type: 'checkbox', checked: hub.auto_connect, onchange: () => this.hubAction(hub.hash, 'auto') }), ' reconnect automatically')),
-      el('span', { class: 'label', text: 'Limits' }), el('span', { text: `${hub.limits.message_bytes} bytes per message, ${hub.limits.rooms} rooms` }))];
+      el('span', { class: 'label', text: 'Limits' }), el('span', { text: `${hub.limits.message_bytes} bytes per message, ${hub.limits.rooms} rooms` }),
+      el('span', { class: 'label', text: 'Notify' }), el('span', { text: `${{ all: 'all messages', mentions: 'mentions and whispers', off: 'off' }[hub.notify]} (the bell above; each room can differ)` }))];
     if (hub.motd) nodes.push(el('div', { class: 'motd', text: hub.motd }));
     if (hub.available) {
       nodes.push(el('div', { class: 'public-rooms' },
@@ -2701,7 +2887,8 @@ app.views.status = {
       label('Last sync'), el('span', { text: sync }),
       label('RNS config'), el('span', { class: 'mono', text: s.rns_config || 'rsReticulum default' }),
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
-      label('Known'), el('span', { text: `${s.known} destinations` }));
+      label('Known'), el('span', { text: `${s.known} destinations` }),
+      label('Notifications'), notifications.describe());
     this.interfaces.replaceChildren(...s.interfaces.map((i) => el('div', { class: 'iface' },
       el('span', { class: i.online ? 'online' : 'offline', text: i.online ? '● ' : '○ ' }), i.name,
       el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` }))));
@@ -3069,5 +3256,6 @@ refreshStatus().then(() => {
   const initial = location.hash.slice(1);
   switchTab(app.views[initial] ? initial : 'messages');
   listen();
+  notifications.start();
   setTimeout(prefetch, 300);
 });

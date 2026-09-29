@@ -47,6 +47,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(Color::Black).bg(Color::Yellow).bold(),
                     ));
                 }
+                if conversation.muted {
+                    spans.push(Span::styled(" muted", Style::default().fg(DIM)));
+                }
                 let preview = conversation
                     .messages
                     .last()
@@ -80,7 +83,10 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let name = app.store.display_name(&key);
     let title = format!("{name}  {key}");
-    let history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
+    let mut history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
+    if app.store.conversations.get(&key).is_some_and(|c| c.muted) {
+        history_block = history_block.title_bottom(Line::styled(" notifications off · N turns them on ", Style::default().fg(DIM)));
+    }
     let history_inner = history_block.inner(history_area);
     let inner_width = history_inner.width as usize;
     let count = app.store.conversations.get(&key).map_or(0, |c| c.messages.len());

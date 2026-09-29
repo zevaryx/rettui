@@ -42,6 +42,10 @@ pub struct Settings {
     pub wrap_lines: bool,
     /// Show people joining and leaving RRC rooms in the chat.
     pub show_joins: bool,
+    /// Notifications for new LXMF messages (each conversation can be muted).
+    pub notify_messages: bool,
+    /// Notifications from RRC (each hub and room has its own level).
+    pub notify_rrc: bool,
 }
 
 impl Default for Settings {
@@ -62,6 +66,8 @@ impl Default for Settings {
             node_executable_pages: false,
             show_joins: true,
             wrap_lines: false,
+            notify_messages: true,
+            notify_rrc: true,
         }
     }
 }
@@ -256,6 +262,20 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "notify_messages",
+        label: "Notify on messages",
+        help: "Notifications for new LXMF messages you aren't looking at (each conversation can be muted)",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "notify_rrc",
+        label: "Notify from RRC",
+        help: "Notifications from RRC hubs: mentions and whispers unless a hub or room is set otherwise",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "rns_config",
         label: "Reticulum config",
         help: "Reticulum config directory; empty uses the standard one (and joins a running rnsd)",
@@ -327,6 +347,8 @@ impl Settings {
             "node_executable_pages" => self.node_executable_pages.to_string(),
             "wrap_lines" => self.wrap_lines.to_string(),
             "show_joins" => self.show_joins.to_string(),
+            "notify_messages" => self.notify_messages.to_string(),
+            "notify_rrc" => self.notify_rrc.to_string(),
             _ => String::new(),
         }
     }
@@ -351,6 +373,8 @@ impl Settings {
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
+            "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
+            "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,
             "node_announce_interval_mins" => {
                 self.node_announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?;
             }

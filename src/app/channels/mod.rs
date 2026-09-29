@@ -14,11 +14,12 @@ use std::time::{Duration, Instant};
 use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
 
+use super::notify::{self, Notification, Target as Opens};
 use super::{App, Tab};
 use crate::net::{Hash, NetCommand, parse_hash};
 use crate::rrc::session::SessionCommand;
 use crate::rrc::{self, Envelope, Limits, t};
-use crate::store::HubConfig;
+use crate::store::{HubConfig, NotifyLevel};
 use crate::term::input::TextInput;
 
 
@@ -143,6 +144,10 @@ pub struct Hub {
     pub name: String,
     pub nick: Option<String>,
     pub auto_connect: bool,
+    /// Notifications for the hub's rooms and whispers (mentions and whispers
+    /// when unset), and rooms set otherwise.
+    pub notify: Option<NotifyLevel>,
+    pub room_notify: BTreeMap<String, NotifyLevel>,
     pub status: HubStatus,
     hub_identity: Option<Vec<u8>>,
     pub hub_name: Option<String>,
@@ -183,6 +188,8 @@ impl Hub {
             name,
             nick: None,
             auto_connect: true,
+            notify: None,
+            room_notify: BTreeMap::new(),
             status: HubStatus::Disconnected,
             hub_identity: None,
             hub_name: None,
@@ -220,7 +227,15 @@ impl Hub {
             rooms: self.rooms.iter().cloned().collect(),
             nick: self.nick.clone(),
             auto_connect: self.auto_connect,
+            notify: self.notify,
+            room_notify: self.room_notify.clone(),
         }
+    }
+
+    /// What in a room (or whisper conversation) gets a notification: its
+    /// own level, else the hub's.
+    pub fn notify_level(&self, room: &str) -> NotifyLevel {
+        self.room_notify.get(room).copied().or(self.notify).unwrap_or(NotifyLevel::Mentions)
     }
 
     pub fn is_connected(&self) -> bool {
@@ -519,6 +534,8 @@ impl Channels {
             let mut hub = Hub::new(hash, config.aspect.clone(), config.name.clone());
             hub.nick = config.nick.clone();
             hub.auto_connect = config.auto_connect;
+            hub.notify = config.notify;
+            hub.room_notify = config.room_notify.clone();
             hub.rooms = config.rooms.iter().map(|r| rrc::normalize_room(r)).collect();
             hub.load_history(history_dir);
             channels.hubs.push(hub);
@@ -578,6 +595,7 @@ impl App {
         let counts = !line.own && matches!(line.kind, LineKind::Msg | LineKind::Action | LineKind::Private);
         let mention = line.mention || line.kind == LineKind::Private;
         let viewing = self.is_viewing(index, room);
+        let notification = if counts && self.settings.notify_rrc { self.rrc_notification(index, room, &line, mention) } else { None };
         let hub = self.hub_mut(index);
         hub.push(room, line);
         if counts && !viewing {
@@ -586,6 +604,37 @@ impl App {
                 hub.mentions.insert(room.to_string());
             }
         }
+        if let Some(notification) = notification {
+            self.push_notification(viewing, notification);
+        }
+    }
+
+    /// A notification for someone else's line, if the room's level asks for
+    /// one (whispers count as mentions).
+    fn rrc_notification(&self, index: usize, room: &str, line: &ChatLine, mention: bool) -> Option<Notification> {
+        let hub = &self.channels.hubs[index];
+        match hub.notify_level(room) {
+            NotifyLevel::All => {}
+            NotifyLevel::Mentions if mention => {}
+            _ => return None,
+        }
+        let name = line
+            .nick
+            .clone()
+            .or_else(|| line.src.as_deref().and_then(|s| hex::decode(s).ok()).map(|h| hub.name_of(&h)))
+            .unwrap_or_else(|| "Someone".to_string());
+        let text = if line.kind == LineKind::Action { format!("* {name} {}", line.text) } else { line.text.clone() };
+        let title = if whisper_peer(room).is_some() {
+            format!("{name} (whisper)")
+        } else if room.is_empty() {
+            format!("{name} on {}", hub.hub_name.as_deref().unwrap_or(&hub.name))
+        } else if line.kind == LineKind::Action {
+            format!("#{room}")
+        } else {
+            format!("{name} in #{room}")
+        };
+        let target = Opens::Room { hub: hex::encode(hub.hash), room: room.to_string() };
+        Some(Notification { title, body: notify::body(&text), target })
     }
 
     /// Room for a reply that names no room: what the user is looking at on
