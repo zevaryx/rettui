@@ -45,6 +45,16 @@ use crate::term::images::{DecodeFor, Decoded, Graphics, Picture, decode_in_backg
 use crate::term::input::TextInput;
 
 pub use browser::{Browser, BrowserFocus, BrowserPane, Location, resolve_url};
+
+/// An app for tests: its data in `dir` (settings saved there too), and no
+/// network.
+#[cfg(test)]
+pub(crate) fn test_app(dir: &std::path::Path, settings: Settings, store: Store) -> App {
+    let paths = Paths::new(Some(dir.to_path_buf())).unwrap();
+    settings.save(&paths.settings).unwrap();
+    let (net, _) = tokio::sync::mpsc::unbounded_channel();
+    App::new(settings, paths, store, net, None, [0; 16])
+}
 pub use network::{NetFilter, NetSearch, match_mask};
 
 const LOG_LINES: usize = 500;

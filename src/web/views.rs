@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::app::channels::{Hub, HubStatus, LineKind};
 use crate::app::{App, NetState, SyncState, network};
-use crate::config::{Effect, FIELDS, FieldKind, Settings};
+use crate::config::{Effect, FIELDS, FieldKind, Settings, WebAccess};
 use crate::net::PeerKind;
 use crate::rrc;
 use crate::store::{Message, MessageState, NotifyLevel};
@@ -357,6 +357,12 @@ pub fn settings(app: &App, saved: &Settings) -> Value {
                 },
                 "next_start": f.effect == Effect::NextStart,
                 "value": saved.field_value(f.key),
+                // What the web UI may do with it.
+                "web": match f.web_access() {
+                    WebAccess::Change => "change",
+                    WebAccess::TurnOffOnly => "turn_off_only",
+                    WebAccess::TerminalOnly => "terminal_only",
+                },
             })
         })
         .collect();

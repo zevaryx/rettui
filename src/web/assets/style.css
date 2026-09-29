@@ -391,6 +391,8 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
 .setting input[type=text], .setting input[type=number] { width: 100%; max-width: 520px; }
 .setting input[type=checkbox] { margin-top: 8px; }
 .setting .help { color: var(--dim); font-size: 12.5px; margin-top: 3px; }
+.setting .help.locked { color: var(--yellow); }
+.setting input:disabled { opacity: 0.6; cursor: not-allowed; }
 .next-start { display: inline-block; margin-left: 6px; font-size: 11px; padding: 0 5px; border: 1px solid var(--border); border-radius: 8px; }
 .settings-footer { padding: 8px 14px 14px; font-size: 12.5px; }
 .settings-group { color: var(--accent); font-weight: 600; padding: 14px 0 2px; border-bottom: 1px solid var(--border); }

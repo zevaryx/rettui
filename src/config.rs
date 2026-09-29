@@ -170,6 +170,30 @@ pub struct Field {
     pub effect: Effect,
 }
 
+/// What the web UI may do with a setting. The web login must not be able to
+/// run programs on this computer (as with pipe interface commands and page
+/// scripts), so settings that decide what runs are changed in the terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebAccess {
+    Change,
+    /// A toggle it may turn off, but not on.
+    TurnOffOnly,
+    TerminalOnly,
+}
+
+impl Field {
+    pub fn web_access(&self) -> WebAccess {
+        match self.key {
+            // Another config directory could hold pipe interfaces, whose
+            // commands Reticulum runs; another node folder could hold
+            // executable pages, or share files that aren't meant to be.
+            "rns_config" | "node_dir" => WebAccess::TerminalOnly,
+            "node_executable_pages" => WebAccess::TurnOffOnly,
+            _ => WebAccess::Change,
+        }
+    }
+}
+
 /// Where rettui lives (opened by clicking the version in either UI).
 pub const PROJECT_URL: &str = "https://github.com/zevaryx/rettui";
 

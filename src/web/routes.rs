@@ -634,7 +634,7 @@ async fn save_settings(State(state): State<WebState>, axum::Json(body): axum::Js
     let notes = state
         .write(move |o| {
             let changes: Vec<(&str, &str)> = body.values.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-            o.app.update_settings(&changes)
+            o.app.update_settings_from_web(&changes)
         })
         .await??;
     Ok(axum::Json(json!({ "notes": notes })))

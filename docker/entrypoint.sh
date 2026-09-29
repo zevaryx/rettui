@@ -19,8 +19,9 @@ for value in "$PUID" "$PGID" "$PORT"; do
 done
 
 mkdir -p "$DATA/reticulum"
-# First start: keep the Reticulum config in the data directory too. The
-# setting can be changed later in the web UI (Status > Settings).
+# First start: keep the Reticulum config in the data directory too. To use
+# another, change rns_config in settings.json while rettui is stopped (the web
+# UI can't: a config's pipe interfaces run commands).
 if [ ! -e "$DATA/settings.json" ]; then
     printf '{\n  "rns_config": "%s/reticulum"\n}\n' "$DATA" > "$DATA/settings.json"
 fi

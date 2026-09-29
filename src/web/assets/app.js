@@ -2992,6 +2992,10 @@ app.views.status = {
           class: field.key === 'display_name' ? '' : 'mono',
         });
       }
+      // Settings that decide what runs on this computer are changed in the
+      // terminal UI, not here (a page script can still be turned off).
+      const locked = field.web === 'terminal_only' || (field.web === 'turn_off_only' && field.value !== 'true');
+      input.disabled = locked;
       input.addEventListener('input', () => this.markDirty());
       input.addEventListener('change', () => this.markDirty());
       input.addEventListener('keydown', (e) => {
@@ -3003,7 +3007,11 @@ app.views.status = {
       return el('div', { class: 'setting' },
         el('label', { for: id, class: 'label' }, field.label,
           field.next_start ? el('span', { class: 'next-start', text: 'next start', title: 'Takes effect the next time rettui starts' }) : null),
-        el('div', {}, input, el('div', { class: 'help', text: field.help })));
+        el('div', {}, input, el('div', { class: 'help', text: field.help }),
+          field.web === 'change' ? null : el('div', { class: 'help locked', text: field.web === 'terminal_only'
+            ? 'Changed in the terminal UI (or settings.json), not here: it decides what runs on this computer.'
+            : 'Turned on in the terminal UI, not here: scripts run programs on this computer.'
+              + (field.value === 'true' ? ' It can be turned off here.' : '') })));
     }));
     const notes = [`Saved in ${data.path}`];
     const file = data.fields.find((f) => f.key === 'rns_config').value;

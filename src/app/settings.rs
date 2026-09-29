@@ -10,7 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Position;
 
 use super::{App, PromptKind};
-use crate::config::{self, Effect, FieldKind, Settings};
+use crate::config::{self, Effect, FieldKind, Settings, WebAccess};
 use crate::net::{NetCommand, parse_hash};
 
 fn minutes(n: u64) -> Option<Duration> {
@@ -114,6 +114,40 @@ impl App {
         Ok(notes)
     }
 
+    /// [`App::update_settings`] for the web UI, which may not change the
+    /// settings that decide what runs on this computer (see
+    /// [`config::WebAccess`]). Values it doesn't change are fine to send.
+    pub fn update_settings_from_web(&mut self, changes: &[(&str, &str)]) -> Result<Vec<String>, String> {
+        let before = self.saved_settings()?;
+        let mut after = before.clone();
+        for (key, value) in changes {
+            after.set_field(key, value)?;
+        }
+        for field in config::FIELDS {
+            let now = after.field_value(field.key);
+            if now == before.field_value(field.key) {
+                continue;
+            }
+            match field.web_access() {
+                WebAccess::Change => {}
+                WebAccess::TurnOffOnly if now == "false" => {}
+                WebAccess::TurnOffOnly => {
+                    return Err(format!(
+                        "{} can only be turned on in the terminal UI: it runs programs on this computer",
+                        field.label
+                    ));
+                }
+                WebAccess::TerminalOnly => {
+                    return Err(format!(
+                        "{} can only be changed in the terminal UI (or settings.json): it decides what runs on this computer",
+                        field.label
+                    ));
+                }
+            }
+        }
+        self.update_settings(changes)
+    }
+
     /// Change one setting, confirming in the footer (the log already has
     /// what was saved; errors go to both).
     pub fn update_setting(&mut self, key: &str, value: &str) {
@@ -190,5 +224,43 @@ impl App {
                 self.edit_setting();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Store;
+
+    #[test]
+    fn the_web_ui_cant_change_what_runs_here() {
+        let dir = std::env::temp_dir().join(format!("rettui-web-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rns = dir.join("rns");
+        std::fs::create_dir_all(&rns).unwrap();
+        let rns = rns.display().to_string();
+        let settings = Settings { node_executable_pages: true, rns_config: Some(rns.clone()), ..Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, Store::default());
+        let elsewhere = dir.display().to_string();
+        // Another Reticulum config or node folder, or scripts turned on: no.
+        let refused = |app: &mut App, key: &str, value: &str| {
+            let e = app.update_settings_from_web(&[("display_name", "Changed"), (key, value)]).unwrap_err();
+            assert!(e.contains("terminal UI"), "{key}: {e}");
+        };
+        refused(&mut app, "rns_config", &elsewhere);
+        refused(&mut app, "rns_config", "");
+        refused(&mut app, "node_dir", &elsewhere);
+        assert_eq!(app.saved_settings().unwrap().display_name, "rettui user", "nothing is saved when one is refused");
+        // Scripts can be turned off, not back on.
+        app.update_settings_from_web(&[("node_executable_pages", "false")]).unwrap();
+        refused(&mut app, "node_executable_pages", "true");
+        // The same values again, and everything else, are fine.
+        app.update_settings_from_web(&[("rns_config", &rns), ("display_name", "Changed"), ("messages_kept", "50")]).unwrap();
+        let saved = app.saved_settings().unwrap();
+        assert_eq!((saved.display_name.as_str(), saved.messages_kept), ("Changed", 50));
+        // The terminal UI may change them all.
+        app.update_settings(&[("node_executable_pages", "true"), ("rns_config", &elsewhere)]).unwrap();
+        assert!(app.saved_settings().unwrap().node_executable_pages);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

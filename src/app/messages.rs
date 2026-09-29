@@ -449,7 +449,7 @@ mod tests {
     use std::io::Read;
 
     use super::*;
-    use crate::config::{Paths, Settings};
+    use crate::config::Settings;
     use crate::store::{Conversation, Store};
 
     fn key() -> String {
@@ -488,11 +488,8 @@ mod tests {
     }
 
     fn app(dir: &Path, store: Store, kept: u64, storage_mb: u64) -> App {
-        let paths = Paths::new(Some(dir.to_path_buf())).unwrap();
         let settings = Settings { messages_kept: kept, message_storage_mb: storage_mb, ..Settings::default() };
-        settings.save(&paths.settings).unwrap();
-        let (net, _) = tokio::sync::mpsc::unbounded_channel();
-        App::new(settings, paths, store, net, None, [0; 16])
+        crate::app::test_app(dir, settings, store)
     }
 
     fn temp_dir(name: &str) -> PathBuf {

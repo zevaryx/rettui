@@ -8,6 +8,12 @@ of the Reticulum instance it uses. Where files are kept is in
   hosting, editor line wrapping and the Reticulum config directory.
   Values are checked before saving, and most changes apply straight away (the
   editor says which ones wait for the next start).
+- **What the web UI can't change:** the Reticulum config directory and the
+  node folder, and it can turn "Run page scripts" off but not on. These decide
+  what runs on the computer rettui runs on (a config's pipe interfaces run
+  commands, and scripts are programs), and the web login must not be able to
+  run programs there. Change them in the terminal UI, or in `settings.json`
+  (for Docker, `./data/settings.json`) while rettui is stopped.
 - **Reticulum config editor:** the Reticulum tab (in both UIs) edits the
   config file of the Reticulum instance rettui uses.
   - **Options:** every option rsReticulum reads, with a description and its

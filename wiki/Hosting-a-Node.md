@@ -33,6 +33,6 @@ or the folder set in `node_dir`.
   Reticulum, so rettui reads your own pages straight from the folder (never
   from the cache).
 - **Scripts:** executable pages run as programs for visitors only when "Run
-  page scripts" is on. The web UI can't change, rename or create scripts, so
-  the web login can't be used to run programs on the host. The TUI can edit
-  them.
+  page scripts" is on. The web UI can't change, rename or create scripts,
+  turn "Run page scripts" on or move the node folder, so the web login can't
+  be used to run programs on the host. The TUI can do all of these.
