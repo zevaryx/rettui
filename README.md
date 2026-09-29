@@ -449,6 +449,16 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 - **Browsing:** NomadNet pages are rendered to HTML by rettui, with links and
   forms handled by the web UI and no scripts allowed. `/file/` links download
   through the browser.
+- **Slow links:** live updates stay light, so the web UI is usable over a
+  slow or distant connection:
+  - **Only what changed:** the interface counters, which change every few
+    seconds, refresh only the sidebar and Status, not the rest of the page.
+  - **Only what shows:** a conversation loads its newest 100 messages and a
+    room its newest 200 lines, until you ask for the earlier ones.
+  - **Compressed:** answers are gzip-compressed.
+  - **For scripts:** `?last=N` on `/api/conversations/<address>` and on
+    `/api/channels/<hub>/room` asks for just the newest N, and `total` or
+    `total_lines` says how many there are in all.
 - **Keys:** `1`–`7` switch sections, `/` searches the Network list, and `Esc`
   leaves a text box.
 - **Phones:** on a phone (or any window up to 760px wide, and phones held

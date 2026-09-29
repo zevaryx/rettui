@@ -798,8 +798,6 @@ async function refreshStatus() {
 // Refetch what is on screen: the status and the section's data, together.
 // Only one refetch runs at a time; asking during one runs another after it.
 function loadNow() {
-  clearTimeout(refreshTimer);
-  refreshTimer = null;
   if (refreshing) {
     refreshAgain = true;
     return;
@@ -818,13 +816,11 @@ function loadNow() {
   });
 }
 
-// Live updates: the first change schedules one refetch and later ones join
-// it, so a steady stream of events can't keep postponing it. Changes during
-// a refetch are fetched once it is done: over a slow link, refetches started
-// on a timer would queue up in the browser faster than they finish (it
-// opens only a few connections to one server), and what was just sent
-// would wait behind them.
-let refreshTimer = null;
+// Live updates: a change refetches at once, and changes during a refetch
+// are fetched together once it is done: over a slow link, a refetch for
+// each would queue up in the browser faster than they finish (it opens only
+// a few connections to one server), and what was just sent would wait
+// behind them.
 let refreshing = null;
 let refreshAgain = false;
 function refresh() {
@@ -832,8 +828,21 @@ function refresh() {
     refreshAgain = true;
     return;
   }
-  if (refreshTimer) return;
-  refreshTimer = setTimeout(loadNow, 150);
+  loadNow();
+}
+
+// Just the status (counters and the log, every few seconds): the sidebar,
+// and Status if it's on screen. A full refetch under way has it already.
+let sidebarLoading = null;
+function refreshSidebar() {
+  if (refreshing || sidebarLoading) return;
+  sidebarLoading = refreshStatus()
+    .then(() => {
+      if (app.tab === 'status') app.views.status.update({ settings: false });
+    })
+    .finally(() => {
+      sidebarLoading = null;
+    });
 }
 
 // Whether a view's data changed since it was last drawn (live updates
@@ -977,7 +986,13 @@ function openTarget(target) {
 
 function listen() {
   const events = new EventSource('/api/events');
-  events.onmessage = () => refresh();
+  // Each change says what it touched: "status" (the counters, the log),
+  // "node" (the hosted node's counters, and the status) or "all".
+  events.onmessage = (e) => {
+    const scope = e.data.split(' ')[1] || 'all';
+    if (scope === 'all' || (scope === 'node' && app.tab === 'node')) refresh();
+    else refreshSidebar();
+  };
   events.addEventListener('notify', (e) => {
     try {
       notifications.show(JSON.parse(e.data));
@@ -1033,6 +1048,8 @@ app.views.messages = {
   cache: new Map(),
   // How many of the most recent conversations are loaded ahead.
   WARM: 10,
+  // Messages shown (and loaded) until "Show earlier".
+  LIMIT: 100,
   mode: localStorage.getItem('rettui.mode') || 'auto',
 
   mount(root, options = {}) {
@@ -1145,8 +1162,9 @@ app.views.messages = {
     this.renderConversation(key, conversation);
   },
 
+  // The newest messages, which is what shows (all of them once asked for).
   load(key) {
-    return loadInto(this, key, '/conversations/' + key);
+    return loadInto(this, key, '/conversations/' + key + (this.showAll === key ? '' : `?last=${this.LIMIT}`));
   },
 
   echo(key, node) {
@@ -1188,16 +1206,17 @@ app.views.messages = {
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }),
       bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
       el('button', { text: 'Copy address', onclick: () => copy(key, 'LXMF address') }));
-    // The newest messages only, unless asked for all.
-    const LIMIT = 100;
-    const hidden = this.showAll === key ? 0 : Math.max(0, conversation.messages.length - LIMIT);
+    // The newest messages only, unless asked for all: those not loaded, and
+    // any loaded but not shown.
+    const from = this.showAll === key ? 0 : Math.max(0, conversation.messages.length - this.LIMIT);
+    const hidden = from + (conversation.total ?? conversation.messages.length) - conversation.messages.length;
     const earlier = hidden ? el('div', { class: 'show-more' }, el('button', { text: `Show ${hidden} earlier messages`, onclick: () => {
       this.showAll = key;
       this.update();
     } })) : null;
     const echoes = echoesFor(this, key);
     const render = () => this.history.replaceChildren(...(conversation.messages.length || echoes.length
-      ? [earlier, ...conversation.messages.slice(hidden).map((m) => this.message(m, conversation))].filter(Boolean)
+      ? [earlier, ...conversation.messages.slice(from).map((m) => this.message(m, conversation))].filter(Boolean)
       : [el('div', { class: 'empty', text: 'No messages yet. Say hello!' })]), ...echoes);
     if (this.lastKey !== key) {
       render();
@@ -1288,6 +1307,8 @@ app.views.channels = {
   // draws one at once and refreshes it behind.
   cache: new Map(),
   selected: null, // { hub, room } — room '' is the hub itself
+  // Lines shown (and loaded) until "Show earlier".
+  LIMIT: 200,
 
   mount(root) {
     this.list = el('div', { class: 'scroll' });
@@ -1399,8 +1420,10 @@ app.views.channels = {
     this.renderRoom(hash, room, view);
   },
 
+  // The newest lines, which is what shows (all of them once asked for).
   load(hub, room) {
-    return loadInto(this, hub + '/' + room, `/channels/${hub}/room?name=${encodeURIComponent(room)}`);
+    const all = this.showAll === hub + '/' + room;
+    return loadInto(this, hub + '/' + room, `/channels/${hub}/room?name=${encodeURIComponent(room)}` + (all ? '' : `&last=${this.LIMIT}`));
   },
 
   // Open a room, whisper or hub page: at once from what is loaded (or its
@@ -1454,15 +1477,16 @@ app.views.channels = {
     this.view = view;
     // Someone joined or left while choosing whom to mention.
     if (this.mentionMatches) this.updateMentions();
-    // The newest lines only, unless asked for all.
-    const LIMIT = 200;
-    const hidden = this.showAll === viewKey ? 0 : Math.max(0, view.lines.length - LIMIT);
+    // The newest lines only, unless asked for all: those not loaded, and any
+    // loaded but not shown.
+    const from = this.showAll === viewKey ? 0 : Math.max(0, view.lines.length - this.LIMIT);
+    const hidden = from + (view.total_lines ?? view.lines.length) - view.lines.length;
     const earlier = hidden ? el('div', { class: 'show-more' }, el('button', { text: `Show ${hidden} earlier lines`, onclick: () => {
       this.showAll = viewKey;
       this.update();
     } })) : null;
     const render = () => {
-      const chat = this.chat(view.lines.slice(hidden));
+      const chat = this.chat(view.lines.slice(from));
       chat.append(...echoesFor(this, viewKey));
       this.body.replaceChildren(...(room || hidden ? [] : this.hubInfo(hub)), ...(earlier ? [earlier] : []), chat);
     };
@@ -2867,7 +2891,8 @@ app.views.status = {
     this.loadSettings(true);
   },
 
-  update() {
+  // `settings: false` when only the status changed (the settings can't have).
+  update({ settings = true } = {}) {
     const s = app.status;
     if (!s) return;
     const net = { starting: 'starting', online: 'online', failed: `failed: ${s.net.error}` }[s.net.state];
@@ -2894,7 +2919,7 @@ app.views.status = {
       el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` }))));
     stickToBottom(this.log, () => this.log.replaceChildren(...s.log.map((line) => el('div', { text: line }))));
     // Pick up changes made elsewhere (the TUI's editor, or by hand).
-    this.loadSettings();
+    if (settings) this.loadSettings();
   },
 };
 

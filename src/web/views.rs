@@ -115,15 +115,14 @@ fn message(m: &Message) -> Value {
     })
 }
 
-pub fn conversation(app: &App, key: &str) -> Value {
-    let messages: Vec<Value> = app
-        .store
-        .conversations
-        .get(key)
-        .map(|c| c.messages.iter().map(message).collect())
-        .unwrap_or_default();
+/// A conversation: its newest `last` messages if asked (what the page
+/// shows; live updates refetch it), and how many there are in all.
+pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
+    let all = app.store.conversations.get(key).map(|c| c.messages.as_slice()).unwrap_or_default();
+    let messages: Vec<Value> = newest(all, last).iter().map(message).collect();
     json!({
         "key": key,
+        "total": all.len(),
         "name": app.store.display_name(key),
         "unread": app.store.conversations.get(key).map_or(0, |c| c.unread),
         "muted": app.store.conversations.get(key).is_some_and(|c| c.muted),
@@ -245,15 +244,21 @@ fn utf16_ranges(text: &str, ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
     ranges.iter().map(|&(start, end)| (at(start), at(end))).collect()
 }
 
-/// One room's (or the hub buffer's, `room` empty) messages and members.
-pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
+/// The newest `last` of `items` (all of them without a limit).
+fn newest<T>(items: &[T], last: Option<usize>) -> &[T] {
+    &items[last.map_or(0, |n| items.len().saturating_sub(n))..]
+}
+
+/// One room's (or the hub buffer's, `room` empty) messages and members: the
+/// newest `last` lines if asked, and how many there are in all.
+pub fn room(app: &App, hub: &Hub, room: &str, last: Option<usize>) -> Value {
     use crate::app::channels::users::lxmf_address;
     let own_nick = hub.nick.clone().unwrap_or_else(|| app.settings.display_name.clone());
     let buffer = hub.buffers.get(room).map(Vec::as_slice).unwrap_or_default();
     let people = hub.mentionable(room);
-    let lines: Vec<Value> = buffer
+    let shown: Vec<_> = buffer.iter().filter(|line| line.shown(app.settings.show_joins)).collect();
+    let lines: Vec<Value> = newest(&shown, last)
         .iter()
-        .filter(|line| line.shown(app.settings.show_joins))
         .map(|line| {
             let highlights = line.highlights(&own_nick);
             // `@name` mentions of others, drawn in that person's colour.
@@ -303,6 +308,7 @@ pub fn room(app: &App, hub: &Hub, room: &str) -> Value {
     json!({
         "hub": hex::encode(hub.hash),
         "room": room,
+        "total_lines": shown.len(),
         "joined": hub.rooms.contains(room),
         "topic": hub.topics.get(room),
         "members": members.iter().map(|(name, id)| json!({ "name": name, "src": hex::encode(id), "own": *id == own })).collect::<Vec<_>>(),
@@ -434,4 +440,18 @@ pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
         "options": options,
         "types": schema::INTERFACE_TYPES.iter().map(|t| json!({ "name": t.name, "label": t.label })).collect::<Vec<_>>(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_newest_part_of_a_history() {
+        let items = [1, 2, 3, 4, 5];
+        assert_eq!(newest(&items, Some(2)), [4, 5]);
+        assert_eq!(newest(&items, Some(9)), items);
+        assert_eq!(newest(&items, None), items);
+        assert!(newest(&items, Some(0)).is_empty());
+    }
 }

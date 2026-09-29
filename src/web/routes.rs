@@ -121,6 +121,7 @@ pub fn router(state: WebState) -> Router {
         .route("/brand/{name}", get(brand))
         .nest("/api", api)
         .layer(middleware::from_fn_with_state(state.clone(), auth))
+        .layer(middleware::from_fn(compress))
         .with_state(state)
 }
 
@@ -189,6 +190,63 @@ async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Re
     response
 }
 
+/// Text (JSON, the page, the script, the stylesheet) gzipped for browsers
+/// that take it: mostly repeated structure, it shrinks to about a quarter,
+/// which matters over a slow link. The event stream and files stay as they
+/// are, and so does anything small.
+async fn compress(request: Request, next: Next) -> Response {
+    use std::io::Write;
+    let gzip = accepts_gzip(request.headers());
+    let mut response = next.run(request).await;
+    let text = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| COMPRESSED_TYPES.iter().any(|p| t.starts_with(p)));
+    if !text || response.headers().contains_key(header::CONTENT_ENCODING) {
+        return response;
+    }
+    // Caches keep each encoding apart.
+    response.headers_mut().append(header::VARY, HeaderValue::from_static("accept-encoding"));
+    if !gzip {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    if bytes.len() < MIN_COMPRESSED {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    }
+    let mut encoder = flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 4), flate2::Compression::fast());
+    let Some(zipped) = encoder.write_all(&bytes).ok().and_then(|()| encoder.finish().ok()) else {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    };
+    parts.headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, axum::body::Body::from(zipped))
+}
+
+/// What [`compress`] gzips.
+const COMPRESSED_TYPES: [&str; 5] = ["application/json", "text/html", "text/javascript", "text/css", "text/plain"];
+/// Smaller than this isn't worth it.
+const MIN_COMPRESSED: usize = 1024;
+
+/// Whether `Accept-Encoding` takes gzip (and not with `q=0`).
+fn accepts_gzip(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT_ENCODING)
+        .into_iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .any(|coding| {
+            let mut parts = coding.split(';').map(str::trim);
+            let name = parts.next().unwrap_or_default();
+            let refused = parts.any(|p| p.strip_prefix("q=").and_then(|q| q.parse::<f32>().ok()) == Some(0.0));
+            (name.eq_ignore_ascii_case("gzip") || name == "*") && !refused
+        })
+}
+
 // ---- static files -------------------------------------------------------
 
 fn asset(content_type: &'static str, body: &'static str) -> Response {
@@ -248,8 +306,9 @@ async fn get_state(State(state): State<WebState>) -> ApiResult {
     Ok(axum::Json(state.read(|o| views::state(&o.app)).await?))
 }
 
-/// One event per change (browsers refetch what they show), and a `notify`
-/// event per notification (each browser decides whether to show it).
+/// One event per change, `<version> <scope>` (browsers refetch what they
+/// show of it), and a `notify` event per notification (each browser decides
+/// whether to show it).
 async fn events(State(state): State<WebState>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let receivers = (state.changes.subscribe(), state.notices.subscribe());
     let stream = futures_util::stream::unfold(receivers, |(mut changes, mut notices)| async move {
@@ -257,9 +316,9 @@ async fn events(State(state): State<WebState>) -> Sse<impl Stream<Item = Result<
         let event = loop {
             tokio::select! {
                 change = changes.recv() => break match change {
-                    Ok(version) => Event::default().data(version.to_string()),
+                    Ok((version, scope)) => Event::default().data(format!("{version} {}", scope.name())),
                     // Missed some: one event covers them.
-                    Err(RecvError::Lagged(_)) => Event::default().data("0"),
+                    Err(RecvError::Lagged(_)) => Event::default().data("0 all"),
                     Err(RecvError::Closed) => return None,
                 },
                 notice = notices.recv() => match notice {
@@ -315,8 +374,14 @@ async fn new_conversation(State(state): State<WebState>, axum::Json(body): axum:
     Ok(axum::Json(json!({ "key": reply })))
 }
 
-async fn conversation(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
-    Ok(axum::Json(state.read(move |o| views::conversation(&o.app, &key)).await?))
+#[derive(Deserialize)]
+struct Newest {
+    /// Only the newest this many messages.
+    last: Option<usize>,
+}
+
+async fn conversation(State(state): State<WebState>, Path(key): Path<String>, Query(query): Query<Newest>) -> ApiResult {
+    Ok(axum::Json(state.read(move |o| views::conversation(&o.app, &key, query.last)).await?))
 }
 
 async fn read_conversation(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
@@ -520,6 +585,8 @@ async fn add_hub(State(state): State<WebState>, axum::Json(body): axum::Json<Add
 struct RoomQuery {
     #[serde(default)]
     name: String,
+    /// Only the newest this many lines.
+    last: Option<usize>,
 }
 
 fn hub_hash(text: &str) -> Result<Hash, ApiError> {
@@ -532,7 +599,7 @@ async fn room(State(state): State<WebState>, Path(hub): Path<String>, Query(quer
     let view = state
         .read(move |o| {
             let index = o.app.channels.hub_index(hash)?;
-            Some(views::room(&o.app, &o.app.channels.hubs[index], &room))
+            Some(views::room(&o.app, &o.app.channels.hubs[index], &room, query.last))
         })
         .await?;
     view.map(axum::Json).ok_or_else(|| not_found("hub"))
@@ -970,6 +1037,8 @@ async fn reticulum_text(State(state): State<WebState>, axum::Json(body): axum::J
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use axum::http::HeaderMap;
 
     use super::*;
@@ -998,5 +1067,88 @@ mod tests {
     fn secrets_compare_exactly() {
         assert!(same("abc", "abc"));
         assert!(!same("abc", "abd") && !same("abc", "ab") && !same("", "a"));
+    }
+
+    #[test]
+    fn gzip_is_taken_unless_refused() {
+        let takes = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_str(value).unwrap());
+            accepts_gzip(&headers)
+        };
+        assert!(takes("gzip, deflate, br, zstd") && takes("GZIP") && takes("br;q=1.0, gzip;q=0.5") && takes("*"));
+        assert!(!takes("br") && !takes("identity") && !takes("gzip;q=0") && !takes("gzip; q=0.0"));
+        assert!(!accepts_gzip(&HeaderMap::new()));
+    }
+
+    /// A response from `router` (behind [`compress`]) to a GET of `path`:
+    /// its headers (lowercase names) and body, as sent.
+    async fn fetch(router: Router, path: &str, accept: Option<&str>) -> (HashMap<String, String>, Vec<u8>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router.layer(middleware::from_fn(compress))).await });
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let accept = accept.map(|a| format!("Accept-Encoding: {a}\r\n")).unwrap_or_default();
+        stream.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n{accept}Connection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.unwrap();
+        server.abort();
+        let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let head = String::from_utf8_lossy(&raw[..split]).to_string();
+        let headers = head
+            .lines()
+            .skip(1)
+            .filter_map(|l| l.split_once(':'))
+            .map(|(k, v)| (k.trim().to_lowercase(), v.trim().to_string()))
+            .collect();
+        let mut body = raw[split + 4..].to_vec();
+        // Chunked (a compressed body has no known length).
+        if head.to_lowercase().contains("transfer-encoding: chunked") {
+            let mut out = Vec::new();
+            let mut rest = &body[..];
+            while let Some(end) = rest.windows(2).position(|w| w == b"\r\n") {
+                let size = usize::from_str_radix(std::str::from_utf8(&rest[..end]).unwrap().trim(), 16).unwrap();
+                if size == 0 {
+                    break;
+                }
+                out.extend_from_slice(&rest[end + 2..end + 2 + size]);
+                rest = &rest[end + 2 + size + 2..];
+            }
+            body = out;
+        }
+        (headers, body)
+    }
+
+    #[tokio::test]
+    async fn text_is_gzipped_and_the_rest_left_alone() {
+        use std::io::Read;
+        let big = json!({ "lines": vec!["the same words again and again"; 400] }).to_string();
+        let router = || {
+            let big = big.clone();
+            Router::new()
+                .route("/big", get(move || async move { ([(header::CONTENT_TYPE, "application/json")], big) }))
+                .route("/small", get(|| async { axum::Json(json!({ "ok": true })) }))
+                .route("/png", get(|| async { ([(header::CONTENT_TYPE, "image/png")], vec![7u8; 50_000]) }))
+                .route("/events", get(|| async { ([(header::CONTENT_TYPE, "text/event-stream")], "data: 1\n\n".repeat(500)) }))
+        };
+        let (headers, body) = fetch(router(), "/big", Some("gzip, br")).await;
+        assert_eq!(headers.get("content-encoding").map(String::as_str), Some("gzip"));
+        assert_eq!(headers.get("vary").map(String::as_str), Some("accept-encoding"));
+        let mut unzipped = String::new();
+        flate2::read::GzDecoder::new(&body[..]).read_to_string(&mut unzipped).unwrap();
+        assert_eq!(unzipped, big);
+        assert!(body.len() * 10 < big.len(), "{} of {}", body.len(), big.len());
+        // Browsers that don't take it, and small answers, get it as it is.
+        let (headers, body) = fetch(router(), "/big", None).await;
+        assert!(!headers.contains_key("content-encoding") && body == big.as_bytes());
+        assert_eq!(headers.get("vary").map(String::as_str), Some("accept-encoding"));
+        let (headers, body) = fetch(router(), "/small", Some("gzip")).await;
+        assert!(!headers.contains_key("content-encoding") && body == br#"{"ok":true}"#);
+        // Images and the event stream are left alone.
+        for path in ["/png", "/events"] {
+            let (headers, _) = fetch(router(), path, Some("gzip")).await;
+            assert!(!headers.contains_key("content-encoding"), "{path}");
+        }
     }
 }

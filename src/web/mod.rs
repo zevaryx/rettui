@@ -4,7 +4,8 @@
 //! that also receives network events, exactly like the TUI's event loop.
 //! HTTP handlers never touch it directly: they send it jobs (closures run
 //! on `&mut Owner`) and await the answer. Browsers are told when something
-//! changed over a Server-Sent Events stream, and fetch what they show.
+//! changed over a Server-Sent Events stream (and what it touched, see
+//! [`Scope`]), and fetch what they show.
 //! Notifications go out on the same stream; each browser shows them unless
 //! it's showing what they're about.
 //!
@@ -146,11 +147,73 @@ struct Job {
     changes: bool,
 }
 
+/// What a change touched, so browsers refetch only what shows it: the
+/// interface counters every few seconds would otherwise refetch whatever is
+/// on screen (a long conversation is hundreds of kilobytes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The status only (the sidebar, and Status): interface counters and
+    /// the log.
+    Status,
+    /// The hosted node's counters, and the status.
+    Node,
+    /// Anything.
+    All,
+}
+
+impl Scope {
+    fn of(event: &NetEvent) -> Self {
+        match event {
+            NetEvent::Interfaces(_) | NetEvent::Log(_) => Scope::Status,
+            NetEvent::Host(net::HostEvent::Stats(_)) => Scope::Node,
+            _ => Scope::All,
+        }
+    }
+
+    /// What two changes touched together.
+    fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (Scope::Status, scope) | (scope, Scope::Status) => scope,
+            (Scope::Node, Scope::Node) => Scope::Node,
+            _ => Scope::All,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Scope::Status => "status",
+            Scope::Node => "node",
+            Scope::All => "all",
+        }
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn counters_and_the_log_touch_only_the_status() {
+        assert_eq!(Scope::of(&NetEvent::Interfaces(Vec::new())), Scope::Status);
+        assert_eq!(Scope::of(&NetEvent::Log("Interface x went offline".into())), Scope::Status);
+        assert_eq!(Scope::of(&NetEvent::Announced), Scope::All);
+        assert_eq!(Scope::of(&NetEvent::SyncStarted), Scope::All);
+        // A burst touches what any of it did.
+        assert_eq!(Scope::Status.and(Scope::Status), Scope::Status);
+        assert_eq!(Scope::Status.and(Scope::Node), Scope::Node);
+        assert_eq!(Scope::Node.and(Scope::Status), Scope::Node);
+        assert_eq!(Scope::Node.and(Scope::Node), Scope::Node);
+        assert_eq!(Scope::Status.and(Scope::All), Scope::All);
+        assert_eq!(Scope::All.and(Scope::Node), Scope::All);
+    }
+}
+
 /// Shared by every HTTP handler.
 #[derive(Clone)]
 pub struct WebState {
     jobs: mpsc::UnboundedSender<Job>,
-    changes: broadcast::Sender<u64>,
+    /// Each change: a version, and what it touched.
+    changes: broadcast::Sender<(u64, Scope)>,
     /// Notifications, for every open browser.
     notices: broadcast::Sender<Notification>,
     token: String,
@@ -282,9 +345,9 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     }
 
     let mut version = 0u64;
-    let mut notify = |changes: &broadcast::Sender<u64>| {
+    let mut notify = |changes: &broadcast::Sender<(u64, Scope)>, scope: Scope| {
         version += 1;
-        let _ = changes.send(version);
+        let _ = changes.send((version, scope));
     };
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let mut save = tokio::time::interval(Duration::from_secs(10));
@@ -297,14 +360,18 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 (job.run)(&mut owner);
                 owner.app.tab = Tab::Status;
                 if job.changes {
-                    notify(&changes);
+                    notify(&changes, Scope::All);
                 }
             }
             Some(event) = net_rx.recv() => {
+                let mut scope = Scope::of(&event);
                 owner.on_net(event);
                 // Apply a burst of events before telling browsers.
-                net::drain_burst(&mut net_rx, |event| owner.on_net(event));
-                notify(&changes);
+                net::drain_burst(&mut net_rx, |event| {
+                    scope = scope.and(Scope::of(&event));
+                    owner.on_net(event);
+                });
+                notify(&changes, scope);
             }
             Some(image) = decoded.recv() => owner.app.on_decoded(image),
             _ = tick.tick() => owner.app.on_tick(),
@@ -320,14 +387,14 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         if owner.app.take_rns_restart() {
             // Browsers see "starting" while the old stack stops; page loads
             // in flight belong to it.
-            notify(&changes);
+            notify(&changes, Scope::All);
             for (_, pending) in owner.fetches.drain() {
                 let _ = pending.reply.send(Err("Reticulum restarted while loading; load the page again".into()));
             }
             net::shutdown(&net_tx, &mut net_rx, net::Stop::Restart).await;
             (net_tx, net_rx) = net::spawn(crate::net_options(&owner.app.settings, &owner.app.paths, identity.clone()));
             owner.app.set_network(net_tx.clone());
-            notify(&changes);
+            notify(&changes, Scope::All);
         }
     };
     owner.app.save_if_dirty();
