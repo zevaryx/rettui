@@ -143,7 +143,7 @@ fn same(a: &str, b: &str) -> bool {
 /// keeps its own cookies and has no address bar to open the link in.
 const LOGIN_PAGE: &str = "<!doctype html><meta charset=utf-8><title>rettui</title>\
 <meta name=viewport content=\"width=device-width, initial-scale=1\">\
-<link rel=icon type=image/png href=/brand/icon.png><link rel=manifest href=/manifest.webmanifest>\
+<link rel=icon type=image/png href=/brand/icon.png><link rel=manifest href=/manifest.webmanifest crossorigin=use-credentials>\
 <body style=\"font-family:sans-serif;background:#16161e;color:#ddd;padding:2em;line-height:1.5\">\
 <h1><img src=/brand/wordmark.png alt=rettui height=36></h1><p>Open the link that <code>rettui --web</code> printed (it ends in <code>?token=…</code>) to log in.</p>\
 <form method=get action=/><p><label>Or paste its token (after <code>token=</code>):<br>\
