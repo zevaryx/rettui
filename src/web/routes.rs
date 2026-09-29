@@ -453,6 +453,7 @@ struct Newest {
 }
 
 async fn conversation(State(state): State<WebState>, Path(key): Path<String>, Query(query): Query<Newest>) -> ApiResult {
+    let key = address(&key)?;
     Ok(axum::Json(state.read(move |o| views::conversation(&o.app, &key, query.last)).await?))
 }
 

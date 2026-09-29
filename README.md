@@ -469,8 +469,9 @@ rettui web UI: http://127.0.0.1:8740/?token=…
     seconds, refresh only the sidebar and Status, not the rest of the page.
     Announces, several a second on a busy network, refresh the Network list
     and the Browser's nodes at most every 2 seconds, and nothing else.
-  - **Only what shows:** a conversation loads its newest 100 messages and a
-    room its newest 200 lines, until you ask for the earlier ones.
+  - **Only what shows:** a conversation loads its newest 100 messages, a
+    room its newest 200 lines, and the Browser's node list the 200 nodes
+    heard most recently, until you ask for more.
   - **Compressed:** answers are gzip-compressed.
   - **Cached:** the script and stylesheet are fetched again only when they've
     changed. The font's text (about 90 KB for each weight) loads on the first

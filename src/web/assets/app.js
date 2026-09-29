@@ -2156,6 +2156,9 @@ app.views.browser = {
   history: [],
   viewSource: false,
   loading: null,
+  // Nodes listed (the most recently heard); more on request. A busy
+  // network hears thousands, refetched with every burst of announces.
+  nodeLimit: 200,
 
   mount(root) {
     this.paneList = el('div', { class: 'scroll' });
@@ -2199,9 +2202,10 @@ app.views.browser = {
   },
 
   async update() {
-    const [saved, peers] = await Promise.all([api.get('/saved'), api.get('/peers?kind=nomad')]);
+    const [saved, peers] = await Promise.all([api.get('/saved'), api.get(`/peers?kind=nomad&limit=${this.nodeLimit}`)]);
     this.saved = saved;
     this.nodes = peers.peers;
+    this.nodeTotal = peers.total;
     this.renderPane();
     if (this.page) {
       const url = this.page.url;
@@ -2216,7 +2220,7 @@ app.views.browser = {
         this.listing = 'saved';
         this.renderPane();
       } }),
-      el('button', { class: this.listing === 'nodes' ? 'active' : '', text: `Nodes ${this.nodes?.length ?? ''}`, onclick: () => {
+      el('button', { class: this.listing === 'nodes' ? 'active' : '', text: `Nodes ${this.nodeTotal ?? ''}`, onclick: () => {
         this.listing = 'nodes';
         this.renderPane();
       } }));
@@ -2232,13 +2236,25 @@ app.views.browser = {
         attempt(() => api.post('/saved/remove', { url: s.url }), `Removed ${s.name}`);
       } }))) : [el('div', { class: 'empty', text: 'Nothing saved yet. Open a page and press ☆ Save.' })]));
     } else {
-      this.paneList.replaceChildren(...((this.nodes || []).length ? this.nodes.map((n) => el('div', {
+      const nodes = this.nodes || [];
+      const rows = nodes.length ? nodes.map((n) => el('div', {
         class: 'list-item' + (n.hash === currentNode ? ' selected' : ''),
         onclick: () => this.go(n.hash),
       }, el('span', { class: 'main' },
         el('div', { class: 'name', text: n.name || `<${n.hash.slice(0, 12)}>` }),
         el('div', { class: 'sub', text: `${n.hash}  ·  ${ago(n.last_seen)} ago` })))) :
-        [el('div', { class: 'empty', text: 'No NomadNet nodes heard yet.' })]));
+        [el('div', { class: 'empty', text: 'No NomadNet nodes heard yet.' })];
+      // The newest only; more on request.
+      const more = (this.nodeTotal ?? nodes.length) - nodes.length;
+      if (more > 0) {
+        rows.push(el('div', { class: 'show-more' },
+          el('span', { class: 'dim', text: `The ${nodes.length} most recently heard of ${this.nodeTotal}. Search the Network tab for others, or ` }),
+          el('button', { text: `show ${Math.min(more, 200)} more`, onclick: () => {
+            this.nodeLimit += 200;
+            this.update();
+          } })));
+      }
+      this.paneList.replaceChildren(...rows);
     }
   },
 

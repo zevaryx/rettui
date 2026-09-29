@@ -90,6 +90,12 @@ pub struct Store {
 /// The first bytes of a gzip file.
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
+/// gzip level for the store, which is written again whenever it changes.
+/// Measured on a 17.6 MB store (60,000 messages), level 3 takes a third of
+/// the time of the default (6) for a file about 7% larger; level 1 is
+/// quicker still but 35% larger.
+const STORE_COMPRESSION: Compression = Compression::new(3);
+
 /// Where earlier versions kept the store, as plain JSON.
 fn legacy_path(path: &Path) -> PathBuf {
     path.with_file_name("store.json")
@@ -210,7 +216,7 @@ impl Store {
         // Serialising first and compressing in one go is several times
         // faster than streaming serde's many small writes through gzip.
         let json = serde_json::to_vec(self)?;
-        let mut gzip = GzEncoder::new(Vec::with_capacity(json.len() / 4), Compression::default());
+        let mut gzip = GzEncoder::new(Vec::with_capacity(json.len() / 4), STORE_COMPRESSION);
         gzip.write_all(&json)?;
         Ok(gzip.finish()?)
     }
@@ -244,7 +250,8 @@ impl Store {
     pub fn display_name(&self, hash: &str) -> String {
         match self.peers.get(hash).and_then(|p| p.name.as_deref()) {
             Some(name) => name.to_string(),
-            None => format!("<{}>", &hash[..hash.len().min(12)]),
+            // By characters: `hash` may come from a request, not only as hex.
+            None => format!("<{}>", hash.chars().take(12).collect::<String>()),
         }
     }
 
@@ -371,6 +378,17 @@ mod tests {
         assert_eq!(store.peers.len(), 1, "and its contents are used");
         assert!(store.migration_note.as_deref().unwrap().starts_with("Could not convert"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unknown_names_are_cut_by_character() {
+        let store = sample();
+        assert_eq!(store.display_name(&"ab".repeat(16)), "Alice");
+        assert_eq!(store.display_name(&"cd".repeat(16)), "<cdcdcdcdcdcd>");
+        assert_eq!(store.display_name("abc"), "<abc>");
+        // Not a character boundary at byte 12: this used to panic.
+        assert_eq!(store.display_name("aéééééé"), "<aéééééé>");
+        assert_eq!(store.display_name(&"é".repeat(20)), format!("<{}>", "é".repeat(12)));
     }
 
     #[test]
