@@ -254,6 +254,9 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
         for notification in app.take_notifications() {
             desktop.show(notification);
         }
+        // Reads close notifications in the web UI's browsers; the desktop
+        // keeps its own.
+        app.take_reads();
         if let Some(e) = desktop.failure() {
             app.log(format!("Could not show a desktop notification: {e}"));
         }

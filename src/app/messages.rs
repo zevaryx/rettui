@@ -371,6 +371,7 @@ impl App {
         {
             conversation.unread = 0;
             self.store_dirty = true;
+            self.read(Target::Conversation { key: key.to_string() });
         }
     }
 

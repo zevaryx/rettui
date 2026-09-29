@@ -33,6 +33,9 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `uploads/`: files attached to messages sent from the web UI
 - `node/`: your node's `pages/` and `files/`
 - `web_token`: the web UI's login secret (delete it to log every browser out)
+- `web_push_key`: the web UI's key for background notifications (Web Push),
+  and `web_push.json`: the browsers that turned them on. Deleting the key
+  makes browsers subscribe again the next time they open rettui.
 
 ## Message history
 

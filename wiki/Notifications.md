@@ -24,6 +24,19 @@ both UIs.
   allow them, a note shows in the page while you're looking at it. On an
   iPhone (iOS 16.4 or later), add rettui to the Home Screen first (see
   **Installing** under [Web UI](Web-UI)).
+- **In the background (web UI):** a phone soon stops a page it isn't
+  showing, and with it rettui's live connection. **Turn on** beside "In the
+  background" (Status, **Notifications**) in each browser that should still
+  be notified then. rettui sends those browsers their notifications by Web
+  Push, through the browser's push service (Google's, Apple's, Mozilla's or
+  Microsoft's), encrypted for that browser: the service sees when one is
+  sent, not what it says. rettui needs to reach the internet for this, and
+  doesn't push to a browser while it shows rettui.
+- **Several devices:** every browser gets each notification (unless it's
+  showing what it's about). Reading a conversation or room on one closes
+  its notification on the others that are connected. A browser whose
+  connection dropped for a while gets the notifications it missed when it's
+  back, for what's still unread.
 - **Muting a conversation:** `N` (TUI), or the 🔔 bell in its header (web
   UI), turns a conversation's notifications off or back on. Muted
   conversations show *muted* (TUI) or 🔕 (web UI) in the list.

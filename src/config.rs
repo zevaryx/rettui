@@ -96,6 +96,9 @@ pub struct Paths {
     pub uploads: PathBuf,
     /// Secret for the web UI's login link.
     pub web_token: PathBuf,
+    /// The web UI's key for Web Push, and the browsers subscribed.
+    pub web_push_key: PathBuf,
+    pub web_push: PathBuf,
     /// Default folder for a hosted node's pages and files.
     pub node: PathBuf,
 }
@@ -122,6 +125,8 @@ impl Paths {
             archive: base.join("archive"),
             uploads: base.join("uploads"),
             web_token: base.join("web_token"),
+            web_push_key: base.join("web_push_key"),
+            web_push: base.join("web_push.json"),
             node: base.join("node"),
         })
     }
@@ -526,6 +531,21 @@ pub fn load_identity(path: &Path) -> Result<Identity> {
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// [`write_atomic`] for secrets: only the owner can read the file, from the
+/// moment it's created (on Unix).
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("tmp");
+    let _ = fs::remove_file(&tmp);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(&tmp)?.write_all(bytes)?;
     fs::rename(&tmp, path)?;
     Ok(())
 }

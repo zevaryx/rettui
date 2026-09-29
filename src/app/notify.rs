@@ -92,6 +92,16 @@ impl App {
     pub fn take_notifications(&mut self) -> Vec<Notification> {
         batch(std::mem::take(&mut self.notifications))
     }
+
+    /// Something with unread messages was read.
+    pub(super) fn read(&mut self, target: Target) {
+        self.reads.push(target.tag());
+    }
+
+    /// What was read since last asked (notification tags).
+    pub fn take_reads(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.reads)
+    }
 }
 
 #[cfg(test)]

@@ -709,8 +709,12 @@ impl App {
 
     pub fn mark_room_read(&mut self, index: usize, room: &str) {
         let hub = self.hub_mut(index);
-        hub.unread.remove(room);
+        let had = hub.unread.remove(room).is_some_and(|n| n > 0);
         hub.mentions.remove(room);
+        if had {
+            let target = crate::app::notify::Target::Room { hub: hex::encode(hub.hash), room: room.to_string() };
+            self.read(target);
+        }
     }
 
     /// Join a room the user asked for (saved, and connecting if needed).

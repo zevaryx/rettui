@@ -297,6 +297,9 @@ pub struct App {
     rejoin_hubs: Vec<Hash>,
     /// Notifications waiting to be shown (see [`App::take_notifications`]).
     notifications: Vec<notify::Notification>,
+    /// What was read since last asked, by notification tag (the web UI
+    /// closes their notifications in every browser).
+    reads: Vec<String>,
     /// Whether the window has the focus (as far as the terminal says; the
     /// web UI's browsers each know their own).
     pub focused: bool,
@@ -382,6 +385,7 @@ impl App {
             restart_pending: false,
             rejoin_hubs: Vec::new(),
             notifications: Vec::new(),
+            reads: Vec::new(),
             focused: true,
         };
         for note in std::mem::take(&mut app.store.migration_notes) {

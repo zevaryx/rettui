@@ -910,6 +910,12 @@ const notifications = {
   // one), once registered.
   worker: null,
   hinted: false,
+  // Background notifications (Web Push) in this browser: 'on', 'off', or
+  // null where they can't be had; and its subscription's address.
+  push: null,
+  endpoint: null,
+  // Notifications shown without the service worker, by tag (to close them).
+  open: new Map(),
 
   // 'granted', 'default', 'denied', 'insecure' (plain HTTP from elsewhere)
   // or 'unsupported'.
@@ -928,7 +934,83 @@ const notifications = {
       });
     } catch (e) {
       console.warn('No service worker:', e);
+      return;
     }
+    await this.checkPush().catch((e) => console.warn('Web Push:', e));
+    // Say whether this browser shows rettui (it's pushed to only when it
+    // doesn't), when that changes and every minute while it does.
+    document.addEventListener('visibilitychange', () => this.showing());
+    setInterval(() => document.visibilityState === 'visible' && this.showing(), 60_000);
+    this.showing();
+    app.views.status.update?.();
+  },
+
+  // Whether this browser has background notifications, and that rettui has
+  // its subscription (made with rettui's current key).
+  async checkPush() {
+    const registration = await navigator.serviceWorker.ready;
+    if (!registration.pushManager || this.state() !== 'granted') {
+      this.push = registration.pushManager && this.state() !== 'denied' ? 'off' : null;
+      return;
+    }
+    let subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      const { key } = await api.get('/push');
+      const current = subscription.options?.applicationServerKey;
+      if (current && base64url(current) !== key) {
+        // rettui's key changed (its data was reset): subscribe again.
+        await subscription.unsubscribe();
+        subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromBase64url(key) });
+      }
+      await api.post('/push/subscribe', subscription.toJSON());
+    }
+    this.endpoint = subscription?.endpoint || null;
+    this.push = subscription ? 'on' : 'off';
+  },
+
+  async setPush(on) {
+    const registration = await navigator.serviceWorker.ready;
+    if (on) {
+      if (this.state() !== 'granted') await Notification.requestPermission();
+      if (this.state() !== 'granted') return toast('Notifications are blocked: allow them in this site\'s settings', true);
+      const { key } = await api.get('/push');
+      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromBase64url(key) });
+      await api.post('/push/subscribe', subscription.toJSON());
+      this.endpoint = subscription.endpoint;
+      this.push = 'on';
+      this.showing();
+      toast('Background notifications are on in this browser');
+    } else {
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await api.post('/push/unsubscribe', { endpoint: subscription.endpoint }).catch(() => {});
+        await subscription.unsubscribe();
+      }
+      this.endpoint = null;
+      this.push = 'off';
+      toast('Background notifications are off in this browser');
+    }
+    app.views.status.update?.();
+  },
+
+  // Tell rettui whether this browser shows it now (kept alive as the page
+  // hides, which is when it matters).
+  showing() {
+    if (this.push !== 'on' || !this.endpoint) return;
+    fetch('/api/push/showing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: this.endpoint, showing: document.visibilityState === 'visible' }),
+      keepalive: true,
+    }).catch(() => {});
+  },
+
+  // What a notification was about was read (here or elsewhere): close it.
+  async close(tag) {
+    this.open.get(tag)?.close();
+    this.open.delete(tag);
+    const registration = await navigator.serviceWorker?.getRegistration?.();
+    for (const shown of (await registration?.getNotifications({ tag })) || []) shown.close();
   },
 
   async allow() {
@@ -954,12 +1036,16 @@ const notifications = {
   async show(notification) {
     const { title, body, target, tag } = notification;
     if (this.onScreen(target)) return;
+    // In the background with Web Push on, the push shows it (a page in the
+    // background may be stopped at any moment).
+    if (this.push === 'on' && document.visibilityState !== 'visible') return;
     if (this.state() === 'granted') {
       // A newer one about the same conversation or room replaces it.
       const options = { body, tag, renotify: true, icon: '/brand/icon.png', data: { target } };
       try {
         if (this.worker) return await (await navigator.serviceWorker.ready).showNotification(title, options);
         const shown = new Notification(title, options);
+        this.open.set(tag, shown);
         shown.onclick = () => {
           window.focus();
           openTarget(target);
@@ -978,7 +1064,8 @@ const notifications = {
     }
   },
 
-  // For the Status page: how things stand here, and a button to allow them.
+  // For the Status page: how things stand here, and a button to allow them;
+  // then background notifications, where the browser can have them.
   describe() {
     const state = this.state();
     const text = {
@@ -988,9 +1075,19 @@ const notifications = {
       insecure: 'not available: browsers only allow them on HTTPS or on this computer (localhost)',
       unsupported: 'not supported by this browser (on an iPhone, add rettui to the Home Screen first)',
     }[state];
-    return el('div', { class: 'row' },
+    const allowed = el('div', { class: 'row' },
       el('span', { class: state === 'granted' ? 'state-ok' : 'dim', text }),
       state === 'default' ? el('button', { text: 'Allow', onclick: () => this.allow() }) : null);
+    if (!this.push || state === 'denied') return allowed;
+    const on = this.push === 'on';
+    return el('div', {}, allowed,
+      el('div', { class: 'row', style: 'margin-top:6px' },
+        el('span', { class: on ? 'state-ok' : 'dim', text: on ? 'In the background: on' : 'In the background: off' }),
+        el('button', { text: on ? 'Turn off' : 'Turn on', onclick: () => attempt(() => this.setPush(!on)) })),
+      el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text:
+        'Notifications while rettui isn\'t open here (a phone with it in the background, say) go through this '
+        + 'browser\'s push service (Google, Apple, Mozilla or Microsoft), encrypted: it sees when one is sent, not what '
+        + 'it says. rettui needs to reach the internet for them.' }));
   },
 };
 
@@ -1001,6 +1098,16 @@ const notifications = {
 function showing(tab) {
   if (app.tab !== tab || document.visibilityState !== 'visible') return false;
   return !phone.matches || app.views[tab].pane === 'detail';
+}
+
+// Web Push keys are base64url text on the wire, and bytes to the browser.
+function fromBase64url(text) {
+  const plain = atob(text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - text.length % 4) % 4));
+  return Uint8Array.from(plain, (c) => c.charCodeAt(0));
+}
+
+function base64url(buffer) {
+  return btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 // A muted conversation, room or hub, in its list.
@@ -1033,9 +1140,18 @@ function openTarget(target) {
 }
 
 let events = null;
+// The last notification this browser had: reconnecting catches up on the
+// ones missed meanwhile (those still unread).
+let lastNotice = (() => {
+  try {
+    return localStorage.getItem('rettui.notice') || '';
+  } catch {
+    return '';
+  }
+})();
 function listen() {
   events?.close();
-  events = new EventSource('/api/events');
+  events = new EventSource('/api/events' + (lastNotice ? `?since=${lastNotice}` : ''));
   // Each change says what it touched: "all", or parts such as
   // "status,peers": the counters and the log ("status"), the hosted node's
   // counters ("node"), peers heard ("peers").
@@ -1046,8 +1162,25 @@ function listen() {
     else refreshSidebar();
   };
   events.addEventListener('notify', (e) => {
+    if (e.lastEventId) {
+      lastNotice = e.lastEventId;
+      try {
+        localStorage.setItem('rettui.notice', lastNotice);
+      } catch {}
+    }
     try {
-      notifications.show(JSON.parse(e.data));
+      const notification = JSON.parse(e.data);
+      // Missed while away, and the page shows now: its unread counts say so.
+      if (notification.replay && document.visibilityState === 'visible') return;
+      notifications.show(notification);
+    } catch (error) {
+      console.warn(error);
+    }
+  });
+  // Read, here or on another device: its notification goes.
+  events.addEventListener('read', (e) => {
+    try {
+      notifications.close(JSON.parse(e.data).tag);
     } catch (error) {
       console.warn(error);
     }

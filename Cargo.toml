@@ -34,6 +34,14 @@ ciborium = "0.2"
 rand = "0.8"
 # Web UI (`--web`).
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+# Web Push (RFC 8291/8292) for the web UI: VAPID keys and message
+# encryption, and HTTPS to the browsers' push services (rustls with bundled
+# roots, so no system certificates or OpenSSL are needed).
+p256 = { version = "0.13", default-features = false, features = ["ecdh", "ecdsa", "sha256", "std"] }
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls", "proxy-from-env"] }
 
 # Runtime and support
 tokio = { version = "1", features = ["full"] }

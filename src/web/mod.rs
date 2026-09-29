@@ -7,15 +7,20 @@
 //! changed over a Server-Sent Events stream (and what it touched, see
 //! [`Scope`]), and fetch what they show.
 //! Notifications go out on the same stream; each browser shows them unless
-//! it's showing what they're about.
+//! it's showing what they're about. A browser reconnecting catches up on
+//! those it missed, while they're unread; reading something closes its
+//! notifications in every browser. Browsers that aren't showing the web UI
+//! get them by Web Push, where they've turned it on.
 //!
 //! - [`routes`]: the HTTP API, login and static files.
 //! - [`views`]: JSON snapshots of the app state.
+//! - [`push`]: Web Push.
 
+mod push;
 mod routes;
 mod views;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -55,9 +60,45 @@ pub struct Owner {
     pub app: App,
     fetches: HashMap<u64, PendingFetch>,
     next_request: u64,
+    /// The latest notifications and their ids, for browsers catching up.
+    recent: VecDeque<(u64, Notification)>,
+}
+
+/// How many notifications are kept for browsers catching up.
+const RECENT_NOTICES: usize = 100;
+
+/// What goes to every open browser, besides changes.
+#[derive(Debug, Clone)]
+pub enum Notice {
+    /// A notification, and its id: a browser that reconnects says the last
+    /// one it had, and gets those it missed.
+    Show(u64, Notification),
+    /// What this tag is about was read: close notifications about it.
+    Read(String),
 }
 
 impl Owner {
+    /// Notifications after `since` whose conversation or room is still
+    /// unread: what a browser missed while its connection was down (the
+    /// latest one about each).
+    pub fn missed(&self, since: u64) -> Vec<(u64, Notification)> {
+        use crate::app::notify::Target;
+        let unread = |target: &Target| match target {
+            Target::Conversation { key } => self.app.store.conversations.get(key).is_some_and(|c| c.unread > 0),
+            Target::Room { hub, room } => net::parse_hash(hub)
+                .and_then(|hash| self.app.channels.hub_index(hash))
+                .is_some_and(|index| self.app.channels.hubs[index].unread.get(room).is_some_and(|n| *n > 0)),
+            // It sums up a sync: what it was about shows as unread anyway.
+            Target::Summary => false,
+        };
+        let mut missed: Vec<(u64, Notification)> = Vec::new();
+        for (id, notification) in self.recent.iter().filter(|(id, n)| *id > since && unread(&n.target)) {
+            missed.retain(|(_, n)| n.target != notification.target);
+            missed.push((*id, notification.clone()));
+        }
+        missed
+    }
+
     /// Fetch from a NomadNet node, from the cache when fresh (unless
     /// `refresh`). Form submissions and `/file/` downloads always go to the
     /// network, as in the terminal browser.
@@ -190,6 +231,42 @@ impl Scope {
 }
 
 #[cfg(test)]
+mod notice_tests {
+    use super::*;
+    use crate::app::notify::Target;
+    use crate::store::{Conversation, Store};
+
+    #[test]
+    fn catching_up_brings_the_latest_still_unread() {
+        let dir = std::env::temp_dir().join(format!("rettui-missed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (a, b) = ("aa".repeat(16), "bb".repeat(16));
+        let mut store = Store::default();
+        store.conversations.insert(a.clone(), Conversation { unread: 2, ..Default::default() });
+        store.conversations.insert(b.clone(), Conversation { unread: 0, ..Default::default() });
+        let app = crate::app::test_app(&dir, Settings::default(), store);
+        let note = |key: &str, body: &str| Notification {
+            title: key[..4].to_string(),
+            body: body.into(),
+            target: Target::Conversation { key: key.to_string() },
+        };
+        let recent = VecDeque::from([
+            (10, note(&a, "first")),
+            (11, note(&b, "read since")),
+            (12, note(&a, "second")),
+            (13, Notification { title: "3 new messages".into(), body: String::new(), target: Target::Summary }),
+        ]);
+        let owner = Owner { app, fetches: HashMap::new(), next_request: 0, recent };
+        let bodies = |since| owner.missed(since).into_iter().map(|(id, n)| (id, n.body)).collect::<Vec<_>>();
+        // The latest about each conversation still unread, and nothing read.
+        assert_eq!(bodies(0), [(12, "second".to_string())]);
+        assert_eq!(bodies(12), []);
+        assert_eq!(bodies(11), [(12, "second".to_string())]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod scope_tests {
     use super::*;
 
@@ -216,8 +293,9 @@ pub struct WebState {
     jobs: mpsc::UnboundedSender<Job>,
     /// Each change: a version, and what it touched.
     changes: broadcast::Sender<(u64, Scope)>,
-    /// Notifications, for every open browser.
-    notices: broadcast::Sender<Notification>,
+    /// Notifications, and what was read, for every open browser.
+    notices: broadcast::Sender<Notice>,
+    push: push::WebPush,
     token: String,
     paths: std::sync::Arc<Paths>,
 }
@@ -287,12 +365,7 @@ fn load_token(paths: &Paths) -> Result<String> {
         return Ok(token.trim().to_string());
     }
     let token = hex::encode(rand::random::<[u8; 24]>());
-    crate::config::write_atomic(&paths.web_token, token.as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&paths.web_token, std::fs::Permissions::from_mode(0o600))?;
-    }
+    crate::config::write_private(&paths.web_token, token.as_bytes())?;
     Ok(token)
 }
 
@@ -319,7 +392,14 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         app,
         fetches: HashMap::new(),
         next_request: FIRST_WEB_REQUEST,
+        recent: VecDeque::new(),
     };
+    let push = push::WebPush::load(&paths).context("could not set up Web Push")?;
+    // Ids go on from the last run's (milliseconds since 1970 at start), so a
+    // browser catching up after a restart isn't confused.
+    let mut next_notice = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
 
     let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
     let (changes, _) = broadcast::channel(64);
@@ -328,6 +408,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         jobs: jobs_tx,
         changes: changes.clone(),
         notices: notices.clone(),
+        push: push.clone(),
         token: token.clone(),
         paths: std::sync::Arc::new(paths),
     };
@@ -381,7 +462,19 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
             () = &mut shutdown => break Ok(()),
         }
         for notification in owner.app.take_notifications() {
-            let _ = notices.send(notification);
+            next_notice += 1;
+            push.notify(&notification);
+            owner.recent.push_back((next_notice, notification.clone()));
+            if owner.recent.len() > RECENT_NOTICES {
+                owner.recent.pop_front();
+            }
+            let _ = notices.send(Notice::Show(next_notice, notification));
+        }
+        for tag in owner.app.take_reads() {
+            let _ = notices.send(Notice::Read(tag));
+        }
+        for report in push.reports() {
+            owner.app.log(report);
         }
         if server.is_finished() {
             break Err(anyhow::anyhow!("the web server stopped"));

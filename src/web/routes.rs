@@ -26,7 +26,8 @@ use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{Fetched, WebState, views};
+use super::{Fetched, Notice, WebState, push, views};
+use crate::app::notify::Notification;
 use crate::app::files::unique_path;
 use crate::app::{Location, resolve_url};
 use crate::lxmf::DeliveryMode;
@@ -76,6 +77,10 @@ pub fn router(state: WebState) -> Router {
     let api = Router::new()
         .route("/state", get(get_state))
         .route("/events", get(events))
+        .route("/push", get(push_key))
+        .route("/push/subscribe", post(push_subscribe))
+        .route("/push/unsubscribe", post(push_unsubscribe))
+        .route("/push/showing", post(push_showing))
         .route("/conversations", get(conversations).post(new_conversation))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/read", post(read_conversation))
@@ -378,12 +383,57 @@ async fn get_state(State(state): State<WebState>) -> ApiResult {
     Ok(axum::Json(state.read(|o| views::state(&o.app)).await?))
 }
 
+#[derive(Deserialize)]
+struct EventsQuery {
+    /// The last notification this browser had (see [`events`]).
+    since: Option<u64>,
+}
+
+/// A `notify` event: a notification, with its id (the browser's last event
+/// id, for catching up). `replay`: one it missed.
+fn notify_event(id: u64, notification: &Notification, replay: bool) -> Option<Event> {
+    Event::default()
+        .event("notify")
+        .id(id.to_string())
+        .json_data(json!({
+            "title": notification.title,
+            "body": notification.body,
+            "target": notification.target,
+            // Newer ones with the same tag replace older ones.
+            "tag": notification.target.tag(),
+            "replay": replay,
+        }))
+        .ok()
+}
+
 /// One event per change, `<version> <scope>` (browsers refetch what they
-/// show of it), and a `notify` event per notification (each browser decides
-/// whether to show it).
-async fn events(State(state): State<WebState>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+/// show of it); a `notify` event per notification (each browser decides
+/// whether to show it); and a `read` event when what one was about is read
+/// (browsers close it).
+///
+/// A browser reconnecting says the last notification it had (the
+/// `Last-Event-ID` header, which browsers send by themselves, or `?since=`),
+/// and first gets those it missed that are still unread.
+async fn events(
+    State(state): State<WebState>,
+    Query(query): Query<EventsQuery>,
+    headers: axum::http::HeaderMap,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    // Listening before looking back, so nothing falls in between.
     let receivers = (state.changes.subscribe(), state.notices.subscribe());
-    let stream = futures_util::stream::unfold(receivers, |(mut changes, mut notices)| async move {
+    let since = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok()?.trim().parse::<u64>().ok())
+        .or(query.since);
+    let missed = match since {
+        Some(since) => state.read(move |o| o.missed(since)).await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    // Live notifications from before these were sent already.
+    let caught_up = missed.iter().map(|(id, _)| *id).max().unwrap_or(0);
+    let replay: Vec<Result<Event, Infallible>> =
+        missed.iter().filter_map(|(id, n)| notify_event(*id, n, true)).map(Ok).collect();
+    let live = futures_util::stream::unfold(receivers, move |(mut changes, mut notices)| async move {
         use tokio::sync::broadcast::error::RecvError;
         let event = loop {
             tokio::select! {
@@ -394,17 +444,16 @@ async fn events(State(state): State<WebState>) -> Sse<impl Stream<Item = Result<
                     Err(RecvError::Closed) => return None,
                 },
                 notice = notices.recv() => match notice {
-                    Ok(notification) => match Event::default().event("notify").json_data(json!({
-                        "title": notification.title,
-                        "body": notification.body,
-                        "target": notification.target,
-                        // Newer ones with the same tag replace older ones.
-                        "tag": notification.target.tag(),
-                    })) {
+                    Ok(Notice::Show(id, _)) if id <= caught_up => continue,
+                    Ok(Notice::Show(id, notification)) => match notify_event(id, &notification, false) {
+                        Some(event) => break event,
+                        None => continue,
+                    },
+                    Ok(Notice::Read(tag)) => match Event::default().event("read").json_data(json!({ "tag": tag })) {
                         Ok(event) => break event,
                         Err(_) => continue,
                     },
-                    // Old news by now.
+                    // Old news by now (a reconnect catches up on the unread).
                     Err(RecvError::Lagged(_)) => continue,
                     Err(RecvError::Closed) => return None,
                 },
@@ -412,7 +461,52 @@ async fn events(State(state): State<WebState>) -> Sse<impl Stream<Item = Result<
         };
         Some((Ok(event), (changes, notices)))
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(futures_util::StreamExt::chain(futures_util::stream::iter(replay), live)).keep_alive(KeepAlive::default())
+}
+
+// ---- Web Push ---------------------------------------------------------------
+
+/// This server's key, which browsers subscribe with.
+async fn push_key(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(json!({ "key": state.push.public_key() })))
+}
+
+#[derive(Deserialize)]
+struct PushKeys {
+    p256dh: String,
+    auth: String,
+}
+
+/// A browser's `PushSubscription`, as its `toJSON()` gives it.
+#[derive(Deserialize)]
+struct SubscribeBody {
+    endpoint: String,
+    keys: PushKeys,
+}
+
+async fn push_subscribe(State(state): State<WebState>, axum::Json(body): axum::Json<SubscribeBody>) -> ApiResult {
+    let subscription = push::Subscription { endpoint: body.endpoint, p256dh: body.keys.p256dh, auth: body.keys.auth };
+    state.push.subscribe(subscription)?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct EndpointBody {
+    endpoint: String,
+    #[serde(default)]
+    showing: bool,
+}
+
+async fn push_unsubscribe(State(state): State<WebState>, axum::Json(body): axum::Json<EndpointBody>) -> ApiResult {
+    state.push.unsubscribe(&body.endpoint)?;
+    ok()
+}
+
+/// A browser with background notifications says whether it shows the web
+/// UI (it's pushed to only when it doesn't).
+async fn push_showing(State(state): State<WebState>, axum::Json(body): axum::Json<EndpointBody>) -> ApiResult {
+    state.push.set_showing(&body.endpoint, body.showing);
+    ok()
 }
 
 // ---- messages -------------------------------------------------------------

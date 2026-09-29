@@ -1,6 +1,8 @@
 // rettui's service worker. Phone browsers only let a service worker show
 // notifications, so the page shows them through this one; tapping one
-// brings the page up at what it's about. It doesn't touch requests.
+// brings the page up at what it's about. With background notifications on,
+// it shows those rettui pushes (Web Push) while no page shows rettui. It
+// doesn't touch requests.
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
@@ -20,5 +22,23 @@ self.addEventListener('notificationclick', (event) => {
     const tab = target?.kind === 'room' ? 'channels' : 'messages';
     const opened = await self.clients.openWindow('/#' + tab);
     opened?.postMessage({ open: target });
+  })());
+});
+
+// A push: shown, always (browsers require it, and some stop pushes to a
+// site that doesn't). If a page in the background showed the same one from
+// its own connection, it's shown again quietly, so the phone doesn't buzz
+// twice.
+self.addEventListener('push', (event) => {
+  let notification = null;
+  try {
+    notification = event.data?.json();
+  } catch {}
+  if (!notification?.title) return;
+  const { title, body, tag, target } = notification;
+  event.waitUntil((async () => {
+    const shown = await self.registration.getNotifications({ tag });
+    const again = shown.some((n) => n.body === body);
+    await self.registration.showNotification(title, { body, tag, renotify: !again, icon: '/brand/icon.png', data: { target } });
   })());
 });
