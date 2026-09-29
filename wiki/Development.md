@@ -55,8 +55,8 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   `dev` gives `ghcr.io/zevaryx/rettui:dev`, and `feature/x` gives
   `:feature-x`. A newer push to the same branch cancels an unfinished run.
 - **Wiki** ([wiki.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/wiki.yml))
-  copies `wiki/` to this wiki when it changes on `main`, or when run from
-  *Actions > Wiki > Run workflow*. Edit the pages in `wiki/`, not here: the
+  copies `wiki/` to this wiki when it changes on `main` or `dev`, or when
+  run from *Actions > Wiki > Run workflow*. Edit the pages in `wiki/`, not here: the
   next publish replaces the wiki with them.
 
 Both image workflows push through

@@ -1,6 +1,7 @@
 name: Wiki
 
-# Publishes wiki/ to the repository's GitHub wiki. The pages are written and
+# Publishes wiki/ to the repository's GitHub wiki when it changes on main or
+# dev (the wiki shows the latest pages pushed). The pages are written and
 # reviewed here, beside the code they describe; the wiki becomes a copy of
 # wiki/ (pages removed here are removed there).
 #
@@ -9,9 +10,10 @@ name: Wiki
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - "wiki/**"
+      - ".github/workflows/wiki.yml"
   workflow_dispatch:
 
 permissions:
