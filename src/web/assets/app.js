@@ -942,7 +942,7 @@ const notifications = {
     document.addEventListener('visibilitychange', () => this.showing());
     setInterval(() => document.visibilityState === 'visible' && this.showing(), 60_000);
     this.showing();
-    app.views.status.update?.();
+    refreshStatusView();
   },
 
   // Whether this browser has background notifications, and that rettui has
@@ -990,7 +990,7 @@ const notifications = {
       this.push = 'off';
       toast('Background notifications are off in this browser');
     }
-    app.views.status.update?.();
+    refreshStatusView();
   },
 
   // Tell rettui whether this browser shows it now (kept alive as the page
@@ -1017,7 +1017,7 @@ const notifications = {
     await Notification.requestPermission();
     if (this.state() === 'granted') toast('Notifications are on in this browser');
     else if (this.state() === 'denied') toast('Notifications are blocked: allow them in this site\'s settings', true);
-    app.views.status.update?.();
+    refreshStatusView();
   },
 
   // Whether what it's about is on screen, in a window that has the focus.
@@ -1100,6 +1100,12 @@ function showing(tab) {
   return !phone.matches || app.views[tab].pane === 'detail';
 }
 
+// Redraw the Status section, if it has been drawn (it shows how
+// notifications stand in this browser).
+function refreshStatusView() {
+  if (app.views.status.root) app.views.status.update();
+}
+
 // Web Push keys are base64url text on the wire, and bytes to the browser.
 function fromBase64url(text) {
   const plain = atob(text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - text.length % 4) % 4));
@@ -1154,10 +1160,11 @@ function listen() {
   events = new EventSource('/api/events' + (lastNotice ? `?since=${lastNotice}` : ''));
   // Each change says what it touched: "all", or parts such as
   // "status,peers": the counters and the log ("status"), the hosted node's
-  // counters ("node"), peers heard ("peers").
+  // counters ("node"), peers heard ("peers"), RRC ("channels": the
+  // Channels section, and unread counts in the sidebar).
   events.onmessage = (e) => {
     const parts = new Set((e.data.split(' ')[1] || 'all').split(','));
-    if (parts.has('all') || (parts.has('node') && app.tab === 'node')) refresh();
+    if (parts.has('all') || (parts.has('node') && app.tab === 'node') || (parts.has('channels') && app.tab === 'channels')) refresh();
     else if (parts.has('peers')) refreshPeers();
     else refreshSidebar();
   };
@@ -1729,10 +1736,22 @@ app.views.channels = {
       this.showAll = viewKey;
       this.update();
     } })) : null;
+    // A room or whisper conversation while its hub isn't connected (the
+    // hub's own page says why), kept in view at the top.
+    const state = hub.status.kind;
+    const offline = room && state !== 'connected' ? el('div', { class: 'room-offline' },
+      el('span', { class: state === 'failed' ? 'state-bad' : 'dim', text: {
+        connecting: 'Connecting to the hub…',
+        failed: 'The hub failed to connect (its page says why).',
+        disconnected: 'Not connected to the hub.',
+      }[state] }),
+      state === 'connecting' ? null : el('button', { text: 'Connect', onclick: async () => {
+        if (await this.hubAction(hash, 'connect')) this.update();
+      } })) : null;
     const render = () => {
       const chat = this.chat(view.lines.slice(from));
       chat.append(...echoesFor(this, viewKey));
-      this.body.replaceChildren(...(room || hidden ? [] : this.hubInfo(hub)), ...(earlier ? [earlier] : []), chat);
+      this.body.replaceChildren(...(offline ? [offline] : []), ...(room || hidden ? [] : this.hubInfo(hub)), ...(earlier ? [earlier] : []), chat);
     };
     if (this.lastView !== viewKey) {
       render();
@@ -3194,9 +3213,13 @@ app.views.status = {
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Known'), el('span', { text: `${s.known} destinations` }),
       label('Notifications'), notifications.describe());
-    this.interfaces.replaceChildren(...s.interfaces.map((i) => el('div', { class: 'iface' },
+    const noInterfaces = s.net.state !== 'online' ? 'Reticulum is starting…'
+      : s.external_shared_instance ? 'None here: the program running the shared instance (such as rnsd) has them.'
+        : 'None: add one in the Reticulum section to reach other peers.';
+    this.interfaces.replaceChildren(...(s.interfaces.length ? s.interfaces.map((i) => el('div', { class: 'iface' },
       el('span', { class: i.online ? 'online' : 'offline', text: i.online ? '● ' : '○ ' }), i.name,
-      el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` }))));
+      el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` })))
+      : [el('div', { class: 'empty', text: noInterfaces })]));
     stickToBottom(this.log, () => this.log.replaceChildren(...s.log.map((line) => el('div', { text: line }))));
     // Pick up changes made elsewhere (the TUI's editor, or by hand).
     if (settings) this.loadSettings();
@@ -3241,7 +3264,7 @@ app.views.reticulum = {
     root.append(
       el('div', { class: 'column side' },
         el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Config file' }),
-          el('button', { text: 'Restart Reticulum', title: 'Apply saved changes now', onclick: () => restartReticulum() })), this.fileCard),
+          el('button', { text: 'Restart', title: 'Restart Reticulum, to apply saved changes now', onclick: () => restartReticulum() })), this.fileCard),
         el('section', { class: 'panel grow' },
           el('header', {}, el('span', { class: 'title grow', text: 'Sections' }),
             el('button', { text: '+ Interface', onclick: () => this.showAdd() })),

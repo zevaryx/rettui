@@ -18,6 +18,8 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(settings_block, area);
     let [list_area, help_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
     app.regions.settings = list_area;
+    // Values line up two spaces after the longest label.
+    let width = FIELDS.iter().map(|f| f.label.chars().count()).max().unwrap_or(0) + 2;
     let items: Vec<ListItem> = FIELDS
         .iter()
         .map(|field| {
@@ -28,7 +30,7 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
                 FieldKind::Number if value == "0" => Span::styled("0 (off)", Style::default().fg(DIM)),
                 _ => Span::raw(value),
             };
-            let mut spans = vec![Span::styled(format!(" {:<22}", field.label), Style::default().fg(DIM)), shown];
+            let mut spans = vec![Span::styled(format!(" {:<width$}", field.label), Style::default().fg(DIM)), shown];
             if field.effect == Effect::NextStart {
                 spans.push(Span::styled("  · next start", Style::default().fg(DIM)));
             }
@@ -111,8 +113,20 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
             ])
         })
         .collect();
+    let iface_lines = if iface_lines.is_empty() {
+        let none = match app.net_state {
+            NetState::Online if app.uses_external_shared_instance() => {
+                "None here: the program running the shared instance (such as rnsd) has them."
+            }
+            NetState::Online => "None: add one in the Reticulum tab to reach other peers.",
+            _ => "Reticulum is starting…",
+        };
+        vec![Line::styled(none, Style::default().fg(DIM))]
+    } else {
+        iface_lines
+    };
     frame.render_widget(
-        Paragraph::new(iface_lines).block(block("Interfaces", false)),
+        Paragraph::new(iface_lines).wrap(ratatui::widgets::Wrap { trim: true }).block(block("Interfaces", false)),
         ifaces,
     );
 

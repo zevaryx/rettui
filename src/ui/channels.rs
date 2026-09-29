@@ -290,6 +290,16 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
     // Under the chat: what differs from the usual, and the key to change it.
     let mut notes = Vec::new();
+    // A room or whisper conversation while its hub isn't connected (the
+    // hub's own view says why).
+    if !room.is_empty() {
+        match &hub.status {
+            HubStatus::Connected => {}
+            HubStatus::Connecting(_) => notes.push("connecting to the hub…"),
+            HubStatus::Failed(_) => notes.push("the hub failed to connect (see the hub) · c retries"),
+            HubStatus::Disconnected => notes.push("not connected to the hub · c connects"),
+        }
+    }
     if !app.settings.show_joins && !room.is_empty() && whisper.is_none() {
         notes.push("joins and leaves hidden · J shows them");
     }

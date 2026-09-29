@@ -426,8 +426,10 @@ impl App {
             KeyCode::Char('o') => self.open_latest_attachment(),
             KeyCode::Char('d') => self.delivery_mode = self.delivery_mode.next(),
             KeyCode::Char('N') => self.toggle_active_muted(),
-            KeyCode::PageUp => self.message_scroll += 5,
-            KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(5),
+            KeyCode::PageUp => self.message_scroll = self.message_scroll.saturating_add(self.history_page()),
+            KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(self.history_page()),
+            KeyCode::Home => self.message_scroll = super::SCROLL_TOP,
+            KeyCode::End => self.message_scroll = 0,
             KeyCode::Char('n') => self.open_prompt(PromptKind::NewConversation, "LXMF address", ""),
             KeyCode::Char('y') => {
                 let address = self.active_conversation.clone().unwrap_or_default();

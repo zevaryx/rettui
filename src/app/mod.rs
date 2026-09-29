@@ -59,6 +59,10 @@ pub use network::{NetFilter, NetSearch, match_mask};
 
 const LOG_LINES: usize = 500;
 
+/// Scrolled as far back as it goes (Home): drawing stops at the top. Far
+/// from `usize::MAX`, since drawing adds the view's height to it.
+pub(crate) const SCROLL_TOP: usize = usize::MAX / 4;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Messages,
@@ -468,6 +472,16 @@ impl App {
                 _ => {}
             }
         }
+    }
+
+    /// A page of the message history, or a channel's: its height, less a
+    /// line that stays in view.
+    pub(crate) fn history_page(&self) -> usize {
+        (self.regions.history.height as usize).saturating_sub(1).max(1)
+    }
+
+    pub(crate) fn channel_page(&self) -> usize {
+        (self.regions.channel_history.height as usize).saturating_sub(1).max(1)
     }
 
     /// Save a new display name and announce it.

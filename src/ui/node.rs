@@ -33,7 +33,8 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let state = match &app.node.status {
         NodeStatus::Running => Span::styled("● hosting", Style::default().fg(Color::Green)),
         NodeStatus::Starting => Span::styled("◌ starting", Style::default().fg(Color::Yellow)),
-        NodeStatus::Off => Span::styled("○ off (h to host)", Style::default().fg(DIM)),
+        // `h` starts it (the footer and the editor pane say so).
+        NodeStatus::Off => Span::styled("○ off", Style::default().fg(DIM)),
         NodeStatus::Failed(e) => Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red)),
     };
     let running = app.node.status == NodeStatus::Running;

@@ -142,7 +142,7 @@ impl Stop {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InterfaceInfo {
     pub name: String,
     pub online: bool,

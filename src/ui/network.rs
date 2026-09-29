@@ -13,6 +13,12 @@ use crate::net::PeerKind;
 
 /// Longest name shown before the address column.
 const NAME_WIDTH: usize = 32;
+/// Narrowest the name column gets (in narrow terminals, before addresses
+/// would be cut off).
+const MIN_NAME_WIDTH: usize = 12;
+/// A row besides its name: the selection mark (2), the tag (6), spaces
+/// around the name (2) and the address (32).
+const ROW_WITHOUT_NAME: usize = 42;
 
 /// `text` (at most `limit` chars) with search matches highlighted.
 fn highlighted(text: &str, limit: usize, terms: &[Vec<char>], style: Style) -> Vec<Span<'static>> {
@@ -74,6 +80,8 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     // Only the rows on screen get drawn (there can be thousands): keep the
     // selection in view, then build items for that window.
     let height = area.height.saturating_sub(2) as usize;
+    // Names give way before addresses do.
+    let name_width = (area.width.saturating_sub(2) as usize).saturating_sub(ROW_WITHOUT_NAME).clamp(MIN_NAME_WIDTH, NAME_WIDTH);
     let selected = app.peers.selected().unwrap_or(0).min(total.saturating_sub(1));
     let mut offset = app.peers.offset().min(total.saturating_sub(height.max(1)));
     if selected < offset {
@@ -97,15 +105,15 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
             ];
             let shown = match &peer.name {
                 Some(name) => {
-                    spans.extend(highlighted(name, NAME_WIDTH, &terms, Style::default()));
-                    name.chars().count().min(NAME_WIDTH)
+                    spans.extend(highlighted(name, name_width, &terms, Style::default()));
+                    name.chars().count().min(name_width)
                 }
                 None => {
                     spans.push(Span::styled("(unnamed)", Style::default().fg(DIM)));
                     "(unnamed)".len()
                 }
             };
-            spans.push(Span::raw(" ".repeat(NAME_WIDTH - shown + 1)));
+            spans.push(Span::raw(" ".repeat(name_width.saturating_sub(shown) + 1)));
             spans.extend(highlighted(hash, usize::MAX, &terms, Style::default().fg(DIM)));
             spans.extend([
                 Span::styled(

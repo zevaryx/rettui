@@ -60,8 +60,8 @@ impl App {
             match key.code {
                 KeyCode::Esc => self.channels.typing = false,
                 KeyCode::Enter => self.submit_channel_input(),
-                KeyCode::PageUp => self.channels.scroll += 5,
-                KeyCode::PageDown => self.channels.scroll = self.channels.scroll.saturating_sub(5),
+                KeyCode::PageUp => self.channels.scroll = self.channels.scroll.saturating_add(self.channel_page()),
+                KeyCode::PageDown => self.channels.scroll = self.channels.scroll.saturating_sub(self.channel_page()),
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
                 _ => {
                     self.channels.input.handle(key);
@@ -93,8 +93,8 @@ impl App {
             match key.code {
                 KeyCode::Esc => self.composing = false,
                 KeyCode::Enter => self.send_compose(),
-                KeyCode::PageUp => self.message_scroll += 5,
-                KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(5),
+                KeyCode::PageUp => self.message_scroll = self.message_scroll.saturating_add(self.history_page()),
+                KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(self.history_page()),
                 KeyCode::Char('o') if ctrl => self.open_attach_prompt(),
                 KeyCode::Char('x') if ctrl => self.attachments.clear(),
                 KeyCode::Char('p') if ctrl => self.delivery_mode = self.delivery_mode.next(),

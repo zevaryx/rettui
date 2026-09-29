@@ -148,6 +148,35 @@ impl Owner {
         );
     }
 
+    /// Take in a network event; what browsers showing it should refetch.
+    /// The counters come every few seconds whether or not they changed:
+    /// unchanged, nobody is told.
+    fn apply(&mut self, event: NetEvent) -> Scope {
+        let scope = Scope::of(&event);
+        match event {
+            // Loads a browser asked for: it gets the answer itself.
+            NetEvent::Fetched { id, .. } if self.fetches.contains_key(&id) => {
+                self.on_net(event);
+                Scope::NONE
+            }
+            NetEvent::Interfaces(_) => {
+                let before = (self.app.interfaces.clone(), self.app.traffic.rates);
+                self.on_net(event);
+                if (&self.app.interfaces, self.app.traffic.rates) == (&before.0, before.1) { Scope::NONE } else { scope }
+            }
+            NetEvent::Host(net::HostEvent::Stats(_)) => {
+                let counts = |o: &Self| o.app.node.stats.as_ref().and_then(|s| serde_json::to_value(s).ok());
+                let before = counts(self);
+                self.on_net(event);
+                if counts(self) == before { Scope::NONE } else { scope }
+            }
+            _ => {
+                self.on_net(event);
+                scope
+            }
+        }
+    }
+
     fn on_net(&mut self, event: NetEvent) {
         match event {
             NetEvent::Fetched { id, result } if self.fetches.contains_key(&id) => {
@@ -203,6 +232,10 @@ impl Scope {
     /// Peers heard (announces): the Network list, the Browser's nodes, and
     /// how many are known.
     pub const PEERS: Scope = Scope(4);
+    /// RRC: the Channels section, and the unread counts in the sidebar.
+    pub const CHANNELS: Scope = Scope(8);
+    /// Nothing any browser shows.
+    pub const NONE: Scope = Scope(0);
     /// Anything.
     pub const ALL: Scope = Scope(u8::MAX);
 
@@ -211,6 +244,9 @@ impl Scope {
             NetEvent::Interfaces(_) | NetEvent::Log(_) => Scope::STATUS,
             NetEvent::Host(net::HostEvent::Stats(_)) => Scope::NODE,
             NetEvent::Announce { .. } => Scope::PEERS,
+            // Hub connections, rooms and whispers (their notifications go
+            // out on their own).
+            NetEvent::Rrc { .. } => Scope::CHANNELS,
             _ => Scope::ALL,
         }
     }
@@ -225,7 +261,7 @@ impl Scope {
         if self == Scope::ALL {
             return "all".into();
         }
-        let parts = [(Scope::STATUS, "status"), (Scope::NODE, "node"), (Scope::PEERS, "peers")];
+        let parts = [(Scope::STATUS, "status"), (Scope::NODE, "node"), (Scope::PEERS, "peers"), (Scope::CHANNELS, "channels")];
         parts.iter().filter(|(part, _)| self.0 & part.0 != 0).map(|(_, name)| *name).collect::<Vec<_>>().join(",")
     }
 }
@@ -284,6 +320,8 @@ mod scope_tests {
         assert_eq!(Scope::PEERS.and(Scope::NODE).and(Scope::STATUS).name(), "status,node,peers");
         assert_eq!(Scope::STATUS.and(Scope::ALL).name(), "all");
         assert_eq!(Scope::ALL.and(Scope::NODE), Scope::ALL);
+        assert_eq!(Scope::STATUS.and(Scope::CHANNELS).name(), "status,channels");
+        assert_eq!(Scope::NONE.and(Scope::PEERS), Scope::PEERS);
     }
 }
 
@@ -447,14 +485,12 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 }
             }
             Some(event) = net_rx.recv() => {
-                let mut scope = Scope::of(&event);
-                owner.on_net(event);
+                let mut scope = owner.apply(event);
                 // Apply a burst of events before telling browsers.
-                net::drain_burst(&mut net_rx, |event| {
-                    scope = scope.and(Scope::of(&event));
-                    owner.on_net(event);
-                });
-                notify(&changes, scope);
+                net::drain_burst(&mut net_rx, |event| scope = scope.and(owner.apply(event)));
+                if scope != Scope::NONE {
+                    notify(&changes, scope);
+                }
             }
             Some(image) = decoded.recv() => owner.app.on_decoded(image),
             _ = tick.tick() => owner.app.on_tick(),

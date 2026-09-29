@@ -210,8 +210,10 @@ impl App {
                     self.copy(&link, "link");
                 }
             }
-            KeyCode::PageUp => self.channels.scroll += 5,
-            KeyCode::PageDown => self.channels.scroll = self.channels.scroll.saturating_sub(5),
+            KeyCode::PageUp => self.channels.scroll = self.channels.scroll.saturating_add(self.channel_page()),
+            KeyCode::PageDown => self.channels.scroll = self.channels.scroll.saturating_sub(self.channel_page()),
+            KeyCode::Home => self.channels.scroll = crate::app::SCROLL_TOP,
+            KeyCode::End => self.channels.scroll = 0,
             _ => {}
         }
     }
