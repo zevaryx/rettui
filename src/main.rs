@@ -72,7 +72,8 @@ enum Command {
         /// Attach a file (repeatable).
         #[arg(long, short)]
         attach: Vec<PathBuf>,
-        /// auto (direct, then propagation node), direct or propagated.
+        /// auto (direct, then propagation node), direct, propagated, or
+        /// paper (not sent: prints an lxm:// link and its QR code).
         #[arg(long, default_value = "auto")]
         mode: String,
     },
@@ -152,11 +153,8 @@ async fn main() -> Result<()> {
             attach,
             mode,
         }) => {
-            let mode = match mode.as_str() {
-                "auto" => lxmf::DeliveryMode::Auto,
-                "direct" => lxmf::DeliveryMode::Direct,
-                "propagated" => lxmf::DeliveryMode::Propagated,
-                other => bail!("unknown delivery mode {other}; use auto, direct or propagated"),
+            let Some(mode) = lxmf::DeliveryMode::parse(&mode) else {
+                bail!("unknown delivery mode {mode}; use auto, direct, propagated or paper");
             };
             cli::send(&settings, &paths, identity, &address, &message, attach, mode).await
         }
@@ -257,6 +255,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
         // Reads close notifications in the web UI's browsers; the desktop
         // keeps its own.
         app.take_reads();
+        app.open_paper_read();
         if let Some(e) = desktop.failure() {
             app.log(format!("Could not show a desktop notification: {e}"));
         }

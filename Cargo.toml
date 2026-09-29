@@ -42,6 +42,10 @@ aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls", "proxy-from-env"] }
+# QR codes for LXMF paper messages (drawn in the terminal, SVG in the web UI).
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# Finding them in pictures (to read a paper message from a photo).
+rqrr = { version = "0.11", default-features = false }
 
 # Runtime and support
 tokio = { version = "1", features = ["full"] }
@@ -76,6 +80,8 @@ opt-level = 3
 [profile.dev.package.fdeflate]
 opt-level = 3
 [profile.dev.package.moxcms]
+opt-level = 3
+[profile.dev.package.rqrr]
 opt-level = 3
 # Store compression (saved in the background, but still quicker to finish).
 [profile.dev.package.miniz_oxide]

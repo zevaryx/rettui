@@ -334,6 +334,9 @@ pub struct WebState {
     /// Notifications, and what was read, for every open browser.
     notices: broadcast::Sender<Notice>,
     push: push::WebPush,
+    /// This client's identity, to open paper messages (see
+    /// [`routes`]' `read_paper`).
+    identity: std::sync::Arc<Identity>,
     token: String,
     paths: std::sync::Arc<Paths>,
 }
@@ -447,6 +450,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         changes: changes.clone(),
         notices: notices.clone(),
         push: push.clone(),
+        identity: std::sync::Arc::new(identity.clone()),
         token: token.clone(),
         paths: std::sync::Arc::new(paths),
     };
@@ -509,6 +513,8 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         for tag in owner.app.take_reads() {
             let _ = notices.send(Notice::Read(tag));
         }
+        // The browser that read a paper message in opens its conversation.
+        owner.app.paper_read = None;
         for report in push.reports() {
             owner.app.log(report);
         }

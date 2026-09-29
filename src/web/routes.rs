@@ -87,6 +87,9 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/notify", post(mute_conversation))
         .route("/conversations/{key}/send", post(send_message))
         .route("/conversations/{key}/attachments/{id}/{index}", get(attachment))
+        .route("/paper/read", post(read_paper))
+        .route("/paper/scan", post(scan_paper))
+        .route("/qr", get(qr_code))
         .route("/peers", get(peers))
         .route("/propagation", post(set_propagation))
         .route("/announce", post(announce))
@@ -243,7 +246,7 @@ async fn compress(request: Request, next: Next) -> Response {
 }
 
 /// What [`compress`] gzips.
-const COMPRESSED_TYPES: [&str; 5] = ["application/json", "text/html", "text/javascript", "text/css", "text/plain"];
+const COMPRESSED_TYPES: [&str; 6] = ["application/json", "text/html", "text/javascript", "text/css", "text/plain", "image/svg+xml"];
 /// Smaller than this isn't worth it.
 const MIN_COMPRESSED: usize = 1024;
 
@@ -593,12 +596,7 @@ async fn send_message(
     axum::Json(body): axum::Json<SendBody>,
 ) -> ApiResult {
     let key = address(&key)?;
-    let mode = match body.mode.as_str() {
-        "" | "auto" => DeliveryMode::Auto,
-        "direct" => DeliveryMode::Direct,
-        "propagated" => DeliveryMode::Propagated,
-        other => return Err(bad(format!("unknown delivery mode {other}"))),
-    };
+    let mode = DeliveryMode::parse(&body.mode).ok_or_else(|| bad(format!("unknown delivery mode {}", body.mode)))?;
     // Uploaded files are kept like received ones, so the message can show them.
     let dir = state.paths.uploads.clone();
     let mut files: Vec<PathBuf> = Vec::new();
@@ -615,7 +613,8 @@ async fn send_message(
         .write(move |o| o.app.send_message(key, body.content, files, mode).map_err(|(e, _, files)| (e, files)))
         .await?;
     match result {
-        Ok(()) => ok(),
+        // Its id: a paper message's link shows on it once written.
+        Ok(id) => Ok(axum::Json(json!({ "ok": true, "id": format!("local-{id}") }))),
         Err((e, files)) => {
             for file in files {
                 let _ = tokio::fs::remove_file(file).await;
@@ -623,6 +622,69 @@ async fn send_message(
             Err(bad(e))
         }
     }
+}
+
+#[derive(Deserialize)]
+struct PaperBody {
+    /// The `lxm://` link (from a QR code, or pasted).
+    link: String,
+}
+
+/// Read in a paper message: the conversation it goes to, answered at once
+/// (it's decrypted here to see), and it arrives there like one received.
+async fn read_paper(State(state): State<WebState>, axum::Json(body): axum::Json<PaperBody>) -> ApiResult {
+    read_paper_link(&state, body.link.trim().to_string()).await
+}
+
+#[derive(Deserialize)]
+struct PictureBody {
+    /// The picture, base64.
+    image: String,
+}
+
+/// Read in a paper message from a picture of its QR code (for browsers
+/// that can't find one themselves, or can't use the camera).
+async fn scan_paper(State(state): State<WebState>, axum::Json(body): axum::Json<PictureBody>) -> ApiResult {
+    let picture = base64::engine::general_purpose::STANDARD
+        .decode(body.image.as_bytes())
+        .map_err(|_| bad("The picture is not valid base64"))?;
+    let link = tokio::task::spawn_blocking(move || crate::lxmf::paper::scan(&picture))
+        .await
+        .map_err(|e| bad(e.to_string()))?
+        .map_err(bad)?;
+    read_paper_link(&state, link).await
+}
+
+async fn read_paper_link(state: &WebState, link: String) -> ApiResult {
+    let own = state.read(|o| o.app.lxmf_hash).await?.ok_or_else(|| bad("Reticulum is still starting"))?;
+    let data = crate::lxmf::paper::open(&state.identity, own, &link).map_err(bad)?;
+    let message = lxmf_core::message_api::LxMessage::unpack(&data).map_err(|_| bad("Not a message rettui can read"))?;
+    let key = hex::encode(message.source_hash);
+    // Read in before: said, rather than nothing happening.
+    let id = message.message_id.or(message.hash).map(hex::encode);
+    let known = state
+        .write(move |o| {
+            let conversation = o.app.store.conversations.get(&key);
+            let known = id.is_some_and(|id| conversation.is_some_and(|c| c.messages.iter().any(|m| m.id == id)));
+            if !known {
+                o.app.read_paper(&link)?;
+            }
+            Ok::<_, String>((key, known))
+        })
+        .await?;
+    let (key, known) = known.map_err(bad)?;
+    Ok(axum::Json(json!({ "key": key, "known": known })))
+}
+
+#[derive(Deserialize)]
+struct TextQuery {
+    text: String,
+}
+
+/// A QR code of `text`, as SVG (a paper message's link).
+async fn qr_code(Query(query): Query<TextQuery>) -> Result<Response, ApiError> {
+    let svg = crate::lxmf::paper::Qr::new(&query.text).map_err(bad)?.svg();
+    Ok(([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "private, max-age=86400")], svg).into_response())
 }
 
 /// Header-safe file name.

@@ -116,6 +116,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Tab::Reticulum => draw_reticulum(frame, app, body),
     }
     draw_footer(frame, app, footer);
+    if app.paper_view.is_some() {
+        messages::draw_paper(frame, app);
+    }
     if app.prompt.is_some() {
         draw_prompt(frame, app);
     }

@@ -107,6 +107,8 @@ pub enum PromptKind {
     EditSetting(&'static str),
     DisplayName,
     Attach,
+    /// Read in a paper message (its `lxm://` link).
+    ReadPaper,
     /// Add an RRC hub by address or `rrc://` link.
     AddHub,
     /// Opening a new hub from a page link reveals our identity: confirm.
@@ -138,6 +140,20 @@ pub enum PromptKind {
     /// The page editor's formatting that needs an answer (a colour, an
     /// address, a field name).
     Format(format::Action),
+}
+
+/// A paper message shown as a QR code, over the tab (terminal UI).
+pub struct PaperView {
+    pub link: String,
+    /// Made once, not every frame (the largest takes a few milliseconds).
+    pub qr: Result<crate::lxmf::paper::Qr, String>,
+}
+
+impl PaperView {
+    pub(crate) fn new(link: String) -> Self {
+        let qr = crate::lxmf::paper::Qr::new(&link);
+        Self { link, qr }
+    }
 }
 
 pub struct Prompt {
@@ -304,6 +320,10 @@ pub struct App {
     /// What was read since last asked, by notification tag (the web UI
     /// closes their notifications in every browser).
     reads: Vec<String>,
+    /// A paper message shown as a QR code (terminal UI).
+    pub paper_view: Option<PaperView>,
+    /// The conversation a paper message was just read into.
+    pub paper_read: Option<String>,
     /// Whether the window has the focus (as far as the terminal says; the
     /// web UI's browsers each know their own).
     pub focused: bool,
@@ -390,6 +410,8 @@ impl App {
             rejoin_hubs: Vec::new(),
             notifications: Vec::new(),
             reads: Vec::new(),
+            paper_view: None,
+            paper_read: None,
             focused: true,
         };
         for note in std::mem::take(&mut app.store.migration_notes) {
@@ -574,6 +596,10 @@ impl App {
                 title: format!("Field: {}", current.name),
                 input,
             });
+        } else if self.tab == Tab::Messages && text.trim().starts_with("lxm://") {
+            if let Err(e) = self.read_paper(text) {
+                self.warn(e);
+            }
         } else {
             self.warn("Nothing to paste into: start writing a message or select a field");
         }
@@ -641,6 +667,7 @@ impl App {
                 }
             }
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
+            NetEvent::Paper { id, result } => self.on_paper(id, result),
             NetEvent::SyncStarted => self.sync = SyncState::Running(Instant::now()),
             NetEvent::Synced(result) => {
                 match &result {
@@ -679,6 +706,21 @@ impl App {
                     field.value = prompt.input.text().to_string();
                 }
             }
+            PromptKind::ReadPaper if !text.is_empty() => {
+                // A link, or a picture of its QR code.
+                let link = if text.starts_with("lxm://") {
+                    Ok(text)
+                } else {
+                    let path = files::expand_home(&text);
+                    std::fs::read(&path)
+                        .map_err(|e| format!("Not an lxm:// link, and can't read {}: {e}", path.display()))
+                        .and_then(|picture| crate::lxmf::paper::scan(&picture))
+                };
+                if let Err(e) = link.and_then(|link| self.read_paper(&link)) {
+                    self.warn(e);
+                }
+            }
+            PromptKind::ReadPaper => {}
             PromptKind::Attach if !text.is_empty() => self.add_attachment(&text),
             PromptKind::Attach => self.composing = true,
             PromptKind::DisplayName if !text.is_empty() => {

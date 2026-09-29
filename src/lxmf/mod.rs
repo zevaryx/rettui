@@ -4,8 +4,10 @@
 //! - [`send`]: direct delivery and propagation node submission.
 //! - [`inbound`]: unpacking and verifying received messages.
 //! - [`sync`]: downloading waiting messages from a propagation node.
+//! - [`paper`]: paper messages (`lxm://` links and QR codes).
 
 mod inbound;
+pub mod paper;
 mod send;
 mod sync;
 
@@ -30,6 +32,9 @@ pub enum DeliveryMode {
     Auto,
     Direct,
     Propagated,
+    /// Not sent: written as a paper message (an `lxm://` link and QR code)
+    /// to pass on some other way.
+    Paper,
 }
 
 impl DeliveryMode {
@@ -38,6 +43,17 @@ impl DeliveryMode {
             DeliveryMode::Auto => "auto",
             DeliveryMode::Direct => "direct",
             DeliveryMode::Propagated => "propagated",
+            DeliveryMode::Paper => "paper",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "" | "auto" => Some(DeliveryMode::Auto),
+            "direct" => Some(DeliveryMode::Direct),
+            "propagated" => Some(DeliveryMode::Propagated),
+            "paper" => Some(DeliveryMode::Paper),
+            _ => None,
         }
     }
 
@@ -45,7 +61,8 @@ impl DeliveryMode {
         match self {
             DeliveryMode::Auto => DeliveryMode::Direct,
             DeliveryMode::Direct => DeliveryMode::Propagated,
-            DeliveryMode::Propagated => DeliveryMode::Auto,
+            DeliveryMode::Propagated => DeliveryMode::Paper,
+            DeliveryMode::Paper => DeliveryMode::Auto,
         }
     }
 }
@@ -83,6 +100,8 @@ pub struct InboundMessage {
     pub timestamp: f64,
     pub verified: bool,
     pub attachments: Vec<Attachment>,
+    /// Read in from a paper message, not received over the network.
+    pub paper: bool,
 }
 
 fn is_image_name(name: &str) -> bool {

@@ -69,7 +69,9 @@ async function copy(text, what) {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
-    const area = el('textarea', { value: text });
+    // No clipboard API (a plain http page): the old way. A textarea's text
+    // is its content, not a value attribute.
+    const area = el('textarea', {}, text);
     document.body.append(area);
     area.select();
     document.execCommand('copy');
@@ -1264,6 +1266,175 @@ function browse(url) {
   app.views.browser.go(url);
 }
 
+// ---- Paper messages ---------------------------------------------------------
+
+// A dialog over the page: closed by its buttons, Escape or a click beside
+// it. Its close function (which `onclose` hears about).
+function dialog(title, body, { className = '', onclose } = {}) {
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+  };
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+    onclose?.();
+  };
+  const overlay = el('div', { class: 'overlay', onclick: (e) => e.target === overlay && close() },
+    el('div', { class: 'dialog ' + className, role: 'dialog', 'aria-label': title },
+      el('header', {}, el('span', { class: 'title grow', text: title }),
+        el('button', { class: 'close', text: '×', title: 'Close', onclick: () => close() })),
+      body(close)));
+  document.addEventListener('keydown', onKey);
+  document.body.append(overlay);
+  return close;
+}
+
+// A paper message written: its QR code, to scan into the recipient's app,
+// print, or pass on as a link.
+function showPaper(link) {
+  dialog('Paper message', (close) => [
+    el('p', { class: 'dim', text: 'Only the recipient can read it. Scan it into their app (Sideband, rettui…), print it, or pass the link on any way you like.' }),
+    el('img', { class: 'qr', src: '/api/qr?text=' + encodeURIComponent(link), alt: 'QR code of the paper message' }),
+    el('textarea', { class: 'mono paper-link', readonly: true, rows: 3, onfocus: (e) => e.target.select() }, link),
+    el('div', { class: 'row actions' },
+      el('button', { text: 'Copy link', onclick: () => copy(link, 'paper message link') }),
+      navigator.share ? el('button', { text: 'Share', onclick: () => navigator.share({ text: link }).catch(() => {}) }) : null,
+      el('button', { text: 'Print', onclick: () => window.print() }),
+      el('span', { class: 'grow' }),
+      el('button', { class: 'primary', text: 'Done', onclick: close })),
+  ], { className: 'paper' });
+}
+
+// Scanning with the camera needs a browser that finds QR codes itself
+// (Chrome on Android and macOS) and a secure page (https, or localhost).
+// Everywhere else a photo of the code does: the server finds it.
+const cameraScan = 'BarcodeDetector' in window && window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
+
+// Read in a paper message: pasted, scanned, or from a picture of its code.
+function readPaper() {
+  let stopCamera = null;
+  let closed = false;
+  const text = el('textarea', {
+    class: 'mono paper-link', rows: 3, placeholder: 'lxm://…', autocomplete: 'off', spellcheck: 'false',
+    onkeydown: (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        submit(text.value);
+      }
+    },
+  });
+  const video = el('video', { class: 'scanner hidden', muted: true, playsinline: true });
+  const status = el('div', { class: 'dim status' });
+  const picture = el('input', {
+    type: 'file', accept: 'image/*', class: 'hidden',
+    onchange: async () => {
+      const file = picture.files[0];
+      picture.value = '';
+      if (!file) return;
+      status.textContent = 'Looking for the QR code…';
+      const result = await attempt(async () => api.post('/paper/scan', { image: await shrunk(file) }));
+      status.textContent = '';
+      if (result) opened(result);
+    },
+  });
+  const opened = (result) => {
+    close();
+    toast(result.known ? 'You have this message already' : 'Reading the paper message…');
+    app.views.messages.selected = result.key;
+    switchTab('messages');
+    setPane(app.views.messages, 'detail');
+  };
+  const submit = async (link) => {
+    if (!link.trim()) return;
+    const result = await attempt(() => api.post('/paper/read', { link }));
+    if (result) opened(result);
+  };
+  const scan = async () => {
+    if (stopCamera) return;
+    stopCamera = () => {};
+    try {
+      video.classList.remove('hidden');
+      status.textContent = 'Point the camera at the QR code';
+      const stop = await scanCamera(video, (link) => {
+        stopCamera = null;
+        status.textContent = '';
+        text.value = link;
+        submit(link);
+      });
+      // Closed while the browser asked for the camera: let it go.
+      if (closed) stop();
+      else if (stopCamera) stopCamera = stop;
+    } catch (e) {
+      stopCamera = null;
+      video.classList.add('hidden');
+      status.textContent = '';
+      toast(`Can't use the camera: ${e.message}`, true);
+    }
+  };
+  const close = dialog('Read a paper message', () => [
+    el('p', { class: 'dim', text: 'A paper message is an lxm:// link, often as a QR code. Paste the link, or scan the code.' }),
+    text, video, status,
+    el('div', { class: 'row actions' },
+      cameraScan ? el('button', { text: 'Scan', onclick: scan }) : null,
+      el('button', { text: cameraScan ? 'From a picture' : 'Scan (take a picture)', onclick: () => picture.click() }),
+      el('span', { class: 'grow' }),
+      el('button', { class: 'primary', text: 'Read', onclick: () => submit(text.value) })),
+    picture,
+  ], { className: 'paper', onclose: () => {
+    closed = true;
+    stopCamera?.();
+  } });
+  setTimeout(() => text.focus(), 50);
+}
+
+// Watch the camera for a paper message's QR code; a function to stop.
+async function scanCamera(video, found) {
+  const detector = new BarcodeDetector({ formats: ['qr_code'] });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    for (const track of stream.getTracks()) track.stop();
+    video.srcObject = null;
+  };
+  video.srcObject = stream;
+  await video.play();
+  const look = async () => {
+    if (stopped) return;
+    const codes = await detector.detect(video).catch(() => []);
+    const code = codes.find((c) => c.rawValue.startsWith('lxm://'));
+    if (code) {
+      stop();
+      video.classList.add('hidden');
+      found(code.rawValue);
+    } else {
+      setTimeout(look, 250);
+    }
+  };
+  look();
+  return stop;
+}
+
+// A picture, smaller (a phone's photo is megabytes; a QR code needs far
+// fewer pixels), as base64 JPEG. As it is if it can't be drawn here.
+async function shrunk(file) {
+  const MAX = 1600;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+    const canvas = el('canvas', { width: Math.round(bitmap.width * scale), height: Math.round(bitmap.height * scale) });
+    const context = canvas.getContext('2d');
+    // White under a transparent screenshot, as it looks.
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    return canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
+  } catch {
+    return readFile(file);
+  }
+}
+
 // ---- Messages ---------------------------------------------------------------
 
 app.views.messages = {
@@ -1310,7 +1481,8 @@ app.views.messages = {
       this.mode = e.target.value;
       localStorage.setItem('rettui.mode', this.mode);
     } },
-    ['auto', 'direct', 'propagated'].map((m) => el('option', { value: m, text: m[0].toUpperCase() + m.slice(1), selected: m === this.mode })));
+    [['auto', 'Auto'], ['direct', 'Direct'], ['propagated', 'Propagated'], ['paper', 'Paper (QR code)']].map(([m, label]) =>
+      el('option', { value: m, text: label, selected: m === this.mode })));
     this.compose = el('div', { class: 'compose' },
       this.chips,
       el('div', { class: 'row' }, this.text),
@@ -1323,6 +1495,7 @@ app.views.messages = {
     root.append(
       el('section', { class: 'panel side' },
         el('header', {}, el('span', { class: 'title grow', text: 'Conversations' }),
+          el('button', { text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
           el('button', { text: '+ New', onclick: () => this.newConversation() })),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose));
@@ -1430,6 +1603,12 @@ app.views.messages = {
   },
 
   renderConversation(key, conversation) {
+    // A paper message this browser wrote: its QR code, once it's ready.
+    const waiting = this.paperWaiting?.key === key && conversation.messages.find((m) => m.id === this.paperWaiting.id);
+    if (waiting && waiting.state.kind !== 'sending') {
+      this.paperWaiting = null;
+      if (waiting.paper) showPaper(waiting.paper);
+    }
     if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key })) return;
     this.header.replaceChildren(
       el('span', { class: 'title', text: conversation.name }),
@@ -1471,8 +1650,11 @@ app.views.messages = {
   message(m, conversation) {
     const state = {
       received: m.state.verified ? null : el('span', { class: 'state-warn', text: ' unverified' }),
-      sending: el('span', { class: 'dim', text: ' sending…' }),
-      delivered: el('span', { class: 'state-ok', text: ' ✓' }),
+      sending: el('span', { class: 'dim', text: this.paperWaiting?.id === m.id ? ' writing the paper message…' : ' sending…' }),
+      delivered: m.paper
+        ? el('span', { class: 'state-ok' }, ' ✓ paper message ',
+          el('button', { class: 'inline', text: 'QR code', onclick: () => showPaper(m.paper) }))
+        : el('span', { class: 'state-ok', text: ' ✓' }),
       propagated: el('span', { class: 'state-ok', text: ' ✓ via propagation node' }),
       failed: el('span', { class: 'state-bad', text: ` failed: ${m.state.error}` }),
     }[m.state.kind];
@@ -1535,13 +1717,16 @@ app.views.messages = {
     for (const file of pending) files.push({ name: file.name, data: await readFile(file) });
     const total = pending.reduce((n, f) => n + f.size, 0);
     if (total > 1_000_000) toast(`Sending ${humanBytes(total)} of attachments; many clients reject direct transfers over 1 MB`);
-    const sent = await attempt(() => api.post(`/conversations/${echo.key}/send`, { content, mode: this.mode, files }));
+    const mode = this.mode;
+    const sent = await attempt(() => api.post(`/conversations/${echo.key}/send`, { content, mode, files }));
     echo.done(!sent);
     if (!sent) {
       // Put it back to try again, in the conversation it was for.
       draftRestore(this, echo.key, { text: content, files: pending });
       return;
     }
+    // Its QR code shows once written (see renderConversation).
+    if (mode === 'paper') this.paperWaiting = { key: echo.key, id: sent.id };
     this.history.scrollTop = this.history.scrollHeight;
     this.history.pinned = true;
   },

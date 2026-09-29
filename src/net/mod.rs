@@ -77,6 +77,10 @@ pub enum PeerKind {
 #[derive(Debug)]
 pub enum NetCommand {
     Announce,
+    /// Write a paper message (answered with [`NetEvent::Paper`]).
+    WritePaper { id: u64, to: Hash, content: String },
+    /// Read in a paper message (an `lxm://` link).
+    ReadPaper(String),
     SetDisplayName(String),
     SetPropagationNode(Option<Hash>),
     /// New automatic announce and sync intervals (`None` turns one off).
@@ -163,6 +167,8 @@ pub enum NetEvent {
     Announced,
     Message(InboundMessage),
     Delivery { id: u64, result: Result<Delivered, String> },
+    /// A paper message written: its `lxm://` link.
+    Paper { id: u64, result: Result<String, String> },
     Fetched { id: u64, result: Result<FetchedContent, String> },
     SyncStarted,
     Synced(Result<usize, String>),
@@ -404,6 +410,15 @@ async fn run(
                         }
                     }
                     NetCommand::Sync => syncer.start(propagation_node),
+                    NetCommand::WritePaper { id, to, content } => {
+                        let (runtime, known, identity, ev) =
+                            (runtime.clone(), known.clone(), identity.clone(), ev.clone());
+                        tokio::spawn(async move {
+                            let result = lxmf::paper::write(&runtime, &known, &identity, lxmf_hash, to, content).await;
+                            let _ = ev.send(NetEvent::Paper { id, result });
+                        });
+                    }
+                    NetCommand::ReadPaper(link) => lxmf::paper::read(&runtime, &known, &identity, lxmf_hash, link, &ev),
                     NetCommand::SendMessage { id, to, content, attachments, mode } => {
                         let (runtime, known, identity, ev) =
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone());

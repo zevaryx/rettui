@@ -112,6 +112,8 @@ fn message(m: &Message) -> Value {
             "index": index, "name": a.name, "size": a.size, "image": a.image,
             "exists": a.path.exists(),
         })).collect::<Vec<_>>(),
+        // A paper message written: its lxm:// link.
+        "paper": m.paper,
     })
 }
 

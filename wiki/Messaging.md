@@ -14,6 +14,8 @@ MeshChat, NomadNet and other LXMF clients).
     the message to your propagation node.
   - **Direct:** delivers over a Link and waits for the recipient's proof.
   - **Propagated:** always goes through the propagation node.
+  - **Paper:** isn't sent. It's written as a [paper message](#paper-messages)
+    to pass on some other way.
 - **Stamps and ratchets:** if the recipient's announce asks for a stamp,
   rettui generates it. It also generates the propagation node's stamp, and
   encrypts to the recipient's ratchet when one is known.
@@ -38,3 +40,39 @@ MeshChat, NomadNet and other LXMF clients).
 - **Announces:** rettui announces your LXMF address when it starts (unless
   you turn that off), every `announce_interval_mins` (360 by default, 0 for
   never), and whenever you press `A`.
+
+## Paper messages
+
+A paper message is an LXMF message that travels outside Reticulum: as an
+`lxm://` link or its QR code. You can print it, show it on a screen, or send
+the link any way you like. It's signed and encrypted for the recipient like
+any other message, so only they can read it. The format is Python LXMF's, so
+Sideband and NomadNet can read what rettui writes, and rettui can read theirs.
+
+- **Writing one:** pick the *paper* delivery mode (`d` or `Ctrl-P` in the
+  TUI, *Paper (QR code)* in the web UI), then write the message.
+  - rettui only needs the recipient's key, from an announce heard at some
+    point. They don't have to be online.
+  - Paper messages carry text only, up to about 1,800 characters.
+  - When the message is ready, its QR code opens:
+    - **TUI:** `y` copies the link, and `s` saves the QR code as an SVG
+      image in the downloads folder, ready to print. If the window is too
+      small for the code, rettui says so, and you can still copy or save it.
+    - **Web UI:** *Copy link*, *Share* (on phones), and *Print*, which
+      prints the code alone.
+  - The message then shows *✓ paper message*. `P` in the TUI, or its *QR
+    code* button in the web UI, opens the code again.
+- **Reading one:** rettui checks the message is for you, decrypts it, and
+  checks the signature like any other message. It then goes into the
+  sender's conversation, which opens.
+  - **TUI:** press `p`, then paste the link or give the path to a picture of
+    the QR code. You can also paste an `lxm://` link straight into the
+    Messages tab.
+  - **Web UI:** *Read paper*, beside *+ New*. Paste the link, or scan the
+    code:
+    - *Scan* uses the camera, in browsers that can read QR codes themselves
+      (Chrome on Android and macOS). The page has to be secure (https or
+      localhost).
+    - *Scan (take a picture)*, or *From a picture*, works in every browser:
+      take a photo or pick a picture, and rettui finds the code in it.
+  - A message you've already read in is only reported, not added twice.

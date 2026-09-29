@@ -73,7 +73,7 @@ fn check_signature(message: &mut LxMessage, sender: Option<&Identity>) -> Result
 }
 
 /// Unpack and verify one complete LXMF message (destination hash included).
-pub async fn parse_inbound(
+pub(super) async fn parse_inbound(
     runtime: &ReticulumHandle,
     known: &Known,
     data: &[u8],
@@ -103,6 +103,7 @@ pub async fn parse_inbound(
         timestamp: message.timestamp,
         verified,
         attachments,
+        paper: false,
     })
 }
 

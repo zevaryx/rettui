@@ -67,6 +67,9 @@ pub struct Message {
     pub state: MessageState,
     #[serde(default)]
     pub attachments: Vec<StoredAttachment>,
+    /// A paper message written: its `lxm://` link (shown as a QR code).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -499,6 +502,7 @@ mod tests {
             timestamp: 1_790_000_000.5,
             state: MessageState::Delivered,
             attachments: Vec::new(),
+            paper: None,
         };
         store.conversations.insert("ab".repeat(16), Conversation { messages: vec![message], unread: 1, ..Default::default() });
         store.next_local_id = 2;

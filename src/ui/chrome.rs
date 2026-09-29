@@ -170,6 +170,8 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     }
     let hints: &[(&str, &str)] = if app.prompt.is_some() {
         &[("Enter", "confirm"), ("Esc", "cancel"), ("^V", "paste")]
+    } else if app.paper_view.is_some() {
+        &[("y", "copy link"), ("s", "save image"), ("Esc", "close")]
     } else {
         match app.tab {
             Tab::Channels if app.channels.typing && app.mention_matches().is_some() => &[
@@ -221,6 +223,8 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("a", "attach"),
                 ("o", "open file"),
                 ("d", "delivery"),
+                ("p", "read paper"),
+                ("P", "show paper"),
                 ("N", "notifications"),
                 ("S", "sync"),
                 ("A", "announce"),

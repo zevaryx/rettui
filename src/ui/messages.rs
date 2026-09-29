@@ -6,10 +6,12 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
+use ratatui::buffer::Buffer;
+use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 
 use super::{ACCENT, DIM, SELECTED_BG, block, human_bytes, time_label, wrap};
 use crate::app::App;
+use crate::lxmf::DeliveryMode;
 use crate::store::{Message, MessageState};
 use crate::term::images::{Placement, draw_placements};
 
@@ -117,6 +119,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(" unverified", Style::default().fg(Color::Yellow))
             }
             MessageState::Sending => Span::styled(" sending…", Style::default().fg(DIM)),
+            MessageState::Delivered if message.paper.is_some() => {
+                Span::styled(" ✓ paper message · P shows its QR code", Style::default().fg(Color::Green))
+            }
             MessageState::Delivered => Span::styled(" ✓", Style::default().fg(Color::Green)),
             MessageState::Propagated => {
                 Span::styled(" ✓ via propagation node", Style::default().fg(Color::Green))
@@ -208,11 +213,12 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         app.picture_ref(path)
     });
 
-    let mut compose_title = if app.composing {
-        format!("Write · {}", app.delivery_mode.label())
-    } else {
-        format!("Press Enter to write · {}", app.delivery_mode.label())
+    let mode = match app.delivery_mode {
+        DeliveryMode::Paper => "paper (a QR code to pass on, not sent)",
+        mode => mode.label(),
     };
+    let mut compose_title =
+        if app.composing { format!("Write · {mode}") } else { format!("Press Enter to write · {mode}") };
     if !app.attachments.is_empty() {
         let names: Vec<String> = app
             .attachments
@@ -235,5 +241,101 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     );
     if app.composing {
         frame.set_cursor_position(Position::new(inner.x + (cursor - offset) as u16, inner.y));
+    }
+}
+
+/// Paper modules: pure black and white from the 256-colour cube, which
+/// themes leave alone (unlike the 16 named colours), so it scans.
+const QR_DARK: Color = Color::Indexed(16);
+const QR_LIGHT: Color = Color::Indexed(231);
+
+/// A paper message's QR code over the tab: two modules a cell (half
+/// blocks), which makes them square.
+pub(super) fn draw_paper(frame: &mut Frame, app: &App) {
+    let Some(view) = &app.paper_view else { return };
+    let area = frame.area();
+    let (cols, rows) = match &view.qr {
+        Ok(qr) => (qr.size() as u16, qr.size().div_ceil(2) as u16),
+        Err(_) => (0, 0),
+    };
+    let fits = view.qr.is_ok() && cols + 2 <= area.width && rows + 3 <= area.height;
+    let (width, height) = if fits { (cols + 2, rows + 3) } else { (area.width.saturating_sub(4).min(64), 7) };
+    let rect = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height.min(area.height)) / 2,
+        width,
+        height: height.min(area.height),
+    };
+    frame.render_widget(Clear, rect);
+    let paper_block = block("Paper message", true)
+        .title_bottom(Line::styled(" y copy link · s save image · Esc close ", Style::default().fg(DIM)));
+    let inner = paper_block.inner(rect);
+    frame.render_widget(paper_block, rect);
+    match &view.qr {
+        Ok(qr) if fits => {
+            let caption = Rect { height: 1, ..inner };
+            frame.render_widget(
+                Paragraph::new("Scan it into the recipient's app (Sideband, rettui…)").style(Style::default().fg(DIM)),
+                caption,
+            );
+            let code = Rect { x: inner.x, y: inner.y + 1, width: cols, height: rows };
+            draw_qr(qr, code, frame.buffer_mut());
+        }
+        _ => {
+            let why = match &view.qr {
+                Ok(_) => format!(
+                    "Its QR code needs {}×{} cells: make the window bigger (or the font smaller), \
+                     or copy the link (y) or save the code as an image (s) to pass it on.",
+                    cols + 2,
+                    rows + 3
+                ),
+                Err(e) => format!("{e}: copy the link (y) to pass it on."),
+            };
+            frame.render_widget(Paragraph::new(why).wrap(Wrap { trim: true }), inner);
+        }
+    }
+}
+
+fn draw_qr(qr: &crate::lxmf::paper::Qr, area: Rect, buffer: &mut Buffer) {
+    let color = |x: usize, y: usize| if qr.is_dark(x, y) { QR_DARK } else { QR_LIGHT };
+    for row in 0..area.height {
+        for col in 0..area.width {
+            let (x, y) = (col as usize, row as usize * 2);
+            if let Some(cell) = buffer.cell_mut(Position::new(area.x + col, area.y + row)) {
+                // The lower half of the last row, if the size is odd, is quiet zone.
+                cell.set_char('▀').set_fg(color(x, y)).set_bg(color(x, y + 1));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::app::{App, PaperView, test_app};
+    use crate::config::Settings;
+    use crate::store::Store;
+
+    fn draw(app: &mut App, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| super::super::draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn a_paper_message_shows_as_a_qr_code_that_fits_or_says_why() {
+        let dir = std::env::temp_dir().join(format!("rettui-paper-ui-{}", std::process::id()));
+        let mut app = test_app(&dir, Settings::default(), Store::default());
+        app.paper_view = Some(PaperView::new(format!("lxm://{}", "a".repeat(300))));
+        let screen = draw(&mut app, 120, 50);
+        assert!(screen.contains("Paper message") && screen.contains('▀'), "{screen}");
+        assert!(screen.contains("y copy link"));
+        // Too small: no half a code, but what to do instead.
+        let screen = draw(&mut app, 80, 24);
+        assert!(!screen.contains('▀') && screen.contains("make the window bigger"), "{screen}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

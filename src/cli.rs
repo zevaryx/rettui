@@ -83,15 +83,17 @@ pub async fn send(
     if let Some(missing) = attachments.iter().find(|path| !path.is_file()) {
         bail!("{} is not a file", missing.display());
     }
+    if mode == DeliveryMode::Paper && !attachments.is_empty() {
+        bail!("a paper message carries text only");
+    }
     let node = settings.propagation_node.as_deref().and_then(crate::net::parse_hash);
     let (commands, mut events) = net::spawn(options(settings, paths, identity, false, node));
     wait_started(&mut events).await?;
-    let _ = commands.send(NetCommand::SendMessage {
-        id: 1,
-        to,
-        content: message.to_string(),
-        attachments,
-        mode,
+    let content = message.to_string();
+    let _ = commands.send(if mode == DeliveryMode::Paper {
+        NetCommand::WritePaper { id: 1, to, content }
+    } else {
+        NetCommand::SendMessage { id: 1, to, content, attachments, mode }
     });
     while let Some(event) = events.recv().await {
         match event {
@@ -100,11 +102,41 @@ pub async fn send(
                 return Ok(());
             }
             NetEvent::Delivery { result: Err(e), .. } => bail!("delivery failed: {e}"),
+            NetEvent::Paper { result: Ok(link), .. } => {
+                print_paper(&link);
+                return Ok(());
+            }
+            NetEvent::Paper { result: Err(e), .. } => bail!("could not write the paper message: {e}"),
             NetEvent::Log(line) => eprintln!("{line}"),
             _ => {}
         }
     }
     bail!("network task stopped")
+}
+
+/// A paper message written: its QR code, on a terminal wide enough (two
+/// modules a character, black on white whatever the theme), then its link.
+fn print_paper(link: &str) {
+    use std::io::IsTerminal;
+    let width = crossterm::terminal::size().map_or(0, |(cols, _)| cols as usize);
+    match crate::lxmf::paper::Qr::new(link) {
+        Ok(qr) if std::io::stdout().is_terminal() && qr.size() <= width => {
+            let colour = |dark: bool| if dark { 16 } else { 231 };
+            for y in (0..qr.size()).step_by(2) {
+                let mut line = String::new();
+                for x in 0..qr.size() {
+                    let (top, bottom) = (colour(qr.is_dark(x, y)), colour(qr.is_dark(x, y + 1)));
+                    line.push_str(&format!("\x1b[38;5;{top}m\x1b[48;5;{bottom}m▀"));
+                }
+                println!("{line}\x1b[0m");
+            }
+        }
+        Ok(qr) if std::io::stdout().is_terminal() => {
+            eprintln!("(the QR code needs a terminal {} columns wide)", qr.size());
+        }
+        _ => {}
+    }
+    println!("{link}");
 }
 
 /// Announce, then print incoming messages until the time runs out.

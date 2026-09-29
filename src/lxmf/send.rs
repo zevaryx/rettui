@@ -68,6 +68,9 @@ pub async fn send(
     source: Hash,
     outgoing: Outgoing,
 ) -> Result<Delivered, String> {
+    if outgoing.mode == DeliveryMode::Paper {
+        return Err("A paper message isn't sent: it's written as a link (see lxmf::paper)".into());
+    }
     if outgoing.mode == DeliveryMode::Propagated {
         return propagate(runtime, known, identity, source, &outgoing).await;
     }

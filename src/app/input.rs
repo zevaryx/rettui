@@ -25,6 +25,17 @@ impl App {
             self.full_redraw = true;
             return;
         }
+        if let Some(view) = &self.paper_view {
+            match key.code {
+                KeyCode::Char('y') => {
+                    let link = view.link.clone();
+                    self.copy(&link, "paper message");
+                }
+                KeyCode::Char('s') => self.save_paper_qr(),
+                _ => self.paper_view = None,
+            }
+            return;
+        }
         if let Some(mut prompt) = self.prompt.take() {
             if key.code == KeyCode::Char('v') && ctrl {
                 self.prompt = Some(prompt);
@@ -138,6 +149,12 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, mouse: MouseEvent) {
+        if self.paper_view.is_some() {
+            if let MouseEventKind::Down(_) = mouse.kind {
+                self.paper_view = None;
+            }
+            return;
+        }
         if self.prompt.is_some() {
             return;
         }

@@ -8,7 +8,7 @@ use ratatui::layout::Position;
 
 use super::files::{expand_home, unique_path};
 use super::notify::{self, Notification, Target};
-use super::{App, PromptKind, Tab, now};
+use super::{App, PaperView, PromptKind, Tab, now};
 use crate::lxmf::DeliveryMode;
 use crate::net::{NetCommand, parse_hash};
 use crate::store::{Archived, Message, MessageState, StoredAttachment};
@@ -45,8 +45,14 @@ impl App {
             .get(&key)
             .is_some_and(|c| c.messages.iter().any(|m| m.id == id))
         {
-            return; // duplicate (e.g. direct and propagated copies)
+            // A duplicate (e.g. direct and propagated copies).
+            if message.paper {
+                self.notify(format!("You have this message from {} already", self.store.display_name(&key)));
+            }
+            return;
         }
+        // Read in by the user, who's looking at it.
+        let paper = message.paper;
 
         let mut attachments = Vec::new();
         if !message.attachments.is_empty() {
@@ -70,9 +76,8 @@ impl App {
 
         // On screen, in a window that has the focus: what arrives while the
         // user is away counts as unread.
-        let is_active = self.focused
-            && self.tab == Tab::Messages
-            && self.active_conversation.as_deref() == Some(key.as_str());
+        let is_active = paper
+            || (self.focused && self.tab == Tab::Messages && self.active_conversation.as_deref() == Some(key.as_str()));
         // What the notification says: the text, else what came with it.
         let preview = if !message.content.trim().is_empty() {
             notify::body(&message.content)
@@ -97,6 +102,7 @@ impl App {
                 verified: message.verified,
             },
             attachments,
+            paper: None,
         });
         // Messages downloaded later may be older than ones already shown.
         conversation
@@ -107,6 +113,11 @@ impl App {
         }
         self.store_dirty = true;
         let name = self.store.display_name(&key);
+        if paper {
+            self.notify(format!("Read a paper message from {name}"));
+            self.paper_read = Some(key);
+            return;
+        }
         self.log(format!("Message from {name}"));
         self.keep_conversation_selection();
         if self.settings.notify_messages && !muted {
@@ -225,20 +236,24 @@ impl App {
         self.message_scroll = 0;
     }
 
-    /// Queue an LXMF message to `key` (a hex address). On failure the text
-    /// and files are handed back with the reason.
+    /// Queue an LXMF message to `key` (a hex address), or write it as a
+    /// paper message; its local id. On failure the text and files are
+    /// handed back with the reason.
     pub fn send_message(
         &mut self,
         key: String,
         content: String,
         files: Vec<PathBuf>,
         mode: DeliveryMode,
-    ) -> Result<(), (String, String, Vec<PathBuf>)> {
+    ) -> Result<u64, (String, String, Vec<PathBuf>)> {
         let Some(to) = parse_hash(&key) else {
             return Err(("An LXMF address is 32 hex characters".into(), content, files));
         };
         if content.trim().is_empty() && files.is_empty() {
             return Err(("Nothing to send".into(), content, files));
+        }
+        if mode == DeliveryMode::Paper && !files.is_empty() {
+            return Err(("A paper message carries text only".into(), content, files));
         }
         if mode == DeliveryMode::Propagated && self.propagation_node().is_none() {
             return Err(("Select a propagation node first (Network tab, p)".into(), content, files));
@@ -277,17 +292,98 @@ impl App {
                 timestamp: now(),
                 state: MessageState::Sending,
                 attachments,
+                paper: None,
             });
         self.store_dirty = true;
         self.keep_conversation_selection();
-        self.send(NetCommand::SendMessage {
-            id,
-            to,
-            content,
-            attachments: files,
-            mode,
-        });
+        if mode == DeliveryMode::Paper {
+            self.send(NetCommand::WritePaper { id, to, content });
+        } else {
+            self.send(NetCommand::SendMessage {
+                id,
+                to,
+                content,
+                attachments: files,
+                mode,
+            });
+        }
+        Ok(id)
+    }
+
+    /// A paper message written (or not): it's kept with its link, and shown
+    /// as a QR code in the terminal UI when its conversation is open.
+    pub(super) fn on_paper(&mut self, id: u64, result: Result<String, String>) {
+        let local = format!("local-{id}");
+        let Some(message) = self.store.find_message_mut(&local) else { return };
+        match result {
+            Ok(link) => {
+                message.state = MessageState::Delivered;
+                message.paper = Some(link.clone());
+                self.store_dirty = true;
+                if self.tab == Tab::Messages {
+                    self.paper_view = Some(PaperView::new(link));
+                }
+            }
+            Err(e) => {
+                message.state = MessageState::Failed(e.clone());
+                self.store_dirty = true;
+                self.fail(format!("Could not write the paper message: {e}"));
+            }
+        }
+    }
+
+    /// Read in a paper message (its `lxm://` link): checked for this client
+    /// here, then decrypted and verified like any message received.
+    pub fn read_paper(&mut self, link: &str) -> Result<(), String> {
+        let link = link.trim();
+        let (to, _) = lxmf_core::message_api::LxMessage::decode_paper_uri(link)
+            .map_err(|_| "Not a paper message: those are lxm:// links (or their QR codes)")?;
+        if self.lxmf_hash.is_some_and(|own| own != to) {
+            return Err(format!("This paper message is for {}, not for you", hex::encode(to)));
+        }
+        self.send(NetCommand::ReadPaper(link.to_string()));
         Ok(())
+    }
+
+    /// Open the conversation a paper message was just read into (the
+    /// terminal UI does; a browser knows it from its request).
+    pub fn open_paper_read(&mut self) {
+        if let Some(key) = self.paper_read.take() {
+            self.open_conversation(key);
+            self.composing = false;
+        }
+    }
+
+    /// The newest paper message written in the open conversation (`P`).
+    pub(super) fn show_newest_paper(&mut self) {
+        let link = self
+            .active_conversation
+            .as_ref()
+            .and_then(|key| self.store.conversations.get(key))
+            .and_then(|c| c.messages.iter().rev().find_map(|m| m.paper.clone()));
+        match link {
+            Some(link) => self.paper_view = Some(PaperView::new(link)),
+            None => self.warn("No paper message written in this conversation (d picks paper, then write one)"),
+        }
+    }
+
+    /// Save the paper message shown as an SVG image, to print or pass on
+    /// (`s` on its QR code).
+    pub(super) fn save_paper_qr(&mut self) {
+        let Some(view) = &self.paper_view else { return };
+        let svg = match &view.qr {
+            Ok(qr) => qr.svg(),
+            Err(e) => return self.warn(e.clone()),
+        };
+        let who = self.active_conversation.as_deref().map_or("", |key| &key[..key.len().min(12)]);
+        let result = std::fs::create_dir_all(&self.paths.downloads).and_then(|()| {
+            let path = unique_path(&self.paths.downloads, &format!("paper-message-{who}.svg"));
+            std::fs::write(&path, svg).map(|()| path)
+        });
+        match result {
+            Ok(path) => self.notify(format!("Saved the QR code to {}", path.display())),
+            Err(e) => self.fail(format!("Could not save the QR code: {e}")),
+        }
     }
 
     /// Move each conversation's messages beyond the newest "Messages kept"
@@ -425,6 +521,10 @@ impl App {
             KeyCode::Char('a') => self.open_attach_prompt(),
             KeyCode::Char('o') => self.open_latest_attachment(),
             KeyCode::Char('d') => self.delivery_mode = self.delivery_mode.next(),
+            KeyCode::Char('p') => {
+                self.open_prompt(PromptKind::ReadPaper, "Read a paper message (lxm:// link, or a picture of its QR code)", "");
+            }
+            KeyCode::Char('P') => self.show_newest_paper(),
             KeyCode::Char('N') => self.toggle_active_muted(),
             KeyCode::PageUp => self.message_scroll = self.message_scroll.saturating_add(self.history_page()),
             KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(self.history_page()),
@@ -481,6 +581,7 @@ mod tests {
             timestamp: 1_700_000_000.0 + n as f64 * 31.0 * 86_400.0,
             state: MessageState::Received { verified: true },
             attachments: Vec::new(),
+            paper: None,
         }
     }
 
@@ -648,6 +749,7 @@ mod tests {
                 timestamp: 1_800_000_000.0 + f64::from(n),
                 verified: true,
                 attachments: Vec::new(),
+                paper: false,
             });
         };
         let unread = |app: &App| app.store.conversations[&key()].unread;
