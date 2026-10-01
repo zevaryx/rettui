@@ -73,11 +73,7 @@ pub fn conversations(app: &App) -> Value {
         .map(|key| {
             let conversation = &app.store.conversations[&key];
             let last = conversation.messages.last().map(|m| {
-                let text = if m.content.is_empty() && !m.attachments.is_empty() {
-                    format!("📎 {}", m.attachments[0].name)
-                } else {
-                    m.content.clone()
-                };
+                let text = if m.content.trim().is_empty() { m.opening() } else { m.content.clone() };
                 json!({ "text": text, "timestamp": m.timestamp, "incoming": m.incoming })
             });
             json!({
@@ -94,14 +90,18 @@ pub fn conversations(app: &App) -> Value {
 }
 
 /// A message, and what it answers if it's a reply (in `conversation`).
-fn message(m: &Message, conversation: &Conversation) -> Value {
-    let state = match &m.state {
+fn message_state(state: &MessageState) -> Value {
+    match state {
         MessageState::Received { verified } => json!({ "kind": "received", "verified": verified }),
         MessageState::Sending => json!({ "kind": "sending" }),
         MessageState::Delivered => json!({ "kind": "delivered" }),
         MessageState::Propagated => json!({ "kind": "propagated" }),
         MessageState::Failed(e) => json!({ "kind": "failed", "error": e }),
-    };
+    }
+}
+
+fn message(m: &Message, conversation: &Conversation) -> Value {
+    let state = message_state(&m.state);
     json!({
         "id": m.id,
         "incoming": m.incoming,
@@ -112,7 +112,18 @@ fn message(m: &Message, conversation: &Conversation) -> Value {
         "attachments": m.attachments.iter().enumerate().map(|(index, a)| json!({
             "index": index, "name": a.name, "size": a.size, "image": a.image,
             "exists": a.path.exists(),
+            // A voice message: its codec, and whether a browser can play it.
+            "voice": a.voice, "playable": a.playable(),
         })).collect::<Vec<_>>(),
+        // Reactions to it, oldest first: yours with how sending went.
+        "reactions": m.reactions.iter().map(|r| json!({
+            "emoji": r.emoji, "incoming": r.incoming, "state": message_state(&r.state),
+        })).collect::<Vec<_>>(),
+        "location": m.location.map(|l| json!({
+            "latitude": l.latitude, "longitude": l.longitude, "accuracy": l.accuracy,
+            "label": l.label(), "map": l.map_url(),
+        })),
+        "notes": m.notes,
         // A paper message written: its lxm:// link.
         "paper": m.paper,
         // Whether it can be replied to (it has an LXMF hash).

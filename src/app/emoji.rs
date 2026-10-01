@@ -13,6 +13,8 @@ use crate::term::input::TextInput;
 pub enum EmojiTarget {
     Compose,
     Channel,
+    /// A reaction to the message in [`App::reacting`].
+    Reaction,
 }
 
 /// The picker: a search, a tab for the recently used emoji and one for each
@@ -63,16 +65,18 @@ impl App {
         }
     }
 
+    /// The input emoji go into (a reaction's picker opens over the message
+    /// box).
     pub fn emoji_input(&self, target: EmojiTarget) -> &TextInput {
         match target {
-            EmojiTarget::Compose => &self.compose,
+            EmojiTarget::Compose | EmojiTarget::Reaction => &self.compose,
             EmojiTarget::Channel => &self.channels.input,
         }
     }
 
     fn emoji_input_mut(&mut self, target: EmojiTarget) -> &mut TextInput {
         match target {
-            EmojiTarget::Compose => &mut self.compose,
+            EmojiTarget::Compose | EmojiTarget::Reaction => &mut self.compose,
             EmojiTarget::Channel => &mut self.channels.input,
         }
     }
@@ -80,7 +84,12 @@ impl App {
     /// Open the picker over the input being written in, at the recently
     /// used if there are any.
     pub fn open_emoji_picker(&mut self) {
-        let Some(target) = self.emoji_target() else { return };
+        if let Some(target) = self.emoji_target() {
+            self.open_emoji_picker_for(target);
+        }
+    }
+
+    pub(super) fn open_emoji_picker_for(&mut self, target: EmojiTarget) {
         let tab = if emoji::recent(&self.store.recent_emoji).is_empty() { 1 } else { 0 };
         self.emoji = Some(EmojiPicker { target, search: TextInput::default(), tab, pick: 0, top: 0, columns: 1, rows: 1 });
     }
@@ -107,8 +116,8 @@ impl App {
         let (columns, page) = (picker.columns.max(1), picker.columns.max(1) * picker.rows.max(1));
         let last = count.saturating_sub(1);
         match key.code {
-            KeyCode::Esc => self.emoji = None,
-            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => self.emoji = None,
+            KeyCode::Esc => self.close_emoji_picker(),
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => self.close_emoji_picker(),
             KeyCode::Enter => {
                 let chosen = self.emoji_choices().get(self.emoji.as_ref().map_or(0, |p| p.pick)).copied();
                 if let Some(chosen) = chosen {
@@ -183,8 +192,18 @@ impl App {
         }
     }
 
-    /// Put `emoji` in at the input's cursor, and remember it.
+    /// Close the picker without picking (nor reacting).
+    pub(crate) fn close_emoji_picker(&mut self) {
+        self.emoji = None;
+        self.reacting = None;
+    }
+
+    /// Put `emoji` in at the input's cursor, and remember it (or react
+    /// with it).
     fn insert_emoji(&mut self, target: EmojiTarget, emoji: &str) {
+        if target == EmojiTarget::Reaction {
+            return self.react_with(emoji);
+        }
         self.emoji_input_mut(target).insert_str(emoji);
         self.remember_emoji(emoji);
     }

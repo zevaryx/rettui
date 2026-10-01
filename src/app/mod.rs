@@ -182,6 +182,8 @@ pub struct Regions {
     pub history: Rect,
     /// What each visible history row opens when clicked.
     pub history_rows: Vec<Option<HistoryHit>>,
+    /// The picked message's buttons, where they are.
+    pub history_buttons: Vec<(Rect, HistoryHit)>,
     pub compose: Rect,
     pub peers: Rect,
     /// Network tab search box.
@@ -229,10 +231,34 @@ pub struct Regions {
 pub enum HistoryHit {
     /// Open an attachment.
     File(PathBuf),
-    /// Reply to the message (its index): its first row.
-    Reply(usize),
+    /// Pick the message (its index), or put it down: its first row.
+    Pick(usize),
     /// Show the message a reply answers (its index): the reply's quote.
     Original(usize),
+    /// Open a link (a location, on a map).
+    Link(String),
+    /// Do something with a message (its index): the picked message's
+    /// buttons.
+    Action(usize, MessageAction),
+}
+
+/// What can be done with a picked message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageAction {
+    Reply,
+    React,
+    Copy,
+}
+
+impl MessageAction {
+    /// The button's label, and its key.
+    pub fn label(self) -> (&'static str, char) {
+        match self {
+            MessageAction::Reply => ("↩ Reply", 'r'),
+            MessageAction::React => ("🙂 React", 'e'),
+            MessageAction::Copy => ("⧉ Copy", 'y'),
+        }
+    }
 }
 
 /// How a footer notice reads: done, a hint that something can't be done
@@ -297,6 +323,12 @@ pub struct App {
     pub composing: bool,
     /// The message being replied to (its id), in the open conversation.
     pub reply: Option<String>,
+    /// The message picked in the open conversation (its id), to do
+    /// something with it (`m`, or a click on it).
+    pub picked: Option<String>,
+    /// The message the emoji picker reacts to (its id), in the open
+    /// conversation.
+    pub reacting: Option<String>,
     /// A message (its index) to bring into view at the next draw.
     pub scroll_to: Option<usize>,
     /// The emoji picker, over the input being written in.
@@ -409,6 +441,8 @@ impl App {
             compose: TextInput::default(),
             composing: false,
             reply: None,
+            picked: None,
+            reacting: None,
             scroll_to: None,
             emoji: None,
             shortcode: emoji::Shortcode::default(),
@@ -679,27 +713,8 @@ impl App {
                 self.peers_dirty = true;
             }
             NetEvent::Announced => self.log("Announced LXMF destination"),
-            NetEvent::Message(message) => self.on_message(message),
-            NetEvent::Delivery { id, result } => {
-                let local = format!("local-{id}");
-                if let Some(message) = self.store.find_message_mut(&local) {
-                    message.state = match &result {
-                        Ok(sent) if sent.delivered == Delivered::Direct => MessageState::Delivered,
-                        Ok(_) => MessageState::Propagated,
-                        Err(e) => MessageState::Failed(e.clone()),
-                    };
-                    // What replies to it will name it by.
-                    if let Ok(sent) = &result {
-                        message.hash = Some(hex::encode(sent.hash));
-                    }
-                    self.store_dirty = true;
-                }
-                match result {
-                    Ok(sent) if sent.delivered == Delivered::Propagated => self.log("Message handed to propagation node"),
-                    Ok(_) => {}
-                    Err(e) => self.log(format!("Delivery failed: {e}")),
-                }
-            }
+            NetEvent::Message(message) => self.on_message(*message),
+            NetEvent::Delivery { id, result } => self.on_delivery(id, result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
             NetEvent::Paper { id, result } => self.on_paper(id, result),
             NetEvent::SyncStarted => self.sync = SyncState::Running(Instant::now()),
@@ -718,6 +733,42 @@ impl App {
             }
             NetEvent::Log(line) => self.log(line),
             NetEvent::Stopped => {}
+        }
+    }
+
+    /// A message (or a reaction) sent, or not.
+    fn on_delivery(&mut self, id: u64, result: Result<crate::lxmf::Sent, String>) {
+        let local = format!("local-{id}");
+        let state = match &result {
+            Ok(sent) if sent.delivered == Delivered::Direct => MessageState::Delivered,
+            Ok(_) => MessageState::Propagated,
+            Err(e) => MessageState::Failed(e.clone()),
+        };
+        if let Some(message) = self.store.find_message_mut(&local) {
+            message.state = state;
+            // What replies (and reactions) to it will name it by.
+            if let Ok(sent) = &result {
+                message.hash = Some(hex::encode(sent.hash));
+                // Reactions to it that came before this did.
+                for conversation in self.store.conversations.values_mut() {
+                    if conversation.messages.iter().any(|m| m.id == local) {
+                        conversation.adopt_strays();
+                    }
+                }
+            }
+            self.store_dirty = true;
+        } else if let Some(reaction) = self.store.find_reaction_mut(&local) {
+            reaction.state = state;
+            self.store_dirty = true;
+            if let Err(e) = &result {
+                return self.log(format!("Reaction not sent: {e}"));
+            }
+            return;
+        }
+        match result {
+            Ok(sent) if sent.delivered == Delivered::Propagated => self.log("Message handed to propagation node"),
+            Ok(_) => {}
+            Err(e) => self.log(format!("Delivery failed: {e}")),
         }
     }
 

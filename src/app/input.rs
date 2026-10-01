@@ -196,7 +196,7 @@ impl App {
                 }
                 return;
             }
-            MouseEventKind::Down(_) => self.emoji = None,
+            MouseEventKind::Down(_) => self.close_emoji_picker(),
             _ => {}
         }
         match mouse.kind {

@@ -5,7 +5,10 @@
 //! - [`inbound`]: unpacking and verifying received messages.
 //! - [`sync`]: downloading waiting messages from a propagation node.
 //! - [`paper`]: paper messages (`lxm://` links and QR codes).
+//! - [`fields`]: what messages carry besides text and files (reactions,
+//!   locations, commands, voice).
 
+pub mod fields;
 mod inbound;
 pub mod paper;
 mod send;
@@ -15,6 +18,7 @@ use std::path::PathBuf;
 
 use rmpv::Value;
 
+pub use fields::{Extras, Location, Reaction};
 pub use inbound::{spawn_inbound, with_destination};
 pub use send::send;
 pub use sync::Syncer;
@@ -114,6 +118,15 @@ pub struct Outgoing {
     /// with the same hash.
     pub timestamp: f64,
     pub reply: Option<Reply>,
+    /// A reaction to a message (sent with no text, as Columba does).
+    pub reaction: Option<Reaction>,
+}
+
+impl Outgoing {
+    /// A text message (with files, maybe), not a reply.
+    pub fn text(to: Hash, content: String, attachments: Vec<PathBuf>, mode: DeliveryMode, timestamp: f64) -> Self {
+        Self { to, content, attachments, mode, propagation_node: None, timestamp, reply: None, reaction: None }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -123,7 +136,7 @@ pub struct Attachment {
     pub image: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct InboundMessage {
     pub id: Option<[u8; 32]>,
     pub source: Hash,
@@ -136,6 +149,8 @@ pub struct InboundMessage {
     pub paper: bool,
     /// The message it answers, if it's a reply.
     pub reply: Option<Reply>,
+    /// Reactions, locations, commands and voice.
+    pub extras: Extras,
 }
 
 fn is_image_name(name: &str) -> bool {
@@ -180,15 +195,7 @@ mod tests {
         std::fs::write(&doc, b"hello").unwrap();
 
         let identity = Identity::new();
-        let outgoing = Outgoing {
-            to: [1; 16],
-            content: "hi".into(),
-            attachments: vec![img, doc],
-            mode: DeliveryMode::Direct,
-            propagation_node: None,
-            timestamp: 1_800_000_000.0,
-            reply: None,
-        };
+        let outgoing = Outgoing::text([1; 16], "hi".into(), vec![img, doc], DeliveryMode::Direct, 1_800_000_000.0);
         let message = build_message(&identity, [2; 16], &outgoing, None).await.unwrap();
         let unpacked = LxMessage::unpack(&message.pack().unwrap()).unwrap();
         let attachments = attachments_of(&unpacked);
@@ -203,15 +210,7 @@ mod tests {
     }
 
     fn outgoing(reply: Option<Reply>) -> Outgoing {
-        Outgoing {
-            to: [1; 16],
-            content: "yes, at noon".into(),
-            attachments: Vec::new(),
-            mode: DeliveryMode::Direct,
-            propagation_node: None,
-            timestamp: 1_800_000_000.5,
-            reply,
-        }
+        Outgoing { reply, ..Outgoing::text([1; 16], "yes, at noon".into(), Vec::new(), DeliveryMode::Direct, 1_800_000_000.5) }
     }
 
     #[tokio::test]

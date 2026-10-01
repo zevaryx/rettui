@@ -36,9 +36,10 @@ pub struct Peer {
     pub last_seen: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageState {
     Received { verified: bool },
+    #[default]
     Sending,
     Delivered,
     /// Accepted by a propagation node for the recipient to collect.
@@ -53,9 +54,46 @@ pub struct StoredAttachment {
     pub path: PathBuf,
     pub size: u64,
     pub image: bool,
+    /// A voice message: its codec (`Opus`, `Codec2 1200`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl StoredAttachment {
+    /// A voice message that plays elsewhere (an Ogg file: Opus).
+    pub fn playable(&self) -> bool {
+        self.voice.is_some() && self.path.extension().is_some_and(|e| e == "ogg")
+    }
+}
+
+/// A reaction to a message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Reaction {
+    /// What it is: an emoji, usually.
+    pub emoji: String,
+    /// Theirs, or yours.
+    pub incoming: bool,
+    /// Unix seconds.
+    pub timestamp: f64,
+    /// A received one's LXMF hash (hex), or `local-N` for yours.
+    pub id: String,
+    /// Yours: sending, sent or failed.
+    pub state: MessageState,
+}
+
+/// A reaction to a message that isn't here (yet): kept in case it arrives.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StrayReaction {
+    /// The LXMF hash (hex) of the message it reacts to.
+    pub to: String,
+    #[serde(flatten)]
+    pub reaction: Reaction,
+}
+
+/// The most reactions kept waiting for their messages, a conversation.
+const STRAY_REACTIONS: usize = 100;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Message {
     /// LXMF message id (hex) for inbound messages, `local-N` for outbound.
     pub id: String,
@@ -77,6 +115,16 @@ pub struct Message {
     /// The message this one answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply: Option<ReplyTo>,
+    /// Reactions to it, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<Reaction>,
+    /// Where they were, if it brought a location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<crate::lxmf::Location>,
+    /// What else it brought, in words: a command asked for, a location
+    /// share that stopped, something rettui can't show.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 impl Message {
@@ -90,14 +138,38 @@ impl Message {
         }
     }
 
-    /// The start of what it says, for a reply's quote: its first line of
-    /// text, else its title, else its first file.
+    /// The start of what it says, for a reply's quote and the
+    /// conversation list: its first line of text, else its title, else
+    /// what it brought (a voice message, a file, a location, a note).
     pub fn opening(&self) -> String {
         let first = |text: &str| text.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string);
         first(&self.content)
             .or_else(|| first(&self.title))
-            .or_else(|| self.attachments.first().map(|a| format!("📎 {}", a.name)))
+            .or_else(|| {
+                self.attachments.first().map(|a| match &a.voice {
+                    Some(_) => "🎤 Voice message".to_string(),
+                    None => format!("📎 {}", a.name),
+                })
+            })
+            .or_else(|| self.location.map(|_| "📍 Location".to_string()))
+            .or_else(|| self.notes.first().cloned())
             .unwrap_or_default()
+    }
+
+    /// Nothing but a location or notes (telemetry, a command): not worth a
+    /// notification, and a newer one replaces it.
+    pub fn is_quiet(&self) -> bool {
+        self.incoming
+            && self.content.trim().is_empty()
+            && self.title.trim().is_empty()
+            && self.attachments.is_empty()
+            && self.reply.is_none()
+    }
+
+    /// Whether `other` is the same kind of quiet message (a newer location
+    /// update, the same command again), which replaces this one.
+    pub fn same_quiet_kind(&self, other: &Message) -> bool {
+        self.is_quiet() && other.is_quiet() && self.location.is_some() == other.location.is_some() && self.notes == other.notes
     }
 }
 
@@ -124,6 +196,42 @@ pub struct Quoted {
 }
 
 impl Conversation {
+    /// Add a reaction to the message with LXMF hash `to`, or keep it until
+    /// that message arrives. False if it's here already (the same one
+    /// twice, or the same emoji from the same side).
+    pub fn add_reaction(&mut self, to: &str, reaction: Reaction) -> bool {
+        let mut known = self.messages.iter().flat_map(|m| &m.reactions).chain(self.stray_reactions.iter().map(|s| &s.reaction));
+        if known.any(|r| r.id == reaction.id) {
+            return false;
+        }
+        match self.messages.iter_mut().find(|m| m.lxmf_hash() == Some(to)) {
+            Some(message) => {
+                if message.reactions.iter().any(|r| r.incoming == reaction.incoming && r.emoji == reaction.emoji) {
+                    return false;
+                }
+                message.reactions.push(reaction);
+            }
+            None => {
+                self.stray_reactions.push(StrayReaction { to: to.to_string(), reaction });
+                let over = self.stray_reactions.len().saturating_sub(STRAY_REACTIONS);
+                self.stray_reactions.drain(..over);
+            }
+        }
+        true
+    }
+
+    /// Put reactions that were waiting on the messages they're for, now
+    /// that they're here (or have their hash).
+    pub fn adopt_strays(&mut self) {
+        for stray in std::mem::take(&mut self.stray_reactions) {
+            if self.messages.iter().any(|m| m.lxmf_hash() == Some(stray.to.as_str())) {
+                self.add_reaction(&stray.to.clone(), stray.reaction);
+            } else {
+                self.stray_reactions.push(stray);
+            }
+        }
+    }
+
     /// The message with LXMF hash `hash`, and where it is.
     pub fn by_hash(&self, hash: &str) -> Option<(usize, &Message)> {
         self.messages.iter().enumerate().find(|(_, m)| m.lxmf_hash() == Some(hash))
@@ -157,6 +265,9 @@ pub struct Conversation {
     /// How many older messages have been moved to the archive.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub archived: usize,
+    /// Reactions to messages that aren't here (yet).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stray_reactions: Vec<StrayReaction>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -533,6 +644,16 @@ impl Store {
             .flat_map(|c| c.messages.iter_mut())
             .find(|m| m.id == id)
     }
+
+    /// A reaction of yours, by its `local-N` id (on a message, or waiting
+    /// for one).
+    pub fn find_reaction_mut(&mut self, id: &str) -> Option<&mut Reaction> {
+        self.conversations.values_mut().find_map(|c| {
+            let on_messages = c.messages.iter_mut().flat_map(|m| m.reactions.iter_mut());
+            let waiting = c.stray_reactions.iter_mut().map(|s| &mut s.reaction);
+            on_messages.chain(waiting).find(|r| r.id == id)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -575,15 +696,10 @@ mod tests {
         );
         let message = Message {
             id: "local-1".into(),
-            incoming: false,
-            title: String::new(),
             content: "hello ".repeat(50),
             timestamp: 1_790_000_000.5,
             state: MessageState::Delivered,
-            attachments: Vec::new(),
-            paper: None,
-            hash: None,
-            reply: None,
+            ..Message::default()
         };
         store.conversations.insert("ab".repeat(16), Conversation { messages: vec![message], unread: 1, ..Default::default() });
         store.next_local_id = 2;

@@ -1629,7 +1629,8 @@ function emojiButton(input) {
 // The picker: a search, a tab for the recently used and one per group, and
 // every emoji (the groups one after another; a tab scrolls to its group).
 // A click puts one in at the input's caret and closes it (Shift keeps it
-// open). Arrows and Enter work from the search, Esc closes.
+// open). Arrows and Enter work from the search, Esc closes. Given
+// `onPick` (a reaction), it hands the emoji to that instead, by `button`.
 const emojiPicker = {
   node: null,
 
@@ -1648,11 +1649,12 @@ const emojiPicker = {
     window.addEventListener('resize', () => this.input && this.place());
   },
 
-  async toggle(input, button) {
+  async toggle(input, button, onPick = null) {
     if (this.input === input) return this.close();
     if (!this.node) this.build();
     this.input = input;
     this.button = button;
+    this.onPick = onPick;
     this.node.classList.remove('hidden');
     this.place();
     this.grid.replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
@@ -1669,15 +1671,23 @@ const emojiPicker = {
     if (!phone.matches) this.search.focus();
   },
 
-  // Above the input's bar, over its button as far as the bar allows.
+  // Above the input's bar, over its button as far as the bar allows (a
+  // reaction's: by its button, below it if there's no room above).
   place() {
-    const bar = this.input.closest('.compose, .chat-input') || this.input;
+    const bar = this.input.closest?.('.compose, .chat-input') || this.input;
     const box = bar.getBoundingClientRect();
     const button = this.button.getBoundingClientRect();
     const width = Math.min(360, innerWidth - 16);
     const left = Math.min(Math.max(button.left + button.width / 2 - width / 2, box.left + 8), box.right - width - 8);
     this.node.style.width = width + 'px';
     this.node.style.left = Math.max(8, Math.min(left, innerWidth - width - 8)) + 'px';
+    if (this.onPick && box.top < 260) {
+      this.node.style.bottom = '';
+      this.node.style.top = (box.bottom + 6) + 'px';
+      this.node.style.maxHeight = Math.max(200, Math.min(400, innerHeight - box.bottom - 16)) + 'px';
+      return;
+    }
+    this.node.style.top = '';
     this.node.style.bottom = (innerHeight - box.top + 6) + 'px';
     this.node.style.maxHeight = Math.max(200, Math.min(400, box.top - 16)) + 'px';
   },
@@ -1686,6 +1696,7 @@ const emojiPicker = {
     if (!this.input) return;
     const input = this.input;
     this.input = null;
+    this.onPick = null;
     this.node.classList.add('hidden');
     if (focus) input.focus();
   },
@@ -1785,6 +1796,12 @@ const emojiPicker = {
   pick(x, keepOpen) {
     const input = this.input;
     if (!input) return;
+    if (this.onPick) {
+      const onPick = this.onPick;
+      this.close(false);
+      emoji.picked(x.e);
+      return onPick(x.e);
+    }
     insertText(input, x.e);
     emoji.picked(x.e);
     if (!keepOpen) this.close();
@@ -2038,19 +2055,31 @@ app.views.messages = {
     }[m.state.kind];
     const base = `/api/conversations/${conversation.key}/attachments/${encodeURIComponent(m.id)}/`;
     const author = m.incoming ? conversation.name : 'You';
+    const reactButton = m.can_reply ? el('button', { class: 'inline reply-button', text: '🙂 React', title: 'React to this message' }) : null;
+    reactButton?.addEventListener('click', () => emojiPicker.toggle(reactButton, reactButton, (e) => this.react(conversation.key, m.id, e)));
     return el('div', { class: 'message ' + (m.incoming ? 'in' : 'out'), dataset: { id: m.id } },
       el('div', { class: 'meta' },
         el('span', { class: 'author ' + (m.incoming ? 'in' : 'out'), text: author }),
         el('span', { class: 'dim', text: '  ' + timeLabel(m.timestamp) }),
         state,
         m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
-          onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null),
+          onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null,
+        reactButton),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
       m.content ? el('div', { class: 'content', text: m.content }) : null,
+      m.location ? el('div', { class: 'location' }, '📍 ',
+        el('a', { href: m.location.map, target: '_blank', rel: 'noopener noreferrer', text: m.location.label, title: 'Show it on a map' })) : null,
+      (m.notes || []).map((note) => el('div', { class: 'note dim', text: note })),
       m.attachments.map((a) => {
         const url = base + a.index;
         if (!a.exists) return el('div', { class: 'attachment dim', text: `📎 ${a.name} (file missing)` });
+        if (a.voice) {
+          return el('div', { class: 'attachment voice' },
+            el('span', { text: '🎤 Voice message ' }),
+            a.playable ? el('audio', { controls: true, preload: 'none', src: url }) : null,
+            el('a', { href: url, download: a.name, class: 'dim', text: a.playable ? ` ${humanBytes(a.size)}` : ` ${a.voice}, which browsers can't play (${humanBytes(a.size)})` }));
+        }
         if (a.image) {
           return el('div', { class: 'attachment' },
             el('a', { href: url, target: '_blank', rel: 'noopener' }, el('img', { src: url, alt: a.name, loading: 'lazy' })));
@@ -2058,14 +2087,38 @@ app.views.messages = {
         return el('div', { class: 'attachment' },
           el('a', { href: url, download: a.name, text: `📎 ${a.name}` }),
           el('span', { class: 'dim', text: ` ${humanBytes(a.size)}` }));
-      }));
+      }),
+      this.reactions(m, conversation));
+  },
+
+  // A message's reactions: each emoji, with who reacted (a failed one of
+  // yours goes again when clicked).
+  reactions(m, conversation) {
+    if (!m.reactions?.length) return null;
+    const groups = new Map();
+    for (const r of m.reactions) {
+      const who = r.incoming ? conversation.name : { sending: 'You (sending…)', failed: 'You (failed)' }[r.state.kind] || 'You';
+      groups.set(r.emoji, [...(groups.get(r.emoji) || []), { who, failed: !r.incoming && r.state.kind === 'failed' }]);
+    }
+    return el('div', { class: 'reactions' }, [...groups].map(([e, people]) => {
+      const failed = people.some((p) => p.failed);
+      return el('button', { class: 'reaction' + (failed ? ' failed' : ''), type: 'button',
+        title: failed ? 'Not sent: click to send it again' : people.map((p) => p.who).join(', '),
+        onclick: () => failed && this.react(conversation.key, m.id, e) },
+      el('span', { text: e }), el('span', { class: 'dim', text: ' ' + people.map((p) => p.who).join(', ') }));
+    }));
+  },
+
+  async react(key, id, e) {
+    if (await attempt(() => api.post(`/conversations/${key}/react`, { id, emoji: e }))) this.update();
   },
 
   // The start of what a message says, for a reply to it (as the server's
   // `Message::opening`).
   opening(m) {
     const first = (text) => (text || '').split('\n').map((l) => l.trim()).find(Boolean);
-    return first(m.content) || first(m.title) || (m.attachments[0] ? `📎 ${m.attachments[0].name}` : '');
+    const file = m.attachments[0] && (m.attachments[0].voice ? '🎤 Voice message' : `📎 ${m.attachments[0].name}`);
+    return first(m.content) || first(m.title) || file || (m.location ? '📍 Location' : '') || m.notes?.[0] || '';
   },
 
   // What a reply answers, above its text: a click shows that message.

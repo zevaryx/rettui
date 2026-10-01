@@ -40,8 +40,7 @@ pub async fn write(
     let recipient = lookup(runtime, known, to)
         .await
         .map_err(|e| format!("{e}: a paper message needs the recipient's key, which their announce brings"))?;
-    let outgoing =
-        Outgoing { to, content, attachments: Vec::new(), mode: DeliveryMode::Paper, propagation_node: None, timestamp, reply };
+    let outgoing = Outgoing { reply, ..Outgoing::text(to, content, Vec::new(), DeliveryMode::Paper, timestamp) };
     let mut message = build_message(identity, source, &outgoing, recipient.app_data.as_deref()).await?;
     message.method = DeliveryMethod::Paper;
     let hash = message.hash.ok_or("The message has no hash after signing")?;
@@ -88,7 +87,7 @@ pub fn read(runtime: &ReticulumHandle, known: &Known, identity: &Identity, lxmf_
             Ok(data) => match inbound::parse_inbound(&runtime, &known, &data).await {
                 Ok(mut message) => {
                     message.paper = true;
-                    NetEvent::Message(message)
+                    NetEvent::Message(Box::new(message))
                 }
                 Err(e) => NetEvent::Log(format!("Could not read the paper message: {e}")),
             },

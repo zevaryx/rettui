@@ -70,7 +70,8 @@ fn draw_picker(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bou
         (false, 0) => "Emoji · used lately".to_string(),
         (false, tab) => format!("Emoji · {}", emoji::groups()[tab - 1].name),
     };
-    let popup = block(&title, true).title_bottom(Line::styled(" Enter insert · Esc close ", Style::default().fg(DIM)));
+    let hint = if target == crate::app::emoji::EmojiTarget::Reaction { " Enter react · Esc close " } else { " Enter insert · Esc close " };
+    let popup = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(DIM)));
     let inner = popup.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(popup, area);

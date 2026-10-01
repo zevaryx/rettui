@@ -86,6 +86,7 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/read", post(read_conversation))
         .route("/conversations/{key}/notify", post(mute_conversation))
         .route("/conversations/{key}/send", post(send_message))
+        .route("/conversations/{key}/react", post(react))
         .route("/conversations/{key}/attachments/{id}/{index}", get(attachment))
         .route("/paper/read", post(read_paper))
         .route("/paper/scan", post(scan_paper))
@@ -674,6 +675,20 @@ async fn send_message(
 }
 
 #[derive(Deserialize)]
+struct ReactBody {
+    /// The message reacted to (its id).
+    id: String,
+    emoji: String,
+}
+
+/// React to a message (sent like one, with no text).
+async fn react(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<ReactBody>) -> ApiResult {
+    let key = address(&key)?;
+    state.write(move |o| o.app.send_reaction(&key, &body.id, &body.emoji)).await?.map_err(bad)?;
+    ok()
+}
+
+#[derive(Deserialize)]
 struct PaperBody {
     /// The `lxm://` link (from a QR code, or pasted).
     link: String,
@@ -746,12 +761,16 @@ fn file_name(name: &str) -> String {
 }
 
 fn file_response(data: Vec<u8>, name: &str, inline: bool) -> Response {
-    let content_type = image::guess_format(&data)
-        .map(|f| f.to_mime_type())
-        .unwrap_or("application/octet-stream");
+    // Voice messages (Opus, in an Ogg file) play in the page.
+    let content_type = if data.starts_with(b"OggS") {
+        "audio/ogg"
+    } else {
+        image::guess_format(&data).map(|f| f.to_mime_type()).unwrap_or("application/octet-stream")
+    };
+    let shown = content_type.starts_with("image/") || content_type.starts_with("audio/");
     let disposition = format!(
         "{}; filename=\"{}\"",
-        if inline && content_type.starts_with("image/") { "inline" } else { "attachment" },
+        if inline && shown { "inline" } else { "attachment" },
         file_name(name)
     );
     (

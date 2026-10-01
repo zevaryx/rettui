@@ -8,9 +8,10 @@ narrower than 110 columns get a sidebar of icons and narrower side lists, so
 | Tab | Keys |
 | --- | ---- |
 | All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
-| Messages | `↑↓` pick a conversation, `Enter` write, `r` [reply](Messaging#replies) to their newest message, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `p` read a [paper message](Messaging#paper-messages), `P` show the newest paper message written, `N` turn the conversation's notifications off or on, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
+| Messages | `↑↓` pick a conversation, `Enter` write, `r` [reply](Messaging#replies) to their newest message, `m` pick a message, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `p` read a [paper message](Messaging#paper-messages), `P` show the newest paper message written, `N` turn the conversation's notifications off or on, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
+| A picked message (`m`) | `↑↓` pick another, `r` / `Enter` reply, `e` [react](Messaging#reactions-locations-commands-and-voice-messages), `y` copy its text, `o` open its file or location, `Esc` done |
 | Writing a message | `Enter` send, `Esc` stop writing (or first stop replying), `Ctrl-R` reply (again: to the one before), `↑↓` while replying another message, `Ctrl-E` [emoji](Messaging#emoji), `:name` an emoji by name, `Ctrl-V` paste, `Ctrl-O` attach, `Ctrl-X` clear attachments, `Ctrl-P` cycle delivery mode |
-| Emoji picker (`Ctrl-E` while writing a message or in a channel) | type to search, arrows choose, `Tab`/`Shift-Tab` next or previous group, `Enter` put it in, `Esc` close; click one to put it in |
+| Emoji picker (`Ctrl-E` while writing a message or in a channel, `e` on a picked message) | type to search, arrows choose, `Tab`/`Shift-Tab` next or previous group, `Enter` put it in (or react with it), `Esc` close; click one to put it in |
 | An emoji name typed after `:` | `↑↓` choose, `Tab`/`Enter` put it in, `Esc` close the list |
 | A paper message's QR code | `y` copy the link, `s` save the code as an SVG image, any other key (or a click) closes it |
 | Channels | `↑↓` pick a hub, room or whisper conversation, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `J` show or hide joins and leaves, `N` next notification choice for the hub, room or whisper conversation, `x` leave a room, close a whisper conversation, or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
@@ -34,7 +35,8 @@ a little longer.
 - Click a section in the left sidebar to switch to it.
 - Click a conversation to open it, the compose box to start writing, and an
   attachment to open it with your desktop's default app. Click the name line
-  of a message to reply to it, and a reply's quote to see what it answers.
+  of a message to pick it, then its buttons to reply, react or copy it. Click
+  a reply's quote to see what it answers, and a location to see it on a map.
 - In Channels, click a hub or room to open it, the input box to write, a
   public room in a hub's view to join it, and a name to message that user.
 - In the Network tab, click a row to select it and double-click to open it.
