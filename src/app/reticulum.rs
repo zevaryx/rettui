@@ -164,7 +164,7 @@ impl App {
 
     /// Change the file: read it, apply `edit`, check and save. Returns the
     /// warnings about interfaces that will not start.
-    fn rns_edit(&mut self, restricted: bool, edit: impl FnOnce(&str) -> Result<String, String>) -> Result<Vec<String>, String> {
+    pub(super) fn rns_edit(&mut self, restricted: bool, edit: impl FnOnce(&str) -> Result<String, String>) -> Result<Vec<String>, String> {
         let path = self.rns_path();
         let (before, _) = rns::load(&path)?;
         let after = edit(&before)?;
