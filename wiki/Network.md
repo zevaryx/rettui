@@ -25,6 +25,15 @@ shows your identity, your interfaces and the log.
   trouble again within five minutes (a connection retrying) is counted
   rather than logged again, and a Reticulum restart starts the count
   afresh. `rettui.log` keeps everything.
+- **What to do about it:** common trouble gets a plain-words hint after
+  the error: a host name that can't be looked up (check the internet
+  connection and the host name), a connection refused (the entry point may
+  be down or the port wrong), no answer (down, or a firewall), no route (no
+  internet), a port already in use (another Reticulum, such as rnsd, or a
+  second rettui), a radio that isn't plugged in, a serial port you may not
+  open (on Linux, the `dialout` group), a device another program has open,
+  no I2P router running, and an interface that has stopped retrying.
+  The command-line commands print the same lines.
 - **Traffic:** the corner of the sidebar, under the interface count, shows how
   fast data is coming in (↓) and going out (↑) over all interfaces, updated
   every few seconds. In the web UI, hovering over it shows the totals.

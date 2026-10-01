@@ -9,6 +9,8 @@
 //! optionally an automatic propagation node; and links to where to learn
 //! more. Nothing changes until the user applies it.
 
+use std::time::{Duration, Instant};
+
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
 
@@ -21,6 +23,10 @@ pub const ENTRY_HOST: &str = "rmap.world";
 pub const ENTRY_PORT: u16 = 4242;
 /// Discovered entry points connected to at once, when discovery is on.
 const DISCOVERED: u32 = 2;
+/// How long the entry point gets to connect before the guide says it
+/// hasn't (a connection that fails says so within seconds; one that
+/// times out, in about half a minute).
+const CONNECT_WAIT: Duration = Duration::from_secs(45);
 
 /// Where to learn more: title, address, and what's there when the title
 /// doesn't say.
@@ -149,17 +155,22 @@ impl App {
             let discover = choices.discover && !view.has_discovery;
             if add || discover {
                 // With discovery, the entry point only bootstraps it.
+                let mut added = None;
                 let warnings = self.rns_edit(restricted, |text| {
                     let text = if add {
-                        rns::add_entry_point(text, ENTRY_NAME, ENTRY_HOST, ENTRY_PORT, choices.discover)?
+                        let (text, name) = rns::add_entry_point(text, ENTRY_NAME, ENTRY_HOST, ENTRY_PORT, choices.discover)?;
+                        added = Some(name);
+                        text
                     } else {
                         text.to_string()
                     };
                     Ok(if discover { rns::enable_discovery(&text, DISCOVERED) } else { text })
                 })?;
                 done.extend(warnings);
-                if add {
+                if let Some(name) = added {
                     done.push(format!("Added {ENTRY_NAME} ({ENTRY_HOST}:{ENTRY_PORT}) to your Reticulum config"));
+                    // Said once it connects, or if it doesn't.
+                    self.connect_watch = Some((name, Instant::now()));
                 }
                 if discover {
                     done.push("Turned on interface discovery".into());
@@ -188,6 +199,30 @@ impl App {
                 self.settings_file = saved;
             }
             Err(e) => self.log(e),
+        }
+    }
+
+    /// After the guide added the entry point: say when it connects, or, if
+    /// it hasn't after a while, why (its latest trouble in the log, in
+    /// plain words). Called as interfaces change, and on every tick.
+    pub(super) fn watch_connection(&mut self) {
+        let Some((name, since)) = &self.connect_watch else { return };
+        if self.interfaces.iter().any(|i| &i.name == name && i.online) {
+            let name = name.clone();
+            self.connect_watch = None;
+            self.notify(format!("Connected through {name}: peers and nodes appear in the Network tab as they announce"));
+        } else if since.elapsed() >= CONNECT_WAIT {
+            let name = name.clone();
+            self.connect_watch = None;
+            let about = format!("Interface {name}:");
+            let why = self
+                .log
+                .iter()
+                .rev()
+                .find(|line| line.contains(&about))
+                .and_then(|line| crate::net::iface_log::hint(line))
+                .unwrap_or("The log in the Status tab says why");
+            self.warn(format!("Couldn't reach {name} yet (it keeps trying). {why}"));
         }
     }
 
@@ -284,6 +319,21 @@ mod tests {
         assert!(config.contains("target_host = rmap.world") && config.contains("bootstrap_only = Yes"), "{config}");
         assert!(rns::discovery_on(&config));
         assert!(app.take_rns_restart());
+        // Once Reticulum is back, it says when the entry point connects.
+        let iface = |online| crate::net::InterfaceInfo { name: ENTRY_NAME.into(), online, rx_bytes: 0, tx_bytes: 0 };
+        app.on_net(crate::net::NetEvent::Interfaces(vec![iface(false)]));
+        assert!(app.connect_watch.is_some());
+        app.on_net(crate::net::NetEvent::Interfaces(vec![iface(true)]));
+        assert!(app.connect_watch.is_none());
+        assert!(app.notice.as_ref().unwrap().text.starts_with("Connected through RMAP World"));
+        // Or, if it doesn't, why.
+        app.interfaces = vec![iface(false)];
+        app.connect_watch = Some((ENTRY_NAME.into(), Instant::now() - CONNECT_WAIT));
+        app.on_net(crate::net::NetEvent::Log("Interface RMAP World: TCP connect failed: Connection refused (os error 111)".into()));
+        app.on_tick();
+        let notice = app.notice.as_ref().unwrap();
+        assert!(notice.text.starts_with("Couldn't reach RMAP World yet") && notice.text.contains("Nothing accepted"), "{}", notice.text);
+        assert!(app.connect_watch.is_none());
         let saved = app.saved_settings().unwrap();
         assert_eq!((saved.display_name.as_str(), saved.welcomed), ("Zev", true));
         assert!(app.guide.is_none());

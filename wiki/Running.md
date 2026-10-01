@@ -27,7 +27,9 @@ the web UI's Status page, opens it again):
   covers the tools that do), and this wiki.
 
 Nothing changes until you choose **Apply**; if the Reticulum config changed,
-Reticulum restarts to connect. **Not now** (or Esc) closes it for good. If
+Reticulum restarts to connect. Once RMAP World connects, rettui says so; if
+it hasn't within 45 seconds, it says why, in plain words, and keeps trying
+(in the log, and in the footer in the terminal UI). **Not now** (or Esc) closes it for good. If
 another program (such as rnsd) runs the shared instance, the guide leaves
 its config alone and says so. Installs from before the guide existed don't
 see it at start.

@@ -422,8 +422,8 @@ pub fn discovery_on(text: &str) -> bool {
 
 /// Add a TCP client interface to an entry point (named `name`, or with a
 /// number after it if that's taken). `bootstrap_only`: used only until
-/// discovered interfaces connect.
-pub fn add_entry_point(text: &str, name: &str, host: &str, port: u16, bootstrap_only: bool) -> Result<String, String> {
+/// discovered interfaces connect. The new text, and the name used.
+pub fn add_entry_point(text: &str, name: &str, host: &str, port: u16, bootstrap_only: bool) -> Result<(String, String), String> {
     let mut doc = Doc::new(text);
     let taken = doc.subsections("interfaces");
     let name = std::iter::once(name.to_string())
@@ -436,7 +436,7 @@ pub fn add_entry_point(text: &str, name: &str, host: &str, port: u16, bootstrap_
         keys.push(("bootstrap_only", "Yes"));
     }
     doc.add_subsection("interfaces", &name, &keys)?;
-    Ok(doc.text())
+    Ok((doc.text(), name))
 }
 
 /// Turn interface discovery on, connecting to up to `connect` of the
@@ -461,7 +461,8 @@ mod tests {
     fn entry_points_and_discovery_for_the_guide() {
         let base = rns_runtime::config::Config::default_config();
         assert!(!super::has_interface_to(base, "rmap.world") && !super::discovery_on(base));
-        let added = super::add_entry_point(base, "RMAP World", "rmap.world", 4242, true).unwrap();
+        let (added, name) = super::add_entry_point(base, "RMAP World", "rmap.world", 4242, true).unwrap();
+        assert_eq!(name, "RMAP World");
         let (config, check) = super::check(&added);
         assert!(check.error.is_none(), "{:?}", check.error);
         let interface = config.unwrap();
@@ -471,8 +472,9 @@ mod tests {
         assert_eq!(section.get_bool("bootstrap_only"), Some(true));
         assert!(super::has_interface_to(&added, "RMAP.world"));
         // A second one gets a name of its own; the default interface stays.
-        let twice = super::add_entry_point(&added, "RMAP World", "rmap.world", 4242, false).unwrap();
+        let (twice, name) = super::add_entry_point(&added, "RMAP World", "rmap.world", 4242, false).unwrap();
         assert!(twice.contains("[[RMAP World 2]]") && twice.contains("[[Default Interface]]"));
+        assert_eq!(name, "RMAP World 2");
         let discovering = super::enable_discovery(&added, 2);
         assert!(super::discovery_on(&discovering) && super::check(&discovering).1.error.is_none());
         let config = super::check(&discovering).0.unwrap();
