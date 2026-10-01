@@ -375,6 +375,8 @@ pub struct App {
     pub reacting: Option<String>,
     /// The contact card shown over the Messages tab (an address).
     pub contact_card: Option<String>,
+    /// Pings to contacts (by address): waiting, or how they went.
+    pub pings: HashMap<String, contacts::PingState>,
     /// The contacts last told to the network actor (trusted, and spared the
     /// stamp), so it's told only of changes.
     policy_sent: Option<(Vec<Hash>, Vec<Hash>)>,
@@ -500,6 +502,7 @@ impl App {
             picked: None,
             reacting: None,
             contact_card: None,
+            pings: HashMap::new(),
             policy_sent: None,
             scroll_to: None,
             emoji: None,
@@ -779,6 +782,7 @@ impl App {
             NetEvent::Announced => self.log("Announced LXMF destination"),
             NetEvent::Message(message) => self.on_message(*message),
             NetEvent::Delivery { id, result } => self.on_delivery(id, result),
+            NetEvent::Pinged { to, result } => self.on_pinged(to, result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
             NetEvent::Paper { id, result } => self.on_paper(id, result),
             NetEvent::SyncStarted => self.sync = SyncState::Running(Instant::now()),
@@ -1025,6 +1029,8 @@ impl App {
             self.node.status = node::NodeStatus::Starting;
         }
         self.node.stats = None;
+        // Pings waiting belong to the old stack.
+        self.pings.retain(|_, ping| *ping != contacts::PingState::Waiting);
         self.pn.restarting(crate::lxmf::pn::PnConfig::from_settings(&self.settings, &self.paths));
         if self.browser.loading.take().is_some() {
             self.browser.error = Some("Reticulum restarted while loading; load the page again".into());

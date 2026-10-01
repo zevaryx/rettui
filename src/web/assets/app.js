@@ -2180,8 +2180,18 @@ app.views.messages = {
     const notes = el('textarea', { rows: 5, maxlength: 10000, placeholder: 'Notes about them, for you alone' });
     notes.value = contact.notes || '';
     const trusted = contact.trust === 'trusted';
+    const pingText = el('span', { text: contact.ping || 'not yet' });
     dialog('Contact', (close) => [
       el('p', { class: 'dim mono', style: 'overflow-wrap:anywhere', text: key }),
+      el('div', { class: 'row trust' },
+        el('span', { class: 'grow' }, el('span', { class: 'dim', text: 'Ping: ' }), pingText),
+        el('button', { text: 'Ping', title: 'How long a Link to them takes to set up, and how far away they are', onclick: async (e) => {
+          e.target.disabled = true;
+          pingText.textContent = 'waiting for an answer…';
+          const result = await attempt(() => api.post(`/conversations/${key}/ping`));
+          pingText.textContent = result ? result.text : 'no answer';
+          e.target.disabled = false;
+        } })),
       el('div', { class: 'row trust' },
         el('span', { class: 'grow' }, el('span', { class: 'dim', text: 'Trust: ' }), contact.trust_label || ''),
         el('button', { text: trusted ? 'Stop trusting' : 'Trust', onclick: () => this.setTrust(key, trusted ? 'unknown' : 'trusted', conversation, close) }),
