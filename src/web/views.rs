@@ -102,6 +102,7 @@ pub fn guide(app: &App) -> Value {
         "has_discovery": view.has_discovery,
         "external": view.external,
         "external_note": crate::reticulum::EXTERNAL_NOTE,
+        "shared_note": (view.shared_config && !view.external).then_some(guide::SHARED_NOTE),
         "identity_file": app.paths.identity.display().to_string(),
         "interfaces_online": view.interfaces_online,
         "heard": view.heard,

@@ -69,6 +69,8 @@ pub const IDENTITY_HELP: &str = "Your identity is the key behind your address. C
 /// In the web UI, which can't change the identity.
 pub const IDENTITY_WEB_NOTE: &str = "Coming from Sideband, NomadNet or MeshChat? To keep your address, use that identity file from the terminal UI (i in its Status tab), or copy it over this file while rettui is stopped:";
 pub const CONNECT_HELP: &str = "A public transport node: your traffic reaches the wider network through it. Its operator sees your IP address. Ticked when nothing else in your config reaches past your local network, since discovery needs one connection to hear of others.";
+/// The config is Python Reticulum's.
+pub const SHARED_NOTE: &str = "This Reticulum config is shared with NomadNet, Sideband and rnsd too.";
 pub const DISCOVER_HELP: &str = "Connects to up to 2 entry points others announce, as Reticulum's manual recommends; you'll connect to hosts you didn't choose. It hears of them through a connection you have, so it needs one to start.";
 pub const AUTO_PROPAGATION_HELP: &str = "A propagation node keeps messages for you while you're offline. Anyone can run one: the one picked (the nearest that answers fastest) sees who your messages are for and when you collect them, and could lose them; it can't read them.";
 pub const APPLY_HELP: &str = "Saves your choices. If the Reticulum config changes, Reticulum restarts to connect.";
@@ -88,6 +90,9 @@ pub struct GuideView {
     /// The config has interfaces of its own besides the Auto one (which
     /// reaches only the local network).
     pub has_own_interfaces: bool,
+    /// The config is Python Reticulum's, which NomadNet, Sideband and rnsd
+    /// use too: changes to it are theirs.
+    pub shared_config: bool,
     /// Another program runs the shared instance: its config has the
     /// interfaces, not this one.
     pub external: bool,
@@ -166,6 +171,7 @@ impl App {
             identity_pending: self.identity_pending,
             has_entry_point: ENTRY_POINTS.iter().map(|entry| rns::has_interface_to(&config, entry.host)).collect(),
             has_own_interfaces: rns::has_own_interfaces(&config),
+            shared_config: self.rns_path().parent().is_some_and(crate::config::is_shared_rns_dir),
             has_discovery: rns::discovery_on(&config),
             external: self.uses_external_shared_instance(),
             auto_propagation: self.settings.auto_propagation_node,
@@ -174,13 +180,16 @@ impl App {
         }
     }
 
-    /// The choices to start from: what's set up already, and discovery.
+    /// The choices to start from: what's set up already; and for a config
+    /// with nothing besides the Auto interface (a fresh install), discovery
+    /// and the entry points to hear of others through (it needs a
+    /// connection to start). A config with interfaces of its own (perhaps
+    /// shared with other Reticulum programs) is changed only as asked.
     pub fn guide_defaults(&self) -> GuideChoices {
         let view = self.guide_view();
-        // The entry points only when there's nothing else to hear of others
-        // through (discovery needs a connection to start).
-        let connect = vec![!view.has_own_interfaces; ENTRY_POINTS.len()];
-        GuideChoices { name: view.name, connect, discover: true, auto_propagation: view.auto_propagation }
+        let fresh = !view.has_own_interfaces;
+        let connect = vec![fresh; ENTRY_POINTS.len()];
+        GuideChoices { name: view.name, connect, discover: fresh || view.has_discovery, auto_propagation: view.auto_propagation }
     }
 
     /// Apply the choices: the name and settings now, the Reticulum config
@@ -453,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn a_config_with_its_own_interfaces_gets_no_entry_point_unasked() {
+    fn a_config_with_its_own_interfaces_is_changed_only_as_asked() {
         let dir = std::env::temp_dir().join(format!("rettui-guide-own-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let rns_dir = dir.join("rns");
@@ -466,7 +475,8 @@ mod tests {
         // RMAP World is there, but off: not counted as connecting through it.
         assert!(view.has_own_interfaces && view.has_entry_point.iter().all(|has| !has));
         let defaults = app.guide_defaults();
-        assert!(defaults.connect.iter().all(|on| !on) && defaults.discover, "{defaults:?}");
+        assert!(defaults.connect.iter().all(|on| !on) && !defaults.discover, "{defaults:?}");
+        assert!(!view.shared_config, "a config of rettui's own");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

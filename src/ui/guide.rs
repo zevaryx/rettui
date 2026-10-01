@@ -65,6 +65,11 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         placed.push((body.len(), row));
         body.push(Line::from(spans).style(style));
     };
+    if view.shared_config && !view.external {
+        for line in wrap(guide::SHARED_NOTE, inner_width) {
+            body.push(Line::styled(line, Style::default().fg(Color::Yellow)));
+        }
+    }
     row_line(&mut body, GuideRow::Name, vec![Span::styled("Your name   ", Style::default().fg(DIM)), Span::raw(choices.name.clone())]);
     let identity = match (view.identity_pending, view.address) {
         (Some(next), _) => vec![Span::raw(format!("{} from the next start", hex::encode(next)))],
