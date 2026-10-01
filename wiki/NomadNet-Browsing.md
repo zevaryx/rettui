@@ -9,7 +9,29 @@ network.
   dividers, literal blocks, links, forms (text fields, checkboxes and radio
   buttons), inline images and page colours. Long lines wrap between words.
   Pages look as they do in NomadNet: a line's background colour fills its
-  row, and headings have NomadNet's colours.
+  row, and headings have NomadNet's colours. Also, as NomadNet's Micron guide
+  describes them:
+  - **Tables** between `` `t `` lines (`` `tc30 `` centres one and keeps it
+    within 30 columns), with columns aligned by a `| --- | :-: | --: |` row,
+    which also makes the row above it a header. Columns are as wide as their
+    widest cells where they fit; otherwise the widest give way and their
+    cells wrap. Links and fields in cells work as anywhere else.
+  - **Collapsible sections:** a heading written `` `+>`` starts open, and
+    `` `->`` starts folded, marked ▾ and ▸ (or a page's own marks, from
+    `#!fold`). `Enter` on the heading, or a click, folds or opens it.
+  - **Anchors:** every heading is one (its text in lowercase, with hyphens
+    between words), and `` `:name `` adds one anywhere. A link to `#name`
+    scrolls to it, `#` alone scrolls to the next heading, and a link to
+    another page with `anchor=name` among its variables opens that page there.
+  - **Partials:** `` `{address`seconds`fields} `` loads part of a page on its
+    own once the page shows (with the fields and variables it names), and
+    again every so many seconds if it says so, while the page is on screen.
+    A link to `p:id` reloads the partials with that `pid=id` among their
+    variables. What you typed in the page's fields stays when a partial
+    loads. Partials inside partials aren't loaded.
+  - **Text fields of several rows:** `` `<40x5|notes`> `` (40 wide, 5 rows).
+    In the TUI the field is edited on one line, with ↵ for each new line; the
+    web UI gives it a text box of that size.
 - **Links:** page links, `lxmf@` links (open a conversation), `rrc://` links
   (open a hub room), and `/file/` downloads, which are saved to `downloads/`.
 - **Identifying:** pages that personalise content need you to identify.

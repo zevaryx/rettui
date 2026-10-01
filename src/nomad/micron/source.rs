@@ -1,7 +1,7 @@
 //! Micron source split into tokens, for the page source view. Follows the
 //! same rules as the parser so the colours match what the markup does.
 
-use super::image_body_len;
+use super::{image_body_len, table_options};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {
@@ -10,7 +10,8 @@ pub enum Token {
     Comment,
     /// `#!c=`, `#!fg=` and other page directives.
     Directive,
-    /// Line-start markup: headings (`>`), depth reset (`<`), dividers (`-`).
+    /// Line-start markup: headings (`>`, collapsible with `` `+ `` / `` `- ``),
+    /// depth reset (`<`), dividers (`-`), and a table's `` `t `` lines.
     Structure,
     /// Inline formatting such as `` `! ``, `` `F0f0 `` or `` `` ``.
     Tag,
@@ -76,10 +77,19 @@ fn tokenize_line(line: &str) -> Vec<(Token, String)> {
         }
     };
 
+    if line.strip_prefix("`t").and_then(table_options).is_some() {
+        push(Token::Structure, &chars);
+        return out;
+    }
     let mut i = 0;
     if chars.first() == Some(&'<') {
         push(Token::Structure, &chars[..1]);
         i = 1;
+    }
+    // A collapsible heading's `+ or `-.
+    if chars.get(i) == Some(&'`') && matches!(chars.get(i + 1), Some('+' | '-')) && chars.get(i + 2) == Some(&'>') {
+        push(Token::Structure, &chars[i..i + 2]);
+        i += 2;
     }
     match chars.get(i) {
         Some('-') => {
@@ -122,6 +132,13 @@ fn tokenize_line(line: &str) -> Vec<(Token, String)> {
                 Some(end) => (Token::Image, end + 1),
                 None => (Token::Image, rest.len()),
             },
+            // A partial, loaded on its own.
+            '{' => match rest.iter().position(|&c| c == '}') {
+                Some(end) => (Token::Link, end + 1),
+                None => (Token::Link, rest.len()),
+            },
+            // An anchor and its name.
+            ':' => (Token::Tag, rest.iter().take_while(|c| c.is_ascii_alphanumeric() || **c == '_' || **c == '-').count()),
             _ => (Token::Tag, 0),
         };
         let end = (i + 2 + len).min(chars.len());
@@ -172,8 +189,20 @@ mod tests {
     }
 
     #[test]
+    fn tables_folds_partials_and_anchors() {
+        let lines = tokenize("`tc30\n| a | b |\n`t\n`->Folded\nsee `:here and `{abc:/p.mu`5}");
+        assert_eq!(kinds(&lines[0]), [(Token::Structure, "`tc30")]);
+        assert_eq!(kinds(&lines[1]), [(Token::Text, "| a | b |")]);
+        assert_eq!(kinds(&lines[3]), [(Token::Structure, "`->"), (Token::Text, "Folded")]);
+        assert_eq!(
+            kinds(&lines[4]),
+            [(Token::Text, "see "), (Token::Tag, "`:here"), (Token::Text, " and "), (Token::Link, "`{abc:/p.mu`5}")]
+        );
+    }
+
+    #[test]
     fn every_character_is_kept() {
-        let source = "<>`!a`[x`y\n`(alt (1)`:/m.png) `<24|f`v> ` `FT12\r\n";
+        let source = "<>`!a`[x`y\n`(alt (1)`:/m.png) `<24|f`v> ` `FT12\n`tc\n`+>`:a `{b\r\n";
         let rebuilt: Vec<String> = tokenize(source)
             .iter()
             .map(|l| l.iter().map(|(_, s)| s.as_str()).collect())

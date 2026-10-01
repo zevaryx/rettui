@@ -3224,6 +3224,102 @@ app.views.browser = {
     }
     // Server-rendered: all page text is escaped and the CSP blocks scripts.
     this.content.innerHTML = this.viewSource ? this.page.source_html : this.page.html;
+    this.fillPartials();
+  },
+
+  // The shown page's partials: their HTML once loaded (by index), which
+  // are loading, and their reload timers.
+  partials: { page: null, html: [], loading: [], timers: [] },
+
+  // A new page: its partials start afresh.
+  resetPartials() {
+    for (const timer of this.partials.timers) clearInterval(timer);
+    this.partials = { page: this.page, html: [], loading: [], timers: [] };
+  },
+
+  // Put the partials loaded in their places, load the others, and reload
+  // those that ask to be every so often (while the page is on screen).
+  fillPartials() {
+    if (this.viewSource || !this.page) return;
+    if (this.partials.page !== this.page) this.resetPartials();
+    [...this.content.querySelectorAll('.m-partial')].forEach((node, i) => {
+      node.dataset.index = i;
+      if (this.partials.html[i] != null) node.innerHTML = this.partials.html[i];
+      else if (!this.partials.loading[i]) this.loadPartial(i);
+      const every = Number(node.dataset.refresh);
+      if (every > 0 && !this.partials.timers[i]) {
+        this.partials.timers[i] = setInterval(() => showing('browser') && !this.viewSource && this.loadPartial(i), every * 1000);
+      }
+    });
+  },
+
+  async loadPartial(i) {
+    const page = this.page;
+    const node = this.content.querySelector(`.m-partial[data-index="${i}"]`);
+    if (!node || this.partials.page !== page || this.partials.loading[i]) return;
+    this.partials.loading[i] = true;
+    const fields = this.formFields(node.dataset.fields ? node.dataset.fields.split('|') : []);
+    let html;
+    try {
+      html = (await api.post('/partial', { url: node.dataset.url, fields })).html;
+    } catch (e) {
+      html = el('span', { class: 'error', text: `Could not load this part of the page: ${e.message}` }).outerHTML;
+    }
+    if (this.partials.page !== page) return;
+    this.partials.loading[i] = false;
+    this.partials.html[i] = html;
+    const target = this.content.querySelector(`.m-partial[data-index="${i}"]`);
+    if (target && !this.viewSource) target.innerHTML = html;
+  },
+
+  // Scroll to an anchor (`name`), or with none, to the first heading after
+  // `from`; sections folded around it open.
+  jumpTo(name, from = null) {
+    let target = null;
+    if (name) {
+      target = [...this.content.querySelectorAll('.m-anchor')].find((a) => a.dataset.anchor === name);
+    } else if (from) {
+      target = [...this.content.querySelectorAll('.m-heading')]
+        .find((h) => from.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }
+    if (!target) return toast(name ? `There's no anchor #${name} on this page` : 'There\'s no heading after this link', true);
+    for (let fold = target.closest('.m-fold'); fold; fold = fold.parentElement.closest('.m-fold')) {
+      if (fold.classList.contains('hidden')) this.toggleFold(fold.previousElementSibling);
+    }
+    (target.nextElementSibling || target).scrollIntoView({ block: 'start' });
+  },
+
+  // Fold or open a collapsible heading's section.
+  toggleFold(head) {
+    const fold = head?.nextElementSibling;
+    if (!fold || !fold.classList.contains('m-fold')) return;
+    const open = fold.classList.toggle('hidden') === false;
+    const mark = head.querySelector('.m-fold-mark');
+    if (mark) mark.textContent = (open ? head.dataset.open : head.dataset.closed) + ' ';
+  },
+
+  // The page's form values (and variables) a link or partial asks for:
+  // `spec` is names, `*` for all, or `var=value`.
+  formFields(spec) {
+    const fields = {};
+    const all = spec.includes('*');
+    for (const input of this.content.querySelectorAll('input[name], textarea[name]')) {
+      const name = input.name;
+      if (!all && !spec.includes(name)) continue;
+      const key = 'field_' + name;
+      if (input.type === 'checkbox') {
+        if (input.checked) fields[key] = fields[key] ? fields[key] + ',' + input.value : input.value;
+      } else if (input.type === 'radio') {
+        if (input.checked) fields[key] = input.value;
+      } else {
+        fields[key] = input.value;
+      }
+    }
+    for (const item of spec) {
+      const eq = item.indexOf('=');
+      if (eq > 0) fields['var_' + item.slice(0, eq)] = item.slice(eq + 1);
+    }
+    return fields;
   },
 
   // Open a NomadNet address. `fields` submits a form (never cached).
@@ -3265,6 +3361,8 @@ app.views.browser = {
     this.loading = null;
     this.renderPage();
     this.renderPane();
+    // A link's `anchor=name`: where on the page to show.
+    if (fields?.var_anchor && !this.error) this.jumpTo(fields.var_anchor);
   },
 
   back() {
@@ -3274,31 +3372,28 @@ app.views.browser = {
 
   // Links carry their target in data-url and the fields they submit in
   // data-fields (names, `*` for all, or `var=value`).
+  // A collapsible heading folds or opens its section.
   click(e) {
     const link = e.target.closest('.m-link');
-    if (!link) return;
+    if (!link) {
+      const head = e.target.closest('.m-fold-head');
+      if (head && !e.target.closest('input, textarea, label')) this.toggleFold(head);
+      return;
+    }
     e.preventDefault();
+    const url = link.dataset.url;
+    // An anchor on this page, or partials to reload (`p:id`).
+    if (url.startsWith('#')) return this.jumpTo(url.slice(1), link);
+    if (url.startsWith('p:')) {
+      const ids = url.slice(2).split(/[|,]/).map((id) => id.trim()).filter(Boolean);
+      const nodes = [...this.content.querySelectorAll('.m-partial')].filter((p) => ids.includes(p.dataset.pid));
+      if (!nodes.length) return toast(`No part of this page has the id ${ids.join(', ')}`, true);
+      for (const node of nodes) this.loadPartial(Number(node.dataset.index));
+      return;
+    }
     const spec = link.dataset.fields ? link.dataset.fields.split('|') : [];
-    if (!spec.length) return this.go(link.dataset.url);
-    const fields = {};
-    const all = spec.includes('*');
-    for (const input of this.content.querySelectorAll('input[name]')) {
-      const name = input.name;
-      if (!all && !spec.includes(name)) continue;
-      const key = 'field_' + name;
-      if (input.type === 'checkbox') {
-        if (input.checked) fields[key] = fields[key] ? fields[key] + ',' + input.value : input.value;
-      } else if (input.type === 'radio') {
-        if (input.checked) fields[key] = input.value;
-      } else {
-        fields[key] = input.value;
-      }
-    }
-    for (const item of spec) {
-      const eq = item.indexOf('=');
-      if (eq > 0) fields['var_' + item.slice(0, eq)] = item.slice(eq + 1);
-    }
-    this.go(link.dataset.url, { fields });
+    if (!spec.length) return this.go(url);
+    this.go(url, { fields: this.formFields(spec) });
   },
 
   toggleSaved() {

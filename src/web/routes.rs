@@ -105,6 +105,7 @@ pub fn router(state: WebState) -> Router {
         .route("/channels/{hub}/room", get(room))
         .route("/channels/{hub}/{action}", post(hub_action))
         .route("/page", get(page).post(submit_form))
+        .route("/partial", post(partial))
         .route("/media", get(media))
         .route("/download", get(download))
         .route("/saved", get(saved).post(save_page))
@@ -1292,6 +1293,33 @@ async fn node_rename(State(state): State<WebState>, axum::Json(body): axum::Json
 async fn node_delete(State(state): State<WebState>, axum::Json(body): axum::Json<PathQuery>) -> ApiResult {
     state.write(move |o| o.app.node_delete(&body.path)).await??;
     ok()
+}
+
+#[derive(Deserialize)]
+struct PartialBody {
+    url: String,
+    /// The form values and variables it asks for, as a form sends them.
+    #[serde(default)]
+    fields: BTreeMap<String, String>,
+}
+
+/// A page's partial, loaded on its own (never from the cache): its HTML.
+/// Partials in it aren't loaded.
+async fn partial(State(state): State<WebState>, axum::Json(body): axum::Json<PartialBody>) -> ApiResult {
+    let mut location = location(&body.url)?;
+    location.fields = body.fields;
+    let node = location.node;
+    let fetched = state.fetch(location, true).await?;
+    let page = micron::parse_partial(&String::from_utf8_lossy(&fetched.data));
+    let html = page.to_html(
+        |url| link_target(url, node),
+        |url| {
+            resolve_url(url, Some(node))
+                .filter(|l| l.path.starts_with("/media/"))
+                .map(|l| format!("/api/media?url={}", query_escape(&l.url())))
+        },
+    );
+    Ok(axum::Json(json!({ "html": html })))
 }
 
 #[derive(Deserialize)]
