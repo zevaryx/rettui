@@ -72,6 +72,11 @@ impl KnownIdentities {
         }
     }
 
+    /// The announce data kept for a destination, if any.
+    pub fn app_data_of(&self, destination: Hash) -> Option<Vec<u8>> {
+        self.entries.get(&hex::encode(destination))?.app_data.as_deref().and_then(|d| hex::decode(d).ok())
+    }
+
     pub(super) fn remember(&mut self, destination: Hash, key: &[u8; 64], app_data: Option<&[u8]>) {
         let slot = self.entries.entry(hex::encode(destination)).or_default();
         let key = hex::encode(key);

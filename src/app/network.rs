@@ -5,7 +5,8 @@ use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 
 use super::App;
-use crate::net::{PeerKind, parse_hash};
+use crate::net::autopn::Pick;
+use crate::net::{Hash, NetCommand, PeerKind, parse_hash};
 use crate::store::{Peer, Trust};
 use crate::term::input::TextInput;
 
@@ -17,6 +18,10 @@ pub enum NetFilter {
     Propagation,
     /// Contacts you've blocked, heard or not.
     Blocked,
+}
+
+fn hops_label(hops: u8) -> String {
+    format!("{hops} hop{}", if hops == 1 { "" } else { "s" })
 }
 
 /// A blocked contact not heard announcing (blocking stops their announces).
@@ -145,11 +150,97 @@ impl App {
     pub fn set_propagation_node(&mut self, key: &str) {
         let Some(hash) = parse_hash(key) else { return };
         let key = hex::encode(hash);
-        if let Err(e) = self.update_settings(&[("propagation_node", &key)]) {
+        // Picking one by hand stops picking them automatically.
+        let auto = self.settings.auto_propagation_node;
+        let changes: &[(&str, &str)] = if auto {
+            &[("propagation_node", &key), ("auto_propagation_node", "false")]
+        } else {
+            &[("propagation_node", &key)]
+        };
+        if let Err(e) = self.update_settings(changes) {
             return self.fail(e);
         }
         let name = self.store.display_name(&key);
-        self.notify(format!("Propagation node set to {name}"));
+        let off = if auto { " (picking one automatically is off now)" } else { "" };
+        self.notify(format!("Propagation node set to {name}{off}"));
+    }
+
+    /// The propagation nodes heard: address, hops, when last heard.
+    fn heard_propagation_nodes(&self) -> Vec<(Hash, u8, i64)> {
+        self.store
+            .peers
+            .iter()
+            .filter(|(_, peer)| peer.kind == PeerKind::Propagation)
+            .filter_map(|(key, peer)| Some((parse_hash(key)?, peer.hops, peer.last_seen)))
+            .collect()
+    }
+
+    /// Start (with the nodes heard before) or stop picking the propagation
+    /// node automatically, as set.
+    pub(super) fn apply_auto_propagation(&mut self) {
+        let enabled = self.settings.auto_propagation_node;
+        let known = if enabled { self.heard_propagation_nodes() } else { Vec::new() };
+        self.auto_pick = None;
+        self.auto_error = None;
+        self.send(NetCommand::AutoPropagation { enabled, known });
+    }
+
+    /// A propagation node picked automatically: used, kept in the settings
+    /// (for the next start), and said in the log when it's another.
+    pub(super) fn on_propagation_picked(&mut self, result: Result<Pick, String>) {
+        if !self.settings.auto_propagation_node {
+            return;
+        }
+        let pick = match result {
+            Ok(pick) => pick,
+            Err(e) => {
+                // Said once, not every ten minutes.
+                if self.auto_error.as_ref() != Some(&e) {
+                    self.log(format!("Couldn't pick a propagation node: {e}; trying again in 10 minutes"));
+                    self.auto_error = Some(e);
+                }
+                return;
+            }
+        };
+        self.auto_error = None;
+        let key = hex::encode(pick.node);
+        if self.settings.propagation_node.as_deref() != Some(key.as_str()) {
+            self.settings.propagation_node = Some(key.clone());
+            match self.saved_settings() {
+                Ok(mut saved) => {
+                    saved.propagation_node = Some(key.clone());
+                    if let Err(e) = saved.save(&self.paths.settings) {
+                        self.log(format!("Could not save settings: {e:#}"));
+                    }
+                    self.settings_file = saved;
+                }
+                Err(e) => self.log(e),
+            }
+        }
+        if pick.changed {
+            self.log(format!(
+                "Picked {} as propagation node automatically: {}, answered in {} ms ({} of {} nearest answered)",
+                self.store.display_name(&key),
+                hops_label(pick.hops),
+                pick.rtt.as_millis(),
+                pick.answered,
+                pick.probed,
+            ));
+        }
+        self.auto_pick = Some(pick);
+    }
+
+    /// How the propagation node in use was picked, if automatically, for
+    /// the Status tab: `picked automatically (2 hops, 40 ms)`.
+    pub fn auto_pick_label(&self) -> Option<String> {
+        if !self.settings.auto_propagation_node {
+            return None;
+        }
+        Some(match &self.auto_pick {
+            Some(pick) => format!("picked automatically ({}, {} ms)", hops_label(pick.hops), pick.rtt.as_millis()),
+            None if self.settings.propagation_node.is_some() => "picked automatically (checking it)".into(),
+            None => "picking one automatically…".into(),
+        })
     }
 
     /// Keys while the search box has focus.
@@ -286,6 +377,57 @@ mod tests {
             hops: 1,
             last_seen: 0,
         }
+    }
+
+    #[test]
+    fn picking_the_propagation_node_automatically() {
+        use std::time::Duration;
+        use crate::config::Settings;
+        use crate::net::NetEvent;
+        use crate::net::autopn::Pick;
+        use crate::store::Store;
+        let dir = std::env::temp_dir().join(format!("rettui-autopn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (near, far) = ("aa".repeat(16), "bb".repeat(16));
+        let mut store = Store::default();
+        store.peers.insert(near.clone(), Peer { kind: PeerKind::Propagation, name: Some("Near".into()), hops: 2, last_seen: 100 });
+        store.peers.insert(far.clone(), Peer { kind: PeerKind::Propagation, name: None, hops: 5, last_seen: 90 });
+        store.peers.insert("cc".repeat(16), peer(Some("a page node")));
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), store);
+        let commands = |net: &mut tokio::sync::mpsc::UnboundedReceiver<NetCommand>| std::iter::from_fn(|| net.try_recv().ok()).collect::<Vec<_>>();
+        // Turning it on warns, and starts from the nodes heard before.
+        let notes = app.update_settings(&[("auto_propagation_node", "true")]).unwrap();
+        assert!(notes.iter().any(|n| n.contains("could lose them")), "{notes:?}");
+        let started = commands(&mut net).into_iter().find_map(|c| match c {
+            NetCommand::AutoPropagation { enabled: true, mut known } => {
+                known.sort();
+                Some(known)
+            }
+            _ => None,
+        });
+        assert_eq!(started, Some(vec![([0xaa; 16], 2, 100), ([0xbb; 16], 5, 90)]));
+        assert_eq!(app.auto_pick_label().as_deref(), Some("picking one automatically…"));
+        // A pick is used and kept for the next start.
+        let pick = Pick { node: [0xaa; 16], hops: 2, rtt: Duration::from_millis(40), changed: true, probed: 2, answered: 2 };
+        app.on_net(NetEvent::PropagationPicked(Ok(pick)));
+        assert_eq!(app.saved_settings().unwrap().propagation_node.as_deref(), Some(near.as_str()));
+        assert!(app.log.iter().any(|l| l.contains("Picked Near as propagation node automatically: 2 hops, answered in 40 ms")));
+        assert_eq!(app.auto_pick_label().as_deref(), Some("picked automatically (2 hops, 40 ms)"));
+        // Failing to sync with it asks for a check; why none was picked is
+        // said once.
+        app.on_net(NetEvent::Synced(Err("Link failed".into())));
+        assert!(commands(&mut net).iter().any(|c| matches!(c, NetCommand::RecheckPropagation)));
+        for _ in 0..3 {
+            app.on_net(NetEvent::PropagationPicked(Err("none of the 2 nearest answered".into())));
+        }
+        assert_eq!(app.log.iter().filter(|l| l.contains("Couldn't pick a propagation node")).count(), 1);
+        // Picking one by hand turns it off.
+        app.set_propagation_node(&far);
+        let saved = app.saved_settings().unwrap();
+        assert_eq!((saved.auto_propagation_node, saved.propagation_node.as_deref()), (false, Some(far.as_str())));
+        assert!(commands(&mut net).iter().any(|c| matches!(c, NetCommand::AutoPropagation { enabled: false, .. })));
+        assert_eq!(app.auto_pick_label(), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

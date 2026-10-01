@@ -3,7 +3,8 @@ of the Reticulum instance it uses. Where files are kept is in
 [Data and Storage](Data-and-Storage).
 
 - **Settings editor:** the Status tab (in both UIs) edits `settings.json`:
-  display name, announces, home page, propagation node, sync interval, how
+  display name, announces, home page, propagation node (or picking one
+  automatically), sync interval, how
   many messages to keep and how much disk they may use, cache time, node
   and propagation node hosting, editor line wrapping and the Reticulum
   config directory.

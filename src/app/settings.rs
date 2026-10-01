@@ -13,6 +13,9 @@ use super::{App, PromptKind};
 use crate::config::{self, Effect, FieldKind, Settings, WebAccess};
 use crate::net::{NetCommand, parse_hash};
 
+/// Said when picking the propagation node automatically is turned on.
+pub const AUTO_PROPAGATION_WARNING: &str = "Picking the propagation node automatically: the one picked sees who your propagated messages are for and when you collect yours, and could lose them (it can't read them). Anyone can run one near you";
+
 fn minutes(n: u64) -> Option<Duration> {
     (n > 0).then(|| Duration::from_secs(n * 60))
 }
@@ -60,6 +63,13 @@ impl App {
                     self.settings.propagation_node = after.propagation_node.clone();
                     let node = after.propagation_node.as_deref().and_then(parse_hash);
                     self.send(NetCommand::SetPropagationNode(node));
+                }
+                "auto_propagation_node" => {
+                    self.settings.auto_propagation_node = after.auto_propagation_node;
+                    self.apply_auto_propagation();
+                    if after.auto_propagation_node {
+                        notes.push(AUTO_PROPAGATION_WARNING.to_string());
+                    }
                 }
                 "announce_interval_mins" | "sync_interval_mins" => {
                     self.settings.announce_interval_mins = after.announce_interval_mins;
