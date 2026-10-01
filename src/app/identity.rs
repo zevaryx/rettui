@@ -68,7 +68,7 @@ impl App {
         if text.is_empty() {
             return;
         }
-        let path = files::expand_home(text);
+        let path = files::path_from_input(text);
         let identity = match read_identity(&path) {
             Ok(identity) => identity,
             Err(e) => return self.warn(e),
@@ -153,7 +153,7 @@ impl App {
                 )),
                 Err(e) => self.fail(e),
             },
-            PromptKind::BackUpIdentity if !text.is_empty() => match self.back_up_identity(&files::expand_home(text)) {
+            PromptKind::BackUpIdentity if !text.is_empty() => match self.back_up_identity(&files::path_from_input(text)) {
                 Ok(path) => self.notify(format!(
                     "Saved your identity to {}. Keep it private: whoever has it can pose as you and read what's sent to you",
                     path.display()
