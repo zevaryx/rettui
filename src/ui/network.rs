@@ -141,8 +141,11 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     if empty {
         let message = if app.net_filter == NetFilter::Blocked && terms.is_empty() {
             "Nobody is blocked. Block someone from their contact card (c in Messages), or with b on an LXMF peer here.".to_string()
+        } else if terms.is_empty() && !app.interfaces.iter().any(|i| i.online) {
+            "Not connected to anyone yet, so nothing can be heard. The getting-started guide (g in the Status tab) adds an entry point to connect through."
+                .to_string()
         } else if terms.is_empty() {
-            "Listening for announces… peers, NomadNet nodes and propagation nodes appear here as they are heard."
+            "Listening for announces… peers, NomadNet nodes and propagation nodes appear here as they are heard. Each announces on its own schedule, many only every few hours, so the list fills over the first hours. Press A to announce yourself, so others can find you too."
                 .to_string()
         } else {
             format!("Nothing heard matches “{}”. Esc clears the search.", app.net_search.input.text().trim())
@@ -165,4 +168,35 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(Style::default().bg(SELECTED_BG).bold())
         .highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut window);
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::config::Settings;
+    use crate::net::InterfaceInfo;
+    use crate::store::Store;
+
+    fn screen(app: &mut crate::app::App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..30).map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn an_empty_list_says_why_and_what_to_expect() {
+        let dir = std::env::temp_dir().join(format!("rettui-net-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.tab = crate::app::Tab::Network;
+        let shown = screen(&mut app);
+        assert!(shown.contains("Not connected to anyone yet") && shown.contains("getting-started guide"), "{shown}");
+        app.interfaces.push(InterfaceInfo { name: "RMAP World".into(), online: true, rx_bytes: 0, tx_bytes: 0 });
+        let shown = screen(&mut app);
+        assert!(shown.contains("Listening for announces") && shown.contains("every few hours") && shown.contains("Press A"), "{shown}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

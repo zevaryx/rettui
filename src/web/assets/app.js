@@ -3136,7 +3136,8 @@ app.views.network = {
       this.table.replaceChildren(el('div', { class: 'empty', text: terms.length
         ? `Nothing heard matches “${this.data.query.trim()}”. Esc clears the search.`
         : this.filter === 'blocked' ? 'Nobody is blocked. Block someone from their conversation\'s Contact dialog, or with Block on an LXMF peer here.'
-          : 'Listening for announces… peers, NomadNet nodes and propagation nodes appear here as they are heard.' }));
+          : !app.status?.interfaces_online ? 'Not connected to anyone yet, so nothing can be heard. Getting started, on the Status page, adds an entry point to connect through.'
+            : 'Listening for announces… peers, NomadNet nodes and propagation nodes appear here as they are heard. Each announces on its own schedule, many only every few hours, so the list fills over the first hours. Announce (above) so others can find you too.' }));
       return;
     }
     const tag = { lxmf: 'PEER', nomad: 'NODE', propagation: 'PROP' };
