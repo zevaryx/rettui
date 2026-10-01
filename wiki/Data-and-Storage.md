@@ -3,8 +3,9 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `identity`
 - `settings.json`: display name, announce behaviour, home page, propagation
   node, sync interval, `messages_kept` and `message_storage_mb` (see
-  *Message history* below), `cache_hours` (24 by default), node hosting,
-  `wrap_lines` and the Reticulum config directory. Edit it in the Status tab
+  *Message history* below), `cache_hours` (24 by default), node and
+  propagation node hosting, what incoming messages must bring (stamp cost,
+  size), `wrap_lines` and the Reticulum config directory. Edit it in the Status tab
   of either UI (or by hand). Changes apply straight away, except the
   Reticulum config and "announce at start", which are used the next time
   rettui starts.
@@ -35,6 +36,8 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `downloads/`: received attachments (one folder per sender) and NomadNet files
 - `uploads/`: files attached to messages sent from the web UI
 - `node/`: your node's `pages/` and `files/`
+- `propagation/`: messages your [propagation node](Hosting-a-Node#propagation-node)
+  keeps for others, one file each, encrypted for their recipients
 - `web_token`: the web UI's login secret (delete it to log every browser out)
 - `web_push_key`: the web UI's key for background notifications (Web Push),
   and `web_push.json`: the browsers that turned them on. Deleting the key

@@ -162,13 +162,16 @@ async fn propagate(
         .ok_or("No propagation node selected (pick one in the Network tab)")?;
     // The recipient may be offline: only its key is needed, not a path.
     let recipient = lookup(runtime, known, outgoing.to).await?;
-    ensure_path(runtime, node).await?;
-    let node_info = lookup(runtime, known, node).await?;
-    let stamp_cost = node_info
-        .app_data
-        .as_deref()
-        .and_then(parse_pn_announce_data)
-        .map_or(0, |d| d.stamp_cost);
+    // This client's own node takes it without a Link.
+    let local = outgoing.local_node.clone().filter(|local| local.hash == node);
+    let stamp_cost = match &local {
+        Some(local) => local.stamp_cost(),
+        None => {
+            ensure_path(runtime, node).await?;
+            let node_info = lookup(runtime, known, node).await?;
+            node_info.app_data.as_deref().and_then(parse_pn_announce_data).map_or(0, |d| d.stamp_cost)
+        }
+    };
 
     let mut message =
         build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
@@ -190,6 +193,10 @@ async fn propagate(
     .map_err(|e| e.to_string())?
     .0;
 
+    if let Some(local) = local {
+        tokio::task::spawn_blocking(move || local.submit(&packed)).await.map_err(|e| e.to_string())??;
+        return Ok(Sent { delivered: Delivered::Propagated, hash });
+    }
     let LinkSession { handle, .. } = runtime
         .connect_link(node, identity.clone(), link_options("rettui.propagation", true))
         .await

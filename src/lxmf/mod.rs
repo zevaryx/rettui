@@ -7,10 +7,14 @@
 //! - [`paper`]: paper messages (`lxm://` links and QR codes).
 //! - [`fields`]: what messages carry besides text and files (reactions,
 //!   locations, commands, voice).
+//! - [`policy`]: stamp costs, tickets and the size limit for incoming
+//!   messages.
+//! - [`pn`]: hosting a propagation node.
 
 pub mod fields;
 mod inbound;
 pub mod paper;
+pub mod pn;
 pub mod policy;
 mod send;
 mod sync;
@@ -128,6 +132,9 @@ pub struct Outgoing {
     /// A ticket of ours for them (`FIELD_TICKET`'s value; set by the
     /// network actor).
     pub ticket: Option<Vec<u8>>,
+    /// The propagation node this client hosts, when it's the one set: sends
+    /// to it go straight in (set by the network actor).
+    pub local_node: Option<pn::LocalNode>,
 }
 
 impl Outgoing {
@@ -144,6 +151,7 @@ impl Outgoing {
             reaction: None,
             stamp_ticket: None,
             ticket: None,
+            local_node: None,
         }
     }
 }

@@ -179,6 +179,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
             .then(|| Duration::from_secs(settings.sync_interval_mins * 60)),
         known_identities: paths.known_identities.clone(),
         host: nomad::host::HostConfig::from_settings(settings, paths),
+        propagation: lxmf::pn::PnConfig::from_settings(settings, paths),
         stamp_cost: lxmf::policy::stamp_cost(settings.stamp_cost),
         max_message_bytes: settings.max_message_kb * 1000,
         tickets: paths.tickets.clone(),

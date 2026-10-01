@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde_json::{Value, json};
 
 use crate::app::channels::{Hub, HubStatus, LineKind};
+use crate::app::node::NodeStatus;
 use crate::app::{App, NetState, SyncState, network};
 use crate::config::{Effect, FIELDS, FieldKind, Settings, WebAccess};
 use crate::net::PeerKind;
@@ -35,6 +36,12 @@ pub fn state(app: &App) -> Value {
     let propagation = app.settings.propagation_node.as_ref().map(|hash| {
         json!({ "hash": hash, "name": app.store.display_name(hash) })
     });
+    let hosting = match &app.pn.status {
+        NodeStatus::Off => json!({ "state": "off" }),
+        NodeStatus::Starting => json!({ "state": "starting" }),
+        NodeStatus::Running => json!({ "state": "running", "hash": hex::encode(app.pn.hash), "stats": app.pn.stats }),
+        NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
+    };
     let message_unread: usize = app.store.conversations.values().map(|c| c.unread).sum();
     let (channel_unread, mention) = app.channels.total_unread();
     let online = app.interfaces.iter().filter(|i| i.online).count();
@@ -46,6 +53,8 @@ pub fn state(app: &App) -> Value {
         "net": net,
         "sync": sync,
         "propagation_node": propagation,
+        // The propagation node hosted here.
+        "hosting": hosting,
         "rns_config": app.settings.rns_config,
         "data_dir": app.paths.store.parent().map(|p| p.display().to_string()),
         "known": app.store.peers.len(),

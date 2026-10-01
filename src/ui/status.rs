@@ -7,8 +7,40 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
 use super::{ACCENT, DIM, SELECTED_BG, block, human_bytes, wrap};
+use crate::app::node::NodeStatus;
 use crate::app::{App, NetState, SyncState};
 use crate::config::{Effect, FIELDS, FieldKind};
+
+/// The propagation node hosted here: how it's doing, and what it holds.
+fn hosting(app: &App) -> Vec<Span<'static>> {
+    match &app.pn.status {
+        NodeStatus::Off => vec![Span::styled("no (Host a propagation node, below)", Style::default().fg(DIM))],
+        NodeStatus::Starting => vec![Span::styled("◌ starting", Style::default().fg(Color::Yellow))],
+        NodeStatus::Failed(e) => vec![Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red))],
+        NodeStatus::Running => {
+            let mut spans = vec![
+                Span::styled("● ", Style::default().fg(Color::Green)),
+                Span::styled(hex::encode(app.pn.hash), Style::default().fg(ACCENT)),
+            ];
+            if let Some(s) = &app.pn.stats {
+                let mut parts = vec![
+                    format!("{} kept ({})", s.messages, human_bytes(s.bytes as u64)),
+                    format!("{} in", s.received),
+                    format!("{} collected", s.served),
+                ];
+                if s.delivered_here > 0 {
+                    parts.push(format!("{} for you", s.delivered_here));
+                }
+                if s.rejected > 0 {
+                    parts.push(format!("{} refused", s.rejected));
+                }
+                parts.push(format!("{} peer{}", s.peers, if s.peers == 1 { "" } else { "s" }));
+                spans.push(Span::raw(format!("  {}", parts.join(" · "))));
+            }
+            spans
+        }
+    }
+}
 
 /// `settings.json`, one row per setting, with help for the selected one.
 fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -51,7 +83,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let settings_height = FIELDS.len() as u16 + 3;
     // The settings list scrolls, so it may give way on short terminals.
     let [info, settings, rest] = Layout::vertical([
-        Constraint::Length(10),
+        Constraint::Length(11),
         Constraint::Max(settings_height),
         Constraint::Min(5),
     ])
@@ -86,6 +118,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![label("Network"), Span::raw(network)]),
         Line::from(vec![label("Propagation node"), Span::raw(propagation)]),
         Line::from(vec![label("Last sync"), Span::raw(sync)]),
+        Line::from([vec![label("Hosting messages")], hosting(app)].concat()),
         Line::from(vec![
             label("RNS config"),
             Span::raw(app.settings.rns_config.clone().unwrap_or_else(|| "rsReticulum default".into())),
@@ -162,7 +195,54 @@ fn log_rows<'a>(log: impl DoubleEndedIterator<Item = &'a String>, width: usize, 
 
 #[cfg(test)]
 mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
     use super::*;
+    use crate::config::Settings;
+    use crate::lxmf::pn::PnStats;
+    use crate::net::{NetCommand, NetEvent, PnEvent};
+    use crate::store::Store;
+
+    fn screen(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn the_propagation_node_follows_the_settings_and_shows_what_it_holds() {
+        let dir = std::env::temp_dir().join(format!("rettui-pn-status-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let settings = Settings { pn_enabled: true, pn_name: Some("Hilltop".into()), ..Settings::default() };
+        let (mut app, mut commands) = crate::app::test_app_with_net(&dir, settings, Store::default());
+        app.tab = crate::app::Tab::Status;
+        assert!(screen(&mut app).contains("Hosting messages  ◌ starting"));
+        app.on_net(NetEvent::Pn(PnEvent::Started { hash: [7; 16] }));
+        app.on_net(NetEvent::Pn(PnEvent::Stats(PnStats { messages: 3, bytes: 2400, received: 4, served: 1, peers: 1, ..PnStats::default() })));
+        let shown = screen(&mut app);
+        assert!(shown.contains(&hex::encode([7; 16])) && shown.contains("3 kept (2.4 KB) · 4 in · 1 collected"), "{shown}");
+        assert!(shown.contains("1 peer") && !shown.contains("1 peers"), "{shown}");
+        // It's listed by name, to be picked as your propagation node.
+        assert_eq!(app.store.peers[&hex::encode([7; 16])].name.as_deref(), Some("Hilltop"));
+        // Settings it doesn't run with leave it be; its own restart it.
+        while commands.try_recv().is_ok() {}
+        app.update_settings(&[("wrap_lines", "true")]).unwrap();
+        assert!(!std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(c, NetCommand::Propagation(_))));
+        app.update_settings(&[("pn_storage_mb", "100")]).unwrap();
+        let config = std::iter::from_fn(|| commands.try_recv().ok()).find_map(|c| match c {
+            NetCommand::Propagation(config) => config,
+            _ => None,
+        });
+        assert_eq!(config.map(|c| (c.name, c.storage_bytes)), Some(("Hilltop".to_string(), 100_000_000)));
+        assert!(screen(&mut app).contains("◌ starting"));
+        app.update_settings(&[("pn_enabled", "false")]).unwrap();
+        assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(c, NetCommand::Propagation(None))));
+        app.on_net(NetEvent::Pn(PnEvent::Stopped));
+        assert!(screen(&mut app).contains("Hosting messages  no"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn long_log_lines_wrap_under_their_time_and_keep_the_newest_in_view() {

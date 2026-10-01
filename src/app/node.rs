@@ -1,4 +1,5 @@
-//! Node tab: hosting a NomadNet node and editing its pages.
+//! Node tab: hosting a NomadNet node and editing its pages; and hosting a
+//! propagation node (its status is on the Status tab).
 //!
 //! The page operations (`node_*`) are shared by the TUI and the web UI.
 //! Saving writes the file the node serves, so edits are live straight away;
@@ -10,7 +11,8 @@ use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 
 use super::{App, PromptKind, format};
-use crate::net::{Hash, HostEvent, NetCommand};
+use crate::lxmf::pn::{PnConfig, PnStats};
+use crate::net::{Hash, HostEvent, NetCommand, PnEvent};
 use crate::nomad::host::HostConfig;
 use crate::nomad::pages::{self, PageInfo, Pages};
 use crate::term::textarea::TextArea;
@@ -116,7 +118,74 @@ impl Node {
     }
 }
 
+/// The propagation node hosted here.
+pub struct PnHost {
+    pub status: NodeStatus,
+    /// Its address (known from the identity before it starts).
+    pub hash: Hash,
+    pub stats: Option<PnStats>,
+    /// What the network actor was last asked to run.
+    config: Option<PnConfig>,
+}
+
+impl PnHost {
+    pub fn new(hash: Hash, config: Option<PnConfig>) -> Self {
+        let status = if config.is_some() { NodeStatus::Starting } else { NodeStatus::Off };
+        Self { status, hash, stats: None, config }
+    }
+
+    /// After a Reticulum restart, it starts again (with the settings).
+    pub(super) fn restarting(&mut self, config: Option<PnConfig>) {
+        *self = Self::new(self.hash, config);
+    }
+}
+
 impl App {
+    /// Start, restart or stop the propagation node to match the settings
+    /// (nothing, if what it runs with didn't change).
+    pub(super) fn apply_pn_settings(&mut self) {
+        let config = PnConfig::from_settings(&self.settings, &self.paths);
+        if config == self.pn.config {
+            return;
+        }
+        self.pn.status = if config.is_some() { NodeStatus::Starting } else { NodeStatus::Off };
+        self.pn.stats = None;
+        self.pn.config = config.clone();
+        self.send(NetCommand::Propagation(config));
+    }
+
+    pub(super) fn on_pn(&mut self, event: PnEvent) {
+        match event {
+            PnEvent::Started { hash } => {
+                self.pn.status = NodeStatus::Running;
+                self.pn.hash = hash;
+                // Listed under its name, to be picked as yours (a client never
+                // hears its own announce).
+                let name = self.pn.config.as_ref().map_or_else(|| self.settings.display_name.clone(), |c| c.name.clone());
+                self.store.peers.insert(
+                    hex::encode(hash),
+                    crate::store::Peer {
+                        kind: crate::net::PeerKind::Propagation,
+                        name: Some(name),
+                        hops: 0,
+                        last_seen: chrono::Utc::now().timestamp(),
+                    },
+                );
+                self.peers_dirty = true;
+                self.log(format!("Hosting propagation node {}", hex::encode(hash)));
+            }
+            PnEvent::Stopped => {
+                self.pn.status = NodeStatus::Off;
+                self.log("Stopped hosting the propagation node");
+            }
+            PnEvent::Failed(e) => {
+                self.log(format!("Propagation node: {e}"));
+                self.pn.status = NodeStatus::Failed(e);
+            }
+            PnEvent::Stats(stats) => self.pn.stats = Some(stats),
+        }
+    }
+
     fn node_store(&self) -> Result<Pages, String> {
         Pages::open(&HostConfig::dir(&self.settings, &self.paths))
     }
