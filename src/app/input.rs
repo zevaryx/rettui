@@ -132,7 +132,7 @@ impl App {
                 KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(self.history_page()),
                 KeyCode::Char('o') if ctrl => self.open_attach_prompt(),
                 KeyCode::Char('x') if ctrl => self.attachments.clear(),
-                KeyCode::Char('p') if ctrl => self.delivery_mode = self.delivery_mode.next(),
+                KeyCode::Char('p') if ctrl => self.cycle_delivery(),
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
                 KeyCode::Char('e') if ctrl => self.open_emoji_picker(),
                 _ => {

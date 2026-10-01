@@ -1836,7 +1836,11 @@ app.views.messages = {
   WARM: 10,
   // Messages shown (and loaded) until "Show earlier".
   LIMIT: 100,
-  mode: localStorage.getItem('rettui.mode') || 'auto',
+  // How the message being written goes: the conversation's own mode, or
+  // paper for one message. `modeFor` is the conversation it was set for.
+  mode: 'auto',
+  modeFor: null,
+  modeKept: null,
 
   mount(root, options = {}) {
     this.list = el('div', { class: 'scroll' });
@@ -1877,9 +1881,12 @@ app.views.messages = {
         this.renderChips();
       },
     });
-    const mode = el('select', { title: 'Delivery mode', onchange: (e) => {
+    // Kept for each conversation, except paper (for one message).
+    const mode = this.modeSelect = el('select', { title: 'Delivery mode (kept for this conversation, except paper)', onchange: async (e) => {
       this.mode = e.target.value;
-      localStorage.setItem('rettui.mode', this.mode);
+      const key = this.selected;
+      if (!key || this.mode === 'paper') return;
+      await attempt(() => api.post(`/conversations/${key}/delivery`, { mode: this.mode }));
     } },
     [['auto', 'Auto'], ['direct', 'Direct'], ['propagated', 'Propagated'], ['paper', 'Paper (QR code)']].map(([m, label]) =>
       el('option', { value: m, text: label, selected: m === this.mode })));
@@ -2020,6 +2027,14 @@ app.views.messages = {
       this.paperWaiting = null;
       if (waiting.paper) showPaper(waiting.paper);
     }
+    // Its way of delivery, unless paper was picked for the next message.
+    const kept = conversation.contact?.delivery || 'auto';
+    if (this.modeFor !== key || (this.modeKept !== kept && this.mode !== 'paper')) {
+      this.mode = kept;
+      this.modeSelect.value = kept;
+      this.modeFor = key;
+    }
+    this.modeKept = kept;
     if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key })) return;
     this.header.replaceChildren(
       el('span', { class: 'title', text: conversation.name }),
@@ -2316,8 +2331,12 @@ app.views.messages = {
       draftRestore(this, echo.key, { text: content, files: pending, reply });
       return;
     }
-    // Its QR code shows once written (see renderConversation).
-    if (mode === 'paper') this.paperWaiting = { key: echo.key, id: sent.id };
+    // Its QR code shows once written (see renderConversation); the next
+    // message goes their usual way.
+    if (mode === 'paper') {
+      this.paperWaiting = { key: echo.key, id: sent.id };
+      this.modeFor = null;
+    }
     this.history.scrollTop = this.history.scrollHeight;
     this.history.pinned = true;
   },

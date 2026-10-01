@@ -179,6 +179,8 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
             "trust_label": crate::app::contacts::trust_label(app.store.contact(key).trust, app.is_known(key)),
             // The last ping, if any.
             "ping": app.pings.get(key).map(crate::app::contacts::ping_label),
+            // How messages to them go.
+            "delivery": app.delivery_for(key).label(),
         },
         "archive": app.paths.archive.display().to_string(),
         "messages": messages,

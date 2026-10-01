@@ -65,6 +65,9 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
         None => lines.push(field("Heard", "not yet (no announce)")),
     }
     lines.push(field("Trust", trust_label(contact.trust, app.is_known(&key))));
+    if let Some(mode) = contact.delivery {
+        lines.push(field("Delivery", format!("{} (d changes it in the conversation)", mode.label())));
+    }
     if let Some(ping) = app.pings.get(&key) {
         let when = match ping {
             PingState::Done { at, .. } => format!(" ({} ago)", ago(*at)),
