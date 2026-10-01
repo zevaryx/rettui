@@ -89,6 +89,14 @@ for you, as Sideband does when none is set:
   message (the same hash), so a copy that got through anyway isn't shown
   twice. It goes by the delivery mode chosen now. Its files must still be
   where they were.
+- **Sent again when they announce:** as in MeshChat, when someone
+  announces, your messages to them that failed go again on their own (by
+  how messages to them go), since the announce shows they can be reached.
+  Text ones only, as a file can be large; not a paper message that
+  couldn't be written (it would go over the network instead); and a
+  message isn't sent again so for ten minutes after the last time, however
+  often they announce. Turn it off with *Resend when they announce*
+  (Status, `resend_on_announce`).
 - **Delete a message:** it goes from rettui, with any files rettui saved
   for it (received files, and ones uploaded in the web UI). A file you sent
   from elsewhere on your computer stays where it is. It isn't deleted from

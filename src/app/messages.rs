@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
@@ -18,6 +19,12 @@ use crate::term::input::TextInput;
 
 /// Many LXMF clients refuse direct transfers above ~1 MB by default.
 const LARGE_MESSAGE_BYTES: u64 = 1_000_000;
+/// How a paper message that couldn't be written fails: it isn't sent again
+/// on its own, since that would send it over the network instead.
+const PAPER_FAILED: &str = "Not written: ";
+/// A failed message sent again when its recipient announced isn't sent
+/// again so for this long.
+const RESEND_GAP: Duration = Duration::from_secs(10 * 60);
 
 impl App {
     /// An attachment image already loaded by [`App::picture`].
@@ -656,6 +663,39 @@ impl App {
         actions
     }
 
+    /// Send again, as MeshChat does, the messages to `key` that failed,
+    /// now that they announced (so they can be reached): text ones only (a
+    /// file can be large), not paper ones (they'd go over the network
+    /// instead), and not ones sent again on their own a moment ago, should
+    /// they announce often. By how messages to them go.
+    pub(super) fn resend_on_announce(&mut self, key: &str) {
+        if !self.settings.resend_on_announce {
+            return;
+        }
+        let Some(conversation) = self.store.conversations.get(key) else { return };
+        let now = Instant::now();
+        let failed: Vec<String> = conversation
+            .messages
+            .iter()
+            .filter(|m| !m.incoming && m.attachments.is_empty() && m.id.starts_with("local-"))
+            .filter(|m| matches!(&m.state, MessageState::Failed(why) if !why.starts_with(PAPER_FAILED)))
+            .filter(|m| self.auto_resent.get(&m.id).is_none_or(|at| now.duration_since(*at) >= RESEND_GAP))
+            .map(|m| m.id.clone())
+            .collect();
+        let mode = self.delivery_for(key);
+        let mut sent = 0;
+        for id in failed {
+            self.auto_resent.insert(id.clone(), now);
+            if self.retry_message(key, &id, mode).is_ok() {
+                sent += 1;
+            }
+        }
+        if sent > 0 {
+            let name = self.store.display_name(key);
+            self.log(format!("{name} announced: sending {sent} message(s) that failed again"));
+        }
+    }
+
     /// Send a message of yours that failed again, the same message (so a
     /// copy that did get there isn't shown twice), by `mode`.
     pub fn retry_message(&mut self, key: &str, id: &str, mode: DeliveryMode) -> Result<(), String> {
@@ -843,7 +883,7 @@ impl App {
                 }
             }
             Err(e) => {
-                message.state = MessageState::Failed(e.clone());
+                message.state = MessageState::Failed(format!("{PAPER_FAILED}{e}"));
                 self.store_dirty = true;
                 self.fail(format!("Could not write the paper message: {e}"));
             }
@@ -1515,6 +1555,50 @@ mod tests {
         std::fs::remove_file(&file).unwrap();
         let err = app.retry_message(&key(), &format!("local-{with_file}"), DeliveryMode::Auto).unwrap_err();
         assert!(err.contains("gone.txt isn't there any more"), "{err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_messages_go_again_when_their_recipient_announces() {
+        use crate::net::{NetEvent, PeerKind};
+        let dir = temp_dir("resend");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        let fail = |app: &mut App, id: u64| app.on_net(NetEvent::Delivery { id, result: Err("no path".into()) });
+        let state = |app: &mut App, id: u64| app.store.find_message_mut(&format!("local-{id}")).unwrap().state.clone();
+        let announce = |app: &mut App| {
+            app.on_net(NetEvent::Announce { kind: PeerKind::Lxmf, hash: parse_hash(&key()).unwrap(), name: Some("Bob".into()), hops: 1 })
+        };
+        // A text message, one with a file, and a paper one that couldn't be
+        // written: all failed.
+        let text = app.send_message(key(), "hello".into(), Vec::new(), DeliveryMode::Auto, None).unwrap();
+        fail(&mut app, text);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("photo.png");
+        std::fs::write(&file, b"png").unwrap();
+        let with_file = app.send_message(key(), String::new(), vec![file], DeliveryMode::Auto, None).unwrap();
+        fail(&mut app, with_file);
+        let paper = app.send_message(key(), "on paper".into(), Vec::new(), DeliveryMode::Paper, None).unwrap();
+        app.on_net(NetEvent::Paper { id: paper, result: Err("no key".into()) });
+        assert_eq!(state(&mut app, paper), MessageState::Failed("Not written: no key".into()));
+        // They announce: the text one goes again, the others don't.
+        announce(&mut app);
+        assert_eq!(state(&mut app, text), MessageState::Sending);
+        assert!(matches!(state(&mut app, with_file), MessageState::Failed(_)));
+        assert!(matches!(state(&mut app, paper), MessageState::Failed(_)));
+        // Failing again, it isn't sent again for a while, however often
+        // they announce.
+        fail(&mut app, text);
+        announce(&mut app);
+        assert!(matches!(state(&mut app, text), MessageState::Failed(_)));
+        app.auto_resent.values_mut().for_each(|at| *at -= RESEND_GAP);
+        announce(&mut app);
+        assert_eq!(state(&mut app, text), MessageState::Sending);
+        // Not when turned off.
+        fail(&mut app, text);
+        app.auto_resent.clear();
+        app.update_settings(&[("resend_on_announce", "false")]).unwrap();
+        announce(&mut app);
+        assert!(matches!(state(&mut app, text), MessageState::Failed(_)));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

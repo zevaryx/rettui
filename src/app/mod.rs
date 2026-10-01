@@ -42,7 +42,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::{Paths, Settings};
 use crate::lxmf::{Delivered, DeliveryMode};
-use crate::net::{Hash, NetCommand, NetEvent, parse_hash};
+use crate::net::{Hash, NetCommand, NetEvent, PeerKind, parse_hash};
 use crate::nomad::cache::Cache;
 use crate::store::{MessageState, Peer, Store};
 use crate::term::clipboard::Clipboard;
@@ -410,6 +410,9 @@ pub struct App {
     /// What's written and attached in the conversations not open.
     drafts: HashMap<String, (TextInput, Vec<PathBuf>, Option<String>)>,
     pub delivery_mode: DeliveryMode,
+    /// Failed messages sent again on their own when their recipient
+    /// announced, and when (see [`App::resend_on_announce`]).
+    auto_resent: HashMap<String, Instant>,
     /// Decoded image attachments by file path (`None` if undecodable).
     pictures: HashMap<PathBuf, Option<Picture>>,
     /// Images being decoded in the background, and where results arrive
@@ -545,6 +548,7 @@ impl App {
             attachments: Vec::new(),
             drafts: HashMap::new(),
             delivery_mode: DeliveryMode::Auto,
+            auto_resent: HashMap::new(),
             pictures: HashMap::new(),
             decoding: std::collections::HashSet::new(),
             decoded_tx,
@@ -813,6 +817,9 @@ impl App {
             }
             NetEvent::Announce { kind, hash, name, hops } => {
                 let key = hex::encode(hash);
+                if kind == PeerKind::Lxmf {
+                    self.resend_on_announce(&key);
+                }
                 let peer = self.store.peers.entry(key).or_insert(Peer {
                     kind,
                     name: None,
