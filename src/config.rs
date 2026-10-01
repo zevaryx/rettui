@@ -24,6 +24,9 @@ pub struct Settings {
     pub propagation_node: Option<String>,
     /// Minutes between automatic propagation node syncs; 0 disables them.
     pub sync_interval_mins: u64,
+    /// Pick the propagation node automatically: the nearest that answers
+    /// fastest (see `net::autopn`). Off unless turned on.
+    pub auto_propagation_node: bool,
     /// Newest messages each conversation keeps in the store; older ones go
     /// to the archive. 0 keeps them all in the store.
     pub messages_kept: u64,
@@ -85,6 +88,7 @@ impl Default for Settings {
             home: None,
             propagation_node: None,
             sync_interval_mins: 30,
+            auto_propagation_node: false,
             messages_kept: 1000,
             message_storage_mb: 0,
             cache_hours: 24,
@@ -267,6 +271,13 @@ pub const FIELDS: &[Field] = &[
         label: "Propagation node",
         help: "Outbound propagation node address (32 hex characters); empty for none",
         kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "auto_propagation_node",
+        label: "Pick propagation node automatically",
+        help: "Warning: anyone can run a propagation node near you. The one picked (the nearest that answers fastest) sees who your propagated messages are for and when you collect yours, and could lose them; it can't read or change them. Pick a node you trust where you can",
+        kind: FieldKind::Toggle,
         effect: Effect::Now,
     },
     Field {
@@ -501,6 +512,7 @@ impl Settings {
             "home" => self.home.clone().unwrap_or_default(),
             "propagation_node" => self.propagation_node.clone().unwrap_or_default(),
             "sync_interval_mins" => self.sync_interval_mins.to_string(),
+            "auto_propagation_node" => self.auto_propagation_node.to_string(),
             "messages_kept" => self.messages_kept.to_string(),
             "message_storage_mb" => self.message_storage_mb.to_string(),
             "cache_hours" => self.cache_hours.to_string(),
@@ -542,6 +554,7 @@ impl Settings {
                 self.display_name = name.to_string();
             }
             "announce_at_start" => self.announce_at_start = toggle(value).map_err(fail)?,
+            "auto_propagation_node" => self.auto_propagation_node = toggle(value).map_err(fail)?,
             "node_enabled" => self.node_enabled = toggle(value).map_err(fail)?,
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,

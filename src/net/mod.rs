@@ -6,6 +6,7 @@
 //! rendering never waits on the network. The protocol work itself lives in [`crate::lxmf`],
 //! [`crate::nomad`] and [`crate::rrc`].
 
+pub mod autopn;
 pub mod iface_log;
 mod remote;
 
@@ -98,6 +99,12 @@ pub enum NetCommand {
     /// `quiet`: no line in the log when it's done (re-applied at start).
     Blackhole { to: Hash, block: bool, quiet: bool },
     SetPropagationNode(Option<Hash>),
+    /// Pick the propagation node automatically, or stop; with the nodes
+    /// heard before (address, hops, when last heard), to start from.
+    AutoPropagation { enabled: bool, known: Vec<(Hash, u8, i64)> },
+    /// Check the propagation node picked automatically soon (syncing with
+    /// it, or sending through it, failed).
+    RecheckPropagation,
     /// New automatic announce and sync intervals (`None` turns one off).
     SetIntervals {
         announce: Option<Duration>,
@@ -183,6 +190,8 @@ pub enum NetEvent {
     Message(Box<InboundMessage>),
     Delivery { id: u64, result: Result<lxmf::Sent, String> },
     Pinged { to: Hash, result: Result<Ping, String> },
+    /// A propagation node picked automatically (or why none was).
+    PropagationPicked(Result<autopn::Pick, String>),
     /// A paper message written: its `lxm://` link and hash.
     Paper { id: u64, result: Result<(String, [u8; 32]), String> },
     Fetched { id: u64, result: Result<FetchedContent, String> },
@@ -222,6 +231,8 @@ pub struct NetOptions {
     pub announce_at_start: bool,
     pub announce_interval: Option<Duration>,
     pub propagation_node: Option<Hash>,
+    /// Pick the propagation node automatically (see [`autopn`]).
+    pub auto_propagation: bool,
     pub sync_interval: Option<Duration>,
     pub known_identities: PathBuf,
     /// Node to host from the start, if any.
@@ -412,6 +423,20 @@ async fn run(
     let mut known_save: Option<tokio::task::JoinHandle<()>> = None;
     let announce_data = |name: &str| app_data(name, policy.lock().unwrap().stamp_cost);
     let mut announces_missed = 0u64;
+    // Picking the propagation node automatically: the nodes heard, and
+    // when to check next (one check at a time).
+    let mut auto_pn = options.auto_propagation;
+    let mut candidates: HashMap<Hash, autopn::Candidate> = HashMap::new();
+    let (auto_tx, mut auto_rx) = mpsc::unbounded_channel::<Result<autopn::Pick, String>>();
+    let mut auto_running = false;
+    let mut auto_started: Option<tokio::time::Instant> = None;
+    let mut auto_next = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut auto_timer = tokio::time::interval(Duration::from_secs(15));
+    // Soon, but not more often than every minute.
+    let soon = |started: Option<tokio::time::Instant>| {
+        started.map_or_else(tokio::time::Instant::now, |at| (at + autopn::MIN_GAP).max(tokio::time::Instant::now()))
+    };
+    let unix_now = || chrono::Utc::now().timestamp();
     // Syncing from the node hosted here: its messages for us were delivered
     // as they came in.
     let sync = |node: Option<Hash>, local: &Option<LocalNode>| match local {
@@ -453,6 +478,28 @@ async fn run(
             }
             _ = sync_timer.tick(), if sync_interval.is_some() && propagation_node.is_some() => {
                 sync(propagation_node, &pn_local);
+            }
+            _ = auto_timer.tick(), if auto_pn && !auto_running => {
+                if tokio::time::Instant::now() >= auto_next {
+                    let hosted = pn_local.as_ref().map(|local| local.hash);
+                    let shortlist = autopn::shortlist(&candidates, unix_now(), propagation_node, hosted);
+                    let (runtime, known, tx, current) = (runtime.clone(), known.clone(), auto_tx.clone(), propagation_node);
+                    auto_running = true;
+                    auto_started = Some(tokio::time::Instant::now());
+                    tokio::spawn(async move {
+                        let _ = tx.send(autopn::evaluate(&runtime, &known, shortlist, current).await);
+                    });
+                }
+            }
+            Some(result) = auto_rx.recv() => {
+                auto_running = false;
+                auto_next = tokio::time::Instant::now() + if result.is_ok() { autopn::RECHECK } else { autopn::RETRY };
+                if auto_pn {
+                    if let Ok(pick) = &result {
+                        propagation_node = Some(pick.node);
+                    }
+                    let _ = ev.send(NetEvent::PropagationPicked(result));
+                }
             }
             _ = stats_timer.tick() => {
                 if known_save.as_ref().is_none_or(|save| save.is_finished()) {
@@ -540,6 +587,16 @@ async fn run(
                         });
                     }
                     NetCommand::SetPropagationNode(node) => propagation_node = node,
+                    NetCommand::AutoPropagation { enabled, known: heard } => {
+                        auto_pn = enabled;
+                        let keys = known.lock().unwrap();
+                        for (hash, hops, heard) in heard {
+                            let stamp_cost = keys.app_data_of(hash).and_then(|d| parse_pn_announce_data(&d)).map(|d| d.stamp_cost);
+                            candidates.entry(hash).or_insert(autopn::Candidate { hash, hops, heard, stamp_cost });
+                        }
+                        auto_next = soon(auto_started);
+                    }
+                    NetCommand::RecheckPropagation => auto_next = auto_next.min(soon(auto_started)),
                     NetCommand::SetIntervals { announce, sync } => {
                         if announce != announce_interval {
                             announce_interval = announce;
@@ -656,10 +713,18 @@ async fn run(
                     continue;
                 };
                 if !data.node_state {
+                    // No longer serving: not one to pick.
+                    candidates.remove(&announce.destination_hash);
                     continue;
                 }
                 if let Some(key) = &announce.public_key {
                     known.lock().unwrap().remember(announce.destination_hash, key, announce.app_data.as_deref());
+                }
+                let hash = announce.destination_hash;
+                candidates.insert(hash, autopn::Candidate { hash, hops: announce.hops, heard: unix_now(), stamp_cost: Some(data.stamp_cost) });
+                // Waiting for a first node to pick: this may be it.
+                if auto_pn && propagation_node.is_none() {
+                    auto_next = auto_next.min(soon(auto_started));
                 }
                 let name = data
                     .metadata

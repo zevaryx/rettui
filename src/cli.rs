@@ -27,6 +27,7 @@ fn options(
         announce_at_start: announce,
         announce_interval: None,
         propagation_node: node,
+        auto_propagation: false,
         sync_interval: None,
         known_identities: paths.known_identities.clone(),
         host: None,

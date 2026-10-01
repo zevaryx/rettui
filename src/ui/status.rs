@@ -101,9 +101,12 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         NetState::Online => "online".to_string(),
         NetState::Failed(e) => format!("failed: {e}"),
     };
-    let propagation = match &app.settings.propagation_node {
-        Some(hash) => format!("{}  {hash}", app.store.display_name(hash)),
-        None => "none (pick one in the Network tab)".to_string(),
+    let auto = app.auto_pick_label();
+    let propagation = match (&app.settings.propagation_node, auto) {
+        (Some(hash), Some(auto)) => format!("{}  {hash} · {auto}", app.store.display_name(hash)),
+        (Some(hash), None) => format!("{}  {hash}", app.store.display_name(hash)),
+        (None, Some(auto)) => auto,
+        (None, None) => "none (pick one in the Network tab)".to_string(),
     };
     let sync = match &app.sync {
         SyncState::Idle => "never".to_string(),
