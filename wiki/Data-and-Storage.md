@@ -14,8 +14,10 @@ rettui keeps its data in `~/.local/share/rettui/`:
   says which apply). Don't run one identity in two
   programs at once: messages to it would be split between them. The web UI
   can't read or change the identity (the login link would otherwise give
-  away the key): use the terminal UI, or, with rettui stopped, copy the
-  file over `identity` (for Docker, `./data/identity`).
+  away the key). Stop the web UI first (two copies of rettui on one data
+  folder overwrite each other's files), then use the terminal UI, or copy
+  the file over `identity` (for Docker, `./data/identity`, with the
+  container stopped).
 - `settings.json`: display name, announce behaviour, home page, propagation
   node, sync interval, `messages_kept` and `message_storage_mb` (see
   *Message history* below), `cache_hours` (24 by default), node and
