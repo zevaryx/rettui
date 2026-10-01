@@ -1337,6 +1337,7 @@ async function gettingStarted() {
   const close = dialog('Getting started', (close) => [
     el('p', { class: 'dim', text: g.help.intro }),
     el('p', { class: 'guide-status ' + status[0], text: status[1] }),
+    g.shared_note ? el('p', { class: 'guide-status warn', text: g.shared_note }) : null,
     el('label', { class: 'field' }, el('span', { text: 'Your name' }), name, el('span', { class: 'dim help', text: g.help.name })),
     el('p', { class: 'dim help' }, g.help.identity + ' ', el('code', { text: g.identity_file })),
     g.external ? el('p', { class: 'dim', text: `${g.external_note}: add entry points in that program's Reticulum config.` }) : null,

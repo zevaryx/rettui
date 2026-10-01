@@ -668,15 +668,30 @@ impl Settings {
 /// directory, since the shared-instance RPC key derives from it. Prefer the
 /// standard Python RNS locations when they exist.
 pub fn default_rns_config() -> Option<String> {
-    let home = directories::BaseDirs::new()?.home_dir().to_path_buf();
-    [
-        PathBuf::from("/etc/reticulum"),
-        home.join(".config/reticulum"),
-        home.join(".reticulum"),
-    ]
-    .into_iter()
-    .find(|dir| dir.join("config").is_file())
-    .map(|dir| dir.to_string_lossy().into_owned())
+    python_rns_dirs()
+        .into_iter()
+        .find(|dir| dir.join("config").is_file())
+        .map(|dir| dir.to_string_lossy().into_owned())
+}
+
+/// Where Python Reticulum (and so NomadNet, Sideband and rnsd) keeps its
+/// config, in the order it looks.
+fn python_rns_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("/etc/reticulum")];
+    if let Some(home) = directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf()) {
+        dirs.extend([home.join(".config/reticulum"), home.join(".reticulum")]);
+    }
+    dirs
+}
+
+/// Whether a Reticulum config directory is one Python Reticulum programs
+/// use too: a change to it changes theirs.
+pub fn is_shared_rns_dir(dir: &Path) -> bool {
+    let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    python_rns_dirs().iter().any(|python| same(python, dir))
 }
 
 /// Load the identity, creating one on first run.
@@ -721,6 +736,13 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn python_reticulum_configs_are_shared() {
+        let home = directories::BaseDirs::new().unwrap().home_dir().to_path_buf();
+        assert!(is_shared_rns_dir(&home.join(".reticulum")) && is_shared_rns_dir(Path::new("/etc/reticulum")));
+        assert!(!is_shared_rns_dir(&std::env::temp_dir().join("rettui-own-rns")));
+    }
     use super::*;
 
     #[test]
