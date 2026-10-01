@@ -136,12 +136,19 @@ pub async fn send(
     bail!("network task stopped")
 }
 
-/// A paper message written: its QR code, on a terminal wide enough (two
-/// modules a character, black on white whatever the theme), then its link.
+/// A paper message written: its QR code, then its link.
 fn print_paper(link: &str) {
+    print_qr(link);
+    println!("{link}");
+}
+
+/// The QR code of `text`, on a terminal wide enough (two modules a
+/// character, black on white whatever the theme); nothing when output
+/// isn't a terminal.
+pub fn print_qr(text: &str) {
     use std::io::IsTerminal;
     let width = crossterm::terminal::size().map_or(0, |(cols, _)| cols as usize);
-    match crate::lxmf::paper::Qr::new(link) {
+    match crate::lxmf::paper::Qr::new(text) {
         Ok(qr) if std::io::stdout().is_terminal() && qr.size() <= width => {
             let colour = |dark: bool| if dark { 16 } else { 231 };
             for y in (0..qr.size()).step_by(2) {
@@ -158,7 +165,6 @@ fn print_paper(link: &str) {
         }
         _ => {}
     }
-    println!("{link}");
 }
 
 /// Announce, then print incoming messages until the time runs out.
