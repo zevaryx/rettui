@@ -106,6 +106,7 @@ pub fn router(state: WebState) -> Router {
         .route("/guide", get(guide).post(apply_guide))
         .route("/guide/dismiss", post(dismiss_guide))
         .route("/identity/backed-up", post(identity_backed_up))
+        .route("/first-steps/hide", post(hide_first_steps))
         .route("/channels", get(channels).post(add_hub))
         .route("/channels/{hub}/room", get(room))
         .route("/channels/{hub}/{action}", post(hub_action))
@@ -1025,6 +1026,11 @@ async fn apply_guide(State(state): State<WebState>, axum::Json(body): axum::Json
 
 async fn dismiss_guide(State(state): State<WebState>) -> ApiResult {
     state.write(|o| o.app.finish_guide()).await?;
+    ok()
+}
+
+async fn hide_first_steps(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.hide_first_steps()).await?;
     ok()
 }
 
