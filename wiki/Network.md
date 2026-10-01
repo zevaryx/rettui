@@ -4,6 +4,14 @@ shows your identity, your interfaces and the log.
 - **Heard announces:** the Network tab lists the LXMF peers, NomadNet nodes
   and propagation nodes you've heard, with their names, addresses, hops and
   when they were last heard.
+- **Names are cleaned:** a name someone announces could otherwise pass for
+  another, or spill over the screen. As NomadNet does, rettui drops
+  characters that hide or turn text around (direction overrides,
+  zero-width and private-use ones), reads compatibility forms as the
+  letters they look like (`ＡＤＭＩＮ` as `ADMIN`), keeps at most four
+  accents on a letter, makes blank-looking characters and line breaks one
+  space, and keeps 128 characters. Unlike NomadNet, emoji stay. Names
+  heard before this are cleaned as rettui starts.
 - **Hearing others takes time:** there's no list to download; each peer
   and node announces on its own schedule, many only every few hours, so a
   new install's list fills over its first hours. Announcing yourself (`A`,

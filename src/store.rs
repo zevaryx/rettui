@@ -645,6 +645,10 @@ impl Store {
             Self::default()
         };
         store.load_peers(&peers_path(path), holds_peers);
+        // Names heard before they were cleaned (see [`crate::names`]).
+        for peer in store.peers.values_mut() {
+            peer.name = peer.name.take().and_then(|name| crate::names::clean(&name));
+        }
         // Anything still "sending" was interrupted by the last shutdown.
         for conversation in store.conversations.values_mut() {
             for message in &mut conversation.messages {
@@ -913,6 +917,18 @@ mod tests {
         assert!(!path.exists());
         assert_eq!(store.peers.len(), 1, "and its contents are used");
         assert!(store.migration_notes[0].starts_with("Could not convert"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn names_heard_before_are_cleaned_when_loaded() {
+        let dir = temp_dir("clean-names");
+        let path = dir.join("store.json.gz");
+        let mut peers = sample().peers;
+        peers.get_mut(&"ab".repeat(16)).unwrap().name = Some("Ali\u{202E}ce\u{200B}".into());
+        Store::default().save(&path).unwrap();
+        write_atomic(&peers_path(&path), &encode_peers(&peers).unwrap()).unwrap();
+        assert_eq!(Store::load(&path).unwrap().display_name(&"ab".repeat(16)), "Alice");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

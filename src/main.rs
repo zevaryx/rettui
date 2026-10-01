@@ -4,6 +4,7 @@ mod config;
 mod emoji;
 mod lxmf;
 mod markdown;
+mod names;
 mod net;
 mod reticulum;
 mod nomad;

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use lxmf_core::handlers::{display_name_from_app_data, get_announce_app_data, parse_pn_announce_data};
+use lxmf_core::handlers::{get_announce_app_data, parse_pn_announce_data};
 use nomad_core::NOMAD_NODE_ASPECT;
 use rns_runtime::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -50,18 +50,20 @@ pub fn drain_burst(events: &mut mpsc::UnboundedReceiver<NetEvent>, mut apply: im
 
 pub type Hash = [u8; 16];
 
-/// The display name in an LXMF delivery announce: the msgpack format, or
-/// the original one where the data is just the name in UTF-8 (still sent by
-/// older clients; Python LXMF reads both).
+/// The display name in an LXMF delivery announce, cleaned (see
+/// [`crate::names`]): the msgpack format (`[name, stamp cost, ...]`), or
+/// the original one where the data is just the name in UTF-8 (still sent
+/// by older clients; Python LXMF reads both). Read here rather than with
+/// lxmf-core's `display_name_from_app_data`, which drops emoji.
 pub fn lxmf_display_name(data: &[u8]) -> Option<String> {
     let first = *data.first()?;
     let msgpack_array = (0x90..=0x9f).contains(&first) || first == 0xdc;
     if msgpack_array {
-        return display_name_from_app_data(data);
+        let value = rmpv::decode::read_value(&mut &data[..]).ok()?;
+        let fields = value.as_array().filter(|fields| fields.len() >= 2)?;
+        return crate::names::clean(std::str::from_utf8(fields[0].as_slice()?).ok()?);
     }
-    let name: String = std::str::from_utf8(data).ok()?.chars().filter(|c| !c.is_control()).take(128).collect();
-    let name = name.trim();
-    (!name.is_empty()).then(|| name.to_string())
+    crate::names::clean(std::str::from_utf8(data).ok()?)
 }
 
 /// A destination hash from hex, tolerating `<...>` around it.
@@ -736,8 +738,7 @@ async fn run(
                 let name = announce
                     .app_data
                     .as_deref()
-                    .map(|d| nomad_core::clamp_node_name(&String::from_utf8_lossy(d)))
-                    .filter(|n| !n.is_empty());
+                    .and_then(|d| crate::names::clean(&nomad_core::clamp_node_name(&String::from_utf8_lossy(d))));
                 let _ = ev.send(NetEvent::Announce {
                     kind: PeerKind::Nomad,
                     hash: announce.destination_hash,
@@ -767,7 +768,7 @@ async fn run(
                 let name = data
                     .metadata
                     .get(&lxmf_core::constants::PN_META_NAME)
-                    .map(|n| String::from_utf8_lossy(n).into_owned());
+                    .and_then(|n| crate::names::clean(&String::from_utf8_lossy(n)));
                 let _ = ev.send(NetEvent::Announce {
                     kind: PeerKind::Propagation,
                     hash: announce.destination_hash,
@@ -943,6 +944,17 @@ mod tests {
         // Original format: the name itself.
         assert_eq!(lxmf_display_name(b"pybot").as_deref(), Some("pybot"));
         assert_eq!(lxmf_display_name(b"a\x07b").as_deref(), Some("ab"));
+        // Cleaned, in both formats; emoji kept (as Python clients send them).
+        let announced = |name: &str| {
+            let fields = rmpv::Value::Array(vec![rmpv::Value::Binary(name.as_bytes().to_vec()), rmpv::Value::Nil]);
+            let mut data = Vec::new();
+            rmpv::encode::write_value(&mut data, &fields).unwrap();
+            data
+        };
+        assert_eq!(lxmf_display_name("Bob\u{202E}nimda".as_bytes()).as_deref(), Some("Bobnimda"));
+        assert_eq!(lxmf_display_name(&announced("\u{3164}Eve\u{200B}")).as_deref(), Some("Eve"));
+        assert_eq!(lxmf_display_name(&announced("🆎 Alex")).as_deref(), Some("🆎 Alex"));
+        assert_eq!(lxmf_display_name(&get_announce_app_data(Some("Alex"), Some(8))).as_deref(), Some("Alex"));
         assert_eq!(lxmf_display_name(b"").as_deref(), None);
         assert_eq!(lxmf_display_name(&[0xff, 0xfe]).as_deref(), None);
     }
