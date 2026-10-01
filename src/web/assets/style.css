@@ -368,6 +368,14 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
 .micron { font-family: var(--mono); font-size: 13.5px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 100%; }
 .m-line { min-height: 1.4em; }
 .m-link { cursor: pointer; }
+.m-fold-head { cursor: pointer; }
+.m-fold-head:hover { filter: brightness(1.15); }
+.m-loading { color: var(--dim); font-style: italic; }
+.m-table-wrap { white-space: normal; margin: 2px 0; }
+.m-table { display: inline-table; width: auto; border-collapse: collapse; white-space: pre-wrap; text-align: left; }
+.m-table th, .m-table td { border: 1px solid var(--border); padding: 1px 8px; vertical-align: top; }
+.m-table th { font-weight: 700; }
+textarea.m-field { resize: vertical; vertical-align: top; }
 .m-link:hover { filter: brightness(1.25); }
 .m-divider { white-space: nowrap; overflow: hidden; }
 .m-image img { max-width: 100%; border-radius: 4px; }

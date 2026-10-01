@@ -685,7 +685,8 @@ impl App {
             // Paste into the selected page field by opening its editor.
             let page = self.browser.page.as_ref().expect("field implies a page");
             let current = &page.fields[field];
-            let mut input = TextInput::with_text(&current.value);
+            let editing = if current.rows > 1 { browser::field_to_line(&current.value) } else { current.value.clone() };
+            let mut input = TextInput::with_text(&editing);
             input.insert_str(text);
             self.prompt = Some(Prompt {
                 kind: PromptKind::EditField(field),
@@ -823,7 +824,11 @@ impl App {
                 if let Some(page) = &mut self.browser.page
                     && let Some(field) = page.fields.get_mut(f)
                 {
-                    field.value = prompt.input.text().to_string();
+                    field.value = if field.rows > 1 {
+                        browser::field_from_line(prompt.input.text())
+                    } else {
+                        prompt.input.text().to_string()
+                    };
                 }
             }
             PromptKind::ReadPaper if !text.is_empty() => {
@@ -1083,6 +1088,7 @@ impl App {
     /// Periodic work (called about twice a second).
     pub fn on_tick(&mut self) {
         self.channels_tick();
+        self.refresh_partials();
         for report in self.saver.reports() {
             match report {
                 saver::Report::Failed(e) => self.fail(e),

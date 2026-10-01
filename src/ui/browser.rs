@@ -113,8 +113,16 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     );
     let height = page_area.height as usize;
     let max_scroll = layout.lines.len().saturating_sub(height);
+    // An anchor jumped to: its row at the top (a folded one's heading).
+    if let Some(line) = app.browser.jump_to.take() {
+        let row = layout.line_rows.iter().take(line + 1).rev().find_map(|row| *row);
+        if let Some(row) = row {
+            app.browser.scroll = row;
+        }
+    }
     app.browser.scroll = app.browser.scroll.min(max_scroll);
     app.browser.item_rows = layout.item_rows;
+    app.browser.line_rows = layout.line_rows;
     app.regions.page_hits = layout.hits;
     // Plain text of every row as drawn (alignment applied), for copying.
     let width = page_area.width as usize;

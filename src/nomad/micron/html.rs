@@ -9,7 +9,7 @@ use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::source::{Token, tokenize, visible};
-use super::{FieldKind, Interactive, MLine, Page};
+use super::{FieldKind, Interactive, MLine, MSpan, Page, Table};
 
 /// Divider lines repeat their character; CSS clips the excess. Enough for
 /// the widest panes: about 9,700 px at the page's font size, wider than a
@@ -107,38 +107,61 @@ fn align_css(align: Alignment) -> &'static str {
 
 impl Page {
     /// The page as HTML. `link` turns a link's URL into the target the web UI
-    /// follows (an absolute NomadNet address, `lxmf@…` or `rrc://…`); `media`
-    /// turns an inline image's URL into its `src`, or `None` to show its alt
-    /// text.
+    /// follows (an absolute NomadNet address, `lxmf@…` or `rrc://…`; `#name`
+    /// jumps to an anchor and `p:id` reloads partials); `media` turns an
+    /// inline image's URL into its `src`, or `None` to show its alt text.
+    ///
+    /// Anchors are empty `m-anchor` spans (`data-anchor`), a collapsible
+    /// heading is an `m-fold-head` (`data-fold`) followed by the `m-fold`
+    /// holding its section, and a partial is an `m-partial` with its
+    /// request in `data-url`, `data-fields`, `data-refresh` and `data-pid`
+    /// for the script to load.
     pub fn to_html(&self, link: impl Fn(&str) -> String, media: impl Fn(&str) -> Option<String>) -> String {
         let mut out = format!("<div class=\"micron\" style=\"{}\">", css(self.base_style));
-        for line in &self.lines {
+        // Open sections that fold: their heading's level.
+        let mut folds: Vec<usize> = Vec::new();
+        for (index, line) in self.lines.iter().enumerate() {
+            if let MLine::Text { section: Some(section), .. } = line {
+                while folds.last().is_some_and(|level| section.level <= *level) {
+                    folds.pop();
+                    out.push_str("</div>");
+                }
+            }
+            if let MLine::SectionEnd = line {
+                for _ in folds.drain(..) {
+                    out.push_str("</div>");
+                }
+            }
+            for (name, _) in self.anchors.iter().filter(|(_, at)| *at == index) {
+                out.push_str(&format!("<span class=\"m-anchor\" data-anchor=\"{}\"></span>", escape(name)));
+            }
             match line {
                 MLine::Text {
                     indent,
                     align,
                     fill,
                     spans,
+                    section,
                 } => {
                     let fill = fill.map(css).unwrap_or_default();
+                    let fold = section.and_then(|s| s.fold);
+                    let class = match (section, fold) {
+                        (_, Some(_)) => "m-line m-heading m-fold-head",
+                        (Some(_), None) => "m-line m-heading",
+                        _ => "m-line",
+                    };
+                    let data = fold.map(|f| format!(" data-fold=\"{f}\" data-open=\"{}\" data-closed=\"{}\"", escape(self.fold_mark(true)), escape(self.fold_mark(false)))).unwrap_or_default();
                     out.push_str(&format!(
-                        "<div class=\"m-line\" style=\"padding-left:{indent}ch;text-align:{};{fill}\">",
+                        "<div class=\"{class}\"{data} style=\"padding-left:{indent}ch;text-align:{};{fill}\">",
                         align_css(*align)
                     ));
-                    for span in spans {
-                        let style = css(span.style);
-                        match span.item.and_then(|i| self.items.get(i)) {
-                            Some(Interactive::Link { url, fields }) => out.push_str(&format!(
-                                "<a class=\"m-link\" data-url=\"{}\" data-fields=\"{}\" style=\"{style}\">{}</a>",
-                                escape(&link(url)),
-                                escape(&fields.join("|")),
-                                escape(&span.text),
-                            )),
-                            Some(Interactive::Field(f)) => out.push_str(&self.field_html(*f, &style)),
-                            None => out.push_str(&format!("<span style=\"{style}\">{}</span>", escape(&span.text))),
-                        }
-                    }
+                    out.push_str(&self.spans_html(spans, &link));
                     out.push_str("</div>");
+                    if let (Some(fold), Some(section)) = (fold, section) {
+                        let hidden = if self.folds[fold].open { "" } else { " hidden" };
+                        out.push_str(&format!("<div class=\"m-fold{hidden}\" data-fold=\"{fold}\">"));
+                        folds.push(section.level);
+                    }
                 }
                 MLine::Divider { indent, ch, style } => {
                     let rule: String = std::iter::repeat_n(*ch, DIVIDER_CHARS).collect();
@@ -174,9 +197,71 @@ impl Page {
                         )),
                     }
                 }
+                MLine::Table(table) => out.push_str(&self.table_html(table, &link)),
+                MLine::FieldBlock { indent, item, style } => {
+                    if let Interactive::Field(f) = self.items[*item] {
+                        out.push_str(&format!("<div class=\"m-line\" style=\"padding-left:{indent}ch\">{}</div>", self.field_html(f, &css(*style))));
+                    }
+                }
+                MLine::Partial { indent, index } => {
+                    let partial = &self.partials[*index];
+                    out.push_str(&format!(
+                        "<div class=\"m-partial\" style=\"padding-left:{indent}ch\" data-url=\"{}\" data-fields=\"{}\" data-refresh=\"{}\" data-pid=\"{}\"><span class=\"m-loading\">loading…</span></div>",
+                        escape(&link(&partial.url)),
+                        escape(&partial.fields.join("|")),
+                        partial.refresh.unwrap_or(0),
+                        escape(partial.pid.as_deref().unwrap_or_default()),
+                    ));
+                }
+                MLine::SectionEnd => {}
             }
         }
+        for _ in folds {
+            out.push_str("</div>");
+        }
         out.push_str("</div>");
+        out
+    }
+
+    /// A run of spans: text, links (inert, see [`Page::to_html`]), fields and
+    /// a fold's mark.
+    fn spans_html(&self, spans: &[MSpan], link: &impl Fn(&str) -> String) -> String {
+        let mut out = String::new();
+        for span in spans {
+            let style = css(span.style);
+            match span.item.and_then(|i| self.items.get(i)) {
+                Some(Interactive::Link { url, fields }) => out.push_str(&format!(
+                    "<a class=\"m-link\" data-url=\"{}\" data-fields=\"{}\" style=\"{style}\">{}</a>",
+                    escape(&link(url)),
+                    escape(&fields.join("|")),
+                    escape(&span.text),
+                )),
+                Some(Interactive::Field(f)) => out.push_str(&self.field_html(*f, &style)),
+                Some(Interactive::Fold(f)) if span.text.is_empty() => {
+                    out.push_str(&format!("<span class=\"m-fold-mark\">{} </span>", escape(self.fold_mark(self.folds[*f].open))));
+                }
+                _ => out.push_str(&format!("<span style=\"{style}\">{}</span>", escape(&span.text))),
+            }
+        }
+        out
+    }
+
+    fn table_html(&self, table: &Table, link: &impl Fn(&str) -> String) -> String {
+        let place = format!("padding-left:{}ch;text-align:{}", table.indent, align_css(table.align));
+        let size = table.max_width.map(|w| format!("max-width:{w}ch")).unwrap_or_default();
+        let mut out = format!("<div class=\"m-table-wrap\" style=\"{place}\"><table class=\"m-table\" style=\"{size}\">");
+        let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0).max(table.columns.len());
+        for (r, row) in table.rows.iter().enumerate() {
+            let cell = if table.header && r == 0 { "th" } else { "td" };
+            out.push_str("<tr>");
+            for c in 0..columns {
+                let align = align_css(table.columns.get(c).copied().unwrap_or(Alignment::Left));
+                let spans = row.get(c).map(Vec::as_slice).unwrap_or_default();
+                out.push_str(&format!("<{cell} style=\"text-align:{align}\">{}</{cell}>", self.spans_html(spans, link)));
+            }
+            out.push_str("</tr>");
+        }
+        out.push_str("</table></div>");
         out
     }
 
@@ -186,6 +271,10 @@ impl Page {
         let value = escape(&field.value);
         let checked = if field.checked { " checked" } else { "" };
         match field.kind {
+            FieldKind::Text { masked: false } if field.rows > 1 => format!(
+                "<textarea class=\"m-field\" name=\"{name}\" cols=\"{}\" rows=\"{}\" style=\"{style}\">{value}</textarea>",
+                field.width, field.rows,
+            ),
             FieldKind::Text { masked } => format!(
                 "<input class=\"m-field\" type=\"{}\" name=\"{name}\" size=\"{}\" value=\"{value}\" style=\"{style}\">",
                 if masked { "password" } else { "text" },

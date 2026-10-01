@@ -87,10 +87,40 @@ pub struct Browser {
     /// Text selected on the page with the mouse.
     pub selection: Option<Selection>,
     pub(super) dragging: bool,
+    /// The shown page's partials, by index: what loaded, and when.
+    pub partials: Vec<PartialState>,
+    /// In-flight partial requests: request id -> (partial, page address).
+    partial_requests: HashMap<u64, (usize, String)>,
+    /// The first row of each of the page's lines in the last layout.
+    pub line_rows: Vec<Option<usize>>,
+    /// A line to scroll to at the next layout (an anchor jumped to).
+    pub jump_to: Option<usize>,
+}
+
+/// A partial of the shown page.
+#[derive(Debug, Clone, Default)]
+pub struct PartialState {
+    /// Its content, once loaded (or why it couldn't be, as Micron).
+    pub content: Option<String>,
+    pub loading: bool,
+    pub loaded_at: Option<Instant>,
+}
+
+/// A multi-row field's text to edit on one line (line breaks as ↵), and
+/// back.
+pub fn field_to_line(value: &str) -> String {
+    value.replace('\n', " ↵ ")
+}
+
+pub fn field_from_line(text: &str) -> String {
+    text.replace(" ↵ ", "\n").replace('↵', "\n")
 }
 
 impl App {
     pub(super) fn on_fetched(&mut self, id: u64, result: Result<FetchedContent, String>) {
+        if let Some((index, page)) = self.browser.partial_requests.remove(&id) {
+            return self.on_partial(index, &page, result);
+        }
         if let Some((url, location, identified)) = self.browser.media_requests.remove(&id) {
             match result {
                 Ok(content) => {
@@ -141,6 +171,8 @@ impl App {
     fn show_page(&mut self, pending: Pending, data: &[u8], cached_age: Option<std::time::Duration>) {
         let source = String::from_utf8_lossy(data).into_owned();
         let page = micron::parse(&source);
+        // A link's `anchor=name`: where to jump once it shows.
+        self.browser.jump_to = micron::anchor_variable(&pending.location.fields).and_then(|name| page.anchor_line(name));
         // Reloading keeps the source view; another page shows the page.
         if self.browser.location.as_ref() != Some(&pending.location) {
             self.browser.view_source = false;
@@ -164,6 +196,91 @@ impl App {
         self.browser.error = None;
         for url in image_urls {
             self.request_image(url, pending.refresh);
+        }
+        self.browser.partial_requests.clear();
+        let count = self.browser.page.as_ref().map_or(0, |p| p.partials.len());
+        self.browser.partials = vec![PartialState::default(); count];
+        for index in 0..count {
+            self.request_partial(index);
+        }
+    }
+
+    /// Load (or reload) one of the shown page's partials, with the fields
+    /// and variables it asks for. Partials always come from the network.
+    fn request_partial(&mut self, index: usize) {
+        let (Some(page), Some(current)) = (&self.browser.page, &self.browser.location) else { return };
+        let Some(partial) = page.partials.get(index) else { return };
+        let Some(mut location) = self.resolve(&partial.url) else {
+            let why = format!("`Ff66This part of the page has an address rettui can't read: {}`f", partial.url.replace('`', "'"));
+            self.browser.partials[index].content = Some(why);
+            return;
+        };
+        location.fields = page.request_fields(&partial.fields);
+        let page_url = current.url();
+        self.browser.partials[index].loading = true;
+        let id = self.request_id();
+        self.browser.partial_requests.insert(id, (index, page_url));
+        if self.is_own_node(location.node) {
+            let result = self.own_node_content(&location.path);
+            return self.on_fetched(id, result);
+        }
+        let identify = self.identifies_to(location.node);
+        self.send(NetCommand::Fetch { id, node: location.node, path: location.path, fields: location.fields, identify });
+    }
+
+    /// A partial loaded (or not): the page is read again with it in place,
+    /// keeping what was typed and folded.
+    fn on_partial(&mut self, index: usize, page_url: &str, result: Result<FetchedContent, String>) {
+        if self.browser.location.as_ref().map(Location::url).as_deref() != Some(page_url) || index >= self.browser.partials.len() {
+            return;
+        }
+        let content = match result {
+            Ok(content) => String::from_utf8_lossy(&content.data).into_owned(),
+            Err(e) => format!("`Ff66Could not load this part of the page: {}`f", e.replace('`', "'")),
+        };
+        let state = &mut self.browser.partials[index];
+        (state.content, state.loading, state.loaded_at) = (Some(content), false, Some(Instant::now()));
+        let (Some(source), Some(old)) = (&self.browser.source, &self.browser.page) else { return };
+        let contents: Vec<Option<String>> = self.browser.partials.iter().map(|p| p.content.clone()).collect();
+        let mut page = micron::parse_with(source, &contents);
+        page.keep_state(old);
+        let known: Vec<String> = old.image_urls();
+        let new_images: Vec<String> = page.image_urls().into_iter().filter(|u| !known.contains(u)).collect();
+        self.browser.selected = self.browser.selected.filter(|&s| s < page.items.len()).or((!page.items.is_empty()).then_some(0));
+        self.browser.page = Some(page);
+        for url in new_images {
+            self.request_image(url, false);
+        }
+    }
+
+    /// Reload the partials that ask to be, every so often, while the page
+    /// is on screen.
+    pub(super) fn refresh_partials(&mut self) {
+        if self.tab != Tab::Browser || self.browser.view_source {
+            return;
+        }
+        let Some(page) = &self.browser.page else { return };
+        let due: Vec<usize> = page
+            .partials
+            .iter()
+            .zip(&self.browser.partials)
+            .enumerate()
+            .filter(|(_, (partial, state))| {
+                !state.loading
+                    && partial.refresh.is_some_and(|every| state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        for index in due {
+            self.request_partial(index);
+        }
+    }
+
+    /// Scroll to `line` of the page (an anchor's) at the next layout.
+    fn jump_to_line(&mut self, line: Option<usize>, what: &str) {
+        match line {
+            Some(line) => self.browser.jump_to = Some(line),
+            None => self.warn(format!("There's no {what} on this page")),
         }
     }
 
@@ -303,6 +420,28 @@ impl App {
     }
 
     fn follow_link(&mut self, url: &str, spec: &[String]) {
+        // An anchor on this page (`#` alone: the next heading).
+        if let Some(name) = url.strip_prefix('#') {
+            let Some(page) = &self.browser.page else { return };
+            let line = if name.is_empty() {
+                self.browser.selected.and_then(|item| page.next_heading_line(item))
+            } else {
+                page.anchor_line(name)
+            };
+            let what = if name.is_empty() { "heading after this link".to_string() } else { format!("anchor #{name}") };
+            return self.jump_to_line(line, &what);
+        }
+        // Reload the partials with these ids.
+        if let Some(ids) = url.strip_prefix("p:") {
+            let due = self.browser.page.as_ref().map(|page| page.partials_with_ids(ids)).unwrap_or_default();
+            if due.is_empty() {
+                self.warn(format!("No part of this page has the id {ids}"));
+            }
+            for index in due {
+                self.request_partial(index);
+            }
+            return;
+        }
         if url.starts_with("rrc://") || url.starts_with("rrc@") {
             self.open_rrc_link(url);
             return;
@@ -337,15 +476,21 @@ impl App {
             Some(Interactive::Field(f)) => {
                 let field = &page.fields[f];
                 if let FieldKind::Text { .. } = field.kind {
+                    let (title, text) = if field.rows > 1 {
+                        (format!("Field: {} (↵ starts a new line)", field.name), field_to_line(&field.value))
+                    } else {
+                        (format!("Field: {}", field.name), field.value.clone())
+                    };
                     self.prompt = Some(Prompt {
                         kind: PromptKind::EditField(f),
-                        title: format!("Field: {}", field.name),
-                        input: TextInput::with_text(&field.value),
+                        title,
+                        input: TextInput::with_text(&text),
                     });
                 } else {
                     page.activate_choice(f);
                 }
             }
+            Some(Interactive::Fold(f)) => page.folds[f].open = !page.folds[f].open,
             None => {}
         }
     }
@@ -693,4 +838,75 @@ pub fn resolve_url(url: &str, current: Option<Hash>) -> Option<Location> {
         path,
         fields: BTreeMap::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+    use crate::config::Settings;
+    use crate::store::Store;
+
+    /// An app showing its own node's index page (read from its folder).
+    fn showing(name: &str, pages: &[(&str, &str)]) -> App {
+        let dir = std::env::temp_dir().join(format!("rettui-browser-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        let folder = app.paths.node.join("pages");
+        std::fs::create_dir_all(&folder).unwrap();
+        for (path, text) in pages {
+            std::fs::write(folder.join(path), text).unwrap();
+        }
+        let location = Location { node: app.node.hash, path: "/page/index.mu".into(), fields: BTreeMap::new() };
+        app.navigate(location);
+        app
+    }
+
+    #[test]
+    fn partials_load_and_reload_from_p_links() {
+        let mut app = showing("partials", &[
+            ("index.mu", "`{:/page/count.mu`0`pid=4|name}\n`[Again`p:4]\nName: `<name`Ann>"),
+            ("count.mu", "#!/bin/sh\nfirst"),
+        ]);
+        let page = app.browser.page.as_ref().unwrap();
+        let shown = |app: &App| {
+            let layout = app.browser.page.as_ref().unwrap().layout(40, None, &HashMap::new(), None);
+            layout.lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>()
+        };
+        assert_eq!(page.partials.len(), 1);
+        assert_eq!(shown(&app)[0], "first");
+        // What's typed stays when it reloads (from a `p:` link).
+        app.browser.page.as_mut().unwrap().fields[0].value = "Bo".into();
+        std::fs::write(app.paths.node.join("pages/count.mu"), "second").unwrap();
+        let link = app.browser.page.as_ref().unwrap().items.iter().position(|i| matches!(i, Interactive::Link { .. })).unwrap();
+        app.activate(link);
+        assert_eq!(shown(&app)[0], "second");
+        assert_eq!(app.browser.page.as_ref().unwrap().fields[0].value, "Bo");
+        let _ = std::fs::remove_dir_all(app.paths.node.parent().unwrap());
+    }
+
+    #[test]
+    fn anchors_and_folds_from_links_and_keys() {
+        let mut app = showing("anchors", &[(
+            "index.mu",
+            "`[Down`#end]\n`->Fold\nhidden\n<\na\nb\nc\n`:end\nlast\nName: `<5x2|notes`>",
+        )]);
+        app.activate(0);
+        assert_eq!(app.browser.jump_to, Some(app.browser.page.as_ref().unwrap().anchor_line("end").unwrap()));
+        // The fold opens with Enter on its heading.
+        assert!(!app.browser.page.as_ref().unwrap().folds[0].open);
+        app.browser.focus = BrowserFocus::Page;
+        app.browser.selected = Some(1);
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.browser.page.as_ref().unwrap().folds[0].open);
+        // A field of several rows is edited on one line, ↵ for new lines.
+        app.activate(2);
+        for c in "one ↵ two".chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.browser.page.as_ref().unwrap().fields[0].value, "one\ntwo");
+        let _ = std::fs::remove_dir_all(app.paths.node.parent().unwrap());
+    }
 }
