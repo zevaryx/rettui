@@ -419,7 +419,7 @@ mod tests {
         let from = |source: u8, n: u8| InboundMessage { id: Some([n; 32]), source: [source; 16], content: format!("hi {n}"), ..Default::default() };
         app.on_message(from(0xab, 1));
         assert!(!app.is_known(&alice), "never written to");
-        assert_eq!(app.card_actions(&alice)[3..6], [CardAction::Trust, CardAction::LeaveAsIs, CardAction::Block]);
+        assert_eq!(app.card_actions(&alice)[4..7], [CardAction::Trust, CardAction::LeaveAsIs, CardAction::Block]);
         while net.try_recv().is_ok() {}
         app.block_contact(&alice).unwrap();
         assert!(!app.store.conversations.contains_key(&alice));
