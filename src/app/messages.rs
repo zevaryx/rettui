@@ -843,9 +843,15 @@ impl App {
             Ok(qr) => qr.svg(),
             Err(e) => return self.warn(e.clone()),
         };
-        let who = self.active_conversation.as_deref().map_or("", |key| &key[..key.len().min(12)]);
+        let name = match view.kind {
+            super::QrKind::Paper => {
+                let who = self.active_conversation.as_deref().map_or("", |key| &key[..key.len().min(12)]);
+                format!("paper-message-{who}.svg")
+            }
+            super::QrKind::Address => "my-lxmf-address.svg".to_string(),
+        };
         let result = std::fs::create_dir_all(&self.paths.downloads).and_then(|()| {
-            let path = unique_path(&self.paths.downloads, &format!("paper-message-{who}.svg"));
+            let path = unique_path(&self.paths.downloads, &name);
             std::fs::write(&path, svg).map(|()| path)
         });
         match result {

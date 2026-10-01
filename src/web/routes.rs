@@ -582,16 +582,11 @@ struct AddressBody {
     address: String,
 }
 
+/// A conversation with an address, or an `lxma://` link (whose public key
+/// is remembered, so you can write before they announce).
 async fn new_conversation(State(state): State<WebState>, axum::Json(body): axum::Json<AddressBody>) -> ApiResult {
-    let key = address(&body.address)?;
-    let reply = key.clone();
-    state
-        .write(move |o| {
-            o.app.store.conversations.entry(key).or_default();
-            o.app.store_dirty = true;
-        })
-        .await?;
-    Ok(axum::Json(json!({ "key": reply })))
+    let key = state.write(move |o| o.app.add_contact(&body.address)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "key": key })))
 }
 
 #[derive(Deserialize)]
@@ -799,6 +794,11 @@ async fn scan_paper(State(state): State<WebState>, axum::Json(body): axum::Json<
 }
 
 async fn read_paper_link(state: &WebState, link: String) -> ApiResult {
+    // A contact's link (or its QR code) is taken here too.
+    if link.trim().starts_with("lxma://") {
+        let key = state.write(move |o| o.app.add_contact(&link)).await?.map_err(bad)?;
+        return Ok(axum::Json(json!({ "key": key, "known": false, "contact": true })));
+    }
     let own = state.read(|o| o.app.lxmf_hash).await?.ok_or_else(|| bad("Reticulum is still starting"))?;
     let data = crate::lxmf::paper::open(&state.identity, own, &link).map_err(bad)?;
     let message = lxmf_core::message_api::LxMessage::unpack(&data).map_err(|_| bad("Not a message rettui can read"))?;

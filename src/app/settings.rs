@@ -200,6 +200,7 @@ impl App {
                 let address = self.lxmf_hash.map(hex::encode).unwrap_or_default();
                 self.copy(&address, "your LXMF address");
             }
+            KeyCode::Char('c') => self.show_address_qr(),
             _ => {}
         }
     }

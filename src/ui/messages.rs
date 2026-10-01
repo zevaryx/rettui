@@ -12,7 +12,7 @@ use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use super::{ACCENT, DIM, PICKED, SELECTED_BG, block, human_bytes, time_label, wrap};
-use crate::app::{App, HistoryHit};
+use crate::app::{App, HistoryHit, QrKind};
 use crate::lxmf::DeliveryMode;
 use crate::store::{Message, MessageState, Reaction};
 use crate::term::images::{Placement, draw_placements};
@@ -439,17 +439,18 @@ pub(super) fn draw_paper(frame: &mut Frame, app: &App) {
         height: height.min(area.height),
     };
     frame.render_widget(Clear, rect);
-    let paper_block = block("Paper message", true)
+    let (title, caption) = match view.kind {
+        QrKind::Paper => ("Paper message", "Scan it into the recipient's app (Sideband, rettui…)"),
+        QrKind::Address => ("Your address", "Scan it in Columba or rettui to add you as a contact"),
+    };
+    let paper_block = block(title, true)
         .title_bottom(Line::styled(" y copy link · s save image · Esc close ", Style::default().fg(DIM)));
     let inner = paper_block.inner(rect);
     frame.render_widget(paper_block, rect);
     match &view.qr {
         Ok(qr) if fits => {
-            let caption = Rect { height: 1, ..inner };
-            frame.render_widget(
-                Paragraph::new("Scan it into the recipient's app (Sideband, rettui…)").style(Style::default().fg(DIM)),
-                caption,
-            );
+            let caption_area = Rect { height: 1, ..inner };
+            frame.render_widget(Paragraph::new(caption).style(Style::default().fg(DIM)), caption_area);
             let code = Rect { x: inner.x, y: inner.y + 1, width: cols, height: rows };
             draw_qr(qr, code, frame.buffer_mut());
         }

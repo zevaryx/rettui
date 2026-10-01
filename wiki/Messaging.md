@@ -77,6 +77,16 @@ everywhere else), and notes for you alone.
   editing), `y` copies their address, `X` deletes the conversation, and
   `Esc` closes the card. Its buttons can be clicked too.
 - **In the web UI:** the **Contact** button above the conversation.
+- **Sharing your address:** `c` in the Status tab (TUI), or **QR code** next
+  to your address (web UI), shows it as a QR code: an `lxma://` link with
+  your address and public key, the way Columba shares contacts. Someone who
+  scans it can write to you before hearing your announce. `rettui address
+  --link` prints the link.
+- **Adding someone from theirs:** paste their `lxma://` link where you'd type
+  an address (`n` in the TUI, **+ New** in the web UI), or read its QR code
+  like a [paper message](#paper-messages) (a picture of it, or the camera in
+  the web UI). rettui checks the key belongs to the address, keeps it, and
+  opens the conversation.
 
 ## Blocking and spam
 

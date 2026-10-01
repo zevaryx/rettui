@@ -101,8 +101,8 @@ pub fn read(runtime: &ReticulumHandle, known: &Known, identity: &Identity, lxmf_
 /// them: a photo is far bigger than one needs, and slower.
 const SCAN_MAX_PIXELS: u32 = 2000;
 
-/// The paper message in a picture of its QR code (a photo, a screenshot):
-/// its link.
+/// The paper message (or contact) in a picture of its QR code (a photo, a
+/// screenshot): its `lxm://` (or `lxma://`) link.
 pub fn scan(picture: &[u8]) -> Result<String, String> {
     let picture = image::load_from_memory(picture)
         .map_err(|_| "Not a picture rettui can read (PNG, JPEG, WebP, GIF or BMP)".to_string())?;
@@ -115,10 +115,10 @@ pub fn scan(picture: &[u8]) -> Result<String, String> {
     let (width, height) = (grey.width() as usize, grey.height() as usize);
     let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(width, height, |x, y| grey.get_pixel(x as u32, y as u32)[0]);
     let texts: Vec<String> = prepared.detect_grids().iter().filter_map(|grid| grid.decode().ok()).map(|(_, text)| text).collect();
-    match texts.iter().find(|text| text.starts_with("lxm://")) {
+    match texts.iter().find(|text| text.starts_with("lxm://") || text.starts_with("lxma://")) {
         Some(link) => Ok(link.clone()),
         None if texts.is_empty() => Err("No QR code found in the picture: try a sharper, closer one".into()),
-        None => Err("That QR code isn't a paper message (an lxm:// link)".into()),
+        None => Err("That QR code isn't a paper message or a contact (an lxm:// or lxma:// link)".into()),
     }
 }
 

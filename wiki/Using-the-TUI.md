@@ -23,7 +23,7 @@ narrower than 110 columns get a sidebar of icons and narrower side lists, so
 | Browser, page | `Tab`/`Shift-Tab` move between links and fields, `Enter` follow a link or edit a field, `L` copy the selected link, `Y` copy the whole page (the raw source when viewing source), `Ctrl-V` paste into the selected field, `Esc` clear the selection or leave the source view, `↑↓` / `PgUp`/`PgDn` scroll |
 | Node | `Enter` edit the selected page, `n` new page, `r` rename, `x` delete, `h` start or stop hosting, `a` announce the node, `b` open it in the Browser, `y` copy its address, `p` switch view (editor and preview, editor only, preview only) |
 | Editing a page | `Ctrl-S` save (live on the node), `Esc` back to the pages, `Alt` + the underlined letter formats (see the ribbon), `Shift`+arrows select, `Ctrl-A` select all, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-P` switch view, `Ctrl-V` paste; with the preview alone, `↑↓` / `PgUp` / `PgDn` scroll it |
-| Status | `↑↓` select a setting, `Enter` edit it (or toggle), `e` edit display name, `y` copy your LXMF address, `Ctrl-R` restart Reticulum |
+| Status | `↑↓` select a setting, `Enter` edit it (or toggle), `e` edit display name, `y` copy your LXMF address, `c` show it as a QR code, `Ctrl-R` restart Reticulum |
 | Reticulum | `Tab` sections / options, `↑↓` select, `Enter` edit (toggles flip, choices open a list), `d` back to the default, `a` add an interface, `Space` enable or disable it, `r` rename, `x` delete, `t` edit the file as text, `R` reload the file, `Ctrl-R` restart Reticulum |
 | Reticulum as text | `Ctrl-S` save (refused while the file can't load), `Esc` close, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-V` paste |
 
