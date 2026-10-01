@@ -103,7 +103,7 @@ pub fn guide(app: &App) -> Value {
             "intro": guide::INTRO, "name": guide::NAME_HELP, "connect": guide::CONNECT_HELP,
             "discover": guide::DISCOVER_HELP, "auto_propagation": guide::AUTO_PROPAGATION_HELP, "apply": guide::APPLY_HELP,
         },
-        "links": guide::LINKS.iter().map(|(title, url)| json!({ "title": title, "url": url })).collect::<Vec<_>>(),
+        "links": guide::LINKS.iter().map(|(title, url, note)| json!({ "title": title, "url": url, "note": note })).collect::<Vec<_>>(),
     })
 }
 

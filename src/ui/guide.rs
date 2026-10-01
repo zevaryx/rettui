@@ -19,6 +19,22 @@ fn check(on: bool) -> &'static str {
     if on { "[x]" } else { "[ ]" }
 }
 
+/// What a row does, shown under the guide when it's picked.
+fn help(row: Option<GuideRow>) -> String {
+    match row {
+        Some(GuideRow::Name) => guide::NAME_HELP.to_string(),
+        Some(GuideRow::Connect) => guide::CONNECT_HELP.to_string(),
+        Some(GuideRow::Discover) => guide::DISCOVER_HELP.to_string(),
+        Some(GuideRow::AutoPropagation) => guide::AUTO_PROPAGATION_HELP.to_string(),
+        Some(GuideRow::Link(i)) => match LINKS[i] {
+            (_, url, Some(note)) => format!("{note} {url} · Enter opens it, y copies it"),
+            (_, url, None) => format!("{url} · Enter opens it, y copies it"),
+        },
+        Some(GuideRow::Apply) => guide::APPLY_HELP.to_string(),
+        Some(GuideRow::Later) | None => guide::LATER_HELP.to_string(),
+    }
+}
+
 pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     app.regions.guide_rows.clear();
     let Some(state) = app.guide.clone() else { return };
@@ -30,7 +46,7 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     let selected = rows.get(state.row).copied();
     let choices = &state.choices;
 
-    let mut lines: Vec<Line<'static>> = wrap(guide::INTRO, inner_width).into_iter().map(|l| Line::styled(l, Style::default().fg(DIM))).collect();
+    let intro: Vec<Line<'static>> = wrap(guide::INTRO, inner_width).into_iter().map(|l| Line::styled(l, Style::default().fg(DIM))).collect();
     let status = match (view.interfaces_online, view.heard) {
         (0, _) => Line::styled("○ Not connected to anyone yet", Style::default().fg(Color::Yellow)),
         (n, 0) => Line::styled(format!("◌ {n} interface{} online, nobody heard yet", if n == 1 { "" } else { "s" }), Style::default().fg(Color::Yellow)),
@@ -39,20 +55,19 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
             Style::default().fg(Color::Green),
         ),
     };
-    lines.push(status);
-    lines.push(Line::default());
 
-    // Rows that can be picked: their line, and where it is.
+    // The choices and links, and which line each row is on.
+    let mut body: Vec<Line<'static>> = Vec::new();
     let mut placed: Vec<(usize, GuideRow)> = Vec::new();
-    let mut row_line = |lines: &mut Vec<Line<'static>>, row: GuideRow, spans: Vec<Span<'static>>| {
+    let mut row_line = |body: &mut Vec<Line<'static>>, row: GuideRow, spans: Vec<Span<'static>>| {
         let style = if Some(row) == selected { Style::default().bg(super::SELECTED_BG).add_modifier(Modifier::BOLD) } else { Style::default() };
-        placed.push((lines.len(), row));
-        lines.push(Line::from(spans).style(style));
+        placed.push((body.len(), row));
+        body.push(Line::from(spans).style(style));
     };
-    row_line(&mut lines, GuideRow::Name, vec![Span::styled("Your name   ", Style::default().fg(DIM)), Span::raw(choices.name.clone())]);
+    row_line(&mut body, GuideRow::Name, vec![Span::styled("Your name   ", Style::default().fg(DIM)), Span::raw(choices.name.clone())]);
     if view.external {
         for line in wrap(&format!("{}: add entry points in that program's Reticulum config.", crate::reticulum::EXTERNAL_NOTE), inner_width) {
-            lines.push(Line::styled(line, Style::default().fg(DIM)));
+            body.push(Line::styled(line, Style::default().fg(DIM)));
         }
     } else {
         let connect = if view.has_entry_point {
@@ -60,42 +75,64 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         } else {
             format!("{} Connect through RMAP World ({}:{}), a community entry point", check(choices.connect), guide::ENTRY_HOST, guide::ENTRY_PORT)
         };
-        row_line(&mut lines, GuideRow::Connect, vec![Span::raw(connect)]);
+        row_line(&mut body, GuideRow::Connect, vec![Span::raw(connect)]);
         let discover = if view.has_discovery {
             "[x] Find entry points near you over time (on already)".to_string()
         } else {
             format!("{} Also find entry points near you over time (interface discovery)", check(choices.discover))
         };
-        row_line(&mut lines, GuideRow::Discover, vec![Span::raw(discover)]);
+        row_line(&mut body, GuideRow::Discover, vec![Span::raw(discover)]);
     }
-    row_line(&mut lines, GuideRow::AutoPropagation, vec![Span::raw(format!("{} Pick a propagation node automatically", check(choices.auto_propagation)))]);
-    lines.push(Line::styled("Learn more", Style::default().fg(DIM)));
-    for (i, (title, _)) in LINKS.iter().enumerate() {
-        row_line(&mut lines, GuideRow::Link(i), vec![Span::raw("↗ "), Span::styled(*title, Style::default().add_modifier(Modifier::UNDERLINED))]);
+    row_line(&mut body, GuideRow::AutoPropagation, vec![Span::raw(format!("{} Pick a propagation node automatically", check(choices.auto_propagation)))]);
+    body.push(Line::styled("Learn more", Style::default().fg(DIM)));
+    for (i, (title, ..)) in LINKS.iter().enumerate() {
+        row_line(&mut body, GuideRow::Link(i), vec![Span::raw("↗ "), Span::styled(*title, Style::default().add_modifier(Modifier::UNDERLINED))]);
     }
-    lines.push(Line::default());
+
     // The two buttons share a line.
-    let buttons_at = lines.len();
     let button = |label: &str, row: GuideRow| {
         let style = if Some(row) == selected { PICKED } else { Style::default().fg(Color::Black).bg(DIM) };
         Span::styled(format!(" {label} "), style)
     };
     let (apply, later) = (" Apply ", " Not now ");
-    lines.push(Line::from(vec![button(apply.trim(), GuideRow::Apply), Span::raw("  "), button(later.trim(), GuideRow::Later)]));
-    // What the chosen row does.
-    let help = match selected {
-        Some(GuideRow::Name) => guide::NAME_HELP.to_string(),
-        Some(GuideRow::Connect) => guide::CONNECT_HELP.to_string(),
-        Some(GuideRow::Discover) => guide::DISCOVER_HELP.to_string(),
-        Some(GuideRow::AutoPropagation) => guide::AUTO_PROPAGATION_HELP.to_string(),
-        Some(GuideRow::Link(i)) => format!("{} · Enter opens it, y copies it", LINKS[i].1),
-        Some(GuideRow::Apply) => guide::APPLY_HELP.to_string(),
-        Some(GuideRow::Later) | None => guide::LATER_HELP.to_string(),
+    let buttons = Line::from(vec![button(apply.trim(), GuideRow::Apply), Span::raw("  "), button(later.trim(), GuideRow::Later)]);
+
+    // What the chosen row does, with room for the longest so the guide
+    // keeps its size moving between rows.
+    let help_lines = wrap(&help(selected), inner_width);
+    let help_room = rows.iter().map(|row| wrap(&help(Some(*row)), inner_width).len()).max().unwrap_or(0).max(help_lines.len());
+
+    // On a short screen, the intro and then the blank lines between parts
+    // are left out before anything is cut off.
+    let mut spare = (area.height.saturating_sub(2) as usize).saturating_sub(1 + body.len() + 1 + help_room);
+    let mut fits = |lines: usize| {
+        let fits = spare >= lines;
+        if fits {
+            spare -= lines;
+        }
+        fits
     };
-    lines.push(Line::default());
-    for line in wrap(&help, inner_width) {
-        lines.push(Line::styled(line, Style::default().fg(DIM).add_modifier(Modifier::ITALIC)));
+    let show_intro = fits(intro.len());
+    let (gap_before_help, gap_before_buttons, gap_after_status) = (fits(1), fits(1), fits(1));
+
+    let mut lines = if show_intro { intro } else { Vec::new() };
+    lines.push(status);
+    if gap_after_status {
+        lines.push(Line::default());
     }
+    let body_at = lines.len();
+    lines.extend(body);
+    if gap_before_buttons {
+        lines.push(Line::default());
+    }
+    let buttons_at = lines.len();
+    lines.push(buttons);
+    if gap_before_help {
+        lines.push(Line::default());
+    }
+    let help_at = lines.len();
+    lines.extend(help_lines.into_iter().map(|line| Line::styled(line, Style::default().fg(DIM).add_modifier(Modifier::ITALIC))));
+    lines.resize(help_at + help_room, Line::default());
 
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect = Rect {
@@ -110,8 +147,8 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(lines).block(guide_block), rect);
     let at = |line: usize| inner.y + line as u16;
     for (line, row) in placed {
-        if at(line) < inner.bottom() {
-            app.regions.guide_rows.push((Rect::new(inner.x, at(line), inner.width, 1), row));
+        if at(body_at + line) < inner.bottom() {
+            app.regions.guide_rows.push((Rect::new(inner.x, at(body_at + line), inner.width, 1), row));
         }
     }
     if at(buttons_at) < inner.bottom() {
@@ -138,12 +175,33 @@ mod tests {
         let settings = Settings { welcomed: false, rns_config: Some(dir.join("rns").display().to_string()), ..Settings::default() };
         let mut app = crate::app::test_app(&dir, settings, Store::default());
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
-        let buffer = terminal.backend().buffer();
-        let screen: String = (0..24).map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect();
-        assert!(screen.contains("Getting started") && screen.contains("Not connected to anyone yet"), "{screen}");
-        assert!(screen.contains("[x] Connect through RMAP World") && screen.contains("Using rettui"), "{screen}");
+        let mut draw = |app: &mut crate::app::App| {
+            terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..24).map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect::<String>()
+        };
+        let apply_at = |app: &crate::app::App| app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Apply).unwrap().0;
+        let screen = draw(&mut app);
+        assert!(screen.contains("Getting started") && screen.contains("Reticulum reaches others") && screen.contains("Not connected to anyone yet"), "{screen}");
+        assert!(screen.contains("[x] Connect through RMAP World") && screen.contains("Using a LoRa radio (RNode)") && screen.contains("Using rettui"), "{screen}");
         assert!(screen.contains("Apply") && screen.contains("Not now") && screen.contains("The name sent"), "{screen}");
+        let first = apply_at(&app);
+        // The longest help is shown whole, and the guide keeps its size.
+        let rows = crate::app::guide::Guide::rows(&app.guide_view());
+        for (index, row) in rows.iter().enumerate() {
+            app.guide.as_mut().unwrap().row = index;
+            let screen = draw(&mut app);
+            assert_eq!(apply_at(&app), first, "{row:?}");
+            match row {
+                GuideRow::AutoPropagation => assert!(screen.contains("read them."), "{screen}"),
+                GuideRow::Link(i) if crate::app::guide::LINKS[*i].2.is_some() => {
+                    assert!(screen.contains("wiki/RNode-Radios") && screen.contains("copies it"), "{screen}")
+                }
+                _ => {}
+            }
+        }
+        app.guide.as_mut().unwrap().row = 0;
+        draw(&mut app);
         // A click on the discovery row ticks it.
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Discover).unwrap();
         app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
