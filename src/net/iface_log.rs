@@ -108,11 +108,50 @@ impl<S: Subscriber> Layer<S> for InterfaceLog {
             recent.retain(|_, (when, _)| now.duration_since(*when) < REPEAT_WINDOW);
         }
         drop(state);
-        let line = match repeats {
+        let hint = hint(&line);
+        let mut line = match repeats {
             0 => line,
             n => format!("{line} (and {n} more time(s) since it was last logged)"),
         };
+        if let Some(hint) = hint {
+            line = format!("{line}. {hint}");
+        }
         let _ = sink.send(NetEvent::Log(line));
+    }
+}
+
+/// What to do about common trouble, in plain words: the libraries' errors
+/// name the symptom ("Connection refused (os error 111)"), not the cause.
+/// The wording differs by system, so each is matched in its Linux, macOS
+/// and Windows forms.
+pub fn hint(line: &str) -> Option<&'static str> {
+    let line = line.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|word| line.contains(word));
+    let device = has(&["serial", "rnode", "kiss", "tty"]);
+    if has(&["max reconnect tries reached"]) {
+        Some("It has stopped trying: restart Reticulum to try again")
+    } else if has(&["failed to lookup address", "name or service not known", "temporary failure in name resolution", "nodename nor servname", "no such host is known"]) {
+        Some("The host name couldn't be looked up: check this computer's internet connection and the interface's host name")
+    } else if has(&["network is unreachable", "no route to host", "network unreachable"]) {
+        Some("This computer has no route there: check its internet connection")
+    } else if has(&["i2p", "sam "]) && has(&["refused"]) {
+        Some("No I2P router is answering: I2P interfaces need one running (i2pd, or I2P with its SAM bridge on)")
+    } else if has(&["connection refused", "actively refused"]) {
+        Some("Nothing accepted the connection: the host may be down, or the port is wrong. Another entry point, or interface discovery, can stand in")
+    } else if has(&["timed out", "timeout"]) {
+        Some("No answer: the host may be down, or a firewall is in the way")
+    } else if has(&["address already in use", "address in use", "only one usage of each socket address"]) {
+        Some("Another program already uses that port, such as another Reticulum (rnsd) or a second rettui: stop it, or pick another port")
+    } else if has(&["device or resource busy", "resource busy"]) {
+        Some("Another program has the device open (rnsd, rnodeconf, or a second rettui): close it first")
+    } else if device && has(&["no such file or directory", "no such device", "cannot find the file", "not found"]) {
+        Some("The device isn't there: check the radio is plugged in and the interface's port (such as /dev/ttyUSB0 or /dev/ttyACM0, or COM3 on Windows)")
+    } else if device && has(&["permission denied", "access is denied"]) {
+        Some("Not allowed to open the device: on Linux, add yourself to the group that owns it (often dialout) and log in again")
+    } else if has(&["permission denied", "access is denied"]) {
+        Some("Not allowed: listening on a port below 1024 needs administrator rights, so pick a higher one")
+    } else {
+        None
     }
 }
 
@@ -215,10 +254,39 @@ mod tests {
         })
         .collect();
         assert_eq!(lines, [
-            "Interface Testnet: TCP connect failed: Connection refused (os error 111)",
+            "Interface Testnet: TCP connect failed: Connection refused (os error 111). Nothing accepted the connection: the host may be down, or the port is wrong. Another entry point, or interface discovery, can stand in",
             "Interface TCPInterface[Testnet]: TCP read error: reset",
             "Interface: TCP write error: broken pipe",
             "Interface: Failed to spawn interface: no such device",
         ]);
+    }
+
+    #[test]
+    fn common_trouble_gets_a_plain_hint() {
+        // As rettui logged them with broken interfaces, and the same on
+        // other systems.
+        let cases = [
+            ("Interface Bad DNS: TCP connect failed: failed to lookup address information: Name or service not known", "looked up"),
+            ("Interface Bad DNS: TCP connect failed: failed to lookup address information: nodename nor servname provided, or not known", "looked up"),
+            ("Interface Bad DNS: TCP connect failed: No such host is known. (os error 11001)", "looked up"),
+            ("Interface Refused: TCP connect failed: Connection refused (os error 111)", "Nothing accepted"),
+            ("Interface Refused: TCP connect failed: No connection could be made because the target machine actively refused it. (os error 10061)", "Nothing accepted"),
+            ("Interface Blackhole: TCP connect timed out", "No answer"),
+            ("Interface No I2P: I2P client: failed to connect to SAM bridge: SAM I/O error: Connection refused (os error 111)", "I2P router"),
+            ("Interface: Failed to spawn interface: TCP server: I/O error: Address already in use (os error 98)", "already uses that port"),
+            ("Interface: Failed to spawn interface: RNode: send failed: rnode serial open: No such file or directory", "plugged in"),
+            ("Interface: Failed to spawn interface: Serial: send failed: serial open: Permission denied (os error 13)", "dialout"),
+            ("Interface: Failed to spawn interface: RNode: send failed: rnode serial open: Device or resource busy", "close it first"),
+            ("Interface: Failed to spawn interface: TCP server: I/O error: Permission denied (os error 13)", "below 1024"),
+            ("Interface Testnet: Max reconnect tries reached", "restart Reticulum"),
+            ("Interface Down: Network is unreachable (os error 101)", "no route"),
+        ];
+        for (line, expected) in cases {
+            let hint = hint(line).unwrap_or_else(|| panic!("no hint for {line}"));
+            assert!(hint.contains(expected), "{line} → {hint}");
+        }
+        assert_eq!(hint("Interface TCPInterface[Testnet]: TCP read error: reset"), None);
+        // A pipe interface's missing program isn't a missing radio.
+        assert_eq!(hint("Interface: Failed to spawn interface: Pipe: spawn command: No such file or directory"), None);
     }
 }

@@ -323,7 +323,11 @@ async fn run(
     // turned on.
     runtime.enable_on_network_discovery(Arc::new(lxmf_core::discovery_stamper::LxmfDiscoveryStamper::default())).await;
     for (name, reason) in runtime.startup_interface_failures() {
-        let _ = ev.send(NetEvent::Log(format!("Interface {name} failed: {reason}")));
+        let mut line = format!("Interface {name} failed: {reason}");
+        if let Some(hint) = iface_log::hint(&line) {
+            line = format!("{line}. {hint}");
+        }
+        let _ = ev.send(NetEvent::Log(line));
     }
 
     let identity = options.identity;

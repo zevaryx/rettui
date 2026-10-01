@@ -43,6 +43,8 @@ async fn wait_started(events: &mut UnboundedReceiver<NetEvent>) -> Result<Hash> 
         match event {
             NetEvent::Started { lxmf_hash, .. } => return Ok(lxmf_hash),
             NetEvent::StartFailed(e) => bail!(e),
+            // Interfaces that fail to start say so before Reticulum is up.
+            NetEvent::Log(line) => eprintln!("{line}"),
             _ => {}
         }
     }
