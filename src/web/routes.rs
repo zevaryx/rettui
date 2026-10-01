@@ -119,6 +119,8 @@ pub fn router(state: WebState) -> Router {
         .route("/reticulum/text", post(reticulum_text))
         .route("/reticulum/check", post(reticulum_check))
         .route("/reticulum/restart", post(reticulum_restart))
+        .route("/emoji", get(emoji_list))
+        .route("/emoji/recent", get(recent_emoji).post(pick_emoji))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
     Router::new()
         .route("/", get(index))
@@ -349,6 +351,48 @@ async fn script(headers: axum::http::HeaderMap) -> Response {
 
 async fn style(headers: axum::http::HeaderMap) -> Response {
     STYLE.serve(&headers)
+}
+
+/// The emoji pickers' list (see [`crate::emoji`]): each group's emoji as
+/// `[emoji, name, shortcodes]`. The same for a build, so a browser that has
+/// it gets "not modified".
+static EMOJI: std::sync::LazyLock<Asset> = std::sync::LazyLock::new(|| {
+    let groups: Vec<Value> = crate::emoji::groups()
+        .iter()
+        .map(|group| {
+            let emoji: Vec<Value> =
+                group.emoji.iter().map(|e| json!([e.as_str(), e.name(), e.shortcodes().collect::<Vec<_>>()])).collect();
+            json!({ "name": group.name, "icon": group.icon, "emoji": emoji })
+        })
+        .collect();
+    Asset::new("application/json", json!({ "groups": groups }).to_string())
+});
+
+async fn emoji_list(headers: axum::http::HeaderMap) -> Response {
+    EMOJI.serve(&headers)
+}
+
+/// The emoji picked lately, newest first (in both UIs).
+async fn recent_emoji(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| json!(o.app.store.recent_emoji)).await?))
+}
+
+#[derive(Deserialize)]
+struct PickedEmoji {
+    emoji: String,
+}
+
+/// An emoji was picked: it goes first among the recently used. Nothing a
+/// browser shows changes, so they aren't told to refresh.
+async fn pick_emoji(State(state): State<WebState>, body: axum::Json<PickedEmoji>) -> ApiResult {
+    let emoji = crate::emoji::get(&body.emoji).ok_or_else(|| bad("not an emoji"))?.as_str();
+    let recent = state
+        .read(move |o| {
+            o.app.remember_emoji(emoji);
+            json!(o.app.store.recent_emoji)
+        })
+        .await?;
+    Ok(axum::Json(recent))
 }
 
 /// Shows notifications for the page (phone browsers only let a service

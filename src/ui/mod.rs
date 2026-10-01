@@ -8,6 +8,7 @@ mod browser;
 mod channels;
 mod chrome;
 mod editor;
+mod emoji;
 mod messages;
 mod network;
 mod node;

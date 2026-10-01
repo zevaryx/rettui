@@ -242,6 +242,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.composing {
         frame.set_cursor_position(Position::new(inner.x + (cursor - offset) as u16, inner.y));
     }
+    super::emoji::draw_emoji(frame, app, inner, offset, history_area);
 }
 
 /// Paper modules: pure black and white from the 256-colour cube, which

@@ -76,3 +76,24 @@ Sideband and NomadNet can read what rettui writes, and rettui can read theirs.
     - *Scan (take a picture)*, or *From a picture*, works in every browser:
       take a photo or pick a picture, and rettui finds the code in it.
   - A message you've already read in is only reported, not added twice.
+
+## Emoji
+
+Both UIs have the same two ways to add an emoji to a message, and to what you
+write in a channel:
+
+- **The picker:** `Ctrl-E` (or the 🙂 button in the web UI) opens it, at the
+  emoji you used lately (both UIs share the list). Type to search by name or
+  shortcode, or go through the groups (`Tab` in the TUI, the tabs in the web
+  UI). `Enter` or a click puts the chosen one in, and in the web UI
+  Shift-click keeps the picker open for another.
+- **By name:** type `:` and the start of a name, such as `:dra`, and a list of
+  the emoji it could be opens above the box. `↑↓` choose, `Tab` or `Enter`
+  puts one in, and `Esc` closes the list. Typing the whole name, such as
+  `:dragon:`, turns it into 🐉 right away. Names are GitHub's shortcodes
+  (`:+1:`, `:tada:`); words of an emoji's Unicode name find it too.
+
+The emoji are Unicode's, up to Unicode 15.0 (2022): many systems still draw
+newer ones as boxes. In the web UI, `Ctrl-E` isn't used on a Mac or an
+iPhone, where it moves to the end of the line and `Ctrl-Cmd-Space` opens the
+system's own picker.

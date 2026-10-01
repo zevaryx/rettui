@@ -8,8 +8,8 @@ rettui keeps its data in `~/.local/share/rettui/`:
   of either UI (or by hand). Changes apply straight away, except the
   Reticulum config and "announce at start", which are used the next time
   rettui starts.
-- `store.json.gz`: conversations, saved pages, RRC hubs, and nodes you
-  identify to, as gzip-compressed JSON (read it with
+- `store.json.gz`: conversations, saved pages, RRC hubs, nodes you
+  identify to, and the emoji you used lately, as gzip-compressed JSON (read it with
   `zcat store.json.gz | jq`). Earlier versions kept it as plain `store.json`,
   about five times larger. The first launch after upgrading converts it,
   checks that the new file reads back the same, and only then removes the

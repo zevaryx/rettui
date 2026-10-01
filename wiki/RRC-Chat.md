@@ -40,6 +40,8 @@ tab.
   shows them. It's one setting for every room ("Show joins and leaves"
   under Status), and hiding them loses nothing: they come back when turned
   on again.
+- **Emoji:** `Ctrl-E` (or the 🙂 button) and `:name` work in the channel
+  input as they do for messages (see [Emoji](Messaging#emoji)).
 - **Mentions and unread:** `@yournick` mentions are highlighted (just the
   mention, not the whole message). Unread counts show on each room and in the
   sidebar, and mentions stand out from ordinary unread messages.

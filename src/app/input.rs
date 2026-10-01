@@ -36,6 +36,13 @@ impl App {
             }
             return;
         }
+        if self.emoji.is_some() {
+            match key.code {
+                KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
+                _ => self.emoji_picker_key(key),
+            }
+            return;
+        }
         if let Some(mut prompt) = self.prompt.take() {
             if key.code == KeyCode::Char('v') && ctrl {
                 self.prompt = Some(prompt);
@@ -65,7 +72,7 @@ impl App {
             return;
         }
         if self.channels.typing && self.tab == Tab::Channels {
-            if self.mention_key(key) {
+            if self.shortcode_key(key) || self.mention_key(key) {
                 return;
             }
             match key.code {
@@ -74,9 +81,11 @@ impl App {
                 KeyCode::PageUp => self.channels.scroll = self.channels.scroll.saturating_add(self.channel_page()),
                 KeyCode::PageDown => self.channels.scroll = self.channels.scroll.saturating_sub(self.channel_page()),
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
+                KeyCode::Char('e') if ctrl => self.open_emoji_picker(),
                 _ => {
                     self.channels.input.handle(key);
                     self.mention_typed();
+                    self.shortcode_typed(key.code == KeyCode::Char(':'));
                 }
             }
             return;
@@ -101,6 +110,9 @@ impl App {
             return;
         }
         if self.composing && self.tab == Tab::Messages {
+            if self.shortcode_key(key) {
+                return;
+            }
             match key.code {
                 KeyCode::Esc => self.composing = false,
                 KeyCode::Enter => self.send_compose(),
@@ -110,8 +122,10 @@ impl App {
                 KeyCode::Char('x') if ctrl => self.attachments.clear(),
                 KeyCode::Char('p') if ctrl => self.delivery_mode = self.delivery_mode.next(),
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
+                KeyCode::Char('e') if ctrl => self.open_emoji_picker(),
                 _ => {
                     self.compose.handle(key);
+                    self.shortcode_typed(key.code == KeyCode::Char(':'));
                 }
             }
             return;
@@ -159,6 +173,27 @@ impl App {
             return;
         }
         let at = Position::new(mouse.column, mouse.row);
+        // The emoji picker and the `:name` list take clicks and the wheel
+        // over them; a click elsewhere closes the picker.
+        let over_emoji = self.regions.emoji_popup.contains(at)
+            && (self.emoji.is_some() || self.shortcode_matches().is_some());
+        match mouse.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if over_emoji => {
+                let delta = if mouse.kind == MouseEventKind::ScrollUp { -1 } else { 1 };
+                if self.emoji.is_some() {
+                    self.scroll_emoji(delta);
+                }
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) if over_emoji => {
+                if let Some(&(_, hit)) = self.regions.emoji_hits.iter().find(|(rect, _)| rect.contains(at)) {
+                    self.click_emoji(hit);
+                }
+                return;
+            }
+            MouseEventKind::Down(_) => self.emoji = None,
+            _ => {}
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll(at, -3),
             MouseEventKind::ScrollDown => self.scroll(at, 3),

@@ -179,10 +179,19 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("Tab/Enter", "mention"),
                 ("Esc", "close list"),
             ],
+            _ if app.emoji.is_some() => &[
+                ("Enter", "insert"),
+                ("arrows", "choose"),
+                ("Tab", "group"),
+                ("type", "search"),
+                ("Esc", "close"),
+            ],
+            _ if app.shortcode_matches().is_some() => &[("↑↓", "choose"), ("Tab/Enter", "pick"), ("Esc", "close list")],
             Tab::Channels if app.channels.typing => &[
                 ("Enter", "send"),
                 ("Esc", "done"),
                 ("@", "mention"),
+                ("^E", "emoji"),
                 ("/help", "commands"),
                 ("^V", "paste"),
                 ("PgUp/PgDn", "scroll"),
@@ -210,6 +219,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             Tab::Messages if app.composing => &[
                 ("Enter", "send"),
                 ("Esc", "done"),
+                ("^E", "emoji"),
                 ("^V", "paste"),
                 ("^O", "attach"),
                 ("^X", "clear files"),

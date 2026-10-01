@@ -293,7 +293,8 @@ impl App {
     /// no name is being typed, nobody matches, or Esc closed the list for
     /// this `@`.
     pub fn mention_matches(&self) -> Option<MentionMatches> {
-        if !self.channels.typing {
+        // The emoji picker or `:name` list is in the way.
+        if !self.channels.typing || self.emoji.is_some() || self.shortcode_matches().is_some() {
             return None;
         }
         let (index, room) = self.channels.active()?;

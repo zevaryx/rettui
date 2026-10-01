@@ -52,7 +52,8 @@ rettui web UI: http://127.0.0.1:8740/?token=…
     `/api/channels/<hub>/room` asks for just the newest N, and `total` or
     `total_lines` says how many there are in all.
 - **Keys:** `1`–`7` switch sections, `/` searches the Network list, and `Esc`
-  leaves a text box.
+  leaves a text box. In the message box and the channel input, `Ctrl-E`
+  opens the [emoji](Messaging#emoji) picker (not on a Mac or an iPhone).
 - **Phones:** on a phone (or any window up to 760px wide, and phones held
   sideways) the web UI changes layout. Larger screens keep the side-by-side
   layout:

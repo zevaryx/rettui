@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod config;
+mod emoji;
 mod lxmf;
 mod net;
 mod reticulum;
