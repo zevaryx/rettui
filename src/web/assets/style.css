@@ -507,6 +507,9 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 .dialog img.qr { display: block; width: 100%; max-width: 360px; height: auto; margin: 0 auto; background: #fff; border-radius: 6px; image-rendering: pixelated; }
 .dialog video.scanner { width: 100%; max-height: 50vh; border-radius: 6px; background: #000; object-fit: cover; }
 .dialog .status:empty { display: none; }
+/* A labelled input in a dialog (a contact's name and notes). */
+.dialog label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--dim); }
+.dialog label.field input, .dialog label.field textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 
 /* Printing a paper message prints its code alone. */
 @media print {

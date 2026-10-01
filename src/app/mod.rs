@@ -14,6 +14,7 @@
 //!   elsewhere.
 
 mod browser;
+pub mod contacts;
 pub mod emoji;
 pub mod format;
 pub mod channels;
@@ -110,6 +111,11 @@ pub enum PromptKind {
     Attach,
     /// Read in a paper message (its `lxm://` link).
     ReadPaper,
+    /// Your own name for a contact (by address), and notes about them.
+    ContactName(String),
+    ContactNotes(String),
+    ConfirmDeleteMessage { key: String, id: String },
+    ConfirmDeleteConversation(String),
     /// Add an RRC hub by address or `rrc://` link.
     AddHub,
     /// Opening a new hub from a page link reveals our identity: confirm.
@@ -184,6 +190,9 @@ pub struct Regions {
     pub history_rows: Vec<Option<HistoryHit>>,
     /// The picked message's buttons, where they are.
     pub history_buttons: Vec<(Rect, HistoryHit)>,
+    /// The contact card, and its buttons.
+    pub card: Rect,
+    pub card_buttons: Vec<(Rect, contacts::CardAction)>,
     pub compose: Rect,
     pub peers: Rect,
     /// Network tab search box.
@@ -248,6 +257,9 @@ pub enum MessageAction {
     Reply,
     React,
     Copy,
+    /// Send a message that failed again.
+    Retry,
+    Delete,
 }
 
 impl MessageAction {
@@ -257,6 +269,8 @@ impl MessageAction {
             MessageAction::Reply => ("↩ Reply", 'r'),
             MessageAction::React => ("🙂 React", 'e'),
             MessageAction::Copy => ("⧉ Copy", 'y'),
+            MessageAction::Retry => ("↻ Retry", 't'),
+            MessageAction::Delete => ("✕ Delete", 'x'),
         }
     }
 }
@@ -329,6 +343,8 @@ pub struct App {
     /// The message the emoji picker reacts to (its id), in the open
     /// conversation.
     pub reacting: Option<String>,
+    /// The contact card shown over the Messages tab (an address).
+    pub contact_card: Option<String>,
     /// A message (its index) to bring into view at the next draw.
     pub scroll_to: Option<usize>,
     /// The emoji picker, over the input being written in.
@@ -443,6 +459,7 @@ impl App {
             reply: None,
             picked: None,
             reacting: None,
+            contact_card: None,
             scroll_to: None,
             emoji: None,
             shortcode: emoji::Shortcode::default(),
@@ -806,6 +823,35 @@ impl App {
                 }
             }
             PromptKind::ReadPaper => {}
+            PromptKind::ContactName(key) => {
+                if let Err(e) = self.set_contact_name(&key, &text) {
+                    self.warn(e);
+                }
+            }
+            PromptKind::ContactNotes(key) => {
+                // Lines were shown as ↵ to edit on one line.
+                let notes = prompt.input.text().replace(" ↵ ", "\n").replace('↵', "\n");
+                if let Err(e) = self.set_contact_notes(&key, &notes) {
+                    self.warn(e);
+                }
+            }
+            PromptKind::ConfirmDeleteMessage { key, id } => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    match self.delete_message(&key, &id) {
+                        Ok(()) => self.confirm("Deleted the message"),
+                        Err(e) => self.warn(e),
+                    }
+                }
+            }
+            PromptKind::ConfirmDeleteConversation(key) => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    let name = self.store.display_name(&key);
+                    if self.delete_conversation(&key) {
+                        self.contact_card = None;
+                        self.notify(format!("Deleted the conversation with {name}"));
+                    }
+                }
+            }
             PromptKind::Attach if !text.is_empty() => self.add_attachment(&text),
             PromptKind::Attach => self.composing = true,
             PromptKind::DisplayName if !text.is_empty() => {

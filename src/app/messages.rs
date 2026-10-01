@@ -564,7 +564,138 @@ impl App {
                 let text = if text.is_empty() { message.opening() } else { text };
                 self.copy(&text, "the message");
             }
+            MessageAction::Retry => {
+                let Some(key) = self.active_conversation.clone() else { return };
+                match self.retry_message(&key, &id, self.delivery_mode) {
+                    Ok(()) => self.confirm("Sending it again"),
+                    Err(e) => self.warn(e),
+                }
+            }
+            MessageAction::Delete => {
+                let Some(key) = self.active_conversation.clone() else { return };
+                let what = if message.attachments.is_empty() { "this message" } else { "this message and its files" };
+                self.open_prompt(PromptKind::ConfirmDeleteMessage { key, id }, &format!("Delete {what}? Type y"), "");
+            }
         }
+    }
+
+    /// What can be done with a message (the buttons a picked one shows).
+    pub fn message_actions(message: &Message) -> Vec<MessageAction> {
+        let mut actions = Vec::new();
+        if message.lxmf_hash().is_some() {
+            actions.extend([MessageAction::Reply, MessageAction::React]);
+        }
+        actions.push(MessageAction::Copy);
+        if !message.incoming && matches!(message.state, MessageState::Failed(_)) {
+            actions.push(MessageAction::Retry);
+        }
+        actions.push(MessageAction::Delete);
+        actions
+    }
+
+    /// Send a message of yours that failed again, the same message (so a
+    /// copy that did get there isn't shown twice), by `mode`.
+    pub fn retry_message(&mut self, key: &str, id: &str, mode: DeliveryMode) -> Result<(), String> {
+        let to = parse_hash(key).ok_or("An LXMF address is 32 hex characters")?;
+        if mode == DeliveryMode::Propagated && self.propagation_node().is_none() {
+            return Err("Select a propagation node first (Network tab, p)".into());
+        }
+        let number: u64 = id.strip_prefix("local-").and_then(|n| n.parse().ok()).ok_or("Only your own messages can be sent again")?;
+        let message = self
+            .store
+            .conversations
+            .get_mut(key)
+            .and_then(|c| c.messages.iter_mut().find(|m| m.id == id))
+            .ok_or("That message isn't in this conversation")?;
+        if !matches!(message.state, MessageState::Failed(_)) {
+            return Err("Only a message that failed can be sent again".into());
+        }
+        let files: Vec<PathBuf> = message.attachments.iter().map(|a| a.path.clone()).collect();
+        if let Some(missing) = message.attachments.iter().find(|a| !a.path.is_file()) {
+            return Err(format!("{} isn't there any more, so it can't be sent again", missing.name));
+        }
+        if mode == DeliveryMode::Paper && !files.is_empty() {
+            return Err("A paper message carries text only".into());
+        }
+        message.state = MessageState::Sending;
+        let (content, timestamp) = (message.content.clone(), message.timestamp);
+        let reply = message.reply.clone().and_then(|reply| {
+            let to = hex::decode(&reply.hash).ok()?.try_into().ok()?;
+            Some(lxmf::Reply { to, quote: reply.quote })
+        });
+        self.store_dirty = true;
+        if mode == DeliveryMode::Paper {
+            self.send(NetCommand::WritePaper { id: number, paper: lxmf::paper::Paper { to, content, timestamp, reply } });
+        } else {
+            let message = lxmf::Outgoing { reply, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            self.send(NetCommand::SendMessage { id: number, message });
+        }
+        Ok(())
+    }
+
+    /// Folders of files rettui saved (received, or uploaded from the web
+    /// UI), which deleting a message deletes its files from. Files sent
+    /// from elsewhere on this computer are left alone.
+    fn owned_folders(&self) -> Vec<PathBuf> {
+        vec![self.paths.downloads.clone(), self.paths.uploads.clone()]
+    }
+
+    /// Delete a message (and its files rettui saved).
+    pub fn delete_message(&mut self, key: &str, id: &str) -> Result<(), String> {
+        let owned = self.owned_folders();
+        let conversation = self.store.conversations.get_mut(key).ok_or("There's no such conversation")?;
+        let at = conversation.messages.iter().position(|m| m.id == id).ok_or("That message isn't in this conversation")?;
+        let message = conversation.messages.remove(at);
+        conversation.unread = conversation.unread.min(conversation.messages.len());
+        for attachment in &message.attachments {
+            crate::store::remove_owned(&attachment.path, &owned);
+            self.pictures.remove(&attachment.path);
+        }
+        for id in [&mut self.picked, &mut self.reply, &mut self.reacting] {
+            if id.as_deref() == Some(message.id.as_str()) {
+                *id = None;
+            }
+        }
+        self.store_dirty = true;
+        Ok(())
+    }
+
+    /// Delete a conversation: its messages, those in the archive, and their
+    /// files rettui saved. What you keep about the contact stays. False if
+    /// there's no such conversation.
+    pub fn delete_conversation(&mut self, key: &str) -> bool {
+        let Some(conversation) = self.store.conversations.remove(key) else { return false };
+        let owned = self.owned_folders();
+        for attachment in conversation.messages.iter().flat_map(|m| &m.attachments) {
+            crate::store::remove_owned(&attachment.path, &owned);
+        }
+        // Their folder of downloads, if that leaves it empty.
+        let _ = std::fs::remove_dir(self.paths.downloads.join(&key[..key.len().min(12)]));
+        self.drafts.remove(key);
+        self.read(Target::Conversation { key: key.to_string() });
+        if self.active_conversation.as_deref() == Some(key) {
+            self.active_conversation = None;
+            (self.picked, self.reply, self.reacting) = (None, None, None);
+            self.compose = TextInput::default();
+            self.attachments.clear();
+            self.conversations.select(None);
+            self.keep_conversation_selection();
+        }
+        if conversation.archived > 0 {
+            let (archive, key) = (self.paths.archive.clone(), key.to_string());
+            self.saver.run("delete the conversation's archived messages", move || {
+                crate::store::remove_from_archive(&archive, &key, &owned)
+            });
+        }
+        self.store_dirty = true;
+        true
+    }
+
+    /// Ask before deleting the open conversation (`X`).
+    pub(super) fn ask_delete_conversation(&mut self, key: String) {
+        let name = self.store.display_name(&key);
+        let title = format!("Delete the conversation with {name}, and the files it brought? Type y");
+        self.open_prompt(PromptKind::ConfirmDeleteConversation(key), &title, "");
     }
 
     /// Keys while a message is picked; true when the key was one of them.
@@ -580,6 +711,8 @@ impl App {
             KeyCode::Char('e') => self.message_action(index, MessageAction::React),
             KeyCode::Char('y') => self.message_action(index, MessageAction::Copy),
             KeyCode::Char('o') => self.open_picked(index),
+            KeyCode::Char('t') => self.message_action(index, MessageAction::Retry),
+            KeyCode::Char('x') | KeyCode::Delete => self.message_action(index, MessageAction::Delete),
             KeyCode::Esc => self.picked = None,
             _ => return false,
         }
@@ -844,6 +977,12 @@ impl App {
             }
             KeyCode::Char('r') if self.active_conversation.is_some() => self.start_reply(),
             KeyCode::Char('m') if self.active_conversation.is_some() => self.start_picking(),
+            KeyCode::Char('c') if self.active_conversation.is_some() => self.contact_card = self.active_conversation.clone(),
+            KeyCode::Char('X') => {
+                if let Some(key) = self.active_conversation.clone() {
+                    self.ask_delete_conversation(key);
+                }
+            }
             KeyCode::Char('a') => self.open_attach_prompt(),
             KeyCode::Char('o') => self.open_latest_attachment(),
             KeyCode::Char('d') => self.delivery_mode = self.delivery_mode.next(),
@@ -1234,6 +1373,80 @@ mod tests {
         let notes = app.take_notifications();
         assert_eq!(notes.len(), 1, "both together, about the one conversation");
         assert_eq!(notes[0].body, "🎤 Voice message");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_messages_go_again_as_the_same_message() {
+        use crate::net::NetEvent;
+        let dir = temp_dir("retry");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        let id = app.send_message(key(), "hello".into(), Vec::new(), DeliveryMode::Auto, None).unwrap();
+        let local = format!("local-{id}");
+        let state = |app: &mut App| app.store.find_message_mut(&local).unwrap().state.clone();
+        assert!(app.retry_message(&key(), &local, DeliveryMode::Auto).unwrap_err().contains("failed"));
+        app.on_net(NetEvent::Delivery { id, result: Err("no path".into()) });
+        let before = app.store.find_message_mut(&local).unwrap().timestamp;
+        app.retry_message(&key(), &local, DeliveryMode::Direct).unwrap();
+        assert_eq!(state(&mut app), MessageState::Sending);
+        let message = app.store.find_message_mut(&local).unwrap();
+        assert_eq!(message.timestamp, before, "the same message, so the same hash");
+        assert_eq!(app.store.conversations[&key()].messages.len(), 1);
+        // Theirs can't be sent again, nor can a file that's gone.
+        app.on_message(from_them(1, "hi", crate::lxmf::Extras::default()));
+        let theirs = hex::encode([1u8; 32]);
+        assert!(app.retry_message(&key(), &theirs, DeliveryMode::Auto).is_err());
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("gone.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let with_file = app.send_message(key(), String::new(), vec![file.clone()], DeliveryMode::Auto, None).unwrap();
+        app.on_net(NetEvent::Delivery { id: with_file, result: Err("timed out".into()) });
+        std::fs::remove_file(&file).unwrap();
+        let err = app.retry_message(&key(), &format!("local-{with_file}"), DeliveryMode::Auto).unwrap_err();
+        assert!(err.contains("gone.txt isn't there any more"), "{err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_messages_and_conversations_takes_their_files() {
+        use crate::lxmf::{Attachment, InboundMessage};
+        let dir = temp_dir("delete");
+        // 30 messages, 20 kept: 10 go to the archive.
+        let messages = (0..30).map(|n| message(n, format!("old {n}"))).collect();
+        let mut app = app(&dir, store_of(messages), 20, 0);
+        let mut photo = from_them(1, "look", crate::lxmf::Extras::default());
+        photo.attachments = vec![Attachment { name: "photo.png".into(), data: b"png".to_vec(), image: true }];
+        photo.timestamp = 1_900_000_000.0;
+        app.on_message(photo);
+        let conversation = &app.store.conversations[&key()];
+        let saved = conversation.messages.last().unwrap().attachments[0].path.clone();
+        assert!(saved.exists());
+        // A message of yours from elsewhere on this computer keeps its file.
+        std::fs::create_dir_all(dir.join("mine")).unwrap();
+        let own = dir.join("mine").join("notes.txt");
+        std::fs::write(&own, b"x").unwrap();
+        let id = app.send_message(key(), String::new(), vec![own.clone()], DeliveryMode::Auto, None).unwrap();
+        app.delete_message(&key(), &format!("local-{id}")).unwrap();
+        assert!(own.exists());
+        // Theirs takes the file rettui saved.
+        app.picked = Some(hex::encode([1u8; 32]));
+        app.delete_message(&key(), &hex::encode([1u8; 32])).unwrap();
+        assert!(!saved.exists() && app.picked.is_none());
+        assert_eq!(app.store.conversations[&key()].messages.len(), 20);
+        assert!(app.delete_message(&key(), "nope").is_err());
+        // The conversation goes, from the archive too.
+        let paths = app.paths.clone();
+        assert_eq!(app.store.conversations[&key()].archived, 10);
+        let other = InboundMessage { source: [0xcd; 16], id: Some([9; 32]), content: "stay".into(), ..Default::default() };
+        app.on_message(other);
+        assert!(app.delete_conversation(&key()));
+        assert!(!app.delete_conversation(&key()));
+        app.finish_saves();
+        app.on_tick();
+        assert!(archived_ids(&paths.archive).is_empty());
+        assert!(app.log.iter().any(|l| l.contains("Deleted 10 archived message(s)")), "{:?}", app.log);
+        let saved = Store::load(&paths.store).unwrap();
+        assert!(!saved.conversations.contains_key(&key()) && saved.conversations.contains_key(&"cd".repeat(16)));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
