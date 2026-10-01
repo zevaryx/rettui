@@ -54,6 +54,37 @@ pub fn trust_label(trust: Trust, known: bool) -> &'static str {
 }
 
 impl App {
+    /// Start a conversation with someone typed or scanned: an address, or
+    /// an `lxma://` link, whose public key is remembered so you can write
+    /// before hearing them announce. Their conversation's key.
+    pub fn add_contact(&mut self, text: &str) -> Result<String, String> {
+        let (address, key) = crate::lxmf::parse_contact(text)?;
+        if self.lxmf_hash == Some(address) {
+            return Err("That's your own address".into());
+        }
+        if let Some(public_key) = key {
+            self.send(NetCommand::Remember { to: address, public_key });
+        }
+        let key = hex::encode(address);
+        self.store.conversations.entry(key.clone()).or_default();
+        self.store_dirty = true;
+        Ok(key)
+    }
+
+    /// Your address with your public key, for others to add you
+    /// (`lxma://`, as Columba shares contacts).
+    pub fn identity_link(&self) -> Option<String> {
+        Some(crate::lxmf::identity_link(self.lxmf_hash?, self.public_key.as_ref()?))
+    }
+
+    /// Show your address as a QR code (`c` in the Status tab).
+    pub(super) fn show_address_qr(&mut self) {
+        match self.identity_link() {
+            Some(link) => self.paper_view = Some(super::PaperView::address(link)),
+            None => self.warn("Reticulum is still starting"),
+        }
+    }
+
     /// Your own name for someone (empty: the one they announce).
     pub fn set_contact_name(&mut self, key: &str, name: &str) -> Result<(), String> {
         let name = name.trim();
@@ -253,6 +284,38 @@ mod tests {
     use super::*;
     use crate::config::Settings;
     use crate::store::{Conversation, Message, MessageState, Store};
+
+    #[test]
+    fn contacts_from_links_and_your_own_as_a_qr_code() {
+        let dir = std::env::temp_dir().join(format!("rettui-contact-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, mut commands) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let press = |app: &mut App, code| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        // Theirs: the key is remembered, and the conversation opens.
+        let them = rns_runtime::prelude::Identity::new();
+        let address = rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&them.hash));
+        let link = crate::lxmf::identity_link(address, &them.get_public_key());
+        press(&mut app, KeyCode::Char('n'));
+        app.on_paste(&link);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.active_conversation, Some(hex::encode(address)));
+        let remembered = std::iter::from_fn(|| commands.try_recv().ok())
+            .any(|c| matches!(c, NetCommand::Remember { to, public_key } if to == address && public_key == them.get_public_key()));
+        assert!(remembered);
+        assert!(app.add_contact("lxma://00").is_err());
+        // Yours, once Reticulum is up: `c` in the Status tab.
+        app.composing = false;
+        app.tab = crate::app::Tab::Status;
+        press(&mut app, KeyCode::Char('c'));
+        assert!(app.paper_view.is_none(), "not before Reticulum is up");
+        let ours = rns_runtime::prelude::Identity::new();
+        app.on_net(crate::net::NetEvent::Started { lxmf_hash: [5; 16], public_key: ours.get_public_key() });
+        press(&mut app, KeyCode::Char('c'));
+        let view = app.paper_view.as_ref().unwrap();
+        assert_eq!((view.kind, view.link.as_str()), (crate::app::QrKind::Address, app.identity_link().unwrap().as_str()));
+        assert!(view.link.starts_with(&format!("lxma://{}:", hex::encode([5; 16]))));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn names_and_notes_from_the_card() {

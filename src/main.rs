@@ -65,7 +65,12 @@ enum Command {
         output: Option<PathBuf>,
     },
     /// Print this client's LXMF address.
-    Address,
+    Address {
+        /// Print it as an lxma:// link with your public key (as Columba
+        /// shares contacts), for others to add you.
+        #[arg(long)]
+        link: bool,
+    },
     /// Send one LXMF message.
     Send {
         address: String,
@@ -134,12 +139,16 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Some(Command::Address) => {
+        Some(Command::Address { link }) => {
             let hash = rns_identity::destination::Destination::hash_from_name_and_identity(
                 lxmf::LXMF_ASPECT,
                 Some(&identity.hash),
             );
-            println!("{}", hex::encode(hash));
+            if link {
+                println!("{}", lxmf::identity_link(hash, &identity.get_public_key()));
+            } else {
+                println!("{}", hex::encode(hash));
+            }
             Ok(())
         }
         Some(Command::Fetch {

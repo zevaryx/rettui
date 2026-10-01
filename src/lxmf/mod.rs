@@ -196,6 +196,38 @@ fn encode(value: &Value) -> Vec<u8> {
     buf
 }
 
+/// An LXMF address with its identity's public key, as Columba shares
+/// contacts in QR codes: `lxma://<address>:<public key>`, both hex. With
+/// the key, a message can be written before the address is heard.
+pub fn identity_link(address: Hash, public_key: &[u8; 64]) -> String {
+    format!("lxma://{}:{}", hex::encode(address), hex::encode(public_key))
+}
+
+/// The address and public key in an `lxma://` link, if the key is the
+/// address's own.
+pub fn parse_identity_link(text: &str) -> Option<(Hash, [u8; 64])> {
+    let rest = text.trim().strip_prefix("lxma://")?;
+    let (address, key) = rest.split_once([':', '/'])?;
+    let address: Hash = hex::decode(address).ok()?.try_into().ok()?;
+    let key: [u8; 64] = hex::decode(key.trim_end_matches('/')).ok()?.try_into().ok()?;
+    let identity = rns_runtime::prelude::Identity::from_public_key(&key).ok()?;
+    let own = rns_identity::destination::Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&identity.hash));
+    (own == address).then_some((address, key))
+}
+
+/// Someone to write to, as typed or scanned: an address, or an `lxma://`
+/// link (which brings the public key too). Errors say what's wrong.
+pub fn parse_contact(text: &str) -> Result<(Hash, Option<[u8; 64]>), String> {
+    if text.trim().starts_with("lxma://") {
+        return parse_identity_link(text)
+            .map(|(address, key)| (address, Some(key)))
+            .ok_or_else(|| "Not a valid lxma:// link (its key doesn't match its address)".to_string());
+    }
+    crate::net::parse_hash(text).map(|address| (address, None)).ok_or_else(|| {
+        "An LXMF address is 32 hex characters (or an lxma:// link)".to_string()
+    })
+}
+
 fn bytes_of(value: &Value) -> Option<Vec<u8>> {
     match value {
         Value::Binary(b) => Some(b.clone()),
@@ -234,6 +266,26 @@ mod tests {
         assert_eq!(attachments[1].name, "notes.txt");
         assert_eq!(attachments[1].data, b"hello");
         assert_eq!(unpacked.content, "hi");
+    }
+
+    #[test]
+    fn identity_links_carry_the_key_of_their_address() {
+        let identity = Identity::new();
+        let address = rns_identity::destination::Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&identity.hash));
+        let key = identity.get_public_key();
+        let link = identity_link(address, &key);
+        assert_eq!(link.len(), "lxma://".len() + 32 + 1 + 128);
+        assert_eq!(parse_identity_link(&link), Some((address, key)));
+        assert_eq!(parse_contact(&format!("  {link} ")), Ok((address, Some(key))));
+        // Upper case, or a slash between them, as some write it.
+        let other = format!("lxma://{}/{}", hex::encode_upper(address), hex::encode(key));
+        assert_eq!(parse_identity_link(&other), Some((address, key)));
+        // Someone else's key for the address: no.
+        let theirs = identity_link(address, &Identity::new().get_public_key());
+        assert_eq!(parse_identity_link(&theirs), None);
+        assert!(parse_contact(&theirs).is_err());
+        assert_eq!(parse_contact(&format!("<{}>", hex::encode(address))), Ok((address, None)));
+        assert!(parse_contact("hello").is_err());
     }
 
     fn outgoing(reply: Option<Reply>) -> Outgoing {

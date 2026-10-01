@@ -379,6 +379,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("Enter", "edit / toggle"),
                 ("e", "edit name"),
                 ("y", "copy my address"),
+                ("c", "address QR code"),
                 ("^R", "restart Reticulum"),
                 ("S", "sync"),
                 ("A", "announce"),

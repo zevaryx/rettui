@@ -160,8 +160,19 @@ pub enum PromptKind {
     Format(format::Action),
 }
 
-/// A paper message shown as a QR code, over the tab (terminal UI).
+/// What a QR code over the tab shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QrKind {
+    /// A paper message.
+    Paper,
+    /// Your address and key (an `lxma://` link), to be added as a contact.
+    Address,
+}
+
+/// A paper message, or your address, shown as a QR code over the tab
+/// (terminal UI).
 pub struct PaperView {
+    pub kind: QrKind,
     pub link: String,
     /// Made once, not every frame (the largest takes a few milliseconds).
     pub qr: Result<crate::lxmf::paper::Qr, String>,
@@ -170,7 +181,11 @@ pub struct PaperView {
 impl PaperView {
     pub(crate) fn new(link: String) -> Self {
         let qr = crate::lxmf::paper::Qr::new(&link);
-        Self { link, qr }
+        Self { kind: QrKind::Paper, link, qr }
+    }
+
+    pub(crate) fn address(link: String) -> Self {
+        Self { kind: QrKind::Address, ..Self::new(link) }
     }
 }
 
@@ -333,6 +348,8 @@ pub struct App {
     pub rns: reticulum::RnsState,
     pub net_state: NetState,
     pub lxmf_hash: Option<Hash>,
+    /// This client's identity's public key (known once Reticulum is up).
+    pub public_key: Option<[u8; 64]>,
     pub interfaces: Vec<crate::net::InterfaceInfo>,
     /// Bytes in and out over all interfaces, and their rates.
     pub traffic: traffic::Traffic,
@@ -467,6 +484,7 @@ impl App {
             rns: reticulum::RnsState::default(),
             net_state: NetState::Starting,
             lxmf_hash: None,
+            public_key: None,
             interfaces: Vec::new(),
             traffic: traffic::Traffic::default(),
             log: VecDeque::new(),
@@ -719,9 +737,10 @@ impl App {
 
     pub fn on_net(&mut self, event: NetEvent) {
         match event {
-            NetEvent::Started { lxmf_hash } => {
+            NetEvent::Started { lxmf_hash, public_key } => {
                 self.net_state = NetState::Online;
                 self.lxmf_hash = Some(lxmf_hash);
+                self.public_key = Some(public_key);
                 self.log(format!("Reticulum ready; LXMF address {}", hex::encode(lxmf_hash)));
                 // A new network actor knows no contacts yet.
                 self.update_policy(true);
@@ -820,9 +839,9 @@ impl App {
     fn submit_prompt(&mut self, prompt: Prompt) {
         let text = prompt.input.text().trim().to_string();
         match prompt.kind {
-            PromptKind::NewConversation => match parse_hash(&text) {
-                Some(hash) => self.open_conversation(hex::encode(hash)),
-                None => self.warn("An LXMF address is 32 hex characters"),
+            PromptKind::NewConversation => match self.add_contact(&text) {
+                Ok(key) => self.open_conversation(key),
+                Err(e) => self.warn(e),
             },
             PromptKind::GoTo => match self.resolve(&text) {
                 Some(location) => self.navigate(location),
@@ -840,6 +859,11 @@ impl App {
                     };
                 }
             }
+            // A contact's link (or its QR code) works here too.
+            PromptKind::ReadPaper if text.starts_with("lxma://") => match self.add_contact(&text) {
+                Ok(key) => self.open_conversation(key),
+                Err(e) => self.warn(e),
+            },
             PromptKind::ReadPaper if !text.is_empty() => {
                 // A link, or a picture of its QR code.
                 let link = if text.starts_with("lxm://") {
@@ -850,7 +874,11 @@ impl App {
                         .map_err(|e| format!("Not an lxm:// link, and can't read {}: {e}", path.display()))
                         .and_then(|picture| crate::lxmf::paper::scan(&picture))
                 };
-                if let Err(e) = link.and_then(|link| self.read_paper(&link)) {
+                let read = link.and_then(|link| match link.starts_with("lxma://") {
+                    true => self.add_contact(&link).map(|key| self.open_conversation(key)),
+                    false => self.read_paper(&link),
+                });
+                if let Err(e) = read {
                     self.warn(e);
                 }
             }

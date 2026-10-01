@@ -89,6 +89,9 @@ pub enum NetCommand {
     /// Contacts: those given stamp tickets (trusted), and those spared the
     /// stamp (trusted, or written to).
     SetContacts { trusted: Vec<Hash>, exempt: Vec<Hash> },
+    /// Remember the public key of an LXMF address (from an `lxma://` link),
+    /// to write to it before hearing its announce.
+    Remember { to: Hash, public_key: [u8; 64] },
     /// Block (or unblock) the identity behind an LXMF address in Reticulum.
     /// `quiet`: no line in the log when it's done (re-applied at start).
     Blackhole { to: Hash, block: bool, quiet: bool },
@@ -164,7 +167,9 @@ pub struct InterfaceInfo {
 
 #[derive(Debug)]
 pub enum NetEvent {
-    Started { lxmf_hash: Hash },
+    /// Reticulum is up: this client's LXMF address, and its identity's
+    /// public key.
+    Started { lxmf_hash: Hash, public_key: [u8; 64] },
     StartFailed(String),
     Announce {
         kind: PeerKind,
@@ -338,7 +343,7 @@ async fn run(
         .await
         .map_err(|e| format!("Could not register LXMF destination: {e}"))?;
     let lxmf_hash = delivery.handle.destination_hash();
-    let _ = ev.send(NetEvent::Started { lxmf_hash });
+    let _ = ev.send(NetEvent::Started { lxmf_hash, public_key: identity.get_public_key() });
 
     let mut lxmf_announces = subscribe(&runtime, LXMF_ASPECT).await?;
     let mut nomad_announces = subscribe(&runtime, NOMAD_NODE_ASPECT).await?;
@@ -514,6 +519,7 @@ async fn run(
                         }
                     }
                     NetCommand::SetContacts { trusted, exempt } => policy.lock().unwrap().set_contacts(trusted, exempt),
+                    NetCommand::Remember { to, public_key } => known.lock().unwrap().remember(to, &public_key, None),
                     NetCommand::Blackhole { to, block, quiet } => {
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
                         tokio::spawn(async move {

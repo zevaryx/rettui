@@ -40,7 +40,7 @@ fn options(
 async fn wait_started(events: &mut UnboundedReceiver<NetEvent>) -> Result<Hash> {
     while let Some(event) = events.recv().await {
         match event {
-            NetEvent::Started { lxmf_hash } => return Ok(lxmf_hash),
+            NetEvent::Started { lxmf_hash, .. } => return Ok(lxmf_hash),
             NetEvent::StartFailed(e) => bail!(e),
             _ => {}
         }

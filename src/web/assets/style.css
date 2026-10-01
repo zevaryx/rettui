@@ -444,8 +444,9 @@ textarea.m-field { resize: vertical; vertical-align: top; }
 
 /* ---- status ------------------------------------------------------------- */
 
-.info { display: grid; grid-template-columns: 150px 1fr; gap: 6px 14px; padding: 14px; align-items: center; }
+.info { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 6px 14px; padding: 14px; align-items: center; }
 .info .label { color: var(--dim); }
+.info .row { flex-wrap: wrap; }
 .log { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; padding: 8px 12px; }
 .iface { padding: 4px 12px; font-family: var(--mono); font-size: 13px; }
 .iface .online { color: var(--green); }

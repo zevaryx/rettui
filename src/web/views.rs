@@ -50,6 +50,8 @@ pub fn state(app: &App) -> Value {
         "external_shared_instance": app.uses_external_shared_instance(),
         "wrap_lines": app.settings.wrap_lines,
         "lxmf_address": app.lxmf_hash.map(hex::encode),
+        // With the public key, for others to add you (`lxma://`).
+        "identity_link": app.identity_link(),
         "net": net,
         "sync": sync,
         "propagation_node": propagation,

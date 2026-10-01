@@ -1290,6 +1290,21 @@ function dialog(title, body, { className = '', onclose } = {}) {
   return close;
 }
 
+// Your address and public key as a QR code (an lxma:// link), for others
+// to add you as a contact.
+function showAddress(link) {
+  dialog('Your address', (close) => [
+    el('p', { class: 'dim', text: 'Scan it in Columba or rettui to add you as a contact: it carries your public key, so they can write to you before hearing your announce.' }),
+    el('img', { class: 'qr', src: '/api/qr?text=' + encodeURIComponent(link), alt: 'QR code of your address' }),
+    el('textarea', { class: 'mono paper-link', readonly: true, rows: 3, onfocus: (e) => e.target.select() }, link),
+    el('div', { class: 'row actions' },
+      el('button', { text: 'Copy link', onclick: () => copy(link, 'your contact link') }),
+      navigator.share ? el('button', { text: 'Share', onclick: () => navigator.share({ text: link }).catch(() => {}) }) : null,
+      el('span', { class: 'grow' }),
+      el('button', { class: 'primary', text: 'Done', onclick: close })),
+  ], { className: 'paper' });
+}
+
 // A paper message written: its QR code, to scan into the recipient's app,
 // print, or pass on as a link.
 function showPaper(link) {
@@ -1316,7 +1331,7 @@ function readPaper() {
   let stopCamera = null;
   let closed = false;
   const text = el('textarea', {
-    class: 'mono paper-link', rows: 3, placeholder: 'lxm://…', autocomplete: 'off', spellcheck: 'false',
+    class: 'mono paper-link', rows: 3, placeholder: 'lxm://… (or a contact’s lxma://…)', autocomplete: 'off', spellcheck: 'false',
     onkeydown: (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
@@ -1340,7 +1355,7 @@ function readPaper() {
   });
   const opened = (result) => {
     close();
-    toast(result.known ? 'You have this message already' : 'Reading the paper message…');
+    toast(result.contact ? 'Contact added' : result.known ? 'You have this message already' : 'Reading the paper message…');
     app.views.messages.selected = result.key;
     switchTab('messages');
     setPane(app.views.messages, 'detail');
@@ -1373,7 +1388,7 @@ function readPaper() {
     }
   };
   const close = dialog('Read a paper message', () => [
-    el('p', { class: 'dim', text: 'A paper message is an lxm:// link, often as a QR code. Paste the link, or scan the code.' }),
+    el('p', { class: 'dim', text: 'A paper message is an lxm:// link, often as a QR code. Paste the link, or scan the code. A contact’s lxma:// link (or code) adds them.' }),
     text, video, status,
     el('div', { class: 'row actions' },
       cameraScan ? el('button', { text: 'Scan', onclick: scan }) : null,
@@ -1403,7 +1418,7 @@ async function scanCamera(video, found) {
   const look = async () => {
     if (stopped) return;
     const codes = await detector.detect(video).catch(() => []);
-    const code = codes.find((c) => c.rawValue.startsWith('lxm://'));
+    const code = codes.find((c) => c.rawValue.startsWith('lxm://') || c.rawValue.startsWith('lxma://'));
     if (code) {
       stop();
       video.classList.add('hidden');
@@ -1899,7 +1914,7 @@ app.views.messages = {
   },
 
   newConversation() {
-    const address = prompt('LXMF address (32 hex characters)');
+    const address = prompt('LXMF address (32 hex characters), or an lxma:// link');
     if (address) openConversation(address);
   },
 
@@ -4075,7 +4090,8 @@ app.views.status = {
     this.info.replaceChildren(
       label('Display name'), el('span', { style: 'font-weight:600', text: s.display_name }),
       label('LXMF address'), el('div', { class: 'row' }, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.lxmf_address || '(starting)' }),
-        s.lxmf_address ? el('button', { text: 'Copy', onclick: () => copy(s.lxmf_address, 'your LXMF address') }) : null),
+        s.lxmf_address ? el('button', { text: 'Copy', onclick: () => copy(s.lxmf_address, 'your LXMF address') }) : null,
+        s.identity_link ? el('button', { text: 'QR code', title: 'Your address as a QR code, to be added as a contact', onclick: () => showAddress(s.identity_link) }) : null),
       label('Network'), el('span', { text: net }),
       label('Propagation node'), el('span', { text: s.propagation_node ? `${s.propagation_node.name}  ${s.propagation_node.hash}` : 'none (pick one in the Network tab)' }),
       label('Last sync'), el('span', { text: sync }),

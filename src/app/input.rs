@@ -28,8 +28,11 @@ impl App {
         if let Some(view) = &self.paper_view {
             match key.code {
                 KeyCode::Char('y') => {
-                    let link = view.link.clone();
-                    self.copy(&link, "paper message");
+                    let (link, what) = match view.kind {
+                        super::QrKind::Paper => (view.link.clone(), "paper message"),
+                        super::QrKind::Address => (view.link.clone(), "your contact link"),
+                    };
+                    self.copy(&link, what);
                 }
                 KeyCode::Char('s') => self.save_paper_qr(),
                 _ => self.paper_view = None,
