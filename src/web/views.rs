@@ -93,7 +93,12 @@ pub fn guide(app: &App) -> Value {
     let defaults = app.guide_defaults();
     json!({
         "name": view.name,
-        "has_entry_point": view.has_entry_point,
+        // Each entry point offered, whether the config has it, and
+        // whether it's ticked to start with.
+        "entries": guide::ENTRY_POINTS.iter().enumerate().map(|(i, entry)| json!({
+            "name": entry.name, "host": entry.host, "port": entry.port,
+            "present": view.has_entry_point[i], "on": defaults.connect[i],
+        })).collect::<Vec<_>>(),
         "has_discovery": view.has_discovery,
         "external": view.external,
         "external_note": crate::reticulum::EXTERNAL_NOTE,
@@ -101,9 +106,8 @@ pub fn guide(app: &App) -> Value {
         "interfaces_online": view.interfaces_online,
         "heard": view.heard,
         "defaults": {
-            "connect": defaults.connect, "discover": defaults.discover, "auto_propagation": defaults.auto_propagation,
+            "discover": defaults.discover, "auto_propagation": defaults.auto_propagation,
         },
-        "entry": { "name": guide::ENTRY_NAME, "host": guide::ENTRY_HOST, "port": guide::ENTRY_PORT },
         "help": {
             "intro": guide::INTRO, "name": guide::NAME_HELP, "connect": guide::CONNECT_HELP,
             "identity": guide::IDENTITY_WEB_NOTE,

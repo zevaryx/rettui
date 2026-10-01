@@ -1002,8 +1002,9 @@ async fn guide(State(state): State<WebState>) -> ApiResult {
 #[derive(Deserialize)]
 struct GuideBody {
     name: String,
+    /// For each entry point offered, in order: connect through it.
     #[serde(default)]
-    connect: bool,
+    connect: Vec<bool>,
     #[serde(default)]
     discover: bool,
     #[serde(default)]
