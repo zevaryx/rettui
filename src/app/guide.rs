@@ -34,12 +34,14 @@ const CONNECT_WAIT: Duration = Duration::from_secs(45);
 pub const LINKS: &[(&str, &str, Option<&str>)] = &[
     ("Reticulum: getting started", "https://reticulum.network/manual/gettingstartedfast.html", None),
     ("Understanding Reticulum", "https://reticulum.network/manual/understanding.html", None),
-    ("Connecting to others", "https://reticulum.network/manual/gettingstartedfast.html#bootstrapping-connectivity", None),
     ("Entry points on a map: RMAP World", "https://rmap.world", None),
     ("A directory of entry points", "https://directory.rns.recipes", None),
     ("Using a LoRa radio (RNode)", "https://github.com/zevaryx/rettui/wiki/RNode-Radios", Some(RNODE_NOTE)),
+    ("Words you'll meet", "https://github.com/zevaryx/rettui/wiki/Glossary", Some(GLOSSARY_NOTE)),
     ("Using rettui", "https://github.com/zevaryx/rettui/wiki", None),
 ];
+/// The glossary: what it is.
+pub const GLOSSARY_NOTE: &str = "Identity, announce, hops, entry point, propagation node and the rest, a line or two each, with where Reticulum's manual explains them.";
 /// LoRa radios: rettui doesn't flash them, the page says what does.
 pub const RNODE_NOTE: &str = "LoRa radios reach others with no internet. Flashing one with RNode or microReticulum firmware (rnodeconf, or a web flasher), and adding it here.";
 

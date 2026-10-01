@@ -21,5 +21,6 @@
 - [Data and Storage](Data-and-Storage)
 
 **More**
+- [Glossary](Glossary)
 - [Notes](Notes)
 - [Development](Development)

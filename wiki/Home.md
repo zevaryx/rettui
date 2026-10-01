@@ -65,5 +65,6 @@ it can edit your Reticulum configuration. It is built on:
 
 **More**
 
+- [Glossary](Glossary): the words you'll meet, with where to read more
 - [Notes](Notes): things that may look odd, and why
 - [Development](Development): code layout, CI and releases

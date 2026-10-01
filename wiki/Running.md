@@ -25,10 +25,11 @@ the web UI's Status page, opens it again):
 - **Pick a propagation node automatically** (see
   [Messaging](Messaging#picking-a-propagation-node-automatically)).
 - **Learn more:** Reticulum's manual (getting started, understanding
-  Reticulum, connecting to others), RMAP World's map and
+  Reticulum), RMAP World's map and
   directory.rns.recipes for finding entry points, using a LoRa radio
   ([RNode Radios](RNode-Radios): rettui doesn't flash radios, the page
-  covers the tools that do), and this wiki.
+  covers the tools that do), the words you'll meet
+  ([Glossary](Glossary)), and this wiki.
 
 Nothing changes until you choose **Apply**; if the Reticulum config changed,
 Reticulum restarts to connect. Once RMAP World connects, rettui says so; if
