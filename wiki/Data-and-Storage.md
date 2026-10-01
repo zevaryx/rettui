@@ -1,6 +1,18 @@
 rettui keeps its data in `~/.local/share/rettui/`:
 
-- `identity`
+- `identity`: the private key behind your address, in the format every
+  Reticulum program uses (Python's raw 64-byte key). Lose it and the
+  address is gone for good, so keep a copy: `b` in the Status tab saves one
+  where you choose, readable only by you. Whoever has it can pose as you
+  and read what's sent to you, so keep copies private.
+  To keep the address you have in Sideband, NomadNet, MeshChat or another
+  rettui, `i` in the Status tab (or the getting-started guide) uses that
+  program's identity file from the next start; the one it replaces is kept
+  beside it as `identity.previous-<date>`. Don't run one identity in two
+  programs at once: messages to it would be split between them. The web UI
+  can't read or change the identity (the login link would otherwise give
+  away the key): use the terminal UI, or, with rettui stopped, copy the
+  file over `identity` (for Docker, `./data/identity`).
 - `settings.json`: display name, announce behaviour, home page, propagation
   node, sync interval, `messages_kept` and `message_storage_mb` (see
   *Message history* below), `cache_hours` (24 by default), node and

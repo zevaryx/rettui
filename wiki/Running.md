@@ -10,6 +10,10 @@ usually hears no one. The first time rettui starts, in either UI, it opens a
 the web UI's Status page, opens it again):
 
 - **Your name:** the display name others see in your announces.
+- **Identity** (terminal UI): use the identity file from Sideband,
+  NomadNet, MeshChat or another rettui, to keep that address (see
+  [Data and Storage](Data-and-Storage)). The web UI says where the file is
+  instead.
 - **Connect through RMAP World** (`rmap.world:4242`, on by default in the
   guide): adds a TCP interface to that community entry point to your
   Reticulum config. Its operator sees your IP address, and anyone watching
