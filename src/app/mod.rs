@@ -375,6 +375,10 @@ pub struct App {
     pub reacting: Option<String>,
     /// The contact card shown over the Messages tab (an address).
     pub contact_card: Option<String>,
+    /// The propagation node picked automatically, and why the last try
+    /// didn't pick one (said once).
+    pub auto_pick: Option<crate::net::autopn::Pick>,
+    auto_error: Option<String>,
     /// Pings to contacts (by address): waiting, or how they went.
     pub pings: HashMap<String, contacts::PingState>,
     /// The contacts last told to the network actor (trusted, and spared the
@@ -503,6 +507,8 @@ impl App {
             reacting: None,
             contact_card: None,
             pings: HashMap::new(),
+            auto_pick: None,
+            auto_error: None,
             policy_sent: None,
             scroll_to: None,
             emoji: None,
@@ -747,6 +753,9 @@ impl App {
                 self.log(format!("Reticulum ready; LXMF address {}", hex::encode(lxmf_hash)));
                 // A new network actor knows no contacts yet.
                 self.update_policy(true);
+                if self.settings.auto_propagation_node {
+                    self.apply_auto_propagation();
+                }
                 self.reapply_blocks();
                 self.start_channels();
                 // Hubs that were connected before a restart, auto or not.
@@ -781,8 +790,16 @@ impl App {
             }
             NetEvent::Announced => self.log("Announced LXMF destination"),
             NetEvent::Message(message) => self.on_message(*message),
-            NetEvent::Delivery { id, result } => self.on_delivery(id, result),
+            NetEvent::Delivery { id, result } => {
+                // Handing a message to a node picked automatically failed:
+                // it may have gone.
+                if self.settings.auto_propagation_node && result.as_ref().is_err_and(|e| e.contains("propagation")) {
+                    self.send(NetCommand::RecheckPropagation);
+                }
+                self.on_delivery(id, result);
+            }
             NetEvent::Pinged { to, result } => self.on_pinged(to, result),
+            NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
             NetEvent::Paper { id, result } => self.on_paper(id, result),
             NetEvent::SyncStarted => self.sync = SyncState::Running(Instant::now()),
@@ -790,7 +807,13 @@ impl App {
                 match &result {
                     Ok(0) => {}
                     Ok(n) => self.log(format!("Downloaded {n} message(s) from propagation node")),
-                    Err(e) => self.log(format!("Sync failed: {e}")),
+                    Err(e) => {
+                        self.log(format!("Sync failed: {e}"));
+                        // A node picked automatically may have gone.
+                        if self.settings.auto_propagation_node {
+                            self.send(NetCommand::RecheckPropagation);
+                        }
+                    }
                 }
                 self.sync = SyncState::Done(chrono::Local::now(), result);
             }

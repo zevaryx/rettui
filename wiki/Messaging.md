@@ -26,7 +26,8 @@ MeshChat, NomadNet and other LXMF clients).
   when one is known. To ask for stamps yourself, see
   [Blocking and spam](#blocking-and-spam).
 - **Propagation nodes:** the ones you hear are listed in the Network tab.
-  Pick one with `p`. You can also [host one](Hosting-a-Node#propagation-node). rettui syncs every `sync_interval_mins` (30 by default)
+  Pick one with `p`. You can also [host one](Hosting-a-Node#propagation-node),
+  or let rettui pick one (below). rettui syncs every `sync_interval_mins` (30 by default)
   or whenever you press `S`. A sync identifies you to the node, downloads your
   messages, then tells the node to delete them.
 - **Attachments:**
@@ -46,6 +47,32 @@ MeshChat, NomadNet and other LXMF clients).
 - **Announces:** rettui announces your LXMF address when it starts (unless
   you turn that off), every `announce_interval_mins` (360 by default, 0 for
   never), and whenever you press `A`.
+
+## Picking a propagation node automatically
+
+*Pick propagation node automatically* (off unless you turn it on) picks one
+for you, as Sideband does when none is set:
+
+- **Which:** of the propagation nodes heard announcing in the last day that
+  are serving and ask a stamp cost of 20 or less, the four nearest by hops
+  (and the one picked before) are probed: a Link is set up to each and
+  timed, like a [ping](#contacts). Of those that answer about as fast as
+  the fastest, the nearest is picked. Your own node, if you host one, is
+  left out: it doesn't pass messages on to other nodes.
+- **Hops are only a hint.** They travel outside the announce's signature, so
+  any transport node on the way can make a node look closer than it is.
+  Nothing can make a node answer faster than it really does, so the
+  measured time decides.
+- **Keeping it:** the node picked is checked again every 6 hours, and soon
+  after syncing with it or sending through it fails. It's replaced only if
+  it stops answering or another answers in under half its time. The Status
+  tab shows which node is in use and how it was picked; picking one by hand
+  in the Network tab turns automatic picking off.
+- **Warning:** anyone can run a propagation node near you, for instance on
+  the same public entry point. The node picked can't read or change your
+  messages (they're encrypted for their recipients and signed), but it sees
+  who your propagated messages are for and when you collect yours, and it
+  could lose them. Where you can, pick a node you trust instead.
 
 ## Message actions
 

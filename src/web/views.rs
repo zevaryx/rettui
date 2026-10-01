@@ -36,6 +36,8 @@ pub fn state(app: &App) -> Value {
     let propagation = app.settings.propagation_node.as_ref().map(|hash| {
         json!({ "hash": hash, "name": app.store.display_name(hash) })
     });
+    // How it was picked, when it's picked automatically.
+    let auto_propagation = app.auto_pick_label();
     let hosting = match &app.pn.status {
         NodeStatus::Off => json!({ "state": "off" }),
         NodeStatus::Starting => json!({ "state": "starting" }),
@@ -55,6 +57,7 @@ pub fn state(app: &App) -> Value {
         "net": net,
         "sync": sync,
         "propagation_node": propagation,
+        "auto_propagation": auto_propagation,
         // The propagation node hosted here.
         "hosting": hosting,
         "rns_config": app.settings.rns_config,

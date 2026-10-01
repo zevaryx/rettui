@@ -189,6 +189,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         announce_interval: (settings.announce_interval_mins > 0)
             .then(|| Duration::from_secs(settings.announce_interval_mins * 60)),
         propagation_node: settings.propagation_node.as_deref().and_then(net::parse_hash),
+        auto_propagation: settings.auto_propagation_node,
         sync_interval: (settings.sync_interval_mins > 0)
             .then(|| Duration::from_secs(settings.sync_interval_mins * 60)),
         known_identities: paths.known_identities.clone(),

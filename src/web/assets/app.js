@@ -4136,7 +4136,9 @@ app.views.status = {
         s.lxmf_address ? el('button', { text: 'Copy', onclick: () => copy(s.lxmf_address, 'your LXMF address') }) : null,
         s.identity_link ? el('button', { text: 'QR code', title: 'Your address as a QR code, to be added as a contact', onclick: () => showAddress(s.identity_link) }) : null),
       label('Network'), el('span', { text: net }),
-      label('Propagation node'), el('span', { text: s.propagation_node ? `${s.propagation_node.name}  ${s.propagation_node.hash}` : 'none (pick one in the Network tab)' }),
+      label('Propagation node'), el('span', { text: s.propagation_node
+        ? `${s.propagation_node.name}  ${s.propagation_node.hash}${s.auto_propagation ? ' · ' + s.auto_propagation : ''}`
+        : s.auto_propagation || 'none (pick one in the Network tab)' }),
       label('Last sync'), el('span', { text: sync }),
       label('Hosting messages'), hosting,
       label('RNS config'), el('span', { class: 'mono', text: s.rns_config || 'rsReticulum default' }),
