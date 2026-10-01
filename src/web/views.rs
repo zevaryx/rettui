@@ -82,6 +82,8 @@ pub fn conversations(app: &App) -> Value {
                 "named": app.store.peers.get(&key).is_some_and(|p| p.name.is_some()),
                 "unread": conversation.unread,
                 "muted": conversation.muted,
+                // Not a contact: not trusted, nor ever written to.
+                "unknown": !app.is_known(&key),
                 "last": last,
             })
         })
@@ -161,6 +163,9 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
             "alias": app.store.contact(key).alias,
             "notes": app.store.contact(key).notes,
             "announced": app.store.announced_name(key),
+            "trust": app.store.contact(key).trust.key(),
+            "known": app.is_known(key),
+            "trust_label": crate::app::contacts::trust_label(app.store.contact(key).trust, app.is_known(key)),
         },
         "archive": app.paths.archive.display().to_string(),
         "messages": messages,
@@ -172,12 +177,23 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
 /// `total` counts every match, so the page can offer more.
 pub fn peers(app: &App, kind: Option<&str>, query: &str, limit: Option<usize>) -> Value {
     let terms = network::search_terms(query);
-    let mut peers: Vec<_> = app
-        .store
-        .peers
-        .iter()
-        .filter(|(hash, p)| kind.is_none_or(|kind| kind_name(p.kind) == kind) && network::matches(&terms, hash, p))
-        .collect();
+    let blocked = |hash: &str| app.store.contact(hash).trust == crate::store::Trust::Blocked;
+    let mut peers: Vec<_> = if kind == Some("blocked") {
+        // Blocked contacts, heard or not (blocking stops their announces).
+        app.store
+            .contacts
+            .keys()
+            .filter(|hash| blocked(hash))
+            .map(|hash| (hash, app.store.peers.get(hash).unwrap_or(&network::UNHEARD)))
+            .filter(|(hash, p)| network::matches(&terms, hash, p))
+            .collect()
+    } else {
+        app.store
+            .peers
+            .iter()
+            .filter(|(hash, p)| kind.is_none_or(|kind| kind_name(p.kind) == kind) && network::matches(&terms, hash, p))
+            .collect()
+    };
     let total = peers.len();
     peers.sort_unstable_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
     peers.truncate(limit.unwrap_or(usize::MAX));
@@ -186,6 +202,7 @@ pub fn peers(app: &App, kind: Option<&str>, query: &str, limit: Option<usize>) -
         "total": total,
         "peers": peers.into_iter().map(|(hash, p)| json!({
             "hash": hash, "kind": kind_name(p.kind), "name": p.name, "hops": p.hops, "last_seen": p.last_seen,
+            "blocked": blocked(hash),
         })).collect::<Vec<_>>(),
     })
 }

@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 
 use super::{bytes_of, encode};
 use super::inbound::deliver_inbound;
+use super::policy::SharedPolicy;
 use crate::net::{Hash, Known, NetEvent, ensure_path, link_options};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -21,6 +22,7 @@ const SYNC_LIMIT_KB: f64 = 1000.0;
 pub struct Syncer {
     runtime: ReticulumHandle,
     known: Known,
+    policy: SharedPolicy,
     identity: Identity,
     lxmf_hash: Hash,
     ev: mpsc::UnboundedSender<NetEvent>,
@@ -31,6 +33,7 @@ impl Syncer {
     pub fn new(
         runtime: ReticulumHandle,
         known: Known,
+        policy: SharedPolicy,
         identity: Identity,
         lxmf_hash: Hash,
         ev: mpsc::UnboundedSender<NetEvent>,
@@ -38,6 +41,7 @@ impl Syncer {
         Self {
             runtime,
             known,
+            policy,
             identity,
             lxmf_hash,
             ev,
@@ -56,9 +60,10 @@ impl Syncer {
             return;
         }
         let _ = self.ev.send(NetEvent::SyncStarted);
-        let (runtime, known, identity, ev, running, lxmf_hash) = (
+        let (runtime, known, policy, identity, ev, running, lxmf_hash) = (
             self.runtime.clone(),
             self.known.clone(),
+            self.policy.clone(),
             self.identity.clone(),
             self.ev.clone(),
             self.running.clone(),
@@ -71,7 +76,7 @@ impl Syncer {
                     // Parse concurrently: verifying an unknown sender can wait
                     // on a path lookup.
                     futures_util::future::join_all(
-                        messages.iter().map(|data| deliver_inbound(&runtime, &known, data, &ev)),
+                        messages.iter().map(|data| deliver_inbound(&runtime, &known, &policy, data, &ev)),
                     )
                     .await;
                     Ok(count)

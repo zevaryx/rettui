@@ -80,6 +80,15 @@ impl App {
                 "show_joins" => self.settings.show_joins = after.show_joins,
                 "notify_messages" => self.settings.notify_messages = after.notify_messages,
                 "notify_rrc" => self.settings.notify_rrc = after.notify_rrc,
+                "ignore_unknown_senders" => self.settings.ignore_unknown_senders = after.ignore_unknown_senders,
+                "stamp_cost" | "max_message_kb" => {
+                    self.settings.stamp_cost = after.stamp_cost;
+                    self.settings.max_message_kb = after.max_message_kb;
+                    self.send(NetCommand::SetPolicy {
+                        stamp_cost: crate::lxmf::policy::stamp_cost(after.stamp_cost),
+                        max_bytes: after.max_message_kb * 1000,
+                    });
+                }
                 "node_enabled" | "node_name" | "node_announce_interval_mins" | "node_dir" | "node_executable_pages" => {
                     self.settings.node_enabled = after.node_enabled;
                     self.settings.node_name = after.node_name.clone();

@@ -1935,7 +1935,8 @@ app.views.messages = {
       onclick: () => this.select(c.key),
     },
     el('div', { class: 'main' },
-      el('div', { class: 'name' }, c.name, c.muted ? mutedMark() : null),
+      el('div', { class: 'name' }, c.name, c.muted ? mutedMark() : null,
+        c.unknown ? el('span', { class: 'unknown-mark', text: ' ?', title: 'Not one of your contacts' }) : null),
       el('div', { class: 'sub', text: c.last ? `${c.last.incoming ? '' : 'You: '}${c.last.text}` : 'No messages yet' })),
     el('div', { class: 'dim', style: 'font-size:12px;text-align:right' },
       c.last ? timeLabel(c.last.timestamp) : '',
@@ -2024,8 +2025,15 @@ app.views.messages = {
       this.update();
     } })) : archived;
     const echoes = echoesFor(this, key);
+    // Someone not a contact: trust them, leave them as they are, or block.
+    const contact = conversation.contact || {};
+    const banner = conversation.messages.length && !contact.known ? el('div', { class: 'stranger' },
+      el('span', { class: 'grow', text: `${conversation.name} isn't one of your contacts.` }),
+      el('button', { text: 'Trust', title: 'No stamp asked of them, and they get tickets', onclick: () => this.setTrust(key, 'trusted', conversation) }),
+      el('button', { text: 'Leave as is', onclick: () => this.setTrust(key, 'untrusted', conversation) }),
+      el('button', { class: 'danger', text: 'Block', onclick: () => this.setTrust(key, 'blocked', conversation) })) : null;
     const render = () => this.history.replaceChildren(...(conversation.messages.length || echoes.length
-      ? [earlier, ...conversation.messages.slice(from).map((m) => this.message(m, conversation))].filter(Boolean)
+      ? [banner, earlier, ...conversation.messages.slice(from).map((m) => this.message(m, conversation))].filter(Boolean)
       : [el('div', { class: 'empty', text: 'No messages yet. Say hello!' })]), ...echoes);
     if (this.lastKey !== key) {
       render();
@@ -2117,6 +2125,23 @@ app.views.messages = {
     if (await attempt(() => api.post(`/conversations/${key}/react`, { id, emoji: e }))) this.update();
   },
 
+  // Trust someone (`trusted`), leave them as is (`untrusted`), stop
+  // trusting them (`unknown`), or block them (`blocked`, after asking).
+  async setTrust(key, trust, conversation, after) {
+    const name = conversation?.name || key;
+    if (trust === 'blocked' && !confirm(`Block ${name}? Their messages are dropped, the conversation is deleted, and their identity is blocked in Reticulum.`)) return false;
+    const said = { trusted: `Trusting ${name}`, untrusted: `Leaving ${name} as is`, unknown: `Not trusting ${name}`, blocked: `Blocked ${name}` }[trust];
+    if (!await attempt(() => api.post(`/conversations/${key}/trust`, { trust }), said)) return false;
+    if (trust === 'blocked' && this.selected === key) {
+      this.selected = null;
+      this.cache.delete(key);
+      setPane(this, 'list');
+    }
+    after?.();
+    this.update();
+    return true;
+  },
+
   async retry(key, id) {
     if (await attempt(() => api.post(`/conversations/${key}/retry`, { id, mode: this.mode }), 'Sending it again')) this.update();
   },
@@ -2139,8 +2164,13 @@ app.views.messages = {
       placeholder: contact.announced ? `They announce ${contact.announced}` : 'Nothing heard from them yet' });
     const notes = el('textarea', { rows: 5, maxlength: 10000, placeholder: 'Notes about them, for you alone' });
     notes.value = contact.notes || '';
+    const trusted = contact.trust === 'trusted';
     dialog('Contact', (close) => [
       el('p', { class: 'dim mono', style: 'overflow-wrap:anywhere', text: key }),
+      el('div', { class: 'row trust' },
+        el('span', { class: 'grow' }, el('span', { class: 'dim', text: 'Trust: ' }), contact.trust_label || ''),
+        el('button', { text: trusted ? 'Stop trusting' : 'Trust', onclick: () => this.setTrust(key, trusted ? 'unknown' : 'trusted', conversation, close) }),
+        el('button', { class: 'danger', text: 'Block', onclick: () => this.setTrust(key, 'blocked', conversation, close) })),
       el('label', { class: 'field' }, el('span', { text: 'Your name for them' }), alias),
       el('label', { class: 'field' }, el('span', { text: 'Notes' }), notes),
       el('div', { class: 'row actions' },
@@ -2950,7 +2980,7 @@ app.views.network = {
       this.filter = e.target.value;
       this.limit = 200;
       this.update();
-    } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes']]
+    } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes'], ['blocked', 'Blocked']]
       .map(([value, text]) => el('option', { value, text, selected: value === this.filter })));
     this.title = el('span', { class: 'title grow' });
     this.table = el('div', { class: 'scroll' });
@@ -2983,14 +3013,15 @@ app.views.network = {
     if (!this.data) return;
     // Highlight what the rows were found by, not what has been typed since.
     const terms = searchTerms(this.data.query);
-    const filterName = { all: 'all', lxmf: 'LXMF peers', nomad: 'NomadNet nodes', propagation: 'propagation nodes' }[this.filter];
+    const filterName = { all: 'all', lxmf: 'LXMF peers', nomad: 'NomadNet nodes', propagation: 'propagation nodes', blocked: 'blocked' }[this.filter];
     const rows = this.data.peers;
     const total = this.data.total;
     this.title.textContent = `Heard announces · ${filterName} · ${total}${terms.length ? ' matching' : ''}`;
     if (!rows.length) {
       this.table.replaceChildren(el('div', { class: 'empty', text: terms.length
         ? `Nothing heard matches “${this.data.query.trim()}”. Esc clears the search.`
-        : 'Listening for announces… peers, NomadNet nodes and propagation nodes appear here as they are heard.' }));
+        : this.filter === 'blocked' ? 'Nobody is blocked. Block someone from their conversation\'s Contact dialog, or with Block on an LXMF peer here.'
+          : 'Listening for announces… peers, NomadNet nodes and propagation nodes appear here as they are heard.' }));
       return;
     }
     const tag = { lxmf: 'PEER', nomad: 'NODE', propagation: 'PROP' };
@@ -3010,12 +3041,17 @@ app.views.network = {
       },
       el('td', {}, el('span', { class: 'tag ' + p.kind, text: tag[p.kind] })),
       el('td', { class: 'name' }, p.name ? highlighted(p.name, terms) : el('span', { class: 'dim', text: '(unnamed)' }),
-        p.hash === outbound ? el('span', { class: 'star', text: '  ★ outbound' }) : null),
+        p.hash === outbound ? el('span', { class: 'star', text: '  ★ outbound' }) : null,
+        p.blocked ? el('span', { class: 'blocked-mark', text: '  ⛔ blocked' }) : null),
       el('td', { class: 'mono dim' }, highlighted(p.hash, terms)),
-      el('td', { class: 'dim', text: `${p.hops} hop${p.hops === 1 ? '' : 's'}` }),
-      el('td', { class: 'dim', text: ago(p.last_seen) + ' ago' }),
+      el('td', { class: 'dim', text: p.last_seen ? `${p.hops} hop${p.hops === 1 ? '' : 's'}` : '' }),
+      el('td', { class: 'dim', text: p.last_seen ? ago(p.last_seen) + ' ago' : 'not heard' }),
       el('td', {}, el('div', { class: 'actions' },
-        p.kind === 'lxmf' ? el('button', { text: 'Message', onclick: () => this.open(p) }) : null,
+        p.kind === 'lxmf' && !p.blocked ? el('button', { text: 'Message', onclick: () => this.open(p) }) : null,
+        p.kind === 'lxmf' ? el('button', { class: p.blocked ? '' : 'danger', text: p.blocked ? 'Unblock' : 'Block', onclick: async (e) => {
+          e.stopPropagation();
+          if (await app.views.messages.setTrust(p.hash, p.blocked ? 'unknown' : 'blocked', { name: p.name || p.hash })) this.update();
+        } }) : null,
         p.kind === 'nomad' ? el('button', { text: 'Browse', onclick: () => this.open(p) }) : null,
         p.kind === 'propagation' ? el('button', { text: p.hash === outbound ? 'In use' : 'Use for sync', disabled: p.hash === outbound, onclick: () => this.open(p) }) : null,
         el('button', { text: 'Copy', onclick: (e) => {

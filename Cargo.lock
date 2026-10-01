@@ -3152,6 +3152,7 @@ dependencies = [
  "rns-crypto",
  "rns-identity",
  "rns-runtime",
+ "rns-transport",
  "rqrr",
  "serde",
  "serde_json",

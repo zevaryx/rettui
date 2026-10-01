@@ -11,7 +11,7 @@ use super::notify::{self, Notification, Target};
 use super::{App, HistoryHit, MessageAction, PaperView, PromptKind, Tab, now};
 use crate::lxmf::{self, DeliveryMode};
 use crate::net::{NetCommand, parse_hash};
-use crate::store::{Archived, Message, MessageState, Reaction, ReplyTo, StoredAttachment};
+use crate::store::{Archived, Message, MessageState, Reaction, ReplyTo, StoredAttachment, Trust};
 use crate::term::images::{DecodeFor, Picture};
 use crate::term::input::TextInput;
 
@@ -53,6 +53,17 @@ impl App {
         }
         // Read in by the user, who's looking at it.
         let paper = message.paper;
+        if !paper {
+            if self.store.contact(&key).trust == Trust::Blocked {
+                return self.log(format!("Dropped a message from {}, who is blocked", self.store.display_name(&key)));
+            }
+            if self.settings.ignore_unknown_senders && !self.is_known(&key) {
+                return self.log(format!(
+                    "Ignored a message from {}, who isn't a contact (Ignore unknown senders is on)",
+                    self.store.display_name(&key)
+                ));
+            }
+        }
         let extras = &message.extras;
         let location = extras.telemetry.as_ref().and_then(|t| t.location);
         // Nothing to show but what the fields say.
@@ -429,6 +440,8 @@ impl App {
             });
         self.store_dirty = true;
         self.keep_conversation_selection();
+        // Someone written to is a contact, spared the stamp.
+        self.update_policy(false);
         let reply = reply.and_then(|reply| {
             let to = hex::decode(&reply.hash).ok()?.try_into().ok()?;
             Some(lxmf::Reply { to, quote: reply.quote })
@@ -688,6 +701,7 @@ impl App {
             });
         }
         self.store_dirty = true;
+        self.update_policy(false);
         true
     }
 

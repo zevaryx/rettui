@@ -17,8 +17,10 @@ MeshChat, NomadNet and other LXMF clients).
   - **Paper:** isn't sent. It's written as a [paper message](#paper-messages)
     to pass on some other way.
 - **Stamps and ratchets:** if the recipient's announce asks for a stamp,
-  rettui generates it. It also generates the propagation node's stamp, and
-  encrypts to the recipient's ratchet when one is known.
+  rettui generates it (or uses a ticket they gave you). It also generates
+  the propagation node's stamp, and encrypts to the recipient's ratchet
+  when one is known. To ask for stamps yourself, see
+  [Blocking and spam](#blocking-and-spam).
 - **Propagation nodes:** the ones you hear are listed in the Network tab.
   Pick one with `p`. rettui syncs every `sync_interval_mins` (30 by default)
   or whenever you press `S`. A sync identifies you to the node, downloads your
@@ -75,6 +77,53 @@ everywhere else), and notes for you alone.
   editing), `y` copies their address, `X` deletes the conversation, and
   `Esc` closes the card. Its buttons can be clicked too.
 - **In the web UI:** the **Contact** button above the conversation.
+
+## Blocking and spam
+
+- **Unknown senders:** someone who isn't a contact (you haven't trusted
+  them, and you've never written to them) is marked with a **?** in the
+  conversation list, and their conversation asks what to do with them, as
+  NomadNet's Untrusted list does:
+  - **Trust** them: they're spared the stamp cost (below), and given
+    tickets.
+  - **Leave as is:** their messages are taken, but they aren't trusted.
+    The question goes away.
+  - **Block** them (below).
+
+  Turn on *Ignore unknown senders* (Status, `ignore_unknown_senders`) to
+  drop their messages altogether, as Sideband can. Anyone you've written
+  to, trusted, or left as is still gets through.
+- **Blocking** someone drops their messages, deletes the conversation with
+  them, and blocks their identity in Reticulum (its blackhole list), so
+  their announces and traffic are dropped too, as NomadNet does. If rettui
+  uses a shared instance (rnsd, NomadNet), that instance blocks them, for
+  every program using it. Blocked contacts are listed under the Network
+  tab's *Blocked* filter, where they can be unblocked; an unblocked contact
+  is an unknown sender again. Blocking needs their identity: if it isn't
+  known (no announce heard), rettui still drops their messages and says
+  so in the log, and blocks them in Reticulum the next time it starts and
+  knows it.
+- **Stamp cost** (`stamp_cost`, 0 by default): proof of work asked of
+  anyone who isn't a contact, announced with your address as Python LXMF
+  does. Their client works out the stamp before sending (a cost of 8 takes
+  a moment, 16 a lot longer); messages without a valid one are dropped and
+  the log says so. Contacts (trusted, or written to) are spared it.
+  Trusted contacts are also given a **ticket** with your messages (LXMF's
+  ticket field, at most once a day): their client stamps later messages
+  with it instead of doing the work, which matters to those who aren't in
+  your contacts on their own side. Tickets they give you are used for your
+  messages to them in the same way. rettui keeps tickets in
+  `tickets.json`, using rsLXMF's ticket store.
+- **Largest message** (`max_message_kb`, 1000 by default, as LXMF's own
+  default; NomadNet uses 500): bigger direct transfers are refused before
+  they're downloaded, and bigger messages from a propagation node are
+  dropped. 0 takes any size.
+
+In the TUI, the contact card (`c`) has *Trust*, *Leave as is* and *Block*
+(`t`, `l`, `b`), and `b` on an LXMF peer in the Network tab blocks or
+unblocks them. In the web UI, the question shows above an unknown sender's
+messages, the **Contact** dialog has *Trust* and *Block*, and the Network
+tab has *Block* and *Unblock* on LXMF peers.
 
 ## Reactions, locations, commands and voice messages
 

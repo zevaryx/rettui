@@ -8,7 +8,8 @@ rettui keeps its data in `~/.local/share/rettui/`:
   of either UI (or by hand). Changes apply straight away, except the
   Reticulum config and "announce at start", which are used the next time
   rettui starts.
-- `store.json.gz`: conversations, saved pages, RRC hubs, nodes you
+- `store.json.gz`: conversations, contacts (your names for people, notes,
+  who you trust or blocked), saved pages, RRC hubs, nodes you
   identify to, and the emoji you used lately, as gzip-compressed JSON (read it with
   `zcat store.json.gz | jq`). Earlier versions kept it as plain `store.json`,
   about five times larger. The first launch after upgrading converts it,
@@ -26,6 +27,8 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `known_identities.json`: public keys from LXMF and propagation-node
   announces, so you can reach peers that are offline now. Saved every few
   seconds and when rettui exits.
+- `tickets.json`: [stamp tickets](Messaging#blocking-and-spam) you gave
+  trusted contacts and ones they gave you. Only you can read it.
 - `cache/`: cached NomadNet pages and images
 - `rrc/`: RRC chat history, one file per hub
 - `rettui.log`: logging, set with `RETTUI_LOG=debug`

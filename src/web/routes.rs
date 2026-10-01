@@ -91,6 +91,7 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/messages/delete", post(delete_message))
         .route("/conversations/{key}/delete", post(delete_conversation))
         .route("/conversations/{key}/contact", post(save_contact))
+        .route("/conversations/{key}/trust", post(set_trust))
         .route("/conversations/{key}/attachments/{id}/{index}", get(attachment))
         .route("/paper/read", post(read_paper))
         .route("/paper/scan", post(scan_paper))
@@ -751,6 +752,21 @@ async fn save_contact(State(state): State<WebState>, Path(key): Path<String>, ax
 }
 
 #[derive(Deserialize)]
+struct TrustBody {
+    /// `trusted`, `untrusted` (left as is), `unknown` or `blocked`.
+    trust: String,
+}
+
+/// Trust someone, leave them as is, stop trusting them, block them (which
+/// deletes the conversation) or unblock them.
+async fn set_trust(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<TrustBody>) -> ApiResult {
+    let key = address(&key)?;
+    let trust = crate::store::Trust::parse(&body.trust).ok_or_else(|| bad(format!("unknown trust {}", body.trust)))?;
+    state.write(move |o| o.app.set_trust(&key, trust)).await?.map_err(bad)?;
+    ok()
+}
+
+#[derive(Deserialize)]
 struct PaperBody {
     /// The `lxm://` link (from a QR code, or pasted).
     link: String,
@@ -866,7 +882,8 @@ async fn attachment(
 
 #[derive(Deserialize)]
 struct PeersQuery {
-    /// `lxmf`, `nomad` or `propagation`; every kind when left out.
+    /// `lxmf`, `nomad` or `propagation`; every kind when left out. `blocked`:
+    /// blocked contacts, heard or not.
     kind: Option<String>,
     #[serde(default)]
     q: String,

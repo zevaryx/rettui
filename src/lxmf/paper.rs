@@ -84,7 +84,7 @@ pub fn read(runtime: &ReticulumHandle, known: &Known, identity: &Identity, lxmf_
     let (runtime, known, identity, ev) = (runtime.clone(), known.clone(), identity.clone(), ev.clone());
     tokio::spawn(async move {
         let event = match open(&identity, lxmf_hash, &link) {
-            Ok(data) => match inbound::parse_inbound(&runtime, &known, &data).await {
+            Ok(data) => match inbound::parse_inbound(&runtime, &known, None, &data).await {
                 Ok(mut message) => {
                     message.paper = true;
                     NetEvent::Message(Box::new(message))

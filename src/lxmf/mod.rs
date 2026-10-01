@@ -11,6 +11,7 @@
 pub mod fields;
 mod inbound;
 pub mod paper;
+pub mod policy;
 mod send;
 mod sync;
 
@@ -20,6 +21,7 @@ use rmpv::Value;
 
 pub use fields::{Extras, Location, Reaction};
 pub use inbound::{spawn_inbound, with_destination};
+pub use policy::Policy;
 pub use send::send;
 pub use sync::Syncer;
 
@@ -120,12 +122,29 @@ pub struct Outgoing {
     pub reply: Option<Reply>,
     /// A reaction to a message (sent with no text, as Columba does).
     pub reaction: Option<Reaction>,
+    /// The recipient's ticket, to stamp it with instead of doing the work
+    /// (set by the network actor).
+    pub stamp_ticket: Option<[u8; 16]>,
+    /// A ticket of ours for them (`FIELD_TICKET`'s value; set by the
+    /// network actor).
+    pub ticket: Option<Vec<u8>>,
 }
 
 impl Outgoing {
     /// A text message (with files, maybe), not a reply.
     pub fn text(to: Hash, content: String, attachments: Vec<PathBuf>, mode: DeliveryMode, timestamp: f64) -> Self {
-        Self { to, content, attachments, mode, propagation_node: None, timestamp, reply: None, reaction: None }
+        Self {
+            to,
+            content,
+            attachments,
+            mode,
+            propagation_node: None,
+            timestamp,
+            reply: None,
+            reaction: None,
+            stamp_ticket: None,
+            ticket: None,
+        }
     }
 }
 

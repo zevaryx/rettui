@@ -68,6 +68,7 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
         NetFilter::Peers => "LXMF peers",
         NetFilter::Nodes => "NomadNet nodes",
         NetFilter::Propagation => "propagation nodes",
+        NetFilter::Blocked => "blocked",
     };
     let propagation = app.settings.propagation_node.clone();
     let rows = app.network_rows();
@@ -120,8 +121,14 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
                     format!("  {} hop{}", peer.hops, if peer.hops == 1 { "" } else { "s" }),
                     Style::default().fg(DIM),
                 ),
-                Span::styled(format!("  {} ago", ago(peer.last_seen)), Style::default().fg(DIM)),
+                Span::styled(
+                    if peer.last_seen == 0 { "  not heard".to_string() } else { format!("  {} ago", ago(peer.last_seen)) },
+                    Style::default().fg(DIM),
+                ),
             ]);
+            if app.store.contacts.get(hash.as_str()).is_some_and(|c| c.trust == crate::store::Trust::Blocked) {
+                spans.push(Span::styled("  ⛔ blocked", Style::default().fg(Color::LightRed)));
+            }
             if propagation.as_deref() == Some(hash.as_str()) {
                 spans.push(Span::styled("  ★ outbound", Style::default().fg(Color::LightYellow)));
             }
@@ -132,7 +139,9 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     let list_block = block(&title, true);
     app.regions.peers = list_block.inner(area);
     if empty {
-        let message = if terms.is_empty() {
+        let message = if app.net_filter == NetFilter::Blocked && terms.is_empty() {
+            "Nobody is blocked. Block someone from their contact card (c in Messages), or with b on an LXMF peer here.".to_string()
+        } else if terms.is_empty() {
             "Listening for announces… peers, NomadNet nodes and propagation nodes appear here as they are heard."
                 .to_string()
         } else {

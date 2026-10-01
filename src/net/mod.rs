@@ -82,6 +82,15 @@ pub enum NetCommand {
     /// Read in a paper message (an `lxm://` link).
     ReadPaper(String),
     SetDisplayName(String),
+    /// The stamp cost asked of senders (announced) and the largest message
+    /// taken, in bytes (0: any).
+    SetPolicy { stamp_cost: Option<u8>, max_bytes: u64 },
+    /// Contacts: those given stamp tickets (trusted), and those spared the
+    /// stamp (trusted, or written to).
+    SetContacts { trusted: Vec<Hash>, exempt: Vec<Hash> },
+    /// Block (or unblock) the identity behind an LXMF address in Reticulum.
+    /// `quiet`: no line in the log when it's done (re-applied at start).
+    Blackhole { to: Hash, block: bool, quiet: bool },
     SetPropagationNode(Option<Hash>),
     /// New automatic announce and sync intervals (`None` turns one off).
     SetIntervals {
@@ -195,6 +204,16 @@ pub struct NetOptions {
     pub known_identities: PathBuf,
     /// Node to host from the start, if any.
     pub host: Option<HostConfig>,
+    /// The stamp cost asked of senders, and the largest message taken.
+    pub stamp_cost: Option<u8>,
+    pub max_message_bytes: u64,
+    /// Where stamp tickets are kept.
+    pub tickets: PathBuf,
+}
+
+/// LXMF announce data: the display name, and the stamp cost asked.
+fn app_data(display_name: &str, stamp_cost: Option<u8>) -> Vec<u8> {
+    get_announce_app_data(Some(display_name), stamp_cost)
 }
 
 /// Start the network actor on a runtime of its own, so heavy traffic
@@ -269,16 +288,34 @@ async fn run(
 
     let identity = options.identity;
     let known = KnownIdentities::load(&options.known_identities);
+    let policy = lxmf::Policy::load(&options.tickets, options.stamp_cost, options.max_message_bytes);
     let mut display_name = options.display_name;
     let mut propagation_node = options.propagation_node;
+    // Transfers over the size limit are refused before they're downloaded.
+    let size_gate = {
+        let (policy, ev) = (policy.clone(), ev.clone());
+        ResourceAcceptPolicy::new(move |_link, advertisement| {
+            let policy = policy.lock().unwrap();
+            if !policy.too_big(advertisement.data_size) {
+                return true;
+            }
+            let _ = ev.send(NetEvent::Log(format!(
+                "Refused a {} KB message: over your limit of {} KB",
+                advertisement.data_size / 1000,
+                policy.max_bytes / 1000
+            )));
+            false
+        })
+    };
     let mut delivery = runtime
         .register_destination(
             identity.clone(),
             LXMF_ASPECT,
             DestinationRuntimeOptions {
                 proof_strategy: ProofStrategy::ProveAll,
-                resource_strategy: ResourceStrategy::AcceptAll,
-                default_app_data: Some(get_announce_app_data(Some(&display_name), None)),
+                resource_strategy: ResourceStrategy::AcceptApp,
+                resource_accept: Some(size_gate),
+                default_app_data: Some(app_data(&display_name, options.stamp_cost)),
                 ..DestinationRuntimeOptions::default()
             },
         )
@@ -309,9 +346,11 @@ async fn run(
     }
     let mut rrc_sessions = rrc_session::Sessions::default();
     let mut stop = Stop::Quit;
-    let syncer = lxmf::Syncer::new(runtime.clone(), known.clone(), identity.clone(), lxmf_hash, ev.clone());
-    // Known identities are saved every few seconds, one save at a time.
+    let syncer = lxmf::Syncer::new(runtime.clone(), known.clone(), policy.clone(), identity.clone(), lxmf_hash, ev.clone());
+    // Known identities (and tickets) are saved every few seconds, one save
+    // at a time.
     let mut known_save: Option<tokio::task::JoinHandle<()>> = None;
+    let announce_data = |name: &str| app_data(name, policy.lock().unwrap().stamp_cost);
     let mut announces_missed = 0u64;
 
     // Give interfaces a moment to come up before announcing or syncing.
@@ -335,22 +374,25 @@ async fn run(
             () = &mut startup, if startup_pending => {
                 startup_pending = false;
                 if options.announce_at_start {
-                    announce(&delivery.handle, &display_name, &ev).await;
+                    announce(&delivery.handle, announce_data(&display_name), &ev).await;
                 }
                 if propagation_node.is_some() && sync_interval.is_some() {
                     syncer.start(propagation_node);
                 }
             }
             _ = announce_timer.tick(), if announce_interval.is_some() => {
-                announce(&delivery.handle, &display_name, &ev).await;
+                announce(&delivery.handle, announce_data(&display_name), &ev).await;
             }
             _ = sync_timer.tick(), if sync_interval.is_some() && propagation_node.is_some() => {
                 syncer.start(propagation_node);
             }
             _ = stats_timer.tick() => {
                 if known_save.as_ref().is_none_or(|save| save.is_finished()) {
-                    let known = known.clone();
-                    known_save = Some(tokio::spawn(async move { KnownIdentities::save_in_background(&known).await }));
+                    let (known, policy) = (known.clone(), policy.clone());
+                    known_save = Some(tokio::spawn(async move {
+                        KnownIdentities::save_in_background(&known).await;
+                        lxmf::Policy::save_in_background(&policy).await;
+                    }));
                 }
                 let missed = lxmf_announces.dropped_events() + nomad_announces.dropped_events() + pn_announces.dropped_events();
                 if missed > announces_missed {
@@ -385,13 +427,36 @@ async fn run(
                         stop = why;
                         break;
                     }
-                    NetCommand::Announce => announce(&delivery.handle, &display_name, &ev).await,
+                    NetCommand::Announce => announce(&delivery.handle, announce_data(&display_name), &ev).await,
                     NetCommand::SetDisplayName(name) => {
                         display_name = name;
-                        let app_data = get_announce_app_data(Some(&display_name), None);
-                        if let Err(e) = delivery.handle.set_default_app_data(Some(app_data)).await {
+                        if let Err(e) = delivery.handle.set_default_app_data(Some(announce_data(&display_name))).await {
                             let _ = ev.send(NetEvent::Log(format!("Could not update announce data: {e}")));
                         }
+                    }
+                    NetCommand::SetPolicy { stamp_cost, max_bytes } => {
+                        let changed = {
+                            let mut policy = policy.lock().unwrap();
+                            policy.max_bytes = max_bytes;
+                            std::mem::replace(&mut policy.stamp_cost, stamp_cost) != stamp_cost
+                        };
+                        // Senders learn a new cost from the announce.
+                        if changed {
+                            if let Err(e) = delivery.handle.set_default_app_data(Some(announce_data(&display_name))).await {
+                                let _ = ev.send(NetEvent::Log(format!("Could not update announce data: {e}")));
+                            }
+                            announce(&delivery.handle, announce_data(&display_name), &ev).await;
+                        }
+                    }
+                    NetCommand::SetContacts { trusted, exempt } => policy.lock().unwrap().set_contacts(trusted, exempt),
+                    NetCommand::Blackhole { to, block, quiet } => {
+                        let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
+                        tokio::spawn(async move {
+                            let result = blackhole(&runtime, &known, to, block).await;
+                            if result.is_err() || !quiet {
+                                let _ = ev.send(NetEvent::Log(result.unwrap_or_else(|e| e)));
+                            }
+                        });
                     }
                     NetCommand::SetPropagationNode(node) => propagation_node = node,
                     NetCommand::SetIntervals { announce, sync } => {
@@ -415,11 +480,16 @@ async fn run(
                     }
                     NetCommand::ReadPaper(link) => lxmf::paper::read(&runtime, &known, &identity, lxmf_hash, link, &ev),
                     NetCommand::SendMessage { id, message } => {
-                        let (runtime, known, identity, ev) =
-                            (runtime.clone(), known.clone(), identity.clone(), ev.clone());
-                        let outgoing = lxmf::Outgoing { propagation_node, ..message };
+                        let (runtime, known, identity, ev, policy) =
+                            (runtime.clone(), known.clone(), identity.clone(), ev.clone(), policy.clone());
+                        let (stamp_ticket, ticket) = policy.lock().unwrap().for_outgoing(message.to);
+                        let outgoing = lxmf::Outgoing { propagation_node, stamp_ticket, ticket, ..message };
+                        let (to, gives_ticket) = (outgoing.to, outgoing.ticket.is_some());
                         tokio::spawn(async move {
                             let result = lxmf::send(&runtime, &known, &identity, lxmf_hash, outgoing).await;
+                            if gives_ticket && result.is_ok() {
+                                policy.lock().unwrap().ticket_delivered(to);
+                            }
                             let _ = ev.send(NetEvent::Delivery { id, result });
                         });
                     }
@@ -516,11 +586,11 @@ async fn run(
             // Opportunistic delivery: a single packet carrying everything after
             // the destination hash.
             Some(packet) = delivery.events.packets.recv() => {
-                lxmf::spawn_inbound(&runtime, &known, lxmf::with_destination(lxmf_hash, packet.data), &ev);
+                lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, packet.data), &ev);
             }
             // Direct delivery over a Link, as a packet or as a Resource.
             Some((data, _link_id)) = delivery.events.link_packets.recv() => {
-                lxmf::spawn_inbound(&runtime, &known, lxmf::with_destination(lxmf_hash, data), &ev);
+                lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, data), &ev);
             }
             Some((generation, result)) = host_rx.recv() => {
                 // A start that was superseded (or stopped) meanwhile is dropped.
@@ -538,19 +608,20 @@ async fn run(
                 let _ = ev.send(NetEvent::Host(event));
             }
             Some(completion) = delivery.events.resource_completions.recv() => {
-                lxmf::spawn_inbound(&runtime, &known, lxmf::with_destination(lxmf_hash, completion.data), &ev);
+                lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, completion.data), &ev);
             }
         }
     }
 
-    // Save known identities while hubs are told we are leaving.
+    // Save known identities (and tickets) while hubs are told we are leaving.
     let final_save = {
-        let (known, previous) = (known.clone(), known_save.take());
+        let (known, policy, previous) = (known.clone(), policy.clone(), known_save.take());
         tokio::spawn(async move {
             if let Some(save) = previous {
                 let _ = save.await;
             }
             KnownIdentities::save_in_background(&known).await;
+            lxmf::Policy::save_in_background(&policy).await;
         })
     };
     // Hubs first, so they see us leave at once. The rest is tidying up: it
@@ -590,13 +661,35 @@ pub async fn shutdown(
     let _ = tokio::time::timeout(why.total_wait(), stopped).await;
 }
 
+/// Block (or unblock) the identity behind LXMF address `to` in Reticulum:
+/// its announces and traffic are dropped by the transport. Says what it did.
+async fn blackhole(runtime: &ReticulumHandle, known: &Known, to: Hash, block: bool) -> Result<String, String> {
+    use rns_transport::blackhole::BlackholeReason;
+    use rns_transport::messages::TransportQuery;
+    let address = hex::encode(to);
+    let remote = lookup(runtime, known, to).await.map_err(|e| {
+        format!("Could not change the block on {address} in Reticulum: their identity isn't known ({e}); rettui still ignores their messages")
+    })?;
+    let hash = remote.identity.hash;
+    let query = if block {
+        TransportQuery::BlackholeIdentity { hash, ttl: None, reason: BlackholeReason::Manual, reason_label: Some("blocked in rettui".into()) }
+    } else {
+        TransportQuery::UnblackholeIdentity { hash }
+    };
+    runtime
+        .query_control_result(query)
+        .await
+        .map(|_| format!("{} {address}'s identity in Reticulum", if block { "Blocked" } else { "Unblocked" }))
+        .map_err(|e| format!("Could not change the block on {address} in Reticulum: {e}"))
+}
+
 async fn announce(
     destination: &DestinationHandle,
-    display_name: &str,
+    app_data: Vec<u8>,
     ev: &mpsc::UnboundedSender<NetEvent>,
 ) {
     let options = DestinationAnnounceOptions {
-        app_data: Some(get_announce_app_data(Some(display_name), None)),
+        app_data: Some(app_data),
         ..DestinationAnnounceOptions::default()
     };
     match destination.announce(options).await {
