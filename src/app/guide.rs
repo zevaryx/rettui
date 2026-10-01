@@ -39,9 +39,10 @@ pub struct EntryPoint {
 
 /// The entry points offered: the ones Colorado Mesh's mesh-client
 /// recommends (its default hubs), in its order and groups. Several, so
-/// one being down doesn't leave a new user unconnected.
+/// one being down doesn't leave a new user unconnected. Not its RNS Dublin
+/// Mainnet (`dublin.connect.reticulum.network:4965`): that name no longer
+/// exists, like its Amsterdam twin, which mesh-client counts as shut down.
 pub const ENTRY_POINTS: &[EntryPoint] = &[
-    EntryPoint { region: "Primary & global backbone", name: "RNS Dublin Mainnet", host: "dublin.connect.reticulum.network", port: 4965 },
     EntryPoint { region: "Primary & global backbone", name: "RNS Between The Borders", host: "reticulum.betweentheborders.com", port: 4242 },
     EntryPoint { region: "Primary & global backbone", name: "RMAP World", host: "rmap.world", port: 4242 },
     EntryPoint { region: "Primary & global backbone", name: "RNS Simply Equipped", host: "rns.simplyequipped.com", port: 4242 },
@@ -524,22 +525,23 @@ mod tests {
         // still being tried in the list's order.
         let defaults = app.guide_defaults();
         assert_eq!((defaults.name.as_str(), defaults.discover, defaults.auto_propagation), ("rettui user", true, false));
-        assert_eq!(ticked(&defaults.connect), [0, 1, 2]);
+        let (borders, rmap, simply, beleth, mich, ratspeak) = (0, 1, 2, 3, 4, 5);
+        assert_eq!(ENTRY_POINTS.len(), 6);
+        assert_eq!((ENTRY_POINTS[rmap].name, ENTRY_POINTS[ratspeak].host), ("RMAP World", "rns.ratspeak.org"));
+        assert_eq!(ticked(&defaults.connect), [borders, rmap, simply]);
         // Those that answered first, quickest first; one that didn't
         // answer isn't ticked, and isn't added even if asked for.
-        let (dublin, borders, rmap, ratspeak) = (0, 1, 2, ENTRY_POINTS.len() - 1);
-        assert_eq!((ENTRY_POINTS[rmap].name, ENTRY_POINTS[ratspeak].host), ("RMAP World", "rns.ratspeak.org"));
         let mut reach = vec![Reach::Checking; ENTRY_POINTS.len()];
-        reach[dublin] = Reach::Down("refused");
+        reach[borders] = Reach::Down("refused");
         reach[ratspeak] = Reach::Up(Duration::from_millis(90));
         app.entry_reach.set(reach.clone());
-        assert_eq!(ticked(&app.guide_defaults().connect), [borders, rmap, ratspeak]);
+        assert_eq!(ticked(&app.guide_defaults().connect), [rmap, simply, ratspeak]);
         // All in: the 3 fastest.
-        for (i, ms) in [(borders, 400), (rmap, 120), (3, 250), (4, 300), (5, 600)] {
+        for (i, ms) in [(rmap, 120), (simply, 250), (beleth, 300), (mich, 600)] {
             reach[i] = Reach::Up(Duration::from_millis(ms));
         }
         app.entry_reach.set(reach.clone());
-        assert_eq!(ticked(&app.guide_defaults().connect), [rmap, 3, ratspeak]);
+        assert_eq!(ticked(&app.guide_defaults().connect), [rmap, simply, ratspeak]);
         // In the terminal, the ticks follow the tries until one is ticked
         // or unticked; a row that didn't answer can't be.
         let mut reach = vec![Reach::Down("refused"); ENTRY_POINTS.len()];
@@ -549,20 +551,20 @@ mod tests {
         app.open_guide();
         let shown = |app: &App| ticked(&app.guide.as_ref().unwrap().shown(&app.guide_view()).connect);
         assert_eq!(shown(&app), [rmap, ratspeak]);
-        app.guide_activate(GuideRow::Connect(dublin));
+        app.guide_activate(GuideRow::Connect(borders));
         assert_eq!(shown(&app), [rmap, ratspeak], "not ticked");
         assert!(!app.guide.as_ref().unwrap().by_hand);
         reach[rmap] = Reach::Up(Duration::from_millis(120));
         reach[ratspeak] = Reach::Up(Duration::from_millis(90));
-        reach[3] = Reach::Up(Duration::from_millis(250));
-        reach[4] = Reach::Up(Duration::from_millis(30));
+        reach[simply] = Reach::Up(Duration::from_millis(250));
+        reach[beleth] = Reach::Up(Duration::from_millis(30));
         app.entry_reach.set(reach.clone());
-        assert_eq!(shown(&app), [rmap, 4, ratspeak], "as they answer");
+        assert_eq!(shown(&app), [rmap, beleth, ratspeak], "as they answer");
         app.guide_activate(GuideRow::Connect(rmap));
-        assert_eq!(shown(&app), [4, ratspeak]);
-        reach[5] = Reach::Up(Duration::from_millis(10));
+        assert_eq!(shown(&app), [beleth, ratspeak]);
+        reach[mich] = Reach::Up(Duration::from_millis(10));
         app.entry_reach.set(reach);
-        assert_eq!(shown(&app), [4, ratspeak], "the user's from then on");
+        assert_eq!(shown(&app), [beleth, ratspeak], "the user's from then on");
         let mut reach = vec![Reach::Down("refused"); ENTRY_POINTS.len()];
         reach[rmap] = Reach::Up(Duration::from_millis(120));
         reach[ratspeak] = Reach::Up(Duration::from_millis(90));
@@ -577,7 +579,7 @@ mod tests {
         let config = std::fs::read_to_string(rns_dir.join("config")).unwrap();
         assert!(config.contains("target_host = rmap.world") && config.contains("target_host = rns.ratspeak.org"), "{config}");
         assert!(config.contains("[[Ratspeak & Colorado Mesh]]"), "{config}");
-        assert!(!config.contains(ENTRY_POINTS[dublin].host) && !config.contains(ENTRY_POINTS[borders].host), "{config}");
+        assert!(!config.contains(ENTRY_POINTS[borders].host) && !config.contains(ENTRY_POINTS[simply].host), "{config}");
         assert!(!config.contains("bootstrap_only"), "{config}");
         assert!(rns::discovery_on(&config));
         assert!(app.take_rns_restart());

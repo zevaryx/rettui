@@ -16,12 +16,12 @@ the web UI's Status page, opens it again):
   instead.
 - **Entry points:** public entry points to connect through, the ones
   Colorado Mesh's [mesh-client](https://github.com/Colorado-Mesh/mesh-client)
-  recommends, under the same headings:
+  recommends, under the same headings (all but RNS Dublin Mainnet, whose
+  address no longer exists):
 
   | Group | Entry point | Address |
   |---|---|---|
-  | Primary & global backbone | RNS Dublin Mainnet | `dublin.connect.reticulum.network:4965` |
-  | | RNS Between The Borders | `reticulum.betweentheborders.com:4242` |
+  | Primary & global backbone | RNS Between The Borders | `reticulum.betweentheborders.com:4242` |
   | | RMAP World | `rmap.world:4242` |
   | | RNS Simply Equipped | `rns.simplyequipped.com:4242` |
   | | RNS Beleth | `rns.beleth.net:4242` |

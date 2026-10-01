@@ -267,8 +267,9 @@ mod tests {
         assert!(screen.contains("Getting started") && screen.contains("Not connected to anyone yet"), "{screen}");
         assert!(screen.contains("Entry points · Primary & global backbone"), "{screen}");
         // While they're tried, the first 3 are ticked.
-        assert!(screen.contains("[x] RNS Dublin Mainnet        checking…"), "{screen}");
-        assert!(screen.contains("[ ] RNS Simply Equipped       checking…"), "{screen}");
+        assert!(screen.contains("[x] RNS Between The Borders   checking…"), "{screen}");
+        assert!(screen.contains("[x] RNS Simply Equipped       checking…"), "{screen}");
+        assert!(screen.contains("[ ] RNS Beleth                checking…"), "{screen}");
         assert!(screen.contains("Apply") && screen.contains("Not now") && screen.contains("The name sent"), "{screen}");
         assert!(!screen.contains("Using rettui"), "below, for now: {screen}");
         let first = apply_at(&app);
@@ -297,16 +298,16 @@ mod tests {
         // As the entry points answer: how quickly, the 3 fastest ticked;
         // or greyed out and not to be ticked.
         let count = crate::app::guide::ENTRY_POINTS.len();
-        let answered = |ms: [u64; 7]| ms.map(|ms| if ms == 0 { Reach::Down("refused") } else { Reach::Up(std::time::Duration::from_millis(ms)) }).to_vec();
-        app.entry_reach.set(answered([382, 0, 120, 250, 500, 600, 90]));
+        let answered = |ms: [u64; 6]| ms.map(|ms| if ms == 0 { Reach::Down("refused") } else { Reach::Up(std::time::Duration::from_millis(ms)) }).to_vec();
+        app.entry_reach.set(answered([0, 120, 250, 382, 600, 90]));
         app.guide.as_mut().unwrap().row = 2;
         let screen = draw(&mut app);
-        assert!(screen.contains("[ ] RNS Dublin Mainnet        up · 382 ms"), "{screen}");
+        assert!(screen.contains("[ ] RNS Beleth                up · 382 ms"), "{screen}");
         assert!(screen.contains("[ ] RNS Between The Borders   down · refused"), "{screen}");
         assert!(screen.contains("[x] RMAP World                up · 120 ms"), "{screen}");
         assert!(screen.contains("[x] RNS Simply Equipped       up · 250 ms"), "{screen}");
         assert!(screen.contains("[x] Ratspeak & Colorado Mesh  up · 90 ms"), "{screen}");
-        let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Connect(1)).unwrap();
+        let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Connect(0)).unwrap();
         app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
         assert!(draw(&mut app).contains("[ ] RNS Between The Borders   down · refused"));
         assert!(draw(&mut app).contains("It didn't answer just now (refused)"));
@@ -333,7 +334,7 @@ mod tests {
         assert!(screen.contains("Reticulum reaches others") && screen.contains("Using rettui") && screen.contains("Not now"), "{screen}");
         assert_eq!(app.regions.guide_rows.len(), crate::app::guide::Guide::rows(&app.guide_view()).len(), "{screen}");
         // Apply adds the ones ticked, as shown.
-        app.entry_reach.set(answered([382, 0, 120, 250, 500, 600, 90]));
+        app.entry_reach.set(answered([0, 120, 250, 382, 600, 90]));
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Apply).unwrap();
         app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
         let config = std::fs::read_to_string(dir.join("rns").join("config")).unwrap();
