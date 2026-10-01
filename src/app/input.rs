@@ -63,6 +63,10 @@ impl App {
             }
             return;
         }
+        if self.guide.is_some() {
+            self.guide_key(key);
+            return;
+        }
         if self.contact_card.is_some() && self.tab == Tab::Messages {
             self.contact_card_key(key);
             return;
@@ -185,6 +189,12 @@ impl App {
             return;
         }
         let at = Position::new(mouse.column, mouse.row);
+        if self.guide.is_some() {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                self.click_guide(at);
+            }
+            return;
+        }
         if self.contact_card.is_some() && self.tab == Tab::Messages {
             if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
                 self.click_contact_card(at);

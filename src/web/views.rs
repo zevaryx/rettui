@@ -58,6 +58,8 @@ pub fn state(app: &App) -> Value {
         "sync": sync,
         "propagation_node": propagation,
         "auto_propagation": auto_propagation,
+        // A new install: the getting-started guide opens by itself.
+        "welcome": !app.settings.welcomed,
         // The propagation node hosted here.
         "hosting": hosting,
         "rns_config": app.settings.rns_config,
@@ -76,6 +78,32 @@ pub fn state(app: &App) -> Value {
         },
         "log": app.log.iter().collect::<Vec<_>>(),
         "unread": { "messages": message_unread, "channels": channel_unread, "mention": mention },
+    })
+}
+
+/// The getting-started guide: what's set up, the choices to start from,
+/// and its words and links.
+pub fn guide(app: &App) -> Value {
+    use crate::app::guide;
+    let view = app.guide_view();
+    let defaults = app.guide_defaults();
+    json!({
+        "name": view.name,
+        "has_entry_point": view.has_entry_point,
+        "has_discovery": view.has_discovery,
+        "external": view.external,
+        "external_note": crate::reticulum::EXTERNAL_NOTE,
+        "interfaces_online": view.interfaces_online,
+        "heard": view.heard,
+        "defaults": {
+            "connect": defaults.connect, "discover": defaults.discover, "auto_propagation": defaults.auto_propagation,
+        },
+        "entry": { "name": guide::ENTRY_NAME, "host": guide::ENTRY_HOST, "port": guide::ENTRY_PORT },
+        "help": {
+            "intro": guide::INTRO, "name": guide::NAME_HELP, "connect": guide::CONNECT_HELP,
+            "discover": guide::DISCOVER_HELP, "auto_propagation": guide::AUTO_PROPAGATION_HELP, "apply": guide::APPLY_HELP,
+        },
+        "links": guide::LINKS.iter().map(|(title, url)| json!({ "title": title, "url": url })).collect::<Vec<_>>(),
     })
 }
 

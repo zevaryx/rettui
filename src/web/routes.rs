@@ -103,6 +103,8 @@ pub fn router(state: WebState) -> Router {
         .route("/announce", post(announce))
         .route("/sync", post(sync))
         .route("/settings", get(get_settings).post(save_settings))
+        .route("/guide", get(guide).post(apply_guide))
+        .route("/guide/dismiss", post(dismiss_guide))
         .route("/channels", get(channels).post(add_hub))
         .route("/channels/{hub}/room", get(room))
         .route("/channels/{hub}/{action}", post(hub_action))
@@ -988,6 +990,40 @@ async fn save_settings(State(state): State<WebState>, axum::Json(body): axum::Js
         })
         .await??;
     Ok(axum::Json(json!({ "notes": notes })))
+}
+
+// ---- getting started ----------------------------------------------------------
+
+async fn guide(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::guide(&o.app)).await?))
+}
+
+#[derive(Deserialize)]
+struct GuideBody {
+    name: String,
+    #[serde(default)]
+    connect: bool,
+    #[serde(default)]
+    discover: bool,
+    #[serde(default)]
+    auto_propagation: bool,
+}
+
+/// Apply the guide's choices (Reticulum restarts if its config changes).
+async fn apply_guide(State(state): State<WebState>, axum::Json(body): axum::Json<GuideBody>) -> ApiResult {
+    let choices = crate::app::guide::GuideChoices {
+        name: body.name,
+        connect: body.connect,
+        discover: body.discover,
+        auto_propagation: body.auto_propagation,
+    };
+    let done = state.write(move |o| o.app.apply_guide(&choices, true)).await??;
+    Ok(axum::Json(json!({ "done": done })))
+}
+
+async fn dismiss_guide(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.finish_guide()).await?;
+    ok()
 }
 
 // ---- channels -------------------------------------------------------------

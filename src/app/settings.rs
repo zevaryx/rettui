@@ -212,6 +212,7 @@ impl App {
                 self.copy(&address, "your LXMF address");
             }
             KeyCode::Char('c') => self.show_address_qr(),
+            KeyCode::Char('g') => self.open_guide(),
             _ => {}
         }
     }

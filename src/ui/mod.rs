@@ -8,6 +8,7 @@ mod browser;
 mod channels;
 mod chrome;
 mod contact;
+mod guide;
 mod editor;
 mod emoji;
 mod messages;
@@ -123,6 +124,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if app.paper_view.is_some() {
         messages::draw_paper(frame, app);
+    }
+    if app.guide.is_some() {
+        guide::draw_guide(frame, app);
     }
     if app.prompt.is_some() {
         draw_prompt(frame, app);

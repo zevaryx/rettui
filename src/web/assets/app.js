@@ -816,6 +816,11 @@ function applyWrap(textarea) {
 async function refreshStatus() {
   try {
     app.status = await api.get('/state');
+    // A new install: the guide opens by itself, once a page load.
+    if (app.status.welcome && !app.guideShown) {
+      app.guideShown = true;
+      gettingStarted();
+    }
     renderSidebar();
     document.querySelectorAll('textarea.page-editor').forEach(applyWrap);
   } catch (e) {
@@ -1302,6 +1307,56 @@ function dialog(title, body, { className = '', onclose } = {}) {
   document.addEventListener('keydown', onKey);
   document.body.append(overlay);
   return close;
+}
+
+// The getting-started guide: an entry point to reach others, finding more
+// over time, a propagation node, and where to learn more.
+async function gettingStarted() {
+  const g = await attempt(() => api.get('/guide'));
+  if (!g) return;
+  let finished = false;
+  const name = el('input', { type: 'text', value: g.name, maxlength: 128 });
+  const option = (key, label, help, { on, already } = {}) => {
+    const box = el('input', { type: 'checkbox', checked: already || on, disabled: !!already });
+    return { key, box, node: el('label', { class: 'guide-option' }, box,
+      el('span', {}, el('span', { text: already ? `${label} (${already})` : label }), el('span', { class: 'dim help', text: help }))) };
+  };
+  const options = [];
+  if (!g.external) {
+    options.push(option('connect', `Connect through ${g.entry.name} (${g.entry.host}:${g.entry.port}), a community entry point`, g.help.connect,
+      { on: g.defaults.connect, already: g.has_entry_point && 'in your Reticulum config already' }));
+    options.push(option('discover', 'Also find entry points near you over time (interface discovery)', g.help.discover,
+      { on: g.defaults.discover, already: g.has_discovery && 'on already' }));
+  }
+  options.push(option('auto_propagation', 'Pick a propagation node automatically', g.help.auto_propagation, { on: g.defaults.auto_propagation }));
+  const status = g.interfaces_online === 0 ? ['warn', '○ Not connected to anyone yet']
+    : g.heard === 0 ? ['warn', `◌ ${g.interfaces_online} interface(s) online, nobody heard yet`]
+      : ['ok', `● Connected: ${g.interfaces_online} interface(s) online, ${g.heard} peers and nodes heard`];
+  const close = dialog('Getting started', (close) => [
+    el('p', { class: 'dim', text: g.help.intro }),
+    el('p', { class: 'guide-status ' + status[0], text: status[1] }),
+    el('label', { class: 'field' }, el('span', { text: 'Your name' }), name, el('span', { class: 'dim help', text: g.help.name })),
+    g.external ? el('p', { class: 'dim', text: `${g.external_note}: add entry points in that program's Reticulum config.` }) : null,
+    ...options.map((o) => o.node),
+    el('div', { class: 'guide-links' }, el('span', { class: 'dim', text: 'Learn more' }),
+      g.links.map((l) => el('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer', text: '↗ ' + l.title }))),
+    el('div', { class: 'row actions' },
+      el('button', { text: 'Not now', onclick: () => close() }),
+      el('span', { class: 'grow' }),
+      el('button', { class: 'primary', text: 'Apply', title: g.help.apply, onclick: async () => {
+        const body = { name: name.value };
+        for (const o of options) body[o.key] = o.box.checked && !o.box.disabled;
+        const result = await attempt(() => api.post('/guide', body));
+        if (!result) return;
+        finished = true;
+        close();
+        toast(result.done.length ? result.done.join('. ') : 'All set');
+        loadNow();
+      } })),
+  ], { className: 'guide', onclose: () => {
+    // Closed without applying: not shown by itself again.
+    if (!finished) api.post('/guide/dismiss').catch(() => {});
+  } });
 }
 
 // Your address and public key as a QR code (an lxma:// link), for others
@@ -4010,6 +4065,7 @@ app.views.status = {
         el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Identity' }),
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
           el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+          el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
           el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }), moreButton()), this.info),
         el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
           this.revertButton, this.saveButton), el('div', { class: 'scroll' }, this.form, this.settingsFooter))),

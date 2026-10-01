@@ -2,6 +2,34 @@ With no command, `rettui` starts the terminal UI ([Using the TUI](Using-the-TUI)
 `--web` starts the [Web UI](Web-UI). The other commands work from a shell,
 without a UI.
 
+## The first start
+
+Reticulum's default config only reaches your local network, so a new install
+usually hears no one. The first time rettui starts, in either UI, it opens a
+**Getting started** guide (`g` in the Status tab, or **Getting started** on
+the web UI's Status page, opens it again):
+
+- **Your name:** the display name others see in your announces.
+- **Connect through RMAP World** (`rmap.world:4242`, on by default in the
+  guide): adds a TCP interface to that community entry point to your
+  Reticulum config. Its operator sees your IP address, and anyone watching
+  your connection can tell you use Reticulum.
+- **Also find entry points near you over time:** turns on interface
+  discovery, as Reticulum's manual recommends; RMAP World is then used only
+  until discovered entry points connect (see
+  [Settings and Reticulum Config](Settings-and-Reticulum-Config)).
+- **Pick a propagation node automatically** (see
+  [Messaging](Messaging#picking-a-propagation-node-automatically)).
+- **Learn more:** Reticulum's manual (getting started, understanding
+  Reticulum, connecting to others), RMAP World's map and
+  directory.rns.recipes for finding entry points, and this wiki.
+
+Nothing changes until you choose **Apply**; if the Reticulum config changed,
+Reticulum restarts to connect. **Not now** (or Esc) closes it for good. If
+another program (such as rnsd) runs the shared instance, the guide leaves
+its config alone and says so. Installs from before the guide existed don't
+see it at start.
+
 ## Commands
 
 ```sh

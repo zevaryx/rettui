@@ -172,6 +172,8 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         &[("Enter", "confirm"), ("Esc", "cancel"), ("^V", "paste")]
     } else if app.paper_view.is_some() {
         &[("y", "copy link"), ("s", "save image"), ("Esc", "close")]
+    } else if app.guide.is_some() {
+        &[("↑↓", "choose"), ("Enter", "change / open"), ("y", "copy link"), ("Esc", "close")]
     } else {
         match app.tab {
             Tab::Channels if app.channels.typing && app.mention_matches().is_some() => &[
@@ -380,6 +382,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("e", "edit name"),
                 ("y", "copy my address"),
                 ("c", "address QR code"),
+                ("g", "getting started"),
                 ("^R", "restart Reticulum"),
                 ("S", "sync"),
                 ("A", "announce"),
