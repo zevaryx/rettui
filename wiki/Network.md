@@ -4,6 +4,12 @@ shows your identity, your interfaces and the log.
 - **Heard announces:** the Network tab lists the LXMF peers, NomadNet nodes
   and propagation nodes you've heard, with their names, addresses, hops and
   when they were last heard.
+- **Hearing others takes time:** there's no list to download; each peer
+  and node announces on its own schedule, many only every few hours, so a
+  new install's list fills over its first hours. Announcing yourself (`A`,
+  or **Announce** in the web UI) lets others find you. While nothing is
+  connected, the empty list says so and points to the getting-started
+  guide.
 - **Finding:** filter by kind (`f`), or search by name or address (`/`),
   with the matches highlighted. Addresses can be pasted in any common form
   (`<hash>`, `lxmf@hash`, `hash:/page/index.mu`).
