@@ -317,6 +317,11 @@ async fn run(
     ev: mpsc::UnboundedSender<NetEvent>,
 ) -> Result<(), String> {
     let runtime = start_runtime(options.rns_config.as_deref()).await?;
+    // Interface discovery (finding entry points, and publishing ours) needs
+    // a stamper, which rsReticulum leaves to the program: without it, the
+    // discovery options in the config do nothing. It's idle unless they're
+    // turned on.
+    runtime.enable_on_network_discovery(Arc::new(lxmf_core::discovery_stamper::LxmfDiscoveryStamper::default())).await;
     for (name, reason) in runtime.startup_interface_failures() {
         let _ = ev.send(NetEvent::Log(format!("Interface {name} failed: {reason}")));
     }
