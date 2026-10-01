@@ -279,6 +279,9 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
         if let Some(e) = desktop.failure() {
             app.log(format!("Could not show a desktop notification: {e}"));
         }
+        while let Some(target) = desktop.clicked() {
+            app.open_notified(target);
+        }
         if app.should_quit {
             break Ok(());
         }
