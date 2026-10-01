@@ -11,6 +11,7 @@ rettui fetch <hash>[:/page/x.mu] [--raw] [--identify] [-o FILE]
 rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]
 rettui listen [--seconds N]  # announce, then print incoming messages
 rettui sync [--node HASH]    # download messages from the propagation node
+rettui ping <address>        # how long a Link takes to set up, and how many hops away
 rettui address [--link]      # print your LXMF address (--link: as an lxma:// link with your key)
 ```
 

@@ -89,6 +89,9 @@ enum Command {
         #[arg(long, default_value_t = 300)]
         seconds: u64,
     },
+    /// Ping an LXMF address: how long a Link to it takes to set up, and
+    /// how many hops away it is.
+    Ping { address: String },
     /// Download waiting messages from the propagation node.
     Sync {
         /// Propagation node to use instead of the configured one.
@@ -170,6 +173,7 @@ async fn main() -> Result<()> {
         }
         Some(Command::Listen { seconds }) => cli::listen(&settings, &paths, identity, seconds).await,
         Some(Command::Sync { node }) => cli::sync(&settings, &paths, identity, node.as_deref()).await,
+        Some(Command::Ping { address }) => cli::ping(&settings, &paths, identity, &address).await,
         None => run_tui(settings, paths, identity).await,
     }
 }

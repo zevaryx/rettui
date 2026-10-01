@@ -150,6 +150,33 @@ pub async fn lookup(runtime: &ReticulumHandle, known: &Known, destination: Hash)
         .ok_or_else(|| "Destination identity is unknown (no announce heard)".to_string())
 }
 
+/// How a peer answered a ping.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ping {
+    /// How long a Link to them took to set up: a round trip, and their
+    /// work to accept it.
+    pub rtt: std::time::Duration,
+    /// How far away they are, if the path table says.
+    pub hops: Option<u8>,
+}
+
+/// Ping an LXMF address: find a path, then time setting up a Link to it
+/// (closed straight away). Any LXMF client answers; nothing is sent over it.
+pub async fn ping(runtime: &ReticulumHandle, known: &Known, to: Hash) -> Result<Ping, String> {
+    ensure_path(runtime, to).await?;
+    // Their key, from earlier runs if the runtime hasn't heard it.
+    lookup(runtime, known, to).await?;
+    let hops = runtime.hops_to(to).await.ok().filter(|&h| h < rns_transport::constants::PATHFINDER_M);
+    let started = std::time::Instant::now();
+    let LinkSession { handle, .. } = runtime
+        .connect_link(to, Identity::new(), link_options("rettui.ping", false))
+        .await
+        .map_err(|e| format!("No answer: {e}"))?;
+    let rtt = started.elapsed();
+    handle.close().await;
+    Ok(Ping { rtt, hops })
+}
+
 pub fn link_options(label: &str, identify: bool) -> LinkConnectOptions {
     LinkConnectOptions {
         path_timeout: PATH_TIMEOUT,

@@ -179,6 +179,30 @@ pub async fn listen(settings: &Settings, paths: &Paths, identity: Identity, seco
     }
 }
 
+/// Ping an LXMF address (or `lxma://` link) and print how it went.
+pub async fn ping(settings: &Settings, paths: &Paths, identity: Identity, address: &str) -> Result<()> {
+    let (to, key) = crate::lxmf::parse_contact(address).map_err(|e| anyhow!(e))?;
+    let (commands, mut events) = net::spawn(options(settings, paths, identity, false, None));
+    wait_started(&mut events).await?;
+    if let Some(public_key) = key {
+        let _ = commands.send(NetCommand::Remember { to, public_key });
+    }
+    let _ = commands.send(NetCommand::Ping(to));
+    while let Some(event) = events.recv().await {
+        match event {
+            NetEvent::Pinged { result: Ok(ping), .. } => {
+                let hops = ping.hops.map_or_else(String::new, |h| format!(", {h} hop{} away", if h == 1 { "" } else { "s" }));
+                println!("{} answered in {} ms{hops}", hex::encode(to), ping.rtt.as_millis());
+                return Ok(());
+            }
+            NetEvent::Pinged { result: Err(e), .. } => bail!("{e}"),
+            NetEvent::Log(line) => eprintln!("{line}"),
+            _ => {}
+        }
+    }
+    bail!("network task stopped")
+}
+
 /// Download waiting messages from the propagation node and print them.
 pub async fn sync(settings: &Settings, paths: &Paths, identity: Identity, node: Option<&str>) -> Result<()> {
     let node = node

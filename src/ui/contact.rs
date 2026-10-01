@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{ACCENT, DIM, PICKED, ago, block, wrap};
 use crate::app::App;
-use crate::app::contacts::{CardAction, trust_label};
+use crate::app::contacts::{CardAction, PingState, ping_label, trust_label};
 
 /// The card's widest, in columns.
 const WIDTH: u16 = 64;
@@ -65,6 +65,13 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
         None => lines.push(field("Heard", "not yet (no announce)")),
     }
     lines.push(field("Trust", trust_label(contact.trust, app.is_known(&key))));
+    if let Some(ping) = app.pings.get(&key) {
+        let when = match ping {
+            PingState::Done { at, .. } => format!(" ({} ago)", ago(*at)),
+            PingState::Waiting => String::new(),
+        };
+        lines.push(field("Ping", format!("{}{when}", ping_label(ping))));
+    }
     if let Some(conversation) = app.store.conversations.get(&key) {
         let mut count = format!("{}", conversation.messages.len());
         if conversation.archived > 0 {
@@ -141,6 +148,15 @@ mod tests {
         assert!(screen.contains("Ally") && screen.contains("Announces Alice") && screen.contains("3 hops"), "{screen}");
         assert!(screen.contains("met at the swapfest") && screen.contains("Rename (r)"), "{screen}");
         assert!(screen.contains("unknown sender") && screen.contains("Leave as is (l)") && screen.contains("Block (b)"), "{screen}");
+        // Ping (p): asked of the network, and shown when it answers.
+        app.on_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char('p'), KeyModifiers::NONE));
+        assert_eq!(app.pings.get(&key), Some(&crate::app::contacts::PingState::Waiting));
+        let ping = crate::net::Ping { rtt: std::time::Duration::from_millis(420), hops: Some(3) };
+        app.on_net(crate::net::NetEvent::Pinged { to: [0xab; 16], result: Ok(ping) });
+        terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let screen: String = (0..30).map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect();
+        assert!(screen.contains("Ping      answered in 420 ms, 3 hops away"), "{screen}");
         // Its Close button closes it.
         let (rect, _) = *app.regions.card_buttons.iter().find(|(_, a)| *a == CardAction::Close).unwrap();
         app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });

@@ -74,9 +74,14 @@ everywhere else), and notes for you alone.
   are, the name they announce, their address, when they were last heard
   and how far away, and your notes. `r` renames them (empty goes back to
   their own name), `e` edits the notes (line breaks show as ↵ while
-  editing), `y` copies their address, `X` deletes the conversation, and
-  `Esc` closes the card. Its buttons can be clicked too.
+  editing), `y` copies their address, `p` pings them, `X` deletes the
+  conversation, and `Esc` closes the card. Its buttons can be clicked too.
 - **In the web UI:** the **Contact** button above the conversation.
+- **Ping:** rettui finds a path to them and times setting up a Link to
+  their LXMF address (closed straight away; nothing is sent over it), then
+  shows how long it took and how many hops away they are. Any LXMF client
+  answers, while it's running. The card keeps the last answer; `rettui
+  ping <address>` does it from the command line.
 - **Sharing your address:** `c` in the Status tab (TUI), or **QR code** next
   to your address (web UI), shows it as a QR code: an `lxma://` link with
   your address and public key, the way Columba shares contacts. Someone who

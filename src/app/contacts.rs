@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
 
 use super::{App, PromptKind};
-use crate::net::{NetCommand, parse_hash};
+use crate::net::{Hash, NetCommand, Ping, parse_hash};
 use crate::store::{MAX_ALIAS, MAX_NOTES, Trust};
 
 /// What a contact card's buttons do.
@@ -14,6 +14,7 @@ pub enum CardAction {
     Rename,
     Notes,
     Copy,
+    Ping,
     Trust,
     Untrust,
     /// Leave an unknown sender as they are (no more asking).
@@ -31,6 +32,7 @@ impl CardAction {
             CardAction::Rename => ("Rename", "r"),
             CardAction::Notes => ("Notes", "e"),
             CardAction::Copy => ("Copy address", "y"),
+            CardAction::Ping => ("Ping", "p"),
             CardAction::Trust => ("Trust", "t"),
             CardAction::Untrust => ("Stop trusting", "t"),
             CardAction::LeaveAsIs => ("Leave as is", "l"),
@@ -39,6 +41,30 @@ impl CardAction {
             CardAction::DeleteConversation => ("Delete conversation", "X"),
             CardAction::Close => ("Close", "Esc"),
         }
+    }
+}
+
+/// A ping to someone: waiting for it, or how it went (and when, Unix
+/// seconds).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PingState {
+    Waiting,
+    Done { at: i64, result: Result<Ping, String> },
+}
+
+/// How a ping went, for the card and the web UI (without when).
+pub fn ping_label(state: &PingState) -> String {
+    match state {
+        PingState::Waiting => "waiting for an answer…".into(),
+        PingState::Done { result: Ok(ping), .. } => {
+            let hops = match ping.hops {
+                Some(1) => ", 1 hop away".to_string(),
+                Some(n) => format!(", {n} hops away"),
+                None => String::new(),
+            };
+            format!("answered in {} ms{hops}", ping.rtt.as_millis())
+        }
+        PingState::Done { result: Err(e), .. } => e.clone(),
     }
 }
 
@@ -54,6 +80,32 @@ pub fn trust_label(trust: Trust, known: bool) -> &'static str {
 }
 
 impl App {
+    /// Ping someone: how long a Link to them takes to set up, and how far
+    /// away they are. One at a time each; [`App::pings`] has how it went.
+    pub fn ping(&mut self, key: &str) -> Result<(), String> {
+        let hash = parse_hash(key).ok_or("An LXMF address is 32 hex characters")?;
+        if self.pings.get(key) == Some(&PingState::Waiting) {
+            return Ok(());
+        }
+        self.pings.insert(key.to_string(), PingState::Waiting);
+        self.send(NetCommand::Ping(hash));
+        self.log(format!("Pinging {}…", self.store.display_name(key)));
+        Ok(())
+    }
+
+    pub(super) fn on_pinged(&mut self, to: Hash, result: Result<Ping, String>) {
+        let key = hex::encode(to);
+        let name = self.store.display_name(&key);
+        let state = PingState::Done { at: chrono::Utc::now().timestamp(), result };
+        let line = format!("Ping {name}: {}", ping_label(&state));
+        if matches!(state, PingState::Done { result: Ok(_), .. }) {
+            self.notify(line);
+        } else {
+            self.warn(line);
+        }
+        self.pings.insert(key, state);
+    }
+
     /// Start a conversation with someone typed or scanned: an address, or
     /// an `lxma://` link, whose public key is remembered so you can write
     /// before hearing them announce. Their conversation's key.
@@ -118,7 +170,7 @@ impl App {
     /// The card's buttons for someone, by how far they're trusted.
     pub fn card_actions(&self, key: &str) -> Vec<CardAction> {
         let trust = self.store.contact(key).trust;
-        let mut actions = vec![CardAction::Rename, CardAction::Notes, CardAction::Copy];
+        let mut actions = vec![CardAction::Rename, CardAction::Notes, CardAction::Copy, CardAction::Ping];
         match trust {
             Trust::Blocked => actions.push(CardAction::Unblock),
             Trust::Trusted => actions.extend([CardAction::Untrust, CardAction::Block]),
@@ -225,6 +277,11 @@ impl App {
                 self.open_prompt(PromptKind::ContactNotes(key), &title, &notes);
             }
             CardAction::Copy => self.copy(&key, "LXMF address"),
+            CardAction::Ping => {
+                if let Err(e) = self.ping(&key) {
+                    self.warn(e);
+                }
+            }
             CardAction::Trust | CardAction::Untrust | CardAction::LeaveAsIs => {
                 let trust = match action {
                     CardAction::Trust => Trust::Trusted,

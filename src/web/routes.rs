@@ -91,6 +91,7 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/messages/delete", post(delete_message))
         .route("/conversations/{key}/delete", post(delete_conversation))
         .route("/conversations/{key}/contact", post(save_contact))
+        .route("/conversations/{key}/ping", post(ping))
         .route("/conversations/{key}/trust", post(set_trust))
         .route("/conversations/{key}/attachments/{id}/{index}", get(attachment))
         .route("/paper/read", post(read_paper))
@@ -733,6 +734,34 @@ struct ContactBody {
     alias: String,
     #[serde(default)]
     notes: String,
+}
+
+/// Ping someone, and wait (a while) for how it went.
+async fn ping(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
+    use crate::app::contacts::{PingState, ping_label};
+    let key = address(&key)?;
+    let asked = key.clone();
+    state.write(move |o| o.app.ping(&asked)).await?.map_err(bad)?;
+    // A path request and a Link each wait up to a while; this covers both.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(70);
+    loop {
+        let wanted = key.clone();
+        let ping = state.read(move |o| o.app.pings.get(&wanted).cloned()).await?;
+        match ping {
+            Some(PingState::Done { at, result }) => {
+                let answer = result.as_ref().ok().copied();
+                let text = ping_label(&PingState::Done { at, result });
+                return Ok(axum::Json(json!({
+                    "ok": answer.is_some(),
+                    "text": text,
+                    "ms": answer.map(|p| p.rtt.as_millis() as u64),
+                    "hops": answer.and_then(|p| p.hops),
+                })));
+            }
+            _ if tokio::time::Instant::now() > deadline => return Err(bad("No answer yet: the log will say how it went")),
+            _ => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+        }
+    }
 }
 
 async fn save_contact(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<ContactBody>) -> ApiResult {
