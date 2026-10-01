@@ -281,6 +281,9 @@ impl App {
     pub(super) fn open_conversation(&mut self, key: String) {
         self.store.conversations.entry(key.clone()).or_default();
         self.store_dirty = true;
+        if self.active_conversation.as_ref() != Some(&key) {
+            self.delivery_mode = self.delivery_for(&key);
+        }
         self.tab = Tab::Messages;
         self.active_conversation = Some(key);
         self.keep_conversation_selection();
@@ -333,6 +336,8 @@ impl App {
         if previous != self.active_conversation {
             self.message_scroll = 0;
             self.picked = None;
+            // Their way of delivery (paper was for the one conversation).
+            self.delivery_mode = self.active_conversation.as_deref().map_or(DeliveryMode::Auto, |key| self.delivery_for(key));
             // What's written (and attached) stays with the conversation it
             // was written in, rather than going to the one opened.
             let draft = (std::mem::take(&mut self.compose), std::mem::take(&mut self.attachments), self.reply.take());
@@ -359,7 +364,7 @@ impl App {
         let content = self.compose.take();
         let files = std::mem::take(&mut self.attachments);
         let reply = self.reply.take();
-        if let Err((e, content, files)) = self.send_message(key, content, files, self.delivery_mode, reply.clone()) {
+        if let Err((e, content, files)) = self.send_message(key.clone(), content, files, self.delivery_mode, reply.clone()) {
             // Keep what was written so it can be sent once the problem is fixed.
             self.warn(e);
             self.compose = TextInput::with_text(&content);
@@ -367,7 +372,44 @@ impl App {
             self.reply = reply;
             return;
         }
+        // Paper is for one message; then it's their usual way again.
+        if self.delivery_mode == DeliveryMode::Paper {
+            self.delivery_mode = self.delivery_for(&key);
+        }
         self.message_scroll = 0;
+    }
+
+    /// How messages to someone go: the mode kept for them, or auto.
+    pub fn delivery_for(&self, key: &str) -> DeliveryMode {
+        self.store.contact(key).delivery.unwrap_or(DeliveryMode::Auto)
+    }
+
+    /// Keep how messages to someone go. Paper isn't kept (it's for one
+    /// message); auto is the default, so nothing is kept for it.
+    pub fn set_delivery(&mut self, key: &str, mode: DeliveryMode) -> Result<(), String> {
+        parse_hash(key).ok_or("An LXMF address is 32 hex characters")?;
+        if mode == DeliveryMode::Paper {
+            return Ok(());
+        }
+        let kept = (mode != DeliveryMode::Auto).then_some(mode);
+        if self.store.contact(key).delivery != kept {
+            self.store.update_contact(key, |c| c.delivery = kept);
+            self.store_dirty = true;
+        }
+        Ok(())
+    }
+
+    /// The next delivery mode for the open conversation (`d`, or Ctrl-P
+    /// while writing), kept for them unless it's paper.
+    pub(super) fn cycle_delivery(&mut self) {
+        self.delivery_mode = self.delivery_mode.next();
+        let Some(key) = self.active_conversation.clone() else { return };
+        let name = self.store.display_name(&key);
+        match self.set_delivery(&key, self.delivery_mode) {
+            Ok(()) if self.delivery_mode == DeliveryMode::Paper => self.confirm("Paper: the next message is written as a QR code"),
+            Ok(()) => self.confirm(format!("Messages to {name}: {}", self.delivery_mode.label())),
+            Err(e) => self.warn(e),
+        }
     }
 
     /// Queue an LXMF message to `key` (a hex address), or write it as a
@@ -1005,7 +1047,7 @@ impl App {
             }
             KeyCode::Char('a') => self.open_attach_prompt(),
             KeyCode::Char('o') => self.open_latest_attachment(),
-            KeyCode::Char('d') => self.delivery_mode = self.delivery_mode.next(),
+            KeyCode::Char('d') => self.cycle_delivery(),
             KeyCode::Char('p') => {
                 self.open_prompt(PromptKind::ReadPaper, "Read a paper message (lxm:// link, or a picture of its QR code)", "");
             }
@@ -1072,6 +1114,42 @@ mod tests {
             state: MessageState::Received { verified: true },
             ..Message::default()
         }
+    }
+
+    #[test]
+    fn each_conversation_keeps_its_delivery_mode_and_paper_is_for_one_message() {
+        let dir = std::env::temp_dir().join(format!("rettui-delivery-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (alice, bob) = (key(), "cd".repeat(16));
+        let mut store = Store::default();
+        store.conversations.insert(alice.clone(), Conversation { messages: vec![message(1, "hi".into())], ..Default::default() });
+        store.conversations.insert(bob.clone(), Conversation { messages: vec![message(2, "yo".into())], ..Default::default() });
+        let mut app = crate::app::test_app(&dir, Settings::default(), store);
+        let open = |app: &mut App, key: &str| {
+            let index = app.store.conversation_order().iter().position(|k| k == key).unwrap();
+            app.select_conversation(index);
+        };
+        open(&mut app, &alice);
+        assert_eq!(app.delivery_mode, DeliveryMode::Auto);
+        app.messages_key(KeyEvent::new(KeyCode::Char('d'), crossterm::event::KeyModifiers::NONE));
+        assert_eq!((app.delivery_mode, app.store.contact(&alice).delivery), (DeliveryMode::Direct, Some(DeliveryMode::Direct)));
+        open(&mut app, &bob);
+        assert_eq!(app.delivery_mode, DeliveryMode::Auto, "Bob's is his own");
+        open(&mut app, &alice);
+        assert_eq!(app.delivery_mode, DeliveryMode::Direct);
+        // Direct → propagated → paper: paper isn't kept, and goes after one
+        // message.
+        app.cycle_delivery();
+        app.cycle_delivery();
+        assert_eq!((app.delivery_mode, app.store.contact(&alice).delivery), (DeliveryMode::Paper, Some(DeliveryMode::Propagated)));
+        app.compose = TextInput::with_text("on paper");
+        app.send_compose();
+        assert_eq!(app.delivery_mode, DeliveryMode::Propagated);
+        // Back to auto: nothing kept.
+        app.set_delivery(&alice, DeliveryMode::Auto).unwrap();
+        assert_eq!(app.store.contact(&alice).delivery, None);
+        assert!(app.store.contact(&alice).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Text that barely compresses, so file sizes are predictable.

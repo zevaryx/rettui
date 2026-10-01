@@ -92,6 +92,7 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/delete", post(delete_conversation))
         .route("/conversations/{key}/contact", post(save_contact))
         .route("/conversations/{key}/ping", post(ping))
+        .route("/conversations/{key}/delivery", post(set_delivery))
         .route("/conversations/{key}/trust", post(set_trust))
         .route("/conversations/{key}/attachments/{id}/{index}", get(attachment))
         .route("/paper/read", post(read_paper))
@@ -695,6 +696,19 @@ struct RetryBody {
     id: String,
     #[serde(default)]
     mode: String,
+}
+
+#[derive(Deserialize)]
+struct DeliveryBody {
+    mode: String,
+}
+
+/// Keep how messages to someone go (paper isn't kept: it's for one message).
+async fn set_delivery(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<DeliveryBody>) -> ApiResult {
+    let key = address(&key)?;
+    let mode = DeliveryMode::parse(&body.mode).ok_or_else(|| bad(format!("unknown delivery mode {}", body.mode)))?;
+    state.write(move |o| o.app.set_delivery(&key, mode)).await?.map_err(bad)?;
+    ok()
 }
 
 /// Send a message that failed again (the same message), by `mode`.

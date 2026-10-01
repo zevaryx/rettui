@@ -36,7 +36,8 @@ pub const PROPAGATION_ASPECT: &str = "lxmf.propagation";
 
 const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DeliveryMode {
     /// Direct, falling back to the propagation node when direct fails.
     Auto,

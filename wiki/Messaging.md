@@ -16,6 +16,10 @@ MeshChat, NomadNet and other LXMF clients).
   - **Propagated:** always goes through the propagation node.
   - **Paper:** isn't sent. It's written as a [paper message](#paper-messages)
     to pass on some other way.
+  - Each conversation keeps its own mode: `d` (or `Ctrl-P` while writing)
+    in the TUI, the menu beside **Send** in the web UI. Paper is for one
+    message; the next goes their usual way again. The contact card shows a
+    mode other than auto.
 - **Stamps and ratchets:** if the recipient's announce asks for a stamp,
   rettui generates it (or uses a ticket they gave you). It also generates
   the propagation node's stamp, and encrypts to the recipient's ratchet

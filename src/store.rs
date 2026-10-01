@@ -318,6 +318,10 @@ pub struct Contact {
     pub notes: String,
     #[serde(skip_serializing_if = "is_unknown")]
     pub trust: Trust,
+    /// How messages to them go, if not auto (never paper: that's for one
+    /// message).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<crate::lxmf::DeliveryMode>,
 }
 
 fn is_unknown(trust: &Trust) -> bool {
