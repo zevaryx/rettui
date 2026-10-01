@@ -56,6 +56,7 @@ it can edit your Reticulum configuration. It is built on:
 - [NomadNet Browsing](NomadNet-Browsing): pages, links, forms, images, the cache
 - [Hosting a Node](Hosting-a-Node): your own NomadNet node and its page editor
 - [Network](Network): announces heard, interfaces, traffic
+- [RNode Radios](RNode-Radios): flashing a LoRa radio and using it with rettui
 
 **Settings and data**
 

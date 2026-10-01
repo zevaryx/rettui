@@ -14,6 +14,7 @@
 - [NomadNet Browsing](NomadNet-Browsing)
 - [Hosting a Node](Hosting-a-Node)
 - [Network](Network)
+- [RNode Radios](RNode-Radios)
 
 **Settings and data**
 - [Settings and Reticulum Config](Settings-and-Reticulum-Config)

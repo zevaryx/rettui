@@ -22,15 +22,19 @@ pub const ENTRY_PORT: u16 = 4242;
 /// Discovered entry points connected to at once, when discovery is on.
 const DISCOVERED: u32 = 2;
 
-/// Where to learn more: title, address.
-pub const LINKS: &[(&str, &str)] = &[
-    ("Reticulum: getting started", "https://reticulum.network/manual/gettingstartedfast.html"),
-    ("Understanding Reticulum", "https://reticulum.network/manual/understanding.html"),
-    ("Connecting to others", "https://reticulum.network/manual/gettingstartedfast.html#bootstrapping-connectivity"),
-    ("Entry points on a map: RMAP World", "https://rmap.world"),
-    ("A directory of entry points", "https://directory.rns.recipes"),
-    ("Using rettui", "https://github.com/zevaryx/rettui/wiki"),
+/// Where to learn more: title, address, and what's there when the title
+/// doesn't say.
+pub const LINKS: &[(&str, &str, Option<&str>)] = &[
+    ("Reticulum: getting started", "https://reticulum.network/manual/gettingstartedfast.html", None),
+    ("Understanding Reticulum", "https://reticulum.network/manual/understanding.html", None),
+    ("Connecting to others", "https://reticulum.network/manual/gettingstartedfast.html#bootstrapping-connectivity", None),
+    ("Entry points on a map: RMAP World", "https://rmap.world", None),
+    ("A directory of entry points", "https://directory.rns.recipes", None),
+    ("Using a LoRa radio (RNode)", "https://github.com/zevaryx/rettui/wiki/RNode-Radios", Some(RNODE_NOTE)),
+    ("Using rettui", "https://github.com/zevaryx/rettui/wiki", None),
 ];
+/// LoRa radios: rettui doesn't flash them, the page says what does.
+pub const RNODE_NOTE: &str = "LoRa radios reach others with no internet. Flashing one with RNode or microReticulum firmware (rnodeconf, or a web flasher), and adding it here.";
 
 /// What each choice does, for both UIs.
 pub const INTRO: &str = "Reticulum reaches others without servers: on your local network, by radio, or over the internet through entry points people run. Until you add one, rettui only reaches your local network.";
