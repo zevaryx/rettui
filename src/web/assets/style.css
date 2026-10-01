@@ -204,6 +204,21 @@ a { color: var(--accent); }
 .message .author.in { color: var(--magenta); }
 .message .author.out { color: var(--accent); }
 .message .content { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Markdown (and Micron) messages, as the server made them. */
+.message .content.formatted { white-space: normal; }
+.formatted p, .formatted ul, .formatted ol, .formatted blockquote, .formatted pre { margin: 0 0 0.45em; }
+.formatted > :last-child { margin-bottom: 0; }
+.formatted ul, .formatted ol { padding-left: 1.5em; }
+.formatted blockquote { padding-left: 0.7em; border-left: 3px solid var(--border); color: var(--dim); }
+.formatted code { font-family: var(--mono); color: var(--yellow); }
+.formatted pre { white-space: pre-wrap; background: var(--raised); padding: 0.4em 0.6em; border-radius: 4px; }
+.formatted pre code { color: inherit; }
+.formatted .md-h1 { font-weight: 700; font-size: 1.2em; }
+.formatted .md-h2 { font-weight: 700; font-size: 1.1em; }
+.formatted .md-h3 { font-weight: 700; }
+.formatted hr { border: 0; border-top: 1px solid var(--border); }
+.formatted .md-link { text-decoration: underline dotted; }
+.formatted .micron { white-space: pre-wrap; min-height: 0; }
 /* Replies: what one answers, above its text; the button to write one
    (shown on hover where there is one); the bar over the box while writing. */
 .reply-quote {

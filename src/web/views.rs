@@ -84,7 +84,7 @@ pub fn conversations(app: &App) -> Value {
         .map(|key| {
             let conversation = &app.store.conversations[&key];
             let last = conversation.messages.last().map(|m| {
-                let text = if m.content.trim().is_empty() { m.opening() } else { m.content.clone() };
+                let text = if m.content.trim().is_empty() { m.opening() } else { m.text() };
                 json!({ "text": text, "timestamp": m.timestamp, "incoming": m.incoming })
             });
             json!({
@@ -113,6 +113,17 @@ fn message_state(state: &MessageState) -> Value {
     }
 }
 
+/// A formatted message's text as HTML (escaped: no HTML of the sender's
+/// gets through), or `None` for plain text.
+fn formatted(m: &Message) -> Option<String> {
+    match m.format? {
+        crate::markdown::TextFormat::Markdown => Some(crate::markdown::html(&m.content)),
+        crate::markdown::TextFormat::Micron => {
+            Some(crate::nomad::micron::parse(&m.content).to_html(|url| url.trim().to_string(), |_| None))
+        }
+    }
+}
+
 fn message(m: &Message, conversation: &Conversation) -> Value {
     let state = message_state(&m.state);
     json!({
@@ -120,6 +131,8 @@ fn message(m: &Message, conversation: &Conversation) -> Value {
         "incoming": m.incoming,
         "title": m.title,
         "content": m.content,
+        // Its text formatted (Markdown or Micron), if it's marked so.
+        "html": formatted(m),
         "timestamp": m.timestamp,
         "state": state,
         "attachments": m.attachments.iter().enumerate().map(|(index, a)| json!({

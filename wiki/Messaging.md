@@ -220,6 +220,22 @@ Sideband and NomadNet can read what rettui writes, and rettui can read theirs.
       take a photo or pick a picture, and rettui finds the code in it.
   - A message you've already read in is only reported, not added twice.
 
+## Formatting (Markdown)
+
+LXMF's renderer field says how a message's text is written. Sideband and
+NomadNet compose in Markdown; rettui does too.
+
+- **What you write** is marked as Markdown, so clients that format it show
+  `**bold**`, `*italic*`, `~~struck~~`, `` `code` ``, lists, quotes (`>`),
+  headings (`#`), code blocks and links formatted. Turn *Write in Markdown*
+  off in the settings to send plain text. `rettui send` sends plain text.
+- **What you get** marked as Markdown shows formatted in both UIs, and so
+  does a message marked as Micron (NomadNet's page markup). Line breaks are
+  kept, as in a chat. Previews in the conversation list and notifications
+  leave the markup out.
+- **Safety:** HTML in a message is shown as text, never run, and in the web
+  UI only web and mail links can be clicked (others show their address).
+
 ## Replies
 
 A reply names the message it answers, and the start of that message's text

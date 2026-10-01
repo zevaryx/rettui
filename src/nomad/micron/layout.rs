@@ -50,14 +50,14 @@ fn align_offset(align: Alignment, width: usize, used: usize) -> usize {
 }
 
 /// A row of wrapped text: styled spans and the item each belongs to.
-type Row = Vec<(Span<'static>, Option<usize>)>;
+pub(crate) type Row = Vec<(Span<'static>, Option<usize>)>;
 /// Text to wrap: its pieces, each with its style and item.
-type Piece = (String, Style, Option<usize>);
+pub(crate) type Piece = (String, Style, Option<usize>);
 
 /// Word-wrap styled pieces into rows of at most `avail` columns. Breaks go
 /// at spaces, which are dropped at the break; a word wider than a whole row
 /// is split. Returns the rows and the row each piece starts on.
-fn wrap(pieces: &[Piece], avail: usize) -> (Vec<Row>, Vec<usize>) {
+pub(crate) fn wrap(pieces: &[Piece], avail: usize) -> (Vec<Row>, Vec<usize>) {
     // Each character as shown (a grapheme: an emoji with its modifiers or
     // joined parts is one, measured whole as the terminal draws it) with its
     // display width and piece, split into words and runs of spaces.

@@ -125,9 +125,20 @@ pub struct Message {
     /// share that stopped, something rettui can't show.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// How its text is written, if not plain (shown formatted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<crate::markdown::TextFormat>,
 }
 
 impl Message {
+    /// What its text says, without Markdown's markup (for previews).
+    pub fn text(&self) -> String {
+        match self.format {
+            Some(crate::markdown::TextFormat::Markdown) => crate::markdown::plain(&self.content),
+            _ => self.content.clone(),
+        }
+    }
+
     /// The LXMF hash (hex) replies to this message name it by, if it has
     /// one (a message being sent, or that failed, has none yet).
     pub fn lxmf_hash(&self) -> Option<&str> {
@@ -143,7 +154,7 @@ impl Message {
     /// what it brought (a voice message, a file, a location, a note).
     pub fn opening(&self) -> String {
         let first = |text: &str| text.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string);
-        first(&self.content)
+        first(&self.text())
             .or_else(|| first(&self.title))
             .or_else(|| {
                 self.attachments.first().map(|a| match &a.voice {

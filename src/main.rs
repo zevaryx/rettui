@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod emoji;
 mod lxmf;
+mod markdown;
 mod net;
 mod reticulum;
 mod nomad;

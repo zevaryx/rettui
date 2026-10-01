@@ -1267,6 +1267,20 @@ function browse(url) {
   app.views.browser.go(url);
 }
 
+// A formatted message's text: HTML the server made from its Markdown or
+// Micron (all of the sender's text escaped). Micron links open in the
+// Browser (or a conversation, for lxmf@ links).
+function formattedContent(html) {
+  const node = el('div', { class: 'content formatted', onclick: (e) => {
+    const link = e.target.closest('.m-link');
+    if (!link) return;
+    e.preventDefault();
+    browse(link.dataset.url);
+  } });
+  node.innerHTML = html;
+  return node;
+}
+
 // ---- Paper messages ---------------------------------------------------------
 
 // A dialog over the page: closed by its buttons, Escape or a click beside
@@ -2109,7 +2123,7 @@ app.views.messages = {
         el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) })),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
-      m.content ? el('div', { class: 'content', text: m.content }) : null,
+      m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content', text: m.content }) : null,
       m.location ? el('div', { class: 'location' }, '📍 ',
         el('a', { href: m.location.map, target: '_blank', rel: 'noopener noreferrer', text: m.location.label, title: 'Show it on a map' })) : null,
       (m.notes || []).map((note) => el('div', { class: 'note dim', text: note })),

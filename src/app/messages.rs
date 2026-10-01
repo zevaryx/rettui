@@ -10,6 +10,7 @@ use super::files::{expand_home, unique_path};
 use super::notify::{self, Notification, Target};
 use super::{App, HistoryHit, MessageAction, PaperView, PromptKind, Tab, now};
 use crate::lxmf::{self, DeliveryMode};
+use crate::markdown::TextFormat;
 use crate::net::{NetCommand, parse_hash};
 use crate::store::{Archived, Message, MessageState, Reaction, ReplyTo, StoredAttachment, Trust};
 use crate::term::images::{DecodeFor, Picture};
@@ -121,6 +122,7 @@ impl App {
             reply: message.reply.clone().map(|reply| ReplyTo { hash: hex::encode(reply.to), quote: reply.quote }),
             location,
             notes,
+            format: extras.format.filter(|_| !message.content.trim().is_empty()),
             ..Message::default()
         };
         // On screen, in a window that has the focus: what arrives while the
@@ -129,7 +131,7 @@ impl App {
             || (self.focused && self.tab == Tab::Messages && self.active_conversation.as_deref() == Some(key.as_str()));
         // What the notification says: the text, else what came with it.
         let preview = if !message.content.trim().is_empty() {
-            notify::body(&message.content)
+            notify::body(&stored.text())
         } else if !message.title.trim().is_empty() {
             notify::body(&message.title)
         } else {
@@ -466,6 +468,8 @@ impl App {
         let id = self.store.next_local_id;
         self.store.next_local_id += 1;
         let timestamp = now();
+        // Written in Markdown, and marked so (unless that's turned off).
+        let format = (self.settings.markdown_messages && !content.trim().is_empty()).then_some(TextFormat::Markdown);
         self.store
             .conversations
             .entry(key)
@@ -478,6 +482,7 @@ impl App {
                 state: MessageState::Sending,
                 attachments,
                 reply: reply.clone(),
+                format,
                 ..Message::default()
             });
         self.store_dirty = true;
@@ -489,9 +494,9 @@ impl App {
             Some(lxmf::Reply { to, quote: reply.quote })
         });
         if mode == DeliveryMode::Paper {
-            self.send(NetCommand::WritePaper { id, paper: lxmf::paper::Paper { to, content, timestamp, reply } });
+            self.send(NetCommand::WritePaper { id, paper: lxmf::paper::Paper { to, content, timestamp, reply, format } });
         } else {
-            let message = lxmf::Outgoing { reply, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            let message = lxmf::Outgoing { reply, format, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
             self.send(NetCommand::SendMessage { id, message });
         }
         Ok(id)
@@ -673,16 +678,16 @@ impl App {
             return Err("A paper message carries text only".into());
         }
         message.state = MessageState::Sending;
-        let (content, timestamp) = (message.content.clone(), message.timestamp);
+        let (content, timestamp, format) = (message.content.clone(), message.timestamp, message.format);
         let reply = message.reply.clone().and_then(|reply| {
             let to = hex::decode(&reply.hash).ok()?.try_into().ok()?;
             Some(lxmf::Reply { to, quote: reply.quote })
         });
         self.store_dirty = true;
         if mode == DeliveryMode::Paper {
-            self.send(NetCommand::WritePaper { id: number, paper: lxmf::paper::Paper { to, content, timestamp, reply } });
+            self.send(NetCommand::WritePaper { id: number, paper: lxmf::paper::Paper { to, content, timestamp, reply, format } });
         } else {
-            let message = lxmf::Outgoing { reply, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            let message = lxmf::Outgoing { reply, format, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
             self.send(NetCommand::SendMessage { id: number, message });
         }
         Ok(())

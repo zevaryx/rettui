@@ -82,6 +82,7 @@ impl App {
                 "notify_messages" => self.settings.notify_messages = after.notify_messages,
                 "notify_rrc" => self.settings.notify_rrc = after.notify_rrc,
                 "ignore_unknown_senders" => self.settings.ignore_unknown_senders = after.ignore_unknown_senders,
+                "markdown_messages" => self.settings.markdown_messages = after.markdown_messages,
                 "stamp_cost" | "max_message_kb" => {
                     self.settings.stamp_cost = after.stamp_cost;
                     self.settings.max_message_kb = after.max_message_kb;

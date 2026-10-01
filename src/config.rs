@@ -60,6 +60,9 @@ pub struct Settings {
     pub stamp_cost: u64,
     /// Largest message taken, in kilobytes; 0 takes any size.
     pub max_message_kb: u64,
+    /// Mark the messages you write as Markdown (LXMF's renderer field), so
+    /// clients that format it show them formatted.
+    pub markdown_messages: bool,
     /// Host an LXMF propagation node (messages kept in `propagation/`).
     pub pn_enabled: bool,
     /// Name the propagation node announces; the display name when unset.
@@ -98,6 +101,7 @@ impl Default for Settings {
             stamp_cost: 0,
             // LXMF's own default delivery limit (NomadNet's is 500).
             max_message_kb: 1000,
+            markdown_messages: true,
             pn_enabled: false,
             pn_name: None,
             // lxmd's defaults.
@@ -291,6 +295,13 @@ pub const FIELDS: &[Field] = &[
         label: "Largest message (KB)",
         help: "Largest message taken; bigger ones are refused (NomadNet takes 500). 0 takes any size",
         kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "markdown_messages",
+        label: "Write in Markdown",
+        help: "Mark the messages you write as Markdown (LXMF's renderer field), so Sideband, NomadNet and rettui show **bold**, *italic*, `code`, lists and links formatted",
+        kind: FieldKind::Toggle,
         effect: Effect::Now,
     },
     Field {
@@ -505,6 +516,7 @@ impl Settings {
             "ignore_unknown_senders" => self.ignore_unknown_senders.to_string(),
             "stamp_cost" => self.stamp_cost.to_string(),
             "max_message_kb" => self.max_message_kb.to_string(),
+            "markdown_messages" => self.markdown_messages.to_string(),
             "pn_enabled" => self.pn_enabled.to_string(),
             "pn_name" => self.pn_name.clone().unwrap_or_default(),
             "pn_stamp_cost" => self.pn_stamp_cost.to_string(),
@@ -540,6 +552,7 @@ impl Settings {
             "stamp_cost" => self.stamp_cost = number(value, MAX_STAMP_COST).map_err(fail)?,
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
+            "markdown_messages" => self.markdown_messages = toggle(value).map_err(fail)?,
             "pn_name" => {
                 if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
                     return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));

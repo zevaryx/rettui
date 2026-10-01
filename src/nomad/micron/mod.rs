@@ -23,7 +23,7 @@ use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 
 pub mod html;
-mod layout;
+pub(crate) mod layout;
 pub mod source;
 
 pub use layout::hit_at;
