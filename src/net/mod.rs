@@ -21,7 +21,7 @@ use rns_runtime::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::lxmf::{self, DeliveryMode, InboundMessage, LXMF_ASPECT, PROPAGATION_ASPECT};
+use crate::lxmf::{self, InboundMessage, LXMF_ASPECT, PROPAGATION_ASPECT};
 use crate::nomad::host::{self, HostConfig};
 use crate::nomad::{self, FetchedContent, LinkCache};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
@@ -89,16 +89,8 @@ pub enum NetCommand {
         sync: Option<Duration>,
     },
     Sync,
-    SendMessage {
-        id: u64,
-        to: Hash,
-        content: String,
-        attachments: Vec<PathBuf>,
-        mode: DeliveryMode,
-        /// When it was written (Unix seconds).
-        timestamp: f64,
-        reply: Option<lxmf::Reply>,
-    },
+    /// Send a message (its propagation node is the one set here).
+    SendMessage { id: u64, message: lxmf::Outgoing },
     Fetch {
         id: u64,
         node: Hash,
@@ -168,7 +160,7 @@ pub enum NetEvent {
         hops: u8,
     },
     Announced,
-    Message(InboundMessage),
+    Message(Box<InboundMessage>),
     Delivery { id: u64, result: Result<lxmf::Sent, String> },
     /// A paper message written: its `lxm://` link and hash.
     Paper { id: u64, result: Result<(String, [u8; 32]), String> },
@@ -422,11 +414,10 @@ async fn run(
                         });
                     }
                     NetCommand::ReadPaper(link) => lxmf::paper::read(&runtime, &known, &identity, lxmf_hash, link, &ev),
-                    NetCommand::SendMessage { id, to, content, attachments, mode, timestamp, reply } => {
+                    NetCommand::SendMessage { id, message } => {
                         let (runtime, known, identity, ev) =
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone());
-                        let outgoing =
-                            lxmf::Outgoing { to, content, attachments, mode, propagation_node, timestamp, reply };
+                        let outgoing = lxmf::Outgoing { propagation_node, ..message };
                         tokio::spawn(async move {
                             let result = lxmf::send(&runtime, &known, &identity, lxmf_hash, outgoing).await;
                             let _ = ev.send(NetEvent::Delivery { id, result });

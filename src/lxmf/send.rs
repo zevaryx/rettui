@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use lxmf_core::constants::{FIELD_FILE_ATTACHMENTS, FIELD_REPLY_QUOTE, FIELD_REPLY_TO};
+use lxmf_core::constants::{FIELD_FILE_ATTACHMENTS, FIELD_REACTION, FIELD_REPLY_QUOTE, FIELD_REPLY_TO};
 use lxmf_core::handlers::{parse_pn_announce_data, stamp_cost_from_app_data};
 use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
 use rmpv::Value;
@@ -60,6 +60,11 @@ pub(super) async fn build_message(
         if let Some(quote) = &reply.quote {
             message.set_field(FIELD_REPLY_QUOTE, quote.as_bytes().to_vec());
         }
+    }
+    if let Some(reaction) = &outgoing.reaction {
+        message
+            .set_msgpack_field(FIELD_REACTION, super::fields::reaction_field(reaction))
+            .map_err(|e| e.to_string())?;
     }
 
     let key = identity

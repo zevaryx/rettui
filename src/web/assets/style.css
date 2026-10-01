@@ -226,6 +226,13 @@ a { color: var(--accent); }
 .state-warn { color: var(--yellow); }
 .attachment { margin-top: 4px; }
 .attachment img { max-width: min(420px, 100%); max-height: 320px; border-radius: 6px; border: 1px solid var(--border); display: block; }
+.attachment.voice { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.attachment.voice audio { height: 32px; max-width: 100%; }
+.message .location { margin-top: 2px; }
+.message .note { font-style: italic; font-size: 12.5px; }
+.reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.reaction { border-radius: 12px; padding: 0 8px; font-size: 12.5px; background: var(--raised); cursor: default; }
+.reaction.failed { border-color: var(--red); cursor: pointer; }
 
 .compose { border-top: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 6px; position: relative; }
 .compose textarea { resize: none; min-height: 38px; max-height: 200px; width: 100%; }

@@ -9,7 +9,8 @@ use rns_crypto::ed25519::Ed25519PublicKey;
 use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
-use super::{Attachment, InboundMessage, Reply, bytes_of, is_image_name};
+use super::fields::{self, FIELD_COLUMBA_EXTENSIONS};
+use super::{Attachment, Extras, InboundMessage, Reply, bytes_of, is_image_name};
 use crate::net::{Hash, Known, NetEvent, lookup};
 
 /// How long to look for an unknown sender's announce to verify a message.
@@ -47,34 +48,18 @@ pub(super) fn attachments_of(message: &LxMessage) -> Vec<Attachment> {
     out
 }
 
-/// Older Columba sent its reply target as `{"reply_to": "<hex>"}` in field
-/// 0x10, before it used [`FIELD_REPLY_TO`].
-const FIELD_COLUMBA_EXTENSIONS: u8 = 0x10;
 /// The most of a received quote kept (some clients send all of the text).
 const QUOTE_KEPT: usize = 500;
 
 /// The message `message` answers, if it's a reply: its hash as bytes (as
 /// sent) or hex, and the quote if there is one.
+/// (Older Columba sent its reply target as `{"reply_to": "<hex>"}` in field
+/// 0x10, before it used [`FIELD_REPLY_TO`].)
 pub fn reply_of(message: &LxMessage) -> Option<Reply> {
-    // Bytes are kept as they are; anything else as its msgpack.
-    let field = |id| {
-        let raw = message.get_field(id)?;
-        if message.msgpack_field_ids.contains(&id) {
-            rmpv::decode::read_value(&mut raw.as_slice()).ok()
-        } else {
-            Some(Value::Binary(raw.clone()))
-        }
-    };
-    let hash = |value: &Value| -> Option<[u8; 32]> {
-        match value {
-            Value::Binary(bytes) => bytes.as_slice().try_into().ok(),
-            Value::String(text) => hex::decode(text.as_str()?).ok()?.try_into().ok(),
-            _ => None,
-        }
-    };
-    let to = field(FIELD_REPLY_TO).as_ref().and_then(hash).or_else(|| {
+    let field = |id| fields::value(message, id);
+    let to = field(FIELD_REPLY_TO).as_ref().and_then(fields::hash_of).or_else(|| {
         let Value::Map(entries) = field(FIELD_COLUMBA_EXTENSIONS)? else { return None };
-        entries.iter().find(|(key, _)| key.as_str() == Some("reply_to")).and_then(|(_, value)| hash(value))
+        entries.iter().find(|(key, _)| key.as_str() == Some("reply_to")).and_then(|(_, value)| fields::hash_of(value))
     })?;
     let quote = field(FIELD_REPLY_QUOTE)
         .as_ref()
@@ -133,6 +118,7 @@ pub(super) async fn parse_inbound(
     tracing::debug!("message from {} verified={verified}", hex::encode(message.source_hash));
     let attachments = attachments_of(&message);
     let reply = reply_of(&message);
+    let extras = Extras::of(&message);
     Ok(InboundMessage {
         id: message.message_id.or(message.hash),
         source: message.source_hash,
@@ -143,6 +129,7 @@ pub(super) async fn parse_inbound(
         attachments,
         paper: false,
         reply,
+        extras,
     })
 }
 
@@ -163,7 +150,7 @@ pub(super) async fn deliver_inbound(
     ev: &mpsc::UnboundedSender<NetEvent>,
 ) {
     let event = match parse_inbound(runtime, known, data).await {
-        Ok(message) => NetEvent::Message(message),
+        Ok(message) => NetEvent::Message(Box::new(message)),
         Err(e) if e.starts_with("Dropped") => NetEvent::Log(e),
         Err(e) => NetEvent::Log(format!("Dropped malformed LXMF message: {e}")),
     };

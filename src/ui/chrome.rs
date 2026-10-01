@@ -235,9 +235,18 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("^P", "delivery mode"),
                 ("PgUp/PgDn", "scroll"),
             ],
+            Tab::Messages if app.picked.is_some() => &[
+                ("↑↓", "another message"),
+                ("r", "reply"),
+                ("e", "react"),
+                ("y", "copy"),
+                ("o", "open"),
+                ("Esc", "done"),
+            ],
             Tab::Messages => &[
                 ("Enter", "write"),
                 ("r", "reply"),
+                ("m", "pick a message"),
                 ("n", "new"),
                 ("y", "copy address"),
                 ("a", "attach"),

@@ -41,6 +41,46 @@ MeshChat, NomadNet and other LXMF clients).
   you turn that off), every `announce_interval_mins` (360 by default, 0 for
   never), and whenever you press `A`.
 
+## Reactions, locations, commands and voice messages
+
+Other LXMF clients send some messages with no text, only an LXMF field.
+rettui shows what each one is, rather than an empty message:
+
+- **Reactions** (LXMF field `0x40`, as Columba and MeshChatX send them) show
+  under the message they react to, with who reacted. A reaction that
+  arrives before its message waits for it. A reaction to one of your
+  messages gets a notification; it isn't counted as unread.
+- **Locations** (Sideband and Columba telemetry, field `0x02`) show as a
+  line with the coordinates. Click it (or open it, below) to see it on
+  OpenStreetMap. Location updates don't notify you or count as unread, and
+  a newer one replaces the one before it while nothing else was said in
+  between, so a shared location doesn't fill the conversation.
+- **Commands** (Sideband's, field `0x09`), such as asking for your location
+  or a ping, are shown in words. rettui doesn't run or answer them, and
+  they don't notify you either.
+- **Voice messages** (field `0x07`) are saved with the attachments. Opus
+  recordings are saved as `.ogg` files, which play in the web UI and in
+  most players. Codec2 recordings need a Codec2 decoder, so they're saved as
+  they came (`.codec2`) and marked as not playable.
+- A message with nothing rettui can show says so, naming the fields it
+  carried, without a notification.
+
+To react, pick a message and choose an emoji:
+
+- **In the TUI:** `m` picks the newest message, and `↑↓` pick another (or
+  click a message's name line). The picked message shows its buttons: `r`
+  reply, `e` react, `y` copy its text, `o` open its file or location. `e`
+  opens the emoji picker; `Enter` sends the reaction. `Esc` puts the
+  message down.
+- **In the web UI:** hover over a message (on a phone the buttons always
+  show) and click **🙂 React**.
+
+A reaction is sent as an LXMF message with no text and the reaction field,
+the way Columba does, so clients that don't know reactions (Sideband,
+NomadNet) may show it as an empty message. A reaction that failed to send
+shows as *failed*: react with the same emoji again (or click it, in the web
+UI) to send it again.
+
 ## Paper messages
 
 A paper message is an LXMF message that travels outside Reticulum: as an
@@ -87,8 +127,9 @@ support replies yet (Sideband, NomadNet, MeshChat) show an ordinary message.
 
 - **In the TUI:** `r` replies to the newest message they sent, and so does
   `Ctrl-R` while writing. `↑↓` then pick another (the one chosen is marked
-  in the history), and `Esc` stops replying. Clicking a message's name line
-  replies to it.
+  in the history), and `Esc` stops replying. To reply to a message further
+  back, pick it (`m`, or click its name line) and press `r` or click
+  **↩ Reply**.
 - **In the web UI:** hover over a message (on a phone it's always shown) and
   click **↩ Reply**. The box shows what you're replying to; `Esc` or **×**
   stops replying.

@@ -56,16 +56,30 @@ fn print_message(message: &InboundMessage, downloads: &Path) {
     for line in message.content.lines() {
         println!("  {line}");
     }
-    for attachment in &message.attachments {
-        let name = Path::new(&attachment.name)
+    let extras = &message.extras;
+    if let Some(reaction) = &extras.reaction {
+        println!("  reacted {} to message {}", reaction.emoji, hex::encode(reaction.to));
+    }
+    let location = extras.telemetry.as_ref().and_then(|t| t.location);
+    if let Some(location) = location {
+        println!("  location: {}  {}", location.label(), location.map_url());
+    }
+    let bare = message.content.trim().is_empty() && message.attachments.is_empty() && extras.audio.is_none() && location.is_none();
+    for note in extras.notes(bare) {
+        println!("  ({note})");
+    }
+    let audio = extras.audio.as_ref().map(|a| (a.file_name(), a.data.as_slice(), format!("voice message, {}", a.codec())));
+    let files = message.attachments.iter().map(|a| (a.name.clone(), a.data.as_slice(), "attachment".to_string()));
+    for (name, data, what) in files.chain(audio) {
+        let name = Path::new(&name)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "attachment".into());
         let path = downloads.join(&name);
-        let saved = std::fs::create_dir_all(downloads).and_then(|()| std::fs::write(&path, &attachment.data));
+        let saved = std::fs::create_dir_all(downloads).and_then(|()| std::fs::write(&path, data));
         match saved {
-            Ok(()) => println!("  attachment: {} ({} bytes)", path.display(), attachment.data.len()),
-            Err(e) => println!("  attachment {name}: could not save: {e}"),
+            Ok(()) => println!("  {what}: {} ({} bytes)", path.display(), data.len()),
+            Err(e) => println!("  {what} {name}: could not save: {e}"),
         }
     }
 }
@@ -94,7 +108,7 @@ pub async fn send(
     let _ = commands.send(if mode == DeliveryMode::Paper {
         NetCommand::WritePaper { id: 1, paper: crate::lxmf::paper::Paper { to, content, timestamp, reply: None } }
     } else {
-        NetCommand::SendMessage { id: 1, to, content, attachments, mode, timestamp, reply: None }
+        NetCommand::SendMessage { id: 1, message: crate::lxmf::Outgoing::text(to, content, attachments, mode, timestamp) }
     });
     while let Some(event) = events.recv().await {
         match event {
