@@ -9,7 +9,7 @@ use crate::app::{App, NetState, SyncState, network};
 use crate::config::{Effect, FIELDS, FieldKind, Settings, WebAccess};
 use crate::net::PeerKind;
 use crate::rrc;
-use crate::store::{Message, MessageState, NotifyLevel};
+use crate::store::{Conversation, Message, MessageState, NotifyLevel};
 
 fn kind_name(kind: PeerKind) -> &'static str {
     match kind {
@@ -93,7 +93,8 @@ pub fn conversations(app: &App) -> Value {
     json!(list)
 }
 
-fn message(m: &Message) -> Value {
+/// A message, and what it answers if it's a reply (in `conversation`).
+fn message(m: &Message, conversation: &Conversation) -> Value {
     let state = match &m.state {
         MessageState::Received { verified } => json!({ "kind": "received", "verified": verified }),
         MessageState::Sending => json!({ "kind": "sending" }),
@@ -114,14 +115,28 @@ fn message(m: &Message) -> Value {
         })).collect::<Vec<_>>(),
         // A paper message written: its lxm:// link.
         "paper": m.paper,
+        // Whether it can be replied to (it has an LXMF hash).
+        "can_reply": m.lxmf_hash().is_some(),
+        // What it answers: that message's id if it's here, who wrote it
+        // (`incoming`, if known) and the start of it.
+        "reply": m.reply.as_ref().map(|reply| {
+            let quoted = conversation.quoted(reply);
+            json!({
+                "id": quoted.index.map(|i| conversation.messages[i].id.clone()),
+                "incoming": quoted.incoming,
+                "text": quoted.text,
+            })
+        }),
     })
 }
 
 /// A conversation: its newest `last` messages if asked (what the page
 /// shows; live updates refetch it), and how many there are in all.
 pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
-    let all = app.store.conversations.get(key).map(|c| c.messages.as_slice()).unwrap_or_default();
-    let messages: Vec<Value> = newest(all, last).iter().map(message).collect();
+    let empty = Conversation::default();
+    let conversation = app.store.conversations.get(key).unwrap_or(&empty);
+    let all = conversation.messages.as_slice();
+    let messages: Vec<Value> = newest(all, last).iter().map(|m| message(m, conversation)).collect();
     json!({
         "key": key,
         "total": all.len(),

@@ -8,10 +8,10 @@ use ratatui::layout::Position;
 
 use super::files::{expand_home, unique_path};
 use super::notify::{self, Notification, Target};
-use super::{App, PaperView, PromptKind, Tab, now};
-use crate::lxmf::DeliveryMode;
+use super::{App, HistoryHit, PaperView, PromptKind, Tab, now};
+use crate::lxmf::{self, DeliveryMode};
 use crate::net::{NetCommand, parse_hash};
-use crate::store::{Archived, Message, MessageState, StoredAttachment};
+use crate::store::{Archived, Message, MessageState, ReplyTo, StoredAttachment};
 use crate::term::images::{DecodeFor, Picture};
 use crate::term::input::TextInput;
 
@@ -103,6 +103,8 @@ impl App {
             },
             attachments,
             paper: None,
+            hash: None,
+            reply: message.reply.map(|reply| ReplyTo { hash: hex::encode(reply.to), quote: reply.quote }),
         });
         // Messages downloaded later may be older than ones already shown.
         conversation
@@ -204,15 +206,16 @@ impl App {
             self.message_scroll = 0;
             // What's written (and attached) stays with the conversation it
             // was written in, rather than going to the one opened.
-            let draft = (std::mem::take(&mut self.compose), std::mem::take(&mut self.attachments));
+            let draft = (std::mem::take(&mut self.compose), std::mem::take(&mut self.attachments), self.reply.take());
             if let Some(previous) = previous
-                && (!draft.0.text().is_empty() || !draft.1.is_empty())
+                && (!draft.0.text().is_empty() || !draft.1.is_empty() || draft.2.is_some())
             {
                 self.drafts.insert(previous, draft);
             }
-            if let Some((text, files)) = self.active_conversation.as_ref().and_then(|key| self.drafts.remove(key)) {
+            if let Some((text, files, reply)) = self.active_conversation.as_ref().and_then(|key| self.drafts.remove(key)) {
                 self.compose = text;
                 self.attachments = files;
+                self.reply = reply;
             }
         }
     }
@@ -226,25 +229,29 @@ impl App {
         }
         let content = self.compose.take();
         let files = std::mem::take(&mut self.attachments);
-        if let Err((e, content, files)) = self.send_message(key, content, files, self.delivery_mode) {
+        let reply = self.reply.take();
+        if let Err((e, content, files)) = self.send_message(key, content, files, self.delivery_mode, reply.clone()) {
             // Keep what was written so it can be sent once the problem is fixed.
             self.warn(e);
             self.compose = TextInput::with_text(&content);
             self.attachments = files;
+            self.reply = reply;
             return;
         }
         self.message_scroll = 0;
     }
 
     /// Queue an LXMF message to `key` (a hex address), or write it as a
-    /// paper message; its local id. On failure the text and files are
-    /// handed back with the reason.
+    /// paper message, as a reply to the message with id `reply` if given;
+    /// its local id. On failure the text and files are handed back with the
+    /// reason.
     pub fn send_message(
         &mut self,
         key: String,
         content: String,
         files: Vec<PathBuf>,
         mode: DeliveryMode,
+        reply: Option<String>,
     ) -> Result<u64, (String, String, Vec<PathBuf>)> {
         let Some(to) = parse_hash(&key) else {
             return Err(("An LXMF address is 32 hex characters".into(), content, files));
@@ -259,6 +266,13 @@ impl App {
             return Err(("Select a propagation node first (Network tab, p)".into(), content, files));
         }
         let key = hex::encode(to);
+        let reply = match reply {
+            None => None,
+            Some(id) => match self.reply_for(&key, &id) {
+                Ok(reply) => Some(reply),
+                Err(e) => return Err((e, content, files)),
+            },
+        };
         let attachments: Vec<StoredAttachment> = files
             .iter()
             .map(|path| StoredAttachment {
@@ -279,6 +293,7 @@ impl App {
         }
         let id = self.store.next_local_id;
         self.store.next_local_id += 1;
+        let timestamp = now();
         self.store
             .conversations
             .entry(key)
@@ -289,15 +304,21 @@ impl App {
                 incoming: false,
                 title: String::new(),
                 content: content.clone(),
-                timestamp: now(),
+                timestamp,
                 state: MessageState::Sending,
                 attachments,
                 paper: None,
+                hash: None,
+                reply: reply.clone(),
             });
         self.store_dirty = true;
         self.keep_conversation_selection();
+        let reply = reply.and_then(|reply| {
+            let to = hex::decode(&reply.hash).ok()?.try_into().ok()?;
+            Some(lxmf::Reply { to, quote: reply.quote })
+        });
         if mode == DeliveryMode::Paper {
-            self.send(NetCommand::WritePaper { id, to, content });
+            self.send(NetCommand::WritePaper { id, paper: lxmf::paper::Paper { to, content, timestamp, reply } });
         } else {
             self.send(NetCommand::SendMessage {
                 id,
@@ -305,20 +326,95 @@ impl App {
                 content,
                 attachments: files,
                 mode,
+                timestamp,
+                reply,
             });
         }
         Ok(id)
     }
 
+    /// The message being replied to in the open conversation, and where it
+    /// is.
+    pub fn reply_target(&self) -> Option<(usize, &Message)> {
+        let id = self.reply.as_deref()?;
+        let conversation = self.store.conversations.get(self.active_conversation.as_deref()?)?;
+        conversation.messages.iter().enumerate().find(|(_, m)| m.id == id)
+    }
+
+    /// The open conversation's messages that can be replied to (those with
+    /// an LXMF hash), by index, oldest first.
+    fn repliable(&self) -> Vec<usize> {
+        let Some(conversation) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)) else {
+            return Vec::new();
+        };
+        conversation.messages.iter().enumerate().filter(|(_, m)| m.lxmf_hash().is_some()).map(|(i, _)| i).collect()
+    }
+
+    /// Reply to the message at `index` in the open conversation, bringing
+    /// it into view, and write.
+    fn reply_to_index(&mut self, index: usize) {
+        let Some(message) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)?.messages.get(index)) else {
+            return;
+        };
+        if message.lxmf_hash().is_none() {
+            return self.warn("That message hasn't been sent, so there's nothing to reply to yet");
+        }
+        self.reply = Some(message.id.clone());
+        self.scroll_to = Some(index);
+        self.composing = true;
+    }
+
+    /// Start a reply: to the newest message they sent, else the newest that
+    /// can be answered.
+    pub(super) fn start_reply(&mut self) {
+        let repliable = self.repliable();
+        let Some(conversation) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)) else {
+            return;
+        };
+        let theirs = repliable.iter().rev().find(|&&i| conversation.messages[i].incoming);
+        match theirs.or(repliable.last()).copied() {
+            Some(index) => self.reply_to_index(index),
+            None => self.warn("Nothing to reply to here yet"),
+        }
+    }
+
+    /// Reply to the message before (`older`) or after the one being replied to.
+    pub(super) fn move_reply(&mut self, older: bool) {
+        let repliable = self.repliable();
+        let Some((current, _)) = self.reply_target() else { return self.start_reply() };
+        let next = if older {
+            repliable.iter().rev().find(|&&i| i < current)
+        } else {
+            repliable.iter().find(|&&i| i > current)
+        };
+        if let Some(&index) = next {
+            self.reply_to_index(index);
+        }
+    }
+
+    /// What a reply to the message with id `id` in conversation `key`
+    /// carries: its hash, and the start of its text to quote.
+    fn reply_for(&self, key: &str, id: &str) -> Result<ReplyTo, String> {
+        let message = self
+            .store
+            .conversations
+            .get(key)
+            .and_then(|c| c.messages.iter().find(|m| m.id == id))
+            .ok_or("The message replied to isn't in this conversation")?;
+        let hash = message.lxmf_hash().ok_or("That message hasn't been sent, so there's nothing to reply to yet")?;
+        Ok(ReplyTo { hash: hash.to_string(), quote: lxmf::quote_of(&message.content) })
+    }
+
     /// A paper message written (or not): it's kept with its link, and shown
     /// as a QR code in the terminal UI when its conversation is open.
-    pub(super) fn on_paper(&mut self, id: u64, result: Result<String, String>) {
+    pub(super) fn on_paper(&mut self, id: u64, result: Result<(String, [u8; 32]), String>) {
         let local = format!("local-{id}");
         let Some(message) = self.store.find_message_mut(&local) else { return };
         match result {
-            Ok(link) => {
+            Ok((link, hash)) => {
                 message.state = MessageState::Delivered;
                 message.paper = Some(link.clone());
+                message.hash = Some(hex::encode(hash));
                 self.store_dirty = true;
                 if self.tab == Tab::Messages {
                     self.paper_view = Some(PaperView::new(link));
@@ -518,6 +614,7 @@ impl App {
             KeyCode::Enter | KeyCode::Char('i') if self.active_conversation.is_some() => {
                 self.composing = true;
             }
+            KeyCode::Char('r') if self.active_conversation.is_some() => self.start_reply(),
             KeyCode::Char('a') => self.open_attach_prompt(),
             KeyCode::Char('o') => self.open_latest_attachment(),
             KeyCode::Char('d') => self.delivery_mode = self.delivery_mode.next(),
@@ -552,8 +649,11 @@ impl App {
             self.composing = true;
         } else if self.regions.history.contains(at) {
             let row = (at.y - self.regions.history.y) as usize;
-            if let Some(Some(path)) = self.regions.history_rows.get(row).cloned() {
-                self.open_file(&path);
+            match self.regions.history_rows.get(row).cloned().flatten() {
+                Some(HistoryHit::File(path)) => self.open_file(&path),
+                Some(HistoryHit::Reply(index)) => self.reply_to_index(index),
+                Some(HistoryHit::Original(index)) => self.scroll_to = Some(index),
+                None => {}
             }
         }
     }
@@ -582,6 +682,8 @@ mod tests {
             state: MessageState::Received { verified: true },
             attachments: Vec::new(),
             paper: None,
+            hash: None,
+            reply: None,
         }
     }
 
@@ -732,6 +834,59 @@ mod tests {
     }
 
     #[test]
+    fn replies_name_and_quote_the_message_they_answer() {
+        use crate::lxmf::{Delivered, Reply, Sent};
+        use crate::net::NetEvent;
+        let dir = temp_dir("replies");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        let incoming = |n: u8, content: &str, reply: Option<Reply>| crate::lxmf::InboundMessage {
+            id: Some([n; 32]),
+            source: [0xab; 16],
+            title: String::new(),
+            content: content.into(),
+            timestamp: 1_700_000_000.0 + f64::from(n),
+            verified: true,
+            attachments: Vec::new(),
+            paper: false,
+            reply,
+        };
+        app.on_message(incoming(1, "Lunch tomorrow?\nAt noon", None));
+        let theirs = hex::encode([1u8; 32]);
+        // A reply to theirs carries its hash and the start of its text.
+        let id = app.send_message(key(), "Yes!".into(), Vec::new(), DeliveryMode::Auto, Some(theirs.clone())).unwrap();
+        let conversation = &app.store.conversations[&key()];
+        let mine = conversation.messages.last().unwrap();
+        let reply = mine.reply.clone().unwrap();
+        assert_eq!(reply.hash, theirs);
+        assert_eq!(reply.quote.as_deref(), Some("Lunch tomorrow?\nAt noon"));
+        // It shows their message's first line.
+        let quoted = conversation.quoted(&reply);
+        assert_eq!((quoted.index, quoted.incoming, quoted.text.as_str()), (Some(0), Some(true), "Lunch tomorrow?"));
+        // Mine can't be answered until it's sent; then it has a hash.
+        let local = format!("local-{id}");
+        let err = app.send_message(key(), "and".into(), Vec::new(), DeliveryMode::Auto, Some(local.clone())).unwrap_err();
+        assert!(err.0.contains("hasn't been sent"), "{}", err.0);
+        app.on_net(NetEvent::Delivery { id, result: Ok(Sent { delivered: Delivered::Direct, hash: [5; 32] }) });
+        assert_eq!(app.store.find_message_mut(&local).unwrap().hash, Some(hex::encode([5u8; 32])));
+        // Their reply to mine finds it; one to a message not here shows
+        // what it quoted.
+        app.on_message(incoming(2, "Great", Some(Reply { to: [5; 32], quote: Some("Yes!".into()) })));
+        app.on_message(incoming(3, "Also", Some(Reply { to: [8; 32], quote: Some("Old news".into()) })));
+        let conversation = &app.store.conversations[&key()];
+        let quoted = |content: &str| {
+            let message = conversation.messages.iter().find(|m| m.content == content).unwrap();
+            let quoted = conversation.quoted(message.reply.as_ref().unwrap());
+            (quoted.index.map(|i| conversation.messages[i].content.clone()), quoted.incoming, quoted.text)
+        };
+        assert_eq!(quoted("Great"), (Some("Yes!".to_string()), Some(false), "Yes!".to_string()));
+        assert_eq!(quoted("Also"), (None, None, "Old news".to_string()));
+        // Nor is the reply kept if what it answers isn't in this conversation.
+        let err = app.send_message(key(), "x".into(), Vec::new(), DeliveryMode::Auto, Some("nope".into())).unwrap_err();
+        assert!(err.0.contains("isn't in this conversation"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn messages_arriving_while_away_are_unread_until_back() {
         let dir = temp_dir("focus");
         let mut app = app(&dir, store_of(vec![message(0, "hi".into())]), 1000, 0);
@@ -750,6 +905,7 @@ mod tests {
                 verified: true,
                 attachments: Vec::new(),
                 paper: false,
+                reply: None,
             });
         };
         let unread = |app: &App| app.store.conversations[&key()].unread;

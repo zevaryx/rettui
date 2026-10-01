@@ -77,6 +77,30 @@ Sideband and NomadNet can read what rettui writes, and rettui can read theirs.
       take a photo or pick a picture, and rettui finds the code in it.
   - A message you've already read in is only reported, not added twice.
 
+## Replies
+
+A reply names the message it answers, and the start of that message's text
+goes with it, so the other side sees what it answers even without that
+message. It's LXMF's own reply format, as Columba and MeshChatX send it:
+replies between them and rettui show as replies both ways. Clients that don't
+support replies yet (Sideband, NomadNet, MeshChat) show an ordinary message.
+
+- **In the TUI:** `r` replies to the newest message they sent, and so does
+  `Ctrl-R` while writing. `↑↓` then pick another (the one chosen is marked
+  in the history), and `Esc` stops replying. Clicking a message's name line
+  replies to it.
+- **In the web UI:** hover over a message (on a phone it's always shown) and
+  click **↩ Reply**. The box shows what you're replying to; `Esc` or **×**
+  stops replying.
+- **Showing them:** a reply shows the first line of what it answers, under
+  who wrote it. That's taken from the message itself when it's here, and
+  from what the reply quoted when it isn't (it's older than the messages
+  kept, or was never received). Click the quote to scroll to the message.
+
+A message you send can be replied to once it's sent: replies name it by its
+hash, which it has from then on. What you're replying to stays with the
+conversation's draft.
+
 ## Emoji
 
 Both UIs have the same two ways to add an emoji to a message, and to what you

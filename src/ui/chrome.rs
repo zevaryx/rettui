@@ -216,9 +216,18 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("x", "remove"),
                 ("y", "copy link"),
             ],
+            Tab::Messages if app.composing && app.reply.is_some() => &[
+                ("Enter", "send reply"),
+                ("↑↓", "another message"),
+                ("Esc", "cancel reply"),
+                ("^E", "emoji"),
+                ("^V", "paste"),
+                ("^O", "attach"),
+            ],
             Tab::Messages if app.composing => &[
                 ("Enter", "send"),
                 ("Esc", "done"),
+                ("^R", "reply"),
                 ("^E", "emoji"),
                 ("^V", "paste"),
                 ("^O", "attach"),
@@ -228,6 +237,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             ],
             Tab::Messages => &[
                 ("Enter", "write"),
+                ("r", "reply"),
                 ("n", "new"),
                 ("y", "copy address"),
                 ("a", "attach"),

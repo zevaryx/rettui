@@ -90,19 +90,20 @@ pub async fn send(
     let (commands, mut events) = net::spawn(options(settings, paths, identity, false, node));
     wait_started(&mut events).await?;
     let content = message.to_string();
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let _ = commands.send(if mode == DeliveryMode::Paper {
-        NetCommand::WritePaper { id: 1, to, content }
+        NetCommand::WritePaper { id: 1, paper: crate::lxmf::paper::Paper { to, content, timestamp, reply: None } }
     } else {
-        NetCommand::SendMessage { id: 1, to, content, attachments, mode }
+        NetCommand::SendMessage { id: 1, to, content, attachments, mode, timestamp, reply: None }
     });
     while let Some(event) = events.recv().await {
         match event {
-            NetEvent::Delivery { result: Ok(how), .. } => {
-                println!("Delivered ({how:?})");
+            NetEvent::Delivery { result: Ok(sent), .. } => {
+                println!("Delivered ({:?})", sent.delivered);
                 return Ok(());
             }
             NetEvent::Delivery { result: Err(e), .. } => bail!("delivery failed: {e}"),
-            NetEvent::Paper { result: Ok(link), .. } => {
+            NetEvent::Paper { result: Ok((link, _)), .. } => {
                 print_paper(&link);
                 return Ok(());
             }

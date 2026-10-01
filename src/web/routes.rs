@@ -632,6 +632,9 @@ struct SendBody {
     mode: String,
     #[serde(default)]
     files: Vec<Upload>,
+    /// The id of the message it replies to.
+    #[serde(default)]
+    reply_to: Option<String>,
 }
 
 async fn send_message(
@@ -654,7 +657,9 @@ async fn send_message(
         files.push(path);
     }
     let result = state
-        .write(move |o| o.app.send_message(key, body.content, files, mode).map_err(|(e, _, files)| (e, files)))
+        .write(move |o| {
+            o.app.send_message(key, body.content, files, mode, body.reply_to).map_err(|(e, _, files)| (e, files))
+        })
         .await?;
     match result {
         // Its id: a paper message's link shows on it once written.

@@ -1821,6 +1821,10 @@ app.views.messages = {
           e.preventDefault();
           emojiPicker.toggle(this.text, this.emojiButton);
         }
+        if (e.key === 'Escape' && this.replyTo) {
+          e.preventDefault();
+          this.setReply(null);
+        }
         // Enter while an input method is composing confirms the text.
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
           e.preventDefault();
@@ -1847,8 +1851,11 @@ app.views.messages = {
     } },
     [['auto', 'Auto'], ['direct', 'Direct'], ['propagated', 'Propagated'], ['paper', 'Paper (QR code)']].map(([m, label]) =>
       el('option', { value: m, text: label, selected: m === this.mode })));
+    // What the message being written answers, if anything.
+    this.replyBar = el('div', { class: 'reply-bar hidden' });
     this.compose = el('div', { class: 'compose' },
       this.emojiList.list,
+      this.replyBar,
       this.chips,
       el('div', { class: 'row' }, this.text),
       el('div', { class: 'row' },
@@ -2030,11 +2037,15 @@ app.views.messages = {
       failed: el('span', { class: 'state-bad', text: ` failed: ${m.state.error}` }),
     }[m.state.kind];
     const base = `/api/conversations/${conversation.key}/attachments/${encodeURIComponent(m.id)}/`;
-    return el('div', { class: 'message ' + (m.incoming ? 'in' : 'out') },
+    const author = m.incoming ? conversation.name : 'You';
+    return el('div', { class: 'message ' + (m.incoming ? 'in' : 'out'), dataset: { id: m.id } },
       el('div', { class: 'meta' },
-        el('span', { class: 'author ' + (m.incoming ? 'in' : 'out'), text: m.incoming ? conversation.name : 'You' }),
+        el('span', { class: 'author ' + (m.incoming ? 'in' : 'out'), text: author }),
         el('span', { class: 'dim', text: '  ' + timeLabel(m.timestamp) }),
-        state),
+        state,
+        m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
+          onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null),
+      m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
       m.content ? el('div', { class: 'content', text: m.content }) : null,
       m.attachments.map((a) => {
@@ -2050,31 +2061,79 @@ app.views.messages = {
       }));
   },
 
-  // What's written (and attached) in the box, if anything (see draftSwitch).
+  // The start of what a message says, for a reply to it (as the server's
+  // `Message::opening`).
+  opening(m) {
+    const first = (text) => (text || '').split('\n').map((l) => l.trim()).find(Boolean);
+    return first(m.content) || first(m.title) || (m.attachments[0] ? `📎 ${m.attachments[0].name}` : '');
+  },
+
+  // What a reply answers, above its text: a click shows that message.
+  quote(reply, conversation) {
+    const author = reply.incoming == null ? '' : `${reply.incoming ? conversation.name : 'You'}: `;
+    return el('div', { class: 'reply-quote' + (reply.id ? ' clickable' : ''), title: reply.id ? 'Show this message' : null,
+      onclick: () => reply.id && this.showMessage(reply.id) },
+    author ? el('span', { class: 'quote-author', text: author }) : null, reply.text);
+  },
+
+  // Scroll to a message and make it stand out for a moment.
+  showMessage(id) {
+    const node = [...this.history.querySelectorAll('.message')].find((n) => n.dataset.id === id);
+    if (!node) return toast('That message is further back: Show earlier messages to see it');
+    node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    node.classList.remove('flash');
+    void node.offsetWidth;
+    node.classList.add('flash');
+  },
+
+  // Reply to `target` ({ id, author, text }), or not (null).
+  setReply(target, focus = false) {
+    this.replyTo = target;
+    this.replyBar.classList.toggle('hidden', !target);
+    this.replyBar.replaceChildren(...(target ? [
+      el('span', { class: 'reply-label', text: '↩' }),
+      el('span', { class: 'quote-author', text: `${target.author}:` }),
+      el('span', { class: 'reply-text', text: target.text }),
+      el('button', { class: 'inline', text: '×', title: 'Don\'t reply (Esc)', onclick: () => this.setReply(null, true) }),
+    ] : []));
+    if (focus) this.text.focus();
+  },
+
+  // What's written (and attached) in the box, and what it replies to, if
+  // anything (see draftSwitch).
   takeDraft() {
-    return this.text.value || this.pending.length ? { text: this.text.value, files: this.pending } : null;
+    return this.text.value || this.pending.length || this.replyTo
+      ? { text: this.text.value, files: this.pending, reply: this.replyTo }
+      : null;
   },
 
   putDraft(draft) {
     this.text.value = draft?.text || '';
     this.pending = draft?.files || [];
+    this.setReply(draft?.reply || null);
     this.renderChips();
   },
 
   joinDrafts(first, second) {
     if (!second) return first;
-    return { text: [first.text, second.text].filter(Boolean).join('\n'), files: [...first.files, ...second.files] };
+    return {
+      text: [first.text, second.text].filter(Boolean).join('\n'),
+      files: [...first.files, ...second.files],
+      reply: first.reply || second.reply,
+    };
   },
 
   async send() {
     const content = this.text.value;
     const pending = this.pending;
+    const reply = this.replyTo;
     if (!content.trim() && !pending.length) return;
     // Take the message out of the box at once, so a second Enter (or a
     // double click) while this one is on its way has nothing to send, and
     // anything typed meanwhile is kept.
     this.text.value = '';
     this.pending = [];
+    this.setReply(null);
     this.renderChips();
     // Show it straight away as sending; the next update draws the real one.
     const echo = this.echo(this.selected, el('div', { class: 'message out echo' },
@@ -2082,6 +2141,7 @@ app.views.messages = {
         el('span', { class: 'author out', text: 'You' }),
         el('span', { class: 'dim', text: '  ' + timeLabel(Date.now() / 1000) }),
         el('span', { class: 'dim', text: ' sending…' })),
+      reply ? el('div', { class: 'reply-quote' }, el('span', { class: 'quote-author', text: `${reply.author}: ` }), reply.text) : null,
       content ? el('div', { class: 'content', text: content }) : null,
       pending.map((f) => el('div', { class: 'attachment dim', text: `📎 ${f.name}` }))));
     const files = [];
@@ -2089,11 +2149,11 @@ app.views.messages = {
     const total = pending.reduce((n, f) => n + f.size, 0);
     if (total > 1_000_000) toast(`Sending ${humanBytes(total)} of attachments; many clients reject direct transfers over 1 MB`);
     const mode = this.mode;
-    const sent = await attempt(() => api.post(`/conversations/${echo.key}/send`, { content, mode, files }));
+    const sent = await attempt(() => api.post(`/conversations/${echo.key}/send`, { content, mode, files, reply_to: reply?.id }));
     echo.done(!sent);
     if (!sent) {
       // Put it back to try again, in the conversation it was for.
-      draftRestore(this, echo.key, { text: content, files: pending });
+      draftRestore(this, echo.key, { text: content, files: pending, reply });
       return;
     }
     // Its QR code shows once written (see renderConversation).

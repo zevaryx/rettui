@@ -70,6 +70,81 @@ pub struct Message {
     /// A paper message written: its `lxm://` link (shown as a QR code).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paper: Option<String>,
+    /// A sent message's LXMF hash (hex), once it's sent or written: what
+    /// replies to it name. A received message's is its `id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    /// The message this one answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<ReplyTo>,
+}
+
+impl Message {
+    /// The LXMF hash (hex) replies to this message name it by, if it has
+    /// one (a message being sent, or that failed, has none yet).
+    pub fn lxmf_hash(&self) -> Option<&str> {
+        if self.incoming {
+            (self.id.len() == 64).then_some(self.id.as_str())
+        } else {
+            self.hash.as_deref()
+        }
+    }
+
+    /// The start of what it says, for a reply's quote: its first line of
+    /// text, else its title, else its first file.
+    pub fn opening(&self) -> String {
+        let first = |text: &str| text.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string);
+        first(&self.content)
+            .or_else(|| first(&self.title))
+            .or_else(|| self.attachments.first().map(|a| format!("📎 {}", a.name)))
+            .unwrap_or_default()
+    }
+}
+
+/// The message a reply answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplyTo {
+    /// Its LXMF hash (hex).
+    pub hash: String,
+    /// The start of its text, as the reply carried it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+}
+
+/// What a reply shows of the message it answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Quoted {
+    /// Where that message is in the conversation, if it's there.
+    pub index: Option<usize>,
+    /// Whether they wrote it (`Some(false)`: you did), if that's known.
+    pub incoming: Option<bool>,
+    /// The start of it: from the message itself where it's here (so a
+    /// quote can't put words in anyone's mouth), else what the reply quoted.
+    pub text: String,
+}
+
+impl Conversation {
+    /// The message with LXMF hash `hash`, and where it is.
+    pub fn by_hash(&self, hash: &str) -> Option<(usize, &Message)> {
+        self.messages.iter().enumerate().find(|(_, m)| m.lxmf_hash() == Some(hash))
+    }
+
+    /// What `reply` shows of the message it answers.
+    pub fn quoted(&self, reply: &ReplyTo) -> Quoted {
+        match self.by_hash(&reply.hash) {
+            Some((index, message)) => Quoted { index: Some(index), incoming: Some(message.incoming), text: message.opening() },
+            None => Quoted {
+                index: None,
+                incoming: None,
+                text: reply
+                    .quote
+                    .as_deref()
+                    .and_then(|q| q.lines().map(str::trim).find(|l| !l.is_empty()))
+                    .unwrap_or("a message that isn't here")
+                    .to_string(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -507,6 +582,8 @@ mod tests {
             state: MessageState::Delivered,
             attachments: Vec::new(),
             paper: None,
+            hash: None,
+            reply: None,
         };
         store.conversations.insert("ab".repeat(16), Conversation { messages: vec![message], unread: 1, ..Default::default() });
         store.next_local_id = 2;

@@ -2,14 +2,14 @@
 
 use std::time::Duration;
 
-use lxmf_core::constants::FIELD_FILE_ATTACHMENTS;
+use lxmf_core::constants::{FIELD_FILE_ATTACHMENTS, FIELD_REPLY_QUOTE, FIELD_REPLY_TO};
 use lxmf_core::message_api::LxMessage;
 use rmpv::Value;
 use rns_crypto::ed25519::Ed25519PublicKey;
 use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
-use super::{Attachment, InboundMessage, bytes_of, is_image_name};
+use super::{Attachment, InboundMessage, Reply, bytes_of, is_image_name};
 use crate::net::{Hash, Known, NetEvent, lookup};
 
 /// How long to look for an unknown sender's announce to verify a message.
@@ -45,6 +45,43 @@ pub(super) fn attachments_of(message: &LxMessage) -> Vec<Attachment> {
         }
     }
     out
+}
+
+/// Older Columba sent its reply target as `{"reply_to": "<hex>"}` in field
+/// 0x10, before it used [`FIELD_REPLY_TO`].
+const FIELD_COLUMBA_EXTENSIONS: u8 = 0x10;
+/// The most of a received quote kept (some clients send all of the text).
+const QUOTE_KEPT: usize = 500;
+
+/// The message `message` answers, if it's a reply: its hash as bytes (as
+/// sent) or hex, and the quote if there is one.
+pub fn reply_of(message: &LxMessage) -> Option<Reply> {
+    // Bytes are kept as they are; anything else as its msgpack.
+    let field = |id| {
+        let raw = message.get_field(id)?;
+        if message.msgpack_field_ids.contains(&id) {
+            rmpv::decode::read_value(&mut raw.as_slice()).ok()
+        } else {
+            Some(Value::Binary(raw.clone()))
+        }
+    };
+    let hash = |value: &Value| -> Option<[u8; 32]> {
+        match value {
+            Value::Binary(bytes) => bytes.as_slice().try_into().ok(),
+            Value::String(text) => hex::decode(text.as_str()?).ok()?.try_into().ok(),
+            _ => None,
+        }
+    };
+    let to = field(FIELD_REPLY_TO).as_ref().and_then(hash).or_else(|| {
+        let Value::Map(entries) = field(FIELD_COLUMBA_EXTENSIONS)? else { return None };
+        entries.iter().find(|(key, _)| key.as_str() == Some("reply_to")).and_then(|(_, value)| hash(value))
+    })?;
+    let quote = field(FIELD_REPLY_QUOTE)
+        .as_ref()
+        .and_then(bytes_of)
+        .map(|bytes| String::from_utf8_lossy(&bytes).chars().take(QUOTE_KEPT).collect::<String>())
+        .filter(|quote| !quote.trim().is_empty());
+    Some(Reply { to, quote })
 }
 
 fn signing_key(identity: &Identity) -> Option<Ed25519PublicKey> {
@@ -95,6 +132,7 @@ pub(super) async fn parse_inbound(
     let verified = check_signature(&mut message, sender.as_ref().map(|remote| &remote.identity))?;
     tracing::debug!("message from {} verified={verified}", hex::encode(message.source_hash));
     let attachments = attachments_of(&message);
+    let reply = reply_of(&message);
     Ok(InboundMessage {
         id: message.message_id.or(message.hash),
         source: message.source_hash,
@@ -104,6 +142,7 @@ pub(super) async fn parse_inbound(
         verified,
         attachments,
         paper: false,
+        reply,
     })
 }
 

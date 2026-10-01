@@ -180,8 +180,8 @@ pub struct Regions {
     pub browser_list: Rect,
     pub conversations: Rect,
     pub history: Rect,
-    /// Attachment shown on each visible history row.
-    pub history_rows: Vec<Option<PathBuf>>,
+    /// What each visible history row opens when clicked.
+    pub history_rows: Vec<Option<HistoryHit>>,
     pub compose: Rect,
     pub peers: Rect,
     /// Network tab search box.
@@ -222,6 +222,17 @@ pub struct Regions {
     /// The emoji picker (or the `:name` list) and what's in it.
     pub emoji_popup: Rect,
     pub emoji_hits: Vec<(Rect, emoji::EmojiHit)>,
+}
+
+/// What a click on a history row does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryHit {
+    /// Open an attachment.
+    File(PathBuf),
+    /// Reply to the message (its index): its first row.
+    Reply(usize),
+    /// Show the message a reply answers (its index): the reply's quote.
+    Original(usize),
 }
 
 /// How a footer notice reads: done, a hint that something can't be done
@@ -284,6 +295,10 @@ pub struct App {
     pub active_conversation: Option<String>,
     pub compose: TextInput,
     pub composing: bool,
+    /// The message being replied to (its id), in the open conversation.
+    pub reply: Option<String>,
+    /// A message (its index) to bring into view at the next draw.
+    pub scroll_to: Option<usize>,
     /// The emoji picker, over the input being written in.
     pub emoji: Option<emoji::EmojiPicker>,
     /// The `:name` list while typing one.
@@ -291,7 +306,7 @@ pub struct App {
     pub message_scroll: usize,
     pub attachments: Vec<PathBuf>,
     /// What's written and attached in the conversations not open.
-    drafts: HashMap<String, (TextInput, Vec<PathBuf>)>,
+    drafts: HashMap<String, (TextInput, Vec<PathBuf>, Option<String>)>,
     pub delivery_mode: DeliveryMode,
     /// Decoded image attachments by file path (`None` if undecodable).
     pictures: HashMap<PathBuf, Option<Picture>>,
@@ -393,6 +408,8 @@ impl App {
             active_conversation: None,
             compose: TextInput::default(),
             composing: false,
+            reply: None,
+            scroll_to: None,
             emoji: None,
             shortcode: emoji::Shortcode::default(),
             message_scroll: 0,
@@ -667,15 +684,19 @@ impl App {
                 let local = format!("local-{id}");
                 if let Some(message) = self.store.find_message_mut(&local) {
                     message.state = match &result {
-                        Ok(Delivered::Direct) => MessageState::Delivered,
-                        Ok(Delivered::Propagated) => MessageState::Propagated,
+                        Ok(sent) if sent.delivered == Delivered::Direct => MessageState::Delivered,
+                        Ok(_) => MessageState::Propagated,
                         Err(e) => MessageState::Failed(e.clone()),
                     };
+                    // What replies to it will name it by.
+                    if let Ok(sent) = &result {
+                        message.hash = Some(hex::encode(sent.hash));
+                    }
                     self.store_dirty = true;
                 }
                 match result {
-                    Ok(Delivered::Propagated) => self.log("Message handed to propagation node"),
-                    Ok(Delivered::Direct) => {}
+                    Ok(sent) if sent.delivered == Delivered::Propagated => self.log("Message handed to propagation node"),
+                    Ok(_) => {}
                     Err(e) => self.log(format!("Delivery failed: {e}")),
                 }
             }

@@ -67,6 +67,33 @@ impl DeliveryMode {
     }
 }
 
+/// The message a reply answers (LXMF's `FIELD_REPLY_TO`, as Columba and
+/// MeshChatX send it): its hash, and the start of its text
+/// (`FIELD_REPLY_QUOTE`), so a client without it can still show what's
+/// answered. Clients that don't know these fields show an ordinary message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    pub to: [u8; 32],
+    pub quote: Option<String>,
+}
+
+/// How much of the answered message's text a reply carries: enough to
+/// recognise it, without sending a long message twice.
+const QUOTE_CHARS: usize = 160;
+
+/// What a reply quotes of `text`: its start, if it has any.
+pub fn quote_of(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.chars().take(QUOTE_CHARS).collect())
+}
+
+/// A message sent: how it went, and its hash (what replies to it name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sent {
+    pub delivered: Delivered,
+    pub hash: [u8; 32],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Delivered {
     /// The recipient proved receipt.
@@ -82,6 +109,11 @@ pub struct Outgoing {
     pub attachments: Vec<PathBuf>,
     pub mode: DeliveryMode,
     pub propagation_node: Option<Hash>,
+    /// When it was written (Unix seconds). Fixed, so each attempt to send
+    /// it (direct, then through the propagation node) is the same message,
+    /// with the same hash.
+    pub timestamp: f64,
+    pub reply: Option<Reply>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +134,8 @@ pub struct InboundMessage {
     pub attachments: Vec<Attachment>,
     /// Read in from a paper message, not received over the network.
     pub paper: bool,
+    /// The message it answers, if it's a reply.
+    pub reply: Option<Reply>,
 }
 
 fn is_image_name(name: &str) -> bool {
@@ -152,6 +186,8 @@ mod tests {
             attachments: vec![img, doc],
             mode: DeliveryMode::Direct,
             propagation_node: None,
+            timestamp: 1_800_000_000.0,
+            reply: None,
         };
         let message = build_message(&identity, [2; 16], &outgoing, None).await.unwrap();
         let unpacked = LxMessage::unpack(&message.pack().unwrap()).unwrap();
@@ -164,5 +200,60 @@ mod tests {
         assert_eq!(attachments[1].name, "notes.txt");
         assert_eq!(attachments[1].data, b"hello");
         assert_eq!(unpacked.content, "hi");
+    }
+
+    fn outgoing(reply: Option<Reply>) -> Outgoing {
+        Outgoing {
+            to: [1; 16],
+            content: "yes, at noon".into(),
+            attachments: Vec::new(),
+            mode: DeliveryMode::Direct,
+            propagation_node: None,
+            timestamp: 1_800_000_000.5,
+            reply,
+        }
+    }
+
+    #[tokio::test]
+    async fn replies_name_the_message_they_answer() {
+        let identity = Identity::new();
+        let reply = Reply { to: [7; 32], quote: Some("Lunch tomorrow?".into()) };
+        let message = build_message(&identity, [2; 16], &outgoing(Some(reply.clone())), None).await.unwrap();
+        let packed = message.pack().unwrap();
+        assert_eq!(super::inbound::reply_of(&LxMessage::unpack(&packed).unwrap()), Some(reply));
+        // Field 0x30 as msgpack bytes (bin 8, 32 long), as Columba and
+        // MeshChatX send it.
+        let mut on_wire = vec![0x30, 0xc4, 32];
+        on_wire.extend([7; 32]);
+        assert!(packed.windows(on_wire.len()).any(|w| w == on_wire));
+        // Not a reply: no fields.
+        let plain = build_message(&identity, [2; 16], &outgoing(None), None).await.unwrap();
+        assert_eq!(super::inbound::reply_of(&LxMessage::unpack(&plain.pack().unwrap()).unwrap()), None);
+    }
+
+    #[tokio::test]
+    async fn every_attempt_at_a_message_has_the_same_hash() {
+        // Direct, then through the propagation node: the same message, so
+        // replies to it find it whichever way it went.
+        let identity = Identity::new();
+        let first = build_message(&identity, [2; 16], &outgoing(None), None).await.unwrap();
+        let second = build_message(&identity, [2; 16], &outgoing(None), Some(&[0x91, 0xc0])).await.unwrap();
+        assert!(first.hash.is_some());
+        assert_eq!(first.hash, second.hash);
+    }
+
+    #[test]
+    fn older_columba_replies_are_read_too() {
+        let mut message = LxMessage::new([1; 16], [2; 16], "", "ok", lxmf_core::message_api::DeliveryMethod::Direct);
+        let extensions = Value::Map(vec![(Value::from("reply_to"), Value::from(hex::encode([9u8; 32])))]);
+        message.set_msgpack_field(0x10, encode(&extensions)).unwrap();
+        assert_eq!(super::inbound::reply_of(&message), Some(Reply { to: [9; 32], quote: None }));
+    }
+
+    #[test]
+    fn quotes_are_the_start_of_the_text() {
+        assert_eq!(quote_of("  hello  "), Some("hello".into()));
+        assert_eq!(quote_of(" \n "), None);
+        assert_eq!(quote_of(&"é".repeat(400)).map(|q| q.chars().count()), Some(QUOTE_CHARS));
     }
 }
