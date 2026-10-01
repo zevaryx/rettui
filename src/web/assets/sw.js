@@ -20,9 +20,12 @@ self.addEventListener('notificationclick', (event) => {
       await page.focus().catch(() => {});
       return;
     }
-    // No page open: start one there.
+    // No page open: start one there. What to open goes in its address too,
+    // since the browser may not hand back the window it opened (an
+    // installed app's, say) to be told.
     const tab = target?.kind === 'room' ? 'channels' : 'messages';
-    const opened = await self.clients.openWindow('/#' + tab);
+    const open = target ? '?open=' + encodeURIComponent(JSON.stringify(target)) : '';
+    const opened = await self.clients.openWindow('/' + open + '#' + tab);
     opened?.postMessage({ open: target });
   })());
 });

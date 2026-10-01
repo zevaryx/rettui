@@ -4594,7 +4594,18 @@ window.addEventListener('hashchange', () => {
 // A notification tapped: open what it's about. Listened for from the
 // start, since a page opened by the tap is told as soon as it has loaded,
 // before it's ready (kept until it is).
-let openOnStart = null;
+let openOnStart = (() => {
+  // From a page a tap opened: what to open is in its address.
+  const params = new URLSearchParams(location.search);
+  if (!params.has('open')) return null;
+  history.replaceState(history.state, '', location.pathname + location.hash);
+  try {
+    const target = JSON.parse(params.get('open'));
+    return ['conversation', 'room', 'summary'].includes(target?.kind) ? target : null;
+  } catch {
+    return null;
+  }
+})();
 let started = false;
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (!e.data || !('open' in e.data)) return;
