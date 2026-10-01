@@ -43,8 +43,8 @@ it and this page differ, the manual is right.
   one; [directory.rns.recipes](https://directory.rns.recipes) lists more.
   ([Manual](https://reticulum.network/manual/gettingstartedfast.html#bootstrapping-connectivity))
 - **Interface discovery:** entry points can announce themselves as
-  discoverable; with discovery on, Reticulum finds them and connects to
-  some by itself (see [Settings and Reticulum Config](Settings-and-Reticulum-Config)
+  discoverable; with discovery on, Reticulum hears of them through the
+  connections it has, and connects to some by itself (see [Settings and Reticulum Config](Settings-and-Reticulum-Config)
   for what works so far). ([Manual](https://reticulum.network/manual/interfaces.html#discoverable-interfaces))
 - **Shared instance:** the first program to start Reticulum on a computer
   opens the interfaces, and programs started after it share them. If rnsd

@@ -213,10 +213,11 @@ mod tests {
         }
         app.guide.as_mut().unwrap().row = 0;
         draw(&mut app);
-        // A click on the discovery row ticks it.
+        // Discovery is ticked to start with; a click on its row unticks it.
+        assert!(screen.contains("[x] Also find entry points"), "{screen}");
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Discover).unwrap();
         app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
-        assert!(app.guide.as_ref().unwrap().choices.discover);
+        assert!(!app.guide.as_ref().unwrap().choices.discover);
         // Not now closes it for good.
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Later).unwrap();
         app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });

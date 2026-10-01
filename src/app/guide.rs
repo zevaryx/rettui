@@ -3,11 +3,16 @@
 //!
 //! Reticulum's default config only reaches the local network, so a new user
 //! usually hears no one. The guide sets up what's needed to reach others,
-//! following Reticulum's manual ("Getting Started Fast"): a community entry
-//! point (RMAP World), optionally interface discovery (more entry points,
-//! found over time, with RMAP World then used only to bootstrap), and
-//! optionally an automatic propagation node; and links to where to learn
-//! more. Nothing changes until the user applies it.
+//! following Reticulum's manual ("Getting Started Fast"): interface
+//! discovery (entry points others announce, found over time), a community
+//! entry point (RMAP World) when the config has nothing else to hear them
+//! through, optionally an automatic propagation node; and links to where to
+//! learn more. Nothing changes until the user applies it.
+//!
+//! Discovery hears of entry points through a connection the config already
+//! has, so a fresh install (the Auto interface only, which reaches the
+//! local network) gets RMAP World ticked; a config with interfaces of its
+//! own doesn't, unless asked.
 
 use std::time::{Duration, Instant};
 
@@ -51,8 +56,8 @@ pub const NAME_HELP: &str = "The name sent in your announces, so others see who 
 pub const IDENTITY_HELP: &str = "Your identity is the key behind your address. Coming from Sideband, NomadNet or MeshChat? Use its identity file, and contacts reach you here at the address they know. Enter picks the file; it's used from the next start.";
 /// In the web UI, which can't change the identity.
 pub const IDENTITY_WEB_NOTE: &str = "Coming from Sideband, NomadNet or MeshChat? To keep your address, use that identity file from the terminal UI (i in its Status tab), or copy it over this file while rettui is stopped:";
-pub const CONNECT_HELP: &str = "RMAP World runs a public transport node: your messages, pages and announces reach the wider network through it. Its operator sees your IP address, and anyone watching your connection can tell you use Reticulum.";
-pub const DISCOVER_HELP: &str = "Connects to up to 2 entry points others announce, as Reticulum's manual recommends, and uses RMAP World only until they connect. You'll connect to hosts you didn't choose.";
+pub const CONNECT_HELP: &str = "A public transport node: your traffic reaches the wider network through it. Its operator sees your IP address. Ticked when nothing else in your config reaches past your local network, since discovery needs one connection to hear of others.";
+pub const DISCOVER_HELP: &str = "Connects to up to 2 entry points others announce, as Reticulum's manual recommends; you'll connect to hosts you didn't choose. It hears of them through a connection you have, so it needs one to start.";
 pub const AUTO_PROPAGATION_HELP: &str = "A propagation node keeps messages for you while you're offline. Anyone can run one: the one picked (the nearest that answers fastest) sees who your messages are for and when you collect them, and could lose them; it can't read them.";
 pub const APPLY_HELP: &str = "Saves your choices. If the Reticulum config changes, Reticulum restarts to connect.";
 pub const LATER_HELP: &str = "Closes the guide; it's in the Status tab (g) whenever you want it.";
@@ -68,6 +73,9 @@ pub struct GuideView {
     /// entry points itself.
     pub has_entry_point: bool,
     pub has_discovery: bool,
+    /// The config has interfaces of its own besides the Auto one (which
+    /// reaches only the local network).
+    pub has_own_interfaces: bool,
     /// Another program runs the shared instance: its config has the
     /// interfaces, not this one.
     pub external: bool,
@@ -142,6 +150,7 @@ impl App {
             address: self.lxmf_hash,
             identity_pending: self.identity_pending,
             has_entry_point: rns::has_interface_to(&config, ENTRY_HOST),
+            has_own_interfaces: rns::has_own_interfaces(&config),
             has_discovery: rns::discovery_on(&config),
             external: self.uses_external_shared_instance(),
             auto_propagation: self.settings.auto_propagation_node,
@@ -154,7 +163,9 @@ impl App {
     /// through the entry point.
     pub fn guide_defaults(&self) -> GuideChoices {
         let view = self.guide_view();
-        GuideChoices { name: view.name, connect: true, discover: view.has_discovery, auto_propagation: view.auto_propagation }
+        // The entry point only when there's nothing else to hear of others
+        // through (discovery needs a connection to start).
+        GuideChoices { name: view.name, connect: !view.has_own_interfaces, discover: true, auto_propagation: view.auto_propagation }
     }
 
     /// Apply the choices: the name and settings now, the Reticulum config
@@ -176,11 +187,10 @@ impl App {
             let add = choices.connect && !view.has_entry_point;
             let discover = choices.discover && !view.has_discovery;
             if add || discover {
-                // With discovery, the entry point only bootstraps it.
                 let mut added = None;
                 let warnings = self.rns_edit(restricted, |text| {
                     let text = if add {
-                        let (text, name) = rns::add_entry_point(text, ENTRY_NAME, ENTRY_HOST, ENTRY_PORT, choices.discover)?;
+                        let (text, name) = rns::add_entry_point(text, ENTRY_NAME, ENTRY_HOST, ENTRY_PORT)?;
                         added = Some(name);
                         text
                     } else {
@@ -373,14 +383,16 @@ mod tests {
         assert!(app.guide.is_some(), "shown the first time");
         let view = app.guide_view();
         assert!(!view.has_entry_point && !view.has_discovery && !view.external);
-        assert_eq!(app.guide_defaults(), GuideChoices { name: "rettui user".into(), connect: true, discover: false, auto_propagation: false });
+        // A fresh install: discovery, and the entry point to hear of others
+        // through.
+        assert_eq!(app.guide_defaults(), GuideChoices { name: "rettui user".into(), connect: true, discover: true, auto_propagation: false });
         // Applying: the name, the entry point in the Reticulum config, and a
         // restart to connect.
         let choices = GuideChoices { name: "Zev".into(), connect: true, discover: true, auto_propagation: false };
         let done = app.apply_guide(&choices, false).unwrap();
         assert!(done.iter().any(|d| d.contains("Added RMAP World")), "{done:?}");
         let config = std::fs::read_to_string(rns_dir.join("config")).unwrap();
-        assert!(config.contains("target_host = rmap.world") && config.contains("bootstrap_only = Yes"), "{config}");
+        assert!(config.contains("target_host = rmap.world") && !config.contains("bootstrap_only"), "{config}");
         assert!(rns::discovery_on(&config));
         assert!(app.take_rns_restart());
         // Once Reticulum is back, it says when the entry point connects.
@@ -410,6 +422,24 @@ mod tests {
         // Existing settings files without the field don't show it again.
         let old: Settings = serde_json::from_str(r#"{"display_name": "Old hand"}"#).unwrap();
         assert!(old.welcomed);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_config_with_its_own_interfaces_gets_no_entry_point_unasked() {
+        let dir = std::env::temp_dir().join(format!("rettui-guide-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rns_dir = dir.join("rns");
+        std::fs::create_dir_all(&rns_dir).unwrap();
+        let config = "[reticulum]\n  share_instance = Yes\n\n[interfaces]\n  [[Default Interface]]\n    type = AutoInterface\n    enabled = Yes\n  [[My hub]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = hub.example\n    target_port = 4242\n  [[RMAP World]]\n    type = TCPClientInterface\n    enabled = No\n    target_host = rmap.world\n    target_port = 4242\n";
+        std::fs::write(rns_dir.join("config"), config).unwrap();
+        let settings = Settings { rns_config: Some(rns_dir.display().to_string()), ..Settings::default() };
+        let app = crate::app::test_app(&dir, settings, Store::default());
+        let view = app.guide_view();
+        // RMAP World is there, but off: not counted as connecting through it.
+        assert!(view.has_own_interfaces && !view.has_entry_point);
+        let defaults = app.guide_defaults();
+        assert!(!defaults.connect && defaults.discover, "{defaults:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

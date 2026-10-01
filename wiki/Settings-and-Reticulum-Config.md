@@ -27,13 +27,18 @@ of the Reticulum instance it uses. Where files are kept is in
     and delete them.
   - **Interface discovery:** with *Discover interfaces* and *Auto-connect*
     in `[reticulum]`, rettui finds entry points that others announce as
-    discoverable and connects to up to that many; an interface marked
-    *Bootstrap only* is used until they connect. rettui's own Reticulum
-    does this; a shared instance run by another program does its own.
-    Known limits, in rsReticulum for now: announces whose location is left
-    unset (Python's default) are skipped, so only entry points that publish
-    a location are found; and publishing your own interfaces
-    (*Discoverable*) doesn't work yet, since those announces aren't sent.
+    discoverable and connects to up to that many. It hears of them through
+    the connections you already have, so it needs one to start. rettui's
+    own Reticulum does this; a shared instance run by another program does
+    its own. Known limits, in rsReticulum for now: announces whose location
+    is left unset (Python's default) are skipped, so only entry points that
+    publish a location are found; publishing your own interfaces
+    (*Discoverable*) doesn't work yet, since those announces aren't sent;
+    and an interface marked *Bootstrap only* is dropped as soon as
+    Reticulum starts connecting to that many discovered entry points,
+    before any of them is up, and isn't brought back if they never come up
+    (on later starts, the entry points it found before drop it straight
+    away). The getting-started guide doesn't mark RMAP World that way.
   - **As text:** edit the whole file, with a live check of whether Reticulum
     can load it.
   - **Safe edits:** changes are made in place, so comments and layout stay.
