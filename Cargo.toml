@@ -71,6 +71,11 @@ codec2 = "0.3.1"
 # Bounded terminal capability probe (poll/read on stdin).
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+# Bringing the console window forward when a notification is clicked (the
+# version the rest already uses).
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
+
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 # Desktop notifications over D-Bus, on the connection that hears their
 # clicks (notify-rust's own, already built, with nothing more turned on).
