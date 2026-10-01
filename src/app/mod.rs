@@ -936,7 +936,7 @@ impl App {
                 let link = if text.starts_with("lxm://") {
                     Ok(text)
                 } else {
-                    let path = files::expand_home(&text);
+                    let path = files::path_from_input(&text);
                     std::fs::read(&path)
                         .map_err(|e| format!("Not an lxm:// link, and can't read {}: {e}", path.display()))
                         .and_then(|picture| crate::lxmf::paper::scan(&picture))

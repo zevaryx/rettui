@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
 
-use super::files::{expand_home, unique_path};
+use super::files::{path_from_input, unique_path};
 use super::notify::{self, Notification, Target};
 use super::{App, HistoryHit, MessageAction, PaperView, PromptKind, Tab, now};
 use crate::lxmf::{self, DeliveryMode};
@@ -996,7 +996,7 @@ impl App {
     }
 
     pub(super) fn add_attachment(&mut self, text: &str) {
-        let path = expand_home(text);
+        let path = path_from_input(text);
         match std::fs::metadata(&path) {
             Ok(meta) if meta.is_file() => {
                 let path = path.canonicalize().unwrap_or(path);
