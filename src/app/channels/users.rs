@@ -371,6 +371,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn names_that_start_with_an_emoji_can_be_mentioned() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let dir = std::env::temp_dir().join(format!("rettui-emoji-mention-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        let hub = [0xcd; 16];
+        app.add_hub(hub, "rrc.hub", None);
+        let (alex, bob) = (vec![0xa1; 16], vec![0xb2; 16]);
+        let room = app.channels.hubs[0].members.entry("general".into()).or_default();
+        room.extend([alex.clone(), bob.clone()]);
+        app.channels.hubs[0].nicks.extend([(alex, "🆎 Alex".to_string()), (bob, "Bob".to_string())]);
+        app.channels.hubs[0].rooms.insert("general".into());
+        app.channels.selected = Some(crate::app::channels::Target { hub, room: Some("general".into()) });
+        app.tab = crate::app::Tab::Channels;
+        app.channels.typing = true;
+        app.on_key(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE));
+        let listed = |app: &App| app.mention_matches().map(|(_, people)| people.into_iter().map(|(name, _)| name).collect::<Vec<_>>());
+        assert_eq!(listed(&app), Some(vec!["Bob".to_string(), "🆎 Alex".to_string()]));
+        // An emoji keyboard's 🆎 (with its variation selector) still finds it.
+        app.on_paste("🆎\u{fe0f}");
+        assert_eq!(listed(&app), Some(vec!["🆎 Alex".to_string()]));
+        app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.channels.input.text(), "@🆎 Alex ");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn lxmf_addresses_come_from_identities() {
         let identity = [7u8; 16];
         let address = lxmf_address(&identity).unwrap();
