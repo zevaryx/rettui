@@ -35,6 +35,7 @@ fn options(
         stamp_cost: crate::lxmf::policy::stamp_cost(settings.stamp_cost),
         max_message_bytes: settings.max_message_kb * 1000,
         tickets: paths.tickets.clone(),
+        ratchets: paths.ratchets.clone(),
     }
 }
 

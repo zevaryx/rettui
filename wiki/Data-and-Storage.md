@@ -47,6 +47,15 @@ rettui keeps its data in `~/.local/share/rettui/`:
   seconds and when rettui exits.
 - `tickets.json`: [stamp tickets](Messaging#blocking-and-spam) you gave
   trusted contacts and ones they gave you. Only you can read it.
+- `ratchets/`: your address's ratchets, one file per address, named as
+  Python LXMF names them. As in Sideband, NomadNet and MeshChat, your
+  announces carry the newest of a set of keys (a new one at most every
+  half hour, as you announce), and senders who heard it encrypt to it: a
+  message can't be read later with your identity's key alone (forward
+  secrecy). The last 512 are kept, for messages still on their way, such
+  as ones waiting on a propagation node. Deleting the folder makes new
+  ones, but messages sent to the old keys can't be read any more. It
+  needn't be backed up.
 - `cache/`: cached NomadNet pages and images
 - `rrc/`: RRC chat history, one file per hub
 - `rettui.log`: logging, set with `RETTUI_LOG=debug`

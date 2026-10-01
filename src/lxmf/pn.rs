@@ -20,7 +20,7 @@
 //!   storage limit.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -109,6 +109,8 @@ struct Ingest {
     /// delivered here.
     lxmf_hash: Hash,
     identity: Identity,
+    /// Its ratchets, to decrypt with.
+    ring: PathBuf,
     /// Complete messages for this client, to read as received.
     deliver: mpsc::UnboundedSender<Vec<u8>>,
 }
@@ -138,7 +140,7 @@ impl Ingest {
                 continue;
             };
             if lxmf_data.len() > 16 && lxmf_data[..16] == self.lxmf_hash {
-                match self.identity.decrypt(&lxmf_data[16..], None, false) {
+                match super::ratchets::decrypt(&self.identity, &self.ring, &lxmf_data[16..]) {
                     Ok(plaintext) => {
                         let mut full = self.lxmf_hash.to_vec();
                         full.extend_from_slice(&plaintext);
@@ -248,12 +250,13 @@ fn error_reply(error: PeerError) -> RequestOutcome {
 
 impl HostedPn {
     /// Start the node on the running Reticulum instance, with this client's
-    /// identity (its LXMF address is `lxmf_hash`). Messages for this client
-    /// go to `deliver`.
+    /// identity (its LXMF address is `lxmf_hash`, its ratchets in `ring`).
+    /// Messages for this client go to `deliver`.
     pub async fn start(
         runtime: &ReticulumHandle,
         identity: &Identity,
         lxmf_hash: Hash,
+        ring: &Path,
         config: &PnConfig,
         deliver: mpsc::UnboundedSender<Vec<u8>>,
     ) -> Result<Self, String> {
@@ -273,7 +276,7 @@ impl HostedPn {
             .map_err(|e| e.to_string())?
             .map_err(|e| format!("Could not open the message store {}: {e}", config.dir.display()))?;
         let node = Arc::new(Mutex::new(node));
-        let ingest = Arc::new(Ingest { node: node.clone(), counters: Counters::default(), min_stamp, lxmf_hash, identity: identity.clone(), deliver });
+        let ingest = Arc::new(Ingest { node: node.clone(), counters: Counters::default(), min_stamp, lxmf_hash, identity: identity.clone(), ring: ring.to_path_buf(), deliver });
         let peers: Arc<Mutex<HashSet<[u8; 16]>>> = Arc::default();
 
         // Clients may send up to the transfer limit; peers up to a sync's.
@@ -455,6 +458,7 @@ mod tests {
             min_stamp: stamp_cost - PROPAGATION_COST_FLEX,
             lxmf_hash,
             identity: identity.clone(),
+            ring: dir.join("no.ratchets"),
             deliver,
         };
         (ingest, delivered, identity)

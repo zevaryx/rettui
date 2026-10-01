@@ -10,6 +10,7 @@
 //! - [`policy`]: stamp costs, tickets and the size limit for incoming
 //!   messages.
 //! - [`pn`]: hosting a propagation node.
+//! - [`ratchets`]: forward secrecy for this client's LXMF address.
 //! - [`voice`]: decoding Codec2 voice messages.
 
 pub mod fields;
@@ -17,6 +18,7 @@ mod inbound;
 pub mod paper;
 pub mod pn;
 pub mod policy;
+pub mod ratchets;
 mod send;
 mod sync;
 pub mod voice;

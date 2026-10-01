@@ -198,6 +198,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         stamp_cost: lxmf::policy::stamp_cost(settings.stamp_cost),
         max_message_bytes: settings.max_message_kb * 1000,
         tickets: paths.tickets.clone(),
+        ratchets: paths.ratchets.clone(),
     }
 }
 

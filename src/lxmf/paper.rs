@@ -7,6 +7,8 @@
 //! The format is Python LXMF's: `lxm://` and base64url of the recipient's
 //! address and the rest of the message, encrypted for their identity.
 
+use std::path::Path;
+
 use lxmf_core::constants::DeliveryMethod;
 use lxmf_core::message_api::{LxMessage, MessageError};
 use rns_runtime::prelude::*;
@@ -64,15 +66,15 @@ pub async fn write(
     Ok((link, hash))
 }
 
-/// A paper message's link, checked: for this client (`lxmf_hash`), and
-/// decrypted, as the complete message ([`inbound::parse_inbound`] reads it).
-pub fn open(identity: &Identity, lxmf_hash: Hash, link: &str) -> Result<Vec<u8>, String> {
+/// A paper message's link, checked: for this client (`lxmf_hash`, whose
+/// ratchets are in `ring`), and decrypted, as the complete message
+/// ([`inbound::parse_inbound`] reads it).
+pub fn open(identity: &Identity, lxmf_hash: Hash, ring: &Path, link: &str) -> Result<Vec<u8>, String> {
     let (to, encrypted) = LxMessage::decode_paper_uri(link.trim()).map_err(|_| "Not a paper message (an lxm:// link)")?;
     if to != lxmf_hash {
         return Err(format!("This paper message is for {}, not for you", hex::encode(to)));
     }
-    let decrypted = identity
-        .decrypt(&encrypted, None, false)
+    let decrypted = super::ratchets::decrypt(identity, ring, &encrypted)
         .map_err(|_| "This paper message can't be decrypted with your key")?;
     let mut message = to.to_vec();
     message.extend_from_slice(&decrypted);
@@ -81,10 +83,10 @@ pub fn open(identity: &Identity, lxmf_hash: Hash, link: &str) -> Result<Vec<u8>,
 
 /// Read a paper message in: it arrives like one received over the network
 /// (its signature checked), marked as from paper.
-pub fn read(runtime: &ReticulumHandle, known: &Known, identity: &Identity, lxmf_hash: Hash, link: String, ev: &mpsc::UnboundedSender<NetEvent>) {
-    let (runtime, known, identity, ev) = (runtime.clone(), known.clone(), identity.clone(), ev.clone());
+pub fn read(runtime: &ReticulumHandle, known: &Known, identity: &Identity, lxmf_hash: Hash, ring: &Path, link: String, ev: &mpsc::UnboundedSender<NetEvent>) {
+    let (runtime, known, identity, ring, ev) = (runtime.clone(), known.clone(), identity.clone(), ring.to_path_buf(), ev.clone());
     tokio::spawn(async move {
-        let event = match open(&identity, lxmf_hash, &link) {
+        let event = match open(&identity, lxmf_hash, &ring, &link) {
             Ok(data) => match inbound::parse_inbound(&runtime, &known, None, &data).await {
                 Ok(mut message) => {
                     message.paper = true;
@@ -222,7 +224,7 @@ mod tests {
     #[test]
     fn a_picture_of_the_qr_code_reads_back() {
         let (alice, bob) = (Identity::new(), Identity::new());
-        let link = paper(&alice, &bob, [2; 16], "meet at noon");
+        let link = paper(&alice, &bob, None, [2; 16], "meet at noon");
         assert_eq!(scan(&picture(&link, 4)).unwrap(), link);
         assert!(scan(&picture("https://example.com", 4)).unwrap_err().contains("isn't a paper message"));
         let mut blank = std::io::Cursor::new(Vec::new());
@@ -231,30 +233,40 @@ mod tests {
         assert!(scan(b"not a picture").unwrap_err().starts_with("Not a picture"));
     }
 
-    /// A paper message from `sender` to `recipient`, as `write` makes it
-    /// (without the network for the recipient's key).
-    fn paper(sender: &Identity, recipient: &Identity, to: Hash, content: &str) -> String {
+    /// A paper message from `sender` to `recipient` (to its `ratchet`, if
+    /// one was heard), as `write` makes it (without the network for the
+    /// recipient's key).
+    fn paper(sender: &Identity, recipient: &Identity, ratchet: Option<&[u8; 32]>, to: Hash, content: &str) -> String {
         let mut message = LxMessage::new(to, [7; 16], "", content, DeliveryMethod::Paper);
         message.sign(&sender.get_signing_key().unwrap()).unwrap();
         message
-            .to_paper_uri(|data| recipient.encrypt(data, None).map_err(|e| MessageError::PackFailed(e.to_string())))
+            .to_paper_uri(|data| recipient.encrypt(data, ratchet).map_err(|e| MessageError::PackFailed(e.to_string())))
             .unwrap()
     }
 
     #[test]
     fn only_the_recipient_opens_a_paper_message() {
+        let dir = std::env::temp_dir().join(format!("rettui-paper-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ring = dir.join("bob.ratchets");
         let (alice, bob, eve) = (Identity::new(), Identity::new(), Identity::new());
         let bob_address = [2; 16];
-        let link = paper(&alice, &bob, bob_address, "meet at noon");
+        let link = paper(&alice, &bob, None, bob_address, "meet at noon");
         assert!(link.starts_with("lxm://"));
-        let opened = open(&bob, bob_address, &format!("  {link}\n")).unwrap();
+        let opened = open(&bob, bob_address, &ring, &format!("  {link}\n")).unwrap();
         let message = LxMessage::unpack(&opened).unwrap();
         assert_eq!(message.content, "meet at noon");
         assert_eq!(message.source_hash, [7; 16]);
         // For someone else, or someone else's key.
-        assert!(open(&eve, [3; 16], &link).unwrap_err().contains("not for you"));
-        assert!(open(&eve, bob_address, &link).unwrap_err().contains("can't be decrypted"));
-        assert!(open(&bob, bob_address, "https://example.com").unwrap_err().starts_with("Not a paper message"));
+        assert!(open(&eve, [3; 16], &ring, &link).unwrap_err().contains("not for you"));
+        assert!(open(&eve, bob_address, &ring, &link).unwrap_err().contains("can't be decrypted"));
+        assert!(open(&bob, bob_address, &ring, "https://example.com").unwrap_err().starts_with("Not a paper message"));
+        // To the ratchet Bob announced.
+        let announced = rns_identity::ratchet::PersistentRatchetRing::open(&ring, &bob).unwrap().ensure_current(&bob).unwrap();
+        let link = paper(&alice, &bob, Some(&announced), bob_address, "after");
+        assert_eq!(LxMessage::unpack(&open(&bob, bob_address, &ring, &link).unwrap()).unwrap().content, "after");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

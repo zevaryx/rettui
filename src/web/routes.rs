@@ -847,8 +847,10 @@ async fn read_paper_link(state: &WebState, link: String) -> ApiResult {
         let key = state.write(move |o| o.app.add_contact(&link)).await?.map_err(bad)?;
         return Ok(axum::Json(json!({ "key": key, "known": false, "contact": true })));
     }
-    let own = state.read(|o| o.app.lxmf_hash).await?.ok_or_else(|| bad("Reticulum is still starting"))?;
-    let data = crate::lxmf::paper::open(&state.identity, own, &link).map_err(bad)?;
+    let (own, ratchets) = state.read(|o| (o.app.lxmf_hash, o.app.paths.ratchets.clone())).await?;
+    let own = own.ok_or_else(|| bad("Reticulum is still starting"))?;
+    let ring = crate::lxmf::ratchets::ring_path(&ratchets, &own);
+    let data = crate::lxmf::paper::open(&state.identity, own, &ring, &link).map_err(bad)?;
     let message = lxmf_core::message_api::LxMessage::unpack(&data).map_err(|_| bad("Not a message rettui can read"))?;
     let key = hex::encode(message.source_hash);
     // Read in before: said, rather than nothing happening.

@@ -23,7 +23,9 @@ MeshChat, NomadNet and other LXMF clients).
 - **Stamps and ratchets:** if the recipient's announce asks for a stamp,
   rettui generates it (or uses a ticket they gave you). It also generates
   the propagation node's stamp, and encrypts to the recipient's ratchet
-  when one is known. To ask for stamps yourself, see
+  when one is known. Your own announces carry a ratchet too, so messages
+  to you have forward secrecy (see [Data and Storage](Data-and-Storage)).
+  To ask for stamps yourself, see
   [Blocking and spam](#blocking-and-spam).
 - **Propagation nodes:** the ones you hear are listed in the Network tab.
   Pick one with `p`. You can also [host one](Hosting-a-Node#propagation-node),

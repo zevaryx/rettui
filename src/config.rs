@@ -138,6 +138,8 @@ pub struct Paths {
     pub known_identities: PathBuf,
     /// Stamp tickets given to contacts and received from them.
     pub tickets: PathBuf,
+    /// Ratchet keys for the LXMF address (see [`crate::lxmf::ratchets`]).
+    pub ratchets: PathBuf,
     pub cache: PathBuf,
     pub rrc_history: PathBuf,
     /// Messages older than the newest each conversation keeps.
@@ -173,6 +175,7 @@ impl Paths {
             downloads: base.join("downloads"),
             known_identities: base.join("known_identities.json"),
             tickets: base.join("tickets.json"),
+            ratchets: base.join("ratchets"),
             cache: base.join("cache"),
             rrc_history: base.join("rrc"),
             archive: base.join("archive"),

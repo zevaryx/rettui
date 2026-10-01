@@ -1,5 +1,6 @@
 //! Propagation node sync: list, download and delete waiting messages.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -25,6 +26,8 @@ pub struct Syncer {
     policy: SharedPolicy,
     identity: Identity,
     lxmf_hash: Hash,
+    /// The LXMF address's ratchets, to decrypt with.
+    ring: PathBuf,
     ev: mpsc::UnboundedSender<NetEvent>,
     running: Arc<AtomicBool>,
 }
@@ -36,6 +39,7 @@ impl Syncer {
         policy: SharedPolicy,
         identity: Identity,
         lxmf_hash: Hash,
+        ring: PathBuf,
         ev: mpsc::UnboundedSender<NetEvent>,
     ) -> Self {
         Self {
@@ -44,6 +48,7 @@ impl Syncer {
             policy,
             identity,
             lxmf_hash,
+            ring,
             ev,
             running: Arc::new(AtomicBool::new(false)),
         }
@@ -60,7 +65,7 @@ impl Syncer {
             return;
         }
         let _ = self.ev.send(NetEvent::SyncStarted);
-        let (runtime, known, policy, identity, ev, running, lxmf_hash) = (
+        let (runtime, known, policy, identity, ev, running, lxmf_hash, ring) = (
             self.runtime.clone(),
             self.known.clone(),
             self.policy.clone(),
@@ -68,9 +73,10 @@ impl Syncer {
             self.ev.clone(),
             self.running.clone(),
             self.lxmf_hash,
+            self.ring.clone(),
         );
         tokio::spawn(async move {
-            let result = match sync(&runtime, &identity, lxmf_hash, node).await {
+            let result = match sync(&runtime, &identity, lxmf_hash, &ring, node).await {
                 Ok(messages) => {
                     let count = messages.len();
                     // Parse concurrently: verifying an unknown sender can wait
@@ -123,6 +129,7 @@ pub async fn sync(
     runtime: &ReticulumHandle,
     identity: &Identity,
     lxmf_hash: Hash,
+    ring: &Path,
     node: Hash,
 ) -> Result<Vec<Vec<u8>>, String> {
     ensure_path(runtime, node).await?;
@@ -131,7 +138,7 @@ pub async fn sync(
         .connect_link(node, identity.clone(), link_options("rettui.sync", true))
         .await
         .map_err(|e| format!("Link to propagation node failed: {e}"))?;
-    let result = sync_on(&handle, identity, lxmf_hash).await;
+    let result = sync_on(&handle, identity, lxmf_hash, ring).await;
     handle.close().await;
     result
 }
@@ -140,6 +147,7 @@ async fn sync_on(
     handle: &LinkSessionHandle,
     identity: &Identity,
     lxmf_hash: Hash,
+    ring: &Path,
 ) -> Result<Vec<Vec<u8>>, String> {
     let Value::Array(available) = get(handle, Value::Array(vec![Value::Nil, Value::Nil])).await?
     else {
@@ -165,7 +173,7 @@ async fn sync_on(
         if blob.len() <= 16 || blob[..16] != lxmf_hash {
             continue;
         }
-        match identity.decrypt(&blob[16..], None, false) {
+        match super::ratchets::decrypt(identity, ring, &blob[16..]) {
             Ok(plaintext) => {
                 let mut full = lxmf_hash.to_vec();
                 full.extend_from_slice(&plaintext);

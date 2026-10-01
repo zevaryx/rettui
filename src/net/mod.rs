@@ -244,6 +244,8 @@ pub struct NetOptions {
     pub max_message_bytes: u64,
     /// Where stamp tickets are kept.
     pub tickets: PathBuf,
+    /// Where the LXMF address's ratchets are kept.
+    pub ratchets: PathBuf,
 }
 
 /// LXMF announce data: the display name, and the stamp cost asked.
@@ -351,20 +353,36 @@ async fn run(
             false
         })
     };
-    let mut delivery = runtime
-        .register_destination(
-            identity.clone(),
-            LXMF_ASPECT,
-            DestinationRuntimeOptions {
-                proof_strategy: ProofStrategy::ProveAll,
-                resource_strategy: ResourceStrategy::AcceptApp,
-                resource_accept: Some(size_gate),
-                default_app_data: Some(app_data(&display_name, options.stamp_cost)),
-                ..DestinationRuntimeOptions::default()
-            },
-        )
-        .await
-        .map_err(|e| format!("Could not register LXMF destination: {e}"))?;
+    let delivery_options = || DestinationRuntimeOptions {
+        proof_strategy: ProofStrategy::ProveAll,
+        resource_strategy: ResourceStrategy::AcceptApp,
+        resource_accept: Some(size_gate.clone()),
+        default_app_data: Some(app_data(&display_name, options.stamp_cost)),
+        ..DestinationRuntimeOptions::default()
+    };
+    // With ratchets, as Python LXMF has (see [`lxmf::ratchets`]); without,
+    // if the ring can't be kept, so messages still arrive.
+    let ring = lxmf::ratchets::ring_path(&options.ratchets, &rns_identity::destination::Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&identity.hash)));
+    let ratcheted = match std::fs::create_dir_all(&options.ratchets) {
+        Ok(()) => runtime
+            .register_ratcheted_destination(identity.clone(), LXMF_ASPECT, delivery_options(), DestinationRatchetOptions::new(&ring))
+            .await
+            .map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    let mut delivery = match ratcheted {
+        Ok(delivery) => delivery,
+        Err(e) => {
+            let _ = ev.send(NetEvent::Log(format!(
+                "Your address has no ratchets this time (forward secrecy for messages to you), as {} couldn't be kept: {e}",
+                ring.display()
+            )));
+            runtime
+                .register_destination(identity.clone(), LXMF_ASPECT, delivery_options())
+                .await
+                .map_err(|e| format!("Could not register LXMF destination: {e}"))?
+        }
+    };
     let lxmf_hash = delivery.handle.destination_hash();
     let _ = ev.send(NetEvent::Started { lxmf_hash, public_key: identity.get_public_key() });
 
@@ -399,8 +417,8 @@ async fn run(
     let mut pn_local: Option<LocalNode> = None;
     let launch_pn = |config: Option<PnConfig>| {
         let generation = pn_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let (runtime, identity, slot, current, tx, deliver) =
-            (runtime.clone(), identity.clone(), pn_slot.clone(), pn_generation.clone(), pn_tx.clone(), pn_deliver_tx.clone());
+        let (runtime, identity, ring, slot, current, tx, deliver) =
+            (runtime.clone(), identity.clone(), ring.clone(), pn_slot.clone(), pn_generation.clone(), pn_tx.clone(), pn_deliver_tx.clone());
         tokio::spawn(async move {
             let mut slot = slot.lock().await;
             if let Some(old) = slot.take() {
@@ -412,7 +430,7 @@ async fn run(
             }
             let result = match config {
                 None => Ok(None),
-                Some(config) => HostedPn::start(&runtime, &identity, lxmf_hash, &config, deliver).await.map(|node| {
+                Some(config) => HostedPn::start(&runtime, &identity, lxmf_hash, &ring, &config, deliver).await.map(|node| {
                     let local = node.local();
                     *slot = Some(node);
                     Some(local)
@@ -426,7 +444,7 @@ async fn run(
     }
     let mut rrc_sessions = rrc_session::Sessions::default();
     let mut stop = Stop::Quit;
-    let syncer = lxmf::Syncer::new(runtime.clone(), known.clone(), policy.clone(), identity.clone(), lxmf_hash, ev.clone());
+    let syncer = lxmf::Syncer::new(runtime.clone(), known.clone(), policy.clone(), identity.clone(), lxmf_hash, ring.clone(), ev.clone());
     // Known identities (and tickets) are saved every few seconds, one save
     // at a time.
     let mut known_save: Option<tokio::task::JoinHandle<()>> = None;
@@ -625,7 +643,7 @@ async fn run(
                             let _ = ev.send(NetEvent::Paper { id, result });
                         });
                     }
-                    NetCommand::ReadPaper(link) => lxmf::paper::read(&runtime, &known, &identity, lxmf_hash, link, &ev),
+                    NetCommand::ReadPaper(link) => lxmf::paper::read(&runtime, &known, &identity, lxmf_hash, &ring, link, &ev),
                     NetCommand::SendMessage { id, message } => {
                         let (runtime, known, identity, ev, policy) =
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone(), policy.clone());
