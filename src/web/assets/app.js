@@ -2814,11 +2814,14 @@ app.views.channels = {
       if (!query) this.mentionDismissed = null;
       return this.hideMentions();
     }
+    // Compared as the server does: any case, and without the variation
+    // selectors emoji keyboards add or leave out (🆎 and 🆎\uFE0F match).
+    const compared = (text) => text.replace(/[\uFE0E\uFE0F]/g, '').toLowerCase();
     // Once it has a space it's a name being finished, not a search.
-    const partial = query.partial.toLowerCase();
+    const partial = compared(query.partial);
     const search = !/\s/u.test(partial);
-    const starts = people.filter((u) => u.name.toLowerCase().startsWith(partial));
-    const contains = search ? people.filter((u) => !u.name.toLowerCase().startsWith(partial) && u.name.toLowerCase().includes(partial)) : [];
+    const starts = people.filter((u) => compared(u.name).startsWith(partial));
+    const contains = search ? people.filter((u) => !compared(u.name).startsWith(partial) && compared(u.name).includes(partial)) : [];
     const matches = [...starts, ...contains].slice(0, 8);
     if (!matches.length) return this.hideMentions();
     const same = this.mentionMatches?.map((u) => u.src).join() === matches.map((u) => u.src).join();

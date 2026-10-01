@@ -46,8 +46,16 @@ fn starts_mention(text: &str, at: usize) -> bool {
     !text[..at].chars().next_back().is_some_and(is_word)
 }
 
-/// Where a mention of `needle` (a lowercased nick) starting with the `@` at
-/// byte `at` ends, if the text there is that nick as a whole name.
+/// Variation selectors: whether an emoji is drawn as a picture (U+FE0F)
+/// or as text (U+FE0E). Emoji keyboards add them or not, so `🆎` and
+/// `🆎\u{fe0f}` are the same name.
+fn is_selector(c: char) -> bool {
+    matches!(c, '\u{fe0e}' | '\u{fe0f}')
+}
+
+/// Where a mention of `needle` (a nick as [`lowercase`] makes it) starting
+/// with the `@` at byte `at` ends, if the text there is that nick as a
+/// whole name.
 fn mention_end(text: &str, at: usize, needle: &[char]) -> Option<usize> {
     if needle.is_empty() || !starts_mention(text, at) {
         return None;
@@ -55,21 +63,32 @@ fn mention_end(text: &str, at: usize, needle: &[char]) -> Option<usize> {
     // Compare the following characters, lowercased, with the nick.
     let mut end = at + 1;
     let mut matched = 0;
-    let mut rest = text[end..].chars();
+    let mut rest = text[end..].chars().peekable();
     while matched < needle.len() {
         let c = rest.next()?;
+        end += c.len_utf8();
+        if is_selector(c) {
+            continue;
+        }
         let lower: Vec<char> = c.to_lowercase().collect();
         if needle.get(matched..matched + lower.len()) != Some(&lower[..]) {
             return None;
         }
         matched += lower.len();
+    }
+    // A selector right after the name is still part of it.
+    while let Some(&c) = rest.peek()
+        && is_selector(c)
+    {
         end += c.len_utf8();
+        rest.next();
     }
     ends_name(&text[end..]).then_some(end)
 }
 
+/// A nick as it's compared: lowercase, without variation selectors.
 fn lowercase(nick: &str) -> Vec<char> {
-    nick.chars().flat_map(char::to_lowercase).collect()
+    nick.chars().filter(|&c| !is_selector(c)).flat_map(char::to_lowercase).collect()
 }
 
 /// Byte ranges of each `@nick` mention (as a whole word, any case) in `text`.
@@ -123,11 +142,12 @@ pub fn mention_prefix(before: &str) -> Option<(usize, &str)> {
 /// those containing it, ignoring case (each in the order given). Once it
 /// has a space, only names starting with it (it's no longer a search).
 pub fn complete_names<'a, T>(names: &'a [(String, T)], partial: &str) -> Vec<&'a (String, T)> {
-    let partial = partial.to_lowercase();
+    let compared = |text: &str| lowercase(text).into_iter().collect::<String>();
+    let partial = compared(partial);
     let search = !partial.contains(char::is_whitespace);
     let (mut starts, mut contains) = (Vec::new(), Vec::new());
     for entry in names {
-        let name = entry.0.to_lowercase();
+        let name = compared(&entry.0);
         if name.starts_with(&partial) {
             starts.push(entry);
         } else if search && name.contains(&partial) {
@@ -187,6 +207,14 @@ mod tests {
         assert!(mention_ranges("mail me@zev.example", "zev").is_empty());
         assert_eq!(mention_ranges("hi @ZEV and @zev!", "zev"), [(3, 7), (12, 16)]);
         assert_eq!(mention_ranges("é @Ünï ok", "ünï"), [(3, 9)]);
+        // Names starting with an emoji, typed with or without the variation
+        // selector an emoji keyboard may add (or the name may have).
+        assert_eq!(mention_ranges("hi @🆎 Alex!", "🆎 Alex"), [(3, 13)]);
+        assert_eq!(mention_ranges("hi @🆎\u{fe0f} alex", "🆎 Alex"), [(3, 16)]);
+        assert_eq!(mention_ranges("hi @🆎 Alex", "🆎\u{fe0f} Alex"), [(3, 13)]);
+        assert_eq!(mention_ranges("hi @🅰\u{fe0f}", "🅰"), [(3, 11)]);
+        assert!(mention_ranges("hi @🆎 Alexander", "🆎 Alex").is_empty());
+        assert_eq!(user_mentions("@🆎 Alex and @Alex", &["🆎 Alex", "Alex"]), [(0, 10, 0), (15, 20, 1)]);
         assert!(mention_ranges("@zevaryx", "zev").is_empty());
         // Any of several users: the longest name wins, case doesn't matter.
         let names = ["ann", "Ann B", "bob"];
@@ -209,6 +237,14 @@ mod tests {
         let people = [("ann b".to_string(), 1), ("joann b".to_string(), 2)];
         assert_eq!(complete_names(&people, "ann b").len(), 1);
         assert_eq!(complete_names(&people, "nn").len(), 2);
+        // A name starting with an emoji, with or without its selector.
+        assert_eq!(mention_prefix("hi @🆎"), Some((3, "🆎")));
+        let people = [("🆎 Alex".to_string(), 1), ("Bob".to_string(), 2), ("🅰\u{fe0f} Ann".to_string(), 3)];
+        let names = |partial| complete_names(&people, partial).iter().map(|(_, i)| *i).collect::<Vec<_>>();
+        assert_eq!(names("🆎"), [1]);
+        assert_eq!(names("🆎\u{fe0f} a"), [1]);
+        assert_eq!(names("🅰"), [3]);
+        assert_eq!(names("al"), [1]);
         let parts = split_message(&"word ".repeat(100), 50);
         assert!(parts.iter().all(|p| p.len() <= 50));
         assert_eq!(parts.join(" ").split(' ').count(), 100);
