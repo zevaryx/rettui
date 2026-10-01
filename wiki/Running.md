@@ -14,14 +14,21 @@ the web UI's Status page, opens it again):
   NomadNet, MeshChat or another rettui, to keep that address (see
   [Data and Storage](Data-and-Storage)). The web UI says where the file is
   instead.
-- **Connect through RMAP World** (`rmap.world:4242`, on by default in the
-  guide): adds a TCP interface to that community entry point to your
-  Reticulum config. Its operator sees your IP address, and anyone watching
-  your connection can tell you use Reticulum.
-- **Also find entry points near you over time:** turns on interface
-  discovery, as Reticulum's manual recommends; RMAP World is then used only
-  until discovered entry points connect (see
-  [Settings and Reticulum Config](Settings-and-Reticulum-Config)).
+- **Connect through RMAP World** (`rmap.world:4242`): adds a TCP interface
+  to that community entry point to your Reticulum config. It's ticked only
+  when the config has nothing besides the Auto interface (which reaches
+  your local network only): a fresh install needs one connection for
+  discovery to hear of others. A config with interfaces of its own (an
+  entry point, a radio) isn't given RMAP World unless you tick it. Its
+  operator sees your IP address, and anyone watching your connection can
+  tell you use Reticulum. It stays connected alongside the entry points
+  discovery finds.
+- **Also find entry points near you over time** (on by default): turns on
+  interface discovery, as Reticulum's manual recommends, connecting to up to
+  two entry points others announce (see
+  [Settings and Reticulum Config](Settings-and-Reticulum-Config)). You'll
+  connect to hosts you didn't choose. Discovery hears of entry points
+  through a connection you already have, so it needs one to start.
 - **Pick a propagation node automatically** (see
   [Messaging](Messaging#picking-a-propagation-node-automatically)).
 - **Learn more:** Reticulum's manual (getting started, understanding

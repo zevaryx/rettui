@@ -397,13 +397,37 @@ pub fn remove_interface(text: &str, name: &str) -> Result<String, String> {
     Ok(doc.text())
 }
 
-/// Whether an interface in the config connects to `host` (a TCP client's
+/// Whether an interface is on: rsReticulum starts it unless `enabled` (or
+/// `interface_enabled`) says no.
+fn interface_on(doc: &Doc, name: &str) -> bool {
+    ["enabled", "interface_enabled"]
+        .iter()
+        .find_map(|key| doc.raw_value(&["interfaces", name], key))
+        .is_none_or(|value| crate::app::reticulum::rns_truthy(value.trim_matches(['"', '\''])))
+}
+
+/// Whether an interface that's on connects to `host` (a TCP client's
 /// `target_host`).
 pub fn has_interface_to(text: &str, host: &str) -> bool {
     let doc = Doc::new(text);
     doc.subsections("interfaces").iter().any(|name| {
-        doc.raw_value(&["interfaces", name], "target_host")
-            .is_some_and(|value| value.trim_matches(['"', '\'']).eq_ignore_ascii_case(host))
+        interface_on(&doc, name)
+            && doc
+                .raw_value(&["interfaces", name], "target_host")
+                .is_some_and(|value| value.trim_matches(['"', '\'']).eq_ignore_ascii_case(host))
+    })
+}
+
+/// Whether an interface that's on is one of the user's own, other than the
+/// Auto interface (which reaches only the local network): an entry point,
+/// a radio, and so on.
+pub fn has_own_interfaces(text: &str) -> bool {
+    let doc = Doc::new(text);
+    doc.subsections("interfaces").iter().any(|name| {
+        interface_on(&doc, name)
+            && doc
+                .raw_value(&["interfaces", name], "type")
+                .is_some_and(|kind| kind.trim_matches(['"', '\'', ' ']) != "AutoInterface")
     })
 }
 
@@ -421,9 +445,12 @@ pub fn discovery_on(text: &str) -> bool {
 }
 
 /// Add a TCP client interface to an entry point (named `name`, or with a
-/// number after it if that's taken). `bootstrap_only`: used only until
-/// discovered interfaces connect. The new text, and the name used.
-pub fn add_entry_point(text: &str, name: &str, host: &str, port: u16, bootstrap_only: bool) -> Result<(String, String), String> {
+/// number after it if that's taken). The new text, and the name used.
+///
+/// Not `bootstrap_only`, whatever discovery does: rsReticulum drops those
+/// as soon as it starts connecting to as many discovered interfaces as
+/// it's set to, before any of them is up, and never brings them back.
+pub fn add_entry_point(text: &str, name: &str, host: &str, port: u16) -> Result<(String, String), String> {
     let mut doc = Doc::new(text);
     let taken = doc.subsections("interfaces");
     let name = std::iter::once(name.to_string())
@@ -431,10 +458,7 @@ pub fn add_entry_point(text: &str, name: &str, host: &str, port: u16, bootstrap_
         .find(|candidate| !taken.contains(candidate))
         .expect("some name is free");
     let port = port.to_string();
-    let mut keys = vec![("type", "TCPClientInterface"), ("enabled", "Yes"), ("target_host", host), ("target_port", port.as_str())];
-    if bootstrap_only {
-        keys.push(("bootstrap_only", "Yes"));
-    }
+    let keys = [("type", "TCPClientInterface"), ("enabled", "Yes"), ("target_host", host), ("target_port", port.as_str())];
     doc.add_subsection("interfaces", &name, &keys)?;
     Ok((doc.text(), name))
 }
@@ -461,7 +485,8 @@ mod tests {
     fn entry_points_and_discovery_for_the_guide() {
         let base = rns_runtime::config::Config::default_config();
         assert!(!super::has_interface_to(base, "rmap.world") && !super::discovery_on(base));
-        let (added, name) = super::add_entry_point(base, "RMAP World", "rmap.world", 4242, true).unwrap();
+        assert!(!super::has_own_interfaces(base), "only the Auto interface");
+        let (added, name) = super::add_entry_point(base, "RMAP World", "rmap.world", 4242).unwrap();
         assert_eq!(name, "RMAP World");
         let (config, check) = super::check(&added);
         assert!(check.error.is_none(), "{:?}", check.error);
@@ -469,10 +494,13 @@ mod tests {
         let section = interface.subsection("interfaces", "RMAP World").unwrap();
         assert_eq!(section.get("target_host"), Some("rmap.world"));
         assert_eq!(section.get_uint("target_port"), Some(4242));
-        assert_eq!(section.get_bool("bootstrap_only"), Some(true));
-        assert!(super::has_interface_to(&added, "RMAP.world"));
+        assert_eq!(section.get_bool("bootstrap_only"), None);
+        assert!(super::has_interface_to(&added, "RMAP.world") && super::has_own_interfaces(&added));
+        // Turned off, it doesn't count.
+        let off = super::set_options(&added, &super::Section::Interface("RMAP World".into()), &[("enabled", "No")]).unwrap();
+        assert!(!super::has_interface_to(&off, "rmap.world") && !super::has_own_interfaces(&off), "{off}");
         // A second one gets a name of its own; the default interface stays.
-        let (twice, name) = super::add_entry_point(&added, "RMAP World", "rmap.world", 4242, false).unwrap();
+        let (twice, name) = super::add_entry_point(&added, "RMAP World", "rmap.world", 4242).unwrap();
         assert!(twice.contains("[[RMAP World 2]]") && twice.contains("[[Default Interface]]"));
         assert_eq!(name, "RMAP World 2");
         let discovering = super::enable_discovery(&added, 2);
