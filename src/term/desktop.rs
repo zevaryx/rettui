@@ -85,18 +85,123 @@ fn run(pending: UnboundedReceiver<Notification>, icon: String, failed: mpsc::Sen
 }
 
 #[cfg(not(all(unix, not(target_os = "macos"))))]
-fn run(mut pending: UnboundedReceiver<Notification>, icon: String, failed: mpsc::Sender<String>, _clicked: mpsc::Sender<Target>) -> bool {
+fn run(mut pending: UnboundedReceiver<Notification>, _icon: String, failed: mpsc::Sender<String>, clicked: mpsc::Sender<Target>) -> bool {
     let mut failing = Failing { failed, failing: false };
     std::thread::Builder::new()
         .name("rettui-notify".into())
         .spawn(move || {
+            #[cfg(target_os = "macos")]
+            macos::send_as_terminal();
             while let Some(notification) = pending.blocking_recv() {
-                let mut desktop = notify_rust::Notification::new();
-                desktop.appname("rettui").summary(&notification.title).body(&notification.body).icon(&icon);
-                failing.report(desktop.show().map(|_| ()).map_err(|e| e.to_string()));
+                failing.report(native::show(&notification, &clicked));
             }
         })
         .is_ok()
+}
+
+/// Windows: toasts, as Windows PowerShell's (a program that isn't
+/// installed can't have its own), with the instant-message sound. Clicking
+/// one while rettui runs opens what it's about, and brings the console
+/// window forward where Windows lets it.
+#[cfg(windows)]
+mod native {
+    use std::sync::mpsc;
+
+    use notify_rust::NotificationResponse;
+
+    use crate::app::notify::{Notification, Target};
+
+    pub fn show(notification: &Notification, clicked: &mpsc::Sender<Target>) -> Result<(), String> {
+        let handle = notify_rust::Notification::new()
+            .appname("rettui")
+            .summary(&notification.title)
+            .body(&notification.body)
+            .sound_name("IM")
+            .show()
+            .map_err(|e| e.to_string())?;
+        // Until it's clicked or gone (dismissed, or timed out into the
+        // notification centre).
+        let (clicked, target) = (clicked.clone(), notification.target.clone());
+        let _ = std::thread::Builder::new().name("rettui-notify-click".into()).spawn(move || {
+            let _ = handle.wait_for_response(|response: &NotificationResponse| {
+                if matches!(response, NotificationResponse::Default) {
+                    bring_forward();
+                    let _ = clicked.send(target);
+                }
+            });
+        });
+        Ok(())
+    }
+
+    /// The console window rettui runs in, restored and in front (Windows
+    /// may refuse; a terminal like Windows Terminal may not pass it on).
+    fn bring_forward() {
+        use windows_sys::Win32::System::Console::GetConsoleWindow;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{IsIconic, SW_RESTORE, SetForegroundWindow, ShowWindow};
+        // SAFETY: plain Win32 calls on the console's own window handle,
+        // checked for null first.
+        unsafe {
+            let window = GetConsoleWindow();
+            if window.is_null() {
+                return;
+            }
+            if IsIconic(window) != 0 {
+                ShowWindow(window, SW_RESTORE);
+            }
+            SetForegroundWindow(window);
+        }
+    }
+}
+
+/// macOS: notifications are sent as the terminal rettui runs in (with its
+/// icon), so clicking one brings that terminal forward; left alone they'd
+/// be Finder's, and a click would open a Finder window. A click can't be
+/// told to rettui: that needs a Cocoa run loop, which a terminal program
+/// doesn't run.
+#[cfg(target_os = "macos")]
+mod native {
+    use std::sync::mpsc;
+
+    use crate::app::notify::{Notification, Target};
+
+    pub fn show(notification: &Notification, _clicked: &mpsc::Sender<Target>) -> Result<(), String> {
+        // Sent as the handle goes (asynchronously).
+        notify_rust::Notification::new()
+            .appname("rettui")
+            .summary(&notification.title)
+            .body(&notification.body)
+            .show()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    /// Send notifications as the terminal: the app that started it, else
+    /// one known by `TERM_PROGRAM`, else Terminal.
+    pub fn send_as_terminal() {
+        let bundle = std::env::var("__CFBundleIdentifier")
+            .ok()
+            .filter(|bundle| !bundle.is_empty())
+            .or_else(|| std::env::var("TERM_PROGRAM").ok().and_then(|program| super::terminal_bundle(&program)).map(String::from))
+            .unwrap_or_else(|| "com.apple.Terminal".to_string());
+        // Unknown here: Terminal's (the library's own fallback).
+        let _ = notify_rust::set_application(&bundle);
+    }
+}
+
+/// The bundle of a macOS terminal, by its `TERM_PROGRAM`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn terminal_bundle(program: &str) -> Option<&'static str> {
+    Some(match program {
+        "Apple_Terminal" => "com.apple.Terminal",
+        "iTerm.app" => "com.googlecode.iterm2",
+        "WezTerm" => "com.github.wez.wezterm",
+        "ghostty" => "com.mitchellh.ghostty",
+        "vscode" => "com.microsoft.VSCode",
+        _ => return None,
+    })
 }
 
 /// The freedesktop notification service, spoken to directly: notify-rust
@@ -128,18 +233,25 @@ mod xdg {
         while let Some(notification) = pending.recv().await {
             // Connected when first needed, and again if the bus went away.
             if connection.is_none() {
-                match zbus::Connection::session().await {
-                    Ok(bus) => {
-                        // Listening before the first is shown, so no click is missed.
-                        match listen(&bus).await {
-                            Ok(signals) => {
-                                tokio::spawn(clicks(signals, on_screen.clone(), clicked.clone()));
-                                connection = Some(bus);
-                            }
-                            Err(e) => failing.report(Err(e)),
-                        }
+                let connected = match zbus::Connection::session().await {
+                    // Listening before the first is shown, so no click is missed.
+                    Ok(bus) => listen(&bus).await.map(|signals| {
+                        tokio::spawn(clicks(signals, on_screen.clone(), clicked.clone()));
+                        bus
+                    }),
+                    Err(e) => Err(e.to_string()),
+                };
+                match connected {
+                    Ok(bus) => connection = Some(bus),
+                    // No desktop bus under WSL: Windows shows it.
+                    Err(_) if super::wsl::detected() => {
+                        failing.report(super::wsl::show("powershell.exe", &notification).await);
+                        continue;
                     }
-                    Err(e) => failing.report(Err(e.to_string())),
+                    Err(e) => {
+                        failing.report(Err(e));
+                        continue;
+                    }
                 }
             }
             let Some(bus) = &connection else { continue };
@@ -215,6 +327,124 @@ mod xdg {
                 _ => {}
             }
         }
+    }
+}
+
+/// Linux under WSL, with no notification service of its own: Windows
+/// shows the notification instead, as a toast made by Windows PowerShell
+/// (which Windows runs for WSL). What it says is handed over in the
+/// environment, never as part of the script, so no message can add to it.
+/// A click can't come back.
+#[cfg(all(unix, not(target_os = "macos")))]
+mod wsl {
+    use std::process::Stdio;
+
+    use base64::Engine;
+
+    use crate::app::notify::Notification;
+
+    pub fn detected() -> bool {
+        std::env::var_os("WSL_DISTRO_NAME").is_some() || std::path::Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists()
+    }
+
+    /// Windows PowerShell 5's toast, from the title and body it's given.
+    const SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
+try {
+    $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+    $title = [System.Security.SecurityElement]::Escape([string]$env:RETTUI_TOAST_TITLE)
+    $body = [System.Security.SecurityElement]::Escape([string]$env:RETTUI_TOAST_BODY)
+    $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>' + $title + '</text><text>' + $body + '</text></binding></visual><audio src="ms-winsoundevent:Notification.IM"/></toast>')
+    $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+    $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show($toast)
+} catch {
+    # Plainly, for rettui's log.
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+"#;
+
+    /// PowerShell's `-EncodedCommand`: the script in UTF-16, as base64.
+    pub fn encoded_script() -> String {
+        let bytes: Vec<u8> = SCRIPT.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    /// Show it with `powershell` (`powershell.exe`, but for tests).
+    pub async fn show(powershell: &str, notification: &Notification) -> Result<(), String> {
+        // Passed from WSL to Windows programs only (`/u`).
+        let handed = "RETTUI_TOAST_TITLE/u:RETTUI_TOAST_BODY/u";
+        let wslenv = match std::env::var("WSLENV") {
+            Ok(set) if !set.is_empty() => format!("{set}:{handed}"),
+            _ => handed.to_string(),
+        };
+        let output = tokio::process::Command::new(powershell)
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded_script()])
+            .env("RETTUI_TOAST_TITLE", &notification.title)
+            .env("RETTUI_TOAST_BODY", &notification.body)
+            .env("WSLENV", wslenv)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .map_err(|e| format!("Windows notifications through {powershell}: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!("Windows notifications: {}", String::from_utf8_lossy(&output.stderr).trim()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    #[test]
+    fn macos_terminals_by_term_program() {
+        assert_eq!(super::terminal_bundle("Apple_Terminal"), Some("com.apple.Terminal"));
+        assert_eq!(super::terminal_bundle("iTerm.app"), Some("com.googlecode.iterm2"));
+        assert_eq!(super::terminal_bundle("tmux"), None);
+    }
+
+    /// Under WSL: what's said goes in the environment, not the script.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[tokio::test]
+    async fn wsl_hands_windows_the_text_apart_from_the_script() {
+        use base64::Engine;
+        let dir = std::env::temp_dir().join(format!("rettui-wsl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Stands in for powershell.exe: writes what it was given.
+        let fake = dir.join("powershell.exe");
+        let seen = dir.join("seen");
+        std::fs::write(&fake, format!("#!/bin/sh\nprintf '%s\\n%s\\n%s\\n%s\\n' \"$4\" \"$RETTUI_TOAST_TITLE\" \"$RETTUI_TOAST_BODY\" \"$WSLENV\" > '{}'\n", seen.display())).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let note = crate::app::notify::Notification {
+            title: "Alice's \"$(rm -rf /)\"".into(),
+            body: "<b>hi</b> & 'bye'".into(),
+            target: crate::app::notify::Target::Summary,
+        };
+        super::wsl::show(fake.to_str().unwrap(), &note).await.unwrap();
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        let lines: Vec<&str> = seen.lines().collect();
+        assert_eq!(lines[0], super::wsl::encoded_script());
+        assert_eq!((lines[1], lines[2]), (note.title.as_str(), note.body.as_str()));
+        assert!(lines[3].ends_with("RETTUI_TOAST_TITLE/u:RETTUI_TOAST_BODY/u"), "{}", lines[3]);
+        // The script is fixed: UTF-16 PowerShell, reading only the environment.
+        let decoded = base64::engine::general_purpose::STANDARD.decode(lines[0]).unwrap();
+        let units: Vec<u16> = decoded.chunks(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+        let script = String::from_utf16(&units).unwrap();
+        assert!(script.contains("$env:RETTUI_TOAST_TITLE") && !script.contains("Alice"));
+        // As Windows PowerShell's toasts (its app id, exactly).
+        assert!(script.contains(r"'{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'"), "{script}");
+        assert!(!script.chars().any(|c| c.is_control() && c != '\n'), "no stray control characters");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 

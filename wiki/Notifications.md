@@ -16,11 +16,22 @@ both UIs.
   on Linux and the BSDs, Notification Center on macOS, toasts on Windows.
   Terminals that report focus (most do; in tmux, turn on `focus-events`) let
   rettui tell when you're looking. Where there's no desktop to show them (over
-  SSH, for example), the log says so once. On Linux and the BSDs, clicking
-  one opens its conversation or room in rettui; whether the terminal's
-  window comes forward is up to the desktop (rettui can't raise a terminal
-  window itself). On macOS and Windows a click isn't reported back to
-  rettui.
+  SSH, for example), the log says so once. Clicking one:
+  - **Linux and the BSDs:** opens its conversation or room in rettui;
+    whether the terminal's window comes forward is up to the desktop.
+  - **Windows:** opens its conversation or room, and brings the console
+    window forward where Windows allows it (Windows Terminal may not pass
+    that on). Notifications show as Windows PowerShell's, since a program
+    that isn't installed can't have its own, with the instant-message
+    sound. If none show, check that Windows PowerShell's notifications are
+    on (Settings > System > Notifications) and Do not disturb is off.
+  - **WSL:** with no Linux notification service, Windows shows them,
+    through Windows PowerShell. A click can't come back to rettui there.
+  - **macOS:** they come from the terminal rettui runs in (with its icon),
+    so a click brings that terminal forward; rettui can't tell which one
+    was clicked (that needs a Cocoa run loop, which a terminal program
+    doesn't run). If none show, allow your terminal's notifications in
+    System Settings > Notifications.
 - **Web UI:** notifications are the browser's own. Allow them under Status
   (the **Notifications** row). Clicking one opens its conversation or room,
   and the tab's title counts what's unread. Browsers only allow notifications
