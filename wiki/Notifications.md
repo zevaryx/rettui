@@ -16,7 +16,11 @@ both UIs.
   on Linux and the BSDs, Notification Center on macOS, toasts on Windows.
   Terminals that report focus (most do; in tmux, turn on `focus-events`) let
   rettui tell when you're looking. Where there's no desktop to show them (over
-  SSH, for example), the log says so once.
+  SSH, for example), the log says so once. On Linux and the BSDs, clicking
+  one opens its conversation or room in rettui; whether the terminal's
+  window comes forward is up to the desktop (rettui can't raise a terminal
+  window itself). On macOS and Windows a click isn't reported back to
+  rettui.
 - **Web UI:** notifications are the browser's own. Allow them under Status
   (the **Notifications** row). Clicking one opens its conversation or room,
   and the tab's title counts what's unread. Browsers only allow notifications

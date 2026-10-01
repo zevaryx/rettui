@@ -937,9 +937,6 @@ const notifications = {
     if (this.state() === 'insecure' || !('serviceWorker' in navigator)) return;
     try {
       this.worker = await navigator.serviceWorker.register('/sw.js');
-      navigator.serviceWorker.addEventListener('message', (e) => {
-        if (e.data && 'open' in e.data) openTarget(e.data.open);
-      });
     } catch (e) {
       console.warn('No service worker:', e);
       return;
@@ -4582,9 +4579,22 @@ window.addEventListener('hashchange', () => {
   if (id !== app.tab && app.views[id]) switchTab(id);
 });
 
+// A notification tapped: open what it's about. Listened for from the
+// start, since a page opened by the tap is told as soon as it has loaded,
+// before it's ready (kept until it is).
+let openOnStart = null;
+let started = false;
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (!e.data || !('open' in e.data)) return;
+  if (started) openTarget(e.data.open);
+  else openOnStart = e.data.open;
+});
+
 refreshStatus().then(() => {
   const initial = location.hash.slice(1);
   switchTab(app.views[initial] ? initial : 'messages');
+  started = true;
+  if (openOnStart) openTarget(openOnStart);
   listen();
   notifications.start();
   setTimeout(prefetch, 300);

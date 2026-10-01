@@ -79,6 +79,25 @@ pub fn batch(pending: Vec<Notification>) -> Vec<Notification> {
 }
 
 impl App {
+    /// A notification was clicked (terminal UI): show what it's about.
+    pub fn open_notified(&mut self, target: Target) {
+        // Whatever is over the tab gives way.
+        (self.prompt, self.guide, self.contact_card, self.paper_view, self.emoji) = (None, None, None, None, None);
+        match target {
+            Target::Conversation { key } => self.open_conversation(key),
+            Target::Room { hub, room } => {
+                let Some(hub) = crate::net::parse_hash(&hub) else { return };
+                if self.channels.hub_index(hub).is_none() {
+                    return;
+                }
+                self.tab = super::Tab::Channels;
+                self.channels.selected = Some(super::channels::Target { hub, room: (!room.is_empty()).then_some(room) });
+                self.mark_channel_read();
+            }
+            Target::Summary => self.tab = super::Tab::Messages,
+        }
+    }
+
     /// Queue a notification, unless it's about what's on screen in a window
     /// that has the focus.
     pub(super) fn push_notification(&mut self, on_screen: bool, notification: Notification) {
@@ -110,6 +129,32 @@ mod tests {
 
     fn note(title: &str, body: &str, key: &str) -> Notification {
         Notification { title: title.into(), body: body.into(), target: Target::Conversation { key: key.into() } }
+    }
+
+    #[test]
+    fn a_clicked_notification_opens_what_its_about() {
+        use crate::app::Tab;
+        let dir = std::env::temp_dir().join(format!("rettui-notified-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        app.tab = Tab::Status;
+        app.open_guide();
+        let key = "ab".repeat(16);
+        app.open_notified(Target::Conversation { key: key.clone() });
+        assert_eq!((app.tab, app.active_conversation.as_deref()), (Tab::Messages, Some(key.as_str())));
+        assert!(app.guide.is_none(), "what was over the tab gives way");
+        // A room on a hub that's there; one that isn't is left alone.
+        let hub = [0xcd; 16];
+        app.add_hub(hub, "rrc.hub", None);
+        app.tab = Tab::Messages;
+        app.open_notified(Target::Room { hub: hex::encode(hub), room: "#general".into() });
+        assert_eq!(app.tab, Tab::Channels);
+        assert_eq!(app.channels.selected, Some(crate::app::channels::Target { hub, room: Some("#general".into()) }));
+        app.open_notified(Target::Room { hub: "ef".repeat(16), room: "#general".into() });
+        assert_eq!(app.channels.selected.as_ref().map(|t| t.hub), Some(hub));
+        app.open_notified(Target::Summary);
+        assert_eq!(app.tab, Tab::Messages);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
