@@ -1319,9 +1319,14 @@ async function gettingStarted() {
       el('span', {}, el('span', { text: already ? `${label} (${already})` : label }), el('span', { class: 'dim help', text: help }))) };
   };
   const options = [];
+  const entries = [];
   if (!g.external) {
-    options.push(option('connect', `Connect through ${g.entry.name} (${g.entry.host}:${g.entry.port}), a community entry point`, g.help.connect,
-      { on: g.defaults.connect, already: g.has_entry_point && 'in your Reticulum config already' }));
+    for (const entry of g.entries) {
+      const choice = option('connect', `Connect through ${entry.name} (${entry.host}:${entry.port}), a public entry point`, g.help.connect,
+        { on: entry.on, already: entry.present && 'in your Reticulum config already' });
+      entries.push(choice);
+      options.push(choice);
+    }
     options.push(option('discover', 'Also find entry points near you over time (interface discovery)', g.help.discover,
       { on: g.defaults.discover, already: g.has_discovery && 'on already' }));
   }
@@ -1344,8 +1349,8 @@ async function gettingStarted() {
       el('button', { text: 'Not now', onclick: () => close() }),
       el('span', { class: 'grow' }),
       el('button', { class: 'primary', text: 'Apply', title: g.help.apply, onclick: async () => {
-        const body = { name: name.value };
-        for (const o of options) body[o.key] = o.box.checked && !o.box.disabled;
+        const body = { name: name.value, connect: entries.map((o) => o.box.checked && !o.box.disabled) };
+        for (const o of options) if (o.key !== 'connect') body[o.key] = o.box.checked && !o.box.disabled;
         const result = await attempt(() => api.post('/guide', body));
         if (!result) return;
         finished = true;

@@ -38,7 +38,8 @@ of the Reticulum instance it uses. Where files are kept is in
     Reticulum starts connecting to that many discovered entry points,
     before any of them is up, and isn't brought back if they never come up
     (on later starts, the entry points it found before drop it straight
-    away). The getting-started guide doesn't mark RMAP World that way.
+    away). The getting-started guide doesn't mark the entry points it adds
+    that way.
   - **As text:** edit the whole file, with a live check of whether Reticulum
     can load it.
   - **Safe edits:** changes are made in place, so comments and layout stay.
