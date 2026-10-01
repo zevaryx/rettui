@@ -9,8 +9,10 @@ use ratatui::text::{Line, Span};
 use ratatui::buffer::Buffer;
 use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 
+use unicode_width::UnicodeWidthStr;
+
 use super::{ACCENT, DIM, SELECTED_BG, block, human_bytes, time_label, wrap};
-use crate::app::App;
+use crate::app::{App, HistoryHit};
 use crate::lxmf::DeliveryMode;
 use crate::store::{Message, MessageState};
 use crate::term::images::{Placement, draw_placements};
@@ -19,8 +21,27 @@ use crate::term::images::{Placement, draw_placements};
 const MAX_PREVIEW_COLS: usize = 48;
 const MAX_PREVIEW_ROWS: usize = 12;
 
-/// A history row, with the attachment it belongs to (for clicks).
-type HistoryRow = (Line<'static>, Option<PathBuf>);
+/// A history row, with what a click on it does.
+type HistoryRow = (Line<'static>, Option<HistoryHit>);
+/// A message's rows (or a note's: no message), and image placements from
+/// its first row.
+type HistoryGroup = (Option<usize>, Vec<HistoryRow>, Vec<Placement<PathBuf>>);
+
+/// `text` cut to `width` columns, with an ellipsis if it was longer.
+fn clipped(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for c in text.chars() {
+        if out.width() + unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) + 1 > width {
+            break;
+        }
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
 
 pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let [list_area, chat_area] =
@@ -98,13 +119,18 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     // message's rows, with image placements relative to its first row.
     let needed = app.message_scroll + height;
     let graphics = app.graphics.clone();
-    let mut groups: Vec<(Vec<HistoryRow>, Vec<Placement<PathBuf>>)> = Vec::new();
+    // The message being replied to, and one to bring into view (built even
+    // if it's further back than what's on screen).
+    let target = app.reply_target().map(|(index, _)| index);
+    let scroll_to = app.scroll_to.take();
+    let mut groups: Vec<HistoryGroup> = Vec::new();
     let mut built = 0;
     for index in (0..count).rev() {
-        if built >= needed {
+        if built >= needed && scroll_to.is_none_or(|wanted| index < wanted) {
             break;
         }
         let message: Message = app.store.conversations[&key].messages[index].clone();
+        let quoted = message.reply.as_ref().map(|reply| app.store.conversations[&key].quoted(reply));
         // Each history line carries the attachment it belongs to (for clicks).
         let mut lines: Vec<HistoryRow> = Vec::new();
         let mut placements: Vec<Placement<PathBuf>> = Vec::new();
@@ -130,14 +156,32 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(format!(" failed: {e}"), Style::default().fg(Color::Red))
             }
         };
-        lines.push((
-            Line::from(vec![
-                Span::styled(who.to_string(), Style::default().fg(color).bold()),
-                Span::styled(format!("  {}", time_label(message.timestamp)), Style::default().fg(DIM)),
-                status,
-            ]),
-            None,
-        ));
+        let mut header = Line::from(vec![
+            Span::styled(who.to_string(), Style::default().fg(color).bold()),
+            Span::styled(format!("  {}", time_label(message.timestamp)), Style::default().fg(DIM)),
+            status,
+        ]);
+        if target == Some(index) {
+            header.spans.push(Span::styled("  ↩ replying to this", Style::default().fg(ACCENT)));
+            header = header.style(Style::default().bg(SELECTED_BG));
+        }
+        lines.push((header, Some(HistoryHit::Reply(index))));
+        // What it answers: a click shows that message.
+        if let Some(quoted) = quoted {
+            let author = match quoted.incoming {
+                Some(true) => format!("{name}: "),
+                Some(false) => "You: ".to_string(),
+                None => String::new(),
+            };
+            let text = clipped(&format!("{author}{}", quoted.text), inner_width.saturating_sub(2));
+            lines.push((
+                Line::from(vec![
+                    Span::styled("▎ ", Style::default().fg(ACCENT)),
+                    Span::styled(text, Style::default().fg(DIM).add_modifier(Modifier::ITALIC)),
+                ]),
+                quoted.index.map(HistoryHit::Original),
+            ));
+        }
         if !message.title.is_empty() {
             lines.push((Line::styled(message.title.clone(), Style::default().bold()), None));
         }
@@ -147,7 +191,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
         for attachment in &message.attachments {
-            let path = Some(attachment.path.clone());
+            let path = Some(HistoryHit::File(attachment.path.clone()));
             if attachment.image
                 && let Some(picture) = app.picture(&attachment.path)
             {
@@ -178,7 +222,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         lines.push((Line::raw(""), None));
         built += lines.len();
-        groups.push((lines, placements));
+        groups.push((Some(index), lines, placements));
     }
     // Scrolled back to the oldest message kept: say where older ones went.
     let archived = app.store.conversations.get(&key).map_or(0, |c| c.archived);
@@ -191,20 +235,32 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut rows: Vec<HistoryRow> =
             wrap(&note, inner_width).into_iter().map(|l| (Line::styled(l, Style::default().fg(DIM)), None)).collect();
         rows.push((Line::raw(""), None));
-        groups.push((rows, Vec::new()));
+        groups.push((None, rows, Vec::new()));
     }
     // Oldest first, with placements at their rows in the whole list.
     let mut lines: Vec<HistoryRow> = Vec::with_capacity(built);
     let mut placements: Vec<Placement<PathBuf>> = Vec::new();
-    for (group, group_placements) in groups.into_iter().rev() {
+    let mut wanted_row = None;
+    for (index, group, group_placements) in groups.into_iter().rev() {
         let base = lines.len();
+        if index.is_some() && index == scroll_to {
+            wanted_row = Some(base);
+        }
         placements.extend(group_placements.into_iter().map(|p| Placement { row: base + p.row, ..p }));
         lines.extend(group);
     }
     let max_scroll = lines.len().saturating_sub(height);
     app.message_scroll = app.message_scroll.min(max_scroll);
+    // Scroll so the message asked for starts on screen (a row of what's
+    // before it showing too), if it isn't already.
+    if let Some(row) = wanted_row {
+        let top = max_scroll - app.message_scroll;
+        if row < top || row >= top + height {
+            app.message_scroll = max_scroll - row.saturating_sub(1).min(max_scroll);
+        }
+    }
     let top = max_scroll - app.message_scroll;
-    let (visible, rows): (Vec<Line>, Vec<Option<PathBuf>>) =
+    let (visible, rows): (Vec<Line>, Vec<Option<HistoryHit>>) =
         lines.into_iter().skip(top).take(height).unzip();
     app.regions.history = history_inner;
     app.regions.history_rows = rows;
@@ -227,7 +283,17 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             .collect();
         compose_title.push_str(&format!(" · 📎 {}", names.join(", ")));
     }
-    let compose_block = block(&compose_title, app.composing);
+    let mut compose_block = block(&compose_title, app.composing);
+    if let Some((_, target)) = app.reply_target() {
+        let author = if target.incoming { name.as_str() } else { "You" };
+        let hint = if app.composing { " · ↑↓ another · Esc cancels " } else { " " };
+        let room = (compose_area.width as usize).saturating_sub(hint.width() + 6);
+        let text = clipped(&format!("↩ {author}: {}", target.opening()), room);
+        compose_block = compose_block.title_bottom(Line::from(vec![
+            Span::styled(format!(" {text}"), Style::default().fg(ACCENT)),
+            Span::styled(hint, Style::default().fg(DIM)),
+        ]));
+    }
     let inner = compose_block.inner(compose_area);
     app.regions.compose = compose_area;
     // Keep the cursor visible for long input.
@@ -337,6 +403,66 @@ mod tests {
         // Too small: no half a code, but what to do instead.
         let screen = draw(&mut app, 80, 24);
         assert!(!screen.contains('▀') && screen.contains("make the window bigger"), "{screen}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replies_are_picked_shown_and_sent() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use crate::net::PeerKind;
+        use crate::store::{Conversation, Message, MessageState, Peer};
+        let dir = std::env::temp_dir().join(format!("rettui-replies-ui-{}", std::process::id()));
+        let key = "ab".repeat(16);
+        let said = |n: u8, content: &str| Message {
+            id: hex::encode([n; 32]),
+            incoming: true,
+            title: String::new(),
+            content: content.into(),
+            timestamp: 1_700_000_000.0 + f64::from(n),
+            state: MessageState::Received { verified: true },
+            attachments: Vec::new(),
+            paper: None,
+            hash: None,
+            reply: None,
+        };
+        let mut store = Store::default();
+        store.peers.insert(key.clone(), Peer { kind: PeerKind::Lxmf, name: Some("Alice".into()), hops: 1, last_seen: 0 });
+        let messages = vec![said(1, "Lunch tomorrow?"), said(2, "Or Friday")];
+        store.conversations.insert(key.clone(), Conversation { messages, ..Default::default() });
+        let mut app = test_app(&dir, Settings::default(), store);
+        app.open_newest_conversation();
+        let press = |app: &mut App, code| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        // `r` replies to their newest; ↑ goes to the one before.
+        press(&mut app, KeyCode::Char('r'));
+        assert!(app.composing);
+        assert_eq!(app.reply.as_deref(), Some(hex::encode([2u8; 32]).as_str()));
+        press(&mut app, KeyCode::Up);
+        let screen = draw(&mut app, 100, 30);
+        assert!(screen.contains("↩ replying to this") && screen.contains("↩ Alice: Lunch tomorrow?"), "{screen}");
+        // Sent, it shows what it answers; Esc first gives up a reply.
+        for c in "Yes".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        assert!(app.reply.is_none());
+        let screen = draw(&mut app, 100, 30);
+        assert!(screen.contains("▎ Alice: Lunch tomorrow?"), "{screen}");
+        app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(app.reply.is_some());
+        press(&mut app, KeyCode::Esc);
+        assert!(app.reply.is_none() && app.composing);
+        // A click on a message's first row replies to it; one on a quote
+        // brings back what it answers.
+        draw(&mut app, 100, 30);
+        let click = |app: &mut App, hit: &crate::app::HistoryHit| {
+            let row = app.regions.history_rows.iter().position(|h| h.as_ref() == Some(hit)).unwrap();
+            let (x, y) = (app.regions.history.x, app.regions.history.y + row as u16);
+            app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE });
+        };
+        click(&mut app, &crate::app::HistoryHit::Reply(1));
+        assert_eq!(app.reply.as_deref(), Some(hex::encode([2u8; 32]).as_str()));
+        click(&mut app, &crate::app::HistoryHit::Original(0));
+        assert_eq!(app.scroll_to, Some(0));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

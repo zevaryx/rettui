@@ -204,6 +204,22 @@ a { color: var(--accent); }
 .message .author.in { color: var(--magenta); }
 .message .author.out { color: var(--accent); }
 .message .content { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Replies: what one answers, above its text; the button to write one
+   (shown on hover where there is one); the bar over the box while writing. */
+.reply-quote {
+  border-left: 3px solid var(--accent); padding: 1px 8px; margin: 3px 0 4px; font-size: 12.5px; color: var(--dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.reply-quote.clickable:hover { color: var(--text); }
+.quote-author { font-weight: 700; }
+.reply-button { opacity: 0; transition: opacity .1s; }
+.message:hover .reply-button, .reply-button:focus-visible { opacity: 1; }
+@media (hover: none) { .reply-button { opacity: .75; } }
+.reply-bar { display: flex; align-items: baseline; gap: 5px; font-size: 12.5px; color: var(--dim); border-left: 3px solid var(--accent); padding: 2px 4px 2px 8px; }
+.reply-bar .reply-label { color: var(--accent); }
+.reply-bar .reply-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.message.flash { animation: flash 1.2s ease-out; }
+@keyframes flash { from { background: #4fd6e033; } to { background: transparent; } }
 .message .title { font-weight: 700; }
 .state-ok { color: var(--green); }
 .state-bad { color: var(--red); }

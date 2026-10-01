@@ -138,7 +138,7 @@ impl App {
     pub fn rrc_lxmf(&mut self, index: usize, room: &str, target: &[u8], text: &str) -> Result<String, String> {
         let user = self.rrc_user(index, target).ok_or("Not a user identity")?;
         let key = hex::encode(user.lxmf);
-        self.send_message(key.clone(), text.to_string(), Vec::new(), DeliveryMode::Auto).map_err(|(e, ..)| e)?;
+        self.send_message(key.clone(), text.to_string(), Vec::new(), DeliveryMode::Auto, None).map_err(|(e, ..)| e)?;
         let note = format!("LXMF message sent to {} ({key}); replies arrive in Messages", user.name);
         self.record(index, room, ChatLine::new(LineKind::System, note));
         Ok(key)

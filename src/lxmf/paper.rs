@@ -13,27 +13,40 @@ use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
 use super::send::build_message;
-use super::{DeliveryMode, Outgoing, inbound};
+use super::{DeliveryMode, Outgoing, Reply, inbound};
 use crate::net::{Hash, Known, NetEvent, lookup};
 
-/// Write a paper message to `to`: its `lxm://` link. Only their key is
-/// needed (from their announce), not a path: they may well be offline.
+/// A paper message to write: who to, what it says, when it was written, and
+/// the message it answers.
+#[derive(Debug)]
+pub struct Paper {
+    pub to: Hash,
+    pub content: String,
+    pub timestamp: f64,
+    pub reply: Option<Reply>,
+}
+
+/// Write a paper message: its `lxm://` link, and its hash (what replies to
+/// it name). Only the recipient's key is needed (from their announce), not
+/// a path: they may well be offline.
 pub async fn write(
     runtime: &ReticulumHandle,
     known: &Known,
     identity: &Identity,
     source: Hash,
-    to: Hash,
-    content: String,
-) -> Result<String, String> {
+    paper: Paper,
+) -> Result<(String, [u8; 32]), String> {
+    let Paper { to, content, timestamp, reply } = paper;
     let recipient = lookup(runtime, known, to)
         .await
         .map_err(|e| format!("{e}: a paper message needs the recipient's key, which their announce brings"))?;
-    let outgoing = Outgoing { to, content, attachments: Vec::new(), mode: DeliveryMode::Paper, propagation_node: None };
+    let outgoing =
+        Outgoing { to, content, attachments: Vec::new(), mode: DeliveryMode::Paper, propagation_node: None, timestamp, reply };
     let mut message = build_message(identity, source, &outgoing, recipient.app_data.as_deref()).await?;
     message.method = DeliveryMethod::Paper;
+    let hash = message.hash.ok_or("The message has no hash after signing")?;
     // A stamp, if the recipient asks for one; it can take a moment.
-    tokio::task::spawn_blocking(move || {
+    let link = tokio::task::spawn_blocking(move || {
         message.get_stamp();
         message
             .to_paper_uri(|data| {
@@ -47,7 +60,8 @@ pub async fn write(
             })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    Ok((link, hash))
 }
 
 /// A paper message's link, checked: for this client (`lxmf_hash`), and

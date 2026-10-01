@@ -114,7 +114,12 @@ impl App {
                 return;
             }
             match key.code {
+                // Esc gives up the reply first, then the writing.
+                KeyCode::Esc if self.reply.is_some() => self.reply = None,
                 KeyCode::Esc => self.composing = false,
+                KeyCode::Char('r') if ctrl => self.move_reply(true),
+                KeyCode::Up if self.reply.is_some() => self.move_reply(true),
+                KeyCode::Down if self.reply.is_some() => self.move_reply(false),
                 KeyCode::Enter => self.send_compose(),
                 KeyCode::PageUp => self.message_scroll = self.message_scroll.saturating_add(self.history_page()),
                 KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(self.history_page()),

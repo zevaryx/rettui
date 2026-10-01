@@ -21,7 +21,7 @@ use rns_runtime::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::lxmf::{self, Delivered, DeliveryMode, InboundMessage, LXMF_ASPECT, PROPAGATION_ASPECT};
+use crate::lxmf::{self, DeliveryMode, InboundMessage, LXMF_ASPECT, PROPAGATION_ASPECT};
 use crate::nomad::host::{self, HostConfig};
 use crate::nomad::{self, FetchedContent, LinkCache};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
@@ -78,7 +78,7 @@ pub enum PeerKind {
 pub enum NetCommand {
     Announce,
     /// Write a paper message (answered with [`NetEvent::Paper`]).
-    WritePaper { id: u64, to: Hash, content: String },
+    WritePaper { id: u64, paper: lxmf::paper::Paper },
     /// Read in a paper message (an `lxm://` link).
     ReadPaper(String),
     SetDisplayName(String),
@@ -95,6 +95,9 @@ pub enum NetCommand {
         content: String,
         attachments: Vec<PathBuf>,
         mode: DeliveryMode,
+        /// When it was written (Unix seconds).
+        timestamp: f64,
+        reply: Option<lxmf::Reply>,
     },
     Fetch {
         id: u64,
@@ -166,9 +169,9 @@ pub enum NetEvent {
     },
     Announced,
     Message(InboundMessage),
-    Delivery { id: u64, result: Result<Delivered, String> },
-    /// A paper message written: its `lxm://` link.
-    Paper { id: u64, result: Result<String, String> },
+    Delivery { id: u64, result: Result<lxmf::Sent, String> },
+    /// A paper message written: its `lxm://` link and hash.
+    Paper { id: u64, result: Result<(String, [u8; 32]), String> },
     Fetched { id: u64, result: Result<FetchedContent, String> },
     SyncStarted,
     Synced(Result<usize, String>),
@@ -410,19 +413,20 @@ async fn run(
                         }
                     }
                     NetCommand::Sync => syncer.start(propagation_node),
-                    NetCommand::WritePaper { id, to, content } => {
+                    NetCommand::WritePaper { id, paper } => {
                         let (runtime, known, identity, ev) =
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone());
                         tokio::spawn(async move {
-                            let result = lxmf::paper::write(&runtime, &known, &identity, lxmf_hash, to, content).await;
+                            let result = lxmf::paper::write(&runtime, &known, &identity, lxmf_hash, paper).await;
                             let _ = ev.send(NetEvent::Paper { id, result });
                         });
                     }
                     NetCommand::ReadPaper(link) => lxmf::paper::read(&runtime, &known, &identity, lxmf_hash, link, &ev),
-                    NetCommand::SendMessage { id, to, content, attachments, mode } => {
+                    NetCommand::SendMessage { id, to, content, attachments, mode, timestamp, reply } => {
                         let (runtime, known, identity, ev) =
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone());
-                        let outgoing = lxmf::Outgoing { to, content, attachments, mode, propagation_node };
+                        let outgoing =
+                            lxmf::Outgoing { to, content, attachments, mode, propagation_node, timestamp, reply };
                         tokio::spawn(async move {
                             let result = lxmf::send(&runtime, &known, &identity, lxmf_hash, outgoing).await;
                             let _ = ev.send(NetEvent::Delivery { id, result });

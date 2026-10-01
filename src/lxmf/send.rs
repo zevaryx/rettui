@@ -3,14 +3,14 @@
 
 use std::time::Duration;
 
-use lxmf_core::constants::FIELD_FILE_ATTACHMENTS;
+use lxmf_core::constants::{FIELD_FILE_ATTACHMENTS, FIELD_REPLY_QUOTE, FIELD_REPLY_TO};
 use lxmf_core::handlers::{parse_pn_announce_data, stamp_cost_from_app_data};
 use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
 use rmpv::Value;
 use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
-use super::{Delivered, DeliveryMode, Outgoing, encode, is_image_name};
+use super::{Delivered, DeliveryMode, Outgoing, Sent, encode, is_image_name};
 use crate::net::{Hash, Known, ensure_path, link_options, lookup};
 
 /// How long to wait for a delivery proof after a message is on the Link.
@@ -24,6 +24,7 @@ pub(super) async fn build_message(
 ) -> Result<LxMessage, String> {
     let mut message =
         LxMessage::new(outgoing.to, source, "", &outgoing.content, DeliveryMethod::Direct);
+    message.timestamp = outgoing.timestamp;
     message.stamp_cost = app_data.and_then(stamp_cost_from_app_data);
     message.determine_compression_support(app_data);
 
@@ -53,6 +54,13 @@ pub(super) async fn build_message(
             .set_msgpack_field(FIELD_FILE_ATTACHMENTS, encode(&Value::Array(files)))
             .map_err(|e| e.to_string())?;
     }
+    // Both as bytes (msgpack `bin`), as Columba and MeshChatX send them.
+    if let Some(reply) = &outgoing.reply {
+        message.set_field(FIELD_REPLY_TO, reply.to.to_vec());
+        if let Some(quote) = &reply.quote {
+            message.set_field(FIELD_REPLY_QUOTE, quote.as_bytes().to_vec());
+        }
+    }
 
     let key = identity
         .get_signing_key()
@@ -67,7 +75,7 @@ pub async fn send(
     identity: &Identity,
     source: Hash,
     outgoing: Outgoing,
-) -> Result<Delivered, String> {
+) -> Result<Sent, String> {
     if outgoing.mode == DeliveryMode::Paper {
         return Err("A paper message isn't sent: it's written as a link (see lxmf::paper)".into());
     }
@@ -76,7 +84,7 @@ pub async fn send(
     }
     let direct = send_direct(runtime, known, identity, source, &outgoing).await;
     match (direct, outgoing.mode, outgoing.propagation_node) {
-        (Ok(()), ..) => Ok(Delivered::Direct),
+        (Ok(hash), ..) => Ok(Sent { delivered: Delivered::Direct, hash }),
         (Err(e), DeliveryMode::Auto, Some(_)) => {
             tracing::info!("direct delivery failed ({e}); using propagation node");
             propagate(runtime, known, identity, source, &outgoing)
@@ -87,17 +95,23 @@ pub async fn send(
     }
 }
 
+/// A built message's hash (signing sets it).
+fn hash_of(message: &LxMessage) -> Result<[u8; 32], String> {
+    message.hash.ok_or_else(|| "The message has no hash after signing".to_string())
+}
+
 async fn send_direct(
     runtime: &ReticulumHandle,
     known: &Known,
     identity: &Identity,
     source: Hash,
     outgoing: &Outgoing,
-) -> Result<(), String> {
+) -> Result<[u8; 32], String> {
     // A Link needs a path, not just a known key.
     ensure_path(runtime, outgoing.to).await?;
     let recipient = lookup(runtime, known, outgoing.to).await?;
     let mut message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
+    let hash = hash_of(&message)?;
     // Proof-of-work stamps can take a while at higher costs.
     let packed = tokio::task::spawn_blocking(move || {
         message.get_stamp();
@@ -123,7 +137,7 @@ async fn send_direct(
         send_resource(&handle, packed).await
     };
     handle.close().await;
-    result
+    result.map(|()| hash)
 }
 
 async fn propagate(
@@ -132,7 +146,7 @@ async fn propagate(
     identity: &Identity,
     source: Hash,
     outgoing: &Outgoing,
-) -> Result<Delivered, String> {
+) -> Result<Sent, String> {
     let node = outgoing
         .propagation_node
         .ok_or("No propagation node selected (pick one in the Network tab)")?;
@@ -148,6 +162,7 @@ async fn propagate(
 
     let mut message =
         build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
+    let hash = hash_of(&message)?;
     let (recipient_identity, ratchet) = (recipient.identity, recipient.ratchet);
     let packed = tokio::task::spawn_blocking(move || {
         message.get_stamp();
@@ -171,7 +186,7 @@ async fn propagate(
         .map_err(|e| format!("Link to propagation node failed: {e}"))?;
     let result = send_resource(&handle, packed).await;
     handle.close().await;
-    result.map(|()| Delivered::Propagated)
+    result.map(|()| Sent { delivered: Delivered::Propagated, hash })
 }
 
 async fn send_resource(handle: &LinkSessionHandle, data: Vec<u8>) -> Result<(), String> {
