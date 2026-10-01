@@ -36,13 +36,15 @@ the web UI's Status page, opens it again):
   is opened a minute or more later. If none answer, the guide says so:
   the device may be offline, or a firewall may block them.
 
-  The ones that answer are ticked only when the config has nothing
-  besides the Auto interface (which reaches your local network only): a
+  When the config has nothing besides the Auto interface (which reaches
+  your local network only), the three that answer fastest are ticked: a
   fresh install needs a connection for discovery to hear of others, and
-  with several, one being down doesn't leave you unconnected. A config
-  with interfaces of its own (an entry point, a radio) isn't given them
-  unless you tick them; one it already has (by address) shows as in your
-  config already. Each operator sees your IP address, and anyone watching
+  with a few, one being down doesn't leave you unconnected. While they're
+  being tried, the ticks move to the fastest as answers come in; once you
+  tick or untick one yourself, they stay as you set them. A config with
+  interfaces of its own (an entry point, a radio) isn't given any unless
+  you tick them; one it already has (by address) shows as in your config
+  already. Each operator sees your IP address, and anyone watching
   your connection can tell you use Reticulum. They stay connected
   alongside the entry points discovery finds.
 - **Also find entry points near you over time:** turns on

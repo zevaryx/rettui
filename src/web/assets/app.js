@@ -1319,9 +1319,11 @@ async function gettingStarted() {
       el('span', {}, el('span', { text: already ? `${label} (${already})` : label }), el('span', { class: 'dim help', text: help }))) };
   };
   // Each entry point, under its region, with whether it answered when
-  // tried: one that didn't is greyed out and can't be ticked.
+  // tried: one that didn't is greyed out and can't be ticked. Until one is
+  // ticked or unticked, the ticks follow the fastest as they answer.
+  let byHand = false;
   const entry = (e) => {
-    const box = el('input', { type: 'checkbox', checked: e.present || e.on, disabled: e.present });
+    const box = el('input', { type: 'checkbox', checked: e.present || e.on, disabled: e.present, onchange: () => { byHand = true; } });
     const status = el('span', { class: 'reach' });
     const help = el('span', { class: 'dim help' });
     const node = el('label', { class: 'guide-option' }, box,
@@ -1338,13 +1340,14 @@ async function gettingStarted() {
       status.className = 'reach ' + reach.state;
       const down = reach.state === 'down';
       if (down) box.checked = false;
+      else if (!byHand) box.checked = !!reach.on;
       box.disabled = down;
       node.classList.toggle('down', down);
       help.textContent = down ? reach.help : '';
       help.hidden = !down;
     };
     const choice = { key: 'connect', box, node, show, present: e.present };
-    show(e.reach);
+    show({ ...e.reach, on: e.on });
     return choice;
   };
   const options = [];

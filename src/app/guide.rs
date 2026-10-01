@@ -11,10 +11,10 @@
 //!
 //! Discovery hears of entry points through a connection the config already
 //! has, so a fresh install (the Auto interface only, which reaches the
-//! local network) gets the entry points ticked; a config with interfaces of
-//! its own doesn't, unless asked. Each entry point is tried as the guide
-//! opens (see [`super::reach`]): one that refuses or doesn't answer can't
-//! be ticked.
+//! local network) gets the few entry points that answer fastest ticked; a
+//! config with interfaces of its own doesn't, unless asked. Each entry
+//! point is tried as the guide opens (see [`super::reach`]): one that
+//! refuses or doesn't answer can't be ticked.
 
 use std::time::{Duration, Instant};
 
@@ -78,7 +78,11 @@ pub const NAME_HELP: &str = "The name sent in your announces, so others see who 
 pub const IDENTITY_HELP: &str = "Your identity is the key behind your address. Coming from Sideband, NomadNet or MeshChat? Use its identity file, and contacts reach you here at the address they know. Enter picks the file; it's used from the next start.";
 /// In the web UI, which can't change the identity.
 pub const IDENTITY_WEB_NOTE: &str = "Coming from Sideband, NomadNet or MeshChat? To keep your address, stop this web UI first (two rettuis on one data folder overwrite each other's files), then use that identity file from the terminal UI (i in its Status tab), or copy it over this one:";
-pub const CONNECT_HELP: &str = "A public transport node: your traffic reaches the wider network through it, and its operator sees your IP address. Ticked when nothing else in your config reaches past your local network: discovery needs one connection to hear of others.";
+pub const CONNECT_HELP: &str = "A public transport node: your traffic reaches the wider network through it, and its operator sees your IP address. When your config reaches only your local network, the 3 that answer fastest are ticked: discovery needs a connection to hear of others.";
+
+/// How many entry points a fresh install is given to start with: the
+/// ones that answer fastest.
+pub const FASTEST: usize = 3;
 /// None of the entry points answered.
 pub const NONE_ANSWERED: &str = "None of the entry points answered: is this device online? A firewall may block them, too.";
 
@@ -148,6 +152,36 @@ pub struct Guide {
     pub row: usize,
     pub choices: GuideChoices,
     pub scroll: usize,
+    /// An entry point was ticked or unticked: the ticks are the user's.
+    /// Until then they follow [`picked`] as the tries come in.
+    pub by_hand: bool,
+}
+
+/// The entry points to tick to start with. For a config with nothing
+/// besides the Auto interface (a fresh install), the [`FASTEST`] that
+/// answered quickest; while they're being tried, those still being tried
+/// make up the number, in the list's order, so the ones ticked are always
+/// the ones Apply adds. None for a config with interfaces of its own.
+pub fn picked(view: &GuideView) -> Vec<bool> {
+    let mut picked = vec![false; view.reach.len()];
+    if view.has_own_interfaces {
+        return picked;
+    }
+    let mut ranked: Vec<(usize, Option<Duration>)> = view
+        .reach
+        .iter()
+        .enumerate()
+        .filter_map(|(i, reach)| match *reach {
+            Reach::Up(took) => Some((i, Some(took))),
+            Reach::Checking => Some((i, None)),
+            Reach::Down(_) => None,
+        })
+        .collect();
+    ranked.sort_by_key(|&(i, took)| (took.is_none(), took, i));
+    for (i, _) in ranked.into_iter().take(FASTEST) {
+        picked[i] = true;
+    }
+    picked
 }
 
 /// The guide's rows in the terminal UI.
@@ -175,6 +209,15 @@ impl Guide {
         rows.extend((0..LINKS.len()).map(GuideRow::Link));
         rows.extend([GuideRow::Apply, GuideRow::Later]);
         rows
+    }
+
+    /// The choices, with the entry points ticked as shown.
+    pub fn shown(&self, view: &GuideView) -> GuideChoices {
+        let mut choices = self.choices.clone();
+        if !self.by_hand {
+            choices.connect = picked(view);
+        }
+        choices
     }
 }
 
@@ -204,14 +247,14 @@ impl App {
 
     /// The choices to start from: what's set up already; and for a config
     /// with nothing besides the Auto interface (a fresh install), discovery
-    /// and the entry points that answer to hear of others through (it
-    /// needs a connection to start). A config with interfaces of its own
-    /// (perhaps shared with other Reticulum programs) is changed only as
+    /// and the entry points that answer fastest to hear of others through
+    /// (it needs a connection to start). A config with interfaces of its
+    /// own (perhaps shared with other Reticulum programs) is changed only as
     /// asked.
     pub fn guide_defaults(&self) -> GuideChoices {
         let view = self.guide_view();
         let fresh = !view.has_own_interfaces;
-        let connect = view.reach.iter().map(|reach| fresh && !reach.is_down()).collect();
+        let connect = picked(&view);
         GuideChoices { name: view.name, connect, discover: fresh || view.has_discovery, auto_propagation: view.auto_propagation }
     }
 
@@ -378,7 +421,7 @@ impl App {
 
     pub fn open_guide(&mut self) {
         self.check_entry_points();
-        self.guide = Some(Guide { row: 0, choices: self.guide_defaults(), scroll: 0 });
+        self.guide = Some(Guide { row: 0, choices: self.guide_defaults(), scroll: 0, by_hand: false });
     }
 
     pub(super) fn guide_key(&mut self, key: KeyEvent) {
@@ -403,11 +446,18 @@ impl App {
     }
 
     pub(super) fn guide_activate(&mut self, row: GuideRow) {
+        let view = self.guide_view();
         let down = match row {
-            GuideRow::Connect(i) => self.entry_reach.get(ENTRY_POINTS.len())[i].is_down(),
+            GuideRow::Connect(i) => view.reach[i].is_down(),
             _ => false,
         };
         let Some(guide) = &mut self.guide else { return };
+        // Ticking or unticking an entry point keeps the ticks as they are.
+        if matches!(row, GuideRow::Connect(_)) && !down && !guide.by_hand {
+            guide.choices = guide.shown(&view);
+            guide.by_hand = true;
+        }
+        let shown = guide.shown(&view);
         let choices = &mut guide.choices;
         match row {
             GuideRow::Name => {
@@ -424,8 +474,7 @@ impl App {
             GuideRow::AutoPropagation => choices.auto_propagation = !choices.auto_propagation,
             GuideRow::Link(i) => self.open_url(LINKS[i].1),
             GuideRow::Apply => {
-                let choices = choices.clone();
-                match self.apply_guide(&choices, false) {
+                match self.apply_guide(&shown, false) {
                     Ok(done) if done.is_empty() => self.notify("All set"),
                     Ok(done) => self.notify(done.join("; ")),
                     Err(e) => self.fail(e),
@@ -469,26 +518,55 @@ mod tests {
         assert!(view.has_entry_point.iter().all(|has| !has) && !view.has_discovery && !view.external);
         assert!(view.reach.iter().all(|reach| *reach == Reach::Checking), "tried as it opens");
         let all = vec![true; ENTRY_POINTS.len()];
-        // A fresh install: discovery, and the entry points to hear of
-        // others through.
-        assert_eq!(app.guide_defaults(), GuideChoices { name: "rettui user".into(), connect: all.clone(), discover: true, auto_propagation: false });
-        // Those that don't answer aren't ticked, and aren't added even if
-        // asked for.
+        let ticked = |connect: &[bool]| connect.iter().enumerate().filter(|(_, on)| **on).map(|(i, _)| i).collect::<Vec<_>>();
+        // A fresh install: discovery, and the 3 entry points that answer
+        // fastest to hear of others through. While they're tried, the ones
+        // still being tried in the list's order.
+        let defaults = app.guide_defaults();
+        assert_eq!((defaults.name.as_str(), defaults.discover, defaults.auto_propagation), ("rettui user", true, false));
+        assert_eq!(ticked(&defaults.connect), [0, 1, 2]);
+        // Those that answered first, quickest first; one that didn't
+        // answer isn't ticked, and isn't added even if asked for.
         let (dublin, borders, rmap, ratspeak) = (0, 1, 2, ENTRY_POINTS.len() - 1);
         assert_eq!((ENTRY_POINTS[rmap].name, ENTRY_POINTS[ratspeak].host), ("RMAP World", "rns.ratspeak.org"));
+        let mut reach = vec![Reach::Checking; ENTRY_POINTS.len()];
+        reach[dublin] = Reach::Down("refused");
+        reach[ratspeak] = Reach::Up(Duration::from_millis(90));
+        app.entry_reach.set(reach.clone());
+        assert_eq!(ticked(&app.guide_defaults().connect), [borders, rmap, ratspeak]);
+        // All in: the 3 fastest.
+        for (i, ms) in [(borders, 400), (rmap, 120), (3, 250), (4, 300), (5, 600)] {
+            reach[i] = Reach::Up(Duration::from_millis(ms));
+        }
+        app.entry_reach.set(reach.clone());
+        assert_eq!(ticked(&app.guide_defaults().connect), [rmap, 3, ratspeak]);
+        // In the terminal, the ticks follow the tries until one is ticked
+        // or unticked; a row that didn't answer can't be.
+        let mut reach = vec![Reach::Down("refused"); ENTRY_POINTS.len()];
+        reach[rmap] = Reach::Checking;
+        reach[ratspeak] = Reach::Checking;
+        app.entry_reach.set(reach.clone());
+        app.open_guide();
+        let shown = |app: &App| ticked(&app.guide.as_ref().unwrap().shown(&app.guide_view()).connect);
+        assert_eq!(shown(&app), [rmap, ratspeak]);
+        app.guide_activate(GuideRow::Connect(dublin));
+        assert_eq!(shown(&app), [rmap, ratspeak], "not ticked");
+        assert!(!app.guide.as_ref().unwrap().by_hand);
+        reach[rmap] = Reach::Up(Duration::from_millis(120));
+        reach[ratspeak] = Reach::Up(Duration::from_millis(90));
+        reach[3] = Reach::Up(Duration::from_millis(250));
+        reach[4] = Reach::Up(Duration::from_millis(30));
+        app.entry_reach.set(reach.clone());
+        assert_eq!(shown(&app), [rmap, 4, ratspeak], "as they answer");
+        app.guide_activate(GuideRow::Connect(rmap));
+        assert_eq!(shown(&app), [4, ratspeak]);
+        reach[5] = Reach::Up(Duration::from_millis(10));
+        app.entry_reach.set(reach);
+        assert_eq!(shown(&app), [4, ratspeak], "the user's from then on");
         let mut reach = vec![Reach::Down("refused"); ENTRY_POINTS.len()];
         reach[rmap] = Reach::Up(Duration::from_millis(120));
-        reach[ratspeak] = Reach::Checking;
+        reach[ratspeak] = Reach::Up(Duration::from_millis(90));
         app.entry_reach.set(reach);
-        let defaults = app.guide_defaults();
-        assert_eq!(defaults.connect.iter().enumerate().filter(|(_, on)| **on).map(|(i, _)| i).collect::<Vec<_>>(), [rmap, ratspeak]);
-        // In the terminal, a row that didn't answer can't be ticked.
-        app.open_guide();
-        assert!(!app.guide.as_ref().unwrap().choices.connect[dublin]);
-        app.guide_activate(GuideRow::Connect(dublin));
-        assert!(!app.guide.as_ref().unwrap().choices.connect[dublin], "not ticked");
-        app.guide_activate(GuideRow::Connect(rmap));
-        assert!(!app.guide.as_ref().unwrap().choices.connect[rmap]);
         // Applying: the name, the entry points in the Reticulum config, and
         // a restart to connect.
         let choices = GuideChoices { name: "Zev".into(), connect: all, discover: true, auto_propagation: false };

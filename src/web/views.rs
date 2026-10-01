@@ -120,10 +120,17 @@ pub fn guide(app: &App) -> Value {
     })
 }
 
-/// Whether each of the guide's entry points answered, as they're tried.
+/// Whether each of the guide's entry points answered, as they're tried,
+/// and whether it's ticked to start with (the fastest are, on a fresh
+/// install).
 pub fn guide_reach(app: &App) -> Value {
-    let reaches = app.guide_view().reach;
-    Value::Array(reaches.into_iter().map(reach).collect())
+    let view = app.guide_view();
+    let picked = crate::app::guide::picked(&view);
+    Value::Array(view.reach.into_iter().zip(picked).map(|(r, on)| {
+        let mut entry = reach(r);
+        entry["on"] = on.into();
+        entry
+    }).collect())
 }
 
 fn reach(reach: crate::app::reach::Reach) -> Value {
