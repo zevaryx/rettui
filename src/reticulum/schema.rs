@@ -209,7 +209,7 @@ pub const INTERFACE_ADVANCED: &[Group] = &[
             opt("announce_rate_penalty", "Rate penalty (s)", Int, "", "Extra seconds a destination waits after breaking the rate"),
             opt("recursive_prs", "Recursive path requests", Bool, "No", "Always look further for unknown paths requested here"),
             opt("announces_from_internal", "Pass internal announces", Bool, "Yes", "Rebroadcast announces learned from internal interfaces"),
-            opt("bootstrap_only", "Bootstrap only", Bool, "No", "Use this interface only until discovered interfaces connect"),
+            opt("bootstrap_only", "Bootstrap only", Bool, "No", "Use this interface only until discovered interfaces connect (rsReticulum drops it as soon as it starts connecting to them)"),
         ],
     },
     Group {

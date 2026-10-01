@@ -112,6 +112,32 @@ impl RnsState {
 }
 
 impl App {
+    /// Once per start of rettui's own Reticulum: whether interface
+    /// discovery is on (it connects to hosts the user didn't choose), and
+    /// which Bootstrap only interfaces it will drop early. A shared instance
+    /// run by another program has its own config, and its own discovery.
+    pub(super) fn note_discovery(&mut self) {
+        if self.discovery_noted || self.interfaces.is_empty() {
+            return;
+        }
+        self.discovery_noted = true;
+        if self.uses_external_shared_instance() {
+            return;
+        }
+        let Ok((text, _)) = rns::load(&self.rns_path()) else { return };
+        let Some(config) = rns::check(&text).0 else { return };
+        let connects = rns::discovery_autoconnect(&config);
+        if connects > 0 {
+            self.log(format!(
+                "Interface discovery is on (in the Reticulum config): connecting to up to {connects} entry point{} others announce",
+                if connects == 1 { "" } else { "s" }
+            ));
+        }
+        for warning in rns::bootstrap_warnings(&config) {
+            self.log(format!("Interface {warning}"));
+        }
+    }
+
     /// The Reticulum config file in use.
     pub fn rns_path(&self) -> PathBuf {
         rns::config_path(self.settings.rns_config.as_deref())
@@ -536,4 +562,41 @@ impl App {
 
 pub fn rns_truthy(value: &str) -> bool {
     matches!(value.trim().to_ascii_lowercase().as_str(), "yes" | "true" | "on" | "1")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::Settings;
+    use crate::net::{InterfaceInfo, NetEvent};
+    use crate::store::Store;
+
+    #[test]
+    fn discovery_already_on_is_said_at_start() {
+        let dir = std::env::temp_dir().join(format!("rettui-discovery-note-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rns_dir = dir.join("rns");
+        std::fs::create_dir_all(&rns_dir).unwrap();
+        // A config from before rettui ran discovery: on, with an entry
+        // point marked Bootstrap only.
+        let config = "[reticulum]\n  discover_interfaces = Yes\n  autoconnect_discovered_interfaces = 3\n\n[interfaces]\n  [[Hub]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = hub.example\n    target_port = 4242\n    bootstrap_only = Yes\n";
+        std::fs::write(rns_dir.join("config"), config).unwrap();
+        let settings = Settings { rns_config: Some(rns_dir.display().to_string()), ..Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, Store::default());
+        let identity = rns_identity::identity::Identity::new();
+        let start = |app: &mut crate::app::App, interface: &str| {
+            app.on_net(NetEvent::Started { lxmf_hash: [5; 16], public_key: identity.get_public_key() });
+            let online = InterfaceInfo { name: interface.into(), online: true, rx_bytes: 0, tx_bytes: 0 };
+            app.on_net(NetEvent::Interfaces(vec![online.clone()]));
+            app.on_net(NetEvent::Interfaces(vec![online]));
+        };
+        let said = |app: &crate::app::App, what: &str| app.log.iter().filter(|line| line.contains(what)).count();
+        start(&mut app, "Hub");
+        assert_eq!(said(&app, "Interface discovery is on (in the Reticulum config): connecting to up to 3 entry points"), 1);
+        assert_eq!(said(&app, "Interface Hub: Bootstrap only: dropped as soon as"), 1);
+        // A shared instance run by another program: its config, not this one.
+        app.log.clear();
+        start(&mut app, "Shared Instance[default]");
+        assert_eq!(said(&app, "Interface discovery is on"), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
