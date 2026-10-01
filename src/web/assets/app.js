@@ -4195,6 +4195,15 @@ app.views.status = {
       label('LXMF address'), el('div', { class: 'row' }, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.lxmf_address || '(starting)' }),
         s.lxmf_address ? el('button', { text: 'Copy', onclick: () => copy(s.lxmf_address, 'your LXMF address') }) : null,
         s.identity_link ? el('button', { text: 'QR code', title: 'Your address as a QR code, to be added as a contact', onclick: () => showAddress(s.identity_link) }) : null),
+      // Until they're all taken: near the top, for those just starting.
+      ...(s.first_steps.length ? [label('First steps'), el('div', { class: 'first-steps' }, s.first_steps.map((step) =>
+        el('div', { class: step.done ? 'done' : '' },
+          el('span', { class: step.done ? 'online' : 'dim', text: step.done ? '✓ ' : '○ ' }), step.label,
+          step.done ? null : el('span', { class: 'dim', text: ` · ${step.how}` }),
+          !step.done && step.label === 'Back up your identity'
+            ? el('button', { text: "I've done it", title: 'You saved a copy of the identity file somewhere safe', onclick: async () => {
+              if (await attempt(() => api.post('/identity/backed-up'))) refresh();
+            } }) : null)))] : []),
       label('Network'), el('span', { text: net }),
       label('Propagation node'), el('span', { text: s.propagation_node
         ? `${s.propagation_node.name}  ${s.propagation_node.hash}${s.auto_propagation ? ' · ' + s.auto_propagation : ''}`
@@ -4205,6 +4214,7 @@ app.views.status = {
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Known'), el('span', { text: `${s.known} destinations` }),
       label('Notifications'), notifications.describe());
+
     const noInterfaces = s.net.state !== 'online' ? 'Reticulum is starting…'
       : s.external_shared_instance ? 'None here: the program running the shared instance (such as rnsd) has them.'
         : 'None: add one in the Reticulum section to reach other peers.';

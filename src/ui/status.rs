@@ -81,9 +81,10 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
 
 pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let settings_height = FIELDS.len() as u16 + 3;
+    let steps = app.first_steps();
     // The settings list scrolls, so it may give way on short terminals.
     let [info, settings, rest] = Layout::vertical([
-        Constraint::Length(11),
+        Constraint::Length(if steps.is_empty() { 11 } else { 12 }),
         Constraint::Max(settings_height),
         Constraint::Min(5),
     ])
@@ -139,6 +140,17 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         ]),
         Line::from(vec![label("Known"), Span::raw(format!("{} destinations", app.store.peers.len()))]),
     ];
+    let mut lines = lines;
+    // Until they're all taken: each step's mark, and the next to take.
+    if let Some(next) = steps.iter().find(|step| !step.done) {
+        let mut spans = vec![label("First steps")];
+        spans.extend(steps.iter().map(|step| match step.done {
+            true => Span::styled("✓", Style::default().fg(Color::Green)),
+            false => Span::styled("○", Style::default().fg(DIM)),
+        }));
+        spans.push(Span::raw(format!("  next: {} ({})", next.label, next.how)));
+        lines.push(Line::from(spans));
+    }
     frame.render_widget(Paragraph::new(lines).block(block("Identity", false)), info);
 
     let iface_lines: Vec<Line> = app

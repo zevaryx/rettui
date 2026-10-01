@@ -38,6 +38,17 @@ another program (such as rnsd) runs the shared instance, the guide leaves
 its config alone and says so. Installs from before the guide existed don't
 see it at start.
 
+### First steps
+
+Until you've taken them all, the Status tab (in both UIs) shows five first
+steps, ticked as you take them: hear from others, announce yourself,
+choose a propagation node, back up your identity, and send a message. The
+terminal UI shows them on one line with the next one and its key (for
+example `next: Back up your identity (b)`); the web UI lists them with how
+to take each. Backing up is ticked when `b` saves a copy; the web UI can't
+make one, so it has an **I've done it** button for a copy you made
+yourself. Once all five are taken, the line goes away.
+
 ## Commands
 
 ```sh

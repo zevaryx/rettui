@@ -66,6 +66,9 @@ pub struct Settings {
     /// The getting-started guide was seen (it's shown at the first start).
     /// Settings files from before it count as seen.
     pub welcomed: bool,
+    /// A copy of the identity was saved (`b` in the Status tab, or the web
+    /// UI was told one was): the first steps stop asking for one.
+    pub identity_backed_up: bool,
     /// Mark the messages you write as Markdown (LXMF's renderer field), so
     /// clients that format it show them formatted.
     pub markdown_messages: bool,
@@ -109,6 +112,7 @@ impl Default for Settings {
             // LXMF's own default delivery limit (NomadNet's is 500).
             max_message_kb: 1000,
             welcomed: true,
+            identity_backed_up: false,
             markdown_messages: true,
             pn_enabled: false,
             pn_name: None,
