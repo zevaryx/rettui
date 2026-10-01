@@ -12,6 +12,8 @@ license = "AGPL-3.0-or-later"
 rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime" }
 rns-identity = { path = "deps/rsReticulum/crates/rns-identity" }
 rns-crypto = { path = "deps/rsReticulum/crates/rns-crypto" }
+# Control queries (blocking an identity).
+rns-transport = { path = "deps/rsReticulum/crates/rns-transport" }
 lxmf-core = { path = "deps/rsLXMF/crates/lxmf-core" }
 nomad-core = { path = "deps/rsNomad/crates/nomad-core" }
 

@@ -10,6 +10,7 @@ use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
 use super::fields::{self, FIELD_COLUMBA_EXTENSIONS};
+use super::policy::SharedPolicy;
 use super::{Attachment, Extras, InboundMessage, Reply, bytes_of, is_image_name};
 use crate::net::{Hash, Known, NetEvent, lookup};
 
@@ -95,12 +96,34 @@ fn check_signature(message: &mut LxMessage, sender: Option<&Identity>) -> Result
 }
 
 /// Unpack and verify one complete LXMF message (destination hash included).
+/// With a `policy`, a message over the size limit, or without the stamp it
+/// asks for, is dropped, and a ticket it brings is kept. (A paper message,
+/// read in by hand, has none.)
 pub(super) async fn parse_inbound(
     runtime: &ReticulumHandle,
     known: &Known,
+    policy: Option<&SharedPolicy>,
     data: &[u8],
 ) -> Result<InboundMessage, String> {
     let mut message = LxMessage::unpack(data).map_err(|e| e.to_string())?;
+    if let Some(policy) = policy {
+        let policy = policy.lock().unwrap();
+        if policy.too_big(data.len()) {
+            return Err(format!(
+                "Dropped a message from {}: {} KB, over your limit of {} KB",
+                hex::encode(message.source_hash),
+                data.len() / 1000,
+                policy.max_bytes / 1000
+            ));
+        }
+        if !policy.stamp_accepted(&mut message) {
+            return Err(format!(
+                "Dropped a message from {}: it had no valid stamp (you ask for stamp cost {})",
+                hex::encode(message.source_hash),
+                policy.stamp_cost.unwrap_or_default()
+            ));
+        }
+    }
     // Senders of propagated messages are often offline; a bounded lookup
     // (cache, remembered keys, then a path request) finds their key.
     let sender = tokio::time::timeout(
@@ -116,6 +139,10 @@ pub(super) async fn parse_inbound(
         .ok();
     let verified = check_signature(&mut message, sender.as_ref().map(|remote| &remote.identity))?;
     tracing::debug!("message from {} verified={verified}", hex::encode(message.source_hash));
+    // Only from who it says, a ticket can be used for messages to them.
+    if verified && let Some(policy) = policy {
+        policy.lock().unwrap().take_ticket(&message);
+    }
     let attachments = attachments_of(&message);
     let reply = reply_of(&message);
     let extras = Extras::of(&message);
@@ -146,10 +173,11 @@ pub fn with_destination(lxmf_hash: Hash, data: Vec<u8>) -> Vec<u8> {
 pub(super) async fn deliver_inbound(
     runtime: &ReticulumHandle,
     known: &Known,
+    policy: &SharedPolicy,
     data: &[u8],
     ev: &mpsc::UnboundedSender<NetEvent>,
 ) {
-    let event = match parse_inbound(runtime, known, data).await {
+    let event = match parse_inbound(runtime, known, Some(policy), data).await {
         Ok(message) => NetEvent::Message(Box::new(message)),
         Err(e) if e.starts_with("Dropped") => NetEvent::Log(e),
         Err(e) => NetEvent::Log(format!("Dropped malformed LXMF message: {e}")),
@@ -160,11 +188,12 @@ pub(super) async fn deliver_inbound(
 pub fn spawn_inbound(
     runtime: &ReticulumHandle,
     known: &Known,
+    policy: &SharedPolicy,
     data: Vec<u8>,
     ev: &mpsc::UnboundedSender<NetEvent>,
 ) {
-    let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
-    tokio::spawn(async move { deliver_inbound(&runtime, &known, &data, &ev).await });
+    let (runtime, known, policy, ev) = (runtime.clone(), known.clone(), policy.clone(), ev.clone());
+    tokio::spawn(async move { deliver_inbound(&runtime, &known, &policy, &data, &ev).await });
 }
 
 #[cfg(test)]

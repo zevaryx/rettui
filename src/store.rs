@@ -274,8 +274,40 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
-/// What you keep about someone you message: your own name for them, and
-/// notes.
+/// How far you trust someone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Trust {
+    /// Nothing decided.
+    #[default]
+    Unknown,
+    /// Looked at and left as is: their messages are taken, but they aren't
+    /// trusted.
+    Untrusted,
+    /// Spared the stamp cost, and given tickets.
+    Trusted,
+    /// Their messages are dropped, and their identity is blocked in
+    /// Reticulum.
+    Blocked,
+}
+
+impl Trust {
+    pub fn key(self) -> &'static str {
+        match self {
+            Trust::Unknown => "unknown",
+            Trust::Untrusted => "untrusted",
+            Trust::Trusted => "trusted",
+            Trust::Blocked => "blocked",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [Trust::Unknown, Trust::Untrusted, Trust::Trusted, Trust::Blocked].into_iter().find(|t| t.key() == text)
+    }
+}
+
+/// What you keep about someone you message: your own name for them, notes,
+/// and how far you trust them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Contact {
@@ -284,6 +316,12 @@ pub struct Contact {
     pub alias: Option<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub notes: String,
+    #[serde(skip_serializing_if = "is_unknown")]
+    pub trust: Trust,
+}
+
+fn is_unknown(trust: &Trust) -> bool {
+    *trust == Trust::Unknown
 }
 
 impl Contact {

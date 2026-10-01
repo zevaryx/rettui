@@ -52,10 +52,20 @@ pub use browser::{Browser, BrowserFocus, BrowserPane, Location, resolve_url};
 /// network.
 #[cfg(test)]
 pub(crate) fn test_app(dir: &std::path::Path, settings: Settings, store: Store) -> App {
+    test_app_with_net(dir, settings, store).0
+}
+
+/// [`test_app`], with what it tells the network.
+#[cfg(test)]
+pub(crate) fn test_app_with_net(
+    dir: &std::path::Path,
+    settings: Settings,
+    store: Store,
+) -> (App, tokio::sync::mpsc::UnboundedReceiver<NetCommand>) {
     let paths = Paths::new(Some(dir.to_path_buf())).unwrap();
     settings.save(&paths.settings).unwrap();
-    let (net, _) = tokio::sync::mpsc::unbounded_channel();
-    App::new(settings, paths, store, net, None, [0; 16])
+    let (net, commands) = tokio::sync::mpsc::unbounded_channel();
+    (App::new(settings, paths, store, net, None, [0; 16]), commands)
 }
 pub use network::{NetFilter, NetSearch, match_mask};
 
@@ -116,6 +126,7 @@ pub enum PromptKind {
     ContactNotes(String),
     ConfirmDeleteMessage { key: String, id: String },
     ConfirmDeleteConversation(String),
+    ConfirmBlock(String),
     /// Add an RRC hub by address or `rrc://` link.
     AddHub,
     /// Opening a new hub from a page link reveals our identity: confirm.
@@ -345,6 +356,9 @@ pub struct App {
     pub reacting: Option<String>,
     /// The contact card shown over the Messages tab (an address).
     pub contact_card: Option<String>,
+    /// The contacts last told to the network actor (trusted, and spared the
+    /// stamp), so it's told only of changes.
+    policy_sent: Option<(Vec<Hash>, Vec<Hash>)>,
     /// A message (its index) to bring into view at the next draw.
     pub scroll_to: Option<usize>,
     /// The emoji picker, over the input being written in.
@@ -460,6 +474,7 @@ impl App {
             picked: None,
             reacting: None,
             contact_card: None,
+            policy_sent: None,
             scroll_to: None,
             emoji: None,
             shortcode: emoji::Shortcode::default(),
@@ -699,6 +714,9 @@ impl App {
                 self.net_state = NetState::Online;
                 self.lxmf_hash = Some(lxmf_hash);
                 self.log(format!("Reticulum ready; LXMF address {}", hex::encode(lxmf_hash)));
+                // A new network actor knows no contacts yet.
+                self.update_policy(true);
+                self.reapply_blocks();
                 self.start_channels();
                 // Hubs that were connected before a restart, auto or not.
                 for hash in std::mem::take(&mut self.rejoin_hubs) {
@@ -839,6 +857,18 @@ impl App {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
                     match self.delete_message(&key, &id) {
                         Ok(()) => self.confirm("Deleted the message"),
+                        Err(e) => self.warn(e),
+                    }
+                }
+            }
+            PromptKind::ConfirmBlock(key) => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    let name = self.store.display_name(&key);
+                    match self.block_contact(&key) {
+                        Ok(()) => {
+                            self.contact_card = None;
+                            self.notify(format!("Blocked {name}"));
+                        }
                         Err(e) => self.warn(e),
                     }
                 }

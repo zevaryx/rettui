@@ -230,6 +230,10 @@ a { color: var(--accent); }
 .attachment.voice audio { height: 32px; max-width: 100%; }
 .message .location { margin-top: 2px; }
 .message .note { font-style: italic; font-size: 12.5px; }
+.stranger { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px; margin-bottom: 10px; border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: 6px; font-size: 13px; }
+.unknown-mark { color: var(--yellow); font-weight: 700; }
+.blocked-mark { color: var(--red); }
+.dialog .trust { align-items: center; gap: 6px; font-size: 13px; }
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .reaction { border-radius: 12px; padding: 0 8px; font-size: 12.5px; background: var(--raised); cursor: default; }
 .reaction.failed { border-color: var(--red); cursor: pointer; }

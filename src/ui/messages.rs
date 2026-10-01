@@ -115,6 +115,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 if conversation.muted {
                     spans.push(Span::styled(" muted", Style::default().fg(DIM)));
                 }
+                if !app.is_known(key) {
+                    spans.push(Span::styled(" ?", Style::default().fg(Color::Yellow)));
+                }
                 let preview = conversation.messages.last().map(Message::opening).unwrap_or_default();
                 ListItem::new(vec![
                     Line::from(spans),
@@ -141,7 +144,12 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let name = app.store.display_name(&key);
     let title = format!("{name}  {key}");
     let mut history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
-    if app.store.conversations.get(&key).is_some_and(|c| c.muted) {
+    if !app.is_known(&key) {
+        history_block = history_block.title_bottom(Line::styled(
+            " not one of your contacts · c to trust or block them ",
+            Style::default().fg(Color::Yellow),
+        ));
+    } else if app.store.conversations.get(&key).is_some_and(|c| c.muted) {
         history_block = history_block.title_bottom(Line::styled(" notifications off · N turns them on ", Style::default().fg(DIM)));
     }
     let history_inner = history_block.inner(history_area);

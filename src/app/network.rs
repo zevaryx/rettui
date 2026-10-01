@@ -6,7 +6,7 @@ use ratatui::widgets::ListState;
 
 use super::App;
 use crate::net::{PeerKind, parse_hash};
-use crate::store::Peer;
+use crate::store::{Peer, Trust};
 use crate::term::input::TextInput;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,7 +15,12 @@ pub enum NetFilter {
     Peers,
     Nodes,
     Propagation,
+    /// Contacts you've blocked, heard or not.
+    Blocked,
 }
+
+/// A blocked contact not heard announcing (blocking stops their announces).
+pub static UNHEARD: Peer = Peer { kind: PeerKind::Lxmf, name: None, hops: 0, last_seen: 0 };
 
 /// The Network tab's search box: finds peers and nodes by name or address.
 #[derive(Default)]
@@ -96,6 +101,13 @@ pub fn matches(terms: &[Vec<char>], hash: &str, peer: &Peer) -> bool {
 impl App {
     pub fn network_rows(&self) -> Vec<(&String, &Peer)> {
         let terms = self.net_search.terms();
+        if self.net_filter == NetFilter::Blocked {
+            let blocked = self.store.contacts.iter().filter(|(_, c)| c.trust == Trust::Blocked);
+            let mut rows: Vec<_> =
+                blocked.map(|(hash, _)| (hash, self.store.peers.get(hash).unwrap_or(&UNHEARD))).filter(|(hash, p)| matches(&terms, hash, p)).collect();
+            rows.sort_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
+            return rows;
+        }
         let mut rows: Vec<_> = self
             .store
             .peers
@@ -105,6 +117,7 @@ impl App {
                 NetFilter::Peers => p.kind == PeerKind::Lxmf,
                 NetFilter::Nodes => p.kind == PeerKind::Nomad,
                 NetFilter::Propagation => p.kind == PeerKind::Propagation,
+                NetFilter::Blocked => false,
             })
             .filter(|(hash, p)| matches(&terms, hash, p))
             .collect();
@@ -191,7 +204,8 @@ impl App {
                     NetFilter::All => NetFilter::Peers,
                     NetFilter::Peers => NetFilter::Nodes,
                     NetFilter::Nodes => NetFilter::Propagation,
-                    NetFilter::Propagation => NetFilter::All,
+                    NetFilter::Propagation => NetFilter::Blocked,
+                    NetFilter::Blocked => NetFilter::All,
                 };
                 self.peers.select(None);
             }
@@ -215,6 +229,19 @@ impl App {
             KeyCode::Char('y') => {
                 if let Some((key, _)) = selected {
                     self.copy(&key, "address");
+                }
+            }
+            // Block an LXMF peer, or unblock one.
+            KeyCode::Char('b') => {
+                if let Some((key, PeerKind::Lxmf)) = selected {
+                    if self.store.contact(&key).trust == Trust::Blocked {
+                        match self.unblock_contact(&key) {
+                            Ok(()) => self.notify(format!("Unblocked {}", self.store.display_name(&key))),
+                            Err(e) => self.warn(e),
+                        }
+                    } else {
+                        self.ask_block(key);
+                    }
                 }
             }
             _ => {}

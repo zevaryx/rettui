@@ -52,6 +52,14 @@ pub struct Settings {
     pub notify_messages: bool,
     /// Notifications from RRC (each hub and room has its own level).
     pub notify_rrc: bool,
+    /// Drop messages from senders who aren't contacts (not trusted, never
+    /// written to).
+    pub ignore_unknown_senders: bool,
+    /// Proof-of-work stamp cost asked of senders who aren't contacts
+    /// (announced); 0 asks none.
+    pub stamp_cost: u64,
+    /// Largest message taken, in kilobytes; 0 takes any size.
+    pub max_message_kb: u64,
 }
 
 impl Default for Settings {
@@ -76,6 +84,10 @@ impl Default for Settings {
             wrap_lines: false,
             notify_messages: true,
             notify_rrc: true,
+            ignore_unknown_senders: false,
+            stamp_cost: 0,
+            // LXMF's own default delivery limit (NomadNet's is 500).
+            max_message_kb: 1000,
         }
     }
 }
@@ -88,6 +100,8 @@ pub struct Paths {
     pub log: PathBuf,
     pub downloads: PathBuf,
     pub known_identities: PathBuf,
+    /// Stamp tickets given to contacts and received from them.
+    pub tickets: PathBuf,
     pub cache: PathBuf,
     pub rrc_history: PathBuf,
     /// Messages older than the newest each conversation keeps.
@@ -120,6 +134,7 @@ impl Paths {
             log: base.join("rettui.log"),
             downloads: base.join("downloads"),
             known_identities: base.join("known_identities.json"),
+            tickets: base.join("tickets.json"),
             cache: base.join("cache"),
             rrc_history: base.join("rrc"),
             archive: base.join("archive"),
@@ -239,6 +254,27 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "ignore_unknown_senders",
+        label: "Ignore unknown senders",
+        help: "Drop messages from anyone who isn't a contact (trusted, or someone you've written to)",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "stamp_cost",
+        label: "Stamp cost",
+        help: "Proof of work asked of senders who aren't contacts, announced with your address (8 to 16 is usual; trusted contacts get tickets instead). Messages without it are dropped. 0 asks none",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "max_message_kb",
+        label: "Largest message (KB)",
+        help: "Largest message taken; bigger ones are refused (NomadNet takes 500). 0 takes any size",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
         key: "messages_kept",
         label: "Messages kept",
         help: "Newest messages each conversation keeps and shows; older ones move to the archive (archive/ in the data directory). 0 keeps all",
@@ -343,6 +379,9 @@ const MAX_DISPLAY_NAME: usize = 128;
 /// Upper bounds for numbers (a year), so durations cannot overflow.
 const MAX_MINUTES: u64 = 525_600;
 const MAX_HOURS: u64 = 8_760;
+/// Highest stamp cost (LXMF's), and largest message limit (a gigabyte).
+const MAX_STAMP_COST: u64 = 254;
+const MAX_MESSAGE_KB: u64 = 1_000_000;
 /// Most messages a conversation may be set to keep.
 const MAX_MESSAGES_KEPT: u64 = 1_000_000;
 /// Largest storage limit, in megabytes (a petabyte, so bytes can't overflow).
@@ -409,6 +448,9 @@ impl Settings {
             "show_joins" => self.show_joins.to_string(),
             "notify_messages" => self.notify_messages.to_string(),
             "notify_rrc" => self.notify_rrc.to_string(),
+            "ignore_unknown_senders" => self.ignore_unknown_senders.to_string(),
+            "stamp_cost" => self.stamp_cost.to_string(),
+            "max_message_kb" => self.max_message_kb.to_string(),
             _ => String::new(),
         }
     }
@@ -435,6 +477,9 @@ impl Settings {
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,
+            "ignore_unknown_senders" => self.ignore_unknown_senders = toggle(value).map_err(fail)?,
+            "stamp_cost" => self.stamp_cost = number(value, MAX_STAMP_COST).map_err(fail)?,
+            "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
             "node_announce_interval_mins" => {
                 self.node_announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?;
             }

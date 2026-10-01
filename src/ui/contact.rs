@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{ACCENT, DIM, PICKED, ago, block, wrap};
 use crate::app::App;
-use crate::app::contacts::CardAction;
+use crate::app::contacts::{CardAction, trust_label};
 
 /// The card's widest, in columns.
 const WIDTH: u16 = 64;
@@ -64,6 +64,7 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
         Some(peer) => lines.push(field("Heard", format!("{} ago, {} hop{}", ago(peer.last_seen), peer.hops, if peer.hops == 1 { "" } else { "s" }))),
         None => lines.push(field("Heard", "not yet (no announce)")),
     }
+    lines.push(field("Trust", trust_label(contact.trust, app.is_known(&key))));
     if let Some(conversation) = app.store.conversations.get(&key) {
         let mut count = format!("{}", conversation.messages.len());
         if conversation.archived > 0 {
@@ -81,7 +82,7 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
         }
     }
     lines.push(Line::raw(""));
-    let actions = [CardAction::Rename, CardAction::Notes, CardAction::Copy, CardAction::DeleteConversation, CardAction::Close];
+    let actions = app.card_actions(&key);
     let (rows, buttons) = button_rows(&actions, inner_width);
     let first_button_row = lines.len();
     lines.extend(rows);
@@ -139,6 +140,7 @@ mod tests {
         let screen: String = (0..30).map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect();
         assert!(screen.contains("Ally") && screen.contains("Announces Alice") && screen.contains("3 hops"), "{screen}");
         assert!(screen.contains("met at the swapfest") && screen.contains("Rename (r)"), "{screen}");
+        assert!(screen.contains("unknown sender") && screen.contains("Leave as is (l)") && screen.contains("Block (b)"), "{screen}");
         // Its Close button closes it.
         let (rect, _) = *app.regions.card_buttons.iter().find(|(_, a)| *a == CardAction::Close).unwrap();
         app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });

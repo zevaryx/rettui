@@ -238,6 +238,8 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             Tab::Messages if app.contact_card.is_some() => &[
                 ("r", "rename"),
                 ("e", "notes"),
+                ("t", "trust"),
+                ("b", "block"),
                 ("y", "copy address"),
                 ("X", "delete conversation"),
                 ("Esc", "close"),
@@ -288,6 +290,7 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("Enter", "open"),
                 ("y", "copy address"),
                 ("p", "use as propagation node"),
+                ("b", "block/unblock"),
                 ("f", "filter"),
                 ("S", "sync"),
                 ("A", "announce"),
