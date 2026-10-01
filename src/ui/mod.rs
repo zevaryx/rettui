@@ -7,6 +7,7 @@
 mod browser;
 mod channels;
 mod chrome;
+mod contact;
 mod editor;
 mod emoji;
 mod messages;
@@ -117,6 +118,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Tab::Reticulum => draw_reticulum(frame, app, body),
     }
     draw_footer(frame, app, footer);
+    if app.contact_card.is_some() && app.tab == Tab::Messages {
+        contact::draw_contact_card(frame, app);
+    }
     if app.paper_view.is_some() {
         messages::draw_paper(frame, app);
     }

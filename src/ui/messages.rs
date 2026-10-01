@@ -12,7 +12,7 @@ use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use super::{ACCENT, DIM, PICKED, SELECTED_BG, block, human_bytes, time_label, wrap};
-use crate::app::{App, HistoryHit, MessageAction};
+use crate::app::{App, HistoryHit};
 use crate::lxmf::DeliveryMode;
 use crate::store::{Message, MessageState, Reaction};
 use crate::term::images::{Placement, draw_placements};
@@ -209,7 +209,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         if picked == Some(index) {
             let mut spans = Vec::new();
             let mut x = 0;
-            for action in [MessageAction::Reply, MessageAction::React, MessageAction::Copy] {
+            for action in App::message_actions(&message) {
                 let (label, key) = action.label();
                 let text = format!(" {label} ({key}) ");
                 let width = text.width();

@@ -41,6 +41,41 @@ MeshChat, NomadNet and other LXMF clients).
   you turn that off), every `announce_interval_mins` (360 by default, 0 for
   never), and whenever you press `A`.
 
+## Message actions
+
+- **Retry:** a message of yours that failed can be sent again, as the same
+  message (the same hash), so a copy that got through anyway isn't shown
+  twice. It goes by the delivery mode chosen now. Its files must still be
+  where they were.
+- **Delete a message:** it goes from rettui, with any files rettui saved
+  for it (received files, and ones uploaded in the web UI). A file you sent
+  from elsewhere on your computer stays where it is. It isn't deleted from
+  the other side.
+- **Delete a conversation:** all its messages go, including those moved to
+  the archive, and the files rettui saved for them. Your name for the
+  contact and your notes stay (they're about the person, not the
+  conversation).
+
+In the TUI, pick a message (`m`, or click its name line) and press `t` to
+retry or `x` to delete; `X` deletes the open conversation. In the web UI,
+**↻ Retry** shows on a message that failed, and the **⋯** beside a message's
+buttons has *Delete*. *Delete conversation* is in the **Contact** dialog.
+Both UIs ask before deleting.
+
+## Contacts
+
+Each person you message can have a name of your own for them, shown instead
+of the one they announce (in the conversation list, notifications and
+everywhere else), and notes for you alone.
+
+- **In the TUI:** `c` opens the open conversation's contact card: who they
+  are, the name they announce, their address, when they were last heard
+  and how far away, and your notes. `r` renames them (empty goes back to
+  their own name), `e` edits the notes (line breaks show as ↵ while
+  editing), `y` copies their address, `X` deletes the conversation, and
+  `Esc` closes the card. Its buttons can be clicked too.
+- **In the web UI:** the **Contact** button above the conversation.
+
 ## Reactions, locations, commands and voice messages
 
 Other LXMF clients send some messages with no text, only an LXMF field.

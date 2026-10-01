@@ -274,6 +274,29 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
+/// What you keep about someone you message: your own name for them, and
+/// notes.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Contact {
+    /// Your name for them, shown instead of the one they announce.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+}
+
+impl Contact {
+    /// Nothing kept: no need for an entry.
+    pub fn is_empty(&self) -> bool {
+        *self == Contact::default()
+    }
+}
+
+/// Longest name of your own for a contact, and longest notes, in characters.
+pub const MAX_ALIAS: usize = 128;
+pub const MAX_NOTES: usize = 10_000;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Store {
@@ -283,6 +306,9 @@ pub struct Store {
     pub peers: HashMap<String, Peer>,
     /// Keyed by the remote LXMF destination hash (hex).
     pub conversations: HashMap<String, Conversation>,
+    /// What you keep about people, by LXMF address (hex).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub contacts: BTreeMap<String, Contact>,
     pub next_local_id: u64,
     /// NomadNet nodes (hex) we identify ourselves to when browsing.
     pub identified_nodes: BTreeSet<String>,
@@ -374,6 +400,55 @@ pub fn encode_archive(messages: &[Archived]) -> Result<Vec<u8>> {
         lines.push(b'\n');
     }
     gzip(&lines)
+}
+
+/// Take a conversation's messages out of the archive (it was deleted):
+/// months that held some are written again without them, or deleted if
+/// that leaves nothing. Their files in `owned` folders (rettui's downloads
+/// and uploads) are deleted too. Returns what it did, for the log.
+pub fn remove_from_archive(dir: &Path, conversation: &str, owned: &[PathBuf]) -> Result<Vec<String>> {
+    let months: Vec<PathBuf> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.file_name().is_some_and(|n| n.to_string_lossy().ends_with(ARCHIVE_EXTENSION)))
+            .collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut removed = 0;
+    for path in months {
+        let mut text = String::new();
+        flate2::read::MultiGzDecoder::new(std::fs::File::open(&path)?).read_to_string(&mut text)?;
+        let (mut kept, mut gone) = (Vec::new(), 0);
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            match serde_json::from_str::<Archived>(line) {
+                Ok(archived) if archived.conversation == conversation => {
+                    for attachment in &archived.message.attachments {
+                        remove_owned(&attachment.path, owned);
+                    }
+                    gone += 1;
+                }
+                // Lines it can't read are kept as they are.
+                _ => kept.push(line),
+            }
+        }
+        if gone == 0 {
+            continue;
+        }
+        removed += gone;
+        if kept.is_empty() {
+            std::fs::remove_file(&path)?;
+        } else {
+            write_atomic(&path, &gzip(format!("{}\n", kept.join("\n")).as_bytes())?)?;
+        }
+    }
+    Ok(if removed > 0 { vec![format!("Deleted {removed} archived message(s) of the deleted conversation")] } else { Vec::new() })
+}
+
+/// Delete `path` if it's in one of the `owned` folders (files rettui saved:
+/// downloads and uploads), not a file of yours sent from elsewhere.
+pub fn remove_owned(path: &Path, owned: &[PathBuf]) -> bool {
+    owned.iter().any(|dir| path.starts_with(dir)) && std::fs::remove_file(path).is_ok()
 }
 
 /// Keep the store and its archive within `limit` bytes together, by
@@ -572,6 +647,7 @@ impl Store {
         Self {
             peers: HashMap::new(),
             conversations: self.conversations.clone(),
+            contacts: self.contacts.clone(),
             next_local_id: self.next_local_id,
             identified_nodes: self.identified_nodes.clone(),
             saved: self.saved.clone(),
@@ -619,11 +695,34 @@ impl Store {
         write_atomic(path, &self.encode()?)
     }
 
+    /// Who someone is: your name for them, else the one they announce,
+    /// else the start of their address.
     pub fn display_name(&self, hash: &str) -> String {
-        match self.peers.get(hash).and_then(|p| p.name.as_deref()) {
+        match self.contacts.get(hash).and_then(|c| c.alias.as_deref()).or_else(|| self.announced_name(hash)) {
             Some(name) => name.to_string(),
             // By characters: `hash` may come from a request, not only as hex.
             None => format!("<{}>", hash.chars().take(12).collect::<String>()),
+        }
+    }
+
+    /// The name someone announces, if they've been heard.
+    pub fn announced_name(&self, hash: &str) -> Option<&str> {
+        self.peers.get(hash).and_then(|p| p.name.as_deref())
+    }
+
+    /// What you keep about someone (nothing, if there's no entry).
+    pub fn contact(&self, hash: &str) -> Contact {
+        self.contacts.get(hash).cloned().unwrap_or_default()
+    }
+
+    /// Change what you keep about someone; an empty entry is dropped.
+    pub fn update_contact(&mut self, hash: &str, change: impl FnOnce(&mut Contact)) {
+        let mut contact = self.contact(hash);
+        change(&mut contact);
+        if contact.is_empty() {
+            self.contacts.remove(hash);
+        } else {
+            self.contacts.insert(hash.to_string(), contact);
         }
     }
 
@@ -863,6 +962,52 @@ mod tests {
         assert_eq!(ids, ["1", "2", "3"]);
         assert!(archived.iter().all(|a| a.conversation == "ab".repeat(16)));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_deleted_conversation_leaves_the_archive() {
+        let dir = temp_dir("forget");
+        let (archive, downloads) = (dir.join("archive"), dir.join("downloads"));
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::create_dir_all(&downloads).unwrap();
+        let (theirs, mine) = (downloads.join("photo.png"), dir.join("elsewhere.png"));
+        std::fs::write(&theirs, b"x").unwrap();
+        std::fs::write(&mine, b"x").unwrap();
+        let file = |path: &Path| StoredAttachment { name: "f".into(), path: path.to_path_buf(), size: 1, image: true, voice: None };
+        let message = |conversation: &str, id: &str, attachments| Archived {
+            conversation: conversation.into(),
+            message: Message { id: id.into(), attachments, ..Message::default() },
+        };
+        let both = archive.join("2026-01.jsonl.gz");
+        let only = archive.join("2026-02.jsonl.gz");
+        let gone = "aa".repeat(16);
+        let stays = "bb".repeat(16);
+        std::fs::write(&both, encode_archive(&[message(&gone, "1", vec![file(&theirs)]), message(&stays, "2", vec![])]).unwrap()).unwrap();
+        std::fs::write(&only, encode_archive(&[message(&gone, "3", vec![file(&mine)])]).unwrap()).unwrap();
+        let notes = remove_from_archive(&archive, &gone, std::slice::from_ref(&downloads)).unwrap();
+        assert_eq!(notes, ["Deleted 2 archived message(s) of the deleted conversation"]);
+        let left: Vec<Archived> = unzip(&both).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(left.iter().map(|a| a.message.id.as_str()).collect::<Vec<_>>(), ["2"]);
+        assert!(!only.exists(), "a month with nothing left goes");
+        assert!(!theirs.exists(), "a file rettui saved goes");
+        assert!(mine.exists(), "a file of yours stays");
+        assert!(remove_from_archive(&dir.join("none"), &gone, &[]).unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn contacts_rename_people_and_go_when_empty() {
+        let mut store = sample();
+        let alice = "ab".repeat(16);
+        store.update_contact(&alice, |c| c.alias = Some("Ally".into()));
+        assert_eq!(store.display_name(&alice), "Ally");
+        assert_eq!(store.announced_name(&alice), Some("Alice"));
+        store.update_contact(&alice, |c| c.alias = None);
+        assert_eq!(store.display_name(&alice), "Alice");
+        assert!(store.contacts.is_empty(), "nothing kept, no entry");
+        store.update_contact(&alice, |c| c.notes = "met at the swapfest".into());
+        let saved: Store = serde_json::from_slice(&serde_json::to_vec(&store.snapshot()).unwrap()).unwrap();
+        assert_eq!(saved.contact(&alice).notes, "met at the swapfest");
     }
 
     #[test]

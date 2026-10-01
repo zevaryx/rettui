@@ -87,6 +87,10 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/notify", post(mute_conversation))
         .route("/conversations/{key}/send", post(send_message))
         .route("/conversations/{key}/react", post(react))
+        .route("/conversations/{key}/retry", post(retry))
+        .route("/conversations/{key}/messages/delete", post(delete_message))
+        .route("/conversations/{key}/delete", post(delete_conversation))
+        .route("/conversations/{key}/contact", post(save_contact))
         .route("/conversations/{key}/attachments/{id}/{index}", get(attachment))
         .route("/paper/read", post(read_paper))
         .route("/paper/scan", post(scan_paper))
@@ -685,6 +689,64 @@ struct ReactBody {
 async fn react(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<ReactBody>) -> ApiResult {
     let key = address(&key)?;
     state.write(move |o| o.app.send_reaction(&key, &body.id, &body.emoji)).await?.map_err(bad)?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct RetryBody {
+    id: String,
+    #[serde(default)]
+    mode: String,
+}
+
+/// Send a message that failed again (the same message), by `mode`.
+async fn retry(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<RetryBody>) -> ApiResult {
+    let key = address(&key)?;
+    let mode = DeliveryMode::parse(&body.mode).ok_or_else(|| bad(format!("unknown delivery mode {}", body.mode)))?;
+    state.write(move |o| o.app.retry_message(&key, &body.id, mode)).await?.map_err(bad)?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct MessageId {
+    id: String,
+}
+
+/// Delete a message (and the files rettui saved for it).
+async fn delete_message(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<MessageId>) -> ApiResult {
+    let key = address(&key)?;
+    state.write(move |o| o.app.delete_message(&key, &body.id)).await?.map_err(bad)?;
+    ok()
+}
+
+/// Delete a conversation, its archived messages and the files rettui saved
+/// for it.
+async fn delete_conversation(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
+    let key = address(&key)?;
+    if !state.write(move |o| o.app.delete_conversation(&key)).await? {
+        return Err(not_found("conversation"));
+    }
+    ok()
+}
+
+#[derive(Deserialize)]
+struct ContactBody {
+    /// Your name for them; empty uses the one they announce.
+    #[serde(default)]
+    alias: String,
+    #[serde(default)]
+    notes: String,
+}
+
+async fn save_contact(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<ContactBody>) -> ApiResult {
+    let key = address(&key)?;
+    state
+        .write(move |o| {
+            o.app.set_contact_name(&key, &body.alias)?;
+            o.app.set_contact_notes(&key, &body.notes)
+        })
+        .await?
+        .map_err(bad)?;
     ok()
 }
 

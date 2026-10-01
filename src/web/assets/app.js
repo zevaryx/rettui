@@ -2009,6 +2009,7 @@ app.views.messages = {
       el('span', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }),
       bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
+      el('button', { text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
       el('button', { text: 'Copy address', onclick: () => copy(key, 'LXMF address') }));
     // The newest messages only, unless asked for all: those not loaded, and
     // any loaded but not shown.
@@ -2064,7 +2065,10 @@ app.views.messages = {
         state,
         m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
           onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null,
-        reactButton),
+        reactButton,
+        m.state.kind === 'failed' ? el('button', { class: 'inline', text: '↻ Retry', title: 'Send it again',
+          onclick: () => this.retry(conversation.key, m.id) }) : null,
+        el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) })),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
       m.content ? el('div', { class: 'content', text: m.content }) : null,
@@ -2111,6 +2115,54 @@ app.views.messages = {
 
   async react(key, id, e) {
     if (await attempt(() => api.post(`/conversations/${key}/react`, { id, emoji: e }))) this.update();
+  },
+
+  async retry(key, id) {
+    if (await attempt(() => api.post(`/conversations/${key}/retry`, { id, mode: this.mode }), 'Sending it again')) this.update();
+  },
+
+  // What else can be done with a message.
+  messageMenu(m, conversation, anchor) {
+    const items = [{ text: 'Copy text', action: () => copy(m.content || this.opening(m), 'the message') }];
+    if (m.state.kind === 'failed') items.push({ text: 'Send again', action: () => this.retry(conversation.key, m.id) });
+    items.push({ text: m.attachments.length ? 'Delete (and its files)' : 'Delete', danger: true, action: async () => {
+      if (!confirm(m.attachments.length ? 'Delete this message and the files it brought?' : 'Delete this message?')) return;
+      if (await attempt(() => api.post(`/conversations/${conversation.key}/messages/delete`, { id: m.id }), 'Deleted the message')) this.update();
+    } });
+    openSheet(null, items, anchor);
+  },
+
+  // Your name for them, notes about them, and deleting the conversation.
+  contactDialog(key, conversation) {
+    const contact = conversation.contact || {};
+    const alias = el('input', { type: 'text', value: contact.alias || '', maxlength: 128,
+      placeholder: contact.announced ? `They announce ${contact.announced}` : 'Nothing heard from them yet' });
+    const notes = el('textarea', { rows: 5, maxlength: 10000, placeholder: 'Notes about them, for you alone' });
+    notes.value = contact.notes || '';
+    dialog('Contact', (close) => [
+      el('p', { class: 'dim mono', style: 'overflow-wrap:anywhere', text: key }),
+      el('label', { class: 'field' }, el('span', { text: 'Your name for them' }), alias),
+      el('label', { class: 'field' }, el('span', { text: 'Notes' }), notes),
+      el('div', { class: 'row actions' },
+        el('button', { class: 'danger', text: 'Delete conversation', onclick: async () => {
+          if (!confirm(`Delete the conversation with ${conversation.name}, its archived messages and the files it brought?`)) return;
+          if (await attempt(() => api.post(`/conversations/${key}/delete`), 'Deleted the conversation')) {
+            close();
+            if (this.selected === key) this.selected = null;
+            this.cache.delete(key);
+            setPane(this, 'list');
+            this.update();
+          }
+        } }),
+        el('span', { class: 'grow' }),
+        el('button', { class: 'primary', text: 'Save', onclick: async () => {
+          if (await attempt(() => api.post(`/conversations/${key}/contact`, { alias: alias.value, notes: notes.value }), 'Saved')) {
+            close();
+            this.update();
+          }
+        } })),
+    ]);
+    setTimeout(() => alias.focus(), 50);
   },
 
   // The start of what a message says, for a reply to it (as the server's

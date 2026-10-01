@@ -60,6 +60,10 @@ impl App {
             }
             return;
         }
+        if self.contact_card.is_some() && self.tab == Tab::Messages {
+            self.contact_card_key(key);
+            return;
+        }
         if self.tab == Tab::Channels {
             self.channels.sync_draft();
         }
@@ -178,6 +182,12 @@ impl App {
             return;
         }
         let at = Position::new(mouse.column, mouse.row);
+        if self.contact_card.is_some() && self.tab == Tab::Messages {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                self.click_contact_card(at);
+            }
+            return;
+        }
         // The emoji picker and the `:name` list take clicks and the wheel
         // over them; a click elsewhere closes the picker.
         let over_emoji = self.regions.emoji_popup.contains(at)
