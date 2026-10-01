@@ -21,7 +21,7 @@ mod routes;
 mod views;
 
 use std::collections::{HashMap, VecDeque};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -308,6 +308,22 @@ mod notice_tests {
 }
 
 #[cfg(test)]
+mod address_tests {
+    use super::*;
+
+    #[test]
+    fn the_address_other_devices_reach() {
+        let lan: IpAddr = "192.168.1.5".parse().unwrap();
+        assert_eq!(reachable_ip(lan), Some(lan));
+        // Listening on all of them: the one traffic goes out from, if any
+        // (never loopback, which another device can't reach).
+        if let Some(ip) = reachable_ip("0.0.0.0".parse().unwrap()) {
+            assert!(!ip.is_loopback() && !ip.is_unspecified(), "{ip}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod scope_tests {
     use super::*;
 
@@ -415,6 +431,29 @@ fn load_token(paths: &Paths) -> Result<String> {
     Ok(token)
 }
 
+/// The address other devices on the network reach this computer at: the
+/// one the web UI listens on, or (listening on all of them) the one its
+/// traffic goes out from. None inside a container, whose own address
+/// other devices can't reach (they use the host's), or if there's none.
+fn reachable_ip(listening: IpAddr) -> Option<IpAddr> {
+    if !listening.is_unspecified() {
+        return Some(listening);
+    }
+    if std::path::Path::new("/.dockerenv").exists() || std::path::Path::new("/run/.containerenv").exists() {
+        return None;
+    }
+    // Connecting a UDP socket sends nothing: it only picks the route (to
+    // documentation addresses, which no one uses).
+    let outgoing = |bind: &str, to: &str| {
+        let socket = std::net::UdpSocket::bind(bind).ok()?;
+        socket.connect(to).ok()?;
+        Some(socket.local_addr().ok()?.ip())
+    };
+    outgoing("0.0.0.0:0", "192.0.2.1:9")
+        .or_else(|| outgoing("[::]:0", "[2001:db8::1]:9"))
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+}
+
 pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: &str) -> Result<()> {
     let address: SocketAddr = address
         .parse()
@@ -472,6 +511,13 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     println!("Scripts can send the token in an \"Authorization: Bearer\" header instead.");
     if !address.ip().is_loopback() {
         println!("Listening on {address}: anyone with the link can use this client.");
+        // For a phone on the same network: the link at this computer's
+        // address, and its QR code to scan rather than type the token.
+        if let Some(ip) = reachable_ip(address.ip()) {
+            let link = format!("http://{}/?token={token}", SocketAddr::new(ip, address.port()));
+            println!("From another device on this network: {link}");
+            crate::cli::print_qr(&link);
+        }
     }
 
     let mut version = 0u64;

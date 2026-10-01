@@ -31,6 +31,12 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 - **Address:** it listens on 127.0.0.1 by default. Pass an address such as
   `--web 0.0.0.0:8740` to reach it from other devices, and prefer a VPN or SSH
   tunnel over exposing it. It uses plain HTTP.
+- **From a phone:** listening beyond 127.0.0.1, rettui also prints the
+  login link at this computer's network address, and its QR code (in a
+  terminal wide enough), so a phone on the same network can scan it
+  rather than type the token. Like the link, the QR code logs in whoever
+  scans it. In Docker it's left out: the container's address isn't the
+  one other devices reach (use the host's).
 - **Browsing:** NomadNet pages are rendered to HTML by rettui, with links and
   forms handled by the web UI and no scripts allowed. `/file/` links download
   through the browser.
