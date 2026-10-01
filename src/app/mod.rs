@@ -430,6 +430,9 @@ pub struct App {
     next_request: u64,
     /// A Reticulum restart the event loop should carry out.
     restart_pending: bool,
+    /// An entry point the guide added, and when: said when it connects
+    /// (see [`App::watch_connection`]).
+    connect_watch: Option<(String, Instant)>,
     /// Hubs to reconnect once Reticulum is back after a restart.
     rejoin_hubs: Vec<Hash>,
     /// Notifications waiting to be shown (see [`App::take_notifications`]).
@@ -543,6 +546,7 @@ impl App {
             last_click: None,
             next_request: 1,
             restart_pending: false,
+            connect_watch: None,
             rejoin_hubs: Vec::new(),
             notifications: Vec::new(),
             reads: Vec::new(),
@@ -833,6 +837,7 @@ impl App {
                 self.traffic.update(&interfaces, Instant::now());
                 self.log_interface_changes(&interfaces);
                 self.interfaces = interfaces;
+                self.watch_connection();
             }
             NetEvent::Log(line) => self.log(line),
             NetEvent::Stopped => {}
@@ -1172,6 +1177,7 @@ impl App {
     /// Periodic work (called about twice a second).
     pub fn on_tick(&mut self) {
         self.channels_tick();
+        self.watch_connection();
         self.refresh_partials();
         for report in self.saver.reports() {
             match report {
