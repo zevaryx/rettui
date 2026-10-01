@@ -67,7 +67,8 @@ for you, as Sideband does when none is set:
   after syncing with it or sending through it fails. It's replaced only if
   it stops answering or another answers in under half its time. The Status
   tab shows which node is in use and how it was picked; picking one by hand
-  in the Network tab turns automatic picking off.
+  (`p` in the Network tab, or the propagation node setting in either UI)
+  turns automatic picking off.
 - **Warning:** anyone can run a propagation node near you, for instance on
   the same public entry point. The node picked can't read or change your
   messages (they're encrypted for their recipients and signed), but it sees
