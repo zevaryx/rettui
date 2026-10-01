@@ -25,12 +25,17 @@ the web UI's Status page, opens it again):
   operator sees your IP address, and anyone watching your connection can
   tell you use Reticulum. They stay connected alongside the entry points
   discovery finds.
-- **Also find entry points near you over time** (on by default): turns on
+- **Also find entry points near you over time:** turns on
   interface discovery, as Reticulum's manual recommends, connecting to up to
   two entry points others announce (see
   [Settings and Reticulum Config](Settings-and-Reticulum-Config)). You'll
   connect to hosts you didn't choose. Discovery hears of entry points
-  through a connection you already have, so it needs one to start.
+  through a connection you already have, so it needs one to start. Like
+  the entry points, it's ticked only for a config with nothing besides the
+  Auto interface: a config you've set up yourself is changed only as you
+  ask. When the config is Python Reticulum's (in `~/.reticulum`,
+  `~/.config/reticulum` or `/etc/reticulum`), the guide says it's shared
+  with NomadNet, Sideband and rnsd, since changes to it are theirs too.
 - **Pick a propagation node automatically** (see
   [Messaging](Messaging#picking-a-propagation-node-automatically)).
 - **Learn more:** Reticulum's manual (getting started, understanding
