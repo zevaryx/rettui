@@ -138,6 +138,8 @@ pub fn hint(line: &str) -> Option<&'static str> {
         Some("No I2P router is answering: I2P interfaces need one running (i2pd, or I2P with its SAM bridge on)")
     } else if has(&["connection refused", "actively refused"]) {
         Some("Nothing accepted the connection: the host may be down, or the port is wrong. Another entry point, or interface discovery, can stand in")
+    } else if has(&["link-local ipv6", "address family not supported", "address family not available"]) {
+        Some("The Auto interface finds others on the local network over IPv6, which this computer (or container: Docker's usually lack it) doesn't have; the other interfaces still work")
     } else if has(&["timed out", "timeout"]) {
         Some("No answer: the host may be down, or a firewall is in the way")
     } else if has(&["address already in use", "address in use", "only one usage of each socket address"]) {
@@ -280,6 +282,8 @@ mod tests {
             ("Interface: Failed to spawn interface: TCP server: I/O error: Permission denied (os error 13)", "below 1024"),
             ("Interface Testnet: Max reconnect tries reached", "restart Reticulum"),
             ("Interface Down: Network is unreachable (os error 101)", "no route"),
+            ("Interface Default Interface: No link-local IPv6 addresses found", "IPv6"),
+            ("Interface Default Interface failed: Auto: I/O error: data socket bind (42671): Address family not supported by protocol (os error 97)", "IPv6"),
         ];
         for (line, expected) in cases {
             let hint = hint(line).unwrap_or_else(|| panic!("no hint for {line}"));

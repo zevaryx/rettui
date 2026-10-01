@@ -33,7 +33,8 @@ shows your identity, your interfaces and the log.
   internet), a port already in use (another Reticulum, such as rnsd, or a
   second rettui), a radio that isn't plugged in, a serial port you may not
   open (on Linux, the `dialout` group), a device another program has open,
-  no I2P router running, and an interface that has stopped retrying.
+  no I2P router running, no IPv6 for the Auto interface (common in Docker
+  containers), and an interface that has stopped retrying.
   The command-line commands print the same lines.
 - **Traffic:** the corner of the sidebar, under the interface count, shows how
   fast data is coming in (↓) and going out (↑) over all interfaces, updated
