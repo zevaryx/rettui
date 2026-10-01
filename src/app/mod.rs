@@ -445,6 +445,8 @@ pub struct App {
     pub identity_pending: Option<Hash>,
     /// This client announced since rettui started.
     pub announced: bool,
+    /// What interface discovery does was said, since Reticulum started.
+    discovery_noted: bool,
     /// Hubs to reconnect once Reticulum is back after a restart.
     rejoin_hubs: Vec<Hash>,
     /// Notifications waiting to be shown (see [`App::take_notifications`]).
@@ -561,6 +563,7 @@ impl App {
             connect_watch: None,
             identity_pending: None,
             announced: false,
+            discovery_noted: true,
             rejoin_hubs: Vec::new(),
             notifications: Vec::new(),
             reads: Vec::new(),
@@ -781,6 +784,8 @@ impl App {
                 self.lxmf_hash = Some(lxmf_hash);
                 self.public_key = Some(public_key);
                 self.log(format!("Reticulum ready; LXMF address {}", hex::encode(lxmf_hash)));
+                // Said once its interfaces are known (see note_discovery).
+                self.discovery_noted = false;
                 // A new network actor knows no contacts yet.
                 self.update_policy(true);
                 if self.settings.auto_propagation_node {
@@ -854,6 +859,7 @@ impl App {
                 self.traffic.update(&interfaces, Instant::now());
                 self.log_interface_changes(&interfaces);
                 self.interfaces = interfaces;
+                self.note_discovery();
                 self.watch_connection();
             }
             NetEvent::Log(line) => self.log(line),
