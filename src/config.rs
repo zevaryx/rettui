@@ -63,6 +63,9 @@ pub struct Settings {
     pub stamp_cost: u64,
     /// Largest message taken, in kilobytes; 0 takes any size.
     pub max_message_kb: u64,
+    /// The getting-started guide was seen (it's shown at the first start).
+    /// Settings files from before it count as seen.
+    pub welcomed: bool,
     /// Mark the messages you write as Markdown (LXMF's renderer field), so
     /// clients that format it show them formatted.
     pub markdown_messages: bool,
@@ -105,6 +108,7 @@ impl Default for Settings {
             stamp_cost: 0,
             // LXMF's own default delivery limit (NomadNet's is 500).
             max_message_kb: 1000,
+            welcomed: true,
             markdown_messages: true,
             pn_enabled: false,
             pn_name: None,
@@ -177,7 +181,8 @@ impl Paths {
 impl Settings {
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
-            let settings = Self::default();
+            // A new install: the getting-started guide is shown.
+            let settings = Self { welcomed: false, ..Self::default() };
             settings.save(path)?;
             return Ok(settings);
         }

@@ -18,6 +18,7 @@ pub mod contacts;
 pub mod emoji;
 pub mod format;
 pub mod channels;
+pub mod guide;
 pub(crate) mod files;
 mod input;
 mod messages;
@@ -124,6 +125,8 @@ pub enum PromptKind {
     /// Your own name for a contact (by address), and notes about them.
     ContactName(String),
     ContactNotes(String),
+    /// The name chosen in the getting-started guide.
+    GuideName,
     ConfirmDeleteMessage { key: String, id: String },
     ConfirmDeleteConversation(String),
     ConfirmBlock(String),
@@ -205,6 +208,8 @@ pub enum NetState {
 #[derive(Default)]
 pub struct Regions {
     pub tabs: Vec<(Rect, Tab)>,
+    /// The getting-started guide's rows.
+    pub guide_rows: Vec<(Rect, guide::GuideRow)>,
     /// The version beside the name, top left (opens the project page).
     pub version: Rect,
     /// Browser pane sub-tabs and list.
@@ -375,6 +380,8 @@ pub struct App {
     pub reacting: Option<String>,
     /// The contact card shown over the Messages tab (an address).
     pub contact_card: Option<String>,
+    /// The getting-started guide, when it's open (terminal UI).
+    pub guide: Option<guide::Guide>,
     /// The propagation node picked automatically, and why the last try
     /// didn't pick one (said once).
     pub auto_pick: Option<crate::net::autopn::Pick>,
@@ -506,6 +513,7 @@ impl App {
             picked: None,
             reacting: None,
             contact_card: None,
+            guide: None,
             pings: HashMap::new(),
             auto_pick: None,
             auto_error: None,
@@ -548,6 +556,10 @@ impl App {
         // Stores of earlier versions (or a lower "Messages kept") may hold
         // more than each conversation keeps.
         app.archive_overflow_now();
+        // A new install: help to reach others first.
+        if !app.settings.welcomed {
+            app.open_guide();
+        }
         app
     }
 
@@ -913,6 +925,11 @@ impl App {
             PromptKind::ContactName(key) => {
                 if let Err(e) = self.set_contact_name(&key, &text) {
                     self.warn(e);
+                }
+            }
+            PromptKind::GuideName => {
+                if let Some(guide) = &mut self.guide {
+                    guide.choices.name = text.to_string();
                 }
             }
             PromptKind::ContactNotes(key) => {

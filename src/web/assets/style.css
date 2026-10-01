@@ -204,6 +204,15 @@ a { color: var(--accent); }
 .message .author.in { color: var(--magenta); }
 .message .author.out { color: var(--accent); }
 .message .content { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The getting-started guide. */
+.dialog.guide { width: min(600px, 100%); }
+.guide .guide-option { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; }
+.guide .guide-option input { margin-top: 3px; }
+.guide .guide-option > span, .guide .field { display: flex; flex-direction: column; gap: 2px; }
+.guide .help { font-size: 0.9em; }
+.guide .guide-status.ok { color: var(--green); }
+.guide .guide-status.warn { color: var(--yellow); }
+.guide .guide-links { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
 /* Markdown (and Micron) messages, as the server made them. */
 .message .content.formatted { white-space: normal; }
 .formatted p, .formatted ul, .formatted ol, .formatted blockquote, .formatted pre { margin: 0 0 0.45em; }
