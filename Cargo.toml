@@ -1,6 +1,6 @@
 [package]
 name = "rettui"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2024"
 description = "Terminal Reticulum client: LXMF messaging and NomadNet browsing"
 # rsReticulum, rsLXMF and rsNomad are AGPL-3.0-or-later.
@@ -9,7 +9,7 @@ license = "AGPL-3.0-or-later"
 [dependencies]
 # Reticulum / LXMF / NomadNet, vendored as git submodules under deps/
 # (the libraries expect rsReticulum as a sibling of rsLXMF and rsNomad).
-rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime" }
+rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime", features = ["serial", "rnode-tcp"] }
 rns-identity = { path = "deps/rsReticulum/crates/rns-identity" }
 rns-crypto = { path = "deps/rsReticulum/crates/rns-crypto" }
 # Control queries (blocking an identity).
