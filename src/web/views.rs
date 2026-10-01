@@ -93,6 +93,7 @@ pub fn guide(app: &App) -> Value {
         "has_discovery": view.has_discovery,
         "external": view.external,
         "external_note": crate::reticulum::EXTERNAL_NOTE,
+        "identity_file": app.paths.identity.display().to_string(),
         "interfaces_online": view.interfaces_online,
         "heard": view.heard,
         "defaults": {
@@ -101,6 +102,7 @@ pub fn guide(app: &App) -> Value {
         "entry": { "name": guide::ENTRY_NAME, "host": guide::ENTRY_HOST, "port": guide::ENTRY_PORT },
         "help": {
             "intro": guide::INTRO, "name": guide::NAME_HELP, "connect": guide::CONNECT_HELP,
+            "identity": guide::IDENTITY_WEB_NOTE,
             "discover": guide::DISCOVER_HELP, "auto_propagation": guide::AUTO_PROPAGATION_HELP, "apply": guide::APPLY_HELP,
         },
         "links": guide::LINKS.iter().map(|(title, url, note)| json!({ "title": title, "url": url, "note": note })).collect::<Vec<_>>(),

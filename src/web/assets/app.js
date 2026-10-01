@@ -1336,6 +1336,7 @@ async function gettingStarted() {
     el('p', { class: 'dim', text: g.help.intro }),
     el('p', { class: 'guide-status ' + status[0], text: status[1] }),
     el('label', { class: 'field' }, el('span', { text: 'Your name' }), name, el('span', { class: 'dim help', text: g.help.name })),
+    el('p', { class: 'dim help' }, g.help.identity + ' ', el('code', { text: g.identity_file })),
     g.external ? el('p', { class: 'dim', text: `${g.external_note}: add entry points in that program's Reticulum config.` }) : null,
     ...options.map((o) => o.node),
     el('div', { class: 'guide-links' }, el('span', { class: 'dim', text: 'Learn more' }),
