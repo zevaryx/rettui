@@ -27,6 +27,11 @@ narrower than 110 columns get a sidebar of icons and narrower side lists, so
 | Reticulum | `Tab` sections / options, `↑↓` select, `Enter` edit (toggles flip, choices open a list), `d` back to the default, `a` add an interface, `Space` enable or disable it, `r` rename, `x` delete, `t` edit the file as text, `R` reload the file, `Ctrl-R` restart Reticulum |
 | Reticulum as text | `Ctrl-S` save (refused while the file can't load), `Esc` close, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-V` paste |
 
+A file asked for in a prompt (an attachment, a picture of a paper
+message, an identity file, where to save a backup) can be dragged onto the
+terminal: the quotes, `\` escapes or `file://` address the terminal adds
+are understood. A path that names a file as typed is always taken as it is.
+
 The footer confirms what keys did: ✓ (green) when something is done, ! (yellow)
 when it can't be done right now, and ✗ (red) when it failed. Problems stay up
 a little longer.
