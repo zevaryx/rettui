@@ -67,7 +67,7 @@ pub const INTRO: &str = "Reticulum reaches others without servers: on your local
 pub const NAME_HELP: &str = "The name sent in your announces, so others see who you are.";
 pub const IDENTITY_HELP: &str = "Your identity is the key behind your address. Coming from Sideband, NomadNet or MeshChat? Use its identity file, and contacts reach you here at the address they know. Enter picks the file; it's used from the next start.";
 /// In the web UI, which can't change the identity.
-pub const IDENTITY_WEB_NOTE: &str = "Coming from Sideband, NomadNet or MeshChat? To keep your address, use that identity file from the terminal UI (i in its Status tab), or copy it over this file while rettui is stopped:";
+pub const IDENTITY_WEB_NOTE: &str = "Coming from Sideband, NomadNet or MeshChat? To keep your address, stop this web UI first (two rettuis on one data folder overwrite each other's files), then use that identity file from the terminal UI (i in its Status tab), or copy it over this one:";
 pub const CONNECT_HELP: &str = "A public transport node: your traffic reaches the wider network through it. Its operator sees your IP address. Ticked when nothing else in your config reaches past your local network, since discovery needs one connection to hear of others.";
 /// The config is Python Reticulum's.
 pub const SHARED_NOTE: &str = "This Reticulum config is shared with NomadNet, Sideband and rnsd too.";
