@@ -35,6 +35,17 @@ impl App {
         for (key, value) in changes {
             after.set_field(key, value)?;
         }
+        // A propagation node set by hand stops picking one automatically
+        // (as `p` in the Network tab does), unless the same change says
+        // otherwise; else the next check could replace it.
+        let sets = |key: &str| changes.iter().any(|(k, _)| *k == key);
+        let hand_picked = sets("propagation_node")
+            && !sets("auto_propagation_node")
+            && before.auto_propagation_node
+            && after.propagation_node != before.propagation_node;
+        if hand_picked {
+            after.auto_propagation_node = false;
+        }
         let changed: Vec<&'static config::Field> = config::FIELDS
             .iter()
             .filter(|f| before.field_value(f.key) != after.field_value(f.key))
@@ -69,6 +80,8 @@ impl App {
                     self.apply_auto_propagation();
                     if after.auto_propagation_node {
                         notes.push(AUTO_PROPAGATION_WARNING.to_string());
+                    } else if hand_picked {
+                        notes.push("Picking the propagation node automatically is off now".to_string());
                     }
                 }
                 "announce_interval_mins" | "sync_interval_mins" => {

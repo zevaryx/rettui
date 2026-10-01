@@ -421,6 +421,15 @@ mod tests {
             app.on_net(NetEvent::PropagationPicked(Err("none of the 2 nearest answered".into())));
         }
         assert_eq!(app.log.iter().filter(|l| l.contains("Couldn't pick a propagation node")).count(), 1);
+        // Setting one in the settings editor (either UI) turns it off.
+        let notes = app.update_settings(&[("propagation_node", &far)]).unwrap();
+        assert!(notes.iter().any(|n| n.contains("automatically is off now")), "{notes:?}");
+        let saved = app.saved_settings().unwrap();
+        assert_eq!((saved.auto_propagation_node, saved.propagation_node.as_deref()), (false, Some(far.as_str())));
+        assert!(commands(&mut net).iter().any(|c| matches!(c, NetCommand::AutoPropagation { enabled: false, .. })));
+        // Unless the same change turns it on.
+        app.update_settings(&[("propagation_node", &near), ("auto_propagation_node", "true")]).unwrap();
+        assert!(app.saved_settings().unwrap().auto_propagation_node);
         // Picking one by hand turns it off.
         app.set_propagation_node(&far);
         let saved = app.saved_settings().unwrap();
