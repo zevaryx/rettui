@@ -14,14 +14,16 @@ the web UI's Status page, opens it again):
   NomadNet, MeshChat or another rettui, to keep that address (see
   [Data and Storage](Data-and-Storage)). The web UI says where the file is
   instead.
-- **Connect through RMAP World** (`rmap.world:4242`): adds a TCP interface
-  to that community entry point to your Reticulum config. It's ticked only
-  when the config has nothing besides the Auto interface (which reaches
-  your local network only): a fresh install needs one connection for
-  discovery to hear of others. A config with interfaces of its own (an
-  entry point, a radio) isn't given RMAP World unless you tick it. Its
+- **Connect through RMAP World** (`rmap.world:4242`) and **Connect through
+  Ratspeak** (`rns.ratspeak.org:4242`, run by the makers of rsReticulum):
+  each adds a TCP interface to that public entry point to your Reticulum
+  config. They're ticked only when the config has nothing besides the Auto
+  interface (which reaches your local network only): a fresh install needs
+  a connection for discovery to hear of others, and with two, one being
+  down doesn't leave you unconnected. A config with interfaces of its own
+  (an entry point, a radio) isn't given them unless you tick them. Each
   operator sees your IP address, and anyone watching your connection can
-  tell you use Reticulum. It stays connected alongside the entry points
+  tell you use Reticulum. They stay connected alongside the entry points
   discovery finds.
 - **Also find entry points near you over time** (on by default): turns on
   interface discovery, as Reticulum's manual recommends, connecting to up to
@@ -39,8 +41,9 @@ the web UI's Status page, opens it again):
   ([Glossary](Glossary)), and this wiki.
 
 Nothing changes until you choose **Apply**; if the Reticulum config changed,
-Reticulum restarts to connect. Once RMAP World connects, rettui says so; if
-it hasn't within 45 seconds, it says why, in plain words, and keeps trying
+Reticulum restarts to connect. As each entry point connects, rettui says
+so; for one that hasn't within 45 seconds, it says why, in plain words, and
+keeps trying
 (in the log, and in the footer in the terminal UI). **Not now** (or Esc) closes it for good. If
 another program (such as rnsd) runs the shared instance, the guide leaves
 its config alone and says so. Installs from before the guide existed don't

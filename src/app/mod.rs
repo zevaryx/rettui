@@ -437,9 +437,9 @@ pub struct App {
     next_request: u64,
     /// A Reticulum restart the event loop should carry out.
     restart_pending: bool,
-    /// An entry point the guide added, and when: said when it connects
-    /// (see [`App::watch_connection`]).
-    connect_watch: Option<(String, Instant)>,
+    /// The entry points the guide added (their interfaces' names), and
+    /// when: said as each connects (see [`App::watch_connection`]).
+    connect_watch: Option<(Vec<String>, Instant)>,
     /// The LXMF address of an identity chosen to use from the next start
     /// (see [`identity`]).
     pub identity_pending: Option<Hash>,

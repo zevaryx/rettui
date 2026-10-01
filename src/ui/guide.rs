@@ -24,7 +24,7 @@ fn help(row: Option<GuideRow>) -> String {
     match row {
         Some(GuideRow::Name) => guide::NAME_HELP.to_string(),
         Some(GuideRow::Identity) => guide::IDENTITY_HELP.to_string(),
-        Some(GuideRow::Connect) => guide::CONNECT_HELP.to_string(),
+        Some(GuideRow::Connect(_)) => guide::CONNECT_HELP.to_string(),
         Some(GuideRow::Discover) => guide::DISCOVER_HELP.to_string(),
         Some(GuideRow::AutoPropagation) => guide::AUTO_PROPAGATION_HELP.to_string(),
         Some(GuideRow::Link(i)) => match LINKS[i] {
@@ -79,12 +79,14 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
             body.push(Line::styled(line, Style::default().fg(DIM)));
         }
     } else {
-        let connect = if view.has_entry_point {
-            "[x] Connect through RMAP World (in your Reticulum config already)".to_string()
-        } else {
-            format!("{} Connect through RMAP World ({}:{}), a community entry point", check(choices.connect), guide::ENTRY_HOST, guide::ENTRY_PORT)
-        };
-        row_line(&mut body, GuideRow::Connect, vec![Span::raw(connect)]);
+        for (i, entry) in guide::ENTRY_POINTS.iter().enumerate() {
+            let connect = if view.has_entry_point[i] {
+                format!("[x] Connect through {} (in your Reticulum config already)", entry.name)
+            } else {
+                format!("{} Connect through {} ({}:{})", check(choices.connect[i]), entry.name, entry.host, entry.port)
+            };
+            row_line(&mut body, GuideRow::Connect(i), vec![Span::raw(connect)]);
+        }
         let discover = if view.has_discovery {
             "[x] Find entry points near you over time (on already)".to_string()
         } else {
@@ -191,8 +193,11 @@ mod tests {
         };
         let apply_at = |app: &crate::app::App| app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Apply).unwrap().0;
         let screen = draw(&mut app);
-        assert!(screen.contains("Getting started") && screen.contains("Reticulum reaches others") && screen.contains("Not connected to anyone yet"), "{screen}");
-        assert!(screen.contains("[x] Connect through RMAP World") && screen.contains("Using a LoRa radio (RNode)") && screen.contains("Words you'll meet") && screen.contains("Using rettui"), "{screen}");
+        // At 80×24 the intro gives way, so that nothing is cut off.
+        assert!(screen.contains("Getting started") && screen.contains("Not connected to anyone yet"), "{screen}");
+        assert!(screen.contains("[x] Connect through RMAP World (rmap.world:4242)"), "{screen}");
+        assert!(screen.contains("[x] Connect through Ratspeak (rns.ratspeak.org:4242)"), "{screen}");
+        assert!(screen.contains("Using a LoRa radio (RNode)") && screen.contains("Words you'll meet") && screen.contains("Using rettui"), "{screen}");
         assert!(screen.contains("Apply") && screen.contains("Not now") && screen.contains("The name sent"), "{screen}");
         let first = apply_at(&app);
         // The longest help is shown whole, and the guide keeps its size.
@@ -222,6 +227,13 @@ mod tests {
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Later).unwrap();
         app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
         assert!(app.guide.is_none() && app.saved_settings().unwrap().welcomed);
+        // A little taller, the intro fits too.
+        app.open_guide();
+        let mut taller = Terminal::new(TestBackend::new(80, 27)).unwrap();
+        taller.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+        let buffer = taller.backend().buffer();
+        let screen: String = (0..27).map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect();
+        assert!(screen.contains("Reticulum reaches others") && screen.contains("Not now"), "{screen}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -4,15 +4,15 @@
 //! Reticulum's default config only reaches the local network, so a new user
 //! usually hears no one. The guide sets up what's needed to reach others,
 //! following Reticulum's manual ("Getting Started Fast"): interface
-//! discovery (entry points others announce, found over time), a community
-//! entry point (RMAP World) when the config has nothing else to hear them
-//! through, optionally an automatic propagation node; and links to where to
-//! learn more. Nothing changes until the user applies it.
+//! discovery (entry points others announce, found over time), public entry
+//! points (RMAP World's and Ratspeak's) when the config has nothing else to
+//! hear them through, optionally an automatic propagation node; and links
+//! to where to learn more. Nothing changes until the user applies it.
 //!
 //! Discovery hears of entry points through a connection the config already
 //! has, so a fresh install (the Auto interface only, which reaches the
-//! local network) gets RMAP World ticked; a config with interfaces of its
-//! own doesn't, unless asked.
+//! local network) gets the entry points ticked; a config with interfaces of
+//! its own doesn't, unless asked.
 
 use std::time::{Duration, Instant};
 
@@ -23,13 +23,25 @@ use super::{App, PromptKind};
 use crate::net::Hash;
 use crate::reticulum as rns;
 
-/// The community entry point offered: RMAP World's transport node.
-pub const ENTRY_NAME: &str = "RMAP World";
-pub const ENTRY_HOST: &str = "rmap.world";
-pub const ENTRY_PORT: u16 = 4242;
+/// An entry point the guide offers: a public transport node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntryPoint {
+    /// Also the interface's name in the Reticulum config.
+    pub name: &'static str,
+    pub host: &'static str,
+    pub port: u16,
+}
+
+/// The entry points offered: RMAP World's transport node, and Ratspeak's
+/// (who make rsReticulum). Two, so one being down doesn't leave a new user
+/// unconnected.
+pub const ENTRY_POINTS: &[EntryPoint] = &[
+    EntryPoint { name: "RMAP World", host: "rmap.world", port: 4242 },
+    EntryPoint { name: "Ratspeak", host: "rns.ratspeak.org", port: 4242 },
+];
 /// Discovered entry points connected to at once, when discovery is on.
 const DISCOVERED: u32 = 2;
-/// How long the entry point gets to connect before the guide says it
+/// How long the entry points get to connect before the guide says one
 /// hasn't (a connection that fails says so within seconds; one that
 /// times out, in about half a minute).
 const CONNECT_WAIT: Duration = Duration::from_secs(45);
@@ -69,9 +81,9 @@ pub struct GuideView {
     /// The LXMF address in use, and one to use from the next start.
     pub address: Option<Hash>,
     pub identity_pending: Option<Hash>,
-    /// The Reticulum config already reaches the entry point, or finds
-    /// entry points itself.
-    pub has_entry_point: bool,
+    /// Which of [`ENTRY_POINTS`] the Reticulum config already reaches;
+    /// and whether it finds entry points itself.
+    pub has_entry_point: Vec<bool>,
     pub has_discovery: bool,
     /// The config has interfaces of its own besides the Auto one (which
     /// reaches only the local network).
@@ -99,7 +111,8 @@ pub struct FirstStep {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuideChoices {
     pub name: String,
-    pub connect: bool,
+    /// For each of [`ENTRY_POINTS`]: connect through it.
+    pub connect: Vec<bool>,
     pub discover: bool,
     pub auto_propagation: bool,
 }
@@ -116,7 +129,8 @@ pub struct Guide {
 pub enum GuideRow {
     Name,
     Identity,
-    Connect,
+    /// One of [`ENTRY_POINTS`].
+    Connect(usize),
     Discover,
     AutoPropagation,
     Link(usize),
@@ -128,7 +142,8 @@ impl Guide {
     pub fn rows(view: &GuideView) -> Vec<GuideRow> {
         let mut rows = vec![GuideRow::Name, GuideRow::Identity];
         if !view.external {
-            rows.extend([GuideRow::Connect, GuideRow::Discover]);
+            rows.extend((0..ENTRY_POINTS.len()).map(GuideRow::Connect));
+            rows.push(GuideRow::Discover);
         }
         rows.push(GuideRow::AutoPropagation);
         rows.extend((0..LINKS.len()).map(GuideRow::Link));
@@ -149,7 +164,7 @@ impl App {
             name: self.settings.display_name.clone(),
             address: self.lxmf_hash,
             identity_pending: self.identity_pending,
-            has_entry_point: rns::has_interface_to(&config, ENTRY_HOST),
+            has_entry_point: ENTRY_POINTS.iter().map(|entry| rns::has_interface_to(&config, entry.host)).collect(),
             has_own_interfaces: rns::has_own_interfaces(&config),
             has_discovery: rns::discovery_on(&config),
             external: self.uses_external_shared_instance(),
@@ -159,13 +174,13 @@ impl App {
         }
     }
 
-    /// The choices to start from: what's set up already, else connecting
-    /// through the entry point.
+    /// The choices to start from: what's set up already, and discovery.
     pub fn guide_defaults(&self) -> GuideChoices {
         let view = self.guide_view();
-        // The entry point only when there's nothing else to hear of others
+        // The entry points only when there's nothing else to hear of others
         // through (discovery needs a connection to start).
-        GuideChoices { name: view.name, connect: !view.has_own_interfaces, discover: true, auto_propagation: view.auto_propagation }
+        let connect = vec![!view.has_own_interfaces; ENTRY_POINTS.len()];
+        GuideChoices { name: view.name, connect, discover: true, auto_propagation: view.auto_propagation }
     }
 
     /// Apply the choices: the name and settings now, the Reticulum config
@@ -181,28 +196,31 @@ impl App {
         }
         done.extend(self.update_settings(&changes)?);
         let view = self.guide_view();
-        if view.external && (choices.connect || choices.discover) {
+        let chosen = |i: usize| choices.connect.get(i).copied().unwrap_or(false);
+        if view.external && ((0..ENTRY_POINTS.len()).any(chosen) || choices.discover) {
             done.push(format!("{}: add entry points in that program's Reticulum config", rns::EXTERNAL_NOTE));
         } else {
-            let add = choices.connect && !view.has_entry_point;
+            let add: Vec<&EntryPoint> =
+                ENTRY_POINTS.iter().enumerate().filter(|&(i, _)| chosen(i) && !view.has_entry_point[i]).map(|(_, entry)| entry).collect();
             let discover = choices.discover && !view.has_discovery;
-            if add || discover {
-                let mut added = None;
+            if !add.is_empty() || discover {
+                let mut added = Vec::new();
                 let warnings = self.rns_edit(restricted, |text| {
-                    let text = if add {
-                        let (text, name) = rns::add_entry_point(text, ENTRY_NAME, ENTRY_HOST, ENTRY_PORT)?;
-                        added = Some(name);
-                        text
-                    } else {
-                        text.to_string()
-                    };
+                    let mut text = text.to_string();
+                    for entry in &add {
+                        let (with, name) = rns::add_entry_point(&text, entry.name, entry.host, entry.port)?;
+                        added.push((name, **entry));
+                        text = with;
+                    }
                     Ok(if discover { rns::enable_discovery(&text, DISCOVERED) } else { text })
                 })?;
                 done.extend(warnings);
-                if let Some(name) = added {
-                    done.push(format!("Added {ENTRY_NAME} ({ENTRY_HOST}:{ENTRY_PORT}) to your Reticulum config"));
-                    // Said once it connects, or if it doesn't.
-                    self.connect_watch = Some((name, Instant::now()));
+                for (_, entry) in &added {
+                    done.push(format!("Added {} ({}:{}) to your Reticulum config", entry.name, entry.host, entry.port));
+                }
+                if !added.is_empty() {
+                    // Said as each connects, or if one doesn't.
+                    self.connect_watch = Some((added.into_iter().map(|(name, _)| name).collect(), Instant::now()));
                 }
                 if discover {
                     done.push("Turned on interface discovery".into());
@@ -275,18 +293,22 @@ impl App {
         if steps.iter().all(|step| step.done) { Vec::new() } else { steps }
     }
 
-    /// After the guide added the entry point: say when it connects, or, if
-    /// it hasn't after a while, why (its latest trouble in the log, in
-    /// plain words). Called as interfaces change, and on every tick.
+    /// After the guide added entry points: say as each connects, or, for
+    /// one that hasn't after a while, why (its latest trouble in the log,
+    /// in plain words). Called as interfaces change, and on every tick.
     pub(super) fn watch_connection(&mut self) {
-        let Some((name, since)) = &self.connect_watch else { return };
-        if self.interfaces.iter().any(|i| &i.name == name && i.online) {
-            let name = name.clone();
+        let Some((names, since)) = &mut self.connect_watch else { return };
+        let since = *since;
+        let online: Vec<String> = names.iter().filter(|name| self.interfaces.iter().any(|i| &i.name == *name && i.online)).cloned().collect();
+        names.retain(|name| !online.contains(name));
+        let waiting = (since.elapsed() >= CONNECT_WAIT).then(|| std::mem::take(names));
+        if names.is_empty() {
             self.connect_watch = None;
+        }
+        for name in online {
             self.notify(format!("Connected through {name}: peers and nodes appear in the Network tab as they announce"));
-        } else if since.elapsed() >= CONNECT_WAIT {
-            let name = name.clone();
-            self.connect_watch = None;
+        }
+        for name in waiting.unwrap_or_default() {
             let about = format!("Interface {name}:");
             let why = self
                 .log
@@ -335,7 +357,11 @@ impl App {
                 self.open_prompt(PromptKind::GuideName, "Your name, as others see it", &name);
             }
             GuideRow::Identity => self.ask_identity_file(),
-            GuideRow::Connect => choices.connect = !choices.connect,
+            GuideRow::Connect(i) => {
+                if let Some(on) = choices.connect.get_mut(i) {
+                    *on = !*on;
+                }
+            }
             GuideRow::Discover => choices.discover = !choices.discover,
             GuideRow::AutoPropagation => choices.auto_propagation = !choices.auto_propagation,
             GuideRow::Link(i) => self.open_url(LINKS[i].1),
@@ -374,7 +400,7 @@ mod tests {
     use crate::store::Store;
 
     #[test]
-    fn the_guide_connects_through_the_entry_point_and_is_shown_once() {
+    fn the_guide_connects_through_the_entry_points_and_is_shown_once() {
         let dir = std::env::temp_dir().join(format!("rettui-guide-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let rns_dir = dir.join("rns");
@@ -382,40 +408,41 @@ mod tests {
         let mut app = crate::app::test_app(&dir, settings, Store::default());
         assert!(app.guide.is_some(), "shown the first time");
         let view = app.guide_view();
-        assert!(!view.has_entry_point && !view.has_discovery && !view.external);
-        // A fresh install: discovery, and the entry point to hear of others
-        // through.
-        assert_eq!(app.guide_defaults(), GuideChoices { name: "rettui user".into(), connect: true, discover: true, auto_propagation: false });
-        // Applying: the name, the entry point in the Reticulum config, and a
-        // restart to connect.
-        let choices = GuideChoices { name: "Zev".into(), connect: true, discover: true, auto_propagation: false };
+        assert!(view.has_entry_point.iter().all(|has| !has) && !view.has_discovery && !view.external);
+        // A fresh install: discovery, and both entry points to hear of
+        // others through.
+        assert_eq!(app.guide_defaults(), GuideChoices { name: "rettui user".into(), connect: vec![true, true], discover: true, auto_propagation: false });
+        // Applying: the name, the entry points in the Reticulum config, and
+        // a restart to connect.
+        let choices = GuideChoices { name: "Zev".into(), connect: vec![true, true], discover: true, auto_propagation: false };
         let done = app.apply_guide(&choices, false).unwrap();
-        assert!(done.iter().any(|d| d.contains("Added RMAP World")), "{done:?}");
+        assert!(done.iter().any(|d| d.contains("Added RMAP World (rmap.world:4242)")), "{done:?}");
+        assert!(done.iter().any(|d| d.contains("Added Ratspeak (rns.ratspeak.org:4242)")), "{done:?}");
         let config = std::fs::read_to_string(rns_dir.join("config")).unwrap();
-        assert!(config.contains("target_host = rmap.world") && !config.contains("bootstrap_only"), "{config}");
+        assert!(config.contains("target_host = rmap.world") && config.contains("target_host = rns.ratspeak.org"), "{config}");
+        assert!(!config.contains("bootstrap_only"), "{config}");
         assert!(rns::discovery_on(&config));
         assert!(app.take_rns_restart());
-        // Once Reticulum is back, it says when the entry point connects.
-        let iface = |online| crate::net::InterfaceInfo { name: ENTRY_NAME.into(), online, rx_bytes: 0, tx_bytes: 0 };
-        app.on_net(crate::net::NetEvent::Interfaces(vec![iface(false)]));
-        assert!(app.connect_watch.is_some());
-        app.on_net(crate::net::NetEvent::Interfaces(vec![iface(true)]));
-        assert!(app.connect_watch.is_none());
+        // Once Reticulum is back, it says as each connects; and, for one
+        // that doesn't, why.
+        let iface = |name: &str, online| crate::net::InterfaceInfo { name: name.into(), online, rx_bytes: 0, tx_bytes: 0 };
+        app.on_net(crate::net::NetEvent::Interfaces(vec![iface("RMAP World", false), iface("Ratspeak", false)]));
+        assert_eq!(app.connect_watch.as_ref().map(|(names, _)| names.len()), Some(2));
+        app.on_net(crate::net::NetEvent::Interfaces(vec![iface("RMAP World", true), iface("Ratspeak", false)]));
         assert!(app.notice.as_ref().unwrap().text.starts_with("Connected through RMAP World"));
-        // Or, if it doesn't, why.
-        app.interfaces = vec![iface(false)];
-        app.connect_watch = Some((ENTRY_NAME.into(), Instant::now() - CONNECT_WAIT));
-        app.on_net(crate::net::NetEvent::Log("Interface RMAP World: TCP connect failed: Connection refused (os error 111)".into()));
+        assert_eq!(app.connect_watch.as_ref().map(|(names, _)| names.clone()), Some(vec!["Ratspeak".to_string()]));
+        app.connect_watch.as_mut().unwrap().1 = Instant::now() - CONNECT_WAIT;
+        app.on_net(crate::net::NetEvent::Log("Interface Ratspeak: TCP connect failed: Connection refused (os error 111)".into()));
         app.on_tick();
         let notice = app.notice.as_ref().unwrap();
-        assert!(notice.text.starts_with("Couldn't reach RMAP World yet") && notice.text.contains("Nothing accepted"), "{}", notice.text);
+        assert!(notice.text.starts_with("Couldn't reach Ratspeak yet") && notice.text.contains("Nothing accepted"), "{}", notice.text);
         assert!(app.connect_watch.is_none());
         let saved = app.saved_settings().unwrap();
         assert_eq!((saved.display_name.as_str(), saved.welcomed), ("Zev", true));
         assert!(app.guide.is_none());
         // Again: nothing more to add, and no restart.
         let view = app.guide_view();
-        assert!(view.has_entry_point && view.has_discovery);
+        assert!(view.has_entry_point.iter().all(|&has| has) && view.has_discovery);
         let done = app.apply_guide(&choices, false).unwrap();
         assert!(!done.iter().any(|d| d.contains("Added")), "{done:?}");
         assert!(!app.take_rns_restart());
@@ -437,9 +464,9 @@ mod tests {
         let app = crate::app::test_app(&dir, settings, Store::default());
         let view = app.guide_view();
         // RMAP World is there, but off: not counted as connecting through it.
-        assert!(view.has_own_interfaces && !view.has_entry_point);
+        assert!(view.has_own_interfaces && view.has_entry_point.iter().all(|has| !has));
         let defaults = app.guide_defaults();
-        assert!(!defaults.connect && defaults.discover, "{defaults:?}");
+        assert!(defaults.connect.iter().all(|on| !on) && defaults.discover, "{defaults:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -491,14 +518,15 @@ mod tests {
         let press = |app: &mut App, code| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
         press(&mut app, KeyCode::Char('g'));
         assert!(app.guide.is_some());
-        // Down to the propagation node row, and on.
-        for _ in 0..4 {
+        // Down to the propagation node row (past both entry points), and on.
+        let rows = 2 + ENTRY_POINTS.len() + 1;
+        for _ in 0..rows {
             press(&mut app, KeyCode::Down);
         }
         press(&mut app, KeyCode::Char(' '));
         assert!(app.guide.as_ref().unwrap().choices.auto_propagation);
         // Changing the name goes through a prompt and comes back.
-        for _ in 0..4 {
+        for _ in 0..rows {
             press(&mut app, KeyCode::Up);
         }
         press(&mut app, KeyCode::Enter);
