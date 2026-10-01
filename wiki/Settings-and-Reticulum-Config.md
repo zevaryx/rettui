@@ -39,7 +39,11 @@ of the Reticulum instance it uses. Where files are kept is in
     before any of them is up, and isn't brought back if they never come up
     (on later starts, the entry points it found before drop it straight
     away). The getting-started guide doesn't mark the entry points it adds
-    that way.
+    that way. With discovery on, the log says so each time rettui's
+    Reticulum starts, and warns about any interface marked *Bootstrap
+    only* (so does the Reticulum tab). Earlier versions of rettui couldn't
+    run discovery, so a config that turned it on before now connects to
+    the entry points it finds.
   - **As text:** edit the whole file, with a live check of whether Reticulum
     can load it.
   - **Safe edits:** changes are made in place, so comments and layout stay.

@@ -92,7 +92,47 @@ pub fn check(text: &str) -> (Option<Config>, Check) {
             Err(e) => result.warnings.push(format!("{name}: {e}")),
         }
     }
+    result.warnings.extend(bootstrap_warnings(&config));
     (Some(config), result)
+}
+
+/// How many entry points interface discovery connects to by itself (0
+/// when it's off or doesn't connect).
+pub fn discovery_autoconnect(config: &Config) -> u64 {
+    let Some(reticulum) = config.section("reticulum") else { return 0 };
+    if reticulum.get_bool("discover_interfaces") != Some(true) {
+        return 0;
+    }
+    reticulum
+        .get_uint("autoconnect_discovered_interfaces")
+        .or_else(|| reticulum.get_uint("discover_interfaces_autoconnect"))
+        .unwrap_or(0)
+}
+
+/// Interfaces marked Bootstrap only, while discovery connects by itself:
+/// rsReticulum drops them as soon as it starts connecting to that many
+/// discovered entry points, before any of them is up, and doesn't bring
+/// them back if they never come up.
+pub fn bootstrap_warnings(config: &Config) -> Vec<String> {
+    let connects = discovery_autoconnect(config);
+    if connects == 0 {
+        return Vec::new();
+    }
+    config
+        .subsections("interfaces")
+        .into_iter()
+        .filter(|(_, section)| {
+            let on = section.get_bool("enabled").or_else(|| section.get_bool("interface_enabled")).unwrap_or(true);
+            on && section.get_bool("bootstrap_only") == Some(true)
+        })
+        .map(|(name, _)| {
+            format!(
+                "{name}: Bootstrap only: dropped as soon as Reticulum starts connecting to {connects} discovered entry point{}, \
+                 before any is up, and not brought back if they never come up (rsReticulum, for now)",
+                if connects == 1 { "" } else { "s" }
+            )
+        })
+        .collect()
 }
 
 /// A part of the file the editors show as one page of options.
@@ -503,6 +543,11 @@ mod tests {
         let (twice, name) = super::add_entry_point(&added, "RMAP World", "rmap.world", 4242).unwrap();
         assert!(twice.contains("[[RMAP World 2]]") && twice.contains("[[Default Interface]]"));
         assert_eq!(name, "RMAP World 2");
+        // Bootstrap only, with discovery connecting by itself: warned of.
+        let bootstrapped = super::set_options(&added, &super::Section::Interface("RMAP World".into()), &[("bootstrap_only", "Yes")]).unwrap();
+        assert!(super::check(&bootstrapped).1.warnings.is_empty(), "no warning without discovery");
+        let warned = super::check(&super::enable_discovery(&bootstrapped, 2)).1.warnings;
+        assert!(warned.iter().any(|w| w.starts_with("RMAP World: Bootstrap only: dropped as soon as") && w.contains("2 discovered entry points")), "{warned:?}");
         let discovering = super::enable_discovery(&added, 2);
         assert!(super::discovery_on(&discovering) && super::check(&discovering).1.error.is_none());
         let config = super::check(&discovering).0.unwrap();
