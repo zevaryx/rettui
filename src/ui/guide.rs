@@ -1,16 +1,18 @@
 //! The getting-started guide over the screen (see [`crate::app::guide`]):
-//! one line a choice, with what the chosen one does at the bottom.
+//! one line a choice, with what the chosen one does at the bottom. The
+//! choices scroll when they don't all fit.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
 use super::{DIM, PICKED, block, wrap};
 use crate::app::App;
-use crate::app::guide::{self, Guide, GuideRow, LINKS};
+use crate::app::guide::{self, ENTRY_POINTS, Guide, GuideRow, GuideView, LINKS};
+use crate::app::reach::Reach;
 
 /// The guide's widest, in columns.
 const WIDTH: u16 = 84;
@@ -19,12 +21,19 @@ fn check(on: bool) -> &'static str {
     if on { "[x]" } else { "[ ]" }
 }
 
-/// What a row does, shown under the guide when it's picked.
-fn help(row: Option<GuideRow>) -> String {
+/// What a row does, shown under the guide when it's picked; for an entry
+/// point, by what trying it found.
+fn help(row: Option<GuideRow>, reach: impl Fn(usize) -> Reach) -> String {
     match row {
         Some(GuideRow::Name) => guide::NAME_HELP.to_string(),
         Some(GuideRow::Identity) => guide::IDENTITY_HELP.to_string(),
-        Some(GuideRow::Connect(_)) => guide::CONNECT_HELP.to_string(),
+        Some(GuideRow::Connect(i)) => {
+            let entry = ENTRY_POINTS[i];
+            match reach(i) {
+                Reach::Down(why) => format!("{}:{}. {}", entry.host, entry.port, guide::down_help(why)),
+                _ => format!("{}:{}. {}", entry.host, entry.port, guide::CONNECT_HELP),
+            }
+        }
         Some(GuideRow::Discover) => guide::DISCOVER_HELP.to_string(),
         Some(GuideRow::AutoPropagation) => guide::AUTO_PROPAGATION_HELP.to_string(),
         Some(GuideRow::Link(i)) => match LINKS[i] {
@@ -34,6 +43,13 @@ fn help(row: Option<GuideRow>) -> String {
         Some(GuideRow::Apply) => guide::APPLY_HELP.to_string(),
         Some(GuideRow::Later) | None => guide::LATER_HELP.to_string(),
     }
+}
+
+/// Every entry point that isn't in the config already was tried, and none
+/// answered.
+fn none_answered(view: &GuideView) -> bool {
+    let offered: Vec<Reach> = view.reach.iter().zip(&view.has_entry_point).filter(|(_, has)| !**has).map(|(reach, _)| *reach).collect();
+    !offered.is_empty() && offered.iter().all(|reach| reach.is_down())
 }
 
 pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
@@ -84,13 +100,32 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
             body.push(Line::styled(line, Style::default().fg(DIM)));
         }
     } else {
-        for (i, entry) in guide::ENTRY_POINTS.iter().enumerate() {
-            let connect = if view.has_entry_point[i] {
-                format!("[x] Connect through {} (in your Reticulum config already)", entry.name)
-            } else {
-                format!("{} Connect through {} ({}:{})", check(choices.connect[i]), entry.name, entry.host, entry.port)
+        // Under their regions' headings, each with what trying it found;
+        // one that didn't answer is greyed out, and can't be ticked.
+        let name_width = ENTRY_POINTS.iter().map(|entry| entry.name.width()).max().unwrap_or(0);
+        let mut region = "";
+        for (i, entry) in ENTRY_POINTS.iter().enumerate() {
+            if entry.region != region {
+                region = entry.region;
+                body.push(Line::styled(format!("Entry points · {region}"), Style::default().fg(DIM)));
+            }
+            let name = format!("{}{}  ", entry.name, " ".repeat(name_width - entry.name.width()));
+            let spans = match view.reach[i] {
+                _ if view.has_entry_point[i] => {
+                    vec![Span::raw(format!("[x] {name}")), Span::styled("in your Reticulum config already", Style::default().fg(DIM))]
+                }
+                reach @ Reach::Down(_) => vec![Span::styled(format!("[ ] {name}{}", reach.label()), Style::default().fg(DIM))],
+                reach => {
+                    let color = if matches!(reach, Reach::Up(_)) { Color::Green } else { DIM };
+                    vec![Span::raw(format!("{} {name}", check(choices.connect[i]))), Span::styled(reach.label(), Style::default().fg(color))]
+                }
             };
-            row_line(&mut body, GuideRow::Connect(i), vec![Span::raw(connect)]);
+            row_line(&mut body, GuideRow::Connect(i), spans);
+        }
+        if none_answered(&view) {
+            for line in wrap(guide::NONE_ANSWERED, inner_width) {
+                body.push(Line::styled(line, Style::default().fg(Color::Yellow)));
+            }
         }
         let discover = if view.has_discovery {
             "[x] Find entry points near you over time (on already)".to_string()
@@ -114,13 +149,21 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     let buttons = Line::from(vec![button(apply.trim(), GuideRow::Apply), Span::raw("  "), button(later.trim(), GuideRow::Later)]);
 
     // What the chosen row does, with room for the longest so the guide
-    // keeps its size moving between rows.
-    let help_lines = wrap(&help(selected), inner_width);
-    let help_room = rows.iter().map(|row| wrap(&help(Some(*row)), inner_width).len()).max().unwrap_or(0).max(help_lines.len());
+    // keeps its size moving between rows (and as entry points answer).
+    let help_lines = wrap(&help(selected, |i| view.reach[i]), inner_width);
+    let help_room = rows
+        .iter()
+        .flat_map(|row| [help(Some(*row), |_| Reach::Checking), help(Some(*row), |_| Reach::Down("name not found"))])
+        .map(|text| wrap(&text, inner_width).len())
+        .max()
+        .unwrap_or(0)
+        .max(help_lines.len());
 
     // On a short screen, the intro and then the blank lines between parts
-    // are left out before anything is cut off.
-    let mut spare = (area.height.saturating_sub(2) as usize).saturating_sub(1 + body.len() + 1 + help_room);
+    // are left out; then the choices scroll.
+    let height = area.height.saturating_sub(2) as usize;
+    let shown = body.len().min(height.saturating_sub(1 + 1 + help_room).max(1));
+    let mut spare = height.saturating_sub(1 + shown + 1 + help_room);
     let mut fits = |lines: usize| {
         let fits = spare >= lines;
         if fits {
@@ -136,8 +179,23 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     if gap_after_status {
         lines.push(Line::default());
     }
+    // The picked row stays in view, with the line above it (perhaps its
+    // heading).
+    let body_len = body.len();
+    let mut top = state.scroll;
+    if let Some(&(line, _)) = placed.iter().find(|(_, row)| Some(*row) == selected) {
+        if line <= top {
+            top = line.saturating_sub(1);
+        } else if line >= top + shown {
+            top = line + 1 - shown;
+        }
+    }
+    let top = top.min(body_len - shown);
+    if let Some(guide) = &mut app.guide {
+        guide.scroll = top;
+    }
     let body_at = lines.len();
-    lines.extend(body);
+    lines.extend(body.into_iter().skip(top).take(shown));
     if gap_before_buttons {
         lines.push(Line::default());
     }
@@ -163,9 +221,15 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(lines).block(guide_block), rect);
     let at = |line: usize| inner.y + line as u16;
     for (line, row) in placed {
-        if at(body_at + line) < inner.bottom() {
-            app.regions.guide_rows.push((Rect::new(inner.x, at(body_at + line), inner.width, 1), row));
+        if (top..top + shown).contains(&line) && at(body_at + line - top) < inner.bottom() {
+            app.regions.guide_rows.push((Rect::new(inner.x, at(body_at + line - top), inner.width, 1), row));
         }
+    }
+    if shown < body_len {
+        let bar = Rect::new(rect.right().saturating_sub(1), at(body_at), 1, (shown as u16).min(inner.bottom().saturating_sub(at(body_at))));
+        let mut position = ScrollbarState::new(body_len - shown + 1).position(top).viewport_content_length(shown);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None).track_symbol(Some("│"));
+        frame.render_stateful_widget(scrollbar, bar, &mut position);
     }
     if at(buttons_at) < inner.bottom() {
         let apply_width = apply.width() as u16;
@@ -181,6 +245,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use crate::app::guide::GuideRow;
+    use crate::app::reach::Reach;
     use crate::config::Settings;
     use crate::store::Store;
 
@@ -198,29 +263,52 @@ mod tests {
         };
         let apply_at = |app: &crate::app::App| app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Apply).unwrap().0;
         let screen = draw(&mut app);
-        // At 80×24 the intro gives way, so that nothing is cut off.
+        // At 80×24 the intro gives way, and the choices scroll.
         assert!(screen.contains("Getting started") && screen.contains("Not connected to anyone yet"), "{screen}");
-        assert!(screen.contains("[x] Connect through RMAP World (rmap.world:4242)"), "{screen}");
-        assert!(screen.contains("[x] Connect through Ratspeak (rns.ratspeak.org:4242)"), "{screen}");
-        assert!(screen.contains("Using a LoRa radio (RNode)") && screen.contains("Words you'll meet") && screen.contains("Using rettui"), "{screen}");
+        assert!(screen.contains("Entry points · Primary & global backbone"), "{screen}");
+        assert!(screen.contains("[x] RNS Dublin Mainnet        checking…"), "{screen}");
         assert!(screen.contains("Apply") && screen.contains("Not now") && screen.contains("The name sent"), "{screen}");
+        assert!(!screen.contains("Using rettui"), "below, for now: {screen}");
         let first = apply_at(&app);
-        // The longest help is shown whole, and the guide keeps its size.
+        // Every row comes into view when picked, where a click picks it;
+        // the longest help is shown whole, and the guide keeps its size.
         let rows = crate::app::guide::Guide::rows(&app.guide_view());
         for (index, row) in rows.iter().enumerate() {
             app.guide.as_mut().unwrap().row = index;
             let screen = draw(&mut app);
             assert_eq!(apply_at(&app), first, "{row:?}");
+            assert!(app.regions.guide_rows.iter().any(|(_, shown)| shown == row), "{row:?} in view: {screen}");
             match row {
                 GuideRow::AutoPropagation => assert!(screen.contains("read them."), "{screen}"),
+                GuideRow::Connect(i) => {
+                    let entry = crate::app::guide::ENTRY_POINTS[*i];
+                    assert!(screen.contains(&format!("{}:{}. A public transport node", entry.host, entry.port)), "{screen}");
+                }
                 // A link's note, then where it goes, whole.
                 GuideRow::Link(i) => {
-                    let (_, url, _) = crate::app::guide::LINKS[*i];
-                    assert!(screen.contains(url) && screen.contains("copies"), "{screen}")
+                    let (title, url, _) = crate::app::guide::LINKS[*i];
+                    assert!(screen.contains(title) && screen.contains(url) && screen.contains("copies"), "{screen}")
                 }
                 _ => {}
             }
         }
+        // As the entry points answer: how quickly, or greyed out and not
+        // to be ticked.
+        let count = crate::app::guide::ENTRY_POINTS.len();
+        let mut reach = vec![Reach::Up(std::time::Duration::from_millis(382)); count];
+        reach[1] = Reach::Down("refused");
+        app.entry_reach.set(reach);
+        app.guide.as_mut().unwrap().row = 2;
+        let screen = draw(&mut app);
+        assert!(screen.contains("[x] RNS Dublin Mainnet        up · 382 ms"), "{screen}");
+        assert!(screen.contains("[ ] RNS Between The Borders   down · refused"), "{screen}");
+        let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Connect(1)).unwrap();
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
+        assert!(draw(&mut app).contains("[ ] RNS Between The Borders   down · refused"));
+        assert!(draw(&mut app).contains("It didn't answer just now (refused)"));
+        // None answering: said.
+        app.entry_reach.set(vec![Reach::Down("no answer"); count]);
+        assert!(draw(&mut app).contains("None of the entry points answered"));
         app.guide.as_mut().unwrap().row = 0;
         draw(&mut app);
         // Discovery is ticked to start with; a click on its row unticks it.
@@ -232,13 +320,14 @@ mod tests {
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Later).unwrap();
         app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
         assert!(app.guide.is_none() && app.saved_settings().unwrap().welcomed);
-        // A little taller, the intro fits too.
+        // Taller, it all fits, the intro too.
         app.open_guide();
-        let mut taller = Terminal::new(TestBackend::new(80, 27)).unwrap();
+        let mut taller = Terminal::new(TestBackend::new(80, 46)).unwrap();
         taller.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
         let buffer = taller.backend().buffer();
-        let screen: String = (0..27).map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect();
-        assert!(screen.contains("Reticulum reaches others") && screen.contains("Not now"), "{screen}");
+        let screen: String = (0..46).map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect();
+        assert!(screen.contains("Reticulum reaches others") && screen.contains("Using rettui") && screen.contains("Not now"), "{screen}");
+        assert_eq!(app.regions.guide_rows.len(), crate::app::guide::Guide::rows(&app.guide_view()).len(), "{screen}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

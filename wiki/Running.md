@@ -14,17 +14,37 @@ the web UI's Status page, opens it again):
   NomadNet, MeshChat or another rettui, to keep that address (see
   [Data and Storage](Data-and-Storage)). The web UI says where the file is
   instead.
-- **Connect through RMAP World** (`rmap.world:4242`) and **Connect through
-  Ratspeak** (`rns.ratspeak.org:4242`, run by the makers of rsReticulum):
-  each adds a TCP interface to that public entry point to your Reticulum
-  config. They're ticked only when the config has nothing besides the Auto
-  interface (which reaches your local network only): a fresh install needs
-  a connection for discovery to hear of others, and with two, one being
-  down doesn't leave you unconnected. A config with interfaces of its own
-  (an entry point, a radio) isn't given them unless you tick them. Each
-  operator sees your IP address, and anyone watching your connection can
-  tell you use Reticulum. They stay connected alongside the entry points
-  discovery finds.
+- **Entry points:** public entry points to connect through, the ones
+  Colorado Mesh's [mesh-client](https://github.com/Colorado-Mesh/mesh-client)
+  recommends, under the same headings:
+
+  | Group | Entry point | Address |
+  |---|---|---|
+  | Primary & global backbone | RNS Dublin Mainnet | `dublin.connect.reticulum.network:4965` |
+  | | RNS Between The Borders | `reticulum.betweentheborders.com:4242` |
+  | | RMAP World | `rmap.world:4242` |
+  | | RNS Simply Equipped | `rns.simplyequipped.com:4242` |
+  | | RNS Beleth | `rns.beleth.net:4242` |
+  | North America | MichMesh | `rns.michmesh.net:7822` |
+  | Specialty | Ratspeak & Colorado Mesh | `rns.ratspeak.org:4242` |
+
+  Each ticked adds a TCP interface to that entry point to your Reticulum
+  config. rettui tries each as the guide opens (a connection, closed at
+  once) and shows how quickly it answered (`up · 120 ms`); one that
+  refuses, doesn't answer, or whose name isn't found is greyed out and
+  can't be ticked (`down · refused`), and it's tried again when the guide
+  is opened a minute or more later. If none answer, the guide says so:
+  the device may be offline, or a firewall may block them.
+
+  The ones that answer are ticked only when the config has nothing
+  besides the Auto interface (which reaches your local network only): a
+  fresh install needs a connection for discovery to hear of others, and
+  with several, one being down doesn't leave you unconnected. A config
+  with interfaces of its own (an entry point, a radio) isn't given them
+  unless you tick them; one it already has (by address) shows as in your
+  config already. Each operator sees your IP address, and anyone watching
+  your connection can tell you use Reticulum. They stay connected
+  alongside the entry points discovery finds.
 - **Also find entry points near you over time:** turns on
   interface discovery, as Reticulum's manual recommends, connecting to up to
   two entry points others announce (see

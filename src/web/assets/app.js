@@ -1318,19 +1318,77 @@ async function gettingStarted() {
     return { key, box, node: el('label', { class: 'guide-option' }, box,
       el('span', {}, el('span', { text: already ? `${label} (${already})` : label }), el('span', { class: 'dim help', text: help }))) };
   };
+  // Each entry point, under its region, with whether it answered when
+  // tried: one that didn't is greyed out and can't be ticked.
+  const entry = (e) => {
+    const box = el('input', { type: 'checkbox', checked: e.present || e.on, disabled: e.present });
+    const status = el('span', { class: 'reach' });
+    const help = el('span', { class: 'dim help' });
+    const node = el('label', { class: 'guide-option' }, box,
+      el('span', {}, el('span', {}, el('span', { text: e.name }), ' ', el('span', { class: 'dim', text: `${e.host}:${e.port}` }), ' ', status), help));
+    const show = (reach) => {
+      choice.reach = reach;
+      if (e.present) {
+        status.textContent = 'in your Reticulum config already';
+        status.className = 'reach dim';
+        help.hidden = true;
+        return;
+      }
+      status.textContent = reach.label;
+      status.className = 'reach ' + reach.state;
+      const down = reach.state === 'down';
+      if (down) box.checked = false;
+      box.disabled = down;
+      node.classList.toggle('down', down);
+      help.textContent = down ? reach.help : '';
+      help.hidden = !down;
+    };
+    const choice = { key: 'connect', box, node, show, present: e.present };
+    show(e.reach);
+    return choice;
+  };
   const options = [];
   const entries = [];
+  const nodes = [];
+  const noneNote = el('p', { class: 'guide-status warn', text: g.help.none_answered });
+  const noneAnswered = () => {
+    const offered = entries.filter((c) => !c.present);
+    return offered.length > 0 && offered.every((c) => c.reach.state === 'down');
+  };
   if (!g.external) {
-    for (const entry of g.entries) {
-      const choice = option('connect', `Connect through ${entry.name} (${entry.host}:${entry.port}), a public entry point`, g.help.connect,
-        { on: entry.on, already: entry.present && 'in your Reticulum config already' });
+    nodes.push(el('p', { class: 'dim help guide-entries', text: g.help.connect }));
+    let region = null;
+    for (const e of g.entries) {
+      if (e.region !== region) {
+        region = e.region;
+        nodes.push(el('p', { class: 'dim guide-region', text: 'Entry points · ' + region }));
+      }
+      const choice = entry(e);
       entries.push(choice);
       options.push(choice);
+      nodes.push(choice.node);
     }
-    options.push(option('discover', 'Also find entry points near you over time (interface discovery)', g.help.discover,
-      { on: g.defaults.discover, already: g.has_discovery && 'on already' }));
+    noneNote.hidden = !noneAnswered();
+    nodes.push(noneNote);
+    const discover = option('discover', 'Also find entry points near you over time (interface discovery)', g.help.discover,
+      { on: g.defaults.discover, already: g.has_discovery && 'on already' });
+    options.push(discover);
+    nodes.push(discover.node);
   }
-  options.push(option('auto_propagation', 'Pick a propagation node automatically', g.help.auto_propagation, { on: g.defaults.auto_propagation }));
+  const autoPropagation = option('auto_propagation', 'Pick a propagation node automatically', g.help.auto_propagation, { on: g.defaults.auto_propagation });
+  options.push(autoPropagation);
+  nodes.push(autoPropagation.node);
+  // The entry points' tries finish over a few seconds.
+  let open = true;
+  (async () => {
+    while (open && entries.some((c) => c.reach.state === 'checking')) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const reaches = open ? await api.get('/guide/reach').catch(() => null) : null;
+      if (!open || !Array.isArray(reaches)) continue;
+      entries.forEach((c, i) => reaches[i] && c.show(reaches[i]));
+      noneNote.hidden = !noneAnswered();
+    }
+  })();
   const status = g.interfaces_online === 0 ? ['warn', '○ Not connected to anyone yet']
     : g.heard === 0 ? ['warn', `◌ ${g.interfaces_online} interface(s) online, nobody heard yet`]
       : ['ok', `● Connected: ${g.interfaces_online} interface(s) online, ${g.heard} peers and nodes heard`];
@@ -1341,7 +1399,7 @@ async function gettingStarted() {
     el('label', { class: 'field' }, el('span', { text: 'Your name' }), name, el('span', { class: 'dim help', text: g.help.name })),
     el('p', { class: 'dim help' }, g.help.identity + ' ', el('code', { text: g.identity_file })),
     g.external ? el('p', { class: 'dim', text: `${g.external_note}: add entry points in that program's Reticulum config.` }) : null,
-    ...options.map((o) => o.node),
+    ...nodes,
     el('div', { class: 'guide-links' }, el('span', { class: 'dim', text: 'Learn more' }),
       g.links.map((l) => el('span', { class: 'guide-link' },
         el('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer', text: '↗ ' + l.title }),
@@ -1360,6 +1418,7 @@ async function gettingStarted() {
         loadNow();
       } })),
   ], { className: 'guide', onclose: () => {
+    open = false;
     // Closed without applying: not shown by itself again.
     if (!finished) api.post('/guide/dismiss').catch(() => {});
   } });

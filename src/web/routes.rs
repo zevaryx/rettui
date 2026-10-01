@@ -105,6 +105,7 @@ pub fn router(state: WebState) -> Router {
         .route("/settings", get(get_settings).post(save_settings))
         .route("/guide", get(guide).post(apply_guide))
         .route("/guide/dismiss", post(dismiss_guide))
+        .route("/guide/reach", get(guide_reach))
         .route("/identity/backed-up", post(identity_backed_up))
         .route("/first-steps/hide", post(hide_first_steps))
         .route("/channels", get(channels).post(add_hub))
@@ -996,8 +997,20 @@ async fn save_settings(State(state): State<WebState>, axum::Json(body): axum::Js
 
 // ---- getting started ----------------------------------------------------------
 
+/// The guide, trying its entry points as it opens.
 async fn guide(State(state): State<WebState>) -> ApiResult {
-    Ok(axum::Json(state.read(|o| views::guide(&o.app)).await?))
+    Ok(axum::Json(
+        state
+            .write(|o| {
+                o.app.check_entry_points();
+                views::guide(&o.app)
+            })
+            .await?,
+    ))
+}
+
+async fn guide_reach(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::guide_reach(&o.app)).await?))
 }
 
 #[derive(Deserialize)]

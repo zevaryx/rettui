@@ -93,11 +93,12 @@ pub fn guide(app: &App) -> Value {
     let defaults = app.guide_defaults();
     json!({
         "name": view.name,
-        // Each entry point offered, whether the config has it, and
-        // whether it's ticked to start with.
+        // Each entry point offered, whether the config has it, whether
+        // it's ticked to start with, and whether it answered.
         "entries": guide::ENTRY_POINTS.iter().enumerate().map(|(i, entry)| json!({
-            "name": entry.name, "host": entry.host, "port": entry.port,
+            "region": entry.region, "name": entry.name, "host": entry.host, "port": entry.port,
             "present": view.has_entry_point[i], "on": defaults.connect[i],
+            "reach": reach(view.reach[i]),
         })).collect::<Vec<_>>(),
         "has_discovery": view.has_discovery,
         "external": view.external,
@@ -113,9 +114,25 @@ pub fn guide(app: &App) -> Value {
             "intro": guide::INTRO, "name": guide::NAME_HELP, "connect": guide::CONNECT_HELP,
             "identity": guide::IDENTITY_WEB_NOTE,
             "discover": guide::DISCOVER_HELP, "auto_propagation": guide::AUTO_PROPAGATION_HELP, "apply": guide::APPLY_HELP,
+            "none_answered": guide::NONE_ANSWERED,
         },
         "links": guide::LINKS.iter().map(|(title, url, note)| json!({ "title": title, "url": url, "note": note })).collect::<Vec<_>>(),
     })
+}
+
+/// Whether each of the guide's entry points answered, as they're tried.
+pub fn guide_reach(app: &App) -> Value {
+    let reaches = app.guide_view().reach;
+    Value::Array(reaches.into_iter().map(reach).collect())
+}
+
+fn reach(reach: crate::app::reach::Reach) -> Value {
+    use crate::app::reach::Reach;
+    match reach {
+        Reach::Checking => json!({ "state": "checking", "label": reach.label() }),
+        Reach::Up(_) => json!({ "state": "up", "label": reach.label() }),
+        Reach::Down(why) => json!({ "state": "down", "label": reach.label(), "help": crate::app::guide::down_help(why) }),
+    }
 }
 
 pub fn conversations(app: &App) -> Value {

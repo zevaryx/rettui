@@ -212,6 +212,12 @@ a { color: var(--accent); }
 .guide .help { font-size: 0.9em; }
 .guide .guide-status.ok { color: var(--green); }
 .guide .guide-status.warn { color: var(--yellow); }
+.guide .guide-entries { margin: 14px 0 0; }
+.guide .guide-region { margin: 12px 0 0; font-size: 0.85em; }
+.guide .guide-option .help[hidden] { display: none; }
+.guide .guide-option.down { opacity: 0.55; }
+.guide .reach { font-size: 0.9em; color: var(--dim); }
+.guide .reach.up { color: var(--green); }
 .guide .guide-links { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
 .guide .guide-link { display: flex; flex-direction: column; gap: 2px; }
 .first-steps { display: flex; flex-direction: column; gap: 2px; }

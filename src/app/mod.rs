@@ -25,6 +25,7 @@ mod input;
 mod messages;
 pub mod network;
 pub mod notify;
+pub mod reach;
 mod saver;
 pub mod node;
 pub mod reticulum;
@@ -440,6 +441,8 @@ pub struct App {
     /// The entry points the guide added (their interfaces' names), and
     /// when: said as each connects (see [`App::watch_connection`]).
     connect_watch: Option<(Vec<String>, Instant)>,
+    /// Whether the guide's entry points answer, tried as it opens.
+    pub(crate) entry_reach: reach::Reachability,
     /// The LXMF address of an identity chosen to use from the next start
     /// (see [`identity`]).
     pub identity_pending: Option<Hash>,
@@ -561,6 +564,7 @@ impl App {
             next_request: 1,
             restart_pending: false,
             connect_watch: None,
+            entry_reach: reach::Reachability::default(),
             identity_pending: None,
             announced: false,
             discovery_noted: true,

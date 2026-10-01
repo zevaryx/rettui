@@ -40,7 +40,8 @@ it and this page differ, the manual is right.
   ([Manual](https://reticulum.network/manual/understanding.html#node-types))
 - **Entry point:** a transport node anyone can connect to over the
   internet, to reach the wider network. RMAP World (`rmap.world:4242`) and
-  Ratspeak (`rns.ratspeak.org:4242`) are two; [directory.rns.recipes](https://directory.rns.recipes) lists more.
+  Ratspeak & Colorado Mesh (`rns.ratspeak.org:4242`) are two; the
+  getting-started guide offers [several](Running), and [directory.rns.recipes](https://directory.rns.recipes) lists more.
   ([Manual](https://reticulum.network/manual/gettingstartedfast.html#bootstrapping-connectivity))
 - **Interface discovery:** entry points can announce themselves as
   discoverable; with discovery on, Reticulum hears of them through the
