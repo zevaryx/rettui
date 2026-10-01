@@ -28,12 +28,12 @@ of the Reticulum instance it uses. Where files are kept is in
   - **Interface discovery:** with *Discover interfaces* and *Auto-connect*
     in `[reticulum]`, rettui finds entry points that others announce as
     discoverable and connects to up to that many; an interface marked
-    *Bootstrap only* is used until they connect. Your own TCP server and
-    Backbone interfaces can be published the same way (*Discoverable*).
-    rettui's own Reticulum does this; a shared instance run by another
-    program does its own. Known limit: rsReticulum skips announces whose
-    location is left unset (Python's default), so only entry points that
-    publish a location are found for now.
+    *Bootstrap only* is used until they connect. rettui's own Reticulum
+    does this; a shared instance run by another program does its own.
+    Known limits, in rsReticulum for now: announces whose location is left
+    unset (Python's default) are skipped, so only entry points that publish
+    a location are found; and publishing your own interfaces
+    (*Discoverable*) doesn't work yet, since those announces aren't sent.
   - **As text:** edit the whole file, with a live check of whether Reticulum
     can load it.
   - **Safe edits:** changes are made in place, so comments and layout stay.
