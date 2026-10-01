@@ -69,6 +69,10 @@ pub fn state(app: &App) -> Value {
             "name": i.name, "online": i.online, "rx": i.rx_bytes, "tx": i.tx_bytes,
         })).collect::<Vec<_>>(),
         "interfaces_online": online,
+        // Until they're all taken.
+        "first_steps": app.first_steps().iter().map(|step| json!({
+            "label": step.label, "done": step.done, "how": step.how_web,
+        })).collect::<Vec<_>>(),
         // Over all interfaces: totals, and bytes per second once known.
         "traffic": {
             "rx": app.traffic.rx_total,

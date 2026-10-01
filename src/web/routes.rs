@@ -105,6 +105,7 @@ pub fn router(state: WebState) -> Router {
         .route("/settings", get(get_settings).post(save_settings))
         .route("/guide", get(guide).post(apply_guide))
         .route("/guide/dismiss", post(dismiss_guide))
+        .route("/identity/backed-up", post(identity_backed_up))
         .route("/channels", get(channels).post(add_hub))
         .route("/channels/{hub}/room", get(room))
         .route("/channels/{hub}/{action}", post(hub_action))
@@ -1023,6 +1024,12 @@ async fn apply_guide(State(state): State<WebState>, axum::Json(body): axum::Json
 
 async fn dismiss_guide(State(state): State<WebState>) -> ApiResult {
     state.write(|o| o.app.finish_guide()).await?;
+    ok()
+}
+
+/// The user saved a copy of the identity themselves (the web UI can't).
+async fn identity_backed_up(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.identity_backed_up()).await?;
     ok()
 }
 

@@ -443,6 +443,8 @@ pub struct App {
     /// The LXMF address of an identity chosen to use from the next start
     /// (see [`identity`]).
     pub identity_pending: Option<Hash>,
+    /// This client announced since rettui started.
+    pub announced: bool,
     /// Hubs to reconnect once Reticulum is back after a restart.
     rejoin_hubs: Vec<Hash>,
     /// Notifications waiting to be shown (see [`App::take_notifications`]).
@@ -558,6 +560,7 @@ impl App {
             restart_pending: false,
             connect_watch: None,
             identity_pending: None,
+            announced: false,
             rejoin_hubs: Vec::new(),
             notifications: Vec::new(),
             reads: Vec::new(),
@@ -815,7 +818,10 @@ impl App {
                 }
                 self.peers_dirty = true;
             }
-            NetEvent::Announced => self.log("Announced LXMF destination"),
+            NetEvent::Announced => {
+                self.announced = true;
+                self.log("Announced LXMF destination");
+            }
             NetEvent::Message(message) => self.on_message(*message),
             NetEvent::Delivery { id, result } => {
                 // Handing a message to a node picked automatically failed:

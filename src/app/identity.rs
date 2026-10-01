@@ -122,6 +122,7 @@ impl App {
         }
         let key = std::fs::read(self.identity_file()).map_err(|e| format!("Couldn't read your identity: {e}"))?;
         write_private(to, &key).map_err(|e| format!("Couldn't save {}: {e}", to.display()))?;
+        self.identity_backed_up();
         Ok(to.to_path_buf())
     }
 

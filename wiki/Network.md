@@ -15,8 +15,9 @@ shows your identity, your interfaces and the log.
   (`<hash>`, `lxmf@hash`, `hash:/page/index.mu`).
 - **Acting on a row:** message a peer, browse a node, or use a propagation
   node for sync, and copy any address.
-- **Status:** the Status tab shows your identity and LXMF address, the
-  network state, each interface with its traffic, the last sync, the
+- **Status:** the Status tab shows your identity and LXMF address, your
+  first steps until they're taken (see
+  [Running](Running#first-steps)), the network state, each interface with its traffic, the last sync, the
   propagation node you host (if any), and a log.
 - **Interface trouble:** the log shows why an interface won't connect or
   dropped, as the Reticulum libraries report it (for example
