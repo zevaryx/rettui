@@ -69,6 +69,9 @@ pub struct Settings {
     /// A copy of the identity was saved (`b` in the Status tab, or the web
     /// UI was told one was): the first steps stop asking for one.
     pub identity_backed_up: bool,
+    /// Show the first steps in the Status tab (until they're taken, or
+    /// hidden). New installs only: settings files from before them don't.
+    pub show_first_steps: bool,
     /// Mark the messages you write as Markdown (LXMF's renderer field), so
     /// clients that format it show them formatted.
     pub markdown_messages: bool,
@@ -113,6 +116,7 @@ impl Default for Settings {
             max_message_kb: 1000,
             welcomed: true,
             identity_backed_up: false,
+            show_first_steps: false,
             markdown_messages: true,
             pn_enabled: false,
             pn_name: None,
@@ -185,8 +189,9 @@ impl Paths {
 impl Settings {
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
-            // A new install: the getting-started guide is shown.
-            let settings = Self { welcomed: false, ..Self::default() };
+            // A new install: the getting-started guide is shown, and the
+            // first steps.
+            let settings = Self { welcomed: false, show_first_steps: true, ..Self::default() };
             settings.save(path)?;
             return Ok(settings);
         }

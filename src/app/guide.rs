@@ -273,9 +273,20 @@ impl App {
         }
     }
 
+    /// The first steps aren't shown any more (`x` in the Status tab, or
+    /// Hide in the web UI).
+    pub fn hide_first_steps(&mut self) {
+        if self.settings.show_first_steps {
+            self.save_flag(|settings| settings.show_first_steps = false);
+        }
+    }
+
     /// The first steps on the network, while some are left (none once all
-    /// are taken).
+    /// are taken, when they're hidden, or for installs from before them).
     pub fn first_steps(&self) -> Vec<FirstStep> {
+        if !self.settings.show_first_steps {
+            return Vec::new();
+        }
         let sent = self.store.conversations.values().any(|c| c.messages.iter().any(|m| !m.incoming));
         let steps = vec![
             FirstStep {
@@ -488,7 +499,17 @@ mod tests {
         use ratatui::backend::TestBackend;
         let dir = std::env::temp_dir().join(format!("rettui-steps-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        // Installs from before the first steps don't see them.
+        let app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        assert!(app.first_steps().is_empty());
+        let old: Settings = serde_json::from_str(r#"{"display_name": "Old hand"}"#).unwrap();
+        assert!(!old.show_first_steps);
+        // A new install does.
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fresh = Settings::load(&dir.join("fresh-settings.json")).unwrap();
+        assert!(fresh.show_first_steps && !fresh.welcomed);
+        let mut app = crate::app::test_app(&dir, Settings { show_first_steps: true, ..Settings::default() }, Store::default());
         let done = |app: &App| app.first_steps().iter().map(|step| step.done).collect::<Vec<_>>();
         assert_eq!(done(&app), [false; 5]);
         let draw = |app: &mut App| {
@@ -513,6 +534,11 @@ mod tests {
         // All taken: gone.
         assert!(app.first_steps().is_empty());
         assert!(!draw(&mut app).contains("First steps"));
+        // Or hidden before that (x in the Status tab), for good.
+        app.store.conversations.clear();
+        assert!(draw(&mut app).contains("First steps"));
+        app.on_key(crossterm::event::KeyEvent::new(KeyCode::Char('x'), crossterm::event::KeyModifiers::NONE));
+        assert!(app.first_steps().is_empty() && !app.saved_settings().unwrap().show_first_steps);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
