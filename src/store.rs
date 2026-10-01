@@ -104,6 +104,9 @@ pub struct Store {
     pub saved: Vec<Bookmark>,
     /// RRC hubs and the rooms joined on them.
     pub rrc_hubs: Vec<HubConfig>,
+    /// Emoji picked lately, newest first (for the pickers).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub recent_emoji: Vec<String>,
     /// What loading did to files of earlier versions, for the app's log.
     #[serde(skip)]
     pub migration_notes: Vec<String>,
@@ -387,6 +390,7 @@ impl Store {
             identified_nodes: self.identified_nodes.clone(),
             saved: self.saved.clone(),
             rrc_hubs: self.rrc_hubs.clone(),
+            recent_emoji: self.recent_emoji.clone(),
             migration_notes: Vec::new(),
             rewrite_store: false,
             rewrite_peers: false,

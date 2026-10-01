@@ -482,6 +482,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     draw_mentions(frame, app, input_inner, offset, chat_area);
+    super::emoji::draw_emoji(frame, app, input_inner, offset, chat_area);
     draw_popup(frame, app, area);
 }
 

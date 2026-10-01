@@ -14,6 +14,7 @@
 //!   elsewhere.
 
 mod browser;
+pub mod emoji;
 pub mod format;
 pub mod channels;
 pub(crate) mod files;
@@ -218,6 +219,9 @@ pub struct Regions {
     pub channel_popup: Rect,
     /// Names in the list `@` opens while typing.
     pub channel_mentions: Vec<(Rect, String)>,
+    /// The emoji picker (or the `:name` list) and what's in it.
+    pub emoji_popup: Rect,
+    pub emoji_hits: Vec<(Rect, emoji::EmojiHit)>,
 }
 
 /// How a footer notice reads: done, a hint that something can't be done
@@ -280,6 +284,10 @@ pub struct App {
     pub active_conversation: Option<String>,
     pub compose: TextInput,
     pub composing: bool,
+    /// The emoji picker, over the input being written in.
+    pub emoji: Option<emoji::EmojiPicker>,
+    /// The `:name` list while typing one.
+    pub shortcode: emoji::Shortcode,
     pub message_scroll: usize,
     pub attachments: Vec<PathBuf>,
     /// What's written and attached in the conversations not open.
@@ -385,6 +393,8 @@ impl App {
             active_conversation: None,
             compose: TextInput::default(),
             composing: false,
+            emoji: None,
+            shortcode: emoji::Shortcode::default(),
             message_scroll: 0,
             attachments: Vec::new(),
             drafts: HashMap::new(),
@@ -573,7 +583,10 @@ impl App {
     /// Text pasted from the terminal (bracketed paste) or the clipboard,
     /// inserted into whatever is being edited.
     pub fn on_paste(&mut self, text: &str) {
-        if let Some(prompt) = &mut self.prompt {
+        if let Some(picker) = &mut self.emoji {
+            picker.search.insert_str(text);
+            (picker.pick, picker.top) = (0, 0);
+        } else if let Some(prompt) = &mut self.prompt {
             prompt.input.insert_str(text);
         } else if self.composing && self.tab == Tab::Messages {
             self.compose.insert_str(text);
@@ -893,6 +906,14 @@ impl App {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         discriminant(&self.tab).hash(&mut h);
         (self.composing, self.prompt.is_some(), self.net_search.typing).hash(&mut h);
+        // Emoji over the view, which some terminals draw narrower than
+        // they should (see `take_full_redraw`).
+        if let Some(picker) = &self.emoji {
+            (picker.tab, picker.top, picker.search.text()).hash(&mut h);
+        }
+        if let Some((at, found)) = self.shortcode_matches() {
+            (at, found.iter().map(|e| e.as_str()).collect::<Vec<_>>()).hash(&mut h);
+        }
         (self.channels.typing, self.channels.menu.is_some(), self.channels.picker.is_some()).hash(&mut h);
         (discriminant(&self.browser.pane), discriminant(&self.browser.focus), self.browser.source.is_some()).hash(&mut h);
         (self.node.editing, discriminant(&self.node.view), self.node.editor.is_some()).hash(&mut h);

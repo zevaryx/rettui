@@ -341,6 +341,7 @@ function switchTab(id, options = {}) {
   if (!view) return;
   const previous = app.views[app.tab];
   app.tab = id;
+  emojiPicker.close(false);
   if (location.hash !== '#' + id) history.replaceState(null, '', '#' + id);
   renderSidebar();
   app.views.channels.closeMenu();
@@ -1435,6 +1436,361 @@ async function shrunk(file) {
   }
 }
 
+// ---- Emoji ------------------------------------------------------------------
+
+// The emoji the pickers offer (fetched once; the browser keeps the list) and
+// the recently used, which the TUI shares. Found as the server's `search`
+// finds them: each word typed starts a word of the name or a shortcode.
+const emoji = {
+  groups: null, // [{ name, icon, emoji: [{ e, name, codes, words }] }]
+  recent: [],
+  RECENT: 30,
+
+  load() {
+    this.loading ||= Promise.all([api.get('/emoji'), api.get('/emoji/recent')]).then(([list, recent]) => {
+      const split = (text) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+      this.groups = list.groups.map((g) => ({
+        name: g.name,
+        icon: g.icon,
+        emoji: g.emoji.map(([e, name, codes]) => ({ e, name, codes, words: [...split(name), ...codes, ...codes.flatMap(split)] })),
+      }));
+      this.all = this.groups.flatMap((g) => g.emoji);
+      this.byChar = new Map(this.all.map((x) => [x.e, x]));
+      this.byCode = new Map(this.all.flatMap((x) => x.codes.map((c) => [c, x])));
+      this.recent = recent;
+    }).catch((e) => {
+      this.loading = null;
+      throw e;
+    });
+    return this.loading;
+  },
+
+  // Best first: the query as a shortcode, then shortcodes starting with it
+  // (shorter first), then the rest in Unicode's order.
+  search(query) {
+    const terms = query.trim().replace(/^:+|:+$/g, '').toLowerCase().split(/[\s_]+/u).filter(Boolean);
+    if (!terms.length || !this.all) return [];
+    const code = terms.join('_');
+    const found = [];
+    for (const x of this.all) {
+      if (!terms.every((t) => x.words.some((w) => w.startsWith(t)))) continue;
+      const lengths = x.codes.filter((c) => c.startsWith(code)).map((c) => c.length);
+      const shortest = lengths.length ? Math.min(...lengths) : null;
+      found.push([shortest === code.length ? [0, 0] : shortest != null ? [1, shortest] : [2, 0], x]);
+    }
+    return found.sort((a, b) => a[0][0] - b[0][0] || a[0][1] - b[0][1]).map(([, x]) => x);
+  },
+
+  recentList() {
+    return this.recent.map((e) => this.byChar?.get(e)).filter(Boolean);
+  },
+
+  // The shortcode to show for `x` when `typed` was typed.
+  codeFor(x, typed = '') {
+    const t = typed.replace(/^:+|:+$/g, '').toLowerCase();
+    return x.codes.find((c) => c.startsWith(t)) || x.codes[0] || null;
+  },
+
+  picked(e) {
+    this.recent = [e, ...this.recent.filter((r) => r !== e)].slice(0, this.RECENT);
+    api.post('/emoji/recent', { emoji: e }).then((recent) => { this.recent = recent; }).catch(() => {});
+  },
+};
+
+// Put `text` in place of the input's selection (or `start`..`end`), the
+// caret after it, and tell the input's listeners.
+function insertText(input, text, start = input.selectionStart ?? input.value.length, end = input.selectionEnd ?? start) {
+  input.setRangeText(text, start, end, 'end');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// The `:name` being typed before the caret (as the server's): its `:`
+// starts a word, so not `12:30` or `http://`, and what follows is a
+// shortcode's characters, at least `min` of them (`:)` and `:D` aren't).
+function shortcodeQuery(input, min = 2) {
+  const caret = input.selectionStart ?? input.value.length;
+  if (input.selectionEnd !== caret) return null;
+  const match = /(?:^|\s):([A-Za-z0-9_+-]*)$/u.exec(input.value.slice(0, caret));
+  if (!match || match[1].length < min) return null;
+  return { start: caret - match[1].length - 1, end: caret, name: match[1] };
+}
+
+// `:name` completion for an input: while one is typed, a list of the emoji
+// it could be just above the input (Up and Down choose, Tab or Enter picks,
+// Esc closes it until the next `:`); a finished `:name:` becomes its emoji.
+// Its `key` handler goes before the input's own keys; `list` is its element.
+function shortcodes(input) {
+  const list = el('div', { class: 'mention-list emoji-list hidden', role: 'listbox' });
+  const self = { list, matches: null, index: 0, dismissed: null };
+  const hide = () => {
+    self.matches = null;
+    list.classList.add('hidden');
+  };
+  const render = () => {
+    const typed = shortcodeQuery(input)?.name || '';
+    list.replaceChildren(...self.matches.map((x, i) => el('div', {
+      class: 'mention-item' + (i === self.index ? ' selected' : ''),
+      role: 'option',
+      // Keep the focus (and the caret) in the input.
+      onmousedown: (e) => e.preventDefault(),
+      onclick: () => pick(x),
+    }, el('span', { class: 'emoji-char', text: x.e }), el('span', { class: 'at', text: ` :${emoji.codeFor(x, typed) || x.name}:` }))));
+    list.classList.remove('hidden');
+  };
+  const pick = (x) => {
+    const query = shortcodeQuery(input);
+    if (!query) return hide();
+    insertText(input, x.e, query.start, query.end);
+    emoji.picked(x.e);
+    input.focus();
+    hide();
+  };
+  self.update = (event) => {
+    const closing = event?.inputType === 'insertText' && event.data === ':';
+    if (!emoji.all) {
+      // The list is fetched on the first `:`, and what's typed by then
+      // looked at again (a `:name:` finished meanwhile included).
+      self.closed ||= closing;
+      if (!self.waiting && input.value.includes(':')) {
+        self.waiting = true;
+        emoji.load().then(() => {
+          const closed = self.closed;
+          self.closed = false;
+          self.update(closed ? { inputType: 'insertText', data: ':' } : undefined);
+        }).catch(() => {}).finally(() => { self.waiting = false; });
+      }
+      return hide();
+    }
+    // Typed (not pasted): a finished `:name:` is its emoji.
+    if (closing) {
+      const caret = input.selectionStart;
+      const done = /(?:^|\s):([A-Za-z0-9_+-]+):$/u.exec(input.value.slice(0, caret));
+      const x = done && emoji.byCode.get(done[1].toLowerCase());
+      if (x) {
+        insertText(input, x.e, caret - done[1].length - 2, caret);
+        emoji.picked(x.e);
+        return hide();
+      }
+    }
+    const query = shortcodeQuery(input);
+    if (!query || query.start === self.dismissed) {
+      if (!query) self.dismissed = null;
+      return hide();
+    }
+    const matches = emoji.search(query.name).slice(0, 8);
+    if (!matches.length) return hide();
+    const same = self.matches?.map((x) => x.e).join() === matches.map((x) => x.e).join();
+    self.matches = matches;
+    if (!same) self.index = 0;
+    render();
+  };
+  self.key = (e) => {
+    if (!self.matches || e.isComposing) return false;
+    const count = self.matches.length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      self.index = (self.index + (e.key === 'ArrowDown' ? 1 : count - 1)) % count;
+      render();
+    } else if (e.key === 'Tab' || e.key === 'Enter') {
+      pick(self.matches[self.index]);
+    } else if (e.key === 'Escape') {
+      self.dismissed = shortcodeQuery(input)?.start ?? null;
+      hide();
+    } else {
+      return false;
+    }
+    e.preventDefault();
+    return true;
+  };
+  input.addEventListener('input', (e) => self.update(e));
+  // Fetched while the first words are written, so it's there for a `:`.
+  input.addEventListener('focus', () => emoji.load().catch(() => {}), { once: true });
+  input.addEventListener('keyup', (e) => ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key) && self.update());
+  input.addEventListener('click', () => self.update());
+  input.addEventListener('blur', hide);
+  return self;
+}
+
+// Ctrl-E opens the picker (not on Apple's systems, where it's the end of
+// the line and Ctrl-Cmd-Space opens their own).
+const APPLE = /Mac|iPhone|iPad/.test(navigator.userAgent);
+function emojiKey(e) {
+  return !APPLE && e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'e';
+}
+
+// The button that opens the picker for `input`.
+function emojiButton(input) {
+  const button = el('button', { class: 'emoji-button', text: '🙂', title: APPLE ? 'Emoji' : 'Emoji (Ctrl+E)', type: 'button',
+    // Keep the input's caret where it is.
+    onmousedown: (e) => e.preventDefault(),
+    onclick: () => emojiPicker.toggle(input, button) });
+  return button;
+}
+
+// The picker: a search, a tab for the recently used and one per group, and
+// every emoji (the groups one after another; a tab scrolls to its group).
+// A click puts one in at the input's caret and closes it (Shift keeps it
+// open). Arrows and Enter work from the search, Esc closes.
+const emojiPicker = {
+  node: null,
+
+  build() {
+    this.search = el('input', { type: 'search', class: 'emoji-search', placeholder: 'Search emoji',
+      oninput: () => this.render(), onkeydown: (e) => this.key(e) });
+    this.tabs = el('div', { class: 'emoji-tabs' });
+    this.grid = el('div', { class: 'emoji-grid', onscroll: () => this.markTab() });
+    this.name = el('div', { class: 'emoji-name' });
+    this.node = el('div', { class: 'emoji-picker hidden', role: 'dialog', 'aria-label': 'Emoji' },
+      this.search, this.tabs, this.grid, this.name);
+    document.body.append(this.node);
+    document.addEventListener('pointerdown', (e) => {
+      if (this.input && !this.node.contains(e.target) && e.target !== this.button) this.close(false);
+    });
+    window.addEventListener('resize', () => this.input && this.place());
+  },
+
+  async toggle(input, button) {
+    if (this.input === input) return this.close();
+    if (!this.node) this.build();
+    this.input = input;
+    this.button = button;
+    this.node.classList.remove('hidden');
+    this.place();
+    this.grid.replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
+    try {
+      await emoji.load();
+    } catch (e) {
+      this.grid.replaceChildren(el('div', { class: 'empty', text: e.message }));
+      return;
+    }
+    if (this.input !== input) return;
+    this.search.value = '';
+    this.render();
+    // A phone's keyboard would cover it; it has its own emoji anyway.
+    if (!phone.matches) this.search.focus();
+  },
+
+  // Above the input's bar, over its button as far as the bar allows.
+  place() {
+    const bar = this.input.closest('.compose, .chat-input') || this.input;
+    const box = bar.getBoundingClientRect();
+    const button = this.button.getBoundingClientRect();
+    const width = Math.min(360, innerWidth - 16);
+    const left = Math.min(Math.max(button.left + button.width / 2 - width / 2, box.left + 8), box.right - width - 8);
+    this.node.style.width = width + 'px';
+    this.node.style.left = Math.max(8, Math.min(left, innerWidth - width - 8)) + 'px';
+    this.node.style.bottom = (innerHeight - box.top + 6) + 'px';
+    this.node.style.maxHeight = Math.max(200, Math.min(400, box.top - 16)) + 'px';
+  },
+
+  close(focus = true) {
+    if (!this.input) return;
+    const input = this.input;
+    this.input = null;
+    this.node.classList.add('hidden');
+    if (focus) input.focus();
+  },
+
+  // What's shown, as sections of [title, emoji].
+  sections() {
+    const query = this.search.value;
+    if (query.trim()) {
+      const found = emoji.search(query);
+      return [[found.length ? `${found.length} found` : 'No emoji with that name', found, -1]];
+    }
+    const recent = emoji.recentList();
+    return [
+      ['Used lately', recent, 0, recent.length ? null : 'None yet: the ones you pick show here'],
+      ...emoji.groups.map((g, i) => [g.name, g.emoji, i + 1]),
+    ];
+  },
+
+  render() {
+    const searching = !!this.search.value.trim();
+    const icons = ['🕘', ...emoji.groups.map((g) => g.icon)];
+    const titles = ['Used lately', ...emoji.groups.map((g) => g.name)];
+    this.tabs.replaceChildren(...icons.map((icon, i) => el('button', {
+      class: 'emoji-tab', type: 'button', text: icon, title: titles[i],
+      onclick: () => {
+        this.search.value = '';
+        this.render();
+        this.grid.querySelector(`[data-tab="${i}"]`)?.scrollIntoView({ block: 'start' });
+        this.markTab();
+      },
+    })));
+    this.cells = [];
+    const parts = [];
+    for (const [title, list, tab, note] of this.sections()) {
+      parts.push(el('div', { class: 'emoji-group', text: title, dataset: tab >= 0 ? { tab } : {} }));
+      if (note) parts.push(el('div', { class: 'dim emoji-note', text: note }));
+      parts.push(el('div', { class: 'emoji-cells' }, ...list.map((x) => {
+        const cell = el('button', { class: 'emoji-cell', type: 'button', text: x.e, title: x.name,
+          onmousedown: (e) => e.preventDefault(),
+          onmouseenter: () => this.show(x),
+          onclick: (e) => this.pick(x, e.shiftKey) });
+        this.cells.push([cell, x]);
+        return cell;
+      })));
+    }
+    this.grid.replaceChildren(...parts);
+    this.grid.scrollTop = 0;
+    this.chosen = 0;
+    this.choose(searching ? 0 : -1);
+    this.markTab();
+  },
+
+  // The tab of the group scrolled to.
+  markTab() {
+    const searching = !!this.search.value.trim();
+    let current = 0;
+    for (const header of this.grid.querySelectorAll('[data-tab]')) {
+      if (header.offsetTop <= this.grid.scrollTop + 4) current = Number(header.dataset.tab);
+    }
+    [...this.tabs.children].forEach((tab, i) => tab.classList.toggle('active', !searching && i === current));
+  },
+
+  show(x) {
+    const code = emoji.codeFor(x, this.search.value);
+    this.name.replaceChildren(el('span', { class: 'emoji-char', text: x.e }), ' ', code ? `:${code}:` : '', el('span', { class: 'dim', text: `  ${x.name}` }));
+  },
+
+  // Choose the cell at `index` (-1: none) for the arrows and Enter.
+  choose(index) {
+    this.cells[this.chosen]?.[0].classList.remove('chosen');
+    this.chosen = index;
+    const cell = this.cells[index];
+    if (!cell) return this.name.replaceChildren(el('span', { class: 'dim', text: 'Pick one, or type to search' }));
+    cell[0].classList.add('chosen');
+    cell[0].scrollIntoView({ block: 'nearest' });
+    this.show(cell[1]);
+  },
+
+  key(e) {
+    const cells = this.cells || [];
+    // Cells in a row, as laid out.
+    const columns = Math.max(1, Math.round(this.grid.querySelector('.emoji-cells')?.clientWidth / (cells[0]?.[0].offsetWidth || 1)) || 1);
+    const at = Math.max(this.chosen, 0);
+    const steps = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns };
+    if (e.key in steps && cells.length) {
+      this.choose(this.chosen < 0 ? 0 : Math.max(0, Math.min(cells.length - 1, at + steps[e.key])));
+    } else if (e.key === 'Enter' && cells[this.chosen]) {
+      this.pick(cells[this.chosen][1], e.shiftKey);
+    } else if (e.key === 'Escape' || emojiKey(e)) {
+      this.close();
+    } else {
+      return;
+    }
+    e.preventDefault();
+  },
+
+  pick(x, keepOpen) {
+    const input = this.input;
+    if (!input) return;
+    insertText(input, x.e);
+    emoji.picked(x.e);
+    if (!keepOpen) this.close();
+  },
+};
+
 // ---- Messages ---------------------------------------------------------------
 
 app.views.messages = {
@@ -1460,6 +1816,11 @@ app.views.messages = {
       enterkeyhint: 'send',
       rows: 2,
       onkeydown: (e) => {
+        if (this.emojiList.key(e)) return;
+        if (emojiKey(e)) {
+          e.preventDefault();
+          emojiPicker.toggle(this.text, this.emojiButton);
+        }
         // Enter while an input method is composing confirms the text.
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
           e.preventDefault();
@@ -1467,6 +1828,9 @@ app.views.messages = {
         }
       },
     });
+    // `:name` completion, and the picker's button.
+    this.emojiList = shortcodes(this.text);
+    this.emojiButton = emojiButton(this.text);
     this.fileInput = el('input', {
       type: 'file',
       multiple: true,
@@ -1484,10 +1848,12 @@ app.views.messages = {
     [['auto', 'Auto'], ['direct', 'Direct'], ['propagated', 'Propagated'], ['paper', 'Paper (QR code)']].map(([m, label]) =>
       el('option', { value: m, text: label, selected: m === this.mode })));
     this.compose = el('div', { class: 'compose' },
+      this.emojiList.list,
       this.chips,
       el('div', { class: 'row' }, this.text),
       el('div', { class: 'row' },
         el('button', { text: '📎 Attach', onclick: () => this.fileInput.click() }),
+        this.emojiButton,
         mode,
         el('span', { class: 'grow' }),
         el('button', { class: 'primary', text: 'Send', onclick: () => this.send() })),
@@ -1756,7 +2122,11 @@ app.views.channels = {
       type: 'text',
       enterkeyhint: 'send',
       onkeydown: (e) => {
-        if (this.mentionKey(e)) return;
+        if (this.emojiList.key(e) || this.mentionKey(e)) return;
+        if (emojiKey(e)) {
+          e.preventDefault();
+          emojiPicker.toggle(this.input, this.emojiButton);
+        }
         if (e.key === 'Enter' && !e.isComposing) this.send();
       },
       oninput: () => this.updateMentions(),
@@ -1765,9 +2135,12 @@ app.views.channels = {
       onclick: () => this.updateMentions(),
       onblur: () => this.hideMentions(),
     });
-    // Who `@` can mention, narrowed as the name is typed.
+    // Who `@` can mention, narrowed as the name is typed; `:name` emoji,
+    // and the picker's button.
     this.mentionList = el('div', { class: 'mention-list hidden', role: 'listbox' });
-    this.inputBar = el('div', { class: 'chat-input' }, this.mentionList, this.input,
+    this.emojiList = shortcodes(this.input);
+    this.emojiButton = emojiButton(this.input);
+    this.inputBar = el('div', { class: 'chat-input' }, this.mentionList, this.emojiList.list, this.input, this.emojiButton,
       el('button', { class: 'primary', text: 'Send', onclick: () => this.send() }));
     this.members = el('div', { class: 'scroll' });
     this.membersPanel = el('section', { class: 'panel members' }, el('header', { text: 'Members' }), this.members);

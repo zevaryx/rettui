@@ -9,7 +9,9 @@ narrower than 110 columns get a sidebar of icons and narrower side lists, so
 | --- | ---- |
 | All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
 | Messages | `↑↓` pick a conversation, `Enter` write, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `p` read a [paper message](Messaging#paper-messages), `P` show the newest paper message written, `N` turn the conversation's notifications off or on, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
-| Writing a message | `Enter` send, `Esc` stop writing, `Ctrl-V` paste, `Ctrl-O` attach, `Ctrl-X` clear attachments, `Ctrl-P` cycle delivery mode |
+| Writing a message | `Enter` send, `Esc` stop writing, `Ctrl-E` [emoji](Messaging#emoji), `:name` an emoji by name, `Ctrl-V` paste, `Ctrl-O` attach, `Ctrl-X` clear attachments, `Ctrl-P` cycle delivery mode |
+| Emoji picker (`Ctrl-E` while writing a message or in a channel) | type to search, arrows choose, `Tab`/`Shift-Tab` next or previous group, `Enter` put it in, `Esc` close; click one to put it in |
+| An emoji name typed after `:` | `↑↓` choose, `Tab`/`Enter` put it in, `Esc` close the list |
 | A paper message's QR code | `y` copy the link, `s` save the code as an SVG image, any other key (or a click) closes it |
 | Channels | `↑↓` pick a hub, room or whisper conversation, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `J` show or hide joins and leaves, `N` next notification choice for the hub, room or whisper conversation, `x` leave a room, close a whisper conversation, or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
 | User menu (click a name, or `m`) | `w` open your whisper conversation, `l` LXMF message, `Enter` pick (also copy their LXMF address or identity), `Esc` close |
