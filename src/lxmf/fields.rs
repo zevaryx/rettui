@@ -273,12 +273,32 @@ pub fn ceased(message: &LxMessage) -> bool {
 pub struct Audio {
     pub mode: u8,
     pub data: Vec<u8>,
+    /// A Codec2 recording decoded to a WAV file, if its mode can be (see
+    /// [`Audio::decoded`]).
+    pub wav: Option<Vec<u8>>,
 }
 
 impl Audio {
-    /// An Ogg file (Opus in its container), which players can open.
+    pub fn new(mode: u8, data: Vec<u8>) -> Self {
+        Self { mode, data, wav: None }
+    }
+
+    /// With a Codec2 recording decoded, if its mode can be. Ten minutes
+    /// take about a second: not for the async threads.
+    pub fn decoded(self) -> Self {
+        let wav = super::voice::codec2_wav(self.mode, &self.data);
+        Self { wav, ..self }
+    }
+
+    /// An Ogg file (Opus in its container), or Codec2 decoded to WAV: what
+    /// players can open.
     pub fn playable(&self) -> bool {
-        self.data.starts_with(b"OggS")
+        self.data.starts_with(b"OggS") || self.wav.is_some()
+    }
+
+    /// The file it's saved as, and what's in it.
+    pub fn file(&self) -> (String, &[u8]) {
+        (self.file_name(), self.wav.as_deref().unwrap_or(&self.data))
     }
 
     /// The codec, as shown.
@@ -292,11 +312,13 @@ impl Audio {
         }
     }
 
-    /// The file it's saved as. Only Ogg files play elsewhere; Codec2 needs
-    /// a decoder, so it's kept as it came.
+    /// The file it's saved as: Ogg, Codec2 decoded to WAV, or Codec2 as it
+    /// came if its mode can't be decoded.
     pub fn file_name(&self) -> String {
-        if self.playable() {
+        if self.data.starts_with(b"OggS") {
             "voice-message.ogg".into()
+        } else if self.wav.is_some() {
+            "voice-message.wav".into()
         } else if (0x01..=0x09).contains(&self.mode) {
             format!("voice-message-{}.codec2", self.codec().trim_start_matches("Codec2 ").to_lowercase())
         } else {
@@ -308,7 +330,7 @@ impl Audio {
 /// The voice message a message carries, if it's well formed.
 pub fn audio_of(message: &LxMessage) -> Option<Audio> {
     let field = message.audio_field().ok()??;
-    (!field.bytes.is_empty()).then(|| Audio { mode: field.mode, data: field.bytes.to_vec() })
+    (!field.bytes.is_empty()).then(|| Audio::new(field.mode, field.bytes.to_vec()))
 }
 
 /// Fields rettui reads, or knows to leave alone (an icon's appearance, a
@@ -501,9 +523,14 @@ mod tests {
         let audio = extras.audio.unwrap();
         assert!(audio.playable());
         assert_eq!((audio.codec().as_str(), audio.file_name().as_str()), ("Opus", "voice-message.ogg"));
-        let codec2 = Audio { mode: 0x04, data: vec![1, 2, 3] };
-        assert!(!codec2.playable());
-        assert_eq!((codec2.codec().as_str(), codec2.file_name().as_str()), ("Codec2 1200", "voice-message-1200.codec2"));
+        // Codec2 that decodes is saved as WAV; what doesn't, as it came.
+        let codec2 = Audio::new(0x04, vec![0; 12]).decoded();
+        assert!(codec2.playable());
+        assert_eq!((codec2.codec().as_str(), codec2.file_name().as_str()), ("Codec2 1200", "voice-message.wav"));
+        assert!(super::super::voice::is_wav(codec2.file().1));
+        let c700 = Audio::new(0x03, vec![0; 12]).decoded();
+        assert!(!c700.playable());
+        assert_eq!((c700.file_name().as_str(), c700.file().1), ("voice-message-700c.codec2", &[0u8; 12][..]));
         // A field nobody knows, on an empty message, is named; an icon's
         // appearance isn't.
         let mut odd = message();

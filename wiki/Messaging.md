@@ -161,10 +161,14 @@ rettui shows what each one is, rather than an empty message:
 - **Commands** (Sideband's, field `0x09`), such as asking for your location
   or a ping, are shown in words. rettui doesn't run or answer them, and
   they don't notify you either.
-- **Voice messages** (field `0x07`) are saved with the attachments. Opus
-  recordings are saved as `.ogg` files, which play in the web UI and in
-  most players. Codec2 recordings need a Codec2 decoder, so they're saved as
-  they came (`.codec2`) and marked as not playable.
+- **Voice messages** (field `0x07`) are saved with the attachments, and
+  play in the web UI and in most players (`o` in the TUI opens them):
+  - Opus recordings are saved as `.ogg` files, as they came.
+  - Codec2 recordings (the low-bandwidth modes MeshChat, Columba and
+    Sideband can send) are decoded when they arrive and saved as `.wav`
+    files (8 kHz mono). The 3200, 2400, 1600, 1400, 1300 and 1200 modes are
+    decoded, up to ten minutes; 700C, 450 and 450PWB aren't yet, so those
+    are saved as they came (`.codec2`) and marked as not playable.
 - A message with nothing rettui can show says so, naming the fields it
   carried, without a notification.
 
