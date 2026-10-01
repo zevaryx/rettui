@@ -110,7 +110,7 @@ pub async fn send(
     let content = message.to_string();
     let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let _ = commands.send(if mode == DeliveryMode::Paper {
-        NetCommand::WritePaper { id: 1, paper: crate::lxmf::paper::Paper { to, content, timestamp, reply: None } }
+        NetCommand::WritePaper { id: 1, paper: crate::lxmf::paper::Paper { to, content, timestamp, reply: None, format: None } }
     } else {
         NetCommand::SendMessage { id: 1, message: crate::lxmf::Outgoing::text(to, content, attachments, mode, timestamp) }
     });

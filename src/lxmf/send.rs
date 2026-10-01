@@ -3,7 +3,10 @@
 
 use std::time::Duration;
 
-use lxmf_core::constants::{FIELD_FILE_ATTACHMENTS, FIELD_REACTION, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TICKET};
+use lxmf_core::constants::{
+    FIELD_FILE_ATTACHMENTS, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TICKET, RENDERER_MARKDOWN,
+    RENDERER_MICRON,
+};
 use lxmf_core::handlers::{parse_pn_announce_data, stamp_cost_from_app_data};
 use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
 use rmpv::Value;
@@ -65,6 +68,16 @@ pub(super) async fn build_message(
         message
             .set_msgpack_field(FIELD_REACTION, super::fields::reaction_field(reaction))
             .map_err(|e| e.to_string())?;
+    }
+    // How its text is written, for clients that format it.
+    if let Some(format) = outgoing.format
+        && !outgoing.content.is_empty()
+    {
+        let renderer = match format {
+            crate::markdown::TextFormat::Markdown => RENDERER_MARKDOWN,
+            crate::markdown::TextFormat::Micron => RENDERER_MICRON,
+        };
+        message.set_msgpack_field(FIELD_RENDERER, encode(&Value::from(renderer))).map_err(|e| e.to_string())?;
     }
     // A ticket for them, and theirs to stamp this with (see `policy`).
     if let Some(ticket) = &outgoing.ticket {

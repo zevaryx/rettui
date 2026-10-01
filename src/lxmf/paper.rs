@@ -24,6 +24,7 @@ pub struct Paper {
     pub content: String,
     pub timestamp: f64,
     pub reply: Option<Reply>,
+    pub format: Option<crate::markdown::TextFormat>,
 }
 
 /// Write a paper message: its `lxm://` link, and its hash (what replies to
@@ -36,11 +37,11 @@ pub async fn write(
     source: Hash,
     paper: Paper,
 ) -> Result<(String, [u8; 32]), String> {
-    let Paper { to, content, timestamp, reply } = paper;
+    let Paper { to, content, timestamp, reply, format } = paper;
     let recipient = lookup(runtime, known, to)
         .await
         .map_err(|e| format!("{e}: a paper message needs the recipient's key, which their announce brings"))?;
-    let outgoing = Outgoing { reply, ..Outgoing::text(to, content, Vec::new(), DeliveryMode::Paper, timestamp) };
+    let outgoing = Outgoing { reply, format, ..Outgoing::text(to, content, Vec::new(), DeliveryMode::Paper, timestamp) };
     let mut message = build_message(identity, source, &outgoing, recipient.app_data.as_deref()).await?;
     message.method = DeliveryMethod::Paper;
     let hash = message.hash.ok_or("The message has no hash after signing")?;

@@ -342,6 +342,8 @@ pub struct Extras {
     pub audio: Option<Audio>,
     /// Its sender stopped sharing their location.
     pub ceased: bool,
+    /// How its text is written (the renderer field), if not plain.
+    pub format: Option<crate::markdown::TextFormat>,
     /// Fields rettui doesn't know.
     pub unknown: Vec<u8>,
 }
@@ -354,6 +356,10 @@ impl Extras {
             commands: commands_of(message),
             audio: audio_of(message),
             ceased: ceased(message),
+            format: value(message, FIELD_RENDERER)
+                .and_then(|v| v.as_u64())
+                .and_then(|r| u8::try_from(r).ok())
+                .and_then(crate::markdown::TextFormat::from_renderer),
             unknown: message.fields.keys().copied().filter(|id| !KNOWN_FIELDS.contains(id)).collect(),
         }
     }

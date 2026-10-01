@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{ACCENT, DIM, PICKED, SELECTED_BG, block, human_bytes, time_label, wrap};
 use crate::app::{App, HistoryHit, QrKind};
 use crate::lxmf::DeliveryMode;
+use crate::markdown::{self, TextFormat};
 use crate::store::{Message, MessageState, Reaction};
 use crate::term::images::{Placement, draw_placements};
 
@@ -249,8 +250,20 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             lines.push((Line::styled(message.title.clone(), Style::default().bold()), None));
         }
         if !message.content.is_empty() {
-            for line in wrap(&message.content, inner_width) {
-                lines.push((Line::raw(line), None));
+            match message.format {
+                Some(TextFormat::Markdown) => {
+                    lines.extend(markdown::lines(&message.content, inner_width).into_iter().map(|line| (line, None)));
+                }
+                Some(TextFormat::Micron) => {
+                    let page = crate::nomad::micron::parse(&message.content);
+                    let layout = page.layout(inner_width, None, &std::collections::HashMap::new(), None);
+                    lines.extend(layout.lines.into_iter().map(|line| (line, None)));
+                }
+                None => {
+                    for line in wrap(&message.content, inner_width) {
+                        lines.push((Line::raw(line), None));
+                    }
+                }
             }
         }
         // A location: a click shows it on a map.
@@ -509,6 +522,45 @@ mod tests {
         // Too small: no half a code, but what to do instead.
         let screen = draw(&mut app, 80, 24);
         assert!(!screen.contains('▀') && screen.contains("make the window bigger"), "{screen}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn markdown_messages_show_formatted_and_sent_ones_are_marked() {
+        use crate::markdown::TextFormat;
+        use crate::store::{Conversation, Message, MessageState};
+        let dir = std::env::temp_dir().join(format!("rettui-markdown-ui-{}", std::process::id()));
+        let key = "ab".repeat(16);
+        let message = Message {
+            id: "m1".into(),
+            incoming: true,
+            content: "Meet at **noon**\n- bring `tea`\n- and cake".into(),
+            state: MessageState::Received { verified: true },
+            format: Some(TextFormat::Markdown),
+            ..Message::default()
+        };
+        let mut store = Store::default();
+        store.conversations.insert(key.clone(), Conversation { messages: vec![message], ..Default::default() });
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), store);
+        app.open_newest_conversation();
+        let screen = draw(&mut app, 100, 30);
+        assert!(screen.contains("Meet at noon") && screen.contains("• bring tea") && !screen.contains("**"), "{screen}");
+        // The list's preview leaves the markup out too.
+        assert!(screen.contains("Meet at noon") && !screen.contains("`tea`"), "{screen}");
+        // What you write goes marked as Markdown (unless that's off).
+        app.send_message(key.clone(), "*hi*".into(), Vec::new(), crate::lxmf::DeliveryMode::Direct, None).unwrap();
+        let sent = std::iter::from_fn(|| net.try_recv().ok()).find_map(|c| match c {
+            crate::net::NetCommand::SendMessage { message, .. } => Some(message.format),
+            _ => None,
+        });
+        assert_eq!(sent, Some(Some(TextFormat::Markdown)));
+        app.settings.markdown_messages = false;
+        app.send_message(key.clone(), "*hi*".into(), Vec::new(), crate::lxmf::DeliveryMode::Direct, None).unwrap();
+        let sent = std::iter::from_fn(|| net.try_recv().ok()).find_map(|c| match c {
+            crate::net::NetCommand::SendMessage { message, .. } => Some(message.format),
+            _ => None,
+        });
+        assert_eq!(sent, Some(None));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

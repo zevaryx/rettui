@@ -136,6 +136,8 @@ pub struct Outgoing {
     /// The propagation node this client hosts, when it's the one set: sends
     /// to it go straight in (set by the network actor).
     pub local_node: Option<pn::LocalNode>,
+    /// How its text is written (LXMF's renderer field), if not plain.
+    pub format: Option<crate::markdown::TextFormat>,
 }
 
 impl Outgoing {
@@ -153,6 +155,7 @@ impl Outgoing {
             stamp_ticket: None,
             ticket: None,
             local_node: None,
+            format: None,
         }
     }
 }
