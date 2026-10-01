@@ -20,6 +20,7 @@ pub mod format;
 pub mod channels;
 pub mod guide;
 pub(crate) mod files;
+pub mod identity;
 mod input;
 mod messages;
 pub mod network;
@@ -127,6 +128,12 @@ pub enum PromptKind {
     ContactNotes(String),
     /// The name chosen in the getting-started guide.
     GuideName,
+    /// An identity file from another program, to use from the next start;
+    /// then, which (its address shown), confirmed.
+    ImportIdentity,
+    ConfirmImportIdentity(PathBuf),
+    /// Where to save a copy of the identity.
+    BackUpIdentity,
     ConfirmDeleteMessage { key: String, id: String },
     ConfirmDeleteConversation(String),
     ConfirmBlock(String),
@@ -433,6 +440,9 @@ pub struct App {
     /// An entry point the guide added, and when: said when it connects
     /// (see [`App::watch_connection`]).
     connect_watch: Option<(String, Instant)>,
+    /// The LXMF address of an identity chosen to use from the next start
+    /// (see [`identity`]).
+    pub identity_pending: Option<Hash>,
     /// Hubs to reconnect once Reticulum is back after a restart.
     rejoin_hubs: Vec<Hash>,
     /// Notifications waiting to be shown (see [`App::take_notifications`]).
@@ -547,6 +557,7 @@ impl App {
             next_request: 1,
             restart_pending: false,
             connect_watch: None,
+            identity_pending: None,
             rejoin_hubs: Vec::new(),
             notifications: Vec::new(),
             reads: Vec::new(),
@@ -936,6 +947,9 @@ impl App {
                 if let Some(guide) = &mut self.guide {
                     guide.choices.name = text.to_string();
                 }
+            }
+            kind @ (PromptKind::ImportIdentity | PromptKind::ConfirmImportIdentity(_) | PromptKind::BackUpIdentity) => {
+                self.submit_identity_prompt(kind, &text)
             }
             PromptKind::ContactNotes(key) => {
                 // Lines were shown as ↵ to edit on one line.

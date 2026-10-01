@@ -23,6 +23,7 @@ fn check(on: bool) -> &'static str {
 fn help(row: Option<GuideRow>) -> String {
     match row {
         Some(GuideRow::Name) => guide::NAME_HELP.to_string(),
+        Some(GuideRow::Identity) => guide::IDENTITY_HELP.to_string(),
         Some(GuideRow::Connect) => guide::CONNECT_HELP.to_string(),
         Some(GuideRow::Discover) => guide::DISCOVER_HELP.to_string(),
         Some(GuideRow::AutoPropagation) => guide::AUTO_PROPAGATION_HELP.to_string(),
@@ -65,6 +66,14 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         body.push(Line::from(spans).style(style));
     };
     row_line(&mut body, GuideRow::Name, vec![Span::styled("Your name   ", Style::default().fg(DIM)), Span::raw(choices.name.clone())]);
+    let identity = match (view.identity_pending, view.address) {
+        (Some(next), _) => vec![Span::raw(format!("{} from the next start", hex::encode(next)))],
+        (None, address) => vec![
+            Span::raw(address.map(hex::encode).unwrap_or_else(|| "(starting)".into())),
+            Span::styled("  · use one you already have", Style::default().fg(DIM)),
+        ],
+    };
+    row_line(&mut body, GuideRow::Identity, [vec![Span::styled("Identity    ", Style::default().fg(DIM))], identity].concat());
     if view.external {
         for line in wrap(&format!("{}: add entry points in that program's Reticulum config.", crate::reticulum::EXTERNAL_NOTE), inner_width) {
             body.push(Line::styled(line, Style::default().fg(DIM)));

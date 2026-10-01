@@ -213,6 +213,8 @@ impl App {
             }
             KeyCode::Char('c') => self.show_address_qr(),
             KeyCode::Char('g') => self.open_guide(),
+            KeyCode::Char('b') => self.ask_identity_backup(),
+            KeyCode::Char('i') => self.ask_identity_file(),
             _ => {}
         }
     }

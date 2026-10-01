@@ -15,6 +15,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
 
 use super::{App, PromptKind};
+use crate::net::Hash;
 use crate::reticulum as rns;
 
 /// The community entry point offered: RMAP World's transport node.
@@ -45,6 +46,9 @@ pub const RNODE_NOTE: &str = "LoRa radios reach others with no internet. Flashin
 /// What each choice does, for both UIs.
 pub const INTRO: &str = "Reticulum reaches others without servers: on your local network, by radio, or over the internet through entry points people run. Until you add one, rettui only reaches your local network.";
 pub const NAME_HELP: &str = "The name sent in your announces, so others see who you are.";
+pub const IDENTITY_HELP: &str = "Your identity is the key behind your address. Coming from Sideband, NomadNet or MeshChat? Use its identity file, and contacts reach you here at the address they know. Enter picks the file; it's used from the next start.";
+/// In the web UI, which can't change the identity.
+pub const IDENTITY_WEB_NOTE: &str = "Coming from Sideband, NomadNet or MeshChat? To keep your address, use that identity file from the terminal UI (i in its Status tab), or copy it over this file while rettui is stopped:";
 pub const CONNECT_HELP: &str = "RMAP World runs a public transport node: your messages, pages and announces reach the wider network through it. Its operator sees your IP address, and anyone watching your connection can tell you use Reticulum.";
 pub const DISCOVER_HELP: &str = "Connects to up to 2 entry points others announce, as Reticulum's manual recommends, and uses RMAP World only until they connect. You'll connect to hosts you didn't choose.";
 pub const AUTO_PROPAGATION_HELP: &str = "A propagation node keeps messages for you while you're offline. Anyone can run one: the one picked (the nearest that answers fastest) sees who your messages are for and when you collect them, and could lose them; it can't read them.";
@@ -55,6 +59,9 @@ pub const LATER_HELP: &str = "Closes the guide; it's in the Status tab (g) whene
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuideView {
     pub name: String,
+    /// The LXMF address in use, and one to use from the next start.
+    pub address: Option<Hash>,
+    pub identity_pending: Option<Hash>,
     /// The Reticulum config already reaches the entry point, or finds
     /// entry points itself.
     pub has_entry_point: bool,
@@ -88,6 +95,7 @@ pub struct Guide {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuideRow {
     Name,
+    Identity,
     Connect,
     Discover,
     AutoPropagation,
@@ -98,7 +106,7 @@ pub enum GuideRow {
 
 impl Guide {
     pub fn rows(view: &GuideView) -> Vec<GuideRow> {
-        let mut rows = vec![GuideRow::Name];
+        let mut rows = vec![GuideRow::Name, GuideRow::Identity];
         if !view.external {
             rows.extend([GuideRow::Connect, GuideRow::Discover]);
         }
@@ -119,6 +127,8 @@ impl App {
         let config = self.guide_config();
         GuideView {
             name: self.settings.display_name.clone(),
+            address: self.lxmf_hash,
+            identity_pending: self.identity_pending,
             has_entry_point: rns::has_interface_to(&config, ENTRY_HOST),
             has_discovery: rns::discovery_on(&config),
             external: self.uses_external_shared_instance(),
@@ -261,6 +271,7 @@ impl App {
                 let name = choices.name.clone();
                 self.open_prompt(PromptKind::GuideName, "Your name, as others see it", &name);
             }
+            GuideRow::Identity => self.ask_identity_file(),
             GuideRow::Connect => choices.connect = !choices.connect,
             GuideRow::Discover => choices.discover = !choices.discover,
             GuideRow::AutoPropagation => choices.auto_propagation = !choices.auto_propagation,
@@ -362,19 +373,25 @@ mod tests {
         press(&mut app, KeyCode::Char('g'));
         assert!(app.guide.is_some());
         // Down to the propagation node row, and on.
-        for _ in 0..3 {
+        for _ in 0..4 {
             press(&mut app, KeyCode::Down);
         }
         press(&mut app, KeyCode::Char(' '));
         assert!(app.guide.as_ref().unwrap().choices.auto_propagation);
         // Changing the name goes through a prompt and comes back.
-        press(&mut app, KeyCode::Up);
-        press(&mut app, KeyCode::Up);
-        press(&mut app, KeyCode::Up);
+        for _ in 0..4 {
+            press(&mut app, KeyCode::Up);
+        }
         press(&mut app, KeyCode::Enter);
         app.on_paste("Zev");
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.guide.as_ref().unwrap().choices.name, "rettui userZev");
+        // The identity row asks for a file; the guide stays.
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.prompt.as_ref().map(|p| &p.kind), Some(PromptKind::ImportIdentity)));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.prompt.is_none() && app.guide.is_some());
         press(&mut app, KeyCode::Esc);
         assert!(app.guide.is_none());
         std::fs::remove_dir_all(&dir).unwrap();

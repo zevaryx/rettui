@@ -117,7 +117,14 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let label = |s: &str| Span::styled(format!("{s:<18}"), Style::default().fg(DIM));
     let lines = vec![
         Line::from(vec![label("Display name"), Span::raw(app.settings.display_name.clone()).bold()]),
-        Line::from(vec![label("LXMF address"), Span::styled(address, Style::default().fg(ACCENT))]),
+        Line::from(vec![
+            label("LXMF address"),
+            Span::styled(address, Style::default().fg(ACCENT)),
+            match app.identity_pending {
+                Some(next) => Span::styled(format!("  → {} from the next start", hex::encode(next)), Style::default().fg(Color::Yellow)),
+                None => Span::raw(""),
+            },
+        ]),
         Line::from(vec![label("Network"), Span::raw(network)]),
         Line::from(vec![label("Propagation node"), Span::raw(propagation)]),
         Line::from(vec![label("Last sync"), Span::raw(sync)]),
