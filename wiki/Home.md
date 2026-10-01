@@ -1,7 +1,7 @@
 A [Reticulum](https://reticulum.network/) client written in Rust, for the terminal
 and the browser. It does LXMF messaging, RRC (Reticulum Relay Chat), NomadNet
-browsing, and hosting your own NomadNet node, and it can edit your Reticulum
-configuration. It is built on:
+browsing, and hosting your own NomadNet node or LXMF propagation node, and
+it can edit your Reticulum configuration. It is built on:
 
 - [rsReticulum](https://github.com/ratspeak/rsReticulum): the Reticulum protocol
 - [rsLXMF](https://github.com/ratspeak/rsLXMF): LXMF messages

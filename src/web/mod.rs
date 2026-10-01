@@ -170,6 +170,11 @@ impl Owner {
                 self.on_net(event);
                 if counts(self) == before { Scope::NONE } else { scope }
             }
+            NetEvent::Pn(net::PnEvent::Stats(_)) => {
+                let before = self.app.pn.stats.clone();
+                self.on_net(event);
+                if self.app.pn.stats == before { Scope::NONE } else { scope }
+            }
             _ => {
                 self.on_net(event);
                 scope
@@ -241,7 +246,7 @@ impl Scope {
 
     fn of(event: &NetEvent) -> Self {
         match event {
-            NetEvent::Interfaces(_) | NetEvent::Log(_) => Scope::STATUS,
+            NetEvent::Interfaces(_) | NetEvent::Log(_) | NetEvent::Pn(net::PnEvent::Stats(_)) => Scope::STATUS,
             NetEvent::Host(net::HostEvent::Stats(_)) => Scope::NODE,
             NetEvent::Announce { .. } => Scope::PEERS,
             // Hub connections, rooms and whispers (their notifications go

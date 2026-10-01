@@ -47,6 +47,7 @@ impl App {
         let mut notes = Vec::new();
         let mut intervals = false;
         let mut node = false;
+        let mut pn = false;
         let mut archive = false;
         for field in &changed {
             match field.key {
@@ -97,6 +98,14 @@ impl App {
                     self.settings.node_executable_pages = after.node_executable_pages;
                     node = true;
                 }
+                "pn_enabled" | "pn_name" | "pn_stamp_cost" | "pn_storage_mb" | "pn_transfer_kb" => {
+                    self.settings.pn_enabled = after.pn_enabled;
+                    self.settings.pn_name = after.pn_name.clone();
+                    self.settings.pn_stamp_cost = after.pn_stamp_cost;
+                    self.settings.pn_storage_mb = after.pn_storage_mb;
+                    self.settings.pn_transfer_kb = after.pn_transfer_kb;
+                    pn = true;
+                }
                 // The running Reticulum instance keeps its config.
                 _ => {}
             }
@@ -108,6 +117,11 @@ impl App {
         let renamed = changed.iter().any(|f| f.key == "display_name") && after.node_name.is_none();
         if node || (renamed && after.node_enabled) {
             self.apply_node_settings();
+        }
+        // The propagation node also takes the display name and the announce
+        // interval (it's only restarted if what it runs with changed).
+        if pn || after.pn_enabled {
+            self.apply_pn_settings();
         }
         if archive {
             self.archive_overflow_now();

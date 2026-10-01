@@ -4060,6 +4060,17 @@ app.views.status = {
       done: `${s.sync.at} · ${s.sync.count} new`,
       failed: `${s.sync.at} · failed: ${s.sync.error}`,
     }[s.sync.state];
+    const h = s.hosting;
+    const hosting = h.state === 'running'
+      ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: h.hash }),
+        h.stats ? el('span', { class: 'dim', text: '  ' + [
+          `${h.stats.messages} kept (${humanBytes(h.stats.bytes)})`, `${h.stats.received} in`, `${h.stats.served} collected`,
+          h.stats.delivered_here ? `${h.stats.delivered_here} for you` : null, h.stats.rejected ? `${h.stats.rejected} refused` : null,
+          `${h.stats.peers} peer${h.stats.peers === 1 ? '' : 's'}`,
+        ].filter(Boolean).join(' · ') }) : null)
+      : el('span', { class: h.state === 'off' ? 'dim' : '', text: {
+        off: 'no (Host a propagation node, in the settings)', starting: 'starting', failed: `failed: ${h.error}`,
+      }[h.state] });
     const label = (text) => el('span', { class: 'label', text });
     this.info.replaceChildren(
       label('Display name'), el('span', { style: 'font-weight:600', text: s.display_name }),
@@ -4068,6 +4079,7 @@ app.views.status = {
       label('Network'), el('span', { text: net }),
       label('Propagation node'), el('span', { text: s.propagation_node ? `${s.propagation_node.name}  ${s.propagation_node.hash}` : 'none (pick one in the Network tab)' }),
       label('Last sync'), el('span', { text: sync }),
+      label('Hosting messages'), hosting,
       label('RNS config'), el('span', { class: 'mono', text: s.rns_config || 'rsReticulum default' }),
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Known'), el('span', { text: `${s.known} destinations` }),

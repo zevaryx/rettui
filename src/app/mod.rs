@@ -327,6 +327,8 @@ pub struct App {
     pub channels: crate::app::channels::Channels,
     /// The hosted node and the page editor.
     pub node: node::Node,
+    /// The propagation node hosted here.
+    pub pn: node::PnHost,
     /// The Reticulum config editor.
     pub rns: reticulum::RnsState,
     pub net_state: NetState,
@@ -437,6 +439,11 @@ impl App {
             Some(&identity_hash),
         );
         let node = node::Node::new(node_hash, settings.node_enabled);
+        let pn_hash = rns_identity::destination::Destination::hash_from_name_and_identity(
+            crate::lxmf::PROPAGATION_ASPECT,
+            Some(&identity_hash),
+        );
+        let pn = node::PnHost::new(pn_hash, crate::lxmf::pn::PnConfig::from_settings(&settings, &paths));
         let cache = Cache::new(
             paths.cache.clone(),
             std::time::Duration::from_secs(settings.cache_hours * 3600),
@@ -456,6 +463,7 @@ impl App {
             identity_hash,
             channels,
             node,
+            pn,
             rns: reticulum::RnsState::default(),
             net_state: NetState::Starting,
             lxmf_hash: None,
@@ -728,6 +736,7 @@ impl App {
             }
             NetEvent::Rrc { hub, event } => self.on_rrc(hub, event),
             NetEvent::Host(event) => self.on_host(event),
+            NetEvent::Pn(event) => self.on_pn(event),
             NetEvent::StartFailed(e) => {
                 self.log(format!("Network failed: {e}"));
                 self.net_state = NetState::Failed(e);
@@ -988,6 +997,7 @@ impl App {
             self.node.status = node::NodeStatus::Starting;
         }
         self.node.stats = None;
+        self.pn.restarting(crate::lxmf::pn::PnConfig::from_settings(&self.settings, &self.paths));
         if self.browser.loading.take().is_some() {
             self.browser.error = Some("Reticulum restarted while loading; load the page again".into());
         }

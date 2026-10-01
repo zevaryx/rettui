@@ -22,7 +22,7 @@ MeshChat, NomadNet and other LXMF clients).
   when one is known. To ask for stamps yourself, see
   [Blocking and spam](#blocking-and-spam).
 - **Propagation nodes:** the ones you hear are listed in the Network tab.
-  Pick one with `p`. rettui syncs every `sync_interval_mins` (30 by default)
+  Pick one with `p`. You can also [host one](Hosting-a-Node#propagation-node). rettui syncs every `sync_interval_mins` (30 by default)
   or whenever you press `S`. A sync identifies you to the node, downloads your
   messages, then tells the node to delete them.
 - **Attachments:**

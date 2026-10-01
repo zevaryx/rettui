@@ -60,6 +60,16 @@ pub struct Settings {
     pub stamp_cost: u64,
     /// Largest message taken, in kilobytes; 0 takes any size.
     pub max_message_kb: u64,
+    /// Host an LXMF propagation node (messages kept in `propagation/`).
+    pub pn_enabled: bool,
+    /// Name the propagation node announces; the display name when unset.
+    pub pn_name: Option<String>,
+    /// Propagation stamp cost asked of senders (LXMF's least is 13).
+    pub pn_stamp_cost: u64,
+    /// Megabytes of messages the propagation node keeps.
+    pub pn_storage_mb: u64,
+    /// Largest message a client may send it, in kilobytes.
+    pub pn_transfer_kb: u64,
 }
 
 impl Default for Settings {
@@ -88,6 +98,12 @@ impl Default for Settings {
             stamp_cost: 0,
             // LXMF's own default delivery limit (NomadNet's is 500).
             max_message_kb: 1000,
+            pn_enabled: false,
+            pn_name: None,
+            // lxmd's defaults.
+            pn_stamp_cost: u64::from(lxmf_core::constants::PROPAGATION_COST),
+            pn_storage_mb: 500,
+            pn_transfer_kb: lxmf_core::constants::PROPAGATION_LIMIT as u64,
         }
     }
 }
@@ -115,6 +131,8 @@ pub struct Paths {
     pub web_push: PathBuf,
     /// Default folder for a hosted node's pages and files.
     pub node: PathBuf,
+    /// Messages kept by the hosted propagation node.
+    pub propagation: PathBuf,
 }
 
 impl Paths {
@@ -143,6 +161,7 @@ impl Paths {
             web_push_key: base.join("web_push_key"),
             web_push: base.join("web_push.json"),
             node: base.join("node"),
+            propagation: base.join("propagation"),
         })
     }
 }
@@ -338,6 +357,41 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "pn_enabled",
+        label: "Host a propagation node",
+        help: "Keep messages for people who are offline until they collect them, as lxmd does (it takes messages from peers, but doesn't sync to other nodes itself)",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "pn_name",
+        label: "Propagation node name",
+        help: "Name your propagation node announces; empty uses your display name",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "pn_stamp_cost",
+        label: "Propagation stamp cost",
+        help: "Proof of work asked of each message sent through your propagation node (at least 13; 16 is usual)",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "pn_storage_mb",
+        label: "Propagation storage (MB)",
+        help: "Most disk the propagation node's messages may use (propagation/ in the data directory); the oldest go first",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "pn_transfer_kb",
+        label: "Propagation message (KB)",
+        help: "Largest message a client may send through your propagation node (256 is usual)",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
         key: "wrap_lines",
         label: "Wrap editor lines",
         help: "Wrap long lines in the text editors (pages, Reticulum config) instead of scrolling sideways",
@@ -451,6 +505,11 @@ impl Settings {
             "ignore_unknown_senders" => self.ignore_unknown_senders.to_string(),
             "stamp_cost" => self.stamp_cost.to_string(),
             "max_message_kb" => self.max_message_kb.to_string(),
+            "pn_enabled" => self.pn_enabled.to_string(),
+            "pn_name" => self.pn_name.clone().unwrap_or_default(),
+            "pn_stamp_cost" => self.pn_stamp_cost.to_string(),
+            "pn_storage_mb" => self.pn_storage_mb.to_string(),
+            "pn_transfer_kb" => self.pn_transfer_kb.to_string(),
             _ => String::new(),
         }
     }
@@ -480,6 +539,36 @@ impl Settings {
             "ignore_unknown_senders" => self.ignore_unknown_senders = toggle(value).map_err(fail)?,
             "stamp_cost" => self.stamp_cost = number(value, MAX_STAMP_COST).map_err(fail)?,
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
+            "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
+            "pn_name" => {
+                if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
+                    return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));
+                }
+                self.pn_name = optional(value);
+            }
+            "pn_stamp_cost" => {
+                let cost = number(value, MAX_STAMP_COST).map_err(fail)?;
+                let least = u64::from(lxmf_core::constants::PROPAGATION_COST_MIN);
+                if cost < least {
+                    return Err(fail(format!("at least {least} (LXMF's least)")));
+                }
+                self.pn_stamp_cost = cost;
+            }
+            "pn_storage_mb" => {
+                let mb = number(value, MAX_STORAGE_MB).map_err(fail)?;
+                if mb == 0 {
+                    return Err(fail("at least 1".into()));
+                }
+                self.pn_storage_mb = mb;
+            }
+            "pn_transfer_kb" => {
+                // Peers send at most a sync's worth at once.
+                let kb = number(value, lxmf_core::constants::SYNC_LIMIT as u64).map_err(fail)?;
+                if kb == 0 {
+                    return Err(fail("at least 1".into()));
+                }
+                self.pn_transfer_kb = kb;
+            }
             "node_announce_interval_mins" => {
                 self.node_announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?;
             }
@@ -630,6 +719,14 @@ mod tests {
         s.set_field("home", "aa11bb22cc33dd44ee55ff6600778899:/page/index.mu").unwrap();
         assert!(s.set_field("rns_config", "/definitely/not/here").is_err());
         s.set_field("rns_config", &std::env::temp_dir().to_string_lossy()).unwrap();
+        // A propagation node asks at least LXMF's least stamp cost, and
+        // keeps something.
+        assert!(s.set_field("pn_stamp_cost", "12").is_err());
+        s.set_field("pn_stamp_cost", "20").unwrap();
+        assert!(s.set_field("pn_storage_mb", "0").is_err());
+        assert!(s.set_field("pn_transfer_kb", "20000").is_err());
+        s.set_field("pn_transfer_kb", "512").unwrap();
+        assert_eq!((s.pn_stamp_cost, s.pn_transfer_kb), (20, 512));
         let error = s.set_field("cache_hours", "lots").unwrap_err();
         assert!(error.starts_with("Cache pages for (h):"), "{error}");
         assert!(s.set_field("nonsense", "1").is_err());

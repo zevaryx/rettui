@@ -32,6 +32,8 @@ configuration. It is built on:
   IRC-like protocol NomadNet 1.4 also speaks.
 - **NomadNet:** browse pages (Micron, forms, images, a page cache), and host
   your own node with a page editor and live preview.
+- **Propagation node:** keep messages for people who are offline, as `lxmd`
+  does (other nodes can peer with it).
 - **Notifications:** the desktop's own in the terminal, the browser's (phones
   too) in the web UI, with per-conversation and per-room muting.
 - **Reticulum config:** edit every option of your Reticulum config, checked

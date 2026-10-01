@@ -1,9 +1,9 @@
 //! Reticulum network actor.
 //!
 //! Owns the rns-runtime handle, the local `lxmf.delivery` destination, the
-//! NomadNet Link cache and the RRC hub sessions. The UI talks to it only
-//! through [`NetCommand`] and [`NetEvent`] channels so rendering never waits
-//! on the network. The protocol work itself lives in [`crate::lxmf`],
+//! NomadNet Link cache, the RRC hub sessions, and the nodes hosted here. The
+//! UI talks to it only through [`NetCommand`] and [`NetEvent`] channels so
+//! rendering never waits on the network. The protocol work itself lives in [`crate::lxmf`],
 //! [`crate::nomad`] and [`crate::rrc`].
 
 pub mod iface_log;
@@ -21,6 +21,7 @@ use rns_runtime::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
+use crate::lxmf::pn::{HostedPn, LocalNode, PnConfig, PnStats};
 use crate::lxmf::{self, InboundMessage, LXMF_ASPECT, PROPAGATION_ASPECT};
 use crate::nomad::host::{self, HostConfig};
 use crate::nomad::{self, FetchedContent, LinkCache};
@@ -120,6 +121,9 @@ pub enum NetCommand {
     /// Pick up added, renamed or deleted pages.
     HostReload,
     HostAnnounce,
+    /// Start (or restart, when it changed) the hosted propagation node, or
+    /// stop it with `None`.
+    Propagation(Option<PnConfig>),
     /// Close hub links and stop Reticulum; [`NetEvent::Stopped`] follows.
     Shutdown(Stop),
 }
@@ -180,6 +184,7 @@ pub enum NetEvent {
     Log(String),
     Rrc { hub: Hash, event: RrcEvent },
     Host(HostEvent),
+    Pn(PnEvent),
     /// The actor has shut down (after [`NetCommand::Shutdown`]).
     Stopped,
 }
@@ -193,6 +198,15 @@ pub enum HostEvent {
     Stats(nomad_core::NomadServeStats),
 }
 
+/// What the hosted propagation node is doing.
+#[derive(Debug)]
+pub enum PnEvent {
+    Started { hash: Hash },
+    Stopped,
+    Failed(String),
+    Stats(PnStats),
+}
+
 pub struct NetOptions {
     pub rns_config: Option<String>,
     pub identity: Identity,
@@ -204,6 +218,8 @@ pub struct NetOptions {
     pub known_identities: PathBuf,
     /// Node to host from the start, if any.
     pub host: Option<HostConfig>,
+    /// Propagation node to host from the start, if any.
+    pub propagation: Option<PnConfig>,
     /// The stamp cost asked of senders, and the largest message taken.
     pub stamp_cost: Option<u8>,
     pub max_message_bytes: u64,
@@ -344,6 +360,42 @@ async fn run(
     if let Some(config) = options.host.clone() {
         launch(host_generation, config);
     }
+    // The propagation node is started (and stopped) in tasks, one at a time:
+    // the slot's lock is held from stopping the old node until the new one
+    // is in place. Messages it takes for us come back on `pn_deliver`.
+    let pn_slot: Arc<Mutex<Option<HostedPn>>> = Arc::default();
+    let (pn_tx, mut pn_rx) = mpsc::unbounded_channel::<(u64, Result<Option<LocalNode>, String>)>();
+    let (pn_deliver_tx, mut pn_deliver) = mpsc::unbounded_channel::<Vec<u8>>();
+    let pn_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let mut pn_config = options.propagation.clone();
+    let mut pn_local: Option<LocalNode> = None;
+    let launch_pn = |config: Option<PnConfig>| {
+        let generation = pn_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let (runtime, identity, slot, current, tx, deliver) =
+            (runtime.clone(), identity.clone(), pn_slot.clone(), pn_generation.clone(), pn_tx.clone(), pn_deliver_tx.clone());
+        tokio::spawn(async move {
+            let mut slot = slot.lock().await;
+            if let Some(old) = slot.take() {
+                old.stop().await;
+            }
+            // A later change replaces this one: it starts what's wanted.
+            if current.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return;
+            }
+            let result = match config {
+                None => Ok(None),
+                Some(config) => HostedPn::start(&runtime, &identity, lxmf_hash, &config, deliver).await.map(|node| {
+                    let local = node.local();
+                    *slot = Some(node);
+                    Some(local)
+                }),
+            };
+            let _ = tx.send((generation, result));
+        });
+    };
+    if pn_config.is_some() {
+        launch_pn(pn_config.clone());
+    }
     let mut rrc_sessions = rrc_session::Sessions::default();
     let mut stop = Stop::Quit;
     let syncer = lxmf::Syncer::new(runtime.clone(), known.clone(), policy.clone(), identity.clone(), lxmf_hash, ev.clone());
@@ -352,6 +404,14 @@ async fn run(
     let mut known_save: Option<tokio::task::JoinHandle<()>> = None;
     let announce_data = |name: &str| app_data(name, policy.lock().unwrap().stamp_cost);
     let mut announces_missed = 0u64;
+    // Syncing from the node hosted here: its messages for us were delivered
+    // as they came in.
+    let sync = |node: Option<Hash>, local: &Option<LocalNode>| match local {
+        Some(local) if node == Some(local.hash) => {
+            let _ = ev.send(NetEvent::Synced(Ok(0)));
+        }
+        _ => syncer.start(node),
+    };
 
     // Give interfaces a moment to come up before announcing or syncing.
     let startup = tokio::time::sleep(Duration::from_secs(3));
@@ -377,14 +437,14 @@ async fn run(
                     announce(&delivery.handle, announce_data(&display_name), &ev).await;
                 }
                 if propagation_node.is_some() && sync_interval.is_some() {
-                    syncer.start(propagation_node);
+                    sync(propagation_node, &pn_local);
                 }
             }
             _ = announce_timer.tick(), if announce_interval.is_some() => {
                 announce(&delivery.handle, announce_data(&display_name), &ev).await;
             }
             _ = sync_timer.tick(), if sync_interval.is_some() && propagation_node.is_some() => {
-                syncer.start(propagation_node);
+                sync(propagation_node, &pn_local);
             }
             _ = stats_timer.tick() => {
                 if known_save.as_ref().is_none_or(|save| save.is_finished()) {
@@ -418,6 +478,11 @@ async fn run(
                 }
                 if let Some(node) = &hosted {
                     let _ = ev.send(NetEvent::Host(HostEvent::Stats(node.stats())));
+                }
+                if let Ok(slot) = pn_slot.try_lock()
+                    && let Some(node) = slot.as_ref()
+                {
+                    let _ = ev.send(NetEvent::Pn(PnEvent::Stats(node.stats())));
                 }
             }
             command = cmd_rx.recv() => {
@@ -469,7 +534,7 @@ async fn run(
                             sync_timer = timer(sync);
                         }
                     }
-                    NetCommand::Sync => syncer.start(propagation_node),
+                    NetCommand::Sync => sync(propagation_node, &pn_local),
                     NetCommand::WritePaper { id, paper } => {
                         let (runtime, known, identity, ev) =
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone());
@@ -483,7 +548,8 @@ async fn run(
                         let (runtime, known, identity, ev, policy) =
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone(), policy.clone());
                         let (stamp_ticket, ticket) = policy.lock().unwrap().for_outgoing(message.to);
-                        let outgoing = lxmf::Outgoing { propagation_node, stamp_ticket, ticket, ..message };
+                        let local_node = pn_local.clone();
+                        let outgoing = lxmf::Outgoing { propagation_node, stamp_ticket, ticket, local_node, ..message };
                         let (to, gives_ticket) = (outgoing.to, outgoing.ticket.is_some());
                         tokio::spawn(async move {
                             let result = lxmf::send(&runtime, &known, &identity, lxmf_hash, outgoing).await;
@@ -525,6 +591,13 @@ async fn run(
                             Err(e) => format!("Node announce failed: {e}"),
                         };
                         let _ = ev.send(NetEvent::Log(line));
+                    }
+                    NetCommand::Propagation(config) => {
+                        if config != pn_config {
+                            pn_config = config.clone();
+                            pn_local = None;
+                            launch_pn(config);
+                        }
                     }
                     NetCommand::Fetch { id, node, path, fields, identify } => {
                         let (runtime, links, ev) = (runtime.clone(), links.clone(), ev.clone());
@@ -610,6 +683,23 @@ async fn run(
             Some(completion) = delivery.events.resource_completions.recv() => {
                 lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, completion.data), &ev);
             }
+            // Sent to us through the propagation node hosted here.
+            Some(data) = pn_deliver.recv() => lxmf::spawn_inbound(&runtime, &known, &policy, data, &ev),
+            Some((generation, result)) = pn_rx.recv() => {
+                if generation != pn_generation.load(std::sync::atomic::Ordering::SeqCst) {
+                    continue;
+                }
+                let event = match result {
+                    Ok(Some(local)) => {
+                        let hash = local.hash;
+                        pn_local = Some(local);
+                        PnEvent::Started { hash }
+                    }
+                    Ok(None) => PnEvent::Stopped,
+                    Err(e) => PnEvent::Failed(e),
+                };
+                let _ = ev.send(NetEvent::Pn(event));
+            }
         }
     }
 
@@ -629,6 +719,12 @@ async fn run(
     rrc_sessions.close_all().await;
     drop(hosted);
     let quick = Duration::from_millis(500);
+    let _ = tokio::time::timeout(quick, async {
+        if let Some(node) = pn_slot.lock().await.take() {
+            node.stop().await;
+        }
+    })
+    .await;
     let _ = tokio::time::timeout(quick, async {
         let _ = lxmf_announces.close().await;
         let _ = nomad_announces.close().await;
