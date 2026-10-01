@@ -214,6 +214,8 @@ a { color: var(--accent); }
 .guide .guide-status.warn { color: var(--yellow); }
 .guide .guide-links { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
 .guide .guide-link { display: flex; flex-direction: column; gap: 2px; }
+.first-steps { display: flex; flex-direction: column; gap: 2px; }
+.first-steps button { margin-left: 8px; padding: 0 6px; }
 /* Markdown (and Micron) messages, as the server made them. */
 .message .content.formatted { white-space: normal; }
 .formatted p, .formatted ul, .formatted ol, .formatted blockquote, .formatted pre { margin: 0 0 0.45em; }

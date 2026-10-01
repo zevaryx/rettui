@@ -75,6 +75,16 @@ pub struct GuideView {
     pub heard: usize,
 }
 
+/// A first step on the network, and whether it's taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstStep {
+    pub label: &'static str,
+    pub done: bool,
+    /// How to take it, in the terminal UI and in the web UI.
+    pub how: &'static str,
+    pub how_web: &'static str,
+}
+
 /// What the user chose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuideChoices {
@@ -196,13 +206,25 @@ impl App {
     /// The guide was seen: it isn't shown at start again.
     pub fn finish_guide(&mut self) {
         self.guide = None;
-        if self.settings.welcomed {
-            return;
+        if !self.settings.welcomed {
+            self.save_flag(|settings| settings.welcomed = true);
         }
-        self.settings.welcomed = true;
+    }
+
+    /// A copy of the identity was saved.
+    pub fn identity_backed_up(&mut self) {
+        if !self.settings.identity_backed_up {
+            self.save_flag(|settings| settings.identity_backed_up = true);
+        }
+    }
+
+    /// Set something in the settings the user doesn't edit, and save it
+    /// (with the file's other values as they are).
+    fn save_flag(&mut self, set: impl Fn(&mut crate::config::Settings)) {
+        set(&mut self.settings);
         match self.saved_settings() {
             Ok(mut saved) => {
-                saved.welcomed = true;
+                set(&mut saved);
                 if let Err(e) = saved.save(&self.paths.settings) {
                     self.log(format!("Could not save settings: {e:#}"));
                 }
@@ -210,6 +232,35 @@ impl App {
             }
             Err(e) => self.log(e),
         }
+    }
+
+    /// The first steps on the network, while some are left (none once all
+    /// are taken).
+    pub fn first_steps(&self) -> Vec<FirstStep> {
+        let sent = self.store.conversations.values().any(|c| c.messages.iter().any(|m| !m.incoming));
+        let steps = vec![
+            FirstStep {
+                label: "Hear from others",
+                done: !self.store.peers.is_empty(),
+                how: "g, then wait",
+                how_web: "connect through an entry point (Getting started, above); announces then arrive over hours",
+            },
+            FirstStep { label: "Announce yourself", done: self.announced, how: "A", how_web: "Announce, above" },
+            FirstStep {
+                label: "Choose a propagation node",
+                done: self.settings.propagation_node.is_some() || self.settings.auto_propagation_node,
+                how: "p in the Network tab, or g",
+                how_web: "in the Network section, or let Getting started pick",
+            },
+            FirstStep {
+                label: "Back up your identity",
+                done: self.settings.identity_backed_up,
+                how: "b",
+                how_web: "copy the identity file in the Data folder (below) somewhere safe, or use b in the terminal UI",
+            },
+            FirstStep { label: "Send a message", done: sent, how: "n in Messages", how_web: "+ New in Messages" },
+        ];
+        if steps.iter().all(|step| step.done) { Vec::new() } else { steps }
     }
 
     /// After the guide added the entry point: say when it connects, or, if
@@ -357,6 +408,42 @@ mod tests {
         // Existing settings files without the field don't show it again.
         let old: Settings = serde_json::from_str(r#"{"display_name": "Old hand"}"#).unwrap();
         assert!(old.welcomed);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn first_steps_until_all_are_taken() {
+        use crate::net::PeerKind;
+        use crate::store::{Conversation, Message, Peer};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let dir = std::env::temp_dir().join(format!("rettui-steps-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        let done = |app: &App| app.first_steps().iter().map(|step| step.done).collect::<Vec<_>>();
+        assert_eq!(done(&app), [false; 5]);
+        let draw = |app: &mut App| {
+            let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+            terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..30).map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect::<String>()
+        };
+        app.tab = crate::app::Tab::Status;
+        let screen = draw(&mut app);
+        assert!(screen.contains("○○○○○  next: Hear from others (g, then wait)"), "{screen}");
+        // Each, as it's taken.
+        app.store.peers.insert("ab".repeat(16), Peer { kind: PeerKind::Lxmf, name: None, hops: 2, last_seen: 0 });
+        app.on_net(crate::net::NetEvent::Announced);
+        app.settings.auto_propagation_node = true;
+        assert_eq!(done(&app), [true, true, true, false, false]);
+        assert!(draw(&mut app).contains("✓✓✓○○  next: Back up your identity (b)"));
+        app.identity_backed_up();
+        assert!(app.saved_settings().unwrap().identity_backed_up, "kept for next time");
+        let sent = Message { id: "local-1".into(), incoming: false, ..Message::default() };
+        app.store.conversations.insert("cd".repeat(16), Conversation { messages: vec![sent], ..Default::default() });
+        // All taken: gone.
+        assert!(app.first_steps().is_empty());
+        assert!(!draw(&mut app).contains("First steps"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
