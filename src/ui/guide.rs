@@ -192,7 +192,7 @@ mod tests {
         let apply_at = |app: &crate::app::App| app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Apply).unwrap().0;
         let screen = draw(&mut app);
         assert!(screen.contains("Getting started") && screen.contains("Reticulum reaches others") && screen.contains("Not connected to anyone yet"), "{screen}");
-        assert!(screen.contains("[x] Connect through RMAP World") && screen.contains("Using a LoRa radio (RNode)") && screen.contains("Using rettui"), "{screen}");
+        assert!(screen.contains("[x] Connect through RMAP World") && screen.contains("Using a LoRa radio (RNode)") && screen.contains("Words you'll meet") && screen.contains("Using rettui"), "{screen}");
         assert!(screen.contains("Apply") && screen.contains("Not now") && screen.contains("The name sent"), "{screen}");
         let first = apply_at(&app);
         // The longest help is shown whole, and the guide keeps its size.
@@ -203,8 +203,10 @@ mod tests {
             assert_eq!(apply_at(&app), first, "{row:?}");
             match row {
                 GuideRow::AutoPropagation => assert!(screen.contains("read them."), "{screen}"),
-                GuideRow::Link(i) if crate::app::guide::LINKS[*i].2.is_some() => {
-                    assert!(screen.contains("wiki/RNode-Radios") && screen.contains("copies it"), "{screen}")
+                // A link's note, then where it goes, whole.
+                GuideRow::Link(i) => {
+                    let (_, url, _) = crate::app::guide::LINKS[*i];
+                    assert!(screen.contains(url) && screen.contains("copies"), "{screen}")
                 }
                 _ => {}
             }
