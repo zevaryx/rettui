@@ -883,9 +883,12 @@ fn file_name(name: &str) -> String {
 }
 
 fn file_response(data: Vec<u8>, name: &str, inline: bool) -> Response {
-    // Voice messages (Opus, in an Ogg file) play in the page.
+    // Voice messages (Opus in an Ogg file, or Codec2 decoded to WAV) play
+    // in the page.
     let content_type = if data.starts_with(b"OggS") {
         "audio/ogg"
+    } else if crate::lxmf::voice::is_wav(&data) {
+        "audio/wav"
     } else {
         image::guess_format(&data).map(|f| f.to_mime_type()).unwrap_or("application/octet-stream")
     };

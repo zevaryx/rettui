@@ -10,6 +10,7 @@
 //! - [`policy`]: stamp costs, tickets and the size limit for incoming
 //!   messages.
 //! - [`pn`]: hosting a propagation node.
+//! - [`voice`]: decoding Codec2 voice messages.
 
 pub mod fields;
 mod inbound;
@@ -18,6 +19,7 @@ pub mod pn;
 pub mod policy;
 mod send;
 mod sync;
+pub mod voice;
 
 use std::path::PathBuf;
 

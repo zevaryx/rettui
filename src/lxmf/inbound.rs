@@ -145,7 +145,11 @@ pub(super) async fn parse_inbound(
     }
     let attachments = attachments_of(&message);
     let reply = reply_of(&message);
-    let extras = Extras::of(&message);
+    let mut extras = Extras::of(&message);
+    // A Codec2 voice message is decoded to play; it can take a moment.
+    if let Some(audio) = extras.audio.take() {
+        extras.audio = Some(tokio::task::spawn_blocking(move || audio.decoded()).await.map_err(|e| e.to_string())?);
+    }
     Ok(InboundMessage {
         id: message.message_id.or(message.hash),
         source: message.source_hash,

@@ -60,9 +60,10 @@ pub struct StoredAttachment {
 }
 
 impl StoredAttachment {
-    /// A voice message that plays elsewhere (an Ogg file: Opus).
+    /// A voice message that plays elsewhere: an Ogg file (Opus), or a WAV
+    /// file (Codec2, decoded).
     pub fn playable(&self) -> bool {
-        self.voice.is_some() && self.path.extension().is_some_and(|e| e == "ogg")
+        self.voice.is_some() && self.path.extension().is_some_and(|e| e == "ogg" || e == "wav")
     }
 }
 

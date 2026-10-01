@@ -88,7 +88,10 @@ impl App {
 
         // Files, and a voice message, are saved as they arrive.
         let mut attachments = Vec::new();
-        let audio = extras.audio.as_ref().map(|a| (a.file_name(), a.data.as_slice(), false, Some(a.codec())));
+        let audio = extras.audio.as_ref().map(|a| {
+            let (name, data) = a.file();
+            (name, data, false, Some(a.codec()))
+        });
         let files: Vec<(String, &[u8], bool, Option<String>)> = message
             .attachments
             .iter()
@@ -1463,18 +1466,23 @@ mod tests {
         let dir = temp_dir("voice");
         let mut app = app(&dir, Store::default(), 1000, 0);
         app.set_focus(false);
-        let voice = |n: u8, mode: u8, data: &[u8]| from_them(n, "", Extras { audio: Some(Audio { mode, data: data.to_vec() }), ..Extras::default() });
+        let voice = |n: u8, mode: u8, data: &[u8]| from_them(n, "", Extras { audio: Some(Audio::new(mode, data.to_vec()).decoded()), ..Extras::default() });
         app.on_message(voice(1, 0x10, b"OggS opus"));
-        app.on_message(voice(2, 0x04, b"\x01\x02"));
+        app.on_message(voice(2, 0x04, &[0; 60]));
+        app.on_message(voice(3, 0x03, b"\x01\x02"));
         let conversation = &app.store.conversations[&key()];
-        let (opus, codec2) = (&conversation.messages[0].attachments[0], &conversation.messages[1].attachments[0]);
+        let attachment = |i: usize| &conversation.messages[i].attachments[0];
+        let (opus, codec2, c700) = (attachment(0), attachment(1), attachment(2));
         assert_eq!(std::fs::read(&opus.path).unwrap(), b"OggS opus");
         assert!(opus.path.ends_with("voice-message.ogg") && opus.playable());
         assert_eq!(opus.voice.as_deref(), Some("Opus"));
-        assert!(!codec2.playable() && codec2.path.to_string_lossy().ends_with(".codec2"));
+        // Codec2 1200 is decoded to WAV (10 frames: 0.4 s); 700C can't be.
+        assert!(codec2.playable() && codec2.path.ends_with("voice-message.wav"));
+        assert_eq!((codec2.voice.as_deref(), codec2.size), (Some("Codec2 1200"), 44 + 3200 * 2));
+        assert!(!c700.playable() && c700.path.to_string_lossy().ends_with(".codec2"));
         assert_eq!(conversation.messages[0].opening(), "🎤 Voice message");
         let notes = app.take_notifications();
-        assert_eq!(notes.len(), 1, "both together, about the one conversation");
+        assert_eq!(notes.len(), 1, "all together, about the one conversation");
         assert_eq!(notes[0].body, "🎤 Voice message");
         std::fs::remove_dir_all(dir).unwrap();
     }
