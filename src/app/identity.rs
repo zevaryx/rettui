@@ -77,7 +77,23 @@ impl App {
             return self.warn("That's the identity rettui uses already");
         }
         let address = hex::encode(lxmf_address(&identity));
-        let title = format!("Use the identity with LXMF address {address}? Yours is kept beside it. Type y");
+        // What else takes its address from the identity, and changes too.
+        let mut also = Vec::new();
+        if self.settings.node_enabled {
+            also.push("your node's address");
+        }
+        if self.settings.pn_enabled {
+            also.push("your propagation node's address");
+        }
+        if !self.channels.hubs.is_empty() {
+            also.push("who you are to RRC hubs");
+        }
+        let also = match also.as_slice() {
+            [] => String::new(),
+            [one] => format!(" It changes {one} too."),
+            [rest @ .., last] => format!(" It changes {} and {last} too.", rest.join(", ")),
+        };
+        let title = format!("Use the identity with LXMF address {address}?{also} Yours is kept beside it. Type y");
         self.open_prompt(PromptKind::ConfirmImportIdentity(path), &title, "");
     }
 
@@ -199,6 +215,20 @@ mod tests {
             .collect();
         assert_eq!(kept.len(), 1);
         assert_eq!(read_identity(&kept[0].path()).unwrap().hash, ours.hash);
+        // The question says what else changes, and shows whole.
+        app.identity_pending = None;
+        app.settings.node_enabled = true;
+        app.add_hub([0xcd; 16], "rrc.hub", None);
+        app.chose_identity_file(theirs_path.to_str().unwrap());
+        let title = app.prompt.as_ref().map(|p| p.title.clone()).unwrap_or_default();
+        assert!(title.contains("It changes your node's address and who you are to RRC hubs too."), "{title}");
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let screen: String = (0..24).map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect();
+        assert!(screen.contains("Type y") && screen.contains("RRC hubs"), "{screen}");
+        app.prompt = None;
+        app.identity_pending = Some(address);
         // Backing up waits for the restart (the file holds the new one).
         app.ask_identity_backup();
         assert!(app.prompt.is_none());

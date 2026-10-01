@@ -8,7 +8,10 @@ rettui keeps its data in `~/.local/share/rettui/`:
   To keep the address you have in Sideband, NomadNet, MeshChat or another
   rettui, `i` in the Status tab (or the getting-started guide) uses that
   program's identity file from the next start; the one it replaces is kept
-  beside it as `identity.previous-<date>`. Don't run one identity in two
+  beside it as `identity.previous-<date>`. Everything that takes its
+  address from the identity changes with it: a node or propagation node
+  you host, and who you are to RRC hubs (the question before switching
+  says which apply). Don't run one identity in two
   programs at once: messages to it would be split between them. The web UI
   can't read or change the identity (the login link would otherwise give
   away the key): use the terminal UI, or, with rettui stopped, copy the

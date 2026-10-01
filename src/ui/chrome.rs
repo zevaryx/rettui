@@ -419,23 +419,35 @@ pub(super) fn draw_prompt(frame: &mut Frame, app: &App) {
     let Some(prompt) = &app.prompt else { return };
     let area = frame.area();
     let width = area.width.saturating_sub(4).min(76);
+    // A question too long for the box's top edge goes inside it, whole,
+    // above what's typed.
+    let inner_width = width.saturating_sub(2) as usize;
+    let question = if prompt.title.width() + 2 > inner_width { super::wrap(&prompt.title, inner_width) } else { Vec::new() };
     let rect = Rect {
         x: area.x + (area.width - width) / 2,
         y: area.y + area.height / 3,
         width,
-        height: 3,
+        height: (3 + question.len() as u16).min(area.height),
     };
     frame.render_widget(Clear, rect);
-    let prompt_block = block(&prompt.title, true);
+    let prompt_block = if question.is_empty() {
+        block(&prompt.title, true)
+    } else {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+    };
     let inner = prompt_block.inner(rect);
     let cursor = prompt.input.cursor_column();
     let offset = cursor.saturating_sub(inner.width.saturating_sub(1) as usize);
+    frame.render_widget(prompt_block, rect);
+    let asked = question.len() as u16;
+    frame.render_widget(Paragraph::new(question.join("\n")).style(Style::default().fg(super::ACCENT)), Rect { height: asked, ..inner });
+    let typed = Rect { y: inner.y + asked, height: 1, ..inner };
     frame.render_widget(
-        Paragraph::new(prompt.input.text())
-            .scroll((0, offset as u16))
-            .style(Style::default().add_modifier(Modifier::BOLD))
-            .block(prompt_block),
-        rect,
+        Paragraph::new(prompt.input.text()).scroll((0, offset as u16)).style(Style::default().add_modifier(Modifier::BOLD)),
+        typed,
     );
-    frame.set_cursor_position(Position::new(inner.x + (cursor - offset) as u16, inner.y));
+    frame.set_cursor_position(Position::new(inner.x + (cursor - offset) as u16, typed.y));
 }
