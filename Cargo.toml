@@ -71,6 +71,11 @@ codec2 = "0.3.1"
 # Bounded terminal capability probe (poll/read on stdin).
 libc = "0.2"
 
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+# Desktop notifications over D-Bus, on the connection that hears their
+# clicks (notify-rust's own, already built, with nothing more turned on).
+zbus = { version = "5.19", default-features = false, features = ["async-io"] }
+
 # Image decoding is very slow unoptimised (seconds per picture), so debug
 # builds optimise the decoders.
 [profile.dev.package.image]

@@ -3222,6 +3222,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "ureq",
+ "zbus",
 ]
 
 [[package]]

@@ -14,8 +14,10 @@ self.addEventListener('notificationclick', (event) => {
     const pages = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const page = pages.find((p) => p.focused) || pages[0];
     if (page) {
-      await page.focus();
+      // What to open first: the browser may refuse to bring the page
+      // forward (it then shows it when next looked at).
       page.postMessage({ open: target });
+      await page.focus().catch(() => {});
       return;
     }
     // No page open: start one there.
