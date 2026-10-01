@@ -8,6 +8,7 @@
 
 pub mod autopn;
 pub mod iface_log;
+mod reannounce;
 mod remote;
 
 use std::collections::{BTreeMap, HashMap};
@@ -488,20 +489,21 @@ async fn run(
     let mut announce_timer = timer(announce_interval);
     let mut sync_timer = timer(sync_interval);
     let mut stats_timer = tokio::time::interval(STATS_INTERVAL);
+    let mut reannounce = reannounce::Reannounce::default();
 
     loop {
         tokio::select! {
             () = &mut startup, if startup_pending => {
                 startup_pending = false;
                 if options.announce_at_start {
-                    announce(&delivery.handle, announce_data(&display_name), &ev).await;
+                    announce_lxmf(&runtime, &delivery.handle, announce_data(&display_name), &mut reannounce, &ev).await;
                 }
                 if propagation_node.is_some() && sync_interval.is_some() {
                     sync(propagation_node, &pn_local);
                 }
             }
             _ = announce_timer.tick(), if announce_interval.is_some() => {
-                announce(&delivery.handle, announce_data(&display_name), &ev).await;
+                announce_lxmf(&runtime, &delivery.handle, announce_data(&display_name), &mut reannounce, &ev).await;
             }
             _ = sync_timer.tick(), if sync_interval.is_some() && propagation_node.is_some() => {
                 sync(propagation_node, &pn_local);
@@ -546,6 +548,15 @@ async fn run(
                 }
                 if let Ok(stats) = runtime.interface_stats().await {
                     iface_log::set_names(stats.interfaces.iter().map(|i| (i.id, i.name.clone())));
+                    // One coming online calls for an announce through it, if
+                    // announcing isn't off (the one at start covers those up
+                    // by then).
+                    let online = stats.interfaces.iter().filter(|i| i.online).map(|i| i.name.clone()).collect();
+                    let up = reannounce.look(online, std::time::Instant::now());
+                    if !up.is_empty() && !startup_pending && (options.announce_at_start || announce_interval.is_some()) {
+                        let _ = ev.send(NetEvent::Log(format!("Announcing again: {} came online", up.join(", "))));
+                        announce_lxmf(&runtime, &delivery.handle, announce_data(&display_name), &mut reannounce, &ev).await;
+                    }
                     let interfaces = stats
                         .interfaces
                         .into_iter()
@@ -574,7 +585,7 @@ async fn run(
                         stop = why;
                         break;
                     }
-                    NetCommand::Announce => announce(&delivery.handle, announce_data(&display_name), &ev).await,
+                    NetCommand::Announce => announce_lxmf(&runtime, &delivery.handle, announce_data(&display_name), &mut reannounce, &ev).await,
                     NetCommand::SetDisplayName(name) => {
                         display_name = name;
                         if let Err(e) = delivery.handle.set_default_app_data(Some(announce_data(&display_name))).await {
@@ -592,7 +603,7 @@ async fn run(
                             if let Err(e) = delivery.handle.set_default_app_data(Some(announce_data(&display_name))).await {
                                 let _ = ev.send(NetEvent::Log(format!("Could not update announce data: {e}")));
                             }
-                            announce(&delivery.handle, announce_data(&display_name), &ev).await;
+                            announce_lxmf(&runtime, &delivery.handle, announce_data(&display_name), &mut reannounce, &ev).await;
                         }
                     }
                     NetCommand::SetContacts { trusted, exempt } => policy.lock().unwrap().set_contacts(trusted, exempt),
@@ -885,6 +896,20 @@ async fn blackhole(runtime: &ReticulumHandle, known: &Known, to: Hash, block: bo
         .await
         .map(|_| format!("{} {address}'s identity in Reticulum", if block { "Blocked" } else { "Unblocked" }))
         .map_err(|e| format!("Could not change the block on {address} in Reticulum: {e}"))
+}
+
+/// Announce the LXMF address, noting the interfaces it went out on.
+async fn announce_lxmf(
+    runtime: &ReticulumHandle,
+    destination: &DestinationHandle,
+    app_data: Vec<u8>,
+    reannounce: &mut reannounce::Reannounce,
+    ev: &mpsc::UnboundedSender<NetEvent>,
+) {
+    announce(destination, app_data, ev).await;
+    if let Ok(stats) = runtime.interface_stats().await {
+        reannounce.announced(stats.interfaces.into_iter().filter(|i| i.online).map(|i| i.name), std::time::Instant::now());
+    }
 }
 
 async fn announce(

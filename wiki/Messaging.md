@@ -48,7 +48,13 @@ MeshChat, NomadNet and other LXMF clients).
   write to a peer you heard earlier even while they're away.
 - **Announces:** rettui announces your LXMF address when it starts (unless
   you turn that off), every `announce_interval_mins` (360 by default, 0 for
-  never), and whenever you press `A`.
+  never), and whenever you press `A`. An announce only reaches those
+  connected when it goes out, so when an interface comes online later (an
+  entry point that connects late, or one interface discovery connects
+  to), rettui announces again, as Sideband does. One that comes back
+  within half an hour of an announce going out on it doesn't bring
+  another: public gateways hold back destinations that announce too
+  often. With announcing at start and the interval both off, it doesn't.
 
 ## Picking a propagation node automatically
 
