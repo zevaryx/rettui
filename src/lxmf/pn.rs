@@ -239,7 +239,11 @@ fn announce_data(config: &PnConfig) -> Vec<u8> {
         PROPAGATION_COST_FLEX,
         PEERING_COST,
     );
-    data.set_name(&config.name);
+    // Its name as Python LXMF sends it, cleaned as rettui cleans others'
+    // (lxmf-core's `set_name` drops emoji).
+    if let Some(name) = crate::names::clean(&config.name) {
+        data.metadata.insert(lxmf_core::constants::PN_META_NAME, name.into_bytes());
+    }
     get_propagation_node_app_data(&data)
 }
 
@@ -445,6 +449,24 @@ mod tests {
     use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
 
     use super::*;
+
+    #[test]
+    fn its_name_goes_out_with_emoji() {
+        let config = |name: &str| PnConfig {
+            name: name.into(),
+            stamp_cost: 16,
+            storage_bytes: 1,
+            transfer_kb: 256,
+            dir: PathBuf::new(),
+            announce_interval: None,
+        };
+        let name_of = |name: &str| {
+            let data = lxmf_core::handlers::parse_pn_announce_data(&announce_data(&config(name))).unwrap();
+            data.metadata.get(&lxmf_core::constants::PN_META_NAME).map(|n| String::from_utf8(n.clone()).unwrap())
+        };
+        assert_eq!(name_of("📮 Post\u{202E}").as_deref(), Some("📮 Post"));
+        assert_eq!(name_of(" "), None);
+    }
 
     fn ingest(dir: &std::path::Path, stamp_cost: u8) -> (Ingest, mpsc::UnboundedReceiver<Vec<u8>>, Identity) {
         let identity = Identity::new();

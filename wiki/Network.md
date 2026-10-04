@@ -11,7 +11,10 @@ shows your identity, your interfaces and the log.
   letters they look like (`ＡＤＭＩＮ` as `ADMIN`), keeps at most four
   accents on a letter, makes blank-looking characters and line breaks one
   space, and keeps 128 characters. Unlike NomadNet, emoji stay. Names
-  heard before this are cleaned as rettui starts.
+  heard before this are cleaned as rettui starts. Your own name, and your
+  propagation node's, go out the same way, emoji included, as Sideband
+  and NomadNet send them (the LXMF library rettui uses would drop the
+  emoji, so rettui builds its announces itself).
 - **Hearing others takes time:** there's no list to download; each peer
   and node announces on its own schedule, many only every few hours, so a
   new install's list fills over its first hours. Announcing yourself (`A`,

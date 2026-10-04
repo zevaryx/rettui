@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use lxmf_core::handlers::{get_announce_app_data, parse_pn_announce_data};
+use lxmf_core::handlers::parse_pn_announce_data;
 use nomad_core::NOMAD_NODE_ASPECT;
 use rns_runtime::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -277,9 +277,18 @@ impl AnnounceSchedule {
     }
 }
 
-/// LXMF announce data: the display name, and the stamp cost asked.
+/// LXMF announce data, as Python LXMF builds it: `[display name, stamp
+/// cost asked, [functions supported]]`. Built here rather than with
+/// lxmf-core's `get_announce_app_data`, which drops emoji from the name;
+/// the name is cleaned as rettui cleans others' (see [`crate::names`]).
 fn app_data(display_name: &str, stamp_cost: Option<u8>) -> Vec<u8> {
-    get_announce_app_data(Some(display_name), stamp_cost)
+    use rmpv::Value;
+    let name = crate::names::clean(display_name).map_or(Value::Nil, |name| Value::Binary(name.into_bytes()));
+    let cost = stamp_cost.filter(|cost| (1..255).contains(cost)).map_or(Value::Nil, Value::from);
+    let functions = Value::Array(vec![Value::from(lxmf_core::constants::SF_COMPRESSION)]);
+    let mut data = Vec::new();
+    rmpv::encode::write_value(&mut data, &Value::Array(vec![name, cost, functions])).expect("writing to memory");
+    data
 }
 
 /// Start the network actor on a runtime of its own, so heavy traffic
@@ -963,6 +972,25 @@ async fn announce(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lxmf_core::handlers::get_announce_app_data;
+
+    #[test]
+    fn our_announce_data_is_python_lxmf_s_with_emoji_kept() {
+        // As lxmf-core (and Python LXMF) build it, for a name it keeps whole.
+        for cost in [None, Some(8), Some(0), Some(255)] {
+            assert_eq!(app_data("Alex", cost), get_announce_app_data(Some("Alex"), cost), "{cost:?}");
+        }
+        // Emoji go out (lxmf-core drops them), and read back as sent.
+        let data = app_data("🆎 Alex", Some(8));
+        assert_eq!(lxmf_display_name(&data).as_deref(), Some("🆎 Alex"));
+        assert_eq!(lxmf_core::handlers::stamp_cost_from_app_data(&data), Some(8));
+        let fields = rmpv::decode::read_value(&mut &data[..]).unwrap();
+        assert_eq!(fields[0].as_slice(), Some("🆎 Alex".as_bytes()));
+        assert_eq!(lxmf_display_name(&get_announce_app_data(Some("🆎 Alex"), None)).as_deref(), Some("Alex"), "why it's built here");
+        // Cleaned as others' names are; nothing left is no name.
+        assert_eq!(lxmf_display_name(&app_data("Bob\u{202E}nimda", None)).as_deref(), Some("Bobnimda"));
+        assert_eq!(rmpv::decode::read_value(&mut &app_data("\u{200B}", None)[..]).unwrap()[0], rmpv::Value::Nil);
+    }
 
     #[test]
     fn lxmf_names_in_both_announce_formats() {
