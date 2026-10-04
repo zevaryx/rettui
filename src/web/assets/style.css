@@ -212,6 +212,8 @@ a { color: var(--accent); }
 .guide .help { font-size: 0.9em; }
 .guide .guide-status.ok { color: var(--green); }
 .guide .guide-status.warn { color: var(--yellow); }
+.guide .guide-warning { margin: 2px 0 8px 28px; }
+.guide .guide-warning[hidden] { display: none; }
 .guide .guide-entries { margin: 14px 0 0; }
 .guide .guide-region { margin: 12px 0 0; font-size: 0.85em; }
 .guide .guide-option .help[hidden] { display: none; }

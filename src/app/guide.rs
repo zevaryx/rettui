@@ -94,7 +94,11 @@ pub fn down_help(why: &str) -> String {
 /// The config is Python Reticulum's.
 pub const SHARED_NOTE: &str = "This Reticulum config is shared with NomadNet, Sideband and rnsd too.";
 pub const DISCOVER_HELP: &str = "Connects to up to 2 entry points others announce, as Reticulum's manual recommends; you'll connect to hosts you didn't choose. It hears of them through a connection you have, so it needs one to start.";
-pub const AUTO_PROPAGATION_HELP: &str = "A propagation node keeps messages for you while you're offline. Anyone can run one: the one picked (the nearest that answers fastest) sees who your messages are for and when you collect them, and could lose them; it can't read them.";
+pub const AUTO_PROPAGATION_HELP: &str = "A propagation node keeps messages for you while you're offline, for you to collect. Ticked, rettui picks one: the nearest that answers fastest.";
+
+/// Shown under picking a propagation node automatically while it's ticked
+/// (it is to start with, the first time the guide opens).
+pub const AUTO_PROPAGATION_WARNING: &str = "Warning: anyone can run a propagation node near you. The one picked sees who your messages are for and when you collect them, and could lose them; it can't read them. Where you can, pick one you trust in the Network tab.";
 pub const APPLY_HELP: &str = "Saves your choices. If the Reticulum config changes, Reticulum restarts to connect.";
 pub const LATER_HELP: &str = "Closes the guide; it's in the Status tab (g) whenever you want it.";
 
@@ -251,12 +255,15 @@ impl App {
     /// and the entry points that answer fastest to hear of others through
     /// (it needs a connection to start). A config with interfaces of its
     /// own (perhaps shared with other Reticulum programs) is changed only as
-    /// asked.
+    /// asked. The first time it opens, picking a propagation node
+    /// automatically too, unless one was picked by hand (with
+    /// [`AUTO_PROPAGATION_WARNING`] under it); after that, it's as set.
     pub fn guide_defaults(&self) -> GuideChoices {
         let view = self.guide_view();
         let fresh = !view.has_own_interfaces;
         let connect = picked(&view);
-        GuideChoices { name: view.name, connect, discover: fresh || view.has_discovery, auto_propagation: view.auto_propagation }
+        let auto_propagation = view.auto_propagation || (!self.settings.welcomed && self.settings.propagation_node.is_none());
+        GuideChoices { name: view.name, connect, discover: fresh || view.has_discovery, auto_propagation }
     }
 
     /// Try the entry points, unless they were a moment ago (or another
@@ -524,7 +531,12 @@ mod tests {
         // fastest to hear of others through. While they're tried, the ones
         // still being tried in the list's order.
         let defaults = app.guide_defaults();
-        assert_eq!((defaults.name.as_str(), defaults.discover, defaults.auto_propagation), ("rettui user", true, false));
+        assert_eq!((defaults.name.as_str(), defaults.discover, defaults.auto_propagation), ("rettui user", true, true));
+        // Picking a propagation node automatically, unless one was picked
+        // by hand.
+        app.settings.propagation_node = Some("ab".repeat(16));
+        assert!(!app.guide_defaults().auto_propagation);
+        app.settings.propagation_node = None;
         let (borders, rmap, simply, beleth, mich, ratspeak) = (0, 1, 2, 3, 4, 5);
         assert_eq!(ENTRY_POINTS.len(), 6);
         assert_eq!((ENTRY_POINTS[rmap].name, ENTRY_POINTS[ratspeak].host), ("RMAP World", "rns.ratspeak.org"));
@@ -608,6 +620,8 @@ mod tests {
         let done = app.apply_guide(&choices, false).unwrap();
         assert!(!done.iter().any(|d| d.contains("Added")), "{done:?}");
         assert!(!app.take_rns_restart());
+        // After the first time, picking a propagation node is as it's set.
+        assert!(!app.guide_defaults().auto_propagation);
         // Existing settings files without the field don't show it again.
         let old: Settings = serde_json::from_str(r#"{"display_name": "Old hand"}"#).unwrap();
         assert!(old.welcomed);

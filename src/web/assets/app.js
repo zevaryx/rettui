@@ -1381,6 +1381,12 @@ async function gettingStarted() {
   const autoPropagation = option('auto_propagation', 'Pick a propagation node automatically', g.help.auto_propagation, { on: g.defaults.auto_propagation });
   options.push(autoPropagation);
   nodes.push(autoPropagation.node);
+  // While it's ticked, what picking one means.
+  const autoWarning = el('p', { class: 'guide-status warn guide-warning', text: g.help.auto_propagation_warning });
+  const showAutoWarning = () => { autoWarning.hidden = !autoPropagation.box.checked; };
+  autoPropagation.box.addEventListener('change', showAutoWarning);
+  showAutoWarning();
+  nodes.push(autoWarning);
   // The entry points' tries finish over a few seconds.
   let open = true;
   (async () => {

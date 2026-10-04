@@ -72,7 +72,9 @@ MeshChat, NomadNet and other LXMF clients).
 
 ## Picking a propagation node automatically
 
-*Pick propagation node automatically* (off unless you turn it on) picks one
+*Pick propagation node automatically* (ticked in the getting-started
+guide the first time it opens, with a warning under it; otherwise off
+unless you turn it on) picks one
 for you, as Sideband does when none is set:
 
 - **Which:** of the propagation nodes heard announcing in the last day that

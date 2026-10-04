@@ -135,6 +135,15 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         row_line(&mut body, GuideRow::Discover, vec![Span::raw(discover)]);
     }
     row_line(&mut body, GuideRow::AutoPropagation, vec![Span::raw(format!("{} Pick a propagation node automatically", check(choices.auto_propagation)))]);
+    // The last line of a row with a warning under it, to keep in view
+    // with it.
+    let mut warned: Option<(GuideRow, usize)> = None;
+    if choices.auto_propagation {
+        for line in wrap(guide::AUTO_PROPAGATION_WARNING, inner_width.saturating_sub(4)) {
+            body.push(Line::styled(format!("    {line}"), Style::default().fg(Color::Yellow)));
+        }
+        warned = Some((GuideRow::AutoPropagation, body.len() - 1));
+    }
     body.push(Line::styled("Learn more", Style::default().fg(DIM)));
     for (i, (title, ..)) in LINKS.iter().enumerate() {
         row_line(&mut body, GuideRow::Link(i), vec![Span::raw("↗ "), Span::styled(*title, Style::default().add_modifier(Modifier::UNDERLINED))]);
@@ -180,14 +189,15 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         lines.push(Line::default());
     }
     // The picked row stays in view, with the line above it (perhaps its
-    // heading).
+    // heading) and any warning under it.
     let body_len = body.len();
     let mut top = state.scroll;
-    if let Some(&(line, _)) = placed.iter().find(|(_, row)| Some(*row) == selected) {
+    if let Some(&(line, row)) = placed.iter().find(|(_, row)| Some(*row) == selected) {
+        let last = warned.filter(|(warned, _)| *warned == row).map_or(line, |(_, last)| last);
         if line <= top {
             top = line.saturating_sub(1);
-        } else if line >= top + shown {
-            top = line + 1 - shown;
+        } else if last >= top + shown {
+            top = (last + 1 - shown).min(line);
         }
     }
     let top = top.min(body_len - shown);
@@ -282,7 +292,17 @@ mod tests {
             assert_eq!(apply_at(&app), first, "{row:?}");
             assert!(app.regions.guide_rows.iter().any(|(_, shown)| shown == row), "{row:?} in view: {screen}");
             match row {
-                GuideRow::AutoPropagation => assert!(screen.contains("read them."), "{screen}"),
+                // Ticked the first time, with the warning under it.
+                GuideRow::AutoPropagation => {
+                    assert!(screen.contains("[x] Pick a propagation node automatically"), "{screen}");
+                    assert!(screen.contains("answers fastest.") && screen.contains("Warning: anyone can run a"), "{screen}");
+                    assert!(screen.contains("the Network tab."), "the warning whole: {screen}");
+                    let space = || crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char(' '), KeyModifiers::NONE);
+                    app.on_key(space());
+                    let screen = draw(&mut app);
+                    assert!(screen.contains("[ ] Pick a propagation node automatically") && !screen.contains("Warning:"), "{screen}");
+                    app.on_key(space());
+                }
                 GuideRow::Connect(i) => {
                     let entry = crate::app::guide::ENTRY_POINTS[*i];
                     assert!(screen.contains(&format!("{}:{}. A public transport node", entry.host, entry.port)), "{screen}");

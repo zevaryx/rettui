@@ -59,7 +59,11 @@ the web UI's Status page, opens it again):
   `~/.config/reticulum` or `/etc/reticulum`), the guide says it's shared
   with NomadNet, Sideband and rnsd, since changes to it are theirs too.
 - **Pick a propagation node automatically** (see
-  [Messaging](Messaging#picking-a-propagation-node-automatically)).
+  [Messaging](Messaging#picking-a-propagation-node-automatically)):
+  ticked the first time the guide opens, unless you picked a node by hand,
+  with a warning under it while it's ticked: the node picked sees who your
+  messages are for and when you collect them, and could lose them. Opened
+  again later, it's as you set it.
 - **Learn more:** Reticulum's manual (getting started, understanding
   Reticulum), RMAP World's map and
   directory.rns.recipes for finding entry points, using a LoRa radio
