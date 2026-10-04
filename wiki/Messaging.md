@@ -33,7 +33,11 @@ MeshChat, NomadNet and other LXMF clients).
   (120, two hours, by default; 0 for never; *Sync every* in Status)
   or whenever you press `S`. Settings that still had the old default of
   30 minutes move to two hours; an interval of your own stays. A sync identifies you to the node, downloads your
-  messages, then tells the node to delete them.
+  messages, then tells the node to delete them. It downloads them 512 KB
+  at a time, as many times as it takes, each lot cleared from the node as
+  it arrives, so a slow link isn't held for long by one transfer. A
+  message bigger than that (a node can be set to take them), within your
+  *Largest message* limit, comes in a transfer of its own.
 - **Attachments:**
   - The first image goes in the LXMF image field, which Sideband and MeshChat
     show inline. Other files are sent as file attachments.
