@@ -108,7 +108,7 @@ impl Default for Settings {
             rns_config: None,
             home: None,
             propagation_node: None,
-            sync_interval_mins: 30,
+            sync_interval_mins: 120,
             auto_propagation_node: false,
             messages_kept: 1000,
             message_storage_mb: 0,
@@ -217,8 +217,12 @@ impl Settings {
         let mut settings: Self = serde_json::from_value(value).with_context(|| format!("parsing {}", path.display()))?;
         // From before announcing on a random schedule: 0 minutes was off,
         // and an interval of one's own stays (6 hours, the default then,
-        // gives way to the random schedule).
+        // gives way to the random schedule). Syncing every 30 minutes, the
+        // default then too, gives way to every two hours.
         if !schedule_set {
+            if settings.sync_interval_mins == 30 {
+                settings.sync_interval_mins = 120;
+            }
             match settings.announce_interval_mins {
                 0 => {
                     settings.announce_schedule = "off".into();
@@ -370,7 +374,7 @@ pub const FIELDS: &[Field] = &[
     Field {
         key: "sync_interval_mins",
         label: "Sync every (min)",
-        help: "Minutes between propagation node syncs; 0 turns them off",
+        help: "Minutes between propagation node syncs (120, two hours, to start with); 0 turns them off",
         kind: FieldKind::Number,
         effect: Effect::Now,
     },
@@ -952,6 +956,14 @@ mod tests {
         assert_eq!(load(360), ("random".into(), 360), "the default then gives way");
         assert_eq!(load(120), ("fixed".into(), 120), "one's own interval stays");
         assert_eq!(load(30), ("fixed".into(), 60), "within the limits");
+        // Syncing every 30 minutes, the default then, is every two hours
+        // now; an interval of one's own stays.
+        let sync = |minutes: u64| {
+            std::fs::write(&path, format!("{{\"announce_interval_mins\": 360, \"sync_interval_mins\": {minutes}}}")).unwrap();
+            Settings::load(&path).unwrap().sync_interval_mins
+        };
+        assert_eq!((sync(30), sync(45), sync(0)), (120, 45, 0));
+        assert_eq!(Settings::default().sync_interval_mins, 120);
         // Once set, it's what was chosen.
         std::fs::write(&path, r#"{"announce_schedule": "random", "announce_interval_mins": 0}"#).unwrap();
         assert_eq!(Settings::load(&path).unwrap().announce_schedule, "random");

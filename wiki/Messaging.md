@@ -29,8 +29,10 @@ MeshChat, NomadNet and other LXMF clients).
   [Blocking and spam](#blocking-and-spam).
 - **Propagation nodes:** the ones you hear are listed in the Network tab.
   Pick one with `p`. You can also [host one](Hosting-a-Node#propagation-node),
-  or let rettui pick one (below). rettui syncs every `sync_interval_mins` (30 by default)
-  or whenever you press `S`. A sync identifies you to the node, downloads your
+  or let rettui pick one (below). rettui syncs every `sync_interval_mins`
+  (120, two hours, by default; 0 for never; *Sync every* in Status)
+  or whenever you press `S`. Settings that still had the old default of
+  30 minutes move to two hours; an interval of your own stays. A sync identifies you to the node, downloads your
   messages, then tells the node to delete them.
 - **Attachments:**
   - The first image goes in the LXMF image field, which Sideband and MeshChat
