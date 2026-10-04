@@ -84,8 +84,11 @@ impl App {
                         notes.push("Picking the propagation node automatically is off now".to_string());
                     }
                 }
-                "announce_interval_mins" | "sync_interval_mins" => {
+                "announce_schedule" | "announce_interval_mins" | "announce_random_min_mins" | "announce_random_max_mins" | "sync_interval_mins" => {
+                    self.settings.announce_schedule = after.announce_schedule.clone();
                     self.settings.announce_interval_mins = after.announce_interval_mins;
+                    self.settings.announce_random_min_mins = after.announce_random_min_mins;
+                    self.settings.announce_random_max_mins = after.announce_random_max_mins;
                     self.settings.sync_interval_mins = after.sync_interval_mins;
                     intervals = true;
                 }
@@ -153,7 +156,7 @@ impl App {
         }
         if intervals {
             self.send(NetCommand::SetIntervals {
-                announce: minutes(after.announce_interval_mins),
+                announce: after.announce_schedule(),
                 sync: minutes(after.sync_interval_mins),
             });
         }
@@ -257,6 +260,11 @@ impl App {
             FieldKind::Toggle => {
                 let flipped = if current == "true" { "false" } else { "true" };
                 self.update_setting(field.key, flipped);
+            }
+            // The next of its choices.
+            FieldKind::Choice(choices) => {
+                let at = choices.iter().position(|c| *c == current).map_or(0, |at| (at + 1) % choices.len());
+                self.update_setting(field.key, choices[at]);
             }
             FieldKind::Optional => {
                 let title = format!("{} (empty for none)", field.label);

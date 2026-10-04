@@ -108,9 +108,10 @@ pub enum NetCommand {
     /// Check the propagation node picked automatically soon (syncing with
     /// it, or sending through it, failed).
     RecheckPropagation,
-    /// New automatic announce and sync intervals (`None` turns one off).
+    /// New automatic announce schedule and sync interval (`None` turns
+    /// syncing off).
     SetIntervals {
-        announce: Option<Duration>,
+        announce: AnnounceSchedule,
         sync: Option<Duration>,
     },
     Sync,
@@ -232,7 +233,7 @@ pub struct NetOptions {
     pub identity: Identity,
     pub display_name: String,
     pub announce_at_start: bool,
-    pub announce_interval: Option<Duration>,
+    pub announce: AnnounceSchedule,
     pub propagation_node: Option<Hash>,
     /// Pick the propagation node automatically (see [`autopn`]).
     pub auto_propagation: bool,
@@ -249,6 +250,31 @@ pub struct NetOptions {
     pub tickets: PathBuf,
     /// Where the LXMF address's ratchets are kept.
     pub ratchets: PathBuf,
+}
+
+/// When the LXMF address is announced on its own (besides at start, when
+/// asked, and when an interface comes online).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnounceSchedule {
+    Off,
+    Every(Duration),
+    /// At a random time between the two, picked again after each announce,
+    /// as Sideband does, so announces don't fall in step with others'.
+    Between(Duration, Duration),
+}
+
+impl AnnounceSchedule {
+    /// How long until the next announce, if there's one.
+    pub fn next(self) -> Option<Duration> {
+        match self {
+            Self::Off => None,
+            Self::Every(every) => Some(every),
+            Self::Between(low, high) => {
+                use rand::Rng;
+                Some(Duration::from_secs(rand::thread_rng().gen_range(low.as_secs()..=high.as_secs())))
+            }
+        }
+    }
 }
 
 /// LXMF announce data: the display name, and the stamp cost asked.
@@ -481,14 +507,15 @@ async fn run(
     tokio::pin!(startup);
     let mut startup_pending = true;
     let day = Duration::from_secs(86_400);
-    let mut announce_interval = options.announce_interval;
+    let mut announce_schedule = options.announce;
+    let next_announce = |schedule: AnnounceSchedule| schedule.next().map(|wait| tokio::time::Instant::now() + wait);
+    let mut announce_at = next_announce(announce_schedule);
     let mut sync_interval = options.sync_interval;
     // A timer's first tick is one interval from now, not immediately.
     let timer = |every: Option<Duration>| {
         let every = every.unwrap_or(day);
         tokio::time::interval_at(tokio::time::Instant::now() + every, every)
     };
-    let mut announce_timer = timer(announce_interval);
     let mut sync_timer = timer(sync_interval);
     let mut stats_timer = tokio::time::interval(STATS_INTERVAL);
     let mut reannounce = reannounce::Reannounce::default();
@@ -504,8 +531,9 @@ async fn run(
                     sync(propagation_node, &pn_local);
                 }
             }
-            _ = announce_timer.tick(), if announce_interval.is_some() => {
+            () = tokio::time::sleep_until(announce_at.unwrap_or_else(|| tokio::time::Instant::now() + day)), if announce_at.is_some() => {
                 announce_lxmf(&runtime, &delivery.handle, announce_data(&display_name), &mut reannounce, &ev).await;
+                announce_at = next_announce(announce_schedule);
             }
             _ = sync_timer.tick(), if sync_interval.is_some() && propagation_node.is_some() => {
                 sync(propagation_node, &pn_local);
@@ -555,7 +583,7 @@ async fn run(
                     // by then).
                     let online = stats.interfaces.iter().filter(|i| i.online).map(|i| i.name.clone()).collect();
                     let up = reannounce.look(online, std::time::Instant::now());
-                    if !up.is_empty() && !startup_pending && (options.announce_at_start || announce_interval.is_some()) {
+                    if !up.is_empty() && !startup_pending && (options.announce_at_start || announce_schedule != AnnounceSchedule::Off) {
                         let _ = ev.send(NetEvent::Log(format!("Announcing again: {} came online", up.join(", "))));
                         announce_lxmf(&runtime, &delivery.handle, announce_data(&display_name), &mut reannounce, &ev).await;
                     }
@@ -638,9 +666,9 @@ async fn run(
                     }
                     NetCommand::RecheckPropagation => auto_next = auto_next.min(soon(auto_started)),
                     NetCommand::SetIntervals { announce, sync } => {
-                        if announce != announce_interval {
-                            announce_interval = announce;
-                            announce_timer = timer(announce);
+                        if announce != announce_schedule {
+                            announce_schedule = announce;
+                            announce_at = next_announce(announce);
                         }
                         if sync != sync_interval {
                             sync_interval = sync;

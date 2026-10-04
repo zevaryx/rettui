@@ -25,7 +25,7 @@ fn options(
         identity,
         display_name: settings.display_name.clone(),
         announce_at_start: announce,
-        announce_interval: None,
+        announce: crate::net::AnnounceSchedule::Off,
         propagation_node: node,
         auto_propagation: false,
         sync_interval: None,

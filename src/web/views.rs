@@ -499,6 +499,11 @@ pub fn settings(app: &App, saved: &Settings) -> Value {
                     FieldKind::Optional => "optional",
                     FieldKind::Toggle => "toggle",
                     FieldKind::Number => "number",
+                    FieldKind::Choice(_) => "choice",
+                },
+                "choices": match f.kind {
+                    FieldKind::Choice(choices) => choices.to_vec(),
+                    _ => Vec::new(),
                 },
                 "next_start": f.effect == Effect::NextStart,
                 "value": saved.field_value(f.key),

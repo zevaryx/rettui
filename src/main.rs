@@ -187,8 +187,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         identity,
         display_name: settings.display_name.clone(),
         announce_at_start: settings.announce_at_start,
-        announce_interval: (settings.announce_interval_mins > 0)
-            .then(|| Duration::from_secs(settings.announce_interval_mins * 60)),
+        announce: settings.announce_schedule(),
         propagation_node: settings.propagation_node.as_deref().and_then(net::parse_hash),
         auto_propagation: settings.auto_propagation_node,
         sync_interval: (settings.sync_interval_mins > 0)

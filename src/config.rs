@@ -13,8 +13,14 @@ pub struct Settings {
     /// Name sent in LXMF announces.
     pub display_name: String,
     pub announce_at_start: bool,
-    /// Minutes between automatic announces; 0 disables them.
+    /// How the LXMF address is announced on its own: one of
+    /// [`ANNOUNCE_SCHEDULES`] (see [`Settings::announce_schedule`]).
+    pub announce_schedule: String,
+    /// With the fixed schedule: minutes between announces.
     pub announce_interval_mins: u64,
+    /// With the random one: the shortest and longest time between them.
+    pub announce_random_min_mins: u64,
+    pub announce_random_max_mins: u64,
     /// Reticulum config directory; `None` uses the standard location
     /// (and joins a running shared instance such as rnsd or NomadNet).
     pub rns_config: Option<String>,
@@ -95,7 +101,10 @@ impl Default for Settings {
         Self {
             display_name: "rettui user".to_string(),
             announce_at_start: true,
+            announce_schedule: "random".into(),
             announce_interval_mins: 360,
+            announce_random_min_mins: ANNOUNCE_MINS.0,
+            announce_random_max_mins: ANNOUNCE_MINS.1,
             rns_config: None,
             home: None,
             propagation_node: None,
@@ -203,7 +212,41 @@ impl Settings {
             return Ok(settings);
         }
         let text = fs::read_to_string(path)?;
-        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        let value: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        let schedule_set = value.get("announce_schedule").is_some();
+        let mut settings: Self = serde_json::from_value(value).with_context(|| format!("parsing {}", path.display()))?;
+        // From before announcing on a random schedule: 0 minutes was off,
+        // and an interval of one's own stays (6 hours, the default then,
+        // gives way to the random schedule).
+        if !schedule_set {
+            match settings.announce_interval_mins {
+                0 => {
+                    settings.announce_schedule = "off".into();
+                    settings.announce_interval_mins = ANNOUNCE_MINS.1;
+                }
+                360 => {}
+                own => {
+                    settings.announce_schedule = "fixed".into();
+                    settings.announce_interval_mins = own.clamp(ANNOUNCE_MINS.0, ANNOUNCE_MINS.1);
+                }
+            }
+        }
+        Ok(settings)
+    }
+
+    /// When the LXMF address is announced on its own, within
+    /// [`ANNOUNCE_MINS`] whatever settings.json says.
+    pub fn announce_schedule(&self) -> crate::net::AnnounceSchedule {
+        use crate::net::AnnounceSchedule;
+        let minutes = |m: u64| std::time::Duration::from_secs(m.clamp(ANNOUNCE_MINS.0, ANNOUNCE_MINS.1) * 60);
+        match self.announce_schedule.as_str() {
+            "off" => AnnounceSchedule::Off,
+            "fixed" => AnnounceSchedule::Every(minutes(self.announce_interval_mins)),
+            _ => {
+                let (low, high) = (minutes(self.announce_random_min_mins), minutes(self.announce_random_max_mins));
+                AnnounceSchedule::Between(low.min(high), low.max(high))
+            }
+        }
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -220,6 +263,8 @@ pub enum FieldKind {
     Toggle,
     /// A whole number; 0 turns the feature off where noted.
     Number,
+    /// One of these words.
+    Choice(&'static [&'static str]),
 }
 
 /// When a change to a setting takes effect.
@@ -281,9 +326,30 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::NextStart,
     },
     Field {
+        key: "announce_schedule",
+        label: "Announce on its own",
+        help: "random: at a random time between the two limits below, picked again each time (as Sideband does, so announces don't fall in step); fixed: every so many minutes; off: only at start and when you announce",
+        kind: FieldKind::Choice(ANNOUNCE_SCHEDULES),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "announce_random_min_mins",
+        label: "Random: from (min)",
+        help: "With random: the shortest time between announces, 60 to 360 minutes (1 to 6 hours)",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "announce_random_max_mins",
+        label: "Random: to (min)",
+        help: "With random: the longest time between announces, 60 to 360 minutes",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
         key: "announce_interval_mins",
-        label: "Announce every (min)",
-        help: "Minutes between automatic announces; 0 turns them off",
+        label: "Fixed: every (min)",
+        help: "With fixed: minutes between announces, 60 to 360 (1 to 6 hours)",
         kind: FieldKind::Number,
         effect: Effect::Now,
     },
@@ -482,6 +548,12 @@ pub const FIELDS: &[Field] = &[
 const MAX_DISPLAY_NAME: usize = 128;
 /// Upper bounds for numbers (a year), so durations cannot overflow.
 const MAX_MINUTES: u64 = 525_600;
+/// How often the LXMF address may be announced on its own, in minutes:
+/// not more than hourly (public gateways hold back destinations that
+/// announce more), and at least every six hours, as NomadNet does.
+pub const ANNOUNCE_MINS: (u64, u64) = (60, 360);
+/// The ways of announcing on its own.
+pub const ANNOUNCE_SCHEDULES: &[&str] = &["random", "fixed", "off"];
 const MAX_HOURS: u64 = 8_760;
 /// Highest stamp cost (LXMF's), and largest message limit (a gigabyte).
 const MAX_STAMP_COST: u64 = 254;
@@ -501,6 +573,25 @@ pub fn expand_home(path: &str) -> PathBuf {
             .map(|d| d.home_dir().join(rest))
             .unwrap_or_else(|| PathBuf::from(path)),
         None => PathBuf::from(path),
+    }
+}
+
+/// A number from `low` to `high`.
+fn between(value: &str, (low, high): (u64, u64)) -> Result<u64, String> {
+    let n = number(value, high)?;
+    if n < low {
+        return Err(format!("at least {low}"));
+    }
+    Ok(n)
+}
+
+/// One of `choices`.
+fn choice(value: &str, choices: &[&str]) -> Result<String, String> {
+    let value = value.trim().to_lowercase();
+    if choices.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(format!("one of {}", choices.join(", ")))
     }
 }
 
@@ -535,7 +626,10 @@ impl Settings {
         match key {
             "display_name" => self.display_name.clone(),
             "announce_at_start" => self.announce_at_start.to_string(),
+            "announce_schedule" => self.announce_schedule.clone(),
             "announce_interval_mins" => self.announce_interval_mins.to_string(),
+            "announce_random_min_mins" => self.announce_random_min_mins.to_string(),
+            "announce_random_max_mins" => self.announce_random_max_mins.to_string(),
             "rns_config" => self.rns_config.clone().unwrap_or_default(),
             "home" => self.home.clone().unwrap_or_default(),
             "propagation_node" => self.propagation_node.clone().unwrap_or_default(),
@@ -643,7 +737,10 @@ impl Settings {
                 }
                 self.node_dir = optional(value);
             }
-            "announce_interval_mins" => self.announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?,
+            "announce_schedule" => self.announce_schedule = choice(value, ANNOUNCE_SCHEDULES).map_err(fail)?,
+            "announce_interval_mins" => self.announce_interval_mins = between(value, ANNOUNCE_MINS).map_err(fail)?,
+            "announce_random_min_mins" => self.announce_random_min_mins = between(value, ANNOUNCE_MINS).map_err(fail)?,
+            "announce_random_max_mins" => self.announce_random_max_mins = between(value, ANNOUNCE_MINS).map_err(fail)?,
             "sync_interval_mins" => self.sync_interval_mins = number(value, MAX_MINUTES).map_err(fail)?,
             "messages_kept" => self.messages_kept = number(value, MAX_MESSAGES_KEPT).map_err(fail)?,
             "message_storage_mb" => self.message_storage_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
@@ -808,5 +905,56 @@ mod tests {
         let error = s.set_field("cache_hours", "lots").unwrap_err();
         assert!(error.starts_with("Cache pages for (h):"), "{error}");
         assert!(s.set_field("nonsense", "1").is_err());
+    }
+
+    #[test]
+    fn announcing_on_its_own_keeps_within_one_to_six_hours() {
+        use crate::net::AnnounceSchedule;
+        use std::time::Duration;
+        let hours = |h: u64| Duration::from_secs(h * 3600);
+        let mut s = Settings::default();
+        // Random, between an hour and six, to start with.
+        assert_eq!(s.announce_schedule(), AnnounceSchedule::Between(hours(1), hours(6)));
+        for _ in 0..200 {
+            let wait = s.announce_schedule().next().unwrap();
+            assert!(wait >= hours(1) && wait <= hours(6), "{wait:?}");
+        }
+        // Fixed, or random within limits of one's own; none outside 1 to 6
+        // hours.
+        for (key, value) in [("announce_interval_mins", "59"), ("announce_random_min_mins", "361"), ("announce_schedule", "sometimes")] {
+            assert!(s.set_field(key, value).is_err(), "{key} {value}");
+        }
+        s.set_field("announce_random_min_mins", "120").unwrap();
+        s.set_field("announce_random_max_mins", "90").unwrap();
+        assert_eq!(s.announce_schedule(), AnnounceSchedule::Between(Duration::from_secs(90 * 60), hours(2)), "either way round");
+        s.set_field("announce_schedule", " Fixed ").unwrap();
+        s.set_field("announce_interval_mins", "90").unwrap();
+        assert_eq!(s.announce_schedule(), AnnounceSchedule::Every(Duration::from_secs(90 * 60)));
+        assert_eq!(s.announce_schedule().next(), Some(Duration::from_secs(90 * 60)));
+        // settings.json edited by hand: held to the limits.
+        s.announce_interval_mins = 5;
+        assert_eq!(s.announce_schedule(), AnnounceSchedule::Every(hours(1)));
+        s.set_field("announce_schedule", "off").unwrap();
+        assert_eq!((s.announce_schedule(), s.announce_schedule().next()), (AnnounceSchedule::Off, None));
+    }
+
+    #[test]
+    fn settings_from_before_the_announce_schedule_keep_their_choice() {
+        let dir = std::env::temp_dir().join(format!("rettui-schedule-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let load = |minutes: u64| {
+            std::fs::write(&path, format!("{{\"display_name\": \"Zev\", \"announce_interval_mins\": {minutes}}}")).unwrap();
+            let s = Settings::load(&path).unwrap();
+            (s.announce_schedule, s.announce_interval_mins)
+        };
+        assert_eq!(load(0), ("off".into(), 360), "off stays off");
+        assert_eq!(load(360), ("random".into(), 360), "the default then gives way");
+        assert_eq!(load(120), ("fixed".into(), 120), "one's own interval stays");
+        assert_eq!(load(30), ("fixed".into(), 60), "within the limits");
+        // Once set, it's what was chosen.
+        std::fs::write(&path, r#"{"announce_schedule": "random", "announce_interval_mins": 0}"#).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().announce_schedule, "random");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

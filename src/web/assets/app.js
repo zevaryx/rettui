@@ -4187,6 +4187,8 @@ app.views.status = {
       let input;
       if (field.kind === 'toggle') {
         input = el('input', { type: 'checkbox', checked: field.value === 'true' });
+      } else if (field.kind === 'choice') {
+        input = el('select', {}, ...field.choices.map((choice) => el('option', { value: choice, text: choice, selected: choice === field.value })));
       } else {
         input = el('input', {
           type: field.kind === 'number' ? 'number' : 'text',
