@@ -279,10 +279,14 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("↑↓", "select"),
                 ("^V", "paste"),
             ],
+            // The footer is cut off at the edge: what's for the rows found
+            // comes before the longer hints.
             Tab::Network if !app.net_search.input.text().is_empty() => &[
                 ("Enter", "open"),
                 ("/", "edit search"),
                 ("Esc", "clear search"),
+                ("P", "path"),
+                ("T", "probe"),
                 ("y", "copy address"),
                 ("p", "use as propagation node"),
                 ("f", "filter"),
