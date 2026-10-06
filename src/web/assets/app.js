@@ -44,6 +44,7 @@ async function request(method, path, body) {
 const api = {
   get: (path) => request('GET', path),
   post: (path, body = {}) => request('POST', path, body),
+  delete: (path) => request('DELETE', path),
 };
 
 function toast(text, error = false) {
@@ -1304,6 +1305,46 @@ function dialog(title, body, { className = '', onclose } = {}) {
   document.addEventListener('keydown', onKey);
   document.body.append(overlay);
   return close;
+}
+
+// A destination's path, as rnpath shows it: found (asked for if none is
+// known, up to three times over a minute), or forgotten when it has gone
+// stale.
+function pathDialog(hash, name) {
+  let open = true;
+  const status = el('p', { class: 'path-status' });
+  const show = (state) => {
+    status.textContent = state.text;
+    status.className = 'path-status ' + state.state;
+  };
+  const find = async () => {
+    show({ state: 'waiting', text: 'looking for a path…' });
+    // How it's going ("path request 2 of 3"), while the answer is awaited.
+    const watching = setInterval(async () => {
+      const state = await api.get(`/path/${hash}`).catch(() => null);
+      if (open && state?.state === 'waiting') show(state);
+    }, 1000);
+    try {
+      const state = await api.post(`/path/${hash}`);
+      if (open) show(state);
+    } catch (e) {
+      if (open) show({ state: 'failed', text: e.message });
+    } finally {
+      clearInterval(watching);
+    }
+  };
+  const forget = async () => {
+    if (await attempt(() => api.delete(`/path/${hash}`))) show({ state: 'none', text: 'forgotten: the next use asks for a fresh one' });
+  };
+  dialog(`Path to ${name || hash}`, () => el('div', { class: 'path-dialog' },
+    el('p', { class: 'dim mono', text: hash }),
+    status,
+    el('p', { class: 'dim help', text: 'Finding asks for a path if none is known, up to three times over a minute: one request often goes unanswered. Forget a path that has gone stale (the destination moved, or a node on the way went), and the next use asks for a fresh one.' }),
+    el('div', { class: 'buttons' },
+      el('button', { class: 'primary', text: 'Find path', onclick: find }),
+      el('button', { text: 'Forget path', onclick: forget }))),
+  { className: 'path', onclose: () => { open = false; } });
+  find();
 }
 
 // The getting-started guide: an entry point to reach others, finding more
@@ -3177,7 +3218,11 @@ app.views.network = {
     root.append(el('div', { class: 'column grow' },
       el('section', { class: 'panel' }, el('header', {}, this.search, filter,
         el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
-        el('button', { text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }))),
+        el('button', { text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+        el('button', { text: 'Find a path…', title: 'Find the path to any address', onclick: () => {
+          const address = prompt('Find a path to (address)', this.selected || '');
+          if (address?.trim()) pathDialog(address.trim().replace(/^<|>$/g, ''));
+        } }))),
       el('section', { class: 'panel grow' }, el('header', {}, this.title), this.table)));
   },
 
@@ -3245,6 +3290,10 @@ app.views.network = {
         } }) : null,
         p.kind === 'nomad' ? el('button', { text: 'Browse', onclick: () => this.open(p) }) : null,
         p.kind === 'propagation' ? el('button', { text: p.hash === outbound ? 'In use' : 'Use for sync', disabled: p.hash === outbound, onclick: () => this.open(p) }) : null,
+        el('button', { text: 'Path', title: 'Find the path to it, or forget it', onclick: (e) => {
+          e.stopPropagation();
+          pathDialog(p.hash, p.name);
+        } }),
         el('button', { text: 'Copy', onclick: (e) => {
           e.stopPropagation();
           copy(p.hash, 'address');

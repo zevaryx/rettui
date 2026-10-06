@@ -200,6 +200,35 @@ pub async fn connect(
     }
 }
 
+/// The path to a destination, as the path table has it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PathInfo {
+    pub hops: u8,
+    /// The transport node it goes through (none: heard directly).
+    pub via: Option<Hash>,
+    pub interface: String,
+    /// When it expires (Unix seconds), unless heard again.
+    pub expires: i64,
+}
+
+/// The path to `destination`, if one is known.
+pub async fn path_info(runtime: &ReticulumHandle, destination: Hash) -> Option<PathInfo> {
+    let entries = runtime.path_table(None).await.ok()?;
+    entries.into_iter().find(|entry| entry.hash == destination).map(|entry| PathInfo {
+        hops: entry.hops,
+        via: entry.via.filter(|via| *via != destination),
+        interface: entry.interface,
+        expires: entry.expires as i64,
+    })
+}
+
+/// Find a path to `destination` (one known already is used), and say what
+/// it is, as `rnpath` does.
+pub async fn trace_path(runtime: &ReticulumHandle, destination: Hash, progress: Progress<'_>) -> Result<PathInfo, String> {
+    find_path(runtime, destination, progress).await?;
+    path_info(runtime, destination).await.ok_or_else(|| "A path was found, then expired".to_string())
+}
+
 /// Forget the path to `destination`, so the next use asks for a fresh one.
 /// Whether there was one.
 pub async fn drop_path(runtime: &ReticulumHandle, destination: Hash) -> bool {
