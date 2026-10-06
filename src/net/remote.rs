@@ -232,16 +232,32 @@ pub struct Probe {
 /// Probe a destination, as `rnprobe` does: find a path (asked for if
 /// need be), tell what it is from its key, then time a probe packet's
 /// proof, or for kinds that don't prove packets, setting up a Link
-/// (closed straight away; nothing is sent over it).
-pub async fn probe(runtime: &ReticulumHandle, known: &Known, to: Hash, progress: Progress<'_>) -> Result<Probe, String> {
+/// (closed straight away; nothing is sent over it). `name` (its full name,
+/// as `rnprobe` takes) is for kinds rettui doesn't know, which get a probe
+/// packet they must prove.
+pub async fn probe(
+    runtime: &ReticulumHandle,
+    known: &Known,
+    to: Hash,
+    name: Option<&str>,
+    progress: Progress<'_>,
+) -> Result<Probe, String> {
     find_path(runtime, to, progress).await?;
     let identity = lookup(runtime, known, to).await?.identity;
-    let name = KINDS
-        .iter()
-        .find(|(name, _)| rns_identity::destination::Destination::hash_from_name_and_identity(name, Some(&identity.hash)) == to);
+    let is = |name: &str| rns_identity::destination::Destination::hash_from_name_and_identity(name, Some(&identity.hash)) == to;
+    if let Some(name) = name
+        && !is(name)
+    {
+        return Err(format!("{} isn't a {name} destination", hex::encode(to)));
+    }
+    let known_kind = KINDS.iter().find(|(name, _)| is(name));
     let hops = runtime.hops_to(to).await.ok().filter(|&h| h < rns_transport::constants::PATHFINDER_M);
-    let kind = name.map(|(_, kind)| *kind);
-    if let Some((name, _)) = name.filter(|(name, _)| PROVE_PACKETS.contains(name)) {
+    let kind = known_kind.map(|(_, kind)| *kind);
+    let by_packet = match known_kind {
+        Some((name, _)) => PROVE_PACKETS.contains(name).then_some(*name),
+        None => name,
+    };
+    if let Some(name) = by_packet {
         let outcome = rns_runtime::probe::probe_once(
             runtime.transport_tx.clone(),
             to,
@@ -276,15 +292,28 @@ pub struct PathInfo {
     pub expires: i64,
 }
 
+/// Every path known, by destination: the shared instance's, when this is
+/// a client of one (as `rnpath -t` lists).
+pub async fn paths(runtime: &ReticulumHandle) -> Result<Vec<(Hash, PathInfo)>, String> {
+    let entries = runtime.path_table(None).await.map_err(|e| format!("The path table couldn't be read: {e}"))?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| {
+            let info = PathInfo {
+                hops: entry.hops,
+                via: entry.via.filter(|via| *via != entry.hash),
+                interface: entry.interface,
+                expires: entry.expires as i64,
+            };
+            (entry.hash, info)
+        })
+        .collect())
+}
+
 /// The path to `destination`, if one is known.
 pub async fn path_info(runtime: &ReticulumHandle, destination: Hash) -> Option<PathInfo> {
-    let entries = runtime.path_table(None).await.ok()?;
-    entries.into_iter().find(|entry| entry.hash == destination).map(|entry| PathInfo {
-        hops: entry.hops,
-        via: entry.via.filter(|via| *via != destination),
-        interface: entry.interface,
-        expires: entry.expires as i64,
-    })
+    let paths = paths(runtime).await.ok()?;
+    paths.into_iter().find(|(hash, _)| *hash == destination).map(|(_, info)| info)
 }
 
 /// Find a path to `destination` (one known already is used), and say what

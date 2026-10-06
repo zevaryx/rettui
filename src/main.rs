@@ -94,6 +94,38 @@ enum Command {
     /// Ping an LXMF address: how long a Link to it takes to set up, and
     /// how many hops away it is.
     Ping { address: String },
+    /// Find the path to any destination and print it, as rnpath does.
+    ///
+    /// One is asked for if none is known, up to three times over a minute.
+    /// With rettui or rnsd running as the shared instance, these are its
+    /// paths; else, those the last run with this Reticulum config saved.
+    Path {
+        /// The destination's address (LXMF, NomadNet node, propagation
+        /// node, RRC hub…).
+        #[arg(required_unless_present = "table")]
+        address: Option<String>,
+        /// Forget the path instead, so the next use asks for a fresh one
+        /// (for one gone stale).
+        #[arg(long, short, requires = "address")]
+        drop: bool,
+        /// Print every path known.
+        #[arg(long, short, conflicts_with_all = ["address", "drop"])]
+        table: bool,
+    },
+    /// Probe any destination, as rnprobe does: how long it takes to answer.
+    ///
+    /// LXMF addresses are sent a probe packet, as rnprobe sends. NomadNet
+    /// and propagation nodes and RRC hubs don't answer those, so setting up
+    /// a Link to one is timed instead.
+    Probe {
+        /// The destination's address (LXMF, NomadNet node, propagation
+        /// node, RRC hub…).
+        address: String,
+        /// The destination's full name (e.g. rnsh.listen), for kinds
+        /// rettui can't tell; it's sent a probe packet it must prove.
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Download waiting messages from the propagation node.
     Sync {
         /// Propagation node to use instead of the configured one.
@@ -176,6 +208,11 @@ async fn main() -> Result<()> {
         Some(Command::Listen { seconds }) => cli::listen(&settings, &paths, identity, seconds).await,
         Some(Command::Sync { node }) => cli::sync(&settings, &paths, identity, node.as_deref()).await,
         Some(Command::Ping { address }) => cli::ping(&settings, &paths, identity, &address).await,
+        Some(Command::Path { table: true, .. }) => cli::path_table(&settings).await,
+        Some(Command::Path { address, drop, .. }) => {
+            cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await
+        }
+        Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         None => run_tui(settings, paths, identity).await,
     }
 }
