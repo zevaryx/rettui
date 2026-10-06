@@ -1,14 +1,15 @@
 //! Browser tab: saved pages / nodes pane, address bar and the page itself.
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{ACCENT, DIM, SELECTED_BG, ago, ago_secs, block};
-use crate::app::{App, BrowserFocus, BrowserPane};
+use super::{ACCENT, DIM, SELECTED_BG, ago, ago_secs, block, highlighted};
+use crate::app::{App, BrowserFocus, BrowserPane, match_mask};
+use crate::net::PeerKind;
 use crate::nomad::micron::source::{Token, tokenize, visible};
 use crate::term::images::draw_placements;
 
@@ -260,27 +261,33 @@ fn draw_source(frame: &mut Frame, app: &mut App, area: Rect) {
     draw_selection(frame, app, text_area);
 }
 
-/// Saved pages and heard nodes, beside the page.
+/// Saved pages and heard nodes, beside the page, and a search for both.
 fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.browser.focus == BrowserFocus::Pane;
     let pane_block = block("Browse", focused);
     let inner = pane_block.inner(area);
     frame.render_widget(pane_block, area);
-    if inner.height < 2 {
+    if inner.height < 3 {
         return;
     }
-    let [tabs_row, list_area] =
-        Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
+    let [tabs_row, search_row, list_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)]).areas(inner);
 
-    app.regions.browser_tabs.clear();
+    let terms = app.browser.search.terms();
+    let saved = app.browser_saved();
+    let nodes = app.browser_nodes();
+    let count = |shown: usize, all: usize| if terms.is_empty() { format!("{all}") } else { format!("{shown}/{all}") };
+    let all_nodes = app.store.peers.values().filter(|p| p.kind == PeerKind::Nomad).count();
+    let labels = [
+        (BrowserPane::Saved, format!(" Saved {} ", count(saved.len(), app.store.saved.len()))),
+        (BrowserPane::Nodes, format!(" Nodes {} ", count(nodes.len(), all_nodes))),
+    ];
+    let mut tabs = Vec::new();
     let mut x = tabs_row.x;
     let mut spans = Vec::new();
-    for (pane, label) in [
-        (BrowserPane::Saved, format!(" Saved {} ", app.store.saved.len())),
-        (BrowserPane::Nodes, format!(" Nodes {} ", app.browser_nodes().len())),
-    ] {
+    for (pane, label) in labels {
         let width = label.width() as u16;
-        app.regions.browser_tabs.push((Rect::new(x, tabs_row.y, width, 1), pane));
+        tabs.push((Rect::new(x, tabs_row.y, width, 1), pane));
         x += width + 1;
         let style = if pane == app.browser.pane {
             Style::default().fg(Color::Black).bg(ACCENT).bold()
@@ -291,42 +298,55 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::raw(" "));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), tabs_row);
-    app.regions.browser_list = list_area;
 
+    // Matches show where they are: in the name, or else in the address.
+    let row = |name: &str, address: &str| {
+        let mut spans = highlighted(name, usize::MAX, &terms, Style::default());
+        if !terms.is_empty() && !match_mask(name, &terms).contains(&true) {
+            spans.push(Span::raw("  "));
+            spans.extend(highlighted(address, usize::MAX, &terms, Style::default().fg(DIM)));
+        }
+        spans
+    };
     let current = app.browser.location.as_ref().map(|l| (l.url(), hex::encode(l.node)));
-    let (items, empty_hint): (Vec<ListItem>, &str) = match app.browser.pane {
+    let (items, empty_hint): (Vec<ListItem>, String) = match app.browser.pane {
         BrowserPane::Saved => (
-            app.store
-                .saved
+            saved
                 .iter()
-                .map(|b| {
+                .map(|(_, b)| {
                     let open = current.as_ref().is_some_and(|(url, _)| *url == b.url);
                     let marker = if open { "▸ " } else { "  " };
-                    ListItem::new(Line::from(vec![
-                        Span::styled(marker, Style::default().fg(ACCENT)),
-                        Span::raw(b.name.clone()),
-                    ]))
+                    let mut spans = vec![Span::styled(marker, Style::default().fg(ACCENT))];
+                    spans.extend(row(&b.name, &b.url));
+                    ListItem::new(Line::from(spans))
                 })
                 .collect(),
-            "Nothing saved yet. Press s on a page to save it.",
+            "Nothing saved yet. Press s on a page to save it.".into(),
         ),
         BrowserPane::Nodes => (
-            app.browser_nodes()
+            nodes
                 .iter()
                 .map(|(hash, peer)| {
                     let open = current.as_ref().is_some_and(|(_, node)| node == *hash);
                     let marker = if open { "▸ " } else { "  " };
                     let name = peer.name.clone().unwrap_or_else(|| format!("<{}>", &hash[..12]));
-                    ListItem::new(Line::from(vec![
-                        Span::styled(marker, Style::default().fg(ACCENT)),
-                        Span::raw(name),
-                        Span::styled(format!("  {}", ago(peer.last_seen)), Style::default().fg(DIM)),
-                    ]))
+                    let mut spans = vec![Span::styled(marker, Style::default().fg(ACCENT))];
+                    spans.extend(row(&name, hash));
+                    spans.push(Span::styled(format!("  {}", ago(peer.last_seen)), Style::default().fg(DIM)));
+                    ListItem::new(Line::from(spans))
                 })
                 .collect(),
-            "No NomadNet nodes heard yet.",
+            "No NomadNet nodes heard yet.".into(),
         ),
     };
+    let empty_hint = if terms.is_empty() {
+        empty_hint
+    } else {
+        format!("Nothing matches “{}”. Esc clears the search.", app.browser.search.input.text().trim())
+    };
+    app.regions.browser_tabs = tabs;
+    app.regions.browser_list = list_area;
+    draw_pane_search(frame, app, search_row);
     if items.is_empty() {
         frame.render_widget(
             Paragraph::new(empty_hint)
@@ -346,3 +366,76 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     frame.render_stateful_widget(list, list_area, state);
 }
+
+/// The pane's search line: what's typed after a `/`, or how to start one.
+fn draw_pane_search(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.regions.browser_search = area;
+    let search = &app.browser.search;
+    let text = search.input.text();
+    if text.is_empty() && !search.typing {
+        let hint = Span::styled("/ search by name or address", Style::default().fg(DIM));
+        frame.render_widget(Paragraph::new(hint), area);
+        return;
+    }
+    let [slash, field] = Layout::horizontal([Constraint::Length(2), Constraint::Min(1)]).areas(area);
+    let slash_style = if search.typing { Style::default().fg(ACCENT).bold() } else { Style::default().fg(DIM) };
+    frame.render_widget(Paragraph::new(Span::styled("/", slash_style)), slash);
+    let cursor = search.input.cursor_column();
+    let offset = cursor.saturating_sub(field.width.saturating_sub(1) as usize);
+    frame.render_widget(Paragraph::new(text.to_string()).scroll((0, offset as u16)), field);
+    if search.typing {
+        frame.set_cursor_position(Position::new(field.x + (cursor - offset) as u16, field.y));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use crate::app::{App, BrowserPane, Tab};
+    use crate::config::Settings;
+    use crate::net::PeerKind;
+    use crate::store::{Peer, Store};
+
+    fn screen(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..16).map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn the_pane_shows_what_the_search_found() {
+        let dir = std::env::temp_dir().join(format!("rettui-ui-browser-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = Store::default();
+        let node = |name: &str, last_seen| Peer { kind: PeerKind::Nomad, name: Some(name.into()), hops: 1, last_seen };
+        store.peers.insert("aa".repeat(16), node("Alpha Library", 30));
+        store.peers.insert("bb".repeat(16), node("Beta Wiki", 20));
+        store.peers.insert("cc".repeat(16), node("Gamma", 10));
+        let mut app = crate::app::test_app(&dir, Settings::default(), store);
+        app.tab = Tab::Browser;
+        app.browser.pane = BrowserPane::Nodes;
+        let shown = screen(&mut app);
+        assert!(shown.contains("Nodes 3") && shown.contains("/ search by name or address"), "{shown}");
+        for c in "/beta".chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        let shown = screen(&mut app);
+        assert!(shown.contains("Saved 0/0") && shown.contains("Nodes 1/3") && shown.contains("/ beta"), "{shown}");
+        assert!(shown.contains("Beta Wiki") && !shown.contains("Alpha Library"), "{shown}");
+        // Found by address: the address shows, as the name doesn't match.
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.on_paste("cccc");
+        let shown = screen(&mut app);
+        assert!(shown.contains(&format!("Gamma  {}", &"cc".repeat(16)[..20])), "{shown}");
+        app.on_paste("zz");
+        let shown = screen(&mut app);
+        assert!(shown.contains("Nothing matches “cccczz”"), "{shown}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+

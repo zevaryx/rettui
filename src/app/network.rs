@@ -27,7 +27,8 @@ fn hops_label(hops: u8) -> String {
 /// A blocked contact not heard announcing (blocking stops their announces).
 pub static UNHEARD: Peer = Peer { kind: PeerKind::Lxmf, name: None, hops: 0, last_seen: 0 };
 
-/// The Network tab's search box: finds peers and nodes by name or address.
+/// A search box, by name or address: the Network tab's finds peers and
+/// nodes, the Browser's nodes and saved pages.
 #[derive(Default)]
 pub struct NetSearch {
     pub input: TextInput,
@@ -93,14 +94,16 @@ pub fn match_mask(text: &str, terms: &[Vec<char>]) -> Vec<bool> {
 
 /// Whether a peer's name or address contains every search word.
 pub fn matches(terms: &[Vec<char>], hash: &str, peer: &Peer) -> bool {
+    matches_text(terms, &[peer.name.as_deref().unwrap_or_default(), hash])
+}
+
+/// Whether every search word is in one of `texts` (a name, an address).
+pub fn matches_text(terms: &[Vec<char>], texts: &[&str]) -> bool {
     if terms.is_empty() {
         return true;
     }
-    let name = fold(peer.name.as_deref().unwrap_or_default());
-    let hash = fold(hash);
-    terms
-        .iter()
-        .all(|term| !find_all(&name, term).is_empty() || !find_all(&hash, term).is_empty())
+    let texts: Vec<Vec<char>> = texts.iter().map(|text| fold(text)).collect();
+    terms.iter().all(|term| texts.iter().any(|text| !find_all(text, term).is_empty()))
 }
 
 impl App {

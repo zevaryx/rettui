@@ -222,6 +222,7 @@ pub struct Regions {
     pub version: Rect,
     /// Browser pane sub-tabs and list.
     pub browser_tabs: Vec<(Rect, BrowserPane)>,
+    pub browser_search: Rect,
     pub browser_list: Rect,
     pub conversations: Rect,
     pub history: Rect,
@@ -757,6 +758,8 @@ impl App {
             self.rns_paste(text);
         } else if self.net_search.typing && self.tab == Tab::Network {
             self.paste_network_search(text);
+        } else if self.browser.search.typing && self.tab == Tab::Browser {
+            self.paste_browser_search(text);
         } else if let Some(field) = self.selected_text_field() {
             // Paste into the selected page field by opening its editor.
             let page = self.browser.page.as_ref().expect("field implies a page");
@@ -1195,6 +1198,7 @@ impl App {
         }
         (self.channels.typing, self.channels.menu.is_some(), self.channels.picker.is_some()).hash(&mut h);
         (discriminant(&self.browser.pane), discriminant(&self.browser.focus), self.browser.source.is_some()).hash(&mut h);
+        self.browser.search.typing.hash(&mut h);
         (self.node.editing, discriminant(&self.node.view), self.node.editor.is_some()).hash(&mut h);
         (discriminant(&self.rns.focus), self.rns.picker.is_some(), self.rns.editor.is_some()).hash(&mut h);
         h.finish()

@@ -7,8 +7,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
-use super::{DIM, SELECTED_BG, ago, block};
-use crate::app::{App, NetFilter, match_mask};
+use super::{DIM, SELECTED_BG, ago, block, highlighted};
+use crate::app::{App, NetFilter};
 use crate::net::PeerKind;
 
 /// Longest name shown before the address column.
@@ -19,25 +19,6 @@ const MIN_NAME_WIDTH: usize = 12;
 /// A row besides its name: the selection mark (2), the tag (6), spaces
 /// around the name (2) and the address (32).
 const ROW_WITHOUT_NAME: usize = 42;
-
-/// `text` (at most `limit` chars) with search matches highlighted.
-fn highlighted(text: &str, limit: usize, terms: &[Vec<char>], style: Style) -> Vec<Span<'static>> {
-    let hit = Style::default().fg(Color::Black).bg(Color::Yellow);
-    let mut spans = Vec::new();
-    let mut run = String::new();
-    let mut on = false;
-    for (c, matched) in text.chars().zip(match_mask(text, terms)).take(limit) {
-        if matched != on && !run.is_empty() {
-            spans.push(Span::styled(std::mem::take(&mut run), if on { hit } else { style }));
-        }
-        on = matched;
-        run.push(c);
-    }
-    if !run.is_empty() {
-        spans.push(Span::styled(run, if on { hit } else { style }));
-    }
-    spans
-}
 
 fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
     let search = &app.net_search;

@@ -25,7 +25,7 @@ use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Tab};
+use crate::app::{App, Tab, match_mask};
 use browser::draw_browser;
 use channels::draw_channels;
 use chrome::{draw_footer, draw_prompt, draw_sidebar, sidebar_width};
@@ -85,6 +85,25 @@ fn ago(unix: i64) -> String {
         3600..86_400 => format!("{}h", secs / 3600),
         _ => format!("{}d", secs / 86_400),
     }
+}
+
+/// `text` (at most `limit` chars) with search matches highlighted.
+fn highlighted(text: &str, limit: usize, terms: &[Vec<char>], style: Style) -> Vec<Span<'static>> {
+    let hit = Style::default().fg(Color::Black).bg(Color::Yellow);
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut on = false;
+    for (c, matched) in text.chars().zip(match_mask(text, terms)).take(limit) {
+        if matched != on && !run.is_empty() {
+            spans.push(Span::styled(std::mem::take(&mut run), if on { hit } else { style }));
+        }
+        on = matched;
+        run.push(c);
+    }
+    if !run.is_empty() {
+        spans.push(Span::styled(run, if on { hit } else { style }));
+    }
+    spans
 }
 
 fn human_bytes(bytes: u64) -> String {

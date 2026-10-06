@@ -9,6 +9,7 @@ use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 
 use super::files::unique_path;
+use super::network::{NetSearch, matches, matches_text};
 use super::{App, Prompt, PromptKind, Tab};
 use crate::net::{Hash, NetCommand, PeerKind, parse_hash};
 use crate::nomad::FetchedContent;
@@ -84,6 +85,9 @@ pub struct Browser {
     pub focus: BrowserFocus,
     pub saved_list: ListState,
     pub nodes_list: ListState,
+    /// Narrows both lists: nodes by name or address, saved pages by name
+    /// or address.
+    pub search: NetSearch,
     /// Text selected on the page with the mouse.
     pub selection: Option<Selection>,
     pub(super) dragging: bool,
@@ -555,21 +559,30 @@ impl App {
         }
     }
 
-    /// NomadNet nodes heard, most recently heard first.
+    /// NomadNet nodes heard that match the search, most recently heard
+    /// first.
     pub fn browser_nodes(&self) -> Vec<(&String, &Peer)> {
+        let terms = self.browser.search.terms();
         let mut nodes: Vec<_> = self
             .store
             .peers
             .iter()
-            .filter(|(_, p)| p.kind == PeerKind::Nomad)
+            .filter(|(hash, p)| p.kind == PeerKind::Nomad && matches(&terms, hash, p))
             .collect();
         nodes.sort_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
         nodes
     }
 
+    /// Saved pages that match the search, with where each is kept.
+    pub fn browser_saved(&self) -> Vec<(usize, &Bookmark)> {
+        let terms = self.browser.search.terms();
+        let saved = self.store.saved.iter().enumerate();
+        saved.filter(|(_, b)| matches_text(&terms, &[&b.name, &b.url])).collect()
+    }
+
     fn pane_len(&self) -> usize {
         match self.browser.pane {
-            BrowserPane::Saved => self.store.saved.len(),
+            BrowserPane::Saved => self.browser_saved().len(),
             BrowserPane::Nodes => self.browser_nodes().len(),
         }
     }
@@ -597,7 +610,7 @@ impl App {
             return;
         };
         let url = match self.browser.pane {
-            BrowserPane::Saved => self.store.saved.get(index).map(|b| b.url.clone()),
+            BrowserPane::Saved => self.browser_saved().get(index).map(|(_, b)| b.url.clone()),
             BrowserPane::Nodes => self.browser_nodes().get(index).map(|(k, _)| (*k).clone()),
         };
         if let Some(location) = url.and_then(|u| self.resolve(&u)) {
@@ -633,21 +646,60 @@ impl App {
         let Some(index) = self.browser.saved_list.selected() else {
             return;
         };
-        if index < self.store.saved.len() {
-            let removed = self.store.saved.remove(index);
-            self.log(format!("Removed {}", removed.name));
-            self.store_dirty = true;
-            let len = self.store.saved.len();
-            self.browser
-                .saved_list
-                .select((len > 0).then(|| index.min(len - 1)));
+        let Some(kept_at) = self.browser_saved().get(index).map(|&(at, _)| at) else {
+            return;
+        };
+        let removed = self.store.saved.remove(kept_at);
+        self.log(format!("Removed {}", removed.name));
+        self.store_dirty = true;
+        let len = self.browser_saved().len();
+        self.browser.saved_list.select((len > 0).then(|| index.min(len - 1)));
+    }
+
+    /// Keys while the pane's search box has focus.
+    pub(super) fn browser_search_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.clear_browser_search(),
+            KeyCode::Enter => self.browser.search.typing = false,
+            KeyCode::Up => self.move_pane_selection(-1),
+            KeyCode::Down => self.move_pane_selection(1),
+            _ => {
+                if self.browser.search.input.handle(key) {
+                    self.browser_search_changed();
+                }
+            }
         }
+    }
+
+    pub(super) fn paste_browser_search(&mut self, text: &str) {
+        self.browser.search.input.insert_str(text);
+        self.browser_search_changed();
+    }
+
+    fn search_browser(&mut self) {
+        self.browser.search.typing = true;
+        self.browser.focus = BrowserFocus::Pane;
+    }
+
+    fn clear_browser_search(&mut self) {
+        self.browser.search.input.take();
+        self.browser.search.typing = false;
+        self.browser_search_changed();
+    }
+
+    /// Show the best match first in both lists whenever the search changes.
+    fn browser_search_changed(&mut self) {
+        let saved = !self.browser_saved().is_empty();
+        let nodes = !self.browser_nodes().is_empty();
+        self.browser.saved_list = ListState::default().with_selected(saved.then_some(0));
+        self.browser.nodes_list = ListState::default().with_selected(nodes.then_some(0));
     }
 
     pub(super) fn browser_key(&mut self, key: KeyEvent) {
         // Keys that work whichever pane has focus.
         match key.code {
             KeyCode::Char('g') | KeyCode::Char('o') => return self.open_goto(),
+            KeyCode::Char('/') => return self.search_browser(),
             KeyCode::Char('H') => {
                 match self.settings.home.clone().and_then(|h| self.resolve(&h)) {
                     Some(location) => self.navigate(location),
@@ -679,6 +731,10 @@ impl App {
             KeyCode::Esc => {
                 if self.browser.loading.is_none() && self.browser.view_source {
                     return self.toggle_source();
+                }
+                let searching = !self.browser.search.input.text().is_empty();
+                if self.browser.loading.is_none() && self.browser.focus == BrowserFocus::Pane && searching {
+                    return self.clear_browser_search();
                 }
                 self.browser.loading = None;
                 self.browser.selection = None;
@@ -801,10 +857,14 @@ impl App {
             self.switch_pane(pane);
             return;
         }
+        if self.regions.browser_search.contains(at) {
+            return self.search_browser();
+        }
         let list = self.regions.browser_list;
         if list.contains(at) {
             // A single click opens the page next to the list.
             self.browser.focus = BrowserFocus::Pane;
+            self.browser.search.typing = false;
             let offset = self.pane_list().offset();
             let index = offset + (at.y - list.y) as usize;
             if index < self.pane_len() {
@@ -907,6 +967,86 @@ mod tests {
         }
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.browser.page.as_ref().unwrap().fields[0].value, "one\ntwo");
+        let _ = std::fs::remove_dir_all(app.paths.node.parent().unwrap());
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            press(app, KeyCode::Char(c));
+        }
+    }
+
+    /// An app with three nodes, an LXMF peer and two saved pages, showing
+    /// the Browser tab.
+    fn with_nodes(name: &str) -> App {
+        let dir = std::env::temp_dir().join(format!("rettui-browser-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = Store::default();
+        let node = |name: Option<&str>, last_seen| Peer { kind: PeerKind::Nomad, name: name.map(str::to_string), hops: 1, last_seen };
+        store.peers.insert("aa".repeat(16), node(Some("Alpha Library"), 30));
+        store.peers.insert("bb".repeat(16), node(Some("Beta Wiki"), 20));
+        store.peers.insert("cc".repeat(16), node(None, 10));
+        store.peers.insert("ab".repeat(16), Peer { kind: PeerKind::Lxmf, name: Some("Alpha person".into()), hops: 1, last_seen: 40 });
+        store.saved.push(Bookmark { name: "Alpha Library".into(), url: format!("{}:/page/index.mu", "aa".repeat(16)) });
+        store.saved.push(Bookmark { name: "Gamma · news.mu".into(), url: format!("{}:/page/news.mu", "dd".repeat(16)) });
+        let mut app = crate::app::test_app(&dir, Settings::default(), store);
+        app.tab = Tab::Browser;
+        app
+    }
+
+    fn node_names(app: &App) -> Vec<String> {
+        app.browser_nodes().iter().map(|(hash, p)| p.name.clone().unwrap_or_else(|| (*hash).clone())).collect()
+    }
+
+    fn saved_names(app: &App) -> Vec<String> {
+        app.browser_saved().iter().map(|(_, b)| b.name.clone()).collect()
+    }
+
+    #[test]
+    fn searching_the_pane_narrows_both_lists() {
+        let mut app = with_nodes("search");
+        app.switch_pane(BrowserPane::Nodes);
+        // Only nodes, newest first.
+        assert_eq!(node_names(&app), ["Alpha Library", "Beta Wiki", &"cc".repeat(16)]);
+        // `/` from the page too: the pane takes focus, and keys go to the box.
+        app.browser.focus = BrowserFocus::Page;
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.browser.search.typing);
+        assert_eq!(app.browser.focus, BrowserFocus::Pane);
+        type_text(&mut app, "ALPHA lib");
+        assert_eq!(node_names(&app), ["Alpha Library"]);
+        assert_eq!(saved_names(&app), ["Alpha Library"]);
+        assert_eq!(app.browser.nodes_list.selected(), Some(0));
+        // Enter keeps the search; keys are the pane's again.
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.browser.search.typing);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.browser.search.input.text(), "ALPHA lib");
+        // Esc in the pane clears it.
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.browser.search.input.text(), "");
+        assert_eq!(node_names(&app).len(), 3);
+        // Addresses match, pasted as `<hash>` too.
+        press(&mut app, KeyCode::Char('/'));
+        app.on_paste(&format!("<{}>", "cc".repeat(16)));
+        assert_eq!(node_names(&app), ["cc".repeat(16)]);
+        // Esc while typing clears it as well.
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.browser.search.typing);
+        assert_eq!(node_names(&app).len(), 3);
+        // Saved pages are found by address, and the one shown is removed.
+        app.switch_pane(BrowserPane::Saved);
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "dddd");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(saved_names(&app), ["Gamma · news.mu"]);
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(app.store.saved.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["Alpha Library"]);
+        assert!(saved_names(&app).is_empty());
         let _ = std::fs::remove_dir_all(app.paths.node.parent().unwrap());
     }
 }

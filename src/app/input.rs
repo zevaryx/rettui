@@ -120,6 +120,13 @@ impl App {
             }
             return;
         }
+        if self.browser.search.typing && self.tab == Tab::Browser {
+            match key.code {
+                KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
+                _ => self.browser_search_key(key),
+            }
+            return;
+        }
         if self.composing && self.tab == Tab::Messages {
             if self.shortcode_key(key) {
                 return;

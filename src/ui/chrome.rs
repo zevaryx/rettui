@@ -298,6 +298,12 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("A", "announce"),
                 ("q", "quit"),
             ],
+            Tab::Browser if app.browser.search.typing => &[
+                ("Enter", "done"),
+                ("Esc", "clear"),
+                ("↑↓", "select"),
+                ("^V", "paste"),
+            ],
             Tab::Browser if app.browser.focus == BrowserFocus::Pane => &[
                 ("↑↓", "select"),
                 ("Enter", "open"),
