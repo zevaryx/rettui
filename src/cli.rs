@@ -1,4 +1,5 @@
-//! Non-interactive commands: send, listen, sync and fetch from the shell.
+//! Non-interactive commands: send, listen, sync, fetch, path and probe
+//! from the shell.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -211,6 +212,92 @@ pub async fn ping(settings: &Settings, paths: &Paths, identity: Identity, addres
         }
     }
     bail!("network task stopped")
+}
+
+fn parse_destination(address: &str) -> Result<Hash> {
+    net::parse_hash(address).ok_or_else(|| anyhow!("{address} isn't an address: one is 32 hex characters"))
+}
+
+/// Say so when a path has to be asked for: the first request's answer can
+/// take a while, and further ones are reported as they go.
+async fn say_if_asking(runtime: &rns_runtime::reticulum::ReticulumHandle, to: Hash) {
+    if !runtime.has_path(to).await.unwrap_or(false) {
+        eprintln!("No path known; asking for one…");
+    }
+}
+
+/// Find the path to a destination and print it, as `rnpath` does, asking
+/// for one if none is known; or with `drop`, forget it.
+pub async fn path(settings: &Settings, address: &str, drop: bool) -> Result<()> {
+    let to = parse_destination(address)?;
+    let runtime = net::start_runtime(settings.rns_config.as_deref())
+        .await
+        .map_err(anyhow::Error::msg)?;
+    if drop {
+        // Without a shared instance, the paths are those the last run with
+        // this config saved, and this run saves them again without it.
+        let had = net::drop_path(&runtime, to).await;
+        runtime.shutdown_and_wait().await;
+        if !had {
+            bail!("No path to {} was known", hex::encode(to));
+        }
+        println!("Forgot the path to {}: the next use asks for a fresh one", hex::encode(to));
+        return Ok(());
+    }
+    say_if_asking(&runtime, to).await;
+    let result = net::trace_path(&runtime, to, &|text| eprintln!("{text}…")).await;
+    runtime.shutdown_and_wait().await;
+    let info = result.map_err(anyhow::Error::msg)?;
+    let hops = crate::app::paths::hops_label(info.hops);
+    let via = info.via.map(|via| format!(" via {}", hex::encode(via))).unwrap_or_default();
+    let kept = crate::app::paths::kept_label(info.expires, chrono::Utc::now().timestamp());
+    println!("{}: {hops}{via} on {}, kept for {kept}", hex::encode(to), info.interface);
+    Ok(())
+}
+
+/// Print every path known, as `rnpath -t` does: the shared instance's, if
+/// rettui or rnsd runs as one.
+pub async fn path_table(settings: &Settings) -> Result<()> {
+    let runtime = net::start_runtime(settings.rns_config.as_deref())
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let shared = runtime.instance_mode == rns_runtime::reticulum::InstanceMode::Client;
+    let paths = net::paths(&runtime).await;
+    runtime.shutdown_and_wait().await;
+    let mut paths = paths.map_err(anyhow::Error::msg)?;
+    if !shared {
+        eprintln!("No shared instance (rettui or rnsd) runs here: these are the paths the last run saved, and any heard since");
+    }
+    if paths.is_empty() {
+        println!("No paths known");
+        return Ok(());
+    }
+    paths.sort_by(|(a, a_info), (b, b_info)| (a_info.hops, &a_info.interface, a).cmp(&(b_info.hops, &b_info.interface, b)));
+    let now = chrono::Utc::now().timestamp();
+    println!("{:<32}  {:>4}  {:<32}  {:<8}  Interface", "Address", "Hops", "Via", "Kept for");
+    for (hash, info) in paths {
+        let via = info.via.map_or_else(|| "-".to_string(), hex::encode);
+        let kept = crate::app::paths::kept_label(info.expires, now);
+        println!("{}  {:>4}  {via:<32}  {kept:<8}  {}", hex::encode(hash), info.hops, info.interface);
+    }
+    Ok(())
+}
+
+/// Probe a destination and print how it answered, as `rnprobe` does.
+/// `name` (e.g. `rnsh.listen`) is for destinations rettui can't tell the
+/// kind of, which are sent a probe packet they must prove.
+pub async fn probe(settings: &Settings, paths: &Paths, address: &str, name: Option<&str>) -> Result<()> {
+    let to = parse_destination(address)?;
+    let known = net::KnownIdentities::load(&paths.known_identities);
+    let runtime = net::start_runtime(settings.rns_config.as_deref())
+        .await
+        .map_err(anyhow::Error::msg)?;
+    say_if_asking(&runtime, to).await;
+    let result = net::probe(&runtime, &known, to, name, &|text| eprintln!("{text}…")).await;
+    runtime.shutdown_and_wait().await;
+    let probe = result.map_err(anyhow::Error::msg)?;
+    println!("{}: {}", hex::encode(to), crate::app::paths::probe_label(&probe));
+    Ok(())
 }
 
 /// Download waiting messages from the propagation node and print them.

@@ -46,20 +46,29 @@ pub fn probe_state_label(state: &ProbeState) -> String {
     }
 }
 
-/// A path in words: "2 hops via <0a1b2c3d…> on RMAP World, kept for 6 days".
-pub fn path_label(info: &PathInfo, now: i64) -> String {
-    let hops = match info.hops {
+/// How far a path goes: "heard directly" (one hop: over an interface of
+/// this one's), or "3 hops".
+pub fn hops_label(hops: u8) -> String {
+    match hops {
         0 | 1 => "heard directly".to_string(),
         n => format!("{n} hops"),
-    };
-    let via = info.via.map(|via| format!(" via <{}…>", &hex::encode(via)[..8])).unwrap_or_default();
-    let left = (info.expires - now).max(0);
-    let kept = match left {
+    }
+}
+
+/// How long a path is kept for, unless heard again: "40 min", "5 h", "6 days".
+pub fn kept_label(expires: i64, now: i64) -> String {
+    let left = (expires - now).max(0);
+    match left {
         0..3600 => format!("{} min", left / 60),
         3600..172_800 => format!("{} h", left / 3600),
         _ => format!("{} days", left / 86_400),
-    };
-    format!("{hops}{via} on {}, kept for {kept}", info.interface)
+    }
+}
+
+/// A path in words: "2 hops via <0a1b2c3d…> on RMAP World, kept for 6 days".
+pub fn path_label(info: &PathInfo, now: i64) -> String {
+    let via = info.via.map(|via| format!(" via <{}…>", &hex::encode(via)[..8])).unwrap_or_default();
+    format!("{}{via} on {}, kept for {}", hops_label(info.hops), info.interface, kept_label(info.expires, now))
 }
 
 /// How finding a path went, or is going, in words.

@@ -29,7 +29,10 @@ use crate::nomad::host::{self, HostConfig};
 use crate::nomad::{self, FetchedContent, LinkCache};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
-pub use remote::{Known, KnownIdentities, PathInfo, Ping, Probe, Progress, connect, ensure_path, find_path, link_options, lookup};
+pub use remote::{
+    Known, KnownIdentities, PathInfo, Ping, Probe, Progress, connect, drop_path, ensure_path, find_path, link_options, lookup,
+    paths, probe, trace_path,
+};
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -688,7 +691,7 @@ async fn run(
                             let progress = |text: String| {
                                 let _ = ev.send(NetEvent::PathProgress { to, text });
                             };
-                            let result = remote::probe(&runtime, &known, to, &progress).await;
+                            let result = remote::probe(&runtime, &known, to, None, &progress).await;
                             let _ = ev.send(NetEvent::Probed { to, result });
                         });
                     }
