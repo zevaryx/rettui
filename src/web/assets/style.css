@@ -393,6 +393,8 @@ mark { background: var(--yellow); color: #111; border-radius: 2px; }
 /* ---- browser ------------------------------------------------------------ */
 
 .subtabs { display: flex; gap: 6px; }
+/* The Browser's search, on its own row under the Saved / Nodes tabs. */
+.panel > header .pane-search { flex: 1 1 100%; min-width: 0; }
 .subtabs button.active { background: var(--accent); color: #111; border-color: var(--accent); }
 .toolbar { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
 .toolbar input { flex: 1; min-width: 200px; font-family: var(--mono); }

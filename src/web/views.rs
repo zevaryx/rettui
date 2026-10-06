@@ -269,32 +269,31 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
 
 /// Heard peers, most recent first: those of one kind (`lxmf`, `nomad`,
 /// `propagation`) if asked, matching the search words, at most `limit`.
-/// `total` counts every match, so the page can offer more.
+/// `total` counts every match, so the page can offer more, and `heard`
+/// every one of the kind, matching or not.
 pub fn peers(app: &App, kind: Option<&str>, query: &str, limit: Option<usize>) -> Value {
     let terms = network::search_terms(query);
     let blocked = |hash: &str| app.store.contact(hash).trust == crate::store::Trust::Blocked;
-    let mut peers: Vec<_> = if kind == Some("blocked") {
+    let of_kind: Vec<_> = if kind == Some("blocked") {
         // Blocked contacts, heard or not (blocking stops their announces).
         app.store
             .contacts
             .keys()
             .filter(|hash| blocked(hash))
             .map(|hash| (hash, app.store.peers.get(hash).unwrap_or(&network::UNHEARD)))
-            .filter(|(hash, p)| network::matches(&terms, hash, p))
             .collect()
     } else {
-        app.store
-            .peers
-            .iter()
-            .filter(|(hash, p)| kind.is_none_or(|kind| kind_name(p.kind) == kind) && network::matches(&terms, hash, p))
-            .collect()
+        app.store.peers.iter().filter(|(_, p)| kind.is_none_or(|kind| kind_name(p.kind) == kind)).collect()
     };
+    let heard = of_kind.len();
+    let mut peers: Vec<_> = of_kind.into_iter().filter(|(hash, p)| network::matches(&terms, hash, p)).collect();
     let total = peers.len();
     peers.sort_unstable_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
     peers.truncate(limit.unwrap_or(usize::MAX));
     json!({
         "propagation_node": app.settings.propagation_node,
         "total": total,
+        "heard": heard,
         "peers": peers.into_iter().map(|(hash, p)| json!({
             "hash": hash, "kind": kind_name(p.kind), "name": p.name, "hops": p.hops, "last_seen": p.last_seen,
             "blocked": blocked(hash),
@@ -613,5 +612,26 @@ mod tests {
         assert_eq!(newest(&items, Some(9)), items);
         assert_eq!(newest(&items, None), items);
         assert!(newest(&items, Some(0)).is_empty());
+    }
+
+    #[test]
+    fn peers_count_the_matches_and_all_of_the_kind() {
+        use crate::net::PeerKind;
+        use crate::store::{Peer, Store};
+        let dir = std::env::temp_dir().join(format!("rettui-views-peers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = Store::default();
+        for (i, name) in ["Alpha Library", "Beta Wiki", "Gamma"].into_iter().enumerate() {
+            store.peers.insert(format!("{i:032x}"), Peer { kind: PeerKind::Nomad, name: Some(name.into()), hops: 1, last_seen: i as i64 });
+        }
+        store.peers.insert("ab".repeat(16), Peer { kind: PeerKind::Lxmf, name: Some("Alpha person".into()), hops: 1, last_seen: 9 });
+        let app = crate::app::test_app(&dir, crate::config::Settings::default(), store);
+        let found = peers(&app, Some("nomad"), "alpha", Some(10));
+        assert_eq!((found["total"].as_u64(), found["heard"].as_u64()), (Some(1), Some(3)));
+        assert_eq!(found["peers"][0]["name"], "Alpha Library");
+        let newest = peers(&app, Some("nomad"), "", Some(2));
+        assert_eq!((newest["total"].as_u64(), newest["heard"].as_u64()), (Some(3), Some(3)));
+        assert_eq!(newest["peers"].as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

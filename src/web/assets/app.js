@@ -3277,10 +3277,37 @@ app.views.browser = {
   // Nodes listed (the most recently heard); more on request. A busy
   // network hears thousands, refetched with every burst of announces.
   nodeLimit: 200,
+  // What both lists are narrowed to: nodes found by rettui, saved pages
+  // here, by name or address.
+  query: '',
+  request: 0,
 
   mount(root) {
     this.paneList = el('div', { class: 'scroll' });
     this.paneTabs = el('div', { class: 'subtabs' });
+    this.search = el('input', {
+      type: 'search',
+      class: 'pane-search',
+      placeholder: 'Find by name or address  ( / )',
+      value: this.query,
+      oninput: () => {
+        this.query = this.search.value;
+        this.nodeLimit = 200;
+        // Saved pages narrow at once; nodes are searched by rettui, after
+        // a pause in typing.
+        this.renderPane();
+        clearTimeout(this.typing);
+        this.typing = setTimeout(() => this.update(), 120);
+      },
+      onkeydown: (e) => {
+        if (e.key === 'Escape') {
+          this.search.value = '';
+          this.query = '';
+          this.nodeLimit = 200;
+          this.update();
+        }
+      },
+    });
     this.address = el('input', {
       type: 'text',
       placeholder: 'NomadNet address (hash:/page/index.mu)',
@@ -3309,7 +3336,7 @@ app.views.browser = {
         el('button', { class: 'phone-only', text: 'Address…', onclick: () => {
           setPane(this, 'detail');
           this.address.focus();
-        } })), this.paneList),
+        } }), this.search), this.paneList),
       el('section', { class: 'panel grow pane-main' },
         el('div', { class: 'toolbar' }, this.buttons.back, this.address, el('button', { class: 'primary', text: 'Go', onclick: () => this.go(this.address.value) }),
           // Their own row on a phone.
@@ -3320,10 +3347,18 @@ app.views.browser = {
   },
 
   async update() {
-    const [saved, peers] = await Promise.all([api.get('/saved'), api.get(`/peers?kind=nomad&limit=${this.nodeLimit}`)]);
+    const request = ++this.request;
+    const query = this.query;
+    const params = new URLSearchParams({ kind: 'nomad', q: query, limit: this.nodeLimit });
+    const [saved, peers] = await Promise.all([api.get('/saved'), api.get('/peers?' + params)]);
+    // A newer search was asked for while this one loaded.
+    if (request !== this.request) return;
     this.saved = saved;
     this.nodes = peers.peers;
     this.nodeTotal = peers.total;
+    this.nodesHeard = peers.heard;
+    // Nodes are highlighted by what found them, not what's typed since.
+    this.nodesQuery = query;
     this.renderPane();
     if (this.page) {
       const url = this.page.url;
@@ -3333,40 +3368,51 @@ app.views.browser = {
   },
 
   renderPane() {
+    const savedTerms = searchTerms(this.query);
+    const nodeTerms = searchTerms(this.nodesQuery || '');
+    const lower = (text) => text.toLowerCase();
+    const saved = (this.saved || []).filter((s) => savedTerms.every((t) => lower(s.name).includes(t) || lower(s.url).includes(t)));
+    const count = (shown, all, searching) => searching ? `${shown}/${all}` : `${all}`;
     this.paneTabs.replaceChildren(
-      el('button', { class: this.listing === 'saved' ? 'active' : '', text: `Saved ${this.saved?.length ?? ''}`, onclick: () => {
+      el('button', { class: this.listing === 'saved' ? 'active' : '', text: `Saved ${this.saved ? count(saved.length, this.saved.length, savedTerms.length) : ''}`, onclick: () => {
         this.listing = 'saved';
         this.renderPane();
       } }),
-      el('button', { class: this.listing === 'nodes' ? 'active' : '', text: `Nodes ${this.nodeTotal ?? ''}`, onclick: () => {
+      el('button', { class: this.listing === 'nodes' ? 'active' : '', text: `Nodes ${this.nodes ? count(this.nodeTotal, this.nodesHeard, nodeTerms.length) : ''}`, onclick: () => {
         this.listing = 'nodes';
         this.renderPane();
       } }));
     const current = this.page?.url;
     const currentNode = this.page?.node;
+    const nothing = (query) => [el('div', { class: 'empty', text: `Nothing matches “${query.trim()}”. Esc clears the search.` })];
     if (this.listing === 'saved') {
-      this.paneList.replaceChildren(...((this.saved || []).length ? this.saved.map((s) => el('div', {
+      // A page found by its address shows it.
+      const byAddress = (s) => savedTerms.length && !savedTerms.some((t) => lower(s.name).includes(t));
+      this.paneList.replaceChildren(...(saved.length ? saved.map((s) => el('div', {
         class: 'list-item' + (s.url === current ? ' selected' : ''),
         onclick: () => this.go(s.url),
-      }, el('span', { class: 'main name', text: s.name }),
+      }, el('span', { class: 'main' },
+        el('div', { class: 'name' }, highlighted(s.name, savedTerms)),
+        byAddress(s) ? el('div', { class: 'sub mono' }, highlighted(s.url, savedTerms)) : null),
       el('button', { text: '×', title: 'Remove', class: 'danger', onclick: (e) => {
         e.stopPropagation();
         attempt(() => api.post('/saved/remove', { url: s.url }), `Removed ${s.name}`);
-      } }))) : [el('div', { class: 'empty', text: 'Nothing saved yet. Open a page and press ☆ Save.' })]));
+      } }))) : savedTerms.length ? nothing(this.query)
+        : [el('div', { class: 'empty', text: 'Nothing saved yet. Open a page and press ☆ Save.' })]));
     } else {
       const nodes = this.nodes || [];
       const rows = nodes.length ? nodes.map((n) => el('div', {
         class: 'list-item' + (n.hash === currentNode ? ' selected' : ''),
         onclick: () => this.go(n.hash),
       }, el('span', { class: 'main' },
-        el('div', { class: 'name', text: n.name || `<${n.hash.slice(0, 12)}>` }),
-        el('div', { class: 'sub', text: `${n.hash}  ·  ${ago(n.last_seen)} ago` })))) :
-        [el('div', { class: 'empty', text: 'No NomadNet nodes heard yet.' })];
+        el('div', { class: 'name' }, n.name ? highlighted(n.name, nodeTerms) : `<${n.hash.slice(0, 12)}>`),
+        el('div', { class: 'sub' }, highlighted(n.hash, nodeTerms), `  ·  ${ago(n.last_seen)} ago`)))) :
+        nodeTerms.length ? nothing(this.nodesQuery) : [el('div', { class: 'empty', text: 'No NomadNet nodes heard yet.' })];
       // The newest only; more on request.
       const more = (this.nodeTotal ?? nodes.length) - nodes.length;
       if (more > 0) {
         rows.push(el('div', { class: 'show-more' },
-          el('span', { class: 'dim', text: `The ${nodes.length} most recently heard of ${this.nodeTotal}. Search the Network tab for others, or ` }),
+          el('span', { class: 'dim', text: `The ${nodes.length} most recently heard of ${this.nodeTotal}${nodeTerms.length ? ' matching' : ''}. Search (above) to find others, or ` }),
           el('button', { text: `show ${Math.min(more, 200)} more`, onclick: () => {
             this.nodeLimit += 200;
             this.update();
@@ -4653,6 +4699,10 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === '/' && app.tab === 'network') {
     e.preventDefault();
     app.views.network.search.focus();
+  } else if (e.key === '/' && app.tab === 'browser') {
+    e.preventDefault();
+    setPane(app.views.browser, 'list');
+    app.views.browser.search.focus();
   }
 });
 
