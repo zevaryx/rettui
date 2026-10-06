@@ -25,6 +25,7 @@ mod input;
 mod messages;
 pub mod network;
 pub mod notify;
+pub mod paths;
 pub mod reach;
 mod saver;
 pub mod node;
@@ -117,6 +118,8 @@ impl Tab {
 pub enum PromptKind {
     NewConversation,
     GoTo,
+    /// An address to find a path to (see [`paths`]).
+    FindPath,
     EditField(usize),
     /// A `settings.json` entry, by key.
     EditSetting(&'static str),
@@ -396,6 +399,8 @@ pub struct App {
     auto_error: Option<String>,
     /// Pings to contacts (by address): waiting, or how they went.
     pub pings: HashMap<String, contacts::PingState>,
+    /// Paths looked for on request, by address (see [`paths`]).
+    pub path_lookups: HashMap<String, paths::PathLookup>,
     /// The contacts last told to the network actor (trusted, and spared the
     /// stamp), so it's told only of changes.
     policy_sent: Option<(Vec<Hash>, Vec<Hash>)>,
@@ -538,6 +543,7 @@ impl App {
             contact_card: None,
             guide: None,
             pings: HashMap::new(),
+            path_lookups: HashMap::new(),
             auto_pick: None,
             auto_error: None,
             policy_sent: None,
@@ -848,6 +854,9 @@ impl App {
                 self.on_delivery(id, result);
             }
             NetEvent::Pinged { to, result } => self.on_pinged(to, result),
+            NetEvent::Path { to, result } => self.on_path(to, result),
+            NetEvent::PathProgress { to, text } => self.on_path_progress(to, text),
+            NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
             NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
             NetEvent::FetchProgress { id, text } => {
@@ -930,6 +939,11 @@ impl App {
                 Some(location) => self.navigate(location),
                 None => self.warn(format!("Not a NomadNet address: {text}")),
             },
+            PromptKind::FindPath => {
+                if let Err(e) = self.find_path_to(&text) {
+                    self.warn(e);
+                }
+            }
             PromptKind::EditSetting(key) => self.update_setting(key, prompt.input.text()),
             PromptKind::EditField(f) => {
                 if let Some(page) = &mut self.browser.page

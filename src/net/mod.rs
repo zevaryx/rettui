@@ -29,7 +29,7 @@ use crate::nomad::host::{self, HostConfig};
 use crate::nomad::{self, FetchedContent, LinkCache};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
-pub use remote::{Known, KnownIdentities, Ping, Progress, connect, ensure_path, find_path, link_options, lookup};
+pub use remote::{Known, KnownIdentities, PathInfo, Ping, Progress, connect, ensure_path, find_path, link_options, lookup};
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -95,6 +95,12 @@ pub enum NetCommand {
     SetContacts { trusted: Vec<Hash>, exempt: Vec<Hash> },
     /// Ping an LXMF address (answered with [`NetEvent::Pinged`]).
     Ping(Hash),
+    /// Find the path to any destination, asking for one if it isn't known
+    /// (answered with [`NetEvent::Path`]).
+    FindPath(Hash),
+    /// Forget the path to a destination (answered with
+    /// [`NetEvent::PathForgotten`]).
+    ForgetPath(Hash),
     /// Remember the public key of an LXMF address (from an `lxma://` link),
     /// to write to it before hearing its announce.
     Remember { to: Hash, public_key: [u8; 64] },
@@ -194,6 +200,12 @@ pub enum NetEvent {
     Message(Box<InboundMessage>),
     Delivery { id: u64, result: Result<lxmf::Sent, String> },
     Pinged { to: Hash, result: Result<Ping, String> },
+    /// The path to a destination, or why none was found; and how finding it
+    /// goes, meanwhile.
+    Path { to: Hash, result: Result<PathInfo, String> },
+    PathProgress { to: Hash, text: String },
+    /// A path forgotten (`had`: there was one).
+    PathForgotten { to: Hash, had: bool },
     /// A propagation node picked automatically (or why none was).
     PropagationPicked(Result<autopn::Pick, String>),
     /// A paper message written: its `lxm://` link and hash.
@@ -655,6 +667,20 @@ async fn run(
                             let result = remote::ping(&runtime, &known, to).await;
                             let _ = ev.send(NetEvent::Pinged { to, result });
                         });
+                    }
+                    NetCommand::FindPath(to) => {
+                        let (runtime, ev) = (runtime.clone(), ev.clone());
+                        tokio::spawn(async move {
+                            let progress = |text: String| {
+                                let _ = ev.send(NetEvent::PathProgress { to, text });
+                            };
+                            let result = remote::trace_path(&runtime, to, &progress).await;
+                            let _ = ev.send(NetEvent::Path { to, result });
+                        });
+                    }
+                    NetCommand::ForgetPath(to) => {
+                        let had = remote::drop_path(&runtime, to).await;
+                        let _ = ev.send(NetEvent::PathForgotten { to, had });
                     }
                     NetCommand::Blackhole { to, block, quiet } => {
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
