@@ -294,6 +294,8 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("p", "use as propagation node"),
                 ("b", "block/unblock"),
                 ("f", "filter"),
+                ("P", "path"),
+                ("T", "probe"),
                 ("S", "sync"),
                 ("A", "announce"),
                 ("q", "quit"),
