@@ -3401,12 +3401,24 @@ app.views.browser = {
         : [el('div', { class: 'empty', text: 'Nothing saved yet. Open a page and press ☆ Save.' })]));
     } else {
       const nodes = this.nodes || [];
-      const rows = nodes.length ? nodes.map((n) => el('div', {
-        class: 'list-item' + (n.hash === currentNode ? ' selected' : ''),
-        onclick: () => this.go(n.hash),
-      }, el('span', { class: 'main' },
-        el('div', { class: 'name' }, n.name ? highlighted(n.name, nodeTerms) : `<${n.hash.slice(0, 12)}>`),
-        el('div', { class: 'sub' }, highlighted(n.hash, nodeTerms), `  ·  ${ago(n.last_seen)} ago`)))) :
+      // A node is saved when its home page is.
+      const savedUrls = new Set((this.saved || []).map((s) => s.url));
+      const rows = nodes.length ? nodes.map((n) => {
+        const home = `${n.hash}:/page/index.mu`;
+        const saved = savedUrls.has(home);
+        const name = n.name || `<${n.hash.slice(0, 12)}>`;
+        return el('div', {
+          class: 'list-item' + (n.hash === currentNode ? ' selected' : ''),
+          onclick: () => this.go(n.hash),
+        }, el('span', { class: 'main' },
+          el('div', { class: 'name' }, n.name ? highlighted(n.name, nodeTerms) : name),
+          el('div', { class: 'sub' }, highlighted(n.hash, nodeTerms), `  ·  ${ago(n.last_seen)} ago`)),
+        el('button', { class: 'save-node' + (saved ? ' on' : ''), text: saved ? '★' : '☆', title: saved ? 'Saved; remove it' : 'Save its home page', onclick: (e) => {
+          e.stopPropagation();
+          if (saved) attempt(() => api.post('/saved/remove', { url: home }), `Removed ${name}`);
+          else attempt(() => api.post('/saved', { url: home }), `Saved ${name}`);
+        } }));
+      }) :
         nodeTerms.length ? nothing(this.nodesQuery) : [el('div', { class: 'empty', text: 'No NomadNet nodes heard yet.' })];
       // The newest only; more on request.
       const more = (this.nodeTotal ?? nodes.length) - nodes.length;

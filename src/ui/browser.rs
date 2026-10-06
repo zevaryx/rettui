@@ -1,5 +1,7 @@
 //! Browser tab: saved pages / nodes pane, address bar and the page itself.
 
+use std::collections::HashSet;
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -309,6 +311,8 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         spans
     };
     let current = app.browser.location.as_ref().map(|l| (l.url(), hex::encode(l.node)));
+    // A node is saved when its home page is.
+    let saved_urls: HashSet<&str> = app.store.saved.iter().map(|b| b.url.as_str()).collect();
     let (items, empty_hint): (Vec<ListItem>, String) = match app.browser.pane {
         BrowserPane::Saved => (
             saved
@@ -332,6 +336,9 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
                     let name = peer.name.clone().unwrap_or_else(|| format!("<{}>", &hash[..12]));
                     let mut spans = vec![Span::styled(marker, Style::default().fg(ACCENT))];
                     spans.extend(row(&name, hash));
+                    if saved_urls.contains(format!("{hash}:{}", nomad_core::DEFAULT_INDEX_ROUTE).as_str()) {
+                        spans.push(Span::styled(" ★", Style::default().fg(Color::Yellow)));
+                    }
                     spans.push(Span::styled(format!("  {}", ago(peer.last_seen)), Style::default().fg(DIM)));
                     ListItem::new(Line::from(spans))
                 })
@@ -420,11 +427,15 @@ mod tests {
         app.browser.pane = BrowserPane::Nodes;
         let shown = screen(&mut app);
         assert!(shown.contains("Nodes 3") && shown.contains("/ search by name or address"), "{shown}");
+        // A node whose home page is saved is starred.
+        app.store.saved.push(crate::store::Bookmark { name: "Beta Wiki".into(), url: format!("{}:/page/index.mu", "bb".repeat(16)) });
+        let shown = screen(&mut app);
+        assert!(shown.contains("Beta Wiki ★") && !shown.contains("Gamma ★"), "{shown}");
         for c in "/beta".chars() {
             app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         let shown = screen(&mut app);
-        assert!(shown.contains("Saved 0/0") && shown.contains("Nodes 1/3") && shown.contains("/ beta"), "{shown}");
+        assert!(shown.contains("Saved 1/1") && shown.contains("Nodes 1/3") && shown.contains("/ beta"), "{shown}");
         assert!(shown.contains("Beta Wiki") && !shown.contains("Alpha Library"), "{shown}");
         // Found by address: the address shows, as the name doesn't match.
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));

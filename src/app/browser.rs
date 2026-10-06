@@ -631,6 +631,20 @@ impl App {
             self.log("Open a page to save it");
             return;
         };
+        self.save(location);
+    }
+
+    /// Save the home page of the node selected in the Nodes list, without
+    /// opening it: the same as saving that page once open.
+    fn save_selected_node(&mut self) {
+        let index = self.browser.nodes_list.selected();
+        let node = index.and_then(|i| self.browser_nodes().get(i).map(|(hash, _)| (*hash).clone()));
+        if let Some(location) = node.and_then(|hash| resolve_url(&hash, None)) {
+            self.save(location);
+        }
+    }
+
+    fn save(&mut self, location: Location) {
         let url = location.url();
         if self.store.saved.iter().any(|b| b.url == url) {
             self.log("Page is already saved");
@@ -711,6 +725,10 @@ impl App {
             KeyCode::Backspace | KeyCode::Char('b') => return self.back(),
             KeyCode::Char('r') => return self.reload(),
             KeyCode::Char('R') => return self.clear_cache(),
+            // With the Nodes list in hand, the node selected; else the page.
+            KeyCode::Char('s') if self.browser.focus == BrowserFocus::Pane && self.browser.pane == BrowserPane::Nodes => {
+                return self.save_selected_node();
+            }
             KeyCode::Char('s') => return self.save_current_page(),
             KeyCode::Char('t') => {
                 let pane = match self.browser.pane {
@@ -1047,6 +1065,34 @@ mod tests {
         press(&mut app, KeyCode::Char('x'));
         assert_eq!(app.store.saved.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["Alpha Library"]);
         assert!(saved_names(&app).is_empty());
+        let _ = std::fs::remove_dir_all(app.paths.node.parent().unwrap());
+    }
+
+    #[test]
+    fn s_in_the_nodes_list_saves_the_node_selected() {
+        let mut app = with_nodes("save-node");
+        app.switch_pane(BrowserPane::Nodes);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(node_names(&app)[app.browser.nodes_list.selected().unwrap()], "Beta Wiki");
+        press(&mut app, KeyCode::Char('s'));
+        let home = format!("{}:/page/index.mu", "bb".repeat(16));
+        let saved = |app: &App| app.store.saved.iter().map(|b| (b.name.clone(), b.url.clone())).collect::<Vec<_>>();
+        assert_eq!(saved(&app).last(), Some(&("Beta Wiki".to_string(), home.clone())));
+        // Once only, and the same bookmark as saving the page once open.
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(saved(&app).len(), 3);
+        assert_eq!(resolve_url(&"bb".repeat(16), None).unwrap().url(), home);
+        // Found by a search, too.
+        press(&mut app, KeyCode::Char('/'));
+        type_text(&mut app, "cccc");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(saved(&app).last().unwrap().1, format!("{}:/page/index.mu", "cc".repeat(16)));
+        // With the page in hand, s saves the page.
+        app.browser.location = Some(Location { node: [0xee; 16], path: "/page/about.mu".into(), fields: BTreeMap::new() });
+        app.browser.focus = BrowserFocus::Page;
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(saved(&app).last().unwrap().1, format!("{}:/page/about.mu", "ee".repeat(16)));
         let _ = std::fs::remove_dir_all(app.paths.node.parent().unwrap());
     }
 }
