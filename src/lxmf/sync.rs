@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use super::{bytes_of, encode};
 use super::inbound::deliver_inbound;
 use super::policy::SharedPolicy;
-use crate::net::{Hash, Known, NetEvent, ensure_path, link_options};
+use crate::net::{Hash, Known, NetEvent, link_options};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// How much one download from a propagation node brings at most (KB): a
@@ -143,10 +143,8 @@ pub async fn sync(
     node: Hash,
     largest_kb: f64,
 ) -> Result<Vec<Vec<u8>>, String> {
-    ensure_path(runtime, node).await?;
     // The node finds our messages from the identity we present on the Link.
-    let LinkSession { handle, .. } = runtime
-        .connect_link(node, identity.clone(), link_options("rettui.sync", true))
+    let LinkSession { handle, .. } = crate::net::connect(runtime, node, identity.clone(), link_options("rettui.sync", true), &|_| {})
         .await
         .map_err(|e| format!("Link to propagation node failed: {e}"))?;
     let result = sync_on(&handle, identity, lxmf_hash, ring, largest_kb).await;

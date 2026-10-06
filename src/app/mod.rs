@@ -850,6 +850,11 @@ impl App {
             NetEvent::Pinged { to, result } => self.on_pinged(to, result),
             NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
+            NetEvent::FetchProgress { id, text } => {
+                if let Some(pending) = self.browser.loading.as_mut().filter(|pending| pending.id == id) {
+                    pending.status = Some(text);
+                }
+            }
             NetEvent::Paper { id, result } => self.on_paper(id, result),
             NetEvent::SyncStarted => self.sync = SyncState::Running(Instant::now()),
             NetEvent::Synced(result) => {

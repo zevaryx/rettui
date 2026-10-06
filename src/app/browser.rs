@@ -42,6 +42,8 @@ pub struct Pending {
     identified: bool,
     /// Bypass the cache for this page's images too.
     refresh: bool,
+    /// How it's going, when finding a path takes a while.
+    pub status: Option<String>,
 }
 
 /// Left pane of the Browser tab.
@@ -358,6 +360,7 @@ impl App {
             record_history,
             identified,
             refresh,
+            status: None,
         };
         if cacheable
             && !refresh
@@ -861,6 +864,21 @@ mod tests {
         let location = Location { node: app.node.hash, path: "/page/index.mu".into(), fields: BTreeMap::new() };
         app.navigate(location);
         app
+    }
+
+    #[test]
+    fn a_load_says_how_finding_a_path_goes() {
+        let dir = std::env::temp_dir().join(format!("rettui-browser-progress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.navigate(Location { node: [9; 16], path: "/page/index.mu".into(), fields: BTreeMap::new() });
+        let id = app.browser.loading.as_ref().expect("loading from the network").id;
+        assert_eq!(app.browser.loading.as_ref().unwrap().status, None);
+        app.on_net(crate::net::NetEvent::FetchProgress { id: id + 1, text: "path request 2 of 3".into() });
+        assert_eq!(app.browser.loading.as_ref().unwrap().status, None, "another load's");
+        app.on_net(crate::net::NetEvent::FetchProgress { id, text: "path request 2 of 3".into() });
+        assert_eq!(app.browser.loading.as_ref().unwrap().status.as_deref(), Some("path request 2 of 3"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
