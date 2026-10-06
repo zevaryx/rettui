@@ -26,6 +26,43 @@ shows your identity, your interfaces and the log.
   (`<hash>`, `lxmf@hash`, `hash:/page/index.mu`).
 - **Acting on a row:** message a peer, browse a node, or use a propagation
   node for sync, and copy any address.
+- **Paths:** to reach a destination, rettui needs a path to it: which
+  interface it goes out on, and through which transport node. Announces
+  bring paths; for one not heard yet, rettui asks for a path, up to three
+  times over a minute (at once, then after 15 and 52 seconds). One request
+  often goes unanswered: it's lost on the way, or reaches a node that
+  hasn't heard of the destination yet. For 45 seconds, Reticulum nodes take
+  further requests for a destination as part of the one they're still
+  working on, so the third request waits until then. Loading a page,
+  connecting to a hub, and sending a message, syncing or pinging all do
+  this; while it goes on, a hub connecting, and a page loading in the TUI,
+  say which request they're on.
+- **Stale paths:** a path can go stale: the destination moved, or a node on
+  the way went down. When a Link over a known path gets no answer, rettui
+  forgets the path, asks for a fresh one, and tries once more (except for
+  a ping, which times one try).
+- **Finding or forgetting a path:** in the TUI, `P` finds the path to the
+  selected row (or to any address typed), and `D` forgets the selected
+  row's path. In the web UI, **Path** on each row opens a dialog with the
+  path and **Find path**, **Probe** and **Forget path** buttons, and **Find
+  a path…** above the list opens it for any address. A path shows as its
+  hops, the transport node it goes through, the interface, and how long
+  it's kept unless heard again ("2 hops via <0a1b2c3d…> on RMAP World,
+  kept for 6 days"). Forget a path that has gone stale, and the next use
+  asks for a fresh one.
+- **Probing:** `T` (or **Probe**) times an answer from the selected
+  destination, as `rnprobe` does, finding a path first. LXMF addresses
+  prove the packets they get, so they're sent a probe packet ("answered in
+  182 ms, 2 hops away"). NomadNet nodes, propagation nodes and RRC hubs
+  don't, so `rnprobe` to one always times out; rettui times setting up a
+  Link to them instead, closed straight away, and says so ("a Link opened
+  in 240 ms").
+- **From the command line:** `rettui path <address>` finds and prints a
+  path, `-d` forgets it, and `-t` lists every path known; `rettui probe
+  <address>` probes (see [Running](Running#commands)). While rettui is the
+  shared instance (the first Reticulum program started with
+  `share_instance` on), these use its paths, and Reticulum's own `rnpath`
+  and `rnprobe` work against it too.
 - **Status:** the Status tab shows your identity and LXMF address, your
   first steps until they're taken (see
   [Running](Running#first-steps)), the network state, each interface with its traffic, the last sync, the

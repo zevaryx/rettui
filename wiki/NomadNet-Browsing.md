@@ -42,6 +42,12 @@ network.
 - **Copying:** drag across page text to copy it, `Y` copies the whole page,
   and `L` copies the selected link.
 - **History:** `b` (or a right-click) goes back.
+- **A node that won't answer:** while a page loads in the TUI, the address
+  bar says how finding a path goes ("path request 2 of 3"). A node not heard yet
+  can take up to a minute. One whose path went stale (it moved, or a node
+  on the way went down) gets a fresh path asked for once its Link goes
+  unanswered. To check a node by hand, find its path (`P`) or probe it
+  (`T`) in the Network tab; see [Network](Network).
 - **Cache:** pages and images are cached on disk for `cache_hours` (24 by
   default). A page's `#!c=` directive can shorten that, and `#!c=0` pages are
   never cached. Form submissions and file downloads always go to the network.
