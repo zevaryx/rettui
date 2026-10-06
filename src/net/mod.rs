@@ -29,7 +29,7 @@ use crate::nomad::host::{self, HostConfig};
 use crate::nomad::{self, FetchedContent, LinkCache};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
-pub use remote::{Known, KnownIdentities, PathInfo, Ping, Progress, connect, ensure_path, find_path, link_options, lookup};
+pub use remote::{Known, KnownIdentities, PathInfo, Ping, Probe, Progress, connect, ensure_path, find_path, link_options, lookup};
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -101,6 +101,9 @@ pub enum NetCommand {
     /// Forget the path to a destination (answered with
     /// [`NetEvent::PathForgotten`]).
     ForgetPath(Hash),
+    /// Probe any destination (answered with [`NetEvent::Probed`]; how
+    /// finding a path goes, with [`NetEvent::PathProgress`]).
+    Probe(Hash),
     /// Remember the public key of an LXMF address (from an `lxma://` link),
     /// to write to it before hearing its announce.
     Remember { to: Hash, public_key: [u8; 64] },
@@ -206,6 +209,7 @@ pub enum NetEvent {
     PathProgress { to: Hash, text: String },
     /// A path forgotten (`had`: there was one).
     PathForgotten { to: Hash, had: bool },
+    Probed { to: Hash, result: Result<Probe, String> },
     /// A propagation node picked automatically (or why none was).
     PropagationPicked(Result<autopn::Pick, String>),
     /// A paper message written: its `lxm://` link and hash.
@@ -676,6 +680,16 @@ async fn run(
                             };
                             let result = remote::trace_path(&runtime, to, &progress).await;
                             let _ = ev.send(NetEvent::Path { to, result });
+                        });
+                    }
+                    NetCommand::Probe(to) => {
+                        let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
+                        tokio::spawn(async move {
+                            let progress = |text: String| {
+                                let _ = ev.send(NetEvent::PathProgress { to, text });
+                            };
+                            let result = remote::probe(&runtime, &known, to, &progress).await;
+                            let _ = ev.send(NetEvent::Probed { to, result });
                         });
                     }
                     NetCommand::ForgetPath(to) => {

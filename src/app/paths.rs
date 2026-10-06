@@ -1,9 +1,9 @@
 //! Paths to destinations, found or forgotten on request, as `rnpath` does:
 //! for when one can't be reached until it announces again (finding asks
 //! for a path again, as [`crate::net::find_path`] does), or a path known
-//! has gone stale.
+//! has gone stale. And probes, as `rnprobe` sends.
 
-use crate::net::{Hash, NetCommand, PathInfo, parse_hash};
+use crate::net::{Hash, NetCommand, PathInfo, Probe, parse_hash};
 
 use super::App;
 
@@ -13,6 +13,37 @@ pub enum PathLookup {
     /// Being looked for; how it's going, once there's word.
     Waiting(Option<String>),
     Done(Result<PathInfo, String>),
+}
+
+/// How probing a destination is going.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProbeState {
+    /// Waiting for an answer; how finding a path goes, once there's word.
+    Waiting(Option<String>),
+    Done(Result<Probe, String>),
+}
+
+/// A probe's answer in words: "answered in 182 ms, 2 hops away (LXMF
+/// address)"; for one reached with a Link, "a Link opened in …".
+pub fn probe_label(probe: &Probe) -> String {
+    let hops = match probe.hops {
+        Some(0 | 1) => ", heard directly".to_string(),
+        Some(n) => format!(", {n} hops away"),
+        None => String::new(),
+    };
+    let kind = probe.kind.map(|kind| format!(" ({kind})")).unwrap_or_default();
+    let how = if probe.by_link { "a Link opened" } else { "answered" };
+    format!("{how} in {} ms{hops}{kind}", probe.rtt.as_millis())
+}
+
+/// How probing went, or is going, in words.
+pub fn probe_state_label(state: &ProbeState) -> String {
+    match state {
+        ProbeState::Waiting(None) => "waiting for an answer…".into(),
+        ProbeState::Waiting(Some(how)) => format!("looking for a path: {how}…"),
+        ProbeState::Done(Ok(probe)) => probe_label(probe),
+        ProbeState::Done(Err(e)) => e.clone(),
+    }
 }
 
 /// A path in words: "2 hops via <0a1b2c3d…> on RMAP World, kept for 6 days".
@@ -65,12 +96,41 @@ impl App {
         Ok(())
     }
 
+    /// Probe `key` (any destination's address), as `rnprobe` does. One at a
+    /// time each; [`App::probes`] has how it went.
+    pub fn probe(&mut self, key: &str) -> Result<(), String> {
+        let hash = parse_hash(key).ok_or("An address is 32 hex characters")?;
+        let key = hex::encode(hash);
+        if matches!(self.probes.get(&key), Some(ProbeState::Waiting(_))) {
+            return Ok(());
+        }
+        self.probes.insert(key.clone(), ProbeState::Waiting(None));
+        self.send(NetCommand::Probe(hash));
+        self.confirm(format!("Probing {}…", self.store.display_name(&key)));
+        Ok(())
+    }
+
     pub(super) fn on_path_progress(&mut self, to: Hash, text: String) {
         let key = hex::encode(to);
+        let name = self.store.display_name(&key);
         if let Some(PathLookup::Waiting(how)) = self.path_lookups.get_mut(&key) {
             *how = Some(text.clone());
-            self.confirm(format!("Finding a path to {}: {text}…", self.store.display_name(&key)));
+            self.confirm(format!("Finding a path to {name}: {text}…"));
         }
+        if let Some(ProbeState::Waiting(how)) = self.probes.get_mut(&key) {
+            *how = Some(text.clone());
+            self.confirm(format!("Probing {name}: {text}…"));
+        }
+    }
+
+    pub(super) fn on_probed(&mut self, to: Hash, result: Result<Probe, String>) {
+        let key = hex::encode(to);
+        let name = self.store.display_name(&key);
+        match &result {
+            Ok(probe) => self.notify(format!("Probe {name}: {}", probe_label(probe))),
+            Err(e) => self.warn(format!("Probe {name}: {e}")),
+        }
+        self.probes.insert(key, ProbeState::Done(result));
     }
 
     pub(super) fn on_path(&mut self, to: Hash, result: Result<PathInfo, String>) {
@@ -127,6 +187,28 @@ mod tests {
         assert!(!app.path_lookups.contains_key(&key));
         app.on_net(NetEvent::PathForgotten { to, had: true });
         assert!(app.notice.as_ref().unwrap().text.contains("the next use asks for a fresh one"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probes_say_how_they_were_answered() {
+        let dir = std::env::temp_dir().join(format!("rettui-probes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        let key = "cd".repeat(16);
+        let to = parse_hash(&key).unwrap();
+        app.probe(&key).unwrap();
+        assert_eq!(app.probes.get(&key), Some(&ProbeState::Waiting(None)));
+        app.on_net(NetEvent::PathProgress { to, text: "path request 3 of 3".into() });
+        assert_eq!(probe_state_label(&app.probes[&key]), "looking for a path: path request 3 of 3…");
+        let rtt = std::time::Duration::from_millis(182);
+        let by_packet = Probe { rtt, hops: Some(2), kind: Some("LXMF address"), by_link: false };
+        app.on_net(NetEvent::Probed { to, result: Ok(by_packet) });
+        assert!(app.notice.as_ref().unwrap().text.ends_with("answered in 182 ms, 2 hops away (LXMF address)"));
+        let by_link = Probe { rtt, hops: Some(1), kind: Some("NomadNet node"), by_link: true };
+        assert_eq!(probe_label(&by_link), "a Link opened in 182 ms, heard directly (NomadNet node)");
+        app.on_net(NetEvent::Probed { to, result: Err("No answer".into()) });
+        assert_eq!(probe_state_label(&app.probes[&key]), "No answer");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

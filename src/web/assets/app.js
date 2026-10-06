@@ -1336,12 +1336,36 @@ function pathDialog(hash, name) {
   const forget = async () => {
     if (await attempt(() => api.delete(`/path/${hash}`))) show({ state: 'none', text: 'forgotten: the next use asks for a fresh one' });
   };
+  // A probe, as rnprobe sends: how quickly it answers.
+  const probed = el('p', { class: 'path-status', hidden: true });
+  const probe = async () => {
+    const showProbe = (state) => {
+      probed.hidden = false;
+      probed.textContent = 'Probe: ' + state.text;
+      probed.className = 'path-status ' + state.state;
+    };
+    showProbe({ state: 'waiting', text: 'waiting for an answer…' });
+    const watching = setInterval(async () => {
+      const state = await api.get(`/probe/${hash}`).catch(() => null);
+      if (open && state?.state === 'waiting') showProbe(state);
+    }, 1000);
+    try {
+      const state = await api.post(`/probe/${hash}`);
+      if (open) showProbe(state);
+    } catch (e) {
+      if (open) showProbe({ state: 'failed', text: e.message });
+    } finally {
+      clearInterval(watching);
+    }
+  };
   dialog(`Path to ${name || hash}`, () => el('div', { class: 'path-dialog' },
     el('p', { class: 'dim mono', text: hash }),
     status,
-    el('p', { class: 'dim help', text: 'Finding asks for a path if none is known, up to three times over a minute: one request often goes unanswered. Forget a path that has gone stale (the destination moved, or a node on the way went), and the next use asks for a fresh one.' }),
+    probed,
+    el('p', { class: 'dim help', text: 'Finding asks for a path if none is known, up to three times over a minute: one request often goes unanswered. Forget a path that has gone stale (the destination moved, or a node on the way went), and the next use asks for a fresh one. A probe times an answer: a probe packet for LXMF addresses (as rnprobe sends), a Link for nodes and hubs, which don\'t answer those.' }),
     el('div', { class: 'buttons' },
       el('button', { class: 'primary', text: 'Find path', onclick: find }),
+      el('button', { text: 'Probe', onclick: probe }),
       el('button', { text: 'Forget path', onclick: forget }))),
   { className: 'path', onclose: () => { open = false; } });
   find();
