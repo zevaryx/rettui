@@ -7,7 +7,7 @@ use nomad_core::NomadEgress;
 use rns_runtime::prelude::*;
 use tokio::sync::Mutex;
 
-use crate::net::{Hash, ensure_path, link_options};
+use crate::net::{Hash, Progress, link_options};
 
 #[derive(Debug, Clone)]
 pub struct FetchedContent {
@@ -20,6 +20,7 @@ pub type LinkCache = Arc<Mutex<HashMap<Hash, (LinkSessionHandle, bool)>>>;
 
 /// Fetch a page, file or media item. With `identity`, the Link identifies
 /// us to the node (some pages personalise content or require it).
+/// `progress` hears how finding a path to it goes, when that takes a while.
 pub async fn fetch(
     runtime: &ReticulumHandle,
     links: &LinkCache,
@@ -27,6 +28,7 @@ pub async fn fetch(
     path: &str,
     fields: &BTreeMap<String, String>,
     identity: Option<Identity>,
+    progress: Progress<'_>,
 ) -> Result<FetchedContent, String> {
     let request = if let Some(media) = path.strip_prefix("/media/") {
         Ok(nomad_core::build_media_request(media))
@@ -41,7 +43,7 @@ pub async fn fetch(
     let timeout = nomad_core::overall_timeout(NomadEgress::Network, hops);
 
     for attempt in 0..2 {
-        let handle = node_link(runtime, links, node, identity.as_ref()).await?;
+        let handle = node_link(runtime, links, node, identity.as_ref(), progress).await?;
         match handle
             .request(&request.route, &request.body, Some(timeout))
             .await
@@ -72,6 +74,7 @@ async fn node_link(
     links: &LinkCache,
     node: Hash,
     identity: Option<&Identity>,
+    progress: Progress<'_>,
 ) -> Result<LinkSessionHandle, String> {
     let identify = identity.is_some();
     let stale = {
@@ -86,10 +89,8 @@ async fn node_link(
     if let Some(handle) = stale {
         handle.close().await;
     }
-    ensure_path(runtime, node).await?;
     let local = identity.cloned().unwrap_or_else(Identity::new);
-    let session = runtime
-        .connect_link(node, local, link_options("rettui.nomad", identify))
+    let session = crate::net::connect(runtime, node, local, link_options("rettui.nomad", identify), progress)
         .await
         .map_err(|e| format!("Could not connect to node: {e}"))?;
     let LinkSession {
@@ -132,9 +133,10 @@ pub async fn fetch_once(
     node: Hash,
     path: &str,
     identity: Option<Identity>,
+    progress: Progress<'_>,
 ) -> Result<FetchedContent, String> {
     let links: LinkCache = Arc::new(Mutex::new(HashMap::new()));
-    let result = fetch(runtime, &links, node, path, &BTreeMap::new(), identity).await;
+    let result = fetch(runtime, &links, node, path, &BTreeMap::new(), identity, progress).await;
     for (handle, _) in links.lock().await.values() {
         handle.close().await;
     }

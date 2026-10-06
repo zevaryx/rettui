@@ -29,7 +29,7 @@ use crate::nomad::host::{self, HostConfig};
 use crate::nomad::{self, FetchedContent, LinkCache};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
-pub use remote::{Known, KnownIdentities, Ping, ensure_path, link_options, lookup};
+pub use remote::{Known, KnownIdentities, Ping, Progress, connect, ensure_path, find_path, link_options, lookup};
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -199,6 +199,8 @@ pub enum NetEvent {
     /// A paper message written: its `lxm://` link and hash.
     Paper { id: u64, result: Result<(String, [u8; 32]), String> },
     Fetched { id: u64, result: Result<FetchedContent, String> },
+    /// How a fetch is going, when finding a path takes a while.
+    FetchProgress { id: u64, text: String },
     SyncStarted,
     Synced(Result<usize, String>),
     Interfaces(Vec<InterfaceInfo>),
@@ -753,7 +755,10 @@ async fn run(
                         let (runtime, links, ev) = (runtime.clone(), links.clone(), ev.clone());
                         let identity = identify.then(|| identity.clone());
                         tokio::spawn(async move {
-                            let result = nomad::fetch(&runtime, &links, node, &path, &fields, identity).await;
+                            let progress = |text: String| {
+                                let _ = ev.send(NetEvent::FetchProgress { id, text });
+                            };
+                            let result = nomad::fetch(&runtime, &links, node, &path, &fields, identity, &progress).await;
                             let _ = ev.send(NetEvent::Fetched { id, result });
                         });
                     }

@@ -13,6 +13,22 @@ use super::Hash;
 
 /// How long to wait for a path when a destination has never been heard.
 pub const PATH_TIMEOUT: Duration = Duration::from_secs(30);
+/// When path requests go out, in seconds from the first; the last is
+/// waited on for [`PATH_TRY`]. One request often goes unanswered: it can be
+/// lost on the way (the second covers that), or reach a node that hasn't
+/// heard of the destination yet. Python Reticulum folds further requests
+/// for a destination into one it's still working on, for 45 s
+/// (`PATH_REQUEST_GATE_TIMEOUT`, cleared within 5 s after), so the third
+/// goes after that: a node that heard the first then looks again.
+const PATH_REQUESTS: [u64; 3] = [0, 15, 52];
+/// How long one path request is waited on: rsReticulum's transport stops
+/// waiting at 15 s, whatever the caller allows.
+const PATH_TRY: Duration = Duration::from_secs(15);
+/// Path requests sent before giving up on finding a path.
+pub const PATH_TRIES: u32 = PATH_REQUESTS.len() as u32;
+
+/// Told how finding a path (or a fresh one) is going, in words.
+pub type Progress<'a> = &'a (dyn Fn(String) + Send + Sync);
 
 /// Public keys and announce data heard from LXMF and propagation node
 /// announces, kept across runs so messages can be encrypted, stamped and
@@ -130,10 +146,66 @@ impl From<RecalledDestination> for Remote {
 /// the daemon's path table, while outbound routing uses the local one.
 /// `await_path` checks the local table and requests a path when missing.
 pub async fn ensure_path(runtime: &ReticulumHandle, destination: Hash) -> Result<(), String> {
-    runtime
-        .await_path(destination, PATH_TIMEOUT)
-        .await
-        .map_err(|e| format!("No path to destination: {e}"))
+    find_path(runtime, destination, &|_| {}).await
+}
+
+/// Find a path to `destination`: one known already, or one asked for, with
+/// requests at [`PATH_REQUESTS`]; `progress` hears of each one after the
+/// first. Between them, a path that comes anyway (with an announce) is
+/// taken.
+pub async fn find_path(runtime: &ReticulumHandle, destination: Hash, progress: Progress<'_>) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    for (i, &at) in PATH_REQUESTS.iter().enumerate() {
+        if i > 0 {
+            while start.elapsed() < Duration::from_secs(at) {
+                if runtime.has_path(destination).await.unwrap_or(false) {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            progress(format!("path request {} of {PATH_TRIES}", i + 1));
+        }
+        // Sends a request, unless a path is known.
+        match runtime.await_path(destination, PATH_TRY).await {
+            Ok(()) => return Ok(()),
+            Err(rns_transport::await_path::AwaitPathError::TransportDown) => return Err("No path: Reticulum isn't running".into()),
+            Err(rns_transport::await_path::AwaitPathError::Timeout) => {}
+        }
+    }
+    Err(format!(
+        "No path found: {PATH_TRIES} requests over a minute went unanswered. Nodes in reach may not have heard of it yet; its next announce brings one"
+    ))
+}
+
+/// Open a Link to `destination` (a path to it found first). One that isn't
+/// answered may have gone over a stale path (the destination moved, or a
+/// node on the way went), or one answered from an out-of-date cache: that
+/// path is dropped, a fresh one found, and the Link tried once more.
+pub async fn connect(
+    runtime: &ReticulumHandle,
+    destination: Hash,
+    identity: Identity,
+    options: LinkConnectOptions,
+    progress: Progress<'_>,
+) -> Result<LinkSession, String> {
+    find_path(runtime, destination, progress).await?;
+    match runtime.connect_link(destination, identity.clone(), options.clone()).await {
+        Err(LinkConnectError::Session(LinkSessionError::Timeout(_))) => {
+            progress("no answer, finding a fresh path".into());
+            drop_path(runtime, destination).await;
+            find_path(runtime, destination, progress).await?;
+            runtime.connect_link(destination, identity, options).await.map_err(|e| e.to_string())
+        }
+        result => result.map_err(|e| e.to_string()),
+    }
+}
+
+/// Forget the path to `destination`, so the next use asks for a fresh one.
+/// Whether there was one.
+pub async fn drop_path(runtime: &ReticulumHandle, destination: Hash) -> bool {
+    let had = runtime.has_path(destination).await.unwrap_or(false);
+    runtime.query_control(rns_transport::messages::TransportQuery::DropPath { dest: destination }).await;
+    had
 }
 
 /// Keys for a destination: the runtime's live announce cache, then keys

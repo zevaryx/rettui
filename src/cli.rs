@@ -257,7 +257,7 @@ pub async fn fetch(
     let runtime = net::start_runtime(settings.rns_config.as_deref())
         .await
         .map_err(anyhow::Error::msg)?;
-    let result = nomad::fetch_once(&runtime, node, path, identity).await;
+    let result = nomad::fetch_once(&runtime, node, path, identity, &|text| eprintln!("{text}")).await;
     runtime.shutdown_and_wait().await;
     let content = result.map_err(anyhow::Error::msg)?;
     if let Some(output) = output {
