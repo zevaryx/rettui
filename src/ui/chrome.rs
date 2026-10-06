@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{ACCENT, DIM, SELECTED_BG, block};
 use crate::app::traffic::rate;
-use crate::app::{App, BrowserFocus, NetState, NoticeKind, SyncState, Tab};
+use crate::app::{App, BrowserFocus, BrowserPane, NetState, NoticeKind, SyncState, Tab};
 use crate::app::node::PageView;
 
 /// The sidebar's width: full, or a rail of icons on narrow terminals.
@@ -304,11 +304,46 @@ pub(super) fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 ("↑↓", "select"),
                 ("^V", "paste"),
             ],
+            Tab::Browser
+                if app.browser.focus == BrowserFocus::Pane && !app.browser.search.input.text().is_empty() =>
+            {
+                if app.browser.pane == BrowserPane::Nodes {
+                    &[
+                        ("Enter", "open"),
+                        ("/", "edit search"),
+                        ("Esc", "clear search"),
+                        ("s", "save node"),
+                        ("t", "saved/nodes"),
+                        ("→", "page"),
+                    ]
+                } else {
+                    &[
+                        ("Enter", "open"),
+                        ("/", "edit search"),
+                        ("Esc", "clear search"),
+                        ("x", "remove saved"),
+                        ("t", "saved/nodes"),
+                        ("→", "page"),
+                    ]
+                }
+            }
+            Tab::Browser if app.browser.focus == BrowserFocus::Pane && app.browser.pane == BrowserPane::Nodes => &[
+                ("↑↓", "select"),
+                ("Enter", "open"),
+                ("/", "search"),
+                ("s", "save node"),
+                ("t", "saved/nodes"),
+                ("→", "page"),
+                ("y", "copy address"),
+                ("g", "go to"),
+                ("R", "clear cache"),
+            ],
             Tab::Browser if app.browser.focus == BrowserFocus::Pane => &[
                 ("↑↓", "select"),
                 ("Enter", "open"),
-                ("t", "saved/nodes"),
+                ("/", "search"),
                 ("x", "remove saved"),
+                ("t", "saved/nodes"),
                 ("→", "page"),
                 ("y", "copy address"),
                 ("g", "go to"),

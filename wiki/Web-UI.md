@@ -48,7 +48,7 @@ rettui web UI: http://127.0.0.1:8740/?token=…
     and the Browser's nodes at most every 2 seconds, and nothing else.
   - **Only what shows:** a conversation loads its newest 100 messages, a
     room its newest 200 lines, and the Browser's node list the 200 nodes
-    heard most recently, until you ask for more.
+    heard most recently, until you ask for more (its search finds any).
   - **Compressed:** answers are gzip-compressed.
   - **Cached:** the script and stylesheet are fetched again only when they've
     changed. The font's text (about 90 KB for each weight) loads on the first
@@ -57,8 +57,8 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   - **For scripts:** `?last=N` on `/api/conversations/<address>` and on
     `/api/channels/<hub>/room` asks for just the newest N, and `total` or
     `total_lines` says how many there are in all.
-- **Keys:** `1`–`7` switch sections, `/` searches the Network list, and `Esc`
-  leaves a text box. In the message box and the channel input, `Ctrl-E`
+- **Keys:** `1`–`7` switch sections, `/` searches the Network list (or, in
+  the Browser, its nodes and saved pages), and `Esc` leaves a text box. In the message box and the channel input, `Ctrl-E`
   opens the [emoji](Messaging#emoji) picker (not on a Mac or an iPhone).
 - **Phones:** on a phone (or any window up to 760px wide, and phones held
   sideways) the web UI changes layout. Larger screens keep the side-by-side

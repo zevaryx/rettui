@@ -2,9 +2,23 @@ The Browser tab opens NomadNet pages (written in Micron) from nodes on the
 network.
 
 - **Finding nodes:** the Browser tab has a pane with two lists: Saved (pages
-  you saved with `s`) and Nodes (every NomadNet node heard). Pages open beside
-  the pane. You can also go to any address (`g`), or to your home page (`H`,
-  set in the settings).
+  you saved with `s`) and Nodes (every NomadNet node heard, newest first).
+  Pages open beside the pane. You can also go to any address (`g`), or to
+  your home page (`H`, set in the settings).
+- **Searching:** `/` (or a click on the line under the lists' tabs) searches
+  both lists by name or address, as the Network tab's search does: every
+  word typed must match, and addresses can be pasted as `<hash>` or
+  `hash:/page/index.mu`. The lists narrow as you type, matches are
+  highlighted, a node or page found by its address shows it, and the tabs
+  count the matches ("Nodes 4/120"). `Enter` keeps the search while you
+  move through the list, and `Esc` clears it. In the web UI, the search box
+  is under the tabs, and finds any node heard, not only the 200 newest
+  listed.
+- **Saving a node:** with the Nodes list in hand, `s` saves the selected
+  node's home page without opening it (with the page in hand, `s` saves
+  the page). In the web UI, the ☆ beside a node saves it, and ★ removes it.
+  Either way it's the same as saving the home page once open, and a node
+  whose home page is saved is starred.
 - **Micron:** most of it is supported, including 24-bit colour, alignment,
   dividers, literal blocks, links, forms (text fields, checkboxes and radio
   buttons), inline images and page colours. Long lines wrap between words.
