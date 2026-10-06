@@ -328,6 +328,14 @@ impl App {
                 let current = selected.map(|(key, _)| key).unwrap_or_default();
                 self.open_prompt(PromptKind::FindPath, "Find a path to (address)", &current);
             }
+            // Probe the selected destination, as rnprobe does.
+            KeyCode::Char('T') => {
+                if let Some((key, _)) = selected
+                    && let Err(e) = self.probe(&key)
+                {
+                    self.warn(e);
+                }
+            }
             KeyCode::Char('D') => {
                 if let Some((key, _)) = selected
                     && let Err(e) = self.forget_path(&key)

@@ -200,6 +200,71 @@ pub async fn connect(
     }
 }
 
+/// The kinds of destination rettui knows, by their Reticulum names: what an
+/// address is can be told from its key, as each address is a hash of its
+/// name and its identity.
+const KINDS: [(&str, &str); 5] = [
+    ("lxmf.delivery", "LXMF address"),
+    ("nomadnetwork.node", "NomadNet node"),
+    ("lxmf.propagation", "propagation node"),
+    ("rrc.hub", "RRC hub"),
+    ("rnstransport.probe", "transport node"),
+];
+/// The kinds that prove every packet, so a probe packet gets an answer;
+/// the others are reached with a Link instead.
+const PROVE_PACKETS: [&str; 2] = ["lxmf.delivery", "rnstransport.probe"];
+/// The size of a probe packet's payload (Python rnprobe's default).
+const PROBE_SIZE: usize = 16;
+
+/// How a destination answered a probe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Probe {
+    pub rtt: Duration,
+    pub hops: Option<u8>,
+    /// What it is ("NomadNet node"), if its key says.
+    pub kind: Option<&'static str>,
+    /// Answered by setting up a Link, as kinds that don't prove packets
+    /// are (NomadNet and propagation nodes, hubs); else, a probe packet's
+    /// proof, as `rnprobe` sends.
+    pub by_link: bool,
+}
+
+/// Probe a destination, as `rnprobe` does: find a path (asked for if
+/// need be), tell what it is from its key, then time a probe packet's
+/// proof, or for kinds that don't prove packets, setting up a Link
+/// (closed straight away; nothing is sent over it).
+pub async fn probe(runtime: &ReticulumHandle, known: &Known, to: Hash, progress: Progress<'_>) -> Result<Probe, String> {
+    find_path(runtime, to, progress).await?;
+    let identity = lookup(runtime, known, to).await?.identity;
+    let name = KINDS
+        .iter()
+        .find(|(name, _)| rns_identity::destination::Destination::hash_from_name_and_identity(name, Some(&identity.hash)) == to);
+    let hops = runtime.hops_to(to).await.ok().filter(|&h| h < rns_transport::constants::PATHFINDER_M);
+    let kind = name.map(|(_, kind)| *kind);
+    if let Some((name, _)) = name.filter(|(name, _)| PROVE_PACKETS.contains(name)) {
+        let outcome = rns_runtime::probe::probe_once(
+            runtime.transport_tx.clone(),
+            to,
+            name,
+            PROBE_SIZE,
+            None,
+            Some(PATH_TRY),
+            runtime.should_use_implicit_proof(),
+        )
+        .await
+        .map_err(|e| format!("No answer to the probe: {e}"))?;
+        return Ok(Probe { rtt: outcome.rtt, hops: hops.or(Some(outcome.hops)), kind, by_link: false });
+    }
+    let started = std::time::Instant::now();
+    let LinkSession { handle, .. } = runtime
+        .connect_link(to, Identity::new(), link_options("rettui.probe", false))
+        .await
+        .map_err(|e| format!("No answer: {e}"))?;
+    let rtt = started.elapsed();
+    handle.close().await;
+    Ok(Probe { rtt, hops, kind, by_link: true })
+}
+
 /// The path to a destination, as the path table has it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathInfo {

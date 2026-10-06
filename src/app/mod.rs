@@ -399,8 +399,10 @@ pub struct App {
     auto_error: Option<String>,
     /// Pings to contacts (by address): waiting, or how they went.
     pub pings: HashMap<String, contacts::PingState>,
-    /// Paths looked for on request, by address (see [`paths`]).
+    /// Paths looked for on request, and probes, by address (see
+    /// [`paths`]).
     pub path_lookups: HashMap<String, paths::PathLookup>,
+    pub probes: HashMap<String, paths::ProbeState>,
     /// The contacts last told to the network actor (trusted, and spared the
     /// stamp), so it's told only of changes.
     policy_sent: Option<(Vec<Hash>, Vec<Hash>)>,
@@ -544,6 +546,7 @@ impl App {
             guide: None,
             pings: HashMap::new(),
             path_lookups: HashMap::new(),
+            probes: HashMap::new(),
             auto_pick: None,
             auto_error: None,
             policy_sent: None,
@@ -857,6 +860,7 @@ impl App {
             NetEvent::Path { to, result } => self.on_path(to, result),
             NetEvent::PathProgress { to, text } => self.on_path_progress(to, text),
             NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
+            NetEvent::Probed { to, result } => self.on_probed(to, result),
             NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
             NetEvent::FetchProgress { id, text } => {

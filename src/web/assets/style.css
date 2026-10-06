@@ -385,7 +385,8 @@ td.name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .net-table th:nth-child(3) { width: 25em; }
 .net-table th:nth-child(4) { width: 5.5em; }
 .net-table th:nth-child(5) { width: 7em; }
-.net-table th:nth-child(6) { width: 16em; }
+.net-table th:nth-child(6) { width: 20em; }
+.net-table .actions { flex-wrap: wrap; }
 .net-table td.name { max-width: none; }
 .tag { font-family: var(--mono); font-size: 11.5px; font-weight: 700; color: #111; padding: 1px 5px; border-radius: 3px; }
 .tag.lxmf { background: var(--magenta); }

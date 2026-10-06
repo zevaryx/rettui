@@ -93,6 +93,7 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/contact", post(save_contact))
         .route("/conversations/{key}/ping", post(ping))
         .route("/path/{key}", get(path_state).post(find_path).delete(forget_path))
+        .route("/probe/{key}", get(probe_state).post(probe))
         .route("/conversations/{key}/delivery", post(set_delivery))
         .route("/conversations/{key}/trust", post(set_trust))
         .route("/conversations/{key}/attachments/{id}/{index}", get(attachment))
@@ -625,6 +626,53 @@ async fn find_path(State(state): State<WebState>, Path(key): Path<String>) -> Ap
         }
         if tokio::time::Instant::now() > deadline {
             return Err(bad("Still looking: the log will say how it went"));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+}
+
+/// A probe as the web UI shows it.
+fn probe_json(state: Option<&crate::app::paths::ProbeState>) -> serde_json::Value {
+    use crate::app::paths::{ProbeState, probe_state_label};
+    let Some(state) = state else { return json!({ "state": "none", "text": "not probed yet" }) };
+    let text = probe_state_label(state);
+    match state {
+        ProbeState::Waiting(_) => json!({ "state": "waiting", "text": text }),
+        ProbeState::Done(Ok(probe)) => json!({
+            "state": "found", "text": text, "ms": probe.rtt.as_millis() as u64, "hops": probe.hops,
+            "kind": probe.kind, "by_link": probe.by_link,
+        }),
+        ProbeState::Done(Err(_)) => json!({ "state": "failed", "text": text }),
+    }
+}
+
+/// How probing a destination is going (without asking).
+async fn probe_state(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
+    let key = destination(&key)?;
+    Ok(axum::Json(state.read(move |o| probe_json(o.app.probes.get(&key))).await?))
+}
+
+/// Probe a destination, as rnprobe does, and wait (a while) for the answer.
+async fn probe(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
+    use crate::app::paths::ProbeState;
+    let key = destination(&key)?;
+    let asked = key.clone();
+    state.write(move |o| o.app.probe(&asked)).await?.map_err(bad)?;
+    // Finding a path takes up to about a minute; then the probe or Link.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(110);
+    loop {
+        let wanted = key.clone();
+        let (done, json) = state
+            .read(move |o| {
+                let probe = o.app.probes.get(&wanted);
+                (matches!(probe, Some(ProbeState::Done(_))), probe_json(probe))
+            })
+            .await?;
+        if done {
+            return Ok(axum::Json(json));
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err(bad("No answer yet: the log will say how it went"));
         }
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
