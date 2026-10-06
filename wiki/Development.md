@@ -15,7 +15,7 @@ state as the TUI.
 | `rrc/` | RRC wire format, hub replies, hub sessions | rsReticulum |
 | `reticulum/` | Reticulum config file: the options it has, editing it in place, and checking it | rsReticulum |
 | `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`), the page editor's formatting (`format`), notifications (`notify`) and input routing | |
-| `ui/` | Drawing per tab, plus the sidebar, footer and prompt (`chrome`) and the text editors | ratatui |
+| `ui/` | Drawing per tab, plus the sidebar, footer and prompt (`chrome`), the keys of each mode for the footer and the `?` list (`keys`), and the text editors | ratatui |
 | `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty, Sixel, iTerm2 or half blocks), desktop notifications (`desktop`) | ratatui-image, notify-rust |
 | `web/` | Web UI: HTTP API, login, live updates and notifications, and the page's HTML/CSS/JS, service worker, font and logo (`web/assets`) | axum |
 

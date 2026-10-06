@@ -373,6 +373,8 @@ pub struct App {
     pub should_quit: bool,
     /// Repaint the whole screen at the next draw (Ctrl-L).
     pub full_redraw: bool,
+    /// The list of keys is open (`?`, or F1).
+    pub keys_help: bool,
     /// What the screen was showing at the last draw (see [`App::view_key`]).
     shown_view: u64,
     pub sync: SyncState,
@@ -533,6 +535,7 @@ impl App {
             log: VecDeque::new(),
             should_quit: false,
             full_redraw: false,
+            keys_help: false,
             shown_view: 0,
             sync: SyncState::Idle,
             conversations: ListState::default(),
@@ -1207,7 +1210,7 @@ impl App {
         use std::mem::discriminant;
         let mut h = std::collections::hash_map::DefaultHasher::new();
         discriminant(&self.tab).hash(&mut h);
-        (self.composing, self.prompt.is_some(), self.net_search.typing).hash(&mut h);
+        (self.composing, self.prompt.is_some(), self.net_search.typing, self.keys_help).hash(&mut h);
         // Emoji over the view, which some terminals draw narrower than
         // they should (see `take_full_redraw`).
         if let Some(picker) = &self.emoji {

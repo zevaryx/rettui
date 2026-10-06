@@ -212,18 +212,17 @@ mod tests {
         let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
         app.tab = crate::app::Tab::Network;
         let footer = |app: &mut crate::app::App, width| screen_at(app, width).lines().last().unwrap().to_string();
-        let plain = footer(&mut app, 160);
-        assert!(plain.contains(" P  path") && plain.contains(" T  probe"), "{plain}");
+        let plain = footer(&mut app, 80);
+        assert!(plain.contains("P path  T probe"), "{plain}");
         // While typing, P and T go into the box.
         app.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
         app.on_paste("node");
         let typing = footer(&mut app, 160);
         assert!(!typing.contains("probe"), "{typing}");
-        // Done typing, the rows found can be traced and probed: hinted
-        // before the longer hints, so a 120-column terminal shows them.
+        // Done typing, the rows found can be traced and probed.
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let found = footer(&mut app, 120);
-        assert!(found.contains("clear search") && found.contains(" P  path") && found.contains(" T  probe"), "{found}");
+        let found = footer(&mut app, 80);
+        assert!(found.contains("Esc clear") && found.contains("P path  T probe"), "{found}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

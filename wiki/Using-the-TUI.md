@@ -5,9 +5,14 @@ narrower than 110 columns get a sidebar of icons and narrower side lists, so
 
 ## Keys
 
+The footer shows the most used keys of what's on screen, as many as fit,
+and `? keys` at its right edge: `?` lists them all, with those that work in
+every tab. While typing, `?` is typed, so it says `F1 keys` instead, and F1
+lists them. Any key, or a click, closes the list.
+
 | Tab | Keys |
 | --- | ---- |
-| All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
+| All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `?` list the keys of what's on screen (`F1` while typing), `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
 | Messages | `↑↓` pick a conversation, `Enter` write, `r` [reply](Messaging#replies) to their newest message, `m` pick a message, `c` [contact card](Messaging#contacts), `X` delete the conversation, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `p` read a [paper message](Messaging#paper-messages), `P` show the newest paper message written, `N` turn the conversation's notifications off or on, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
 | A picked message (`m`) | `↑↓` pick another, `r` / `Enter` reply, `e` [react](Messaging#reactions-locations-commands-and-voice-messages), `y` copy its text, `o` open its file or location, `t` [send it again](Messaging#message-actions) if it failed, `x` delete it, `Esc` done |
 | Contact card (`c`) | `r` your name for them, `e` notes, `t` [trust](Messaging#blocking-and-spam) (or stop), `l` leave an unknown sender as is, `b` block (or unblock), `y` copy their address, `X` delete the conversation, `Esc` close |
