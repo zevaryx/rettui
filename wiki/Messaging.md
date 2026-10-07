@@ -334,6 +334,11 @@ rettui shows what each one is, rather than an empty message:
     page use the microphone: open the web UI at `localhost`, or over
     [HTTPS](Web-UI). The TUI can't record, but sends audio files as
     attachments.
+  - **Voice calls** (Sideband's, over LXST) aren't something rettui can
+    make or answer. LXST, the library they use, is published under
+    CC BY-NC-ND 4.0, which doesn't allow adaptations of it to be shared,
+    and there's no separate description of its protocol to build one
+    from. Voice messages work with the same clients.
 - A message with nothing rettui can show says so, naming the fields it
   carried, without a notification.
 
