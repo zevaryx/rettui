@@ -44,6 +44,7 @@ Changes since v1.5.1.
   - Colour themes (dark, light, basic).
   - The footer shows the shortest hints that fit; `?` (or `F1` while typing) lists every key.
 - **Settings and CLI**
+  - Quiet hours: no notifications between two times of day, except (unless turned off) from trusted contacts.
   - Update checks: once a day, rettui can ask GitHub whether a newer release is out, and marks the version (↑) and Status when one is. Off by default; the getting-started guide recommends turning it on (*Check for updates*).
   - Release binaries can install a newer release in their own place when asked (`U` in Status, Install in the web UI, or `rettui update`), checked against the release's `SHA256SUMS` and run once before they replace the old one. Builds from source, containers and package managers' are told how to update instead.
   - 12-hour clock and date order.

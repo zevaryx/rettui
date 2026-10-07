@@ -99,12 +99,31 @@ impl App {
     }
 
     /// Queue a notification, unless it's about what's on screen in a window
-    /// that has the focus.
+    /// that has the focus, or it's quiet hours (see [`App::quiet_for`]).
     pub(super) fn push_notification(&mut self, on_screen: bool, notification: Notification) {
         if self.focused && on_screen {
             return;
         }
+        if self.quiet_for(&notification.target, minute_now()) {
+            return;
+        }
         self.notifications.push(notification);
+    }
+
+    /// Whether quiet hours hold back a notification about `target` at
+    /// `minute` (of the day, local time): inside them, all but trusted
+    /// contacts' messages (if they're let through) wait to be seen in the
+    /// app. Messages still arrive and count as unread.
+    pub fn quiet_for(&self, target: &Target, minute: u32) -> bool {
+        let Some(hours) = self.settings.quiet_hours.as_deref().and_then(QuietHours::parse) else { return false };
+        if !hours.contains(minute) {
+            return false;
+        }
+        let trusted = match target {
+            Target::Conversation { key } => self.store.contact(key).trust == crate::store::Trust::Trusted,
+            _ => false,
+        };
+        !(trusted && self.settings.quiet_hours_trusted)
     }
 
     /// The notifications to show now.
@@ -123,9 +142,90 @@ impl App {
     }
 }
 
+/// The minute of the day now, local time.
+fn minute_now() -> u32 {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    now.hour() * 60 + now.minute()
+}
+
+/// Quiet hours: from one time of day to another, the end the next day if
+/// it's earlier (`22:00-07:00`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuietHours {
+    /// Minutes from midnight.
+    pub from: u32,
+    pub to: u32,
+}
+
+impl QuietHours {
+    /// `22:00-07:00`, `22-7`, `9:30 to 12`: two times of day (hours, or
+    /// hours and minutes), apart.
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim().replace(['–', '—'], "-").to_lowercase().replace(" to ", "-");
+        let (from, to) = text.split_once('-')?;
+        let time = |t: &str| -> Option<u32> {
+            let (h, m) = t.trim().split_once(':').unwrap_or((t.trim(), "0"));
+            let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+            (h < 24 && m < 60).then_some(h * 60 + m)
+        };
+        let (from, to) = (time(from)?, time(to)?);
+        (from != to).then_some(Self { from, to })
+    }
+
+    /// Whether `minute` (of the day) is inside them.
+    pub fn contains(self, minute: u32) -> bool {
+        if self.from < self.to { (self.from..self.to).contains(&minute) } else { minute >= self.from || minute < self.to }
+    }
+
+    /// As settings.json keeps them: `22:00-07:00`.
+    pub fn label(self) -> String {
+        format!("{:02}:{:02}-{:02}:{:02}", self.from / 60, self.from % 60, self.to / 60, self.to % 60)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_hours_as_typed_and_across_midnight() {
+        let night = QuietHours::parse("22:00-07:00").unwrap();
+        assert_eq!(night, QuietHours { from: 22 * 60, to: 7 * 60 });
+        assert_eq!(QuietHours::parse(" 22 - 7 "), Some(night));
+        assert_eq!(QuietHours::parse("22:00–07:00"), Some(night));
+        assert_eq!(QuietHours::parse("9:30 to 12").unwrap().label(), "09:30-12:00");
+        for wrong in ["", "22", "25-7", "22:60-7", "7-7", "night"] {
+            assert_eq!(QuietHours::parse(wrong), None, "{wrong}");
+        }
+        assert!(night.contains(23 * 60) && night.contains(0) && night.contains(6 * 60 + 59));
+        assert!(!night.contains(7 * 60) && !night.contains(12 * 60) && !night.contains(21 * 60 + 59));
+        let lunch = QuietHours::parse("12-13").unwrap();
+        assert!(lunch.contains(12 * 60 + 30) && !lunch.contains(13 * 60) && !lunch.contains(11 * 60));
+    }
+
+    #[test]
+    fn quiet_hours_hold_back_all_but_trusted_contacts() {
+        let dir = std::env::temp_dir().join(format!("rettui-quiet-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let settings = crate::config::Settings { quiet_hours: Some("22:00-07:00".into()), ..crate::config::Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, crate::store::Store::default());
+        let (friend, stranger) = ("aa".repeat(16), "bb".repeat(16));
+        app.store.update_contact(&friend, |c| c.trust = crate::store::Trust::Trusted);
+        let to = |key: &str| Target::Conversation { key: key.into() };
+        let room = Target::Room { hub: "cc".repeat(16), room: "general".into() };
+        let (night, day) = (23 * 60, 12 * 60);
+        assert!(app.quiet_for(&to(&stranger), night) && app.quiet_for(&room, night));
+        // Trusted contacts get through, unless that's turned off.
+        assert!(!app.quiet_for(&to(&friend), night));
+        app.settings.quiet_hours_trusted = false;
+        assert!(app.quiet_for(&to(&friend), night));
+        // Outside them, or with none set: nothing held back.
+        assert!(!app.quiet_for(&to(&stranger), day));
+        app.settings.quiet_hours = None;
+        assert!(!app.quiet_for(&to(&stranger), night));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn note(title: &str, body: &str, key: &str) -> Notification {
         Notification { title: title.into(), body: body.into(), target: Target::Conversation { key: key.into() } }

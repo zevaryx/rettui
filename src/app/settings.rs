@@ -355,6 +355,7 @@ mod tests {
                     "node_name" => "Hilltop".into(),
                     "node_dir" => node_dir.clone(),
                     "pn_name" => "Hilltop messages".into(),
+                    "quiet_hours" => "22:00-07:00".into(),
                     other => panic!("give {other} a value to change it to here"),
                 },
             };

@@ -68,3 +68,9 @@ both UIs.
     (web UI).
 - **Settings:** "Notify on messages" and "Notify from RRC" (under Status)
   turn each kind off everywhere.
+- **Quiet hours:** *Quiet hours* (Status, `quiet_hours`) holds back
+  notifications between two times of day, by this computer's clock: say
+  `22:00-07:00` (past midnight is fine). Messages still arrive and count as
+  unread; only the notifications (desktop and browser, background ones too)
+  don't come. *Trusted break quiet hours* (on unless turned off) lets
+  messages from contacts you trust through anyway. Empty, there are none.

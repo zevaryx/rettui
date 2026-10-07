@@ -67,6 +67,11 @@ pub struct Settings {
     pub notify_messages: bool,
     /// Notifications from RRC (each hub and room has its own level).
     pub notify_rrc: bool,
+    /// No notifications between these times of day (`22:00-07:00`); none
+    /// when unset (see `app::notify::QuietHours`).
+    pub quiet_hours: Option<String>,
+    /// Trusted contacts' messages notify during quiet hours anyway.
+    pub quiet_hours_trusted: bool,
     /// What becomes of messages from senders who aren't contacts (not
     /// trusted, nor left as they are, nor ever written to): one of
     /// [`UNKNOWN_SENDERS`]. Settings files from before it said
@@ -161,6 +166,8 @@ impl Default for Settings {
             wrap_lines: false,
             notify_messages: true,
             notify_rrc: true,
+            quiet_hours: None,
+            quiet_hours_trusted: true,
             unknown_senders: "show".into(),
             resend_on_announce: true,
             answer_commands: "off".into(),
@@ -687,6 +694,20 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "quiet_hours",
+        label: "Quiet hours",
+        help: "No notifications between these times of day, this computer's time, e.g. 22:00-07:00 (past midnight is fine). Messages still arrive and count as unread; only the notifications wait. Empty for none",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "quiet_hours_trusted",
+        label: "Trusted break quiet hours",
+        help: "During quiet hours, messages from contacts you trust still notify",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "log_level",
         label: "Log level",
         help: "How much goes to rettui.log in the data directory: error, warn (the default), info, debug, or trace (a great deal, for tracking a problem down). RETTUI_LOG, if set when rettui starts, decides instead",
@@ -815,6 +836,8 @@ impl Settings {
             "show_joins" => self.show_joins.to_string(),
             "notify_messages" => self.notify_messages.to_string(),
             "notify_rrc" => self.notify_rrc.to_string(),
+            "quiet_hours" => self.quiet_hours.clone().unwrap_or_default(),
+            "quiet_hours_trusted" => self.quiet_hours_trusted.to_string(),
             "unknown_senders" => self.unknown_senders.clone(),
             "resend_on_announce" => self.resend_on_announce.to_string(),
             "answer_commands" => self.answer_commands.clone(),
@@ -879,6 +902,17 @@ impl Settings {
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,
+            "quiet_hours" => {
+                self.quiet_hours = match optional(value) {
+                    None => None,
+                    Some(text) => Some(
+                        crate::app::notify::QuietHours::parse(&text)
+                            .ok_or_else(|| fail("two times of day, as 22:00-07:00".into()))?
+                            .label(),
+                    ),
+                };
+            }
+            "quiet_hours_trusted" => self.quiet_hours_trusted = toggle(value).map_err(fail)?,
             "unknown_senders" => self.unknown_senders = choice(value, UNKNOWN_SENDERS).map_err(fail)?,
             "resend_on_announce" => self.resend_on_announce = toggle(value).map_err(fail)?,
             "answer_commands" => self.answer_commands = choice(value, ANSWER_COMMANDS).map_err(fail)?,
