@@ -49,6 +49,7 @@ pub fn state(app: &App) -> Value {
     let online = app.interfaces.iter().filter(|i| i.online).count();
     json!({
         "display_name": app.settings.display_name,
+        "icon": icon(app.own_appearance().as_ref()),
         "external_shared_instance": app.uses_external_shared_instance(),
         "wrap_lines": app.settings.wrap_lines,
         // How big pictures sent may be (the composer says they'll shrink).
@@ -145,6 +146,18 @@ fn reach(reach: crate::app::reach::Reach) -> Value {
     }
 }
 
+/// An icon to show: its character (none if rettui doesn't know the name),
+/// its name and colours.
+pub fn icon(appearance: Option<&crate::lxmf::fields::Appearance>) -> Value {
+    let Some(a) = appearance else { return Value::Null };
+    json!({
+        "glyph": crate::icons::glyph(&a.icon).map(String::from),
+        "name": a.icon,
+        "fg": crate::icons::hex_colour(a.foreground),
+        "bg": crate::icons::hex_colour(a.background),
+    })
+}
+
 pub fn conversations(app: &App) -> Value {
     let list: Vec<Value> = app
         .store
@@ -164,6 +177,7 @@ pub fn conversations(app: &App) -> Value {
                 "muted": conversation.muted,
                 // Not a contact: not trusted, nor ever written to.
                 "unknown": !app.is_known(&key),
+                "icon": icon(app.store.contacts.get(&key).and_then(|c| c.icon.as_ref())),
                 "last": last,
             })
         })
@@ -249,6 +263,7 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
         "name": app.store.display_name(key),
         "unread": app.store.conversations.get(key).map_or(0, |c| c.unread),
         "muted": app.store.conversations.get(key).is_some_and(|c| c.muted),
+        "icon": icon(app.store.contacts.get(key).and_then(|c| c.icon.as_ref())),
         // Older messages moved to the archive (not in `total`).
         "archived": app.store.conversations.get(key).map_or(0, |c| c.archived),
         // What you keep about them, and the name they announce.
@@ -526,6 +541,7 @@ pub fn settings(app: &App, saved: &Settings) -> Value {
                     FieldKind::Toggle => "toggle",
                     FieldKind::Number => "number",
                     FieldKind::Choice(_) => "choice",
+                    FieldKind::Color => "color",
                 },
                 "choices": match f.kind {
                     FieldKind::Choice(choices) => choices.to_vec(),

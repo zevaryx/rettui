@@ -142,6 +142,8 @@ pub struct Outgoing {
     pub local_node: Option<pn::LocalNode>,
     /// How its text is written (LXMF's renderer field), if not plain.
     pub format: Option<crate::markdown::TextFormat>,
+    /// Our icon, if one's set (sent with each message, as Sideband does).
+    pub appearance: Option<fields::Appearance>,
 }
 
 impl Outgoing {
@@ -160,6 +162,7 @@ impl Outgoing {
             ticket: None,
             local_node: None,
             format: None,
+            appearance: None,
         }
     }
 }

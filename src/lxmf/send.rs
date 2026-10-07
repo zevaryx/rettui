@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use lxmf_core::constants::{
-    FIELD_FILE_ATTACHMENTS, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TICKET, RENDERER_MARKDOWN,
+    FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TICKET, RENDERER_MARKDOWN,
     RENDERER_MICRON,
 };
 use lxmf_core::handlers::{parse_pn_announce_data, stamp_cost_from_app_data};
@@ -67,6 +67,11 @@ pub(super) async fn build_message(
     if let Some(reaction) = &outgoing.reaction {
         message
             .set_msgpack_field(FIELD_REACTION, super::fields::reaction_field(reaction))
+            .map_err(|e| e.to_string())?;
+    }
+    if let Some(appearance) = &outgoing.appearance {
+        message
+            .set_msgpack_field(FIELD_ICON_APPEARANCE, super::fields::appearance_field(appearance))
             .map_err(|e| e.to_string())?;
     }
     // How its text is written, for clients that format it.

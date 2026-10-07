@@ -250,6 +250,19 @@ function stickToBottom(node, update) {
   if (atBottom) node.scrollTop = node.scrollHeight;
 }
 
+// Someone's icon, as Sideband and MeshChat show one: a Material Design Icon
+// in a colour on a colour, or with no icon (or one rettui doesn't know),
+// the first letter of their name.
+function avatar(icon, name) {
+  const letter = ([...(name || '').trim()][0] || '?').toUpperCase();
+  return el('span', {
+    class: 'avatar' + (icon?.glyph ? ' icon' : ''),
+    style: icon ? `color:${icon.fg};background:${icon.bg}` : null,
+    title: icon ? `Icon: ${icon.name}` : null,
+    text: icon?.glyph || letter,
+  });
+}
+
 // Whether a file attached is a picture that goes smaller, as the setting
 // has it (not a GIF, which may move): see shrink.rs.
 function shrinks(file) {
@@ -319,7 +332,7 @@ function renderSidebar() {
   document.title = count ? `(${count}) rettui` : 'rettui';
   renderAppbar();
   if (app.status) {
-    $('#who-name').textContent = app.status.display_name;
+    $('#who-name').replaceChildren(...[app.status.icon ? avatar(app.status.icon, app.status.display_name) : null, app.status.display_name].filter(Boolean));
     const total = app.status.interfaces.length;
     const net = app.status.net.state === 'online'
       ? `● ${app.status.interfaces_online}/${total} interfaces`
@@ -2196,6 +2209,8 @@ app.views.messages = {
     draftSwitch(this, this.selected);
     this.names = new Map(conversations.map((c) => [c.key, c.name]));
     this.warmRecent(conversations);
+    // Icons beside every name once someone has one (letters for the rest).
+    const icons = conversations.some((c) => c.icon);
     if (this.query.trim()) this.runSearch();
     else if (changed(this, 'list:' + this.selected, conversations)) this.list.replaceChildren(...(conversations.length ? conversations.map((c) => el('div', {
       class: 'list-item' + (c.key === this.selected ? ' selected' : ''),
@@ -2204,6 +2219,7 @@ app.views.messages = {
       onpointerdown: () => this.load(c.key).catch(() => {}),
       onclick: () => this.select(c.key),
     },
+    icons ? avatar(c.icon, c.name) : null,
     el('div', { class: 'main' },
       el('div', { class: 'name' }, c.name, c.muted ? mutedMark() : null,
         c.unknown ? el('span', { class: 'unknown-mark', text: ' ?', title: 'Not one of your contacts' }) : null),
@@ -2325,6 +2341,7 @@ app.views.messages = {
     this.modeKept = kept;
     if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key })) return;
     this.header.replaceChildren(
+      conversation.icon ? avatar(conversation.icon, conversation.name) : null,
       el('span', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }),
       bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
@@ -4408,6 +4425,8 @@ app.views.status = {
         input = el('input', { type: 'checkbox', checked: field.value === 'true' });
       } else if (field.kind === 'choice') {
         input = el('select', {}, ...field.choices.map((choice) => el('option', { value: choice, text: choice, selected: choice === field.value })));
+      } else if (field.kind === 'color') {
+        input = el('input', { type: 'color', value: field.value });
       } else {
         input = el('input', {
           type: field.kind === 'number' ? 'number' : 'text',
@@ -4432,7 +4451,7 @@ app.views.status = {
       return el('div', { class: 'setting' },
         el('label', { for: id, class: 'label' }, field.label,
           field.next_start ? el('span', { class: 'next-start', text: 'next start', title: 'Takes effect the next time rettui starts' }) : null),
-        el('div', {}, input, el('div', { class: 'help', text: field.help }),
+        el('div', {}, input, field.key === 'icon' ? this.iconPicker(input) : null, el('div', { class: 'help', text: field.help }),
           field.web === 'change' ? null : el('div', { class: 'help locked', text: field.web === 'terminal_only'
             ? 'Changed in the terminal UI (or settings.json), not here: it decides what runs on this computer.'
             : 'Turned on in the terminal UI, not here: scripts run programs on this computer.'
@@ -4445,6 +4464,42 @@ app.views.status = {
     }
     this.settingsFooter.replaceChildren(...notes.map((n) => el('div', { text: n })));
     this.markDirty();
+  },
+
+  // Icons to pick from, by what's typed in the icon's box (shown once it's
+  // used: the icons' font is a megabyte), with the one picked in its
+  // colours.
+  iconPicker(input) {
+    const picks = el('div', { class: 'icon-picks hidden' });
+    let timer = null;
+    const show = async () => {
+      const name = input.value.trim().toLowerCase();
+      const found = await api.get('/icons?q=' + encodeURIComponent(name)).catch(() => []);
+      const colours = () => `color:${this.inputs.icon_color?.value};background:${this.inputs.icon_background?.value}`;
+      picks.replaceChildren(...found.map((icon) => el('button', {
+        type: 'button',
+        class: 'icon-pick' + (icon.name === name ? ' selected' : ''),
+        style: icon.name === name ? colours() : null,
+        title: icon.name,
+        text: icon.glyph,
+        onclick: () => {
+          input.value = icon.name;
+          this.markDirty();
+          show();
+        },
+      })), found.length ? '' : el('span', { class: 'dim', text: 'No icon has that in its name' }));
+      picks.classList.remove('hidden');
+    };
+    input.addEventListener('focus', () => picks.classList.contains('hidden') && show());
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(show, 200);
+    });
+    // The colours, as they're picked.
+    for (const key of ['icon_color', 'icon_background']) {
+      setTimeout(() => this.inputs[key]?.addEventListener('input', () => picks.classList.contains('hidden') || show()));
+    }
+    return picks;
   },
 
   async save() {

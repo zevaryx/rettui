@@ -192,6 +192,18 @@ everywhere else), and notes for you alone.
   your address and public key, the way Columba shares contacts. Someone who
   scans it can write to you before hearing your announce. `rettui address
   --link` prints the link.
+- **Icons:** Sideband, Columba and MeshChat let people pick an icon (a
+  [Material Design Icon](https://pictogrammers.com/library/mdi/) in a colour
+  on a colour), which comes with their messages. rettui keeps the newest
+  one each person sent. The web UI shows it beside their name in the
+  conversation list and above the conversation; once anyone has one, the
+  rest get their first letter. The TUI's contact card names it, in its
+  colours.
+  - **Your own:** *Icon* in the settings (Status), with *Icon colour* and
+    *Icon background*. Type part of a name in the web UI and pick from the
+    icons that match; in the TUI, type the name. Once set, it goes with
+    every message you send (not paper ones), as Sideband sends its own, and
+    shows beside your name in the web UI. Empty, the default, sends none.
 - **Adding someone from theirs:** paste their `lxma://` link where you'd type
   an address (`n` in the TUI, **+ New** in the web UI), or read its QR code
   like a [paper message](#paper-messages) (a picture of it, or the camera in

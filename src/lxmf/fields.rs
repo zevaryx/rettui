@@ -17,6 +17,10 @@
 //!   of them; it says what was asked.
 //! - Voice messages (`FIELD_AUDIO`, 0x07): `[mode, bytes]`, Opus (in an Ogg
 //!   file) or Codec2.
+//! - Icons (`FIELD_ICON_APPEARANCE`, 0x04): `[name, foreground, background]`,
+//!   a Material Design Icon's name and two colours of three bytes (red,
+//!   green, blue), as Sideband and MeshChat send them. rettui sends its own
+//!   if one's set.
 
 use lxmf_core::constants::{
     FIELD_AUDIO, FIELD_COMMANDS, FIELD_CUSTOM_META, FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_IMAGE,
@@ -109,6 +113,46 @@ pub fn reaction_field(reaction: &Reaction) -> Vec<u8> {
     encode(&Value::Map(vec![
         (Value::from(REACTION_TO), Value::Binary(reaction.to.to_vec())),
         (Value::from(REACTION_CONTENT), Value::Binary(reaction.emoji.as_bytes().to_vec())),
+    ]))
+}
+
+/// Someone's icon: a Material Design Icon by name (see `crate::icons`), in
+/// a colour on a colour.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Appearance {
+    pub icon: String,
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
+}
+
+/// A colour sent as three bytes, or (to be lenient) as `#rrggbb`.
+fn colour_of(value: &Value) -> Option<[u8; 3]> {
+    match value {
+        Value::Binary(bytes) => bytes.as_slice().try_into().ok(),
+        Value::String(text) => crate::icons::parse_colour(text.as_str()?),
+        _ => None,
+    }
+}
+
+/// The icon a message carries, if it's well formed: a name of letters,
+/// digits and dashes, and two colours.
+pub fn appearance_of(message: &LxMessage) -> Option<Appearance> {
+    let Value::Array(parts) = value(message, FIELD_ICON_APPEARANCE)? else { return None };
+    let [name, foreground, background, ..] = parts.as_slice() else { return None };
+    let icon = String::from_utf8(bytes_of(name)?).ok()?.trim().to_lowercase();
+    let fine = |c: char| c.is_ascii_alphanumeric() || c == '-';
+    if icon.is_empty() || icon.len() > crate::icons::MAX_NAME || !icon.chars().all(fine) {
+        return None;
+    }
+    Some(Appearance { icon, foreground: colour_of(foreground)?, background: colour_of(background)? })
+}
+
+/// `FIELD_ICON_APPEARANCE`'s value for an icon.
+pub fn appearance_field(appearance: &Appearance) -> Vec<u8> {
+    encode(&Value::Array(vec![
+        Value::from(appearance.icon.as_str()),
+        Value::Binary(appearance.foreground.to_vec()),
+        Value::Binary(appearance.background.to_vec()),
     ]))
 }
 
@@ -364,6 +408,8 @@ pub struct Extras {
     pub audio: Option<Audio>,
     /// Its sender stopped sharing their location.
     pub ceased: bool,
+    /// Its sender's icon.
+    pub appearance: Option<Appearance>,
     /// How its text is written (the renderer field), if not plain.
     pub format: Option<crate::markdown::TextFormat>,
     /// Fields rettui doesn't know.
@@ -378,6 +424,7 @@ impl Extras {
             commands: commands_of(message),
             audio: audio_of(message),
             ceased: ceased(message),
+            appearance: appearance_of(message),
             format: value(message, FIELD_RENDERER)
                 .and_then(|v| v.as_u64())
                 .and_then(|r| u8::try_from(r).ok())
@@ -403,7 +450,8 @@ impl Extras {
                 notes.push(note);
             }
         }
-        if bare && notes.is_empty() && self.telemetry.is_none() && self.reaction.is_none() {
+        // Their icon on its own isn't a message to mention.
+        if bare && notes.is_empty() && self.telemetry.is_none() && self.reaction.is_none() && self.appearance.is_none() {
             notes.push(match self.unknown.as_slice() {
                 [] => "Sent an empty message".into(),
                 ids => {
@@ -550,5 +598,35 @@ mod tests {
         stop.set_field(FIELD_CUSTOM_META, meta);
         assert!(ceased(&received(&stop)));
         assert!(!ceased(&received(&message())));
+    }
+
+    #[test]
+    fn icons_as_sideband_and_meshchat_send_them() {
+        let tower = Appearance { icon: "radio-tower".into(), foreground: [1, 2, 3], background: [250, 251, 252] };
+        let mut sent = message();
+        sent.set_msgpack_field(FIELD_ICON_APPEARANCE, appearance_field(&tower)).unwrap();
+        assert_eq!(appearance_of(&received(&sent)), Some(tower.clone()));
+        // On the wire: {0x04: [str, bin 3, bin 3]}, as Python's msgpack packs
+        // Sideband's [icon, fg, bg].
+        let packed = sent.pack_payload().unwrap();
+        let mut wire = vec![0x04, 0x93, 0xab];
+        wire.extend(b"radio-tower");
+        wire.extend([0xc4, 3, 1, 2, 3, 0xc4, 3, 250, 251, 252]);
+        assert!(packed.windows(wire.len()).any(|w| w == wire.as_slice()));
+        // Colours as text are taken too; a name that can't be an icon's, or
+        // a colour that isn't one, isn't.
+        let icon = |name: &str, fg: Value| {
+            let mut m = message();
+            let parts = Value::Array(vec![Value::from(name), fg, Value::Binary(vec![0, 0, 0])]);
+            m.set_msgpack_field(FIELD_ICON_APPEARANCE, encode(&parts)).unwrap();
+            appearance_of(&received(&m))
+        };
+        assert_eq!(icon("Account", Value::from("#ffffff")).map(|a| (a.icon, a.foreground)), Some(("account".into(), [255; 3])));
+        assert_eq!(icon("no good!", Value::Binary(vec![0, 0, 0])), None);
+        assert_eq!(icon("account", Value::Binary(vec![0, 0])), None);
+        // Known: an icon alone isn't "something rettui can't show".
+        let extras = Extras::of(&received(&sent));
+        assert_eq!(extras.appearance, Some(tower));
+        assert!(extras.notes(true).is_empty());
     }
 }

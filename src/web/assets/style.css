@@ -192,6 +192,22 @@ a { color: var(--accent); }
 .list-item:hover { background: var(--raised); }
 .list-item.selected { background: var(--selected); border-left-color: var(--accent); }
 .list-item .main { flex: 1; min-width: 0; }
+/* Someone's icon (Sideband's and MeshChat's), or their first letter. */
+.avatar {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--raised); color: var(--dim);
+  font-weight: 600; font-size: 15px; line-height: 1;
+}
+.avatar.icon { font-weight: 400; font-size: 19px; }
+header .avatar { width: 26px; height: 26px; font-size: 13px; }
+header .avatar.icon { font-size: 17px; }
+#who-name { display: flex; align-items: center; gap: 6px; }
+#who-name .avatar { width: 20px; height: 20px; font-size: 11px; }
+#who-name .avatar.icon { font-size: 13px; }
+.icon-picks { display: flex; flex-wrap: wrap; gap: 4px; max-height: 168px; overflow: auto; margin-top: 6px; }
+.icon-pick { width: 36px; height: 36px; padding: 0; font-size: 20px; line-height: 1; }
+.icon-pick.selected { border-color: var(--accent); }
 .list-item .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-item .sub { color: var(--dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

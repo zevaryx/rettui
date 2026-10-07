@@ -65,6 +65,15 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
         None => lines.push(field("Heard", "not yet (no announce)")),
     }
     lines.push(field("Trust", trust_label(contact.trust, app.is_known(&key))));
+    // Their icon by name, in its colours (the icon itself needs a Nerd Font).
+    if let Some(icon) = &contact.icon {
+        let [r, g, b] = icon.background;
+        let [fr, fg, fb] = icon.foreground;
+        let colours = Style::default().fg(ratatui::style::Color::Rgb(fr, fg, fb)).bg(ratatui::style::Color::Rgb(r, g, b));
+        let mut line = field("Icon", "");
+        line.spans.push(Span::styled(format!(" {} ", icon.icon), colours));
+        lines.push(line);
+    }
     if let Some(mode) = contact.delivery {
         lines.push(field("Delivery", format!("{} (d changes it in the conversation)", mode.label())));
     }
@@ -140,6 +149,7 @@ mod tests {
         store.update_contact(&key, |c| {
             c.alias = Some("Ally".into());
             c.notes = "met at the swapfest".into();
+            c.icon = Some(crate::lxmf::fields::Appearance { icon: "radio-tower".into(), foreground: [255; 3], background: [0, 64, 128] });
         });
         let mut app = test_app(&dir, Settings::default(), store);
         app.open_newest_conversation();
@@ -150,6 +160,7 @@ mod tests {
         let screen: String = (0..30).map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect();
         assert!(screen.contains("Ally") && screen.contains("Announces Alice") && screen.contains("3 hops"), "{screen}");
         assert!(screen.contains("met at the swapfest") && screen.contains("Rename (r)"), "{screen}");
+        assert!(screen.contains("Icon       radio-tower "), "{screen}");
         assert!(screen.contains("unknown sender") && screen.contains("Leave as is (l)") && screen.contains("Block (b)"), "{screen}");
         // Ping (p): asked of the network, and shown when it answers.
         app.on_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char('p'), KeyModifiers::NONE));

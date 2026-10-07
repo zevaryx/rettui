@@ -73,6 +73,9 @@ impl App {
             }
         }
         let extras = &message.extras;
+        if let Some(appearance) = &extras.appearance {
+            self.keep_appearance(&key, appearance, message.timestamp);
+        }
         let location = extras.telemetry.as_ref().and_then(|t| t.location);
         // Nothing to show but what the fields say.
         let bare = message.content.trim().is_empty()
@@ -81,6 +84,10 @@ impl App {
             && extras.audio.is_none()
             && location.is_none();
         let notes = extras.notes(bare);
+        // Their icon alone isn't a message either (it's kept, above).
+        if bare && notes.is_empty() && extras.reaction.is_none() && extras.appearance.is_some() && extras.telemetry.is_none() {
+            return;
+        }
         // A reaction goes on the message it's for: on its own, it's not a
         // message.
         if let Some(reaction) = extras.reaction.clone() {
@@ -263,7 +270,11 @@ impl App {
             mode => mode,
         };
         let reaction = lxmf::Reaction { to: target, emoji };
-        let message = lxmf::Outgoing { reaction: Some(reaction), ..lxmf::Outgoing::text(to, String::new(), Vec::new(), mode, timestamp) };
+        let message = lxmf::Outgoing {
+            reaction: Some(reaction),
+            appearance: self.own_appearance(),
+            ..lxmf::Outgoing::text(to, String::new(), Vec::new(), mode, timestamp)
+        };
         self.send(NetCommand::SendMessage { id, message });
         Ok(())
     }
@@ -396,6 +407,31 @@ impl App {
         self.message_scroll = 0;
     }
 
+    /// Our icon, as the settings have it (none unless one's set).
+    pub fn own_appearance(&self) -> Option<lxmf::fields::Appearance> {
+        let icon = self.settings.icon.clone()?;
+        let colour = |text: &str, or: [u8; 3]| crate::icons::parse_colour(text).unwrap_or(or);
+        Some(lxmf::fields::Appearance {
+            icon,
+            foreground: colour(&self.settings.icon_color, [0x0b, 0x0b, 0x10]),
+            background: colour(&self.settings.icon_background, [0x4f, 0xd6, 0xe0]),
+        })
+    }
+
+    /// Keep someone's icon, from a message written at `timestamp`, unless
+    /// one from a newer message is kept already.
+    fn keep_appearance(&mut self, key: &str, appearance: &lxmf::fields::Appearance, timestamp: f64) {
+        let contact = self.store.contact(key);
+        if contact.icon_at > timestamp || contact.icon.as_ref() == Some(appearance) && contact.icon_at == timestamp {
+            return;
+        }
+        self.store.update_contact(key, |c| {
+            c.icon = Some(appearance.clone());
+            c.icon_at = timestamp;
+        });
+        self.store_dirty = true;
+    }
+
     /// How messages to someone go: the mode kept for them, or auto.
     pub fn delivery_for(&self, key: &str) -> DeliveryMode {
         self.store.contact(key).delivery.unwrap_or(DeliveryMode::Auto)
@@ -511,7 +547,8 @@ impl App {
         if mode == DeliveryMode::Paper {
             self.send(NetCommand::WritePaper { id, paper: lxmf::paper::Paper { to, content, timestamp, reply, format } });
         } else {
-            let message = lxmf::Outgoing { reply, format, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            let appearance = self.own_appearance();
+            let message = lxmf::Outgoing { reply, format, appearance, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
             self.send(NetCommand::SendMessage { id, message });
         }
         Ok(id)
@@ -735,7 +772,8 @@ impl App {
         if mode == DeliveryMode::Paper {
             self.send(NetCommand::WritePaper { id: number, paper: lxmf::paper::Paper { to, content, timestamp, reply, format } });
         } else {
-            let message = lxmf::Outgoing { reply, format, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            let appearance = self.own_appearance();
+            let message = lxmf::Outgoing { reply, format, appearance, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
             self.send(NetCommand::SendMessage { id: number, message });
         }
         Ok(())
@@ -1414,6 +1452,35 @@ mod tests {
             extras,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn their_icon_is_kept_and_ours_is_sent_once_set() {
+        use crate::lxmf::Extras;
+        use crate::lxmf::fields::Appearance;
+        let dir = temp_dir("icons");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        let tower = Appearance { icon: "radio-tower".into(), foreground: [255; 3], background: [0, 0, 128] };
+        let antenna = Appearance { icon: "antenna".into(), ..tower.clone() };
+        let with = |n: u8, content: &str, icon: &Appearance| {
+            from_them(n, content, Extras { appearance: Some(icon.clone()), ..Extras::default() })
+        };
+        app.on_message(with(2, "hello", &tower));
+        assert_eq!(app.store.contact(&key()).icon.as_ref(), Some(&tower));
+        // An older message's icon doesn't replace a newer one's.
+        app.on_message(with(1, "from before", &antenna));
+        assert_eq!(app.store.contact(&key()).icon.as_ref(), Some(&tower));
+        // An icon alone is kept, but isn't a message.
+        let count = app.store.conversations[&key()].messages.len();
+        app.on_message(with(3, "", &antenna));
+        assert_eq!(app.store.contact(&key()).icon.as_ref(), Some(&antenna));
+        assert_eq!(app.store.conversations[&key()].messages.len(), count);
+        // Ours: none until one's set.
+        assert_eq!(app.own_appearance(), None);
+        app.settings.icon = Some("account".into());
+        let ours = app.own_appearance().unwrap();
+        assert_eq!((ours.icon.as_str(), ours.foreground, ours.background), ("account", [0x0b, 0x0b, 0x10], [0x4f, 0xd6, 0xe0]));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -334,6 +334,16 @@ pub struct Contact {
     /// message).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<crate::lxmf::DeliveryMode>,
+    /// Their icon, from their newest message that had one, and when that
+    /// was written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<crate::lxmf::fields::Appearance>,
+    #[serde(skip_serializing_if = "is_never")]
+    pub icon_at: f64,
+}
+
+fn is_never(n: &f64) -> bool {
+    *n == 0.0
 }
 
 fn is_unknown(trust: &Trust) -> bool {

@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 pub struct Settings {
     /// Name sent in LXMF announces.
     pub display_name: String,
+    /// Your icon (a Material Design Icon's name), sent with your messages
+    /// for Sideband, Columba and MeshChat to show; none when unset.
+    pub icon: Option<String>,
+    /// Its colour and the colour behind it, as `#rrggbb`.
+    pub icon_color: String,
+    pub icon_background: String,
     pub announce_at_start: bool,
     /// How the LXMF address is announced on its own: one of
     /// [`ANNOUNCE_SCHEDULES`] (see [`Settings::announce_schedule`]).
@@ -103,6 +109,10 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             display_name: "rettui user".to_string(),
+            icon: None,
+            // Dark on rettui's own colour, as its buttons are.
+            icon_color: "#0b0b10".into(),
+            icon_background: "#4fd6e0".into(),
             announce_at_start: true,
             announce_schedule: "random".into(),
             announce_interval_mins: 360,
@@ -276,6 +286,8 @@ pub enum FieldKind {
     Number,
     /// One of these words.
     Choice(&'static [&'static str]),
+    /// A colour, as `#rrggbb`.
+    Color,
 }
 
 /// When a change to a setting takes effect.
@@ -327,6 +339,27 @@ pub const FIELDS: &[Field] = &[
         label: "Display name",
         help: "Name sent in your LXMF announces (and your RRC nick unless a hub has its own)",
         kind: FieldKind::Text,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "icon",
+        label: "Icon",
+        help: "Your icon, sent with your messages for Sideband, Columba and MeshChat to show beside your name: a Material Design Icon's name, such as account, radio-tower or antenna (find one at pictogrammers.com/library/mdi). Empty sends none",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "icon_color",
+        label: "Icon colour",
+        help: "Your icon's colour, as #rrggbb",
+        kind: FieldKind::Color,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "icon_background",
+        label: "Icon background",
+        help: "The colour behind your icon, as #rrggbb",
+        kind: FieldKind::Color,
         effect: Effect::Now,
     },
     Field {
@@ -643,6 +676,9 @@ impl Settings {
     pub fn field_value(&self, key: &str) -> String {
         match key {
             "display_name" => self.display_name.clone(),
+            "icon" => self.icon.clone().unwrap_or_default(),
+            "icon_color" => self.icon_color.clone(),
+            "icon_background" => self.icon_background.clone(),
             "announce_at_start" => self.announce_at_start.to_string(),
             "announce_schedule" => self.announce_schedule.clone(),
             "announce_interval_mins" => self.announce_interval_mins.to_string(),
@@ -696,6 +732,23 @@ impl Settings {
                 self.display_name = name.to_string();
             }
             "announce_at_start" => self.announce_at_start = toggle(value).map_err(fail)?,
+            "icon" => {
+                self.icon = match optional(value).map(|name| name.to_lowercase()) {
+                    Some(name) if crate::icons::glyph(&name).is_none() => {
+                        return Err(fail(format!("there's no icon called {name:?} (find one at {})", crate::icons::LIBRARY_URL)));
+                    }
+                    name => name,
+                };
+            }
+            "icon_color" | "icon_background" => {
+                let colour = crate::icons::parse_colour(value).ok_or_else(|| fail("a colour is #rrggbb, as #4fd6e0".into()))?;
+                let colour = crate::icons::hex_colour(colour);
+                if key == "icon_color" {
+                    self.icon_color = colour;
+                } else {
+                    self.icon_background = colour;
+                }
+            }
             "auto_propagation_node" => self.auto_propagation_node = toggle(value).map_err(fail)?,
             "node_enabled" => self.node_enabled = toggle(value).map_err(fail)?,
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
@@ -874,6 +927,21 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn icons_are_named_as_mdi_names_them_and_colours_are_colours() {
+        let mut settings = Settings::default();
+        settings.set_field("icon", " Radio-Tower ").unwrap();
+        assert_eq!(settings.icon.as_deref(), Some("radio-tower"));
+        let err = settings.set_field("icon", "radio-towers").unwrap_err();
+        assert!(err.contains("no icon called") && err.contains("pictogrammers.com"), "{err}");
+        settings.set_field("icon", "").unwrap();
+        assert_eq!(settings.icon, None);
+        settings.set_field("icon_color", "F80").unwrap();
+        assert_eq!(settings.field_value("icon_color"), "#ff8800");
+        assert!(settings.set_field("icon_background", "blue").is_err());
+    }
 
     #[test]
     fn python_reticulum_configs_are_shared() {
@@ -881,7 +949,6 @@ mod tests {
         assert!(is_shared_rns_dir(&home.join(".reticulum")) && is_shared_rns_dir(Path::new("/etc/reticulum")));
         assert!(!is_shared_rns_dir(&std::env::temp_dir().join("rettui-own-rns")));
     }
-    use super::*;
 
     #[test]
     fn every_field_round_trips() {

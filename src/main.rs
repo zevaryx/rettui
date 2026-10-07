@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod config;
 mod emoji;
+mod icons;
 mod lxmf;
 mod markdown;
 mod names;

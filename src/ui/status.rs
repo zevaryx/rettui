@@ -60,9 +60,14 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
                 FieldKind::Toggle => Span::raw(if value == "true" { "on" } else { "off" }),
                 FieldKind::Optional if value.is_empty() => Span::styled("(none)", Style::default().fg(DIM)),
                 FieldKind::Number if value == "0" => Span::styled("0 (off)", Style::default().fg(DIM)),
-                _ => Span::raw(value),
+                _ => Span::raw(value.clone()),
             };
-            let mut spans = vec![Span::styled(format!(" {:<width$}", field.label), Style::default().fg(DIM)), shown];
+            let mut spans = vec![Span::styled(format!(" {:<width$}", field.label), Style::default().fg(DIM))];
+            // A colour shows as itself, before its code.
+            if let (FieldKind::Color, Some([r, g, b])) = (field.kind, crate::icons::parse_colour(&value)) {
+                spans.push(Span::styled("██ ", Style::default().fg(ratatui::style::Color::Rgb(r, g, b))));
+            }
+            spans.push(shown);
             if field.effect == Effect::NextStart {
                 spans.push(Span::styled("  · next start", Style::default().fg(DIM)));
             }

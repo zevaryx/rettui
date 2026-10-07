@@ -110,6 +110,11 @@ impl App {
                 "ignore_unknown_senders" => self.settings.ignore_unknown_senders = after.ignore_unknown_senders,
                 "resend_on_announce" => self.settings.resend_on_announce = after.resend_on_announce,
                 "markdown_messages" => self.settings.markdown_messages = after.markdown_messages,
+                "icon" | "icon_color" | "icon_background" => {
+                    self.settings.icon = after.icon.clone();
+                    self.settings.icon_color = after.icon_color.clone();
+                    self.settings.icon_background = after.icon_background.clone();
+                }
                 "picture_size" => self.settings.picture_size = after.picture_size.clone(),
                 "stamp_cost" | "max_message_kb" => {
                     self.settings.stamp_cost = after.stamp_cost;
@@ -271,7 +276,7 @@ impl App {
                 let title = format!("{} (empty for none)", field.label);
                 self.open_prompt(PromptKind::EditSetting(field.key), &title, &current);
             }
-            FieldKind::Text | FieldKind::Number => {
+            FieldKind::Text | FieldKind::Number | FieldKind::Color => {
                 self.open_prompt(PromptKind::EditSetting(field.key), field.label, &current);
             }
         }

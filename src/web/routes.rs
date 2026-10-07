@@ -82,6 +82,7 @@ pub fn router(state: WebState) -> Router {
         .route("/push/showing", post(push_showing))
         .route("/conversations", get(conversations).post(new_conversation))
         .route("/search", get(search_messages))
+        .route("/icons", get(icons))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/read", post(read_conversation))
         .route("/conversations/{key}/notify", post(mute_conversation))
@@ -461,6 +462,19 @@ async fn brand(Path(name): Path<String>) -> Response {
 }
 
 // ---- state and live updates ----------------------------------------------
+
+#[derive(Deserialize)]
+struct IconQuery {
+    #[serde(default)]
+    q: String,
+}
+
+/// Icons whose names hold every word asked for, to pick one: names and
+/// characters.
+async fn icons(Query(query): Query<IconQuery>) -> axum::Json<Value> {
+    let found = crate::icons::search(&query.q, 120);
+    axum::Json(json!(found.iter().map(|(name, glyph)| json!({ "name": name, "glyph": glyph.to_string() })).collect::<Vec<_>>()))
+}
 
 #[derive(Deserialize)]
 struct SearchQuery {
