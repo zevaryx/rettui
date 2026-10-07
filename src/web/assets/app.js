@@ -32,10 +32,13 @@ async function request(method, path, body) {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body);
   }
-  const response = await fetch('/api' + path, options);
+  const response = await fetch('api' + path, options);
   if (response.status === 401) {
     location.reload();
     throw new Error('not logged in');
+  }
+  if (response.status === 413) {
+    throw new Error('Too large to send: over 64 MB, or over the limit of a proxy in front of rettui (nginx takes 1 MB unless its client_max_body_size is raised)');
   }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || response.statusText);
@@ -937,7 +940,7 @@ const notifications = {
   async start() {
     if (this.state() === 'insecure' || !('serviceWorker' in navigator)) return;
     try {
-      this.worker = await navigator.serviceWorker.register('/sw.js');
+      this.worker = await navigator.serviceWorker.register('sw.js');
     } catch (e) {
       console.warn('No service worker:', e);
       return;
@@ -1003,7 +1006,7 @@ const notifications = {
   // hides, which is when it matters).
   showing() {
     if (this.push !== 'on' || !this.endpoint) return;
-    fetch('/api/push/showing', {
+    fetch('api/push/showing', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ endpoint: this.endpoint, showing: document.visibilityState === 'visible' }),
@@ -1047,7 +1050,7 @@ const notifications = {
     if (this.push === 'on' && document.visibilityState !== 'visible') return;
     if (this.state() === 'granted') {
       // A newer one about the same conversation or room replaces it.
-      const options = { body, tag, renotify: true, icon: '/brand/icon.png', data: { target } };
+      const options = { body, tag, renotify: true, icon: 'brand/icon.png', data: { target } };
       try {
         if (this.worker) return await (await navigator.serviceWorker.ready).showNotification(title, options);
         const shown = new Notification(title, options);
@@ -1163,7 +1166,7 @@ let lastNotice = (() => {
 })();
 function listen() {
   events?.close();
-  events = new EventSource('/api/events' + (lastNotice ? `?since=${lastNotice}` : ''));
+  events = new EventSource('api/events' + (lastNotice ? `?since=${lastNotice}` : ''));
   // Each change says what it touched: "all", or parts such as
   // "status,peers": the counters and the log ("status"), the hosted node's
   // counters ("node"), peers heard ("peers"), RRC ("channels": the
@@ -1503,7 +1506,7 @@ async function gettingStarted() {
 function showAddress(link) {
   dialog('Your address', (close) => [
     el('p', { class: 'dim', text: 'Scan it in Columba or rettui to add you as a contact: it carries your public key, so they can write to you before hearing your announce.' }),
-    el('img', { class: 'qr', src: '/api/qr?text=' + encodeURIComponent(link), alt: 'QR code of your address' }),
+    el('img', { class: 'qr', src: 'api/qr?text=' + encodeURIComponent(link), alt: 'QR code of your address' }),
     el('textarea', { class: 'mono paper-link', readonly: true, rows: 3, onfocus: (e) => e.target.select() }, link),
     el('div', { class: 'row actions' },
       el('button', { text: 'Copy link', onclick: () => copy(link, 'your contact link') }),
@@ -1518,7 +1521,7 @@ function showAddress(link) {
 function showPaper(link) {
   dialog('Paper message', (close) => [
     el('p', { class: 'dim', text: 'Only the recipient can read it. Scan it into their app (Sideband, rettui…), print it, or pass the link on any way you like.' }),
-    el('img', { class: 'qr', src: '/api/qr?text=' + encodeURIComponent(link), alt: 'QR code of the paper message' }),
+    el('img', { class: 'qr', src: 'api/qr?text=' + encodeURIComponent(link), alt: 'QR code of the paper message' }),
     el('textarea', { class: 'mono paper-link', readonly: true, rows: 3, onfocus: (e) => e.target.select() }, link),
     el('div', { class: 'row actions' },
       el('button', { text: 'Copy link', onclick: () => copy(link, 'paper message link') }),
@@ -2300,7 +2303,7 @@ app.views.messages = {
       propagated: el('span', { class: 'state-ok', text: ' ✓ via propagation node' }),
       failed: el('span', { class: 'state-bad', text: ` failed: ${m.state.error}` }),
     }[m.state.kind];
-    const base = `/api/conversations/${conversation.key}/attachments/${encodeURIComponent(m.id)}/`;
+    const base = `api/conversations/${conversation.key}/attachments/${encodeURIComponent(m.id)}/`;
     const author = m.incoming ? conversation.name : 'You';
     const reactButton = m.can_reply ? el('button', { class: 'inline reply-button', text: '🙂 React', title: 'React to this message' }) : null;
     reactButton?.addEventListener('click', () => emojiPicker.toggle(reactButton, reactButton, (e) => this.react(conversation.key, m.id, e)));
@@ -3651,7 +3654,7 @@ app.views.browser = {
     if (url.startsWith('lxmf@') || url.startsWith('lxmf://')) return openConversation(url);
     if (url.startsWith('rrc://') || url.startsWith('rrc@')) return openHubLink(url);
     if (/:\/file\//.test(url)) {
-      window.location.href = '/api/download?url=' + encodeURIComponent(url);
+      window.location.href = 'api/download?url=' + encodeURIComponent(url);
       toast('Downloading…');
       return;
     }

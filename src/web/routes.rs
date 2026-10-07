@@ -22,7 +22,6 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine;
-use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -161,10 +160,10 @@ fn same(a: &str, b: &str) -> bool {
 /// keeps its own cookies and has no address bar to open the link in.
 const LOGIN_PAGE: &str = "<!doctype html><meta charset=utf-8><title>rettui</title>\
 <meta name=viewport content=\"width=device-width, initial-scale=1\">\
-<link rel=icon type=image/png href=/brand/icon.png><link rel=manifest href=/manifest.webmanifest crossorigin=use-credentials>\
+<link rel=icon type=image/png href=brand/icon.png><link rel=manifest href=manifest.webmanifest crossorigin=use-credentials>\
 <body style=\"font-family:sans-serif;background:#16161e;color:#ddd;padding:2em;line-height:1.5\">\
-<h1><img src=/brand/wordmark.png alt=rettui height=36></h1><p>Open the link that <code>rettui --web</code> printed (it ends in <code>?token=…</code>) to log in.</p>\
-<form method=get action=/><p><label>Or paste its token (after <code>token=</code>):<br>\
+<h1><img src=brand/wordmark.png alt=rettui height=36></h1><p>Open the link that <code>rettui --web</code> printed (it ends in <code>?token=…</code>) to log in.</p>\
+<form method=get action=.><p><label>Or paste its token (after <code>token=</code>):<br>\
 <input name=token type=password autocomplete=current-password required \
 style=\"font:inherit;padding:.4em;width:min(28em,100%);box-sizing:border-box\"></label></p><p><button style=\"font:inherit;padding:.4em 1.2em\">Log in</button></p></form>";
 
@@ -198,7 +197,7 @@ async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Re
     let mut response = if let Some(token) = query_token.filter(|_| path == "/") {
         if same(&token, &state.token) {
             let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000");
-            (StatusCode::SEE_OTHER, [(header::LOCATION, "/".to_string()), (header::SET_COOKIE, cookie)]).into_response()
+            (StatusCode::SEE_OTHER, [(header::LOCATION, "./".to_string()), (header::SET_COOKIE, cookie)]).into_response()
         } else {
             (StatusCode::UNAUTHORIZED, axum::response::Html(LOGIN_PAGE)).into_response()
         }
@@ -481,7 +480,7 @@ async fn events(
     State(state): State<WebState>,
     Query(query): Query<EventsQuery>,
     headers: axum::http::HeaderMap,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> impl IntoResponse {
     // Listening before looking back, so nothing falls in between.
     let receivers = (state.changes.subscribe(), state.notices.subscribe());
     let since = headers
@@ -524,7 +523,10 @@ async fn events(
         };
         Some((Ok(event), (changes, notices)))
     });
-    Sse::new(futures_util::StreamExt::chain(futures_util::stream::iter(replay), live)).keep_alive(KeepAlive::default())
+    let stream = Sse::new(futures_util::StreamExt::chain(futures_util::stream::iter(replay), live)).keep_alive(KeepAlive::default());
+    // Behind nginx, sent as they come rather than buffered (other proxies
+    // pass event streams on as they are).
+    ([(header::HeaderName::from_static("x-accel-buffering"), "no")], stream)
 }
 
 // ---- Web Push ---------------------------------------------------------------
@@ -1301,7 +1303,7 @@ async fn render_page(state: &WebState, location: Location, fetched: Fetched) -> 
         |url| {
             resolve_url(url, Some(node))
                 .filter(|l| l.path.starts_with("/media/"))
-                .map(|l| format!("/api/media?url={}", query_escape(&l.url())))
+                .map(|l| format!("api/media?url={}", query_escape(&l.url())))
         },
     );
     let url = location.url();
@@ -1536,7 +1538,7 @@ async fn partial(State(state): State<WebState>, axum::Json(body): axum::Json<Par
         |url| {
             resolve_url(url, Some(node))
                 .filter(|l| l.path.starts_with("/media/"))
-                .map(|l| format!("/api/media?url={}", query_escape(&l.url())))
+                .map(|l| format!("api/media?url={}", query_escape(&l.url())))
         },
     );
     Ok(axum::Json(json!({ "html": html })))
@@ -1557,8 +1559,8 @@ async fn node_preview(State(state): State<WebState>, axum::Json(body): axum::Jso
         |url| {
             let location = resolve_url(url, Some(node)).filter(|l| l.path.starts_with("/media/"))?;
             Some(match location.path.strip_prefix("/media/") {
-                Some(rel) if location.node == node => format!("/api/node/media?path={}", query_escape(rel)),
-                _ => format!("/api/media?url={}", query_escape(&location.url())),
+                Some(rel) if location.node == node => format!("api/node/media?path={}", query_escape(rel)),
+                _ => format!("api/media?url={}", query_escape(&location.url())),
             })
         },
     );

@@ -31,6 +31,22 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 - **Address:** it listens on 127.0.0.1 by default. Pass an address such as
   `--web 0.0.0.0:8740` to reach it from other devices, and prefer a VPN or SSH
   tunnel over exposing it. It uses plain HTTP.
+- **Behind a reverse proxy:** it works behind one with nothing to set,
+  at a site's root or under a path such as `https://example.com/rettui/`
+  (all its addresses are relative). Keep rettui on 127.0.0.1, and open the
+  proxy's address with the same `?token=…`. Through a proxy that serves
+  HTTPS, a phone gets what browsers keep for secure pages: notifications,
+  background notifications, installing the app, and the camera and
+  microphone. For example:
+  - **Caddy:** `reverse_proxy 127.0.0.1:8740`, or under a path,
+    `handle_path /rettui/* { reverse_proxy 127.0.0.1:8740 }`.
+  - **nginx:** `location /rettui/ { proxy_pass http://127.0.0.1:8740/; }`.
+    The live connection isn't buffered (rettui asks nginx not to). nginx
+    refuses uploads over 1 MB unless `client_max_body_size` is raised (to
+    `64m`, rettui's own limit); the web UI says so when it happens.
+  - **Tailscale:** `tailscale serve --bg 8740` serves it at your machine's
+    `https://…ts.net` address, with a certificate browsers trust, to your
+    tailnet only.
 - **From a phone:** listening beyond 127.0.0.1, rettui also prints the
   login link at this computer's network address, and its QR code (in a
   terminal wide enough), so a phone on the same network can scan it

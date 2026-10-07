@@ -25,7 +25,8 @@ self.addEventListener('notificationclick', (event) => {
     // installed app's, say) to be told.
     const tab = target?.kind === 'room' ? 'channels' : 'messages';
     const open = target ? '?open=' + encodeURIComponent(JSON.stringify(target)) : '';
-    const opened = await self.clients.openWindow('/' + open + '#' + tab);
+    // Where rettui is: the worker's scope, behind a proxy at a sub-path too.
+    const opened = await self.clients.openWindow(new URL(open + '#' + tab, self.registration.scope).href);
     opened?.postMessage({ open: target });
   })());
 });
@@ -44,6 +45,6 @@ self.addEventListener('push', (event) => {
   event.waitUntil((async () => {
     const shown = await self.registration.getNotifications({ tag });
     const again = shown.some((n) => n.body === body);
-    await self.registration.showNotification(title, { body, tag, renotify: !again, icon: '/brand/icon.png', data: { target } });
+    await self.registration.showNotification(title, { body, tag, renotify: !again, icon: 'brand/icon.png', data: { target } });
   })());
 });

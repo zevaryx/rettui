@@ -3,7 +3,7 @@
    shows one: a NomadNet page made for a Nerd Font terminal, say. */
 @font-face {
   font-family: "FiraCode Nerd Font";
-  src: url("/fonts/FiraCodeNerdFont-Regular-Text.woff2") format("woff2");
+  src: url("fonts/FiraCodeNerdFont-Regular-Text.woff2") format("woff2");
   font-weight: 300 500;
   font-style: normal;
   font-display: swap;
@@ -11,7 +11,7 @@
 }
 @font-face {
   font-family: "FiraCode Nerd Font";
-  src: url("/fonts/FiraCodeNerdFont-Bold-Text.woff2") format("woff2");
+  src: url("fonts/FiraCodeNerdFont-Bold-Text.woff2") format("woff2");
   font-weight: 600 800;
   font-style: normal;
   font-display: swap;
@@ -21,7 +21,7 @@
    browsers take them as one font (one file, fetched once). */
 @font-face {
   font-family: "FiraCode Nerd Font";
-  src: url("/fonts/FiraCodeNerdFont-Icons.woff2") format("woff2");
+  src: url("fonts/FiraCodeNerdFont-Icons.woff2") format("woff2");
   font-weight: 300 500;
   font-style: normal;
   font-display: swap;
@@ -29,7 +29,7 @@
 }
 @font-face {
   font-family: "FiraCode Nerd Font";
-  src: url("/fonts/FiraCodeNerdFont-Icons.woff2") format("woff2");
+  src: url("fonts/FiraCodeNerdFont-Icons.woff2") format("woff2");
   font-weight: 600 800;
   font-style: normal;
   font-display: swap;
