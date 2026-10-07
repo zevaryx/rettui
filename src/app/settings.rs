@@ -109,6 +109,7 @@ impl App {
                 "notify_rrc" => self.settings.notify_rrc = after.notify_rrc,
                 "unknown_senders" => self.settings.unknown_senders = after.unknown_senders.clone(),
                 "resend_on_announce" => self.settings.resend_on_announce = after.resend_on_announce,
+                "answer_commands" => self.settings.answer_commands = after.answer_commands.clone(),
                 "markdown_messages" => self.settings.markdown_messages = after.markdown_messages,
                 "icon" | "icon_color" | "icon_background" => {
                     self.settings.icon = after.icon.clone();

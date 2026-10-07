@@ -13,8 +13,9 @@
 //!   as big-endian integers in bytes (degrees × 10⁶, then metres, m/s,
 //!   degrees and metres × 10²).
 //! - Commands (`FIELD_COMMANDS`, 0x09): a list of `{command: arguments}`
-//!   maps, as Sideband sends telemetry requests and pings. rettui runs none
-//!   of them; it says what was asked.
+//!   maps, as Sideband sends telemetry requests, pings, echoes and signal
+//!   report requests. rettui says what was asked, and answers pings, echoes
+//!   and signal reports as Sideband does if it's set to (`answer_commands`).
 //! - Voice messages (`FIELD_AUDIO`, 0x07): `[mode, bytes]`, Opus (in an Ogg
 //!   file) or Codec2.
 //! - Icons (`FIELD_ICON_APPEARANCE`, 0x04): `[name, foreground, background]`,
@@ -255,35 +256,48 @@ pub fn telemetry_of(message: &LxMessage) -> Option<Telemetry> {
 }
 
 /// A command another client asks for (Sideband's numbers).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     TelemetryRequest,
     Ping,
-    Echo,
+    /// What to send back.
+    Echo(String),
     SignalReport,
     /// A plugin's, or one rettui doesn't know.
     Other(u64),
 }
 
 impl Command {
-    fn from_id(id: u64) -> Self {
+    fn from(id: u64, argument: &Value) -> Self {
         match id {
             0x01 => Command::TelemetryRequest,
             0x02 => Command::Ping,
-            0x03 => Command::Echo,
+            0x03 => Command::Echo(bytes_of(argument).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()),
             0x04 => Command::SignalReport,
             other => Command::Other(other),
         }
     }
 
     /// What it asked, in words.
-    pub fn describe(self) -> String {
+    pub fn describe(&self) -> String {
         match self {
             Command::TelemetryRequest => "Asked for your location (rettui doesn't share it)".into(),
-            Command::Ping => "Pinged you with a command (rettui doesn't answer commands)".into(),
-            Command::Echo => "Sent an echo command (rettui doesn't answer commands)".into(),
-            Command::SignalReport => "Asked for a signal report (rettui doesn't answer commands)".into(),
+            Command::Ping => "Pinged you with a command".into(),
+            Command::Echo(text) => format!("Asked for an echo of “{}”", text.trim()),
+            Command::SignalReport => "Asked for a signal report".into(),
             Command::Other(id) => format!("Sent a command rettui doesn't run ({id:#04x})"),
+        }
+    }
+
+    /// The answer Sideband gives, for those rettui answers: a ping's, an
+    /// echo's, and a signal report's (rettui isn't given the readings of a
+    /// message received, so it says so, as Sideband does without them).
+    pub fn answer(&self) -> Option<String> {
+        match self {
+            Command::Ping => Some("Ping reply".into()),
+            Command::Echo(text) => Some(format!("Echo reply: {text}")),
+            Command::SignalReport => Some("No reception info available".into()),
+            Command::TelemetryRequest | Command::Other(_) => None,
         }
     }
 }
@@ -299,7 +313,7 @@ pub fn commands_of(message: &LxMessage) -> Vec<Command> {
             _ => None,
         })
         .flatten()
-        .filter_map(|(id, _)| id.as_u64().map(Command::from_id))
+        .filter_map(|(id, argument)| id.as_u64().map(|id| Command::from(id, argument)))
         .collect()
 }
 
@@ -550,17 +564,31 @@ mod tests {
     #[test]
     fn commands_and_what_they_say() {
         let mut ping = message();
+        // As Sideband sends them: a ping, a telemetry request, an echo (its
+        // text as bytes), a signal report request, and a plugin's.
         let list = Value::Array(vec![
-            Value::Map(vec![(Value::from(0x02), Value::Array(Vec::new()))]),
+            Value::Map(vec![(Value::from(0x02), Value::Boolean(true))]),
             Value::Map(vec![(Value::from(0x01), Value::Array(vec![Value::from(0), Value::from(false)]))]),
+            Value::Map(vec![(Value::from(0x03), Value::Binary(b"anyone there?".to_vec()))]),
+            Value::Map(vec![(Value::from(0x04), Value::Boolean(true))]),
             Value::Map(vec![(Value::from(0x33), Value::Nil)]),
         ]);
         ping.set_msgpack_field(FIELD_COMMANDS, encode(&list)).unwrap();
         let extras = Extras::of(&received(&ping));
-        assert_eq!(extras.commands, [Command::Ping, Command::TelemetryRequest, Command::Other(0x33)]);
+        let echo = Command::Echo("anyone there?".into());
+        assert_eq!(extras.commands, [Command::Ping, Command::TelemetryRequest, echo.clone(), Command::SignalReport, Command::Other(0x33)]);
         let notes = extras.notes(true);
-        assert_eq!(notes.len(), 3);
-        assert!(notes[0].starts_with("Pinged you") && notes[2].contains("0x33"), "{notes:?}");
+        assert_eq!(notes.len(), 5);
+        assert!(notes[0].starts_with("Pinged you") && notes[2].contains("“anyone there?”") && notes[4].contains("0x33"), "{notes:?}");
+        // Sideband's answers, for those rettui answers.
+        let answers: Vec<Option<String>> = extras.commands.iter().map(Command::answer).collect();
+        assert_eq!(answers, [
+            Some("Ping reply".into()),
+            None,
+            Some("Echo reply: anyone there?".into()),
+            Some("No reception info available".into()),
+            None,
+        ]);
     }
 
     #[test]

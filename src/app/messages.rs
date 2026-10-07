@@ -25,6 +25,8 @@ const PAPER_FAILED: &str = "Not written: ";
 /// A failed message sent again when its recipient announced isn't sent
 /// again so for this long.
 const RESEND_GAP: Duration = Duration::from_secs(10 * 60);
+/// Commands from someone are answered at most this often.
+const ANSWER_EVERY: Duration = Duration::from_secs(60);
 
 impl App {
     /// An attachment image already loaded by [`App::picture`].
@@ -83,7 +85,15 @@ impl App {
             && message.attachments.is_empty()
             && extras.audio.is_none()
             && location.is_none();
-        let notes = extras.notes(bare);
+        let mut notes = extras.notes(bare);
+        // Sideband's commands: answered if set to, and said so either way.
+        let answers: Vec<String> = extras.commands.iter().filter_map(|c| c.answer()).collect();
+        if !answers.is_empty() && !paper {
+            notes.push(match self.answer_commands(&key, answers) {
+                Ok(()) => "Answered automatically (Answer commands)".into(),
+                Err(why) => why,
+            });
+        }
         // Their icon alone isn't a message either (it's kept, above).
         if bare && notes.is_empty() && extras.reaction.is_none() && extras.appearance.is_some() && extras.telemetry.is_none() {
             return;
@@ -410,6 +420,31 @@ impl App {
             self.delivery_mode = self.delivery_for(&key);
         }
         self.message_scroll = 0;
+    }
+
+    /// Send `answers` to `key`'s commands, if they're someone whose commands
+    /// are answered and weren't answered a moment ago; else why not.
+    fn answer_commands(&mut self, key: &str, answers: Vec<String>) -> Result<(), String> {
+        let allowed = match self.settings.answer_commands.as_str() {
+            "trusted" => self.store.contact(key).trust == Trust::Trusted,
+            "contacts" => self.is_known(key),
+            _ => return Err("Not answered: Answer commands is off".into()),
+        };
+        if !allowed {
+            return Err(format!("Not answered: Answer commands is set to {} only", self.settings.answer_commands));
+        }
+        let now = Instant::now();
+        if self.answered.get(key).is_some_and(|at| now.duration_since(*at) < ANSWER_EVERY) {
+            return Err("Not answered: one was answered less than a minute ago".into());
+        }
+        self.answered.insert(key.to_string(), now);
+        let mode = self.delivery_for(key);
+        for answer in answers {
+            if let Err((e, ..)) = self.send_message(key.to_string(), answer, Vec::new(), mode, None) {
+                return Err(format!("Not answered: {e}"));
+            }
+        }
+        Ok(())
     }
 
     /// Our icon, as the settings have it (none unless one's set).
@@ -1632,6 +1667,36 @@ mod tests {
         let last = app.store.conversations[&key()].messages.last().unwrap().clone();
         assert_eq!(last.notes, ["Sent something rettui can't show (LXMF field 0x77)"]);
         assert!(app.take_notifications().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn commands_are_answered_as_sideband_does_when_set_to() {
+        use crate::lxmf::Extras;
+        use crate::lxmf::fields::Command;
+        let dir = temp_dir("answers");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        let ping = |n: u8| from_them(n, "", Extras { commands: vec![Command::Ping], ..Extras::default() });
+        let mine = |app: &App| -> Vec<String> {
+            app.store.conversations[&key()].messages.iter().filter(|m| !m.incoming).map(|m| m.content.clone()).collect()
+        };
+        // Off, the default: said so, not answered.
+        app.on_message(ping(1));
+        assert!(mine(&app).is_empty());
+        assert_eq!(app.store.conversations[&key()].messages[0].notes.last().unwrap(), "Not answered: Answer commands is off");
+        // Trusted only, and they aren't.
+        app.update_settings(&[("answer_commands", "trusted")]).unwrap();
+        app.on_message(ping(2));
+        assert!(mine(&app).is_empty());
+        // Once trusted: answered, with Sideband's words, an echo too.
+        app.set_trust(&key(), Trust::Trusted).unwrap();
+        let echo = from_them(3, "", Extras { commands: vec![Command::Echo("hello?".into()), Command::SignalReport], ..Extras::default() });
+        app.on_message(echo);
+        assert_eq!(mine(&app), ["Echo reply: hello?", "No reception info available"]);
+        // Not again within the minute.
+        app.on_message(ping(4));
+        assert_eq!(mine(&app).len(), 2);
+        assert!(app.store.conversations[&key()].messages.iter().any(|m| m.notes.iter().any(|n| n.contains("less than a minute ago"))));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

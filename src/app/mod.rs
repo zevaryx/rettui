@@ -431,6 +431,9 @@ pub struct App {
     pub scroll_to: Option<usize>,
     /// The message search (`/` in Messages), while open.
     pub message_search: Option<search::MessageSearch>,
+    /// When commands from each sender were last answered (see
+    /// `answer_commands`), to answer at most one a minute.
+    pub(crate) answered: HashMap<String, Instant>,
     /// A conversation's archived messages, open to read (`H`).
     pub archive_reader: Option<archive::ArchiveReader>,
     /// Where to forward a picked message to (`f`).
@@ -587,6 +590,7 @@ impl App {
             scroll_to: None,
             message_search: None,
             archive_reader: None,
+            answered: HashMap::new(),
             forward: None,
             emoji: None,
             shortcode: emoji::Shortcode::default(),

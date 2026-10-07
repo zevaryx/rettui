@@ -305,8 +305,16 @@ rettui shows what each one is, rather than an empty message:
   a newer one replaces the one before it while nothing else was said in
   between, so a shared location doesn't fill the conversation.
 - **Commands** (Sideband's, field `0x09`), such as asking for your location
-  or a ping, are shown in words. rettui doesn't run or answer them, and
-  they don't notify you either.
+  or a ping, are shown in words, and don't notify you.
+  - *Answer commands* (Status, `answer_commands`) answers pings, echoes and
+    signal report requests as Sideband does: "Ping reply", "Echo reply:"
+    and the text, and, for a signal report, "No reception info available"
+    (rettui isn't told how well a message was heard). It's off by default;
+    *trusted* answers only contacts you trust, *contacts* any contact. The
+    answers go as messages, shown in the conversation, at most once a
+    minute to each sender; the command's line says whether, or why not.
+  - Requests for your location aren't answered: rettui doesn't share it.
+    Plugin commands aren't run.
 - **Voice messages** (field `0x07`) are saved with the attachments, and
   play in the web UI and in most players (`o` in the TUI opens them):
   - Opus recordings are saved as `.ogg` files, as they came.

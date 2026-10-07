@@ -75,6 +75,9 @@ pub struct Settings {
     /// Send failed messages (text ones) again when their recipient
     /// announces, as MeshChat does.
     pub resend_on_announce: bool,
+    /// Answer Sideband's ping, echo and signal report commands: one of
+    /// [`ANSWER_COMMANDS`] (whose commands are answered).
+    pub answer_commands: String,
     /// Proof-of-work stamp cost asked of senders who aren't contacts
     /// (announced); 0 asks none.
     pub stamp_cost: u64,
@@ -147,6 +150,7 @@ impl Default for Settings {
             notify_rrc: true,
             unknown_senders: "show".into(),
             resend_on_announce: true,
+            answer_commands: "off".into(),
             stamp_cost: 0,
             // LXMF's own default delivery limit (NomadNet's is 500).
             max_message_kb: 1000,
@@ -459,6 +463,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "answer_commands",
+        label: "Answer commands",
+        help: "Answer the ping, echo and signal report commands Sideband sends, as Sideband does: off; trusted (only from contacts you trust); or contacts (any contact). Answers go as messages, shown in the conversation, at most one a minute to each sender",
+        kind: FieldKind::Choice(ANSWER_COMMANDS),
+        effect: Effect::Now,
+    },
+    Field {
         key: "stamp_cost",
         label: "Stamp cost",
         help: "Proof of work asked of senders who aren't contacts, announced with your address (8 to 16 is usual; trusted contacts get tickets instead). Messages without it are dropped. 0 asks none",
@@ -657,6 +668,9 @@ const MAX_MINUTES: u64 = 525_600;
 /// not more than hourly (public gateways hold back destinations that
 /// announce more), and at least every six hours, as NomadNet does.
 pub const ANNOUNCE_MINS: (u64, u64) = (60, 360);
+/// Whose commands are answered: no one's, trusted contacts', or any
+/// contact's.
+pub const ANSWER_COMMANDS: &[&str] = &["off", "trusted", "contacts"];
 /// What can become of messages from unknown senders.
 pub const UNKNOWN_SENDERS: &[&str] = &["show", "requests", "ignore"];
 /// The ways of announcing on its own.
@@ -759,6 +773,7 @@ impl Settings {
             "notify_rrc" => self.notify_rrc.to_string(),
             "unknown_senders" => self.unknown_senders.clone(),
             "resend_on_announce" => self.resend_on_announce.to_string(),
+            "answer_commands" => self.answer_commands.clone(),
             "stamp_cost" => self.stamp_cost.to_string(),
             "max_message_kb" => self.max_message_kb.to_string(),
             "markdown_messages" => self.markdown_messages.to_string(),
@@ -818,6 +833,7 @@ impl Settings {
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,
             "unknown_senders" => self.unknown_senders = choice(value, UNKNOWN_SENDERS).map_err(fail)?,
             "resend_on_announce" => self.resend_on_announce = toggle(value).map_err(fail)?,
+            "answer_commands" => self.answer_commands = choice(value, ANSWER_COMMANDS).map_err(fail)?,
             "stamp_cost" => self.stamp_cost = number(value, MAX_STAMP_COST).map_err(fail)?,
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
