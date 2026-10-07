@@ -264,6 +264,13 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--raised); bord
 .pin-button.on { filter: none; opacity: 1; border-color: var(--accent); }
 .pin-mark { font-size: 11px; }
 .iface-details { font-size: 12px; padding-left: 1.4em; }
+/* An interface's traffic: in (cyan) and out (magenta), the last ten
+   minutes. */
+.traffic-graph { padding: 2px 0 4px 1.4em; font-size: 12px; }
+.traffic-graph svg { display: block; width: 100%; max-width: 360px; height: 34px; background: var(--sunken); border-radius: 3px; }
+.traffic-graph path { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.traffic-graph .rx { stroke: var(--cyan); color: var(--cyan); }
+.traffic-graph .tx { stroke: var(--magenta); color: var(--magenta); }
 /* Archived messages, shown above the rest when asked for: only to read. */
 .archive-block { border-bottom: 1px dashed var(--border); margin-bottom: 12px; }
 .archive-mark { text-align: center; padding: 4px 0 12px; }

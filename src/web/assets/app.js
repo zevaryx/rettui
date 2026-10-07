@@ -121,6 +121,35 @@ function ago(unixSeconds) {
   return `${Math.floor(secs / 86400)}d`;
 }
 
+// An SVG element (el() makes HTML ones).
+function svgEl(tag, attrs = {}, ...children) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+  node.append(...children);
+  return node;
+}
+
+// An interface's traffic over the last ten minutes (one rate every five
+// seconds), in and out, against the busiest moment; none while it's been
+// quiet throughout.
+function trafficGraph(history) {
+  const peak = Math.max(0, ...(history || []).flat());
+  if (!peak) return null;
+  const [width, height, slots] = [240, 34, 120];
+  // The newest at the right edge.
+  const x = (i) => (width - (history.length - 1 - i) * (width / (slots - 1))).toFixed(1);
+  const y = (value) => (height - 1 - (value / peak) * (height - 3)).toFixed(1);
+  const line = (k) => history.map((r, i) => `${i ? 'L' : 'M'}${x(i)},${y(r[k])}`).join('');
+  const [rx, tx] = history[history.length - 1];
+  return el('div', { class: 'traffic-graph' },
+    svgEl('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', role: 'img',
+      'aria-label': `Traffic over the last ten minutes: now ${rate(rx)} in, ${rate(tx)} out; at most ${rate(peak)}` },
+    svgEl('path', { class: 'rx', d: line(0) }), svgEl('path', { class: 'tx', d: line(1) })),
+    el('div', { class: 'dim' },
+      el('span', { class: 'rx', text: '↓ ' }), rate(rx), el('span', { class: 'tx', text: '  ↑ ' }), rate(tx),
+      `  · at most ${rate(peak)} in 10 min`));
+}
+
 // Bytes per second, short (as the terminal UI shows it).
 function rate(bytesPerSec) {
   const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
@@ -5679,7 +5708,8 @@ app.views.status = {
     this.interfaces.replaceChildren(...(s.interfaces.length ? s.interfaces.map((i) => el('div', { class: 'iface' },
       el('span', { class: i.online ? 'online' : 'offline', text: i.online ? '● ' : '○ ' }), i.name,
       el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` }),
-      i.details?.length ? el('div', { class: 'iface-details dim', text: i.details.join(' · ') }) : null))
+      i.details?.length ? el('div', { class: 'iface-details dim', text: i.details.join(' · ') }) : null,
+      trafficGraph(i.history)))
       : [el('div', { class: 'empty', text: noInterfaces })]));
     stickToBottom(this.log, () => this.log.replaceChildren(...s.log.map((line) => el('div', { text: line }))));
     // Pick up changes made elsewhere (the TUI's editor, or by hand).

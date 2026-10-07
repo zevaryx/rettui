@@ -93,6 +93,10 @@ pub fn state(app: &App) -> Value {
             "name": i.name, "online": i.online, "rx": i.rx_bytes, "tx": i.tx_bytes,
             // Its rate, MTU and the rest, as rnstatus shows them.
             "details": i.details(),
+            // Bytes per second in and out at each update, oldest first.
+            "history": app.traffic.history.get(&i.name).map(|history| {
+                history.iter().map(|(rx, tx)| [rx.round(), tx.round()]).collect::<Vec<_>>()
+            }),
         })).collect::<Vec<_>>(),
         "interfaces_online": online,
         // Until they're all taken.

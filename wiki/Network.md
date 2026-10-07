@@ -117,3 +117,9 @@ shows your identity, your interfaces and the log.
 - **Traffic:** the corner of the sidebar, under the interface count, shows how
   fast data is coming in (↓) and going out (↑) over all interfaces, updated
   every few seconds. In the web UI, hovering over it shows the totals.
+  Under each interface in the Status tab, a graph shows its own traffic
+  over the last ten minutes (a reading every five seconds), in (↓) and
+  out (↑) against its busiest moment, with how fast it's moving now: bars
+  in the terminal UI, lines in the web UI (in cyan, out magenta). An
+  interface that's been quiet throughout has none. The graphs start when
+  rettui does.

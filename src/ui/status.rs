@@ -162,18 +162,21 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     frame.render_widget(Paragraph::new(lines).block(block("Identity", false)), info);
 
+    let graph_width = ifaces.width.saturating_sub(2) as usize;
     let iface_lines: Vec<Line> = app
         .interfaces
         .iter()
-        .map(|i| {
+        .flat_map(|i| {
             let (dot, color) = if i.online { ("●", Color::Green) } else { ("○", Color::Red) };
             // Its rate, MTU and the rest, as rnstatus shows them.
             let details: String = i.details().iter().map(|d| format!(" · {d}")).collect();
-            Line::from(vec![
+            let mut lines = vec![Line::from(vec![
                 Span::styled(format!("{dot} "), Style::default().fg(color)),
                 Span::raw(i.name.clone()),
                 Span::styled(format!("  ↓{} ↑{}{details}", human_bytes(i.rx_bytes), human_bytes(i.tx_bytes)), Style::default().fg(dim())),
-            ])
+            ])];
+            lines.extend(app.traffic.history.get(&i.name).and_then(|history| traffic_graph(history, graph_width)));
+            lines
         })
         .collect();
     let iface_lines = if iface_lines.is_empty() {
@@ -192,6 +195,36 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let rows = log_rows(app.log.iter(), log.width.saturating_sub(2) as usize, log.height.saturating_sub(2) as usize);
     frame.render_widget(Paragraph::new(rows).block(block("Log", false)), log);
+}
+
+/// An interface's traffic over the last minutes, in and out, as bars
+/// against the busiest moment (in either direction), with how fast it's
+/// moving now: `↓ ▁▃▇▂ 1.2 KB/s  ↑ ▁▁▂ 40 B/s`. None while it's been
+/// quiet throughout, or with too little room.
+fn traffic_graph(history: &std::collections::VecDeque<(f64, f64)>, width: usize) -> Option<Line<'static>> {
+    use crate::app::traffic::{rate, sparkline};
+    let (rx, tx) = *history.back()?;
+    let peak = history.iter().fold(0.0f64, |peak, &(rx, tx)| peak.max(rx).max(tx));
+    if peak <= 0.0 {
+        return None;
+    }
+    let (rx_rate, tx_rate) = (rate(rx), rate(tx));
+    // The labels around the two graphs; the graphs share the rest.
+    let room = width.saturating_sub(2 + 1 + rx_rate.len() + 2 + 2 + 1 + tx_rate.len() + 1) / 2;
+    if room < 4 {
+        return None;
+    }
+    let shown = history.len().min(room);
+    let newest = || history.iter().skip(history.len() - shown);
+    // The newest beside the rate now.
+    let graph = |rates: String| Span::styled(format!("{rates:>room$}"), Style::default().fg(Color::Cyan));
+    Some(Line::from(vec![
+        Span::styled("↓ ", Style::default().fg(dim())),
+        graph(sparkline(newest().map(|r| r.0), peak)),
+        Span::styled(format!(" {rx_rate}  ↑ "), Style::default().fg(dim())),
+        graph(sparkline(newest().map(|r| r.1), peak)),
+        Span::styled(format!(" {tx_rate}"), Style::default().fg(dim())),
+    ]))
 }
 
 /// The newest log lines that fit, wrapped under their times (long ones,
@@ -236,6 +269,37 @@ mod tests {
         terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
         (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn each_interface_has_its_traffic_graph_once_it_moves() {
+        let dir = std::env::temp_dir().join(format!("rettui-traffic-graph-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.tab = crate::app::Tab::Status;
+        let iface = |name: &str, rx, tx| crate::net::InterfaceInfo {
+            name: name.into(),
+            online: true,
+            rx_bytes: rx,
+            tx_bytes: tx,
+            ..Default::default()
+        };
+        let start = std::time::Instant::now();
+        let mut bytes = 0;
+        for (i, step) in [0u64, 100, 4000, 9000, 200, 0].into_iter().enumerate() {
+            bytes += step;
+            let at = start + std::time::Duration::from_secs(5 * i as u64);
+            app.traffic.update(&[iface("LoRa", bytes, bytes / 10), iface("Quiet", 0, 0)], at);
+        }
+        app.interfaces = vec![iface("LoRa", bytes, bytes / 10), iface("Quiet", 0, 0)];
+        let shown = screen(&mut app);
+        let graph = shown.lines().find(|line| line.contains(" B/s  ↑ ")).expect("a graph");
+        // The busiest moment is the tallest bar, the newest beside how fast
+        // it's moving now (nothing).
+        assert!(graph.contains("▁▄█▁  0 B/s  ↑ "), "{graph}");
+        // A quiet interface has none.
+        assert_eq!(shown.lines().filter(|line| line.contains(" B/s  ↑ ")).count(), 1, "{shown}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

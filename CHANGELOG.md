@@ -29,7 +29,7 @@ Changes since v1.5.1.
   - Sort the Network list (`s`), or keep it to one interface (`i`).
   - An announce viewer (`a` in Network): every announce as it's heard, of every kind (RRC hubs, calls and others too), with when, how far and through which interface.
   - Pings report RSSI/SNR when answered over an RNode.
-  - Status shows rnstatus-style interface details.
+  - Status shows rnstatus-style interface details, and a graph of each interface's traffic over the last ten minutes.
 - **Browser**
   - Search nodes and saved pages (`/`).
   - Save a node without opening it (`s`, or ☆ in the web UI).
