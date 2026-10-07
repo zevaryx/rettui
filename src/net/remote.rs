@@ -357,8 +357,41 @@ pub struct Signal {
 
 impl Signal {
     /// None if nothing was reported.
-    fn of(rssi: Option<f64>, snr: Option<f64>, q: Option<f64>) -> Option<Self> {
+    pub fn of(rssi: Option<f64>, snr: Option<f64>, q: Option<f64>) -> Option<Self> {
         (rssi.is_some() || snr.is_some() || q.is_some()).then_some(Self { rssi, snr, q })
+    }
+
+    /// How the packet `raw` was heard, if the interface it came in on said
+    /// (an RNode): Reticulum keeps that by the packet's hash for a while, as
+    /// Python's `Transport.get_packet_rssi` and the rest read it (through a
+    /// shared instance too).
+    pub async fn of_packet(runtime: &ReticulumHandle, raw: &[u8]) -> Option<Self> {
+        use rns_transport::messages::{TransportQuery, TransportQueryResponse};
+        let header_type = rns_wire::flags::PacketFlags::unpack(*raw.first()?)?.header_type;
+        let packet_hash = rns_wire::hash::packet_hash(raw, header_type);
+        let reading = async |query| match runtime.query_control_result(query).await {
+            Ok(TransportQueryResponse::FloatResult(value)) => value,
+            _ => None,
+        };
+        let rssi = reading(TransportQuery::GetPacketRssi { packet_hash }).await;
+        let snr = reading(TransportQuery::GetPacketSnr { packet_hash }).await;
+        let q = reading(TransportQuery::GetPacketQ { packet_hash }).await;
+        Self::of(rssi, snr, q)
+    }
+
+    /// Shorter, beside a message: "-91 dBm · SNR 4.0 dB · 87%".
+    pub fn short(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(rssi) = self.rssi {
+            parts.push(format!("{rssi:.0} dBm"));
+        }
+        if let Some(snr) = self.snr {
+            parts.push(format!("SNR {snr:.1} dB"));
+        }
+        if let Some(q) = self.q {
+            parts.push(format!("{q:.0}%"));
+        }
+        parts.join(" · ")
     }
 
     /// As rnprobe says it: "RSSI -91 dBm, SNR 4.0 dB, link quality 87%".

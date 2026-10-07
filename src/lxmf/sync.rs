@@ -80,7 +80,10 @@ impl Syncer {
                     let count = messages.len();
                     // Parse concurrently: verifying an unknown sender can wait
                     // on a path lookup.
-                    futures_util::future::join_all(messages.iter().map(|data| deliver_inbound(&runtime, &known, &policy, data, &ev))).await;
+                    futures_util::future::join_all(
+                        messages.iter().map(|data| deliver_inbound(&runtime, &known, &policy, data, super::Heard::Unknown, &ev)),
+                    )
+                    .await;
                     Ok(count)
                 }
                 Err(e) => Err(e),

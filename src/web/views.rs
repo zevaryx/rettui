@@ -270,6 +270,8 @@ fn message(m: &Message, conversation: &Conversation) -> Value {
             "label": l.label(), "map": l.map_url(),
         })),
         "notes": m.notes,
+        // How it was heard, over a radio that says.
+        "signal": m.signal.map(|s| json!({ "short": s.short(), "label": s.label() })),
         // A paper message written: its lxm:// link.
         "paper": m.paper,
         // Whether it can be replied to (it has an LXMF hash).

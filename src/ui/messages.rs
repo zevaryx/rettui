@@ -193,6 +193,10 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(format!("  {}", time_label(message.timestamp)), Style::default().fg(dim())),
             status,
         ]);
+        // How it was heard, over a radio that says.
+        if let Some(signal) = &message.signal {
+            header.spans.push(Span::styled(format!("  📶 {}", signal.short()), Style::default().fg(dim())));
+        }
         if target == Some(index) {
             header.spans.push(Span::styled("  ↩ replying to this", Style::default().fg(accent())));
             header = header.style(Style::default().bg(selected_bg()));
@@ -536,6 +540,41 @@ mod tests {
             _ => None,
         });
         assert_eq!(sent, Some(None));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn how_a_message_was_heard_shows_beside_it() {
+        let dir = std::env::temp_dir().join(format!("rettui-signal-ui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        let signal = crate::net::remote::Signal { rssi: Some(-91.0), snr: Some(4.0), q: None };
+        app.on_message(crate::lxmf::InboundMessage {
+            id: Some([1; 32]),
+            source: [0xab; 16],
+            content: "over the radio".into(),
+            timestamp: crate::app::now(),
+            verified: true,
+            signal: Some(signal),
+            ..Default::default()
+        });
+        app.on_message(crate::lxmf::InboundMessage {
+            id: Some([2; 32]),
+            source: [0xab; 16],
+            content: "over the internet".into(),
+            timestamp: crate::app::now(),
+            verified: true,
+            ..Default::default()
+        });
+        app.open_newest_conversation();
+        let screen = draw(&mut app, 120, 30);
+        // (The emoji takes two cells.)
+        assert_eq!(screen.matches("📶").count(), 1, "{screen}");
+        assert_eq!(screen.matches("-91 dBm · SNR 4.0 dB").count(), 1, "{screen}");
+        // Kept with the message.
+        let kept = &app.store.conversations[&"ab".repeat(16)].messages;
+        assert_eq!(kept[0].signal, Some(signal));
+        assert_eq!(kept[1].signal, None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

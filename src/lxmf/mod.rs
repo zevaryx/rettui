@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use rmpv::Value;
 
 pub use fields::{Extras, Location, Reaction};
-pub use inbound::{spawn_inbound, with_destination};
+pub use inbound::{Heard, spawn_inbound, with_destination};
 pub use policy::Policy;
 pub use send::send;
 pub use sync::Syncer;
@@ -198,6 +198,9 @@ pub struct InboundMessage {
     pub reply: Option<Reply>,
     /// Reactions, locations, commands and voice.
     pub extras: Extras,
+    /// How it was heard, when it came in one packet straight from the
+    /// sender over a radio that says (an RNode).
+    pub signal: Option<crate::net::remote::Signal>,
 }
 
 fn is_image_name(name: &str) -> bool {

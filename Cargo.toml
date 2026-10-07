@@ -14,6 +14,8 @@ rns-identity = { path = "deps/rsReticulum/crates/rns-identity" }
 rns-crypto = { path = "deps/rsReticulum/crates/rns-crypto" }
 # Control queries (blocking an identity).
 rns-transport = { path = "deps/rsReticulum/crates/rns-transport" }
+# A packet's hash, to ask how it was heard.
+rns-wire = { path = "deps/rsReticulum/crates/rns-wire" }
 lxmf-core = { path = "deps/rsLXMF/crates/lxmf-core" }
 nomad-core = { path = "deps/rsNomad/crates/nomad-core" }
 

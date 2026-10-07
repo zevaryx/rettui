@@ -146,6 +146,10 @@ pub struct Message {
     /// Your location, shared live: the newest update, replaced by the next.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub live: bool,
+    /// How a received message was heard (RSSI, SNR, link quality), when it
+    /// came in one packet straight from the sender over a radio that says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<crate::net::remote::Signal>,
 }
 
 impl Message {

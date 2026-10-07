@@ -3157,6 +3157,7 @@ app.views.messages = {
         el('span', { class: 'author ' + (m.incoming ? 'in' : 'out'), text: author }),
         el('span', { class: 'dim', text: '  ' + timeLabel(m.timestamp) }),
         state,
+        m.signal ? el('span', { class: 'dim', text: `  📶 ${m.signal.short}`, title: `How it was heard: ${m.signal.label}` }) : null,
         actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
           onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null,
         reactButton,

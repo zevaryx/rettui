@@ -10,7 +10,7 @@ pub mod autopn;
 pub mod heard;
 pub mod iface_log;
 mod reannounce;
-mod remote;
+pub mod remote;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -1007,11 +1007,12 @@ async fn run(
             // Opportunistic delivery: a single packet carrying everything after
             // the destination hash.
             Some(packet) = delivery.events.packets.recv() => {
-                lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, packet.data), &ev);
+                let heard = lxmf::Heard::Packet(packet.raw);
+                lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, packet.data), heard, &ev);
             }
             // Direct delivery over a Link, as a packet or as a Resource.
             Some((data, _link_id)) = delivery.events.link_packets.recv() => {
-                lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, data), &ev);
+                lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, data), lxmf::Heard::Unknown, &ev);
             }
             Some((generation, result)) = host_rx.recv() => {
                 // A start that was superseded (or stopped) meanwhile is dropped.
@@ -1029,10 +1030,10 @@ async fn run(
                 let _ = ev.send(NetEvent::Host(event));
             }
             Some(completion) = delivery.events.resource_completions.recv() => {
-                lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, completion.data), &ev);
+                lxmf::spawn_inbound(&runtime, &known, &policy, lxmf::with_destination(lxmf_hash, completion.data), lxmf::Heard::Unknown, &ev);
             }
             // Sent to us through the propagation node hosted here.
-            Some(data) = pn_deliver.recv() => lxmf::spawn_inbound(&runtime, &known, &policy, data, &ev),
+            Some(data) = pn_deliver.recv() => lxmf::spawn_inbound(&runtime, &known, &policy, data, lxmf::Heard::Unknown, &ev),
             Some((generation, result)) = pn_rx.recv() => {
                 if generation != pn_generation.load(std::sync::atomic::Ordering::SeqCst) {
                     continue;

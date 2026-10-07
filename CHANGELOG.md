@@ -29,7 +29,7 @@ Changes since v1.5.1.
   - New `rettui path` and `rettui probe` commands, like rnpath and rnprobe.
   - Sort the Network list (`s`), or keep it to one interface (`i`).
   - An announce viewer (`a` in Network): every announce as it's heard, of every kind (RRC hubs, calls and others too), with when, how far and through which interface.
-  - Pings report RSSI/SNR when answered over an RNode.
+  - Pings report RSSI/SNR when answered over an RNode, and so do messages that came in one packet straight from the sender (📶 beside them).
   - Status shows rnstatus-style interface details, and a graph of each interface's traffic over the last ten minutes.
 - **Browser**
   - Search nodes and saved pages (`/`).
@@ -72,7 +72,7 @@ Changes since v1.5.1.
 - A release's notes are its section of this changelog; tagging fails without one.
 
 ### Known limitations
-- Received messages don't show RSSI/SNR; this needs an rsReticulum change.
+- Messages received over a Link (most direct messages) don't show RSSI/SNR: rsReticulum doesn't say how a Link's packets were heard.
 - LXST voice calls aren't supported because of LXST's license (CC BY-NC-ND 4.0).
 
 **Pull requests:** [#12](https://github.com/zevaryx/rettui/pull/12) Browser search · [#13](https://github.com/zevaryx/rettui/pull/13) path tools · [#16](https://github.com/zevaryx/rettui/pull/16) quality-of-life changes

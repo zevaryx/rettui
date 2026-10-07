@@ -111,9 +111,15 @@ shows your identity, your interfaces and the log.
   dropped, when there are any.
 - **Signal:** a [ping](Messaging#contacts) says how well the answer was
   heard (RSSI, SNR and link quality, as rnprobe does) when it came in over
-  a radio that reports it, such as an RNode. Received messages don't show
-  it: the Reticulum library rettui uses doesn't pass those readings on for
-  them.
+  a radio that reports it, such as an RNode. So does a message that came
+  in one packet straight from the sender (sent *opportunistically*, as
+  Sideband and others send short messages to someone they have no Link
+  to): 📶 beside it says how it was heard, as Sideband shows it, and it's
+  kept with the message. A message sent over a Link (most direct
+  messages, and any too big for one packet) doesn't show it: the
+  Reticulum library rettui uses doesn't say how a Link's packets were
+  heard. Nor does one from a propagation node, which wasn't heard from
+  the sender.
 - **Traffic:** the corner of the sidebar, under the interface count, shows how
   fast data is coming in (↓) and going out (↑) over all interfaces, updated
   every few seconds. In the web UI, hovering over it shows the totals.

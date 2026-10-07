@@ -144,6 +144,7 @@ pub(super) async fn parse_inbound(
         paper: false,
         reply,
         extras,
+        signal: None,
     })
 }
 
@@ -162,19 +163,42 @@ pub(super) async fn deliver_inbound(
     known: &Known,
     policy: &SharedPolicy,
     data: &[u8],
+    heard: Heard,
     ev: &mpsc::UnboundedSender<NetEvent>,
 ) {
     let event = match parse_inbound(runtime, known, Some(policy), data).await {
-        Ok(message) => NetEvent::Message(Box::new(message)),
+        Ok(mut message) => {
+            message.signal = match heard {
+                Heard::Unknown => None,
+                Heard::Packet(raw) => crate::net::remote::Signal::of_packet(runtime, &raw).await,
+            };
+            NetEvent::Message(Box::new(message))
+        }
         Err(e) if e.starts_with("Dropped") => NetEvent::Log(e),
         Err(e) => NetEvent::Log(format!("Dropped malformed LXMF message: {e}")),
     };
     let _ = ev.send(event);
 }
 
-pub fn spawn_inbound(runtime: &ReticulumHandle, known: &Known, policy: &SharedPolicy, data: Vec<u8>, ev: &mpsc::UnboundedSender<NetEvent>) {
+/// How a message came, to say how it was heard.
+pub enum Heard {
+    /// Over a Link (whose packets rettui doesn't see), or not straight from
+    /// the sender (from a propagation node).
+    Unknown,
+    /// In this one packet, straight from the sender.
+    Packet(Vec<u8>),
+}
+
+pub fn spawn_inbound(
+    runtime: &ReticulumHandle,
+    known: &Known,
+    policy: &SharedPolicy,
+    data: Vec<u8>,
+    heard: Heard,
+    ev: &mpsc::UnboundedSender<NetEvent>,
+) {
     let (runtime, known, policy, ev) = (runtime.clone(), known.clone(), policy.clone(), ev.clone());
-    tokio::spawn(async move { deliver_inbound(&runtime, &known, &policy, &data, &ev).await });
+    tokio::spawn(async move { deliver_inbound(&runtime, &known, &policy, &data, heard, &ev).await });
 }
 
 #[cfg(test)]

@@ -51,7 +51,7 @@ impl App {
         self.pictures.get(path).and_then(Option::as_ref)
     }
 
-    pub(super) fn on_message(&mut self, message: crate::lxmf::InboundMessage) {
+    pub(crate) fn on_message(&mut self, message: crate::lxmf::InboundMessage) {
         let key = hex::encode(message.source);
         let id = message.id.map(hex::encode).unwrap_or_else(|| format!("in-{}", message.timestamp));
         if self.store.conversations.get(&key).is_some_and(|c| c.messages.iter().any(|m| m.id == id)) {
@@ -150,6 +150,7 @@ impl App {
             location,
             notes,
             format: extras.format.filter(|_| !message.content.trim().is_empty()),
+            signal: message.signal,
             ..Message::default()
         };
         // On screen, in a window that has the focus: what arrives while the
