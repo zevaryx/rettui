@@ -166,6 +166,7 @@ a { color: var(--accent); }
 .mark { display: none; width: 34px; height: 34px; margin: 12px auto 6px; }
 .brand .version { color: var(--dim); font-size: 12px; line-height: 1; text-decoration: none; }
 .brand .version:hover { color: var(--accent); text-decoration: underline; }
+.brand .version.update, .update-note { color: var(--yellow); }
 #tabs { flex: 1; }
 .tab {
   display: flex;

@@ -15,6 +15,7 @@ mod rrc;
 mod store;
 mod term;
 mod ui;
+mod update;
 mod web;
 
 use std::path::PathBuf;

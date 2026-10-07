@@ -109,6 +109,9 @@ pub struct Settings {
     pub picture_size: String,
     /// How much goes to `rettui.log`: one of [`crate::logging::LEVELS`].
     pub log_level: String,
+    /// Ask GitHub once a day whether there's a newer release (see
+    /// `crate::update`).
+    pub update_check: bool,
     /// How times and dates read: one of [`crate::clock::CLOCKS`], and of
     /// [`crate::clock::DATE_STYLES`].
     pub clock: String,
@@ -172,6 +175,7 @@ impl Default for Settings {
             markdown_messages: true,
             picture_size: "medium".into(),
             log_level: "warn".into(),
+            update_check: true,
             clock: "24-hour".into(),
             tui_theme: "dark".into(),
             date_style: "month-day".into(),
@@ -216,6 +220,8 @@ pub struct Paths {
     pub propagation: PathBuf,
     /// Map tiles fetched for the web UI's map.
     pub map_tiles: PathBuf,
+    /// What the last update check found (see `crate::update`).
+    pub update_check: PathBuf,
 }
 
 impl Paths {
@@ -247,6 +253,7 @@ impl Paths {
             node: base.join("node"),
             propagation: base.join("propagation"),
             map_tiles: base.join("map-tiles"),
+            update_check: base.join("update-check.json"),
         })
     }
 }
@@ -686,6 +693,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "update_check",
+        label: "Check for updates",
+        help: "Once a day, ask GitHub for the newest rettui release, and say so (by the version, and in Status) when it's newer than this one. It's one HTTPS request to api.github.com (through the proxy set in the environment, if any), saying it's rettui and which version; nothing is downloaded or installed. Off: never asked",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "rns_config",
         label: "Reticulum config",
         help: "Reticulum config directory; empty uses the standard one (and joins a running rnsd)",
@@ -811,6 +825,7 @@ impl Settings {
             "markdown_messages" => self.markdown_messages.to_string(),
             "picture_size" => self.picture_size.clone(),
             "log_level" => self.log_level.clone(),
+            "update_check" => self.update_check.to_string(),
             "clock" => self.clock.clone(),
             "tui_theme" => self.tui_theme.clone(),
             "date_style" => self.date_style.clone(),
@@ -894,6 +909,7 @@ impl Settings {
             "markdown_messages" => self.markdown_messages = toggle(value).map_err(fail)?,
             "picture_size" => self.picture_size = choice(value, crate::app::shrink::PICTURE_SIZES).map_err(fail)?,
             "log_level" => self.log_level = choice(value, crate::logging::LEVELS).map_err(fail)?,
+            "update_check" => self.update_check = toggle(value).map_err(fail)?,
             "clock" => self.clock = choice(value, crate::clock::CLOCKS).map_err(fail)?,
             "tui_theme" => self.tui_theme = choice(value, crate::ui::THEMES).map_err(fail)?,
             "date_style" => self.date_style = choice(value, crate::clock::DATE_STYLES).map_err(fail)?,

@@ -55,6 +55,8 @@ pub fn state(app: &App) -> Value {
         "date_style": app.settings.date_style,
         // How big pictures sent may be (the composer says they'll shrink).
         "picture_size": app.settings.picture_size,
+        // A newer release, if one's out and update checks are on.
+        "update": app.update_available().map(|r| json!({ "version": r.version, "url": r.url })),
         // This station's location, to share (see the Location setting).
         "location": app.settings.own_location().map(|l| json!({ "latitude": l.latitude, "longitude": l.longitude })),
         "lxmf_address": app.lxmf_hash.map(hex::encode),

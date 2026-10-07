@@ -418,7 +418,8 @@ impl App {
 
     fn click(&mut self, at: Position, double: bool) {
         if self.regions.version.contains(at) {
-            return self.open_url(crate::config::PROJECT_URL);
+            let url = self.version_url();
+            return self.open_url(&url);
         }
         if let Some(&(_, tab)) = self.regions.tabs.iter().find(|(r, _)| r.contains(at)) {
             self.switch_tab(tab);

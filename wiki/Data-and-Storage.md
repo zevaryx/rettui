@@ -63,6 +63,8 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `uploads/`: files attached to messages sent from the web UI, and the
   smaller copies of pictures sent (see
   [Messaging](Messaging))
+- `update-check.json`: what the last [update check](Installing#updating)
+  found, and when
 - `map-tiles/`: pictures for the web UI's [map](Messaging#locations-and-the-map),
   kept a month (200 MB at most); deleting it is harmless
 - `node/`: your node's `pages/` and `files/`

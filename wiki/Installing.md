@@ -39,3 +39,26 @@ revisions that build together:
 
 Once ratspeak/rsReticulum#26 is merged, point `deps/rsReticulum` back at
 ratspeak/rsReticulum in `.gitmodules` and pin its `main`.
+
+## Updating
+
+rettui checks once a day whether a newer release is out. When one is:
+
+- the version beside the name, top left, is marked ↑ (in yellow, in both
+  UIs), and opens the new release's page;
+- Status says which release, with a link to what's new;
+- the log says so, once.
+
+Nothing is downloaded or installed. To update, put the new release's
+binary in place of the old one, and start it again; the data directory
+stays as it is. With Docker, `docker compose pull` then
+`docker compose up -d`; from source, `git pull --recurse-submodules` and
+build again.
+
+The check is one HTTPS request a day to GitHub's API (`api.github.com`),
+through the proxy set in the environment if there is one, with rettui's
+name and version as its user agent. What it found is kept in
+`update-check.json` in the data directory, so starting again doesn't
+ask again. If it can't reach GitHub (offline, say), it tries again an
+hour later, without a word. *Check for updates* (Status,
+`update_check`) off never asks.

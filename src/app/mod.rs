@@ -38,6 +38,7 @@ pub mod search;
 mod settings;
 pub mod shrink;
 pub mod traffic;
+mod updates;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -75,7 +76,10 @@ pub(crate) fn test_app_with_net(
     let paths = Paths::new(Some(dir.to_path_buf())).unwrap();
     settings.save(&paths.settings).unwrap();
     let (net, commands) = tokio::sync::mpsc::unbounded_channel();
-    (App::new(settings, paths, store, net, None, [0; 16]), commands)
+    let mut app = App::new(settings, paths, store, net, None, [0; 16]);
+    // Never online: a test that wants an answer gives its own.
+    app.updates.fetch = || Err("no update checks in tests".into());
+    (app, commands)
 }
 pub use network::{NetFilter, NetSearch, match_mask};
 
@@ -463,6 +467,8 @@ pub struct App {
     decoded_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Decoded>>,
     /// Writes the store and chat history in the background.
     saver: saver::Saver,
+    /// Checking for a newer rettui (see [`updates`]).
+    pub(crate) updates: updates::Updates,
 
     pub peers: ListState,
     pub net_filter: NetFilter,
@@ -540,6 +546,7 @@ impl App {
         let cache = Cache::new(paths.cache.clone(), std::time::Duration::from_secs(settings.cache_hours * 3600));
         let settings_file = Settings::load(&paths.settings).unwrap_or_else(|_| settings.clone());
         let (decoded_tx, decoded_rx) = tokio::sync::mpsc::unbounded_channel();
+        let updates = updates::Updates::load(&paths.update_check);
         let mut app = Self {
             tab: Tab::Messages,
             settings,
@@ -599,6 +606,7 @@ impl App {
             decoded_tx,
             decoded_rx: Some(decoded_rx),
             saver: saver::Saver::new(),
+            updates,
             peers: ListState::default(),
             net_filter: NetFilter::All,
             net_sort: network::NetSort::Heard,
@@ -1269,6 +1277,7 @@ impl App {
 
     /// Periodic work (called about twice a second).
     pub fn on_tick(&mut self) {
+        self.updates_tick();
         self.channels_tick();
         self.watch_connection();
         self.refresh_partials();

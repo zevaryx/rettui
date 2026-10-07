@@ -514,6 +514,16 @@ function renderSidebar() {
     }, el('span', { class: 'icon', text: tab.icon }), el('span', { class: 'label', text: tab.title }), badge);
   }));
   tabs.dataset.drawn = drawn;
+  // The version, marked when a newer release is out (it links to that).
+  const version = $('#sidebar .version');
+  if (version) {
+    if (!version.dataset.current) Object.assign(version.dataset, { current: version.textContent, home: version.href });
+    const update = app.status?.update;
+    version.classList.toggle('update', !!update);
+    version.textContent = update ? `${version.dataset.current} ↑` : version.dataset.current;
+    version.href = update ? update.url : version.dataset.home;
+    version.title = update ? `rettui ${update.version} is out: what's new` : 'rettui on GitHub';
+  }
   // Unread in the tab's title, for when the page is in the background.
   const count = (unread.messages || 0) + (unread.channels || 0);
   document.title = count ? `(${count}) rettui` : 'rettui';
@@ -1049,7 +1059,9 @@ function loadNow() {
   // Loads started before now may miss the change being fetched for.
   loadEpoch++;
   refreshing = Promise.allSettled([
-    refreshStatus(),
+    // Status draws from the status too: again once it's in, in case its
+    // own update finished first (with the one before).
+    refreshStatus().then(() => app.tab === 'status' && app.views.status.update({ settings: false })),
     Promise.resolve().then(() => app.views[app.tab]?.update()).catch((e) => console.warn(e)),
   ]).finally(() => {
     refreshing = null;
@@ -5347,6 +5359,9 @@ app.views.status = {
       label('RNS config'), el('span', { class: 'mono', text: s.rns_config || 'rsReticulum default' }),
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Known'), el('span', { text: `${s.known} destinations` }),
+      ...(s.update ? [label('Update'), el('span', {},
+        el('strong', { class: 'update-note', text: `rettui ${s.update.version} is out ` }),
+        el('a', { href: s.update.url, target: '_blank', rel: 'noopener noreferrer', text: 'what\'s new ↗' }))] : []),
       label('Notifications'), notifications.describe(),
       label('Theme'), el('select', { title: 'This browser\'s colours', onchange: (e) => theme.set(e.target.value) },
         [['dark', 'Dark'], ['light', 'Light'], ['auto', 'As the device is set']]

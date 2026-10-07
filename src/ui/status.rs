@@ -85,7 +85,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let steps = app.first_steps();
     // The settings list scrolls, so it may give way on short terminals.
     let [info, settings, rest] = Layout::vertical([
-        Constraint::Length(if steps.is_empty() { 11 } else { 12 }),
+        Constraint::Length(11 + u16::from(!steps.is_empty()) + u16::from(app.update_available().is_some())),
         Constraint::Max(settings_height),
         Constraint::Min(5),
     ])
@@ -132,6 +132,13 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![label("Known"), Span::raw(format!("{} destinations", app.store.peers.len()))]),
     ];
     let mut lines = lines;
+    if let Some(release) = app.update_available() {
+        lines.push(Line::from(vec![
+            label("Update"),
+            Span::styled(format!("rettui {} is out", release.version), Style::default().fg(Color::Yellow).bold()),
+            Span::raw(format!("  {}", release.url)),
+        ]));
+    }
     // Until they're all taken: each step's mark, and the next to take.
     if let Some(next) = steps.iter().find(|step| !step.done) {
         let mut spans = vec![label("First steps")];
@@ -279,5 +286,28 @@ mod tests {
                 "12:00:02  Newest",
             ]
         );
+    }
+
+    #[test]
+    fn a_newer_release_shows_by_the_version_and_in_status() {
+        let dir = std::env::temp_dir().join(format!("rettui-update-status-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.tab = crate::app::Tab::Status;
+        let version = crate::update::VERSION;
+        let shown = screen(&mut app);
+        assert!(shown.contains(&format!("rettui>_ {version} ")) && !shown.contains("is out"), "{shown}");
+        let url = "https://github.com/zevaryx/rettui/releases/tag/v99.0.0";
+        let release = crate::update::Release { version: "99.0.0".into(), url: url.into() };
+        app.updates.checked = crate::update::Checked { at: crate::app::now() as i64, latest: Some(release) };
+        let shown = screen(&mut app);
+        assert!(shown.contains(&format!("rettui>_ {version}↑")), "{shown}");
+        assert!(shown.contains(&format!("Update            rettui 99.0.0 is out  {url}")), "{shown}");
+        assert_eq!(app.version_url(), url);
+        // Turned off, it's gone.
+        app.settings.update_check = false;
+        let shown = screen(&mut app);
+        assert!(!shown.contains(&format!("{version}↑")) && !shown.contains("is out"), "{shown}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

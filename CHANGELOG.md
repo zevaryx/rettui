@@ -43,6 +43,7 @@ Changes since v1.5.1.
   - Colour themes (dark, light, basic).
   - The footer shows the shortest hints that fit; `?` (or `F1` while typing) lists every key.
 - **Settings and CLI**
+  - Update checks: once a day, rettui asks GitHub whether a newer release is out, and marks the version (↑) and Status when one is. Nothing is downloaded. *Check for updates* turns it off.
   - 12-hour clock and date order.
   - *Log level* as a setting.
   - `rettui send` accepts `lxma://` links.

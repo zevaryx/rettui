@@ -33,12 +33,16 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![Span::raw(" "), prompt])
     } else {
         let mut spans = vec![Span::styled(" rettui", Style::default().bold()), prompt];
-        // The version when it fits (" rettui>_ " is 10 columns); clicking
-        // it opens the project page.
-        let version = env!("CARGO_PKG_VERSION");
-        if width >= 10 + 1 + version.len() {
-            spans.push(Span::styled(format!(" {version}"), Style::default().fg(dim())));
-            app.regions.version = Rect::new(inner.x + 10, inner.y, version.len() as u16, 1);
+        // The version when it fits (" rettui>_ " is 10 columns), marked ↑
+        // when a newer release is out; clicking it opens that release's
+        // page, or else the project's.
+        let update = app.update_available().is_some();
+        let version = format!("{}{}", crate::update::VERSION, if update { "↑" } else { "" });
+        let shown = version.chars().count();
+        if width >= 10 + 1 + shown {
+            let colour = if update { Color::Yellow } else { dim() };
+            spans.push(Span::styled(format!(" {version}"), Style::default().fg(colour)));
+            app.regions.version = Rect::new(inner.x + 10, inner.y, shown as u16, 1);
         }
         Line::from(spans)
     };
