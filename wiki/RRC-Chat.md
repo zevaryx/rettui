@@ -49,7 +49,7 @@ tab.
 - **Long messages:** messages over the hub's size limit are offered as a
   split into several messages.
 - **Drafts:** what you write stays with its room or whisper conversation,
-  as in Messaging.
+  as in [Messaging](Messaging), and in the web UI outlives reloading the page.
 - **Connections:** hubs reconnect automatically with backoff (toggle with
   `a`) and rejoin your rooms quietly. Quitting leaves hubs properly, so others
   see you go at once.

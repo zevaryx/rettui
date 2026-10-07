@@ -7,6 +7,9 @@ MeshChat, NomadNet and other LXMF clients).
 - **Drafts:** what you write (and attach) stays with its conversation.
   Opening another one doesn't carry it over, and coming back brings it back.
   A message that fails to send goes back to the conversation it was for.
+  In the web UI, drafts also outlive reloading the page (which phones do to
+  pages left in the background) and restarting rettui: their text, and
+  what they reply to, are kept in that browser. Files attached aren't.
 - **Message states:** your messages show *sending…*, ✓ (delivered), *✓ via
   propagation node*, or *failed* with the reason.
 - **Delivery modes:**

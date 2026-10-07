@@ -211,23 +211,73 @@ function echoSent(view, { key, node, parent, scroller, slot }) {
 // it over to be sent to someone else.
 function draftSwitch(view, key) {
   if (key == null || view.draftKey === key) return;
-  view.drafts ||= new Map();
+  const drafts = draftsOf(view);
   if (view.draftKey != null) {
     const draft = view.takeDraft();
-    if (draft) view.drafts.set(view.draftKey, draft);
-    else view.drafts.delete(view.draftKey);
+    if (draft) drafts.set(view.draftKey, draft);
+    else drafts.delete(view.draftKey);
   }
   view.draftKey = key;
-  view.putDraft(view.drafts.get(key) || null);
-  view.drafts.delete(key);
+  view.putDraft(drafts.get(key) || null);
+  drafts.delete(key);
+  keepDrafts(view);
 }
 
 // Put back what failed to send, before anything written since, in the
 // conversation or room it was sent to.
 function draftRestore(view, key, draft) {
-  view.drafts ||= new Map();
+  const drafts = draftsOf(view);
   if (view.draftKey === key) view.putDraft(view.joinDrafts(draft, view.takeDraft()));
-  else view.drafts.set(key, view.joinDrafts(draft, view.drafts.get(key) || null));
+  else drafts.set(key, view.joinDrafts(draft, drafts.get(key) || null));
+  keepDrafts(view);
+}
+
+// Drafts outlive a reload (phones reload pages they've put away, and a
+// restart of rettui reloads them all): their text, and what they reply to,
+// are kept in this browser under the view's `draftStore`. Attached files
+// aren't: a page can't keep those.
+const MAX_KEPT_DRAFT = 100_000;
+
+function draftsOf(view) {
+  if (!view.drafts) {
+    view.drafts = new Map();
+    try {
+      const kept = JSON.parse(localStorage.getItem(view.draftStore) || '{}');
+      for (const [key, draft] of Object.entries(kept)) {
+        if (typeof draft?.text !== 'string') continue;
+        view.drafts.set(key, { text: draft.text, files: [], reply: draft.reply || null });
+      }
+    } catch { /* kept in this page only */ }
+  }
+  return view.drafts;
+}
+
+// Keep the drafts, the open one's too: soon (as it's typed), or `now`.
+function keepDrafts(view, now = false) {
+  clearTimeout(view.draftTimer);
+  if (!now) {
+    view.draftTimer = setTimeout(() => keepDrafts(view, true), 400);
+    return;
+  }
+  const kept = {};
+  const keep = (key, draft) => {
+    if (draft?.text || draft?.reply) kept[key] = { text: (draft.text || '').slice(0, MAX_KEPT_DRAFT), reply: draft.reply || undefined };
+  };
+  for (const [key, draft] of draftsOf(view)) keep(key, draft);
+  if (view.draftKey != null) keep(view.draftKey, view.takeDraft());
+  try {
+    if (Object.keys(kept).length) localStorage.setItem(view.draftStore, JSON.stringify(kept));
+    else localStorage.removeItem(view.draftStore);
+  } catch { /* full, or not allowed: kept in this page only */ }
+}
+
+// Leaving (or put in the background, where a phone may close it): keep
+// them now.
+for (const event of ['pagehide', 'visibilitychange']) {
+  addEventListener(event, () => {
+    if (event === 'visibilitychange' && document.visibilityState !== 'hidden') return;
+    for (const view of Object.values(app.views)) if (view.draftStore && view.draftKey != null) keepDrafts(view, true);
+  });
 }
 
 function echoesFor(view, key) {
@@ -2058,6 +2108,7 @@ const emojiPicker = {
 
 app.views.messages = {
   panes: true,
+  draftStore: 'rettui.drafts.messages',
   selected: null,
   pending: [],
   // Conversations loaded so far, by key: a click draws one at once and
@@ -2107,6 +2158,7 @@ app.views.messages = {
       placeholder: composePlaceholder(),
       enterkeyhint: 'send',
       rows: 2,
+      oninput: () => keepDrafts(this),
       onkeydown: (e) => {
         if (this.emojiList.key(e)) return;
         if (emojiKey(e)) {
@@ -2569,6 +2621,7 @@ app.views.messages = {
   // Reply to `target` ({ id, author, text }), or not (null).
   setReply(target, focus = false) {
     this.replyTo = target;
+    if (this.draftKey != null) keepDrafts(this);
     this.replyBar.classList.toggle('hidden', !target);
     this.replyBar.replaceChildren(...(target ? [
       el('span', { class: 'reply-label', text: '↩' }),
@@ -2615,6 +2668,7 @@ app.views.messages = {
     this.pending = [];
     this.setReply(null);
     this.renderChips();
+    keepDrafts(this, true);
     // Show it straight away as sending; the next update draws the real one.
     const echo = this.echo(this.selected, el('div', { class: 'message out echo' },
       el('div', { class: 'meta' },
@@ -2652,6 +2706,7 @@ app.views.messages = {
 
 app.views.channels = {
   panes: true,
+  draftStore: 'rettui.drafts.channels',
   // Rooms, whispers and hub pages loaded so far, by "hub/room": a click
   // draws one at once and refreshes it behind.
   cache: new Map(),
@@ -2674,7 +2729,10 @@ app.views.channels = {
         }
         if (e.key === 'Enter' && !e.isComposing) this.send();
       },
-      oninput: () => this.updateMentions(),
+      oninput: () => {
+        this.updateMentions();
+        keepDrafts(this);
+      },
       // The cursor moved: the name being typed may have changed.
       onkeyup: (e) => ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key) && this.updateMentions(),
       onclick: () => this.updateMentions(),
@@ -3237,6 +3295,7 @@ app.views.channels = {
     // typed meanwhile is kept.
     this.input.value = '';
     this.hideMentions();
+    keepDrafts(this, true);
     // Put it back to try again or edit, in the room it was for.
     const restore = () => draftRestore(this, hub + '/' + room, { text });
     // A chat line (not a command) shows straight away as sending; the next
