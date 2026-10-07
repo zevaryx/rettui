@@ -123,6 +123,10 @@ impl App {
             self.rns_editor_key(key);
             return;
         }
+        if self.message_search.is_some() && self.tab == Tab::Messages {
+            self.message_search_key(key);
+            return;
+        }
         if self.net_search.typing && self.tab == Tab::Network {
             match key.code {
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
@@ -209,6 +213,20 @@ impl App {
         if self.paper_view.is_some() {
             if let MouseEventKind::Down(_) = mouse.kind {
                 self.paper_view = None;
+            }
+            return;
+        }
+        // The message search: a click on a result opens it, elsewhere closes.
+        if self.message_search.is_some() && self.tab == Tab::Messages {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                let at = Position::new(mouse.column, mouse.row);
+                let list = self.regions.message_search;
+                let index = self.regions.message_search_first + at.y.saturating_sub(list.y) as usize;
+                match self.message_search_hits().get(index).cloned() {
+                    Some(hit) if list.contains(at) => self.open_hit(&hit),
+                    _ if self.regions.message_search_box.contains(at) => {}
+                    _ => self.message_search = None,
+                }
             }
             return;
         }

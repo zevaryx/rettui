@@ -2053,10 +2053,35 @@ app.views.messages = {
   modeFor: null,
   modeKept: null,
 
+  // The message search: what's typed, and whether only in the open
+  // conversation.
+  query: '',
+  searchHere: false,
+  searchRequest: 0,
+
   mount(root, options = {}) {
     this.list = el('div', { class: 'scroll' });
     this.header = el('header');
     this.history = el('div', { class: 'scroll history', dataset: { stick: 'bottom' } });
+    this.search = el('input', {
+      type: 'search',
+      class: 'pane-search',
+      placeholder: 'Search messages  ( / )',
+      value: this.query,
+      oninput: () => {
+        this.query = this.search.value;
+        clearTimeout(this.searchTimer);
+        this.searchTimer = setTimeout(() => this.query.trim() ? this.runSearch() : this.endSearch(), 150);
+      },
+      onkeydown: (e) => {
+        if (e.key === 'Escape' && this.query) {
+          e.preventDefault();
+          this.search.value = '';
+          this.query = '';
+          this.endSearch();
+        }
+      },
+    });
     this.chips = el('div', { class: 'chips' });
     this.text = el('textarea', {
       placeholder: composePlaceholder(),
@@ -2119,7 +2144,7 @@ app.views.messages = {
       el('section', { class: 'panel side' },
         el('header', {}, el('span', { class: 'title grow', text: 'Conversations' }),
           el('button', { text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
-          el('button', { text: '+ New', onclick: () => this.newConversation() })),
+          el('button', { text: '+ New', onclick: () => this.newConversation() }), this.search),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose));
     this.renderChips();
@@ -2160,7 +2185,8 @@ app.views.messages = {
     draftSwitch(this, this.selected);
     this.names = new Map(conversations.map((c) => [c.key, c.name]));
     this.warmRecent(conversations);
-    if (changed(this, 'list:' + this.selected, conversations)) this.list.replaceChildren(...(conversations.length ? conversations.map((c) => el('div', {
+    if (this.query.trim()) this.runSearch();
+    else if (changed(this, 'list:' + this.selected, conversations)) this.list.replaceChildren(...(conversations.length ? conversations.map((c) => el('div', {
       class: 'list-item' + (c.key === this.selected ? ' selected' : ''),
       dataset: { key: c.key },
       // Start loading as the button goes down; the click shows it.
@@ -2203,6 +2229,46 @@ app.views.messages = {
     return echoSent(this, { key, node, parent: shown && this.history, scroller: this.history, slot: 'conversation' });
   },
 
+  // Messages matching the search, newest first, in the list's place.
+  async runSearch() {
+    const request = ++this.searchRequest;
+    const query = this.query;
+    const params = new URLSearchParams({ q: query });
+    const here = this.searchHere && this.selected;
+    if (here) params.set('in', this.selected);
+    const found = await api.get('/search?' + params).catch(() => null);
+    if (!found || request !== this.searchRequest || query !== this.query) return;
+    const terms = searchTerms(query);
+    const scope = this.selected ? el('label', { class: 'search-scope' },
+      el('input', { type: 'checkbox', checked: !!here, onchange: (e) => {
+        this.searchHere = e.target.checked;
+        this.runSearch();
+      } }), ` In ${this.names?.get(this.selected) || 'this conversation'}`) : null;
+    const count = found.hits.length ? `${found.full ? 'The newest ' : ''}${found.hits.length} found` : 'Nothing found';
+    this.list.replaceChildren(
+      el('div', { class: 'search-status dim' }, el('span', { class: 'grow', text: count }), scope),
+      ...found.hits.map((hit) => el('div', { class: 'list-item' + (hit.key === this.selected ? ' selected' : ''), onclick: () => this.openHit(hit) },
+        el('div', { class: 'main' },
+          el('div', { class: 'name' }, hit.name),
+          el('div', { class: 'sub hit' }, hit.incoming ? '' : 'You: ', ...highlighted(hit.snippet, terms))),
+        el('div', { class: 'dim', style: 'font-size:12px;text-align:right', text: timeLabel(hit.timestamp) }))));
+  },
+
+  // Back to the conversations.
+  endSearch() {
+    ++this.searchRequest;
+    for (const slot of Object.keys(this.snapshots || {})) if (slot.startsWith('list:')) delete this.snapshots[slot];
+    this.update();
+  },
+
+  // Open a message found: its conversation, at it (all of it loaded if it's
+  // further back than what shows).
+  async openHit(hit) {
+    if (hit.newer >= this.LIMIT) this.showAll = hit.key;
+    await this.select(hit.key);
+    this.showMessage(hit.id);
+  },
+
   // Open a conversation: at once from what is loaded (or its name while it
   // loads), then fresh.
   select(key) {
@@ -2219,7 +2285,7 @@ app.views.messages = {
         el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }));
       this.history.replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
     }
-    this.update();
+    return this.update();
   },
 
   // Load the most recent conversations ahead, and again when they change.
@@ -4799,6 +4865,10 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === '/' && app.tab === 'network') {
     e.preventDefault();
     app.views.network.search.focus();
+  } else if (e.key === '/' && app.tab === 'messages') {
+    e.preventDefault();
+    setPane(app.views.messages, 'list');
+    app.views.messages.search.focus();
   } else if (e.key === '/' && app.tab === 'browser') {
     e.preventDefault();
     setPane(app.views.browser, 'list');

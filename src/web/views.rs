@@ -267,6 +267,30 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
     })
 }
 
+/// Messages found by a search: each with its conversation, when it was,
+/// who sent it, how many newer follow it there (to know whether it's among
+/// those loaded), and a line of it around what matched.
+pub fn search(app: &App, query: &str, within: Option<&str>) -> Value {
+    let hits = crate::app::search::search(&app.store, query, within);
+    let full = hits.len() >= crate::app::search::MAX_HITS;
+    let found: Vec<Value> = hits
+        .iter()
+        .filter_map(|hit| {
+            let message = app.store.conversations.get(&hit.key)?.messages.get(hit.index)?;
+            Some(json!({
+                "key": hit.key,
+                "name": app.store.display_name(&hit.key),
+                "id": hit.id,
+                "timestamp": hit.timestamp,
+                "incoming": hit.incoming,
+                "newer": hit.newer,
+                "snippet": crate::app::search::snippet(message, query, 80),
+            }))
+        })
+        .collect();
+    json!({ "query": query, "hits": found, "full": full })
+}
+
 /// Heard peers, most recent first: those of one kind (`lxmf`, `nomad`,
 /// `propagation`) if asked, matching the search words, at most `limit`.
 /// `total` counts every match, so the page can offer more, and `heard`

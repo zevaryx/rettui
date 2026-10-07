@@ -94,6 +94,10 @@ pub fn keys(app: &App) -> Keys {
                 ("Home/End", "first/last"),
             ],
         ),
+        Tab::Messages if app.message_search.is_some() => typing(
+            "Search messages",
+            &[("Enter", "open"), ("↑↓", "select"), ("Tab", "here/all"), ("Esc", "close"), ("^V", "paste")],
+        ),
         Tab::Messages if app.composing && app.reply.is_some() => typing(
             "Replying",
             &[
@@ -150,6 +154,7 @@ pub fn keys(app: &App) -> Keys {
             "Messages",
             &[
                 ("Enter", "write"),
+                ("/", "search"),
                 ("r", "reply"),
                 ("m", "pick"),
                 ("c", "contact"),

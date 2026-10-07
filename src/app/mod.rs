@@ -30,6 +30,7 @@ pub mod reach;
 mod saver;
 pub mod node;
 pub mod reticulum;
+pub mod search;
 mod settings;
 pub mod traffic;
 
@@ -226,6 +227,10 @@ pub struct Regions {
     /// Browser pane sub-tabs and list.
     pub browser_tabs: Vec<(Rect, BrowserPane)>,
     pub browser_search: Rect,
+    /// The message search's results, and the first one shown.
+    pub message_search: Rect,
+    pub message_search_first: usize,
+    pub message_search_box: Rect,
     pub browser_list: Rect,
     pub conversations: Rect,
     pub history: Rect,
@@ -411,6 +416,8 @@ pub struct App {
     policy_sent: Option<(Vec<Hash>, Vec<Hash>)>,
     /// A message (its index) to bring into view at the next draw.
     pub scroll_to: Option<usize>,
+    /// The message search (`/` in Messages), while open.
+    pub message_search: Option<search::MessageSearch>,
     /// The emoji picker, over the input being written in.
     pub emoji: Option<emoji::EmojiPicker>,
     /// The `:name` list while typing one.
@@ -555,6 +562,7 @@ impl App {
             auto_error: None,
             policy_sent: None,
             scroll_to: None,
+            message_search: None,
             emoji: None,
             shortcode: emoji::Shortcode::default(),
             message_scroll: 0,
@@ -770,6 +778,8 @@ impl App {
             self.rns_paste(text);
         } else if self.net_search.typing && self.tab == Tab::Network {
             self.paste_network_search(text);
+        } else if self.message_search.is_some() && self.tab == Tab::Messages {
+            self.paste_message_search(text);
         } else if self.browser.search.typing && self.tab == Tab::Browser {
             self.paste_browser_search(text);
         } else if let Some(field) = self.selected_text_field() {
@@ -1214,6 +1224,7 @@ impl App {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         discriminant(&self.tab).hash(&mut h);
         (self.composing, self.prompt.is_some(), self.net_search.typing, self.keys_help).hash(&mut h);
+        self.message_search.is_some().hash(&mut h);
         // Emoji over the view, which some terminals draw narrower than
         // they should (see `take_full_redraw`).
         if let Some(picker) = &self.emoji {

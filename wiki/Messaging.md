@@ -103,6 +103,23 @@ for you, as Sideband does when none is set:
   who your propagated messages are for and when you collect yours, and it
   could lose them. Where you can, pick a node you trust instead.
 
+## Searching
+
+Find messages by what they say: every word typed must be found, in any
+order, in a message's text, title, attachments' names or what rettui noted
+of it. Results are newest first (the newest 200 at most), each with who
+it's with, when, and the part that matched.
+
+- **In the TUI:** `/` in the Messages tab opens the search over all
+  conversations. `Tab` keeps it to the open conversation (or goes back to
+  all), `↑↓` pick a result, and `Enter` opens its conversation scrolled to
+  the message, picked. `Esc` closes it; a click on a result opens it.
+- **In the web UI:** type in **Search messages** above the conversations
+  (or press `/`). **In <name>** keeps it to the open conversation, and a
+  click on a result opens it there, loading the older messages first if
+  it's further back. `Esc` (or emptying the box) shows the conversations
+  again.
+
 ## Message actions
 
 - **Retry:** a message of yours that failed can be sent again, as the same

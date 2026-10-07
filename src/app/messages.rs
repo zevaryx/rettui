@@ -1087,6 +1087,7 @@ impl App {
             }
             KeyCode::Char('r') if self.active_conversation.is_some() => self.start_reply(),
             KeyCode::Char('m') if self.active_conversation.is_some() => self.start_picking(),
+            KeyCode::Char('/') => self.open_message_search(),
             KeyCode::Char('c') if self.active_conversation.is_some() => self.contact_card = self.active_conversation.clone(),
             KeyCode::Char('X') => {
                 if let Some(key) = self.active_conversation.clone() {

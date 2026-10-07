@@ -81,6 +81,7 @@ pub fn router(state: WebState) -> Router {
         .route("/push/unsubscribe", post(push_unsubscribe))
         .route("/push/showing", post(push_showing))
         .route("/conversations", get(conversations).post(new_conversation))
+        .route("/search", get(search_messages))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/read", post(read_conversation))
         .route("/conversations/{key}/notify", post(mute_conversation))
@@ -460,6 +461,20 @@ async fn brand(Path(name): Path<String>) -> Response {
 }
 
 // ---- state and live updates ----------------------------------------------
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: String,
+    /// One conversation's key, to search only there.
+    #[serde(rename = "in")]
+    within: Option<String>,
+}
+
+/// Messages matching the search words, newest first (see
+/// [`crate::app::search`]).
+async fn search_messages(State(state): State<WebState>, Query(query): Query<SearchQuery>) -> ApiResult {
+    Ok(axum::Json(state.read(move |o| views::search(&o.app, &query.q, query.within.as_deref())).await?))
+}
 
 async fn get_state(State(state): State<WebState>) -> ApiResult {
     let mut view = state.read(|o| views::state(&o.app)).await?;
