@@ -157,6 +157,13 @@ impl App {
                     self.settings.pn_transfer_kb = after.pn_transfer_kb;
                     pn = true;
                 }
+                // Anything else that applies now, with nothing more to do
+                // than take the new value (Location, Map tiles, ...).
+                key if field.effect == Effect::Now => {
+                    if let Err(e) = self.settings.set_field(key, &after.field_value(key)) {
+                        self.log(format!("Couldn't apply {}: {e}", field.label));
+                    }
+                }
                 // The running Reticulum instance keeps its config.
                 _ => {}
             }
@@ -312,6 +319,51 @@ impl App {
 mod tests {
     use super::*;
     use crate::store::Store;
+
+    /// A setting that says it applies now is the running app's at once,
+    /// not only settings.json's (as Location and Map tiles once weren't).
+    #[test]
+    fn settings_that_apply_now_do() {
+        let dir = std::env::temp_dir().join(format!("rettui-settings-now-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, _commands) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let node_dir = dir.join("pages").display().to_string();
+        let address = "ab".repeat(16);
+        let home = format!("{address}:/page/index.mu");
+        // These change what every test draws or logs (global), and are
+        // applied by their own arms.
+        let global = ["tui_theme", "clock", "date_style", "log_level"];
+        for field in config::FIELDS.iter().filter(|f| f.effect == Effect::Now && !global.contains(&f.key)) {
+            let current = app.settings.field_value(field.key);
+            let value = match field.kind {
+                config::FieldKind::Toggle => (current != "true").to_string(),
+                config::FieldKind::Choice(choices) => choices.iter().find(|c| **c != current).unwrap().to_string(),
+                config::FieldKind::Color => "#123456".into(),
+                config::FieldKind::Number => {
+                    let n: u64 = current.parse().unwrap();
+                    let up = (n + 1).to_string();
+                    if app.settings.clone().set_field(field.key, &up).is_ok() { up } else { (n - 1).to_string() }
+                }
+                config::FieldKind::Text | config::FieldKind::Optional => match field.key {
+                    "display_name" => "Someone else".into(),
+                    "icon" => "account".into(),
+                    "propagation_node" => address.clone(),
+                    "location" => "1.5, 2.5".into(),
+                    "map_tiles" => String::new(),
+                    "home" => home.clone(),
+                    "node_name" => "Hilltop".into(),
+                    "node_dir" => node_dir.clone(),
+                    "pn_name" => "Hilltop messages".into(),
+                    other => panic!("give {other} a value to change it to here"),
+                },
+            };
+            assert_ne!(value, current, "{}", field.key);
+            app.update_settings(&[(field.key, &value)]).unwrap_or_else(|e| panic!("{}: {e}", field.key));
+            assert_eq!(app.settings.field_value(field.key), app.settings_file.field_value(field.key), "{} isn't applied", field.key);
+            assert_ne!(app.settings.field_value(field.key), current, "{} didn't change", field.key);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_web_ui_cant_change_what_runs_here() {
