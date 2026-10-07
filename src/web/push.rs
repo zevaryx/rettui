@@ -78,10 +78,7 @@ fn push_service(endpoint: &str) -> Option<String> {
     if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
         return None;
     }
-    PUSH_SERVICES
-        .iter()
-        .any(|service| host == *service || host.ends_with(&format!(".{service}")))
-        .then(|| format!("https://{host}"))
+    PUSH_SERVICES.iter().any(|service| host == *service || host.ends_with(&format!(".{service}"))).then(|| format!("https://{host}"))
 }
 
 /// `payload` encrypted for one browser (RFC 8291, `aes128gcm`), from the
@@ -96,9 +93,7 @@ fn encrypt(payload: &[u8], theirs: &[u8], auth: &[u8], ours: &SecretKey, salt: &
     info.extend_from_slice(theirs);
     info.extend_from_slice(our_public.as_bytes());
     let mut ikm = [0u8; 32];
-    Hkdf::<Sha256>::new(Some(auth), shared.raw_secret_bytes())
-        .expand(&info, &mut ikm)
-        .map_err(|_| "key derivation failed")?;
+    Hkdf::<Sha256>::new(Some(auth), shared.raw_secret_bytes()).expand(&info, &mut ikm).map_err(|_| "key derivation failed")?;
     // The content encryption key and nonce, from it and the salt.
     let hkdf = Hkdf::<Sha256>::new(Some(salt), &ikm);
     let (mut key, mut nonce) = ([0u8; 16], [0u8; 12]);
@@ -107,9 +102,7 @@ fn encrypt(payload: &[u8], theirs: &[u8], auth: &[u8], ours: &SecretKey, salt: &
     // One record: the payload, then the last-record delimiter.
     let mut record = payload.to_vec();
     record.push(2);
-    let sealed = Aes128Gcm::new(&key.into())
-        .encrypt(&nonce.into(), record.as_slice())
-        .map_err(|_| "encryption failed")?;
+    let sealed = Aes128Gcm::new(&key.into()).encrypt(&nonce.into(), record.as_slice()).map_err(|_| "encryption failed")?;
     // Header: salt, record size, and our public key as the key id.
     let mut body = Vec::with_capacity(21 + 65 + sealed.len());
     body.extend_from_slice(salt);
@@ -174,10 +167,8 @@ impl WebPush {
             }
         };
         let public = B64.encode(secret.public_key().to_encoded_point(false).as_bytes());
-        let subscriptions: Vec<Subscription> = std::fs::read(&paths.web_push)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let subscriptions: Vec<Subscription> =
+            std::fs::read(&paths.web_push).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
         let subscriptions = Arc::new(Mutex::new(subscriptions));
         let (queue, pushes) = mpsc::channel::<Push>();
         let (report, reports) = mpsc::channel();
@@ -281,10 +272,7 @@ struct Sender {
 
 impl Sender {
     fn run(self, pushes: mpsc::Receiver<Push>) {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(20))
-            .try_proxy_from_env(true)
-            .build();
+        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(20)).try_proxy_from_env(true).build();
         // Out of reach (no internet, say) is said once, until it works again.
         let mut unreachable = false;
         while let Ok(push) = pushes.recv() {
@@ -295,7 +283,9 @@ impl Sender {
                     let mut subscriptions = self.subscriptions.lock().unwrap();
                     subscriptions.retain(|s| s.endpoint != push.subscription.endpoint);
                     let _ = save(&self.path, &subscriptions);
-                    let _ = self.report.send("A browser's background notifications ended (its subscription expired); turn them on again there".into());
+                    let _ = self
+                        .report
+                        .send("A browser's background notifications ended (its subscription expired); turn them on again there".into());
                 }
                 Err(Failure::Refused(e)) => {
                     tracing::warn!("push refused: {e}");

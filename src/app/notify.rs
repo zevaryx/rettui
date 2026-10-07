@@ -169,8 +169,7 @@ mod tests {
     fn newer_replace_older_and_piles_are_summed_up() {
         let two = batch(vec![note("alice", "one", "a"), note("bob", "hi", "b"), note("alice", "two", "a")]);
         assert_eq!(two, vec![note("bob", "hi", "b"), note("alice", "two", "a")]);
-        let pile: Vec<Notification> =
-            ["alice", "bob", "carol", "dave", "erin"].iter().map(|n| note(n, "hi", n)).collect();
+        let pile: Vec<Notification> = ["alice", "bob", "carol", "dave", "erin"].iter().map(|n| note(n, "hi", n)).collect();
         let summed = batch(pile);
         assert_eq!(summed.len(), 1);
         assert_eq!(summed[0].title, "5 new messages");

@@ -34,9 +34,22 @@ pub fn escape(text: &str) -> String {
 /// xterm's 256-colour palette.
 fn indexed(n: u8) -> (u8, u8, u8) {
     const BASE: [(u8, u8, u8); 16] = [
-        (0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 0, 205), (0, 205, 205),
-        (229, 229, 229), (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0), (92, 92, 255),
-        (255, 0, 255), (0, 255, 255), (255, 255, 255),
+        (0, 0, 0),
+        (205, 0, 0),
+        (0, 205, 0),
+        (205, 205, 0),
+        (0, 0, 238),
+        (205, 0, 205),
+        (0, 205, 205),
+        (229, 229, 229),
+        (127, 127, 127),
+        (255, 0, 0),
+        (0, 255, 0),
+        (255, 255, 0),
+        (92, 92, 255),
+        (255, 0, 255),
+        (0, 255, 255),
+        (255, 255, 255),
     ];
     match n {
         0..16 => BASE[n as usize],
@@ -136,13 +149,7 @@ impl Page {
                 out.push_str(&format!("<span class=\"m-anchor\" data-anchor=\"{}\"></span>", escape(name)));
             }
             match line {
-                MLine::Text {
-                    indent,
-                    align,
-                    fill,
-                    spans,
-                    section,
-                } => {
+                MLine::Text { indent, align, fill, spans, section } => {
                     let fill = fill.map(css).unwrap_or_default();
                     let fold = section.and_then(|s| s.fold);
                     let class = match (section, fold) {
@@ -150,7 +157,15 @@ impl Page {
                         (Some(_), None) => "m-line m-heading",
                         _ => "m-line",
                     };
-                    let data = fold.map(|f| format!(" data-fold=\"{f}\" data-open=\"{}\" data-closed=\"{}\"", escape(self.fold_mark(true)), escape(self.fold_mark(false)))).unwrap_or_default();
+                    let data = fold
+                        .map(|f| {
+                            format!(
+                                " data-fold=\"{f}\" data-open=\"{}\" data-closed=\"{}\"",
+                                escape(self.fold_mark(true)),
+                                escape(self.fold_mark(false))
+                            )
+                        })
+                        .unwrap_or_default();
                     out.push_str(&format!(
                         "<div class=\"{class}\"{data} style=\"padding-left:{indent}ch;text-align:{};{fill}\">",
                         align_css(*align)
@@ -171,13 +186,7 @@ impl Page {
                         escape(&rule)
                     ));
                 }
-                MLine::Image {
-                    indent,
-                    align,
-                    url,
-                    alt,
-                    width,
-                } => {
+                MLine::Image { indent, align, url, alt, width } => {
                     let place = format!("padding-left:{indent}ch;text-align:{}", align_css(*align));
                     match media(url) {
                         Some(src) => {
@@ -191,16 +200,16 @@ impl Page {
                                 escape(alt),
                             ));
                         }
-                        None => out.push_str(&format!(
-                            "<div class=\"m-image\" style=\"{place}\">[image: {}]</div>",
-                            escape(alt)
-                        )),
+                        None => out.push_str(&format!("<div class=\"m-image\" style=\"{place}\">[image: {}]</div>", escape(alt))),
                     }
                 }
                 MLine::Table(table) => out.push_str(&self.table_html(table, &link)),
                 MLine::FieldBlock { indent, item, style } => {
                     if let Interactive::Field(f) = self.items[*item] {
-                        out.push_str(&format!("<div class=\"m-line\" style=\"padding-left:{indent}ch\">{}</div>", self.field_html(f, &css(*style))));
+                        out.push_str(&format!(
+                            "<div class=\"m-line\" style=\"padding-left:{indent}ch\">{}</div>",
+                            self.field_html(f, &css(*style))
+                        ));
                     }
                 }
                 MLine::Partial { indent, index } => {

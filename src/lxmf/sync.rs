@@ -10,9 +10,9 @@ use rmpv::Value;
 use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
-use super::{bytes_of, encode};
 use super::inbound::deliver_inbound;
 use super::policy::SharedPolicy;
+use super::{bytes_of, encode};
 use crate::net::{Hash, Known, NetEvent, link_options};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -46,23 +46,12 @@ impl Syncer {
         ring: PathBuf,
         ev: mpsc::UnboundedSender<NetEvent>,
     ) -> Self {
-        Self {
-            runtime,
-            known,
-            policy,
-            identity,
-            lxmf_hash,
-            ring,
-            ev,
-            running: Arc::new(AtomicBool::new(false)),
-        }
+        Self { runtime, known, policy, identity, lxmf_hash, ring, ev, running: Arc::new(AtomicBool::new(false)) }
     }
 
     pub fn start(&self, node: Option<Hash>) {
         let Some(node) = node else {
-            let _ = self.ev.send(NetEvent::Synced(Err(
-                "No propagation node selected (pick one in the Network tab)".to_string(),
-            )));
+            let _ = self.ev.send(NetEvent::Synced(Err("No propagation node selected (pick one in the Network tab)".to_string())));
             return;
         };
         if self.running.swap(true, Ordering::SeqCst) {
@@ -91,10 +80,7 @@ impl Syncer {
                     let count = messages.len();
                     // Parse concurrently: verifying an unknown sender can wait
                     // on a path lookup.
-                    futures_util::future::join_all(
-                        messages.iter().map(|data| deliver_inbound(&runtime, &known, &policy, data, &ev)),
-                    )
-                    .await;
+                    futures_util::future::join_all(messages.iter().map(|data| deliver_inbound(&runtime, &known, &policy, data, &ev))).await;
                     Ok(count)
                 }
                 Err(e) => Err(e),
@@ -121,12 +107,9 @@ fn peer_error(code: u64) -> String {
 }
 
 async fn get(handle: &LinkSessionHandle, request: Value) -> Result<Value, String> {
-    let response = handle
-        .request(MESSAGE_GET_PATH, &encode(&request), Some(REQUEST_TIMEOUT))
-        .await
-        .map_err(|e| format!("Request failed: {e}"))?;
-    let value = rmpv::decode::read_value(&mut response.data.as_slice())
-        .unwrap_or(Value::Binary(response.data));
+    let response =
+        handle.request(MESSAGE_GET_PATH, &encode(&request), Some(REQUEST_TIMEOUT)).await.map_err(|e| format!("Request failed: {e}"))?;
+    let value = rmpv::decode::read_value(&mut response.data.as_slice()).unwrap_or(Value::Binary(response.data));
     match value {
         Value::Integer(code) => Err(peer_error(code.as_u64().unwrap_or(0))),
         other => Ok(other),
@@ -159,8 +142,7 @@ async fn sync_on(
     ring: &Path,
     largest_kb: f64,
 ) -> Result<Vec<Vec<u8>>, String> {
-    let Value::Array(mut waiting) = get(handle, Value::Array(vec![Value::Nil, Value::Nil])).await?
-    else {
+    let Value::Array(mut waiting) = get(handle, Value::Array(vec![Value::Nil, Value::Nil])).await? else {
         return Err("Unexpected message list from propagation node".to_string());
     };
     let mut messages = Vec::new();

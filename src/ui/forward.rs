@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use super::{accent, dim, selected_bg, block};
+use super::{accent, block, dim, selected_bg};
 use crate::app::App;
 
 pub(super) fn draw_forward(frame: &mut Frame, app: &mut App) {
@@ -55,10 +55,8 @@ pub(super) fn draw_forward(frame: &mut Frame, app: &mut App) {
             let base = if i == selected { Style::default().bg(selected_bg()) } else { Style::default() };
             let name = app.store.display_name(key);
             let new = if app.store.conversations.contains_key(key) { "" } else { "  (new conversation)" };
-            let mut spans = vec![
-                Span::styled(name, base.add_modifier(Modifier::BOLD)),
-                Span::styled(format!("  {}{new}", &key[..12]), base.fg(dim())),
-            ];
+            let mut spans =
+                vec![Span::styled(name, base.add_modifier(Modifier::BOLD)), Span::styled(format!("  {}{new}", &key[..12]), base.fg(dim()))];
             let used: usize = spans.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum();
             if i == selected && used < list.width as usize {
                 spans.push(Span::styled(" ".repeat(list.width as usize - used), base));

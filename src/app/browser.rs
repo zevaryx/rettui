@@ -162,10 +162,8 @@ impl App {
             }
             Ok(content) => {
                 if location.fields.is_empty() {
-                    let ttl = micron::cache_directive(&String::from_utf8_lossy(&content.data))
-                        .map(std::time::Duration::from_secs);
-                    self.cache
-                        .put(location.node, &location.path, pending.identified, &content.data, ttl);
+                    let ttl = micron::cache_directive(&String::from_utf8_lossy(&content.data)).map(std::time::Duration::from_secs);
+                    self.cache.put(location.node, &location.path, pending.identified, &content.data, ttl);
                 }
                 self.show_page(pending, &content.data, None);
             }
@@ -274,8 +272,7 @@ impl App {
             .zip(&self.browser.partials)
             .enumerate()
             .filter(|(_, (partial, state))| {
-                !state.loading
-                    && partial.refresh.is_some_and(|every| state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every))
+                !state.loading && partial.refresh.is_some_and(|every| state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every))
             })
             .map(|(index, _)| index)
             .collect();
@@ -355,23 +352,13 @@ impl App {
         self.tab = Tab::Browser;
         self.browser.focus = BrowserFocus::Page;
         // Pages from this client's own node skip the cache, so edits show.
-        let cacheable = location.fields.is_empty()
-            && !location.path.starts_with(nomad_core::FILE_PREFIX)
-            && !self.is_own_node(location.node);
+        let cacheable =
+            location.fields.is_empty() && !location.path.starts_with(nomad_core::FILE_PREFIX) && !self.is_own_node(location.node);
         let id = self.request_id();
-        let pending = Pending {
-            id,
-            location,
-            started: Instant::now(),
-            record_history,
-            identified,
-            refresh,
-            status: None,
-        };
+        let pending = Pending { id, location, started: Instant::now(), record_history, identified, refresh, status: None };
         if cacheable
             && !refresh
-            && let Some(cached) =
-                self.cache.get(pending.location.node, &pending.location.path, identified)
+            && let Some(cached) = self.cache.get(pending.location.node, &pending.location.path, identified)
         {
             self.browser.loading = None;
             self.show_page(pending, &cached.data, Some(cached.age));
@@ -416,11 +403,7 @@ impl App {
 
     pub fn set_identify(&mut self, node: Hash, on: bool) {
         let key = hex::encode(node);
-        let changed = if on {
-            self.store.identified_nodes.insert(key.clone())
-        } else {
-            self.store.identified_nodes.remove(&key)
-        };
+        let changed = if on { self.store.identified_nodes.insert(key.clone()) } else { self.store.identified_nodes.remove(&key) };
         if changed {
             let name = self.store.display_name(&key);
             self.notify(if on { format!("Identifying to {name}") } else { format!("No longer identifying to {name}") });
@@ -432,11 +415,8 @@ impl App {
         // An anchor on this page (`#` alone: the next heading).
         if let Some(name) = url.strip_prefix('#') {
             let Some(page) = &self.browser.page else { return };
-            let line = if name.is_empty() {
-                self.browser.selected.and_then(|item| page.next_heading_line(item))
-            } else {
-                page.anchor_line(name)
-            };
+            let line =
+                if name.is_empty() { self.browser.selected.and_then(|item| page.next_heading_line(item)) } else { page.anchor_line(name) };
             let what = if name.is_empty() { "heading after this link".to_string() } else { format!("anchor #{name}") };
             return self.jump_to_line(line, &what);
         }
@@ -455,10 +435,7 @@ impl App {
             self.open_rrc_link(url);
             return;
         }
-        if let Some(hash) = url
-            .strip_prefix("lxmf@")
-            .or_else(|| url.strip_prefix("lxmf://"))
-        {
+        if let Some(hash) = url.strip_prefix("lxmf@").or_else(|| url.strip_prefix("lxmf://")) {
             match parse_hash(hash) {
                 Some(hash) => self.open_conversation(hex::encode(hash)),
                 None => self.warn(format!("Bad LXMF address: {url}")),
@@ -490,11 +467,7 @@ impl App {
                     } else {
                         (format!("Field: {}", field.name), field.value.clone())
                     };
-                    self.prompt = Some(Prompt {
-                        kind: PromptKind::EditField(f),
-                        title,
-                        input: TextInput::with_text(&text),
-                    });
+                    self.prompt = Some(Prompt { kind: PromptKind::EditField(f), title, input: TextInput::with_text(&text) });
                 } else {
                     page.activate_choice(f);
                 }
@@ -546,15 +519,10 @@ impl App {
     }
 
     fn copy_selected_link(&mut self) {
-        let link = self
-            .browser
-            .page
-            .as_ref()
-            .zip(self.browser.selected)
-            .and_then(|(page, i)| match page.items.get(i) {
-                Some(Interactive::Link { url, .. }) => Some(url.clone()),
-                _ => None,
-            });
+        let link = self.browser.page.as_ref().zip(self.browser.selected).and_then(|(page, i)| match page.items.get(i) {
+            Some(Interactive::Link { url, .. }) => Some(url.clone()),
+            _ => None,
+        });
         match link {
             Some(url) => {
                 let url = self.link_url(&url);
@@ -568,12 +536,7 @@ impl App {
     /// first.
     pub fn browser_nodes(&self) -> Vec<(&String, &Peer)> {
         let terms = self.browser.search.terms();
-        let mut nodes: Vec<_> = self
-            .store
-            .peers
-            .iter()
-            .filter(|(hash, p)| p.kind == PeerKind::Nomad && matches(&terms, hash, p))
-            .collect();
+        let mut nodes: Vec<_> = self.store.peers.iter().filter(|(hash, p)| p.kind == PeerKind::Nomad && matches(&terms, hash, p)).collect();
         nodes.sort_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
         nodes
     }
@@ -824,12 +787,7 @@ impl App {
     }
 
     fn open_goto(&mut self) {
-        let current = self
-            .browser
-            .location
-            .as_ref()
-            .map(Location::url)
-            .unwrap_or_default();
+        let current = self.browser.location.as_ref().map(Location::url).unwrap_or_default();
         self.open_prompt(PromptKind::GoTo, "Go to (hash:/page/path.mu)", &current);
     }
 
@@ -880,9 +838,7 @@ impl App {
             self.open_goto();
             return;
         }
-        if let Some(&(_, pane)) =
-            self.regions.browser_tabs.iter().find(|(r, _)| r.contains(at))
-        {
+        if let Some(&(_, pane)) = self.regions.browser_tabs.iter().find(|(r, _)| r.contains(at)) {
             self.switch_pane(pane);
             return;
         }
@@ -917,16 +873,8 @@ pub fn resolve_url(url: &str, current: Option<Hash>) -> Option<Location> {
         None if url.starts_with('/') => (current?, url.to_string()),
         None => (parse_hash(url)?, String::new()),
     };
-    let path = if path.is_empty() || path == "/" {
-        nomad_core::DEFAULT_INDEX_ROUTE.to_string()
-    } else {
-        path
-    };
-    Some(Location {
-        node,
-        path,
-        fields: BTreeMap::new(),
-    })
+    let path = if path.is_empty() || path == "/" { nomad_core::DEFAULT_INDEX_ROUTE.to_string() } else { path };
+    Some(Location { node, path, fields: BTreeMap::new() })
 }
 
 #[cfg(test)]
@@ -969,10 +917,10 @@ mod tests {
 
     #[test]
     fn partials_load_and_reload_from_p_links() {
-        let mut app = showing("partials", &[
-            ("index.mu", "`{:/page/count.mu`0`pid=4|name}\n`[Again`p:4]\nName: `<name`Ann>"),
-            ("count.mu", "#!/bin/sh\nfirst"),
-        ]);
+        let mut app = showing(
+            "partials",
+            &[("index.mu", "`{:/page/count.mu`0`pid=4|name}\n`[Again`p:4]\nName: `<name`Ann>"), ("count.mu", "#!/bin/sh\nfirst")],
+        );
         let page = app.browser.page.as_ref().unwrap();
         let shown = |app: &App| {
             let layout = app.browser.page.as_ref().unwrap().layout(40, None, &HashMap::new(), None);
@@ -992,10 +940,7 @@ mod tests {
 
     #[test]
     fn anchors_and_folds_from_links_and_keys() {
-        let mut app = showing("anchors", &[(
-            "index.mu",
-            "`[Down`#end]\n`->Fold\nhidden\n<\na\nb\nc\n`:end\nlast\nName: `<5x2|notes`>",
-        )]);
+        let mut app = showing("anchors", &[("index.mu", "`[Down`#end]\n`->Fold\nhidden\n<\na\nb\nc\n`:end\nlast\nName: `<5x2|notes`>")]);
         app.activate(0);
         assert_eq!(app.browser.jump_to, Some(app.browser.page.as_ref().unwrap().anchor_line("end").unwrap()));
         // The fold opens with Enter on its heading.

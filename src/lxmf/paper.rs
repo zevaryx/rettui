@@ -50,16 +50,14 @@ pub async fn write(
     // A stamp, if the recipient asks for one; it can take a moment.
     let link = tokio::task::spawn_blocking(move || {
         message.get_stamp();
-        message
-            .to_paper_uri(|data| {
-                recipient.identity.encrypt(data, None).map_err(|e| MessageError::PackFailed(e.to_string()))
-            })
-            .map_err(|e| match e {
+        message.to_paper_uri(|data| recipient.identity.encrypt(data, None).map_err(|e| MessageError::PackFailed(e.to_string()))).map_err(
+            |e| match e {
                 MessageError::PackFailed(e) if e.contains("maximum size") => {
                     "Too long for a paper message (about 1,800 characters fit)".to_string()
                 }
                 e => e.to_string(),
-            })
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -74,8 +72,8 @@ pub fn open(identity: &Identity, lxmf_hash: Hash, ring: &Path, link: &str) -> Re
     if to != lxmf_hash {
         return Err(format!("This paper message is for {}, not for you", hex::encode(to)));
     }
-    let decrypted = super::ratchets::decrypt(identity, ring, &encrypted)
-        .map_err(|_| "This paper message can't be decrypted with your key")?;
+    let decrypted =
+        super::ratchets::decrypt(identity, ring, &encrypted).map_err(|_| "This paper message can't be decrypted with your key")?;
     let mut message = to.to_vec();
     message.extend_from_slice(&decrypted);
     Ok(message)
@@ -83,7 +81,15 @@ pub fn open(identity: &Identity, lxmf_hash: Hash, ring: &Path, link: &str) -> Re
 
 /// Read a paper message in: it arrives like one received over the network
 /// (its signature checked), marked as from paper.
-pub fn read(runtime: &ReticulumHandle, known: &Known, identity: &Identity, lxmf_hash: Hash, ring: &Path, link: String, ev: &mpsc::UnboundedSender<NetEvent>) {
+pub fn read(
+    runtime: &ReticulumHandle,
+    known: &Known,
+    identity: &Identity,
+    lxmf_hash: Hash,
+    ring: &Path,
+    link: String,
+    ev: &mpsc::UnboundedSender<NetEvent>,
+) {
     let (runtime, known, identity, ring, ev) = (runtime.clone(), known.clone(), identity.clone(), ring.to_path_buf(), ev.clone());
     tokio::spawn(async move {
         let event = match open(&identity, lxmf_hash, &ring, &link) {
@@ -107,13 +113,10 @@ const SCAN_MAX_PIXELS: u32 = 2000;
 /// The paper message (or contact) in a picture of its QR code (a photo, a
 /// screenshot): its `lxm://` (or `lxma://`) link.
 pub fn scan(picture: &[u8]) -> Result<String, String> {
-    let picture = image::load_from_memory(picture)
-        .map_err(|_| "Not a picture rettui can read (PNG, JPEG, WebP, GIF or BMP)".to_string())?;
-    let picture = if picture.width().max(picture.height()) > SCAN_MAX_PIXELS {
-        picture.thumbnail(SCAN_MAX_PIXELS, SCAN_MAX_PIXELS)
-    } else {
-        picture
-    };
+    let picture =
+        image::load_from_memory(picture).map_err(|_| "Not a picture rettui can read (PNG, JPEG, WebP, GIF or BMP)".to_string())?;
+    let picture =
+        if picture.width().max(picture.height()) > SCAN_MAX_PIXELS { picture.thumbnail(SCAN_MAX_PIXELS, SCAN_MAX_PIXELS) } else { picture };
     let grey = picture.to_luma8();
     let (width, height) = (grey.width() as usize, grey.height() as usize);
     let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(width, height, |x, y| grey.get_pixel(x as u32, y as u32)[0]);
@@ -239,9 +242,7 @@ mod tests {
     fn paper(sender: &Identity, recipient: &Identity, ratchet: Option<&[u8; 32]>, to: Hash, content: &str) -> String {
         let mut message = LxMessage::new(to, [7; 16], "", content, DeliveryMethod::Paper);
         message.sign(&sender.get_signing_key().unwrap()).unwrap();
-        message
-            .to_paper_uri(|data| recipient.encrypt(data, ratchet).map_err(|e| MessageError::PackFailed(e.to_string())))
-            .unwrap()
+        message.to_paper_uri(|data| recipient.encrypt(data, ratchet).map_err(|e| MessageError::PackFailed(e.to_string()))).unwrap()
     }
 
     #[test]

@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{accent, dim, selected_bg, block};
+use super::{accent, block, dim, selected_bg};
 use crate::app::traffic::rate;
 use crate::app::{App, NetState, NoticeKind, SyncState, Tab};
 
@@ -20,9 +20,7 @@ pub(super) fn sidebar_width(total: u16) -> u16 {
 /// Vertical navigation rail, chat-client style. On narrow terminals it is
 /// icons only, with a dot for unread messages.
 pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
-    let rail = Block::default()
-        .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(dim()));
+    let rail = Block::default().borders(Borders::RIGHT).border_style(Style::default().fg(dim()));
     let inner = rail.inner(area);
     frame.render_widget(rail, area);
     let width = inner.width as usize;
@@ -70,11 +68,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             Tab::Reticulum => "⛭",
         };
         let selected = *tab == app.tab;
-        let base = if selected {
-            Style::default().bg(selected_bg()).bold()
-        } else {
-            Style::default()
-        };
+        let base = if selected { Style::default().bg(selected_bg()).bold() } else { Style::default() };
         let mut spans = vec![
             Span::styled(if selected { "▌" } else { " " }, base.fg(accent())),
             Span::styled(if compact { format!(" {icon} ") } else { format!(" {icon}  {}", tab.title()) }, base),
@@ -93,8 +87,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             frame.render_widget(Paragraph::new(Line::from(spans)).style(base), row);
             continue;
         }
-        let used: usize = spans.iter().map(Span::width).sum::<usize>()
-            + badge.as_ref().map_or(0, |b| b.width() + 1);
+        let used: usize = spans.iter().map(Span::width).sum::<usize>() + badge.as_ref().map_or(0, |b| b.width() + 1);
         spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), base));
         if let Some(badge) = badge {
             spans.push(Span::styled(badge, Style::default().fg(Color::Black).bg(badge_bg).bold()));
@@ -117,19 +110,13 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         return;
     }
-    let mut status = vec![Line::styled(
-        format!(" {}", app.settings.display_name),
-        Style::default().fg(dim()),
-    )];
+    let mut status = vec![Line::styled(format!(" {}", app.settings.display_name), Style::default().fg(dim()))];
     status.push(Line::from(match &app.net_state {
         NetState::Starting => Span::styled(" ● starting", Style::default().fg(Color::Yellow)),
         NetState::Online => {
             let online = app.interfaces.iter().filter(|i| i.online).count();
             let color = if online > 0 { Color::Green } else { Color::Yellow };
-            Span::styled(
-                format!(" ● {online}/{} interfaces", app.interfaces.len()),
-                Style::default().fg(color),
-            )
+            Span::styled(format!(" ● {online}/{} interfaces", app.interfaces.len()), Style::default().fg(color))
         }
         NetState::Failed(_) => Span::styled(" ● offline", Style::default().fg(Color::Red)),
     }));

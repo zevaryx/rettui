@@ -198,13 +198,11 @@ pub struct InboundMessage {
 }
 
 fn is_image_name(name: &str) -> bool {
-    name.rsplit_once('.')
-        .is_some_and(|(_, ext)| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+    name.rsplit_once('.').is_some_and(|(_, ext)| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
 pub fn is_image_path(path: &std::path::Path) -> bool {
-    path.file_name()
-        .is_some_and(|n| is_image_name(&n.to_string_lossy()))
+    path.file_name().is_some_and(|n| is_image_name(&n.to_string_lossy()))
 }
 
 fn encode(value: &Value) -> Vec<u8> {
@@ -240,9 +238,9 @@ pub fn parse_contact(text: &str) -> Result<(Hash, Option<[u8; 64]>), String> {
             .map(|(address, key)| (address, Some(key)))
             .ok_or_else(|| "Not a valid lxma:// link (its key doesn't match its address)".to_string());
     }
-    crate::net::parse_hash(text).map(|address| (address, None)).ok_or_else(|| {
-        "An LXMF address is 32 hex characters (or an lxma:// link)".to_string()
-    })
+    crate::net::parse_hash(text)
+        .map(|address| (address, None))
+        .ok_or_else(|| "An LXMF address is 32 hex characters (or an lxma:// link)".to_string())
 }
 
 fn bytes_of(value: &Value) -> Option<Vec<u8>> {

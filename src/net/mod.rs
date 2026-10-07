@@ -30,8 +30,8 @@ use crate::nomad::{self, FetchedContent, LinkCache};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
 pub use remote::{
-    Known, KnownIdentities, PathInfo, Ping, Probe, Progress, connect, drop_path, ensure_path, find_path, link_options, lookup,
-    paths, probe, trace_path,
+    Known, KnownIdentities, PathInfo, Ping, Probe, Progress, connect, drop_path, ensure_path, find_path, link_options, lookup, paths,
+    probe, trace_path,
 };
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
@@ -88,16 +88,25 @@ pub enum PeerKind {
 pub enum NetCommand {
     Announce,
     /// Write a paper message (answered with [`NetEvent::Paper`]).
-    WritePaper { id: u64, paper: lxmf::paper::Paper },
+    WritePaper {
+        id: u64,
+        paper: lxmf::paper::Paper,
+    },
     /// Read in a paper message (an `lxm://` link).
     ReadPaper(String),
     SetDisplayName(String),
     /// The stamp cost asked of senders (announced) and the largest message
     /// taken, in bytes (0: any).
-    SetPolicy { stamp_cost: Option<u8>, max_bytes: u64 },
+    SetPolicy {
+        stamp_cost: Option<u8>,
+        max_bytes: u64,
+    },
     /// Contacts: those given stamp tickets (trusted), and those spared the
     /// stamp (trusted, or written to).
-    SetContacts { trusted: Vec<Hash>, exempt: Vec<Hash> },
+    SetContacts {
+        trusted: Vec<Hash>,
+        exempt: Vec<Hash>,
+    },
     /// Ping an LXMF address (answered with [`NetEvent::Pinged`]).
     Ping(Hash),
     /// Find the path to any destination, asking for one if it isn't known
@@ -111,14 +120,24 @@ pub enum NetCommand {
     Probe(Hash),
     /// Remember the public key of an LXMF address (from an `lxma://` link),
     /// to write to it before hearing its announce.
-    Remember { to: Hash, public_key: [u8; 64] },
+    Remember {
+        to: Hash,
+        public_key: [u8; 64],
+    },
     /// Block (or unblock) the identity behind an LXMF address in Reticulum.
     /// `quiet`: no line in the log when it's done (re-applied at start).
-    Blackhole { to: Hash, block: bool, quiet: bool },
+    Blackhole {
+        to: Hash,
+        block: bool,
+        quiet: bool,
+    },
     SetPropagationNode(Option<Hash>),
     /// Pick the propagation node automatically, or stop; with the nodes
     /// heard before (address, hops, when last heard), to start from.
-    AutoPropagation { enabled: bool, known: Vec<(Hash, u8, i64)> },
+    AutoPropagation {
+        enabled: bool,
+        known: Vec<(Hash, u8, i64)>,
+    },
     /// Check the propagation node picked automatically soon (syncing with
     /// it, or sending through it, failed).
     RecheckPropagation,
@@ -130,7 +149,10 @@ pub enum NetCommand {
     },
     Sync,
     /// Send a message (its propagation node is the one set here).
-    SendMessage { id: u64, message: Box<lxmf::Outgoing> },
+    SendMessage {
+        id: u64,
+        message: Box<lxmf::Outgoing>,
+    },
     Fetch {
         id: u64,
         node: Hash,
@@ -145,7 +167,10 @@ pub enum NetCommand {
         nick: Option<String>,
     },
     /// Pass a command to a running hub session.
-    Rrc { hub: Hash, command: SessionCommand },
+    Rrc {
+        hub: Hash,
+        command: SessionCommand,
+    },
     /// Start (or restart) the hosted node, or stop it with `None`.
     Host(Option<HostConfig>),
     /// Pick up added, renamed or deleted pages.
@@ -252,7 +277,10 @@ pub fn bit_rate(bits: u64) -> String {
 pub enum NetEvent {
     /// Reticulum is up: this client's LXMF address, and its identity's
     /// public key.
-    Started { lxmf_hash: Hash, public_key: [u8; 64] },
+    Started {
+        lxmf_hash: Hash,
+        public_key: [u8; 64],
+    },
     StartFailed(String),
     Announce {
         kind: PeerKind,
@@ -262,22 +290,49 @@ pub enum NetEvent {
     },
     Announced,
     Message(Box<InboundMessage>),
-    Delivery { id: u64, result: Result<lxmf::Sent, String> },
-    Pinged { to: Hash, result: Result<Ping, String> },
+    Delivery {
+        id: u64,
+        result: Result<lxmf::Sent, String>,
+    },
+    Pinged {
+        to: Hash,
+        result: Result<Ping, String>,
+    },
     /// The path to a destination, or why none was found; and how finding it
     /// goes, meanwhile.
-    Path { to: Hash, result: Result<PathInfo, String> },
-    PathProgress { to: Hash, text: String },
+    Path {
+        to: Hash,
+        result: Result<PathInfo, String>,
+    },
+    PathProgress {
+        to: Hash,
+        text: String,
+    },
     /// A path forgotten (`had`: there was one).
-    PathForgotten { to: Hash, had: bool },
-    Probed { to: Hash, result: Result<Probe, String> },
+    PathForgotten {
+        to: Hash,
+        had: bool,
+    },
+    Probed {
+        to: Hash,
+        result: Result<Probe, String>,
+    },
     /// A propagation node picked automatically (or why none was).
     PropagationPicked(Result<autopn::Pick, String>),
     /// A paper message written: its `lxm://` link and hash.
-    Paper { id: u64, result: Result<(String, [u8; 32]), String> },
-    Fetched { id: u64, result: Result<FetchedContent, String> },
+    Paper {
+        id: u64,
+        result: Result<(String, [u8; 32]), String>,
+    },
+    Fetched {
+        id: u64,
+        result: Result<FetchedContent, String>,
+    },
     /// How a fetch is going, when finding a path takes a while.
-    FetchProgress { id: u64, text: String },
+    FetchProgress {
+        id: u64,
+        text: String,
+    },
     SyncStarted,
     Synced(Result<usize, String>),
     Interfaces(Vec<InterfaceInfo>),
@@ -285,7 +340,10 @@ pub enum NetEvent {
     /// path table (read now and then, for the Network list).
     Routes(std::collections::HashMap<Hash, String>),
     Log(String),
-    Rrc { hub: Hash, event: RrcEvent },
+    Rrc {
+        hub: Hash,
+        event: RrcEvent,
+    },
     Host(HostEvent),
     Pn(PnEvent),
     /// The actor has shut down (after [`NetCommand::Shutdown`]).
@@ -383,11 +441,7 @@ pub fn spawn(options: NetOptions) -> (mpsc::UnboundedSender<NetCommand>, mpsc::U
     let started = std::thread::Builder::new().name("rettui-net".into()).spawn({
         let ev_tx = ev_tx.clone();
         move || {
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .thread_name("rettui-net-worker")
-                .enable_all()
-                .build()
-            {
+            let runtime = match tokio::runtime::Builder::new_multi_thread().thread_name("rettui-net-worker").enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     let _ = ev_tx.send(NetEvent::StartFailed(format!("Could not start the network runtime: {e}")));
@@ -411,14 +465,9 @@ pub fn spawn(options: NetOptions) -> (mpsc::UnboundedSender<NetCommand>, mpsc::U
 
 /// Start the runtime without registering any destination, for one-shot CLI use.
 pub async fn start_runtime(rns_config: Option<&str>) -> Result<ReticulumHandle, String> {
-    init(
-        rns_config,
-        None,
-        ShutdownSignal::new(),
-        Arc::new(AtomicBool::new(true)),
-    )
-    .await
-    .map_err(|e| format!("Reticulum failed to start: {e}"))
+    init(rns_config, None, ShutdownSignal::new(), Arc::new(AtomicBool::new(true)))
+        .await
+        .map_err(|e| format!("Reticulum failed to start: {e}"))
 }
 
 /// Announces a subscription holds while the actor is busy. Busy networks
@@ -482,7 +531,10 @@ async fn run(
     };
     // With ratchets, as Python LXMF has (see [`lxmf::ratchets`]); without,
     // if the ring can't be kept, so messages still arrive.
-    let ring = lxmf::ratchets::ring_path(&options.ratchets, &rns_identity::destination::Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&identity.hash)));
+    let ring = lxmf::ratchets::ring_path(
+        &options.ratchets,
+        &rns_identity::destination::Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&identity.hash)),
+    );
     let ratcheted = match std::fs::create_dir_all(&options.ratchets) {
         Ok(()) => runtime
             .register_ratcheted_destination(identity.clone(), LXMF_ASPECT, delivery_options(), DestinationRatchetOptions::new(&ring))
@@ -1022,11 +1074,7 @@ async fn run(
 }
 
 /// Ask the actor to shut down and wait until it has (bounded; see [`Stop`]).
-pub async fn shutdown(
-    commands: &mpsc::UnboundedSender<NetCommand>,
-    events: &mut mpsc::UnboundedReceiver<NetEvent>,
-    why: Stop,
-) {
+pub async fn shutdown(commands: &mpsc::UnboundedSender<NetCommand>, events: &mut mpsc::UnboundedReceiver<NetEvent>, why: Stop) {
     if commands.send(NetCommand::Shutdown(why)).is_err() {
         return;
     }
@@ -1047,11 +1095,18 @@ async fn blackhole(runtime: &ReticulumHandle, known: &Known, to: Hash, block: bo
     use rns_transport::messages::TransportQuery;
     let address = hex::encode(to);
     let remote = lookup(runtime, known, to).await.map_err(|e| {
-        format!("Could not change the block on {address} in Reticulum: their identity isn't known ({e}); rettui still ignores their messages")
+        format!(
+            "Could not change the block on {address} in Reticulum: their identity isn't known ({e}); rettui still ignores their messages"
+        )
     })?;
     let hash = remote.identity.hash;
     let query = if block {
-        TransportQuery::BlackholeIdentity { hash, ttl: None, reason: BlackholeReason::Manual, reason_label: Some("blocked in rettui".into()) }
+        TransportQuery::BlackholeIdentity {
+            hash,
+            ttl: None,
+            reason: BlackholeReason::Manual,
+            reason_label: Some("blocked in rettui".into()),
+        }
     } else {
         TransportQuery::UnblackholeIdentity { hash }
     };
@@ -1076,15 +1131,8 @@ async fn announce_lxmf(
     }
 }
 
-async fn announce(
-    destination: &DestinationHandle,
-    app_data: Vec<u8>,
-    ev: &mpsc::UnboundedSender<NetEvent>,
-) {
-    let options = DestinationAnnounceOptions {
-        app_data: Some(app_data),
-        ..DestinationAnnounceOptions::default()
-    };
+async fn announce(destination: &DestinationHandle, app_data: Vec<u8>, ev: &mpsc::UnboundedSender<NetEvent>) {
+    let options = DestinationAnnounceOptions { app_data: Some(app_data), ..DestinationAnnounceOptions::default() };
     match destination.announce(options).await {
         Ok(_) => {
             let _ = ev.send(NetEvent::Announced);
@@ -1109,7 +1157,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(lora.details(), ["1.20 kbps", "MTU 508", "2 announces held"]);
-        let server = super::InterfaceInfo { bitrate: 10_000_000, mode: "ACCESS_POINT".into(), clients: Some(1), tx_drops: 3, ..Default::default() };
+        let server =
+            super::InterfaceInfo { bitrate: 10_000_000, mode: "ACCESS_POINT".into(), clients: Some(1), tx_drops: 3, ..Default::default() };
         assert_eq!(server.details(), ["10.00 Mbps", "mode access point", "1 client", "3 dropped"]);
         assert!(super::InterfaceInfo::default().details().is_empty());
     }

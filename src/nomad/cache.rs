@@ -31,10 +31,7 @@ pub struct Cache {
 }
 
 fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 impl Cache {
@@ -69,10 +66,7 @@ impl Cache {
         if age >= meta.ttl {
             return None;
         }
-        Some(Cached {
-            data: fs::read(data_path).ok()?,
-            age: Duration::from_secs(age),
-        })
+        Some(Cached { data: fs::read(data_path).ok()?, age: Duration::from_secs(age) })
     }
 
     /// Store a response. `ttl` overrides the default (a page's `#!c=`);
@@ -85,17 +79,11 @@ impl Cache {
             return;
         }
         let (data_path, meta_path) = self.files(&key);
-        let meta = Meta {
-            url: format!("{}:{path}", hex::encode(node)),
-            fetched: now(),
-            ttl: ttl.as_secs(),
-        };
-        let result = fs::create_dir_all(&self.dir)
-            .and_then(|()| fs::write(&data_path, data))
-            .and_then(|()| {
-                let json = serde_json::to_string(&meta).map_err(std::io::Error::other)?;
-                fs::write(&meta_path, json)
-            });
+        let meta = Meta { url: format!("{}:{path}", hex::encode(node)), fetched: now(), ttl: ttl.as_secs() };
+        let result = fs::create_dir_all(&self.dir).and_then(|()| fs::write(&data_path, data)).and_then(|()| {
+            let json = serde_json::to_string(&meta).map_err(std::io::Error::other)?;
+            fs::write(&meta_path, json)
+        });
         if let Err(e) = result {
             tracing::warn!("could not cache {}: {e}", meta.url);
         }
@@ -115,9 +103,7 @@ impl Cache {
     /// Drop expired entries (run at startup).
     fn prune(&self) {
         let now = now();
-        let removed = self.remove_where(|meta| {
-            meta.is_none_or(|m| now.saturating_sub(m.fetched) >= m.ttl)
-        });
+        let removed = self.remove_where(|meta| meta.is_none_or(|m| now.saturating_sub(m.fetched) >= m.ttl));
         if removed > 0 {
             tracing::debug!("pruned {removed} expired cache entries");
         }

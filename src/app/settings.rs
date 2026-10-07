@@ -46,16 +46,12 @@ impl App {
         if hand_picked {
             after.auto_propagation_node = false;
         }
-        let changed: Vec<&'static config::Field> = config::FIELDS
-            .iter()
-            .filter(|f| before.field_value(f.key) != after.field_value(f.key))
-            .collect();
+        let changed: Vec<&'static config::Field> =
+            config::FIELDS.iter().filter(|f| before.field_value(f.key) != after.field_value(f.key)).collect();
         if changed.is_empty() {
             return Ok(Vec::new());
         }
-        after
-            .save(&self.paths.settings)
-            .map_err(|e| format!("Could not save settings: {e:#}"))?;
+        after.save(&self.paths.settings).map_err(|e| format!("Could not save settings: {e:#}"))?;
         self.settings_file = after.clone();
 
         let mut notes = Vec::new();
@@ -84,7 +80,11 @@ impl App {
                         notes.push("Picking the propagation node automatically is off now".to_string());
                     }
                 }
-                "announce_schedule" | "announce_interval_mins" | "announce_random_min_mins" | "announce_random_max_mins" | "sync_interval_mins" => {
+                "announce_schedule"
+                | "announce_interval_mins"
+                | "announce_random_min_mins"
+                | "announce_random_max_mins"
+                | "sync_interval_mins" => {
                     self.settings.announce_schedule = after.announce_schedule.clone();
                     self.settings.announce_interval_mins = after.announce_interval_mins;
                     self.settings.announce_random_min_mins = after.announce_random_min_mins;
@@ -178,10 +178,7 @@ impl App {
             self.archive_overflow_now();
         }
         if intervals {
-            self.send(NetCommand::SetIntervals {
-                announce: after.announce_schedule(),
-                sync: minutes(after.sync_interval_mins),
-            });
+            self.send(NetCommand::SetIntervals { announce: after.announce_schedule(), sync: minutes(after.sync_interval_mins) });
         }
         let names: Vec<&str> = changed.iter().map(|f| f.label).collect();
         self.log(format!("Settings saved: {}", names.join(", ")));
@@ -206,10 +203,7 @@ impl App {
                 WebAccess::Change => {}
                 WebAccess::TurnOffOnly if now == "false" => {}
                 WebAccess::TurnOffOnly => {
-                    return Err(format!(
-                        "{} can only be turned on in the terminal UI: it runs programs on this computer",
-                        field.label
-                    ));
+                    return Err(format!("{} can only be turned on in the terminal UI: it runs programs on this computer", field.label));
                 }
                 WebAccess::TerminalOnly => {
                     return Err(format!(

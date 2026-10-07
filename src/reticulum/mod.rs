@@ -70,13 +70,7 @@ pub fn check(text: &str) -> (Option<Config>, Check) {
     let config = match Config::parse(text) {
         Ok(config) => config,
         Err(e) => {
-            return (
-                None,
-                Check {
-                    error: Some(e.to_string()),
-                    warnings: Vec::new(),
-                },
-            );
+            return (None, Check { error: Some(e.to_string()), warnings: Vec::new() });
         }
     };
     let mut result = Check::default();
@@ -103,10 +97,7 @@ pub fn discovery_autoconnect(config: &Config) -> u64 {
     if reticulum.get_bool("discover_interfaces") != Some(true) {
         return 0;
     }
-    reticulum
-        .get_uint("autoconnect_discovered_interfaces")
-        .or_else(|| reticulum.get_uint("discover_interfaces_autoconnect"))
-        .unwrap_or(0)
+    reticulum.get_uint("autoconnect_discovered_interfaces").or_else(|| reticulum.get_uint("discover_interfaces_autoconnect")).unwrap_or(0)
 }
 
 /// Interfaces marked Bootstrap only, while discovery connects by itself:
@@ -253,10 +244,7 @@ pub fn options(config: Option<&Config>, section: &Section) -> Vec<OptionView> {
     let values = config.and_then(|c| section_of(c, section));
     let lookup = |opt: &Opt| {
         let values = values?;
-        std::iter::once(opt.key)
-            .chain(opt.aliases.iter().copied())
-            .find_map(|k| values.values.get(k))
-            .map(value_text)
+        std::iter::once(opt.key).chain(opt.aliases.iter().copied()).find_map(|k| values.values.get(k)).map(value_text)
     };
     let mut known: BTreeSet<&str> = BTreeSet::new();
     let mut views = Vec::new();
@@ -465,9 +453,7 @@ pub fn has_own_interfaces(text: &str) -> bool {
     let doc = Doc::new(text);
     doc.subsections("interfaces").iter().any(|name| {
         interface_on(&doc, name)
-            && doc
-                .raw_value(&["interfaces", name], "type")
-                .is_some_and(|kind| kind.trim_matches(['"', '\'', ' ']) != "AutoInterface")
+            && doc.raw_value(&["interfaces", name], "type").is_some_and(|kind| kind.trim_matches(['"', '\'', ' ']) != "AutoInterface")
     })
 }
 
@@ -544,17 +530,29 @@ mod tests {
         assert!(twice.contains("[[RMAP World 2]]") && twice.contains("[[Default Interface]]"));
         assert_eq!(name, "RMAP World 2");
         // Bootstrap only, with discovery connecting by itself: warned of.
-        let bootstrapped = super::set_options(&added, &super::Section::Interface("RMAP World".into()), &[("bootstrap_only", "Yes")]).unwrap();
+        let bootstrapped =
+            super::set_options(&added, &super::Section::Interface("RMAP World".into()), &[("bootstrap_only", "Yes")]).unwrap();
         assert!(super::check(&bootstrapped).1.warnings.is_empty(), "no warning without discovery");
         let warned = super::check(&super::enable_discovery(&bootstrapped, 2)).1.warnings;
-        assert!(warned.iter().any(|w| w.starts_with("RMAP World: Bootstrap only: dropped as soon as") && w.contains("2 discovered entry points")), "{warned:?}");
+        assert!(
+            warned
+                .iter()
+                .any(|w| w.starts_with("RMAP World: Bootstrap only: dropped as soon as") && w.contains("2 discovered entry points")),
+            "{warned:?}"
+        );
         let discovering = super::enable_discovery(&added, 2);
         assert!(super::discovery_on(&discovering) && super::check(&discovering).1.error.is_none());
         let config = super::check(&discovering).0.unwrap();
         let reticulum = config.section("reticulum").unwrap();
-        assert_eq!((reticulum.get_bool("discover_interfaces"), reticulum.get_uint("autoconnect_discovered_interfaces")), (Some(true), Some(2)));
+        assert_eq!(
+            (reticulum.get_bool("discover_interfaces"), reticulum.get_uint("autoconnect_discovered_interfaces")),
+            (Some(true), Some(2))
+        );
         // A number already set is kept.
-        let set = super::enable_discovery(&discovering.replace("autoconnect_discovered_interfaces = 2", "autoconnect_discovered_interfaces = 5"), 2);
+        let set = super::enable_discovery(
+            &discovering.replace("autoconnect_discovered_interfaces = 2", "autoconnect_discovered_interfaces = 5"),
+            2,
+        );
         assert!(set.contains("autoconnect_discovered_interfaces = 5"));
     }
 

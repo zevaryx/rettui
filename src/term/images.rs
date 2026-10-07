@@ -153,11 +153,7 @@ impl Graphics {
 
     #[cfg(test)]
     pub fn for_tests(protocol: ProtocolType) -> Self {
-        Self::for_terminal(&Terminal {
-            forced: Some(protocol),
-            cell: Some(DEFAULT_CELL),
-            ..Terminal::default()
-        })
+        Self::for_terminal(&Terminal { forced: Some(protocol), cell: Some(DEFAULT_CELL), ..Terminal::default() })
     }
 }
 
@@ -213,10 +209,7 @@ impl Picture {
         } else {
             image
         };
-        Some(Self {
-            image: DynamicImage::into_rgba8(image),
-            graphic_cache: RefCell::new(None),
-        })
+        Some(Self { image: DynamicImage::into_rgba8(image), graphic_cache: RefCell::new(None) })
     }
 
     /// Lay out within `max_cols` x `max_rows` cells, keeping the aspect
@@ -227,11 +220,7 @@ impl Picture {
         let protocol = graphics.protocol();
         // A half-block cell shows 1x2 pixels, so pictures can be as many
         // cells wide as they have pixels; real graphics use the cell size.
-        let font = if protocol == ProtocolType::Halfblocks {
-            FontSize::new(1, 2)
-        } else {
-            graphics.picker.font_size()
-        };
+        let font = if protocol == ProtocolType::Halfblocks { FontSize::new(1, 2) } else { graphics.picker.font_size() };
         let (fw, fh) = (f64::from(font.width.max(1)), f64::from(font.height.max(1)));
         let (w, h) = (f64::from(self.image.width()), f64::from(self.image.height().max(1)));
         // Natural size in cells, then shrink to fit both limits.
@@ -341,11 +330,7 @@ mod probe {
             if remaining.is_zero() {
                 break;
             }
-            let mut pfd = libc::pollfd {
-                fd: libc::STDIN_FILENO,
-                events: libc::POLLIN,
-                revents: 0,
-            };
+            let mut pfd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
             // SAFETY: one valid pollfd for the duration of the call.
             let ready = unsafe { libc::poll(&mut pfd, 1, remaining.as_millis().max(1) as i32) };
             if ready <= 0 {
@@ -443,9 +428,7 @@ mod tests {
             *p = image::Rgba([if y < h / 2 { 255 } else { 0 }, 0, 0, 255]);
         }
         let mut out = Vec::new();
-        DynamicImage::ImageRgba8(img)
-            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-            .unwrap();
+        DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
         out
     }
 
@@ -506,12 +489,37 @@ mod tests {
         assert_eq!(t(|t| t.iterm2 = true), ProtocolType::Iterm2);
         // Windows Terminal always gets Sixel, whatever it answered.
         assert_eq!(t(|t| t.windows_terminal = true), ProtocolType::Sixel);
-        assert_eq!(t(|t| { t.windows_terminal = true; t.kitty = true }), ProtocolType::Sixel);
+        assert_eq!(
+            t(|t| {
+                t.windows_terminal = true;
+                t.kitty = true
+            }),
+            ProtocolType::Sixel
+        );
         // WezTerm: iTerm2 rather than its Kitty; Konsole: neither of its own.
-        assert_eq!(t(|t| { t.iterm2 = true; t.kitty = true }), ProtocolType::Iterm2);
-        assert_eq!(t(|t| { t.konsole = true; t.kitty = true; t.sixel = true }), ProtocolType::Halfblocks);
+        assert_eq!(
+            t(|t| {
+                t.iterm2 = true;
+                t.kitty = true
+            }),
+            ProtocolType::Iterm2
+        );
+        assert_eq!(
+            t(|t| {
+                t.konsole = true;
+                t.kitty = true;
+                t.sixel = true
+            }),
+            ProtocolType::Halfblocks
+        );
         // RETTUI_GRAPHICS wins.
-        assert_eq!(t(|t| { t.windows_terminal = true; t.forced = Some(ProtocolType::Halfblocks) }), ProtocolType::Halfblocks);
+        assert_eq!(
+            t(|t| {
+                t.windows_terminal = true;
+                t.forced = Some(ProtocolType::Halfblocks)
+            }),
+            ProtocolType::Halfblocks
+        );
         let graphics = Graphics::for_terminal(&Terminal { windows_terminal: true, ..Terminal::default() });
         assert_eq!(graphics.protocol(), ProtocolType::Sixel);
     }

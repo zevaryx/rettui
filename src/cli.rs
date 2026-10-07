@@ -14,13 +14,7 @@ use crate::lxmf::{DeliveryMode, InboundMessage};
 use crate::net::{self, Hash, NetCommand, NetEvent, NetOptions};
 use crate::nomad::{self, micron};
 
-fn options(
-    settings: &Settings,
-    paths: &Paths,
-    identity: Identity,
-    announce: bool,
-    node: Option<Hash>,
-) -> NetOptions {
+fn options(settings: &Settings, paths: &Paths, identity: Identity, announce: bool, node: Option<Hash>) -> NetOptions {
     NetOptions {
         rns_config: settings.rns_config.clone(),
         identity,
@@ -78,10 +72,7 @@ fn print_message(message: &InboundMessage, downloads: &Path) {
     let audio = extras.audio.as_ref().map(|a| (a.file_name(), a.data.as_slice(), format!("voice message, {}", a.codec())));
     let files = message.attachments.iter().map(|a| (a.name.clone(), a.data.as_slice(), "attachment".to_string()));
     for (name, data, what) in files.chain(audio) {
-        let name = Path::new(&name)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "attachment".into());
+        let name = Path::new(&name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "attachment".into());
         let path = downloads.join(&name);
         let saved = std::fs::create_dir_all(downloads).and_then(|()| std::fs::write(&path, data));
         match saved {
@@ -234,9 +225,7 @@ async fn say_if_asking(runtime: &rns_runtime::reticulum::ReticulumHandle, to: Ha
 /// for one if none is known; or with `drop`, forget it.
 pub async fn path(settings: &Settings, address: &str, drop: bool) -> Result<()> {
     let to = parse_destination(address)?;
-    let runtime = net::start_runtime(settings.rns_config.as_deref())
-        .await
-        .map_err(anyhow::Error::msg)?;
+    let runtime = net::start_runtime(settings.rns_config.as_deref()).await.map_err(anyhow::Error::msg)?;
     if drop {
         // Without a shared instance, the paths are those the last run with
         // this config saved, and this run saves them again without it.
@@ -262,9 +251,7 @@ pub async fn path(settings: &Settings, address: &str, drop: bool) -> Result<()> 
 /// Print every path known, as `rnpath -t` does: the shared instance's, if
 /// rettui or rnsd runs as one.
 pub async fn path_table(settings: &Settings) -> Result<()> {
-    let runtime = net::start_runtime(settings.rns_config.as_deref())
-        .await
-        .map_err(anyhow::Error::msg)?;
+    let runtime = net::start_runtime(settings.rns_config.as_deref()).await.map_err(anyhow::Error::msg)?;
     let shared = runtime.instance_mode == rns_runtime::reticulum::InstanceMode::Client;
     let paths = net::paths(&runtime).await;
     runtime.shutdown_and_wait().await;
@@ -293,9 +280,7 @@ pub async fn path_table(settings: &Settings) -> Result<()> {
 pub async fn probe(settings: &Settings, paths: &Paths, address: &str, name: Option<&str>) -> Result<()> {
     let to = parse_destination(address)?;
     let known = net::KnownIdentities::load(&paths.known_identities);
-    let runtime = net::start_runtime(settings.rns_config.as_deref())
-        .await
-        .map_err(anyhow::Error::msg)?;
+    let runtime = net::start_runtime(settings.rns_config.as_deref()).await.map_err(anyhow::Error::msg)?;
     say_if_asking(&runtime, to).await;
     let result = net::probe(&runtime, &known, to, name, &|text| eprintln!("{text}…")).await;
     runtime.shutdown_and_wait().await;
@@ -333,21 +318,13 @@ pub async fn sync(settings: &Settings, paths: &Paths, identity: Identity, node: 
     bail!("network task stopped")
 }
 
-pub async fn fetch(
-    settings: &Settings,
-    url: &str,
-    raw: bool,
-    identity: Option<Identity>,
-    output: Option<PathBuf>,
-) -> Result<()> {
+pub async fn fetch(settings: &Settings, url: &str, raw: bool, identity: Option<Identity>, output: Option<PathBuf>) -> Result<()> {
     let (node, path) = url.split_once(':').unwrap_or((url, ""));
     let Some(node) = net::parse_hash(node) else {
         bail!("expected <32 hex char node hash>[:/page/path.mu]");
     };
     let path = if path.is_empty() { nomad_core::DEFAULT_INDEX_ROUTE } else { path };
-    let runtime = net::start_runtime(settings.rns_config.as_deref())
-        .await
-        .map_err(anyhow::Error::msg)?;
+    let runtime = net::start_runtime(settings.rns_config.as_deref()).await.map_err(anyhow::Error::msg)?;
     let result = nomad::fetch_once(&runtime, node, path, identity, &|text| eprintln!("{text}")).await;
     runtime.shutdown_and_wait().await;
     let content = result.map_err(anyhow::Error::msg)?;

@@ -32,13 +32,7 @@ pub fn hello_body() -> Value {
     Value::Map(vec![
         (key(B_HELLO_NAME), Value::Text("rettui".into())),
         (key(B_HELLO_VER), Value::Text(env!("CARGO_PKG_VERSION").into())),
-        (
-            key(B_HELLO_CAPS),
-            Value::Map(vec![
-                (key(CAP_RESOURCE_ENVELOPE), Value::Bool(true)),
-                (key(CAP_ACTION), Value::Bool(true)),
-            ]),
-        ),
+        (key(B_HELLO_CAPS), Value::Map(vec![(key(CAP_RESOURCE_ENVELOPE), Value::Bool(true)), (key(CAP_ACTION), Value::Bool(true))])),
     ])
 }
 
@@ -54,13 +48,7 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self {
-            max_nick_bytes: 32,
-            max_room_bytes: 64,
-            max_msg_bytes: 350,
-            max_rooms: 32,
-            msgs_per_minute: 240,
-        }
+        Self { max_nick_bytes: 32, max_room_bytes: 64, max_msg_bytes: 350, max_rooms: 32, msgs_per_minute: 240 }
     }
 }
 
@@ -80,15 +68,10 @@ pub fn parse_welcome(body: Option<&Value>) -> Welcome {
     welcome.hub_name = get(map, B_WELCOME_HUB).and_then(text);
     welcome.version = get(map, B_WELCOME_VER).and_then(text);
     if let Some(Value::Map(caps)) = get(map, B_WELCOME_CAPS) {
-        welcome.direct_notices = get(caps, CAP_DIRECT_NOTICE)
-            .is_some_and(|v| v.as_bool().unwrap_or(false));
+        welcome.direct_notices = get(caps, CAP_DIRECT_NOTICE).is_some_and(|v| v.as_bool().unwrap_or(false));
     }
     if let Some(Value::Map(limits)) = get(map, B_WELCOME_LIMITS) {
-        let limit = |k: u64, default: usize| {
-            get(limits, k)
-                .and_then(as_u64)
-                .map_or(default, |v| v as usize)
-        };
+        let limit = |k: u64, default: usize| get(limits, k).and_then(as_u64).map_or(default, |v| v as usize);
         let d = Limits::default();
         welcome.limits = Limits {
             max_nick_bytes: limit(0, d.max_nick_bytes),
@@ -121,9 +104,7 @@ pub fn parse_resource_envelope(env: &Envelope) -> Option<ResourceAnnouncement> {
         kind: get(map, B_RES_KIND).and_then(text)?,
         size,
         sha256: get(map, B_RES_SHA256).and_then(bytes),
-        encoding: get(map, B_RES_ENCODING)
-            .and_then(text)
-            .unwrap_or_else(|| "utf-8".into()),
+        encoding: get(map, B_RES_ENCODING).and_then(text).unwrap_or_else(|| "utf-8".into()),
         room: env.room.as_deref().map(normalize_room).filter(|r| !r.is_empty()),
     })
 }
@@ -142,10 +123,7 @@ pub fn parse_room_list(text: &str) -> Option<Vec<(String, Option<String>)>> {
             .map(str::trim)
             .filter(|l| !l.is_empty())
             .map(|line| match line.split_once(" - ") {
-                Some((name, topic)) => (
-                    normalize_room(name),
-                    Some(topic.trim().to_string()).filter(|t| !t.is_empty()),
-                ),
+                Some((name, topic)) => (normalize_room(name), Some(topic.trim().to_string()).filter(|t| !t.is_empty())),
                 None => (normalize_room(line), None),
             })
             .collect(),
@@ -183,10 +161,7 @@ pub fn parse_who(text: &str) -> Option<(String, Vec<WhoEntry>)> {
         }
         current.push_str(piece);
         if is_hex(&current, 32) {
-            entries.push(WhoEntry {
-                nick: None,
-                hash_hex: current.to_lowercase(),
-            });
+            entries.push(WhoEntry { nick: None, hash_hex: current.to_lowercase() });
             current.clear();
         } else if let Some(open) = current.rfind(" (")
             && current.ends_with(')')
@@ -217,10 +192,7 @@ pub fn parse_room_info(text: &str) -> Option<RoomInfo> {
     let (room, info) = rest.split_once(": ")?;
     let (head, topic) = info.split_once("topic=")?;
     let topic = topic.trim();
-    let mode = head
-        .split_once("mode=")
-        .map(|(_, m)| m.trim().trim_end_matches(';').trim().to_string())
-        .unwrap_or_default();
+    let mode = head.split_once("mode=").map(|(_, m)| m.trim().trim_end_matches(';').trim().to_string()).unwrap_or_default();
     Some(RoomInfo {
         room: normalize_room(room),
         registered: head.trim_start().starts_with("registered"),
@@ -250,17 +222,12 @@ mod tests {
     #[test]
     fn hub_notice_parsers() {
         let list = parse_room_list("Registered public rooms:\n  general - Chat about anything\n  mesh\n").unwrap();
-        assert_eq!(list, vec![
-            ("general".into(), Some("Chat about anything".into())),
-            ("mesh".into(), None),
-        ]);
+        assert_eq!(list, vec![("general".into(), Some("Chat about anything".into())), ("mesh".into(), None),]);
         assert_eq!(parse_room_list("No public rooms registered"), Some(vec![]));
         assert_eq!(parse_room_list("something else"), None);
 
-        let (room, who) = parse_who(
-            "members in General: zev (0123456789ab), odd, nick (x) (abcdefabcdef), 00112233445566778899aabbccddeeff",
-        )
-        .unwrap();
+        let (room, who) =
+            parse_who("members in General: zev (0123456789ab), odd, nick (x) (abcdefabcdef), 00112233445566778899aabbccddeeff").unwrap();
         assert_eq!(room, "general");
         assert_eq!(who.len(), 3);
         assert_eq!(who[0].nick.as_deref(), Some("zev"));

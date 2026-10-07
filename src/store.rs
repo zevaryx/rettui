@@ -38,7 +38,9 @@ pub struct Peer {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageState {
-    Received { verified: bool },
+    Received {
+        verified: bool,
+    },
     #[default]
     Sending,
     Delivered,
@@ -155,11 +157,7 @@ impl Message {
     /// The LXMF hash (hex) replies to this message name it by, if it has
     /// one (a message being sent, or that failed, has none yet).
     pub fn lxmf_hash(&self) -> Option<&str> {
-        if self.incoming {
-            (self.id.len() == 64).then_some(self.id.as_str())
-        } else {
-            self.hash.as_deref()
-        }
+        if self.incoming { (self.id.len() == 64).then_some(self.id.as_str()) } else { self.hash.as_deref() }
     }
 
     /// The start of what it says, for a reply's quote and the
@@ -429,8 +427,8 @@ pub struct Archived {
 
 /// The archive's file for the month a message was sent (UTC), in `dir`.
 pub fn archive_month(dir: &Path, timestamp: f64) -> PathBuf {
-    let month = chrono::DateTime::from_timestamp(timestamp as i64, 0)
-        .map_or_else(|| "0000-00".to_string(), |t| t.format("%Y-%m").to_string());
+    let month =
+        chrono::DateTime::from_timestamp(timestamp as i64, 0).map_or_else(|| "0000-00".to_string(), |t| t.format("%Y-%m").to_string());
     dir.join(format!("{month}{ARCHIVE_EXTENSION}"))
 }
 
@@ -587,10 +585,7 @@ pub fn keep_within(store: &Path, archive: &Path, limit: u64) -> Result<(Vec<Stri
         std::fs::remove_file(&path)?;
         total -= bytes;
         let name = path.file_name().map(|n| n.to_string_lossy().replace(ARCHIVE_EXTENSION, "")).unwrap_or_default();
-        notes.push(format!(
-            "Deleted the archived messages of {name} ({}) to keep messages within the storage limit",
-            kilobytes(bytes)
-        ));
+        notes.push(format!("Deleted the archived messages of {name} ({}) to keep messages within the storage limit", kilobytes(bytes)));
     }
     Ok((notes, total > limit))
 }
@@ -684,9 +679,7 @@ impl Store {
                 Ok(store) => store,
                 Err(e) => {
                     let mut store: Self = read_json(&legacy)?;
-                    store
-                        .migration_notes
-                        .push(format!("Could not convert store.json to store.json.gz, still using it: {e:#}"));
+                    store.migration_notes.push(format!("Could not convert store.json to store.json.gz, still using it: {e:#}"));
                     tracing::warn!("store conversion failed: {e:#}");
                     store
                 }
@@ -728,17 +721,14 @@ impl Store {
                 }
                 Err(e) => {
                     tracing::warn!("could not read {}: {e:#}", path.display());
-                    self.migration_notes.push(format!(
-                        "Could not read peers.json.gz ({e:#}); peers are listed again as they announce"
-                    ));
+                    self.migration_notes.push(format!("Could not read peers.json.gz ({e:#}); peers are listed again as they announce"));
                 }
             }
         } else if !self.peers.is_empty() {
             match encode_peers(&self.peers).and_then(|bytes| write_atomic(path, &bytes)) {
                 Ok(()) => {
                     self.rewrite_store = holds_peers;
-                    self.migration_notes
-                        .push(format!("Moved {} peers from store.json.gz to peers.json.gz", self.peers.len()));
+                    self.migration_notes.push(format!("Moved {} peers from store.json.gz to peers.json.gz", self.peers.len()));
                 }
                 Err(e) => {
                     self.rewrite_peers = true;
@@ -840,20 +830,14 @@ impl Store {
 
     /// Conversation keys, most recent activity first.
     pub fn conversation_order(&self) -> Vec<String> {
-        let mut keys: Vec<(&String, f64)> = self
-            .conversations
-            .iter()
-            .map(|(k, c)| (k, c.messages.last().map_or(0.0, |m| m.timestamp)))
-            .collect();
+        let mut keys: Vec<(&String, f64)> =
+            self.conversations.iter().map(|(k, c)| (k, c.messages.last().map_or(0.0, |m| m.timestamp))).collect();
         keys.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         keys.into_iter().map(|(k, _)| k.clone()).collect()
     }
 
     pub fn find_message_mut(&mut self, id: &str) -> Option<&mut Message> {
-        self.conversations
-            .values_mut()
-            .flat_map(|c| c.messages.iter_mut())
-            .find(|m| m.id == id)
+        self.conversations.values_mut().flat_map(|c| c.messages.iter_mut()).find(|m| m.id == id)
     }
 
     /// A reaction of yours, by its `local-N` id (on a message, or waiting
@@ -896,15 +880,7 @@ mod tests {
 
     fn sample() -> Store {
         let mut store = Store::default();
-        store.peers.insert(
-            "ab".repeat(16),
-            Peer {
-                kind: PeerKind::Lxmf,
-                name: Some("Alice".into()),
-                hops: 2,
-                last_seen: 1_790_000_000,
-            },
-        );
+        store.peers.insert("ab".repeat(16), Peer { kind: PeerKind::Lxmf, name: Some("Alice".into()), hops: 2, last_seen: 1_790_000_000 });
         let message = Message {
             id: "local-1".into(),
             content: "hello ".repeat(50),
@@ -1098,7 +1074,11 @@ mod tests {
         let (alice, bob) = ("ab".repeat(16), "cd".repeat(16));
         // Two months, out of order, with someone else's between.
         let october = archive_month(&dir, 1_791_000_000.0);
-        std::fs::write(&october, encode_archive(&[message(&alice, "late", 1_791_000_000.0), message(&bob, "bob", 1_791_000_001.0)]).unwrap()).unwrap();
+        std::fs::write(
+            &october,
+            encode_archive(&[message(&alice, "late", 1_791_000_000.0), message(&bob, "bob", 1_791_000_001.0)]).unwrap(),
+        )
+        .unwrap();
         let september = archive_month(&dir, 1_790_000_000.0);
         let mut bytes = encode_archive(&[message(&alice, "early", 1_790_000_000.0)]).unwrap();
         bytes.extend(gzip(b"not json, but naming abababababababababababababababab\n").unwrap());

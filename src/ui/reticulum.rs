@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 
 use super::editor::{Highlighted, draw_text_editor};
-use super::{accent, dim, selected_bg, block};
+use super::{accent, block, dim, selected_bg};
 use crate::app::App;
 use crate::app::reticulum::{RnsFocus, RnsRow, rns_truthy};
 use crate::reticulum::schema::Kind;
@@ -96,9 +96,7 @@ fn draw_sections(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|section| match section {
             Section::Interface(name) => {
                 let values = config.as_ref().and_then(|c| c.subsection("interfaces", name));
-                let enabled = values
-                    .and_then(|v| v.get("enabled").or_else(|| v.get("interface_enabled")))
-                    .is_none_or(rns_truthy);
+                let enabled = values.and_then(|v| v.get("enabled").or_else(|| v.get("interface_enabled"))).is_none_or(rns_truthy);
                 let kind = values.and_then(|v| v.get("type")).unwrap_or("?").trim_end_matches("Interface").to_string();
                 let (dot, color) = if enabled { ("●", Color::Green) } else { ("○", dim()) };
                 ListItem::new(Line::from(vec![
@@ -157,10 +155,7 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     option.label.clone()
                 };
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("  {label:<label_width$}"), Style::default().fg(dim())),
-                    value,
-                ]))
+                ListItem::new(Line::from(vec![Span::styled(format!("  {label:<label_width$}"), Style::default().fg(dim())), value]))
             }
         })
         .collect();
@@ -168,9 +163,10 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, list_area, &mut app.rns.option_list);
 
     let help = app.rns.selected_option().map_or_else(Vec::new, |o| {
-        vec![
-            Line::from(vec![Span::styled(format!(" {} ", o.key), Style::default().fg(KEY)), Span::styled(o.help, Style::default().fg(dim()).italic())]),
-        ]
+        vec![Line::from(vec![
+            Span::styled(format!(" {} ", o.key), Style::default().fg(KEY)),
+            Span::styled(o.help, Style::default().fg(dim()).italic()),
+        ])]
     });
     frame.render_widget(Paragraph::new(help).wrap(Wrap { trim: false }), help_area);
 }
@@ -243,7 +239,10 @@ fn draw_text(frame: &mut Frame, app: &mut App, area: Rect) {
     let status = match (&check.error, check.warnings.first()) {
         (Some(error), _) => Line::styled(format!(" ✗ {error} (cannot be saved like this)"), Style::default().fg(Color::Red)),
         (None, Some(warning)) => Line::styled(
-            format!(" ! {warning}{}", if check.warnings.len() > 1 { format!(" (+{} more)", check.warnings.len() - 1) } else { String::new() }),
+            format!(
+                " ! {warning}{}",
+                if check.warnings.len() > 1 { format!(" (+{} more)", check.warnings.len() - 1) } else { String::new() }
+            ),
             Style::default().fg(Color::Yellow),
         ),
         (None, None) => Line::styled(" ✓ Loads", Style::default().fg(Color::Green)),

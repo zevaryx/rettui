@@ -10,8 +10,7 @@ pub fn normalize_room(room: &str) -> String {
 /// A nick the hub will accept, or `None`.
 pub fn normalize_nick(nick: &str, max_bytes: usize) -> Option<String> {
     let nick = nick.trim();
-    (!nick.is_empty() && nick.len() <= max_bytes && !nick.contains(['\n', '\r', '\0']))
-        .then(|| nick.to_string())
+    (!nick.is_empty() && nick.len() <= max_bytes && !nick.contains(['\n', '\r', '\0'])).then(|| nick.to_string())
 }
 
 fn is_word(c: char) -> bool {
@@ -94,9 +93,7 @@ fn lowercase(nick: &str) -> Vec<char> {
 /// Byte ranges of each `@nick` mention (as a whole word, any case) in `text`.
 pub fn mention_ranges(text: &str, nick: &str) -> Vec<(usize, usize)> {
     let needle = lowercase(nick);
-    text.match_indices('@')
-        .filter_map(|(at, _)| Some((at, mention_end(text, at, &needle)?)))
-        .collect()
+    text.match_indices('@').filter_map(|(at, _)| Some((at, mention_end(text, at, &needle)?))).collect()
 }
 
 /// Byte ranges of mentions of any of `names` in `text`, each with the index
@@ -113,11 +110,8 @@ pub fn user_mentions(text: &str, names: &[&str]) -> Vec<(usize, usize, usize)> {
         if at < after {
             continue;
         }
-        let longest = needles
-            .iter()
-            .enumerate()
-            .filter_map(|(i, needle)| Some((mention_end(text, at, needle)?, i)))
-            .max_by_key(|(end, _)| *end);
+        let longest =
+            needles.iter().enumerate().filter_map(|(i, needle)| Some((mention_end(text, at, needle)?, i))).max_by_key(|(end, _)| *end);
         if let Some((end, i)) = longest {
             found.push((at, end, i));
             after = end;
@@ -182,12 +176,8 @@ pub fn split_message(text: &str, limit: usize) -> Vec<String> {
 
 /// `rrc://<hash>[:<aspect>]/<room>`, `rrc@<hash>[/<room>]` or a bare hash.
 pub fn parse_link(link: &str) -> Option<(crate::net::Hash, String, Option<String>)> {
-    let rest = link
-        .trim()
-        .strip_prefix("rrc://")
-        .or_else(|| link.trim().strip_prefix("rrc@"))
-        .unwrap_or(link.trim())
-        .trim_start_matches('/');
+    let rest =
+        link.trim().strip_prefix("rrc://").or_else(|| link.trim().strip_prefix("rrc@")).unwrap_or(link.trim()).trim_start_matches('/');
     let (hub, room) = rest.split_once('/').unwrap_or((rest, ""));
     let (hex, aspect) = hub.split_once(':').unwrap_or((hub, ""));
     let hash = crate::net::parse_hash(hex)?;
@@ -273,10 +263,7 @@ mod tests {
         assert_eq!(mention_ranges("@名前さん", "名前さん"), [(0, 13)]);
         // Several users: each whole, the longest winning.
         let names = ["bob", "bob-smith", "o'brien", "ann b"];
-        assert_eq!(
-            user_mentions("@bob-smith, @bob's, @O'Brien and @ann b.", &names),
-            [(0, 10, 1), (12, 16, 0), (20, 28, 2), (33, 39, 3)]
-        );
+        assert_eq!(user_mentions("@bob-smith, @bob's, @O'Brien and @ann b.", &names), [(0, 10, 1), (12, 16, 0), (20, 28, 2), (33, 39, 3)]);
         assert!(user_mentions("@bob-jones @bobby", &names).is_empty());
         assert_eq!(user_mentions("hi @a@b!", &["a@b", "b"]), [(3, 7, 0)]);
     }

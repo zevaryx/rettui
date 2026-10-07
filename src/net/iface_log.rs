@@ -130,16 +130,26 @@ pub fn hint(line: &str) -> Option<&'static str> {
     let device = has(&["serial", "rnode", "kiss", "tty"]);
     if has(&["max reconnect tries reached"]) {
         Some("It has stopped trying: restart Reticulum to try again")
-    } else if has(&["failed to lookup address", "name or service not known", "temporary failure in name resolution", "nodename nor servname", "no such host is known"]) {
+    } else if has(&[
+        "failed to lookup address",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "nodename nor servname",
+        "no such host is known",
+    ]) {
         Some("The host name couldn't be looked up: check this computer's internet connection and the interface's host name")
     } else if has(&["network is unreachable", "no route to host", "network unreachable"]) {
         Some("This computer has no route there: check its internet connection")
     } else if has(&["i2p", "sam "]) && has(&["refused"]) {
         Some("No I2P router is answering: I2P interfaces need one running (i2pd, or I2P with its SAM bridge on)")
     } else if has(&["connection refused", "actively refused"]) {
-        Some("Nothing accepted the connection: the host may be down, or the port is wrong. Another entry point, or interface discovery, can stand in")
+        Some(
+            "Nothing accepted the connection: the host may be down, or the port is wrong. Another entry point, or interface discovery, can stand in",
+        )
     } else if has(&["link-local ipv6", "address family not supported", "address family not available"]) {
-        Some("The Auto interface finds others on the local network over IPv6, which this computer (or container: Docker's usually lack it) doesn't have; the other interfaces still work")
+        Some(
+            "The Auto interface finds others on the local network over IPv6, which this computer (or container: Docker's usually lack it) doesn't have; the other interfaces still work",
+        )
     } else if has(&["timed out", "timeout"]) {
         Some("No answer: the host may be down, or a firewall is in the way")
     } else if has(&["address already in use", "address in use", "only one usage of each socket address"]) {
@@ -147,7 +157,9 @@ pub fn hint(line: &str) -> Option<&'static str> {
     } else if has(&["device or resource busy", "resource busy"]) {
         Some("Another program has the device open (rnsd, rnodeconf, or a second rettui): close it first")
     } else if device && has(&["no such file or directory", "no such device", "cannot find the file", "not found"]) {
-        Some("The device isn't there: check the radio is plugged in and the interface's port (such as /dev/ttyUSB0 or /dev/ttyACM0, or COM3 on Windows)")
+        Some(
+            "The device isn't there: check the radio is plugged in and the interface's port (such as /dev/ttyUSB0 or /dev/ttyACM0, or COM3 on Windows)",
+        )
     } else if device && has(&["permission denied", "access is denied"]) {
         Some("Not allowed to open the device: on Linux, add yourself to the group that owns it (often dialout) and log in again")
     } else if has(&["permission denied", "access is denied"]) {
@@ -255,12 +267,15 @@ mod tests {
             _ => None,
         })
         .collect();
-        assert_eq!(lines, [
-            "Interface Testnet: TCP connect failed: Connection refused (os error 111). Nothing accepted the connection: the host may be down, or the port is wrong. Another entry point, or interface discovery, can stand in",
-            "Interface TCPInterface[Testnet]: TCP read error: reset",
-            "Interface: TCP write error: broken pipe",
-            "Interface: Failed to spawn interface: no such device",
-        ]);
+        assert_eq!(
+            lines,
+            [
+                "Interface Testnet: TCP connect failed: Connection refused (os error 111). Nothing accepted the connection: the host may be down, or the port is wrong. Another entry point, or interface discovery, can stand in",
+                "Interface TCPInterface[Testnet]: TCP read error: reset",
+                "Interface: TCP write error: broken pipe",
+                "Interface: Failed to spawn interface: no such device",
+            ]
+        );
     }
 
     #[test]
@@ -269,12 +284,21 @@ mod tests {
         // other systems.
         let cases = [
             ("Interface Bad DNS: TCP connect failed: failed to lookup address information: Name or service not known", "looked up"),
-            ("Interface Bad DNS: TCP connect failed: failed to lookup address information: nodename nor servname provided, or not known", "looked up"),
+            (
+                "Interface Bad DNS: TCP connect failed: failed to lookup address information: nodename nor servname provided, or not known",
+                "looked up",
+            ),
             ("Interface Bad DNS: TCP connect failed: No such host is known. (os error 11001)", "looked up"),
             ("Interface Refused: TCP connect failed: Connection refused (os error 111)", "Nothing accepted"),
-            ("Interface Refused: TCP connect failed: No connection could be made because the target machine actively refused it. (os error 10061)", "Nothing accepted"),
+            (
+                "Interface Refused: TCP connect failed: No connection could be made because the target machine actively refused it. (os error 10061)",
+                "Nothing accepted",
+            ),
             ("Interface Blackhole: TCP connect timed out", "No answer"),
-            ("Interface No I2P: I2P client: failed to connect to SAM bridge: SAM I/O error: Connection refused (os error 111)", "I2P router"),
+            (
+                "Interface No I2P: I2P client: failed to connect to SAM bridge: SAM I/O error: Connection refused (os error 111)",
+                "I2P router",
+            ),
             ("Interface: Failed to spawn interface: TCP server: I/O error: Address already in use (os error 98)", "already uses that port"),
             ("Interface: Failed to spawn interface: RNode: send failed: rnode serial open: No such file or directory", "plugged in"),
             ("Interface: Failed to spawn interface: Serial: send failed: serial open: Permission denied (os error 13)", "dialout"),
@@ -283,7 +307,10 @@ mod tests {
             ("Interface Testnet: Max reconnect tries reached", "restart Reticulum"),
             ("Interface Down: Network is unreachable (os error 101)", "no route"),
             ("Interface Default Interface: No link-local IPv6 addresses found", "IPv6"),
-            ("Interface Default Interface failed: Auto: I/O error: data socket bind (42671): Address family not supported by protocol (os error 97)", "IPv6"),
+            (
+                "Interface Default Interface failed: Auto: I/O error: data socket bind (42671): Address family not supported by protocol (os error 97)",
+                "IPv6",
+            ),
         ];
         for (line, expected) in cases {
             let hint = hint(line).unwrap_or_else(|| panic!("no hint for {line}"));

@@ -107,27 +107,19 @@ impl Owner {
     pub fn fetch(&mut self, location: Location, refresh: bool, reply: oneshot::Sender<Result<Fetched, String>>) {
         // This client's own node is read from its folder (see `own_node_content`).
         if self.app.is_own_node(location.node) {
-            let result = self.app.own_node_content(&location.path).map(|content| Fetched {
-                data: content.data,
-                metadata: None,
-                cached_age: None,
-            });
+            let result =
+                self.app.own_node_content(&location.path).map(|content| Fetched { data: content.data, metadata: None, cached_age: None });
             let _ = reply.send(result);
             return;
         }
         let identified = self.app.identifies_to(location.node);
-        let cacheable = location.fields.is_empty()
-            && !location.path.starts_with(nomad_core::FILE_PREFIX)
-            && !self.app.is_own_node(location.node);
+        let cacheable =
+            location.fields.is_empty() && !location.path.starts_with(nomad_core::FILE_PREFIX) && !self.app.is_own_node(location.node);
         if cacheable
             && !refresh
             && let Some(cached) = self.app.page_cache().get(location.node, &location.path, identified)
         {
-            let _ = reply.send(Ok(Fetched {
-                data: cached.data,
-                metadata: None,
-                cached_age: Some(cached.age),
-            }));
+            let _ = reply.send(Ok(Fetched { data: cached.data, metadata: None, cached_age: Some(cached.age) }));
             return;
         }
         let id = self.next_request;
@@ -139,15 +131,7 @@ impl Owner {
             fields: location.fields.clone(),
             identify: identified,
         });
-        self.fetches.insert(
-            id,
-            PendingFetch {
-                location,
-                identified,
-                cacheable,
-                reply,
-            },
-        );
+        self.fetches.insert(id, PendingFetch { location, identified, cacheable, reply });
     }
 
     /// Take in a network event; what browsers showing it should refetch.
@@ -195,19 +179,9 @@ impl Owner {
                             .then(|| micron::cache_directive(&String::from_utf8_lossy(&content.data)))
                             .flatten()
                             .map(Duration::from_secs);
-                        self.app.page_cache().put(
-                            location.node,
-                            &location.path,
-                            pending.identified,
-                            &content.data,
-                            ttl,
-                        );
+                        self.app.page_cache().put(location.node, &location.path, pending.identified, &content.data, ttl);
                     }
-                    Fetched {
-                        data: content.data,
-                        metadata: content.metadata,
-                        cached_age: None,
-                    }
+                    Fetched { data: content.data, metadata: content.metadata, cached_age: None }
                 });
                 let _ = pending.reply.send(result);
             }
@@ -393,18 +367,12 @@ impl WebState {
         Ok(token)
     }
 
-    async fn run<T: Send + 'static>(
-        &self,
-        changes: bool,
-        f: impl FnOnce(&mut Owner) -> T + Send + 'static,
-    ) -> Result<T, String> {
+    async fn run<T: Send + 'static>(&self, changes: bool, f: impl FnOnce(&mut Owner) -> T + Send + 'static) -> Result<T, String> {
         let (tx, rx) = oneshot::channel();
         let run: JobFn = Box::new(move |owner| {
             let _ = tx.send(f(owner));
         });
-        self.jobs
-            .send(Job { run, changes })
-            .map_err(|_| "rettui is shutting down".to_string())?;
+        self.jobs.send(Job { run, changes }).map_err(|_| "rettui is shutting down".to_string())?;
         rx.await.map_err(|_| "rettui is shutting down".to_string())
     }
 
@@ -484,25 +452,15 @@ fn reachable_ip(listening: IpAddr) -> Option<IpAddr> {
         .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
 }
 
-pub async fn run(
-    settings: Settings,
-    paths: Paths,
-    identity: Identity,
-    address: &str,
-    https: Option<tls::Https>,
-) -> Result<()> {
-    let address: SocketAddr = address
-        .parse()
-        .with_context(|| format!("--web expects an address like {DEFAULT_ADDRESS}, not {address}"))?;
+pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: &str, https: Option<tls::Https>) -> Result<()> {
+    let address: SocketAddr = address.parse().with_context(|| format!("--web expects an address like {DEFAULT_ADDRESS}, not {address}"))?;
     let token = load_token(&paths)?;
     // Certificates first: a problem with them stops rettui before it starts.
     let served = match &https {
         Some(how) => Some(tls::prepare(how, &paths.web_tls, address.ip()).context("could not set up HTTPS")?),
         None => None,
     };
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
-        .with_context(|| format!("could not listen on {address}"))?;
+    let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("could not listen on {address}"))?;
 
     let identity_hash = identity.hash;
     let store = Store::load(&paths.store).unwrap_or_else(|e| {
@@ -514,25 +472,14 @@ pub async fn run(
     // No tab is "on screen" in the web UI: unread counts are cleared by
     // browsers when they show a conversation or room.
     app.tab = Tab::Status;
-    let mut owner = Owner {
-        app,
-        fetches: HashMap::new(),
-        next_request: FIRST_WEB_REQUEST,
-        recent: VecDeque::new(),
-    };
+    let mut owner = Owner { app, fetches: HashMap::new(), next_request: FIRST_WEB_REQUEST, recent: VecDeque::new() };
     let push = push::WebPush::load(&paths).context("could not set up Web Push")?;
     // Ids go on from the last run's (milliseconds since 1970 at start), so a
     // browser catching up after a restart isn't confused.
-    let mut next_notice = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64);
+    let mut next_notice = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
 
     let scheme = if served.is_some() { "https" } else { "http" };
-    let shown = if address.ip().is_unspecified() {
-        format!("127.0.0.1:{}", address.port())
-    } else {
-        address.to_string()
-    };
+    let shown = if address.ip().is_unspecified() { format!("127.0.0.1:{}", address.port()) } else { address.to_string() };
     let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
     let (changes, _) = broadcast::channel(64);
     let (notices, _) = broadcast::channel(64);

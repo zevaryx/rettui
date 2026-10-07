@@ -218,7 +218,10 @@ pub fn lines(text: &str, width: usize) -> Vec<Line<'static>> {
         let rest = " ".repeat(first.width());
         let avail = width.saturating_sub(bars.width() + first.width()).max(1);
         if block.kind == Kind::Rule {
-            out.push(Line::from(vec![Span::styled(bars.clone(), Style::default().fg(QUOTE)), Span::styled("─".repeat(avail), Style::default().fg(QUOTE))]));
+            out.push(Line::from(vec![
+                Span::styled(bars.clone(), Style::default().fg(QUOTE)),
+                Span::styled("─".repeat(avail), Style::default().fg(QUOTE)),
+            ]));
             continue;
         }
         // Each line of the block (split at its breaks), wrapped.
@@ -345,25 +348,28 @@ mod tests {
     #[test]
     fn markdown_in_the_terminal() {
         let text = "# Plans\nMeet at **noon**, not *ten*.\nBring `coffee`.\n\n- one\n- two\n  1. nested\n\n> quoted\n> still\n\n[map](https://example.org) and <b>raw</b>\n\n---\n\n```\nlet x = 1;\n```";
-        assert_eq!(shown(text, 40), [
-            "Plans",
-            "",
-            "Meet at noon, not ten.",
-            "Bring coffee.",
-            "",
-            "• one",
-            "• two",
-            "  1. nested",
-            "",
-            "▎ quoted",
-            "▎ still",
-            "",
-            "map (https://example.org) and <b>raw</b>",
-            "",
-            "────────────────────────────────────────",
-            "",
-            "let x = 1;",
-        ]);
+        assert_eq!(
+            shown(text, 40),
+            [
+                "Plans",
+                "",
+                "Meet at noon, not ten.",
+                "Bring coffee.",
+                "",
+                "• one",
+                "• two",
+                "  1. nested",
+                "",
+                "▎ quoted",
+                "▎ still",
+                "",
+                "map (https://example.org) and <b>raw</b>",
+                "",
+                "────────────────────────────────────────",
+                "",
+                "let x = 1;",
+            ]
+        );
         let styled = lines("**bold** _it_ ~~gone~~ `code`", 40);
         let style = |text: &str| styled[0].spans.iter().find(|s| s.content == text).unwrap().style;
         assert!(style("bold").add_modifier.contains(Modifier::BOLD));

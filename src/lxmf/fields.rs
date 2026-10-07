@@ -24,9 +24,9 @@
 //!   if one's set.
 
 use lxmf_core::constants::{
-    FIELD_AUDIO, FIELD_COMMANDS, FIELD_CUSTOM_META, FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_IMAGE,
-    FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TELEMETRY, FIELD_TELEMETRY_STREAM,
-    FIELD_TICKET, REACTION_CONTENT, REACTION_TO,
+    FIELD_AUDIO, FIELD_COMMANDS, FIELD_CUSTOM_META, FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_IMAGE, FIELD_REACTION,
+    FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TELEMETRY, FIELD_TELEMETRY_STREAM, FIELD_TICKET, REACTION_CONTENT,
+    REACTION_TO,
 };
 use lxmf_core::message_api::LxMessage;
 use rmpv::Value;
@@ -212,8 +212,7 @@ impl Location {
             return None;
         }
         let fine = latitude.is_finite() && longitude.is_finite();
-        (fine && (-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude))
-            .then(|| Self::at(latitude, longitude))
+        (fine && (-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude)).then(|| Self::at(latitude, longitude))
     }
 
     /// How far it is to `other`, in metres (along the ground, the Earth
@@ -710,13 +709,10 @@ mod tests {
         assert!(notes[0].starts_with("Pinged you") && notes[2].contains("“anyone there?”") && notes[4].contains("0x33"), "{notes:?}");
         // Sideband's answers, for those rettui answers.
         let answers: Vec<Option<String>> = extras.commands.iter().map(Command::answer).collect();
-        assert_eq!(answers, [
-            Some("Ping reply".into()),
-            None,
-            Some("Echo reply: anyone there?".into()),
-            Some("No reception info available".into()),
-            None,
-        ]);
+        assert_eq!(
+            answers,
+            [Some("Ping reply".into()), None, Some("Echo reply: anyone there?".into()), Some("No reception info available".into()), None,]
+        );
     }
 
     #[test]

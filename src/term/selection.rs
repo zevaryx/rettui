@@ -12,19 +12,12 @@ pub struct Selection {
 
 impl Selection {
     pub fn at(row: usize, col: usize) -> Self {
-        Self {
-            anchor: (row, col),
-            head: (row, col),
-        }
+        Self { anchor: (row, col), head: (row, col) }
     }
 
     /// Start and end in reading order.
     pub fn ordered(&self) -> ((usize, usize), (usize, usize)) {
-        if self.anchor <= self.head {
-            (self.anchor, self.head)
-        } else {
-            (self.head, self.anchor)
-        }
+        if self.anchor <= self.head { (self.anchor, self.head) } else { (self.head, self.anchor) }
     }
 
     pub fn is_empty(&self) -> bool {

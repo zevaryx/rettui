@@ -149,10 +149,8 @@ impl App {
                     // Our own message came back: the hub delivered it.
                     hub.sent.remove(pos);
                     let key = room.clone().unwrap_or_default();
-                    if let Some(line) = hub
-                        .buffers
-                        .get_mut(&key)
-                        .and_then(|b| b.iter_mut().rev().find(|l| l.pending.as_ref() == Some(&env.id)))
+                    if let Some(line) =
+                        hub.buffers.get_mut(&key).and_then(|b| b.iter_mut().rev().find(|l| l.pending.as_ref() == Some(&env.id)))
                     {
                         line.pending = None;
                     }
@@ -166,10 +164,7 @@ impl App {
                 }
                 let Some(text) = env.body_text() else { return };
                 let my_nick = self.effective_nick(index).unwrap_or_default();
-                let mut line = ChatLine::new(
-                    if env.t == t::ACTION { LineKind::Action } else { LineKind::Msg },
-                    text,
-                );
+                let mut line = ChatLine::new(if env.t == t::ACTION { LineKind::Action } else { LineKind::Msg }, text);
                 line.src = Some(hex::encode(&env.src));
                 line.nick = env.nick.clone();
                 line.own = is_own;

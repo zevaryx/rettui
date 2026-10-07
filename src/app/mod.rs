@@ -13,30 +13,30 @@
 //! - [`notify`]: notifications for what arrives while the user looks
 //!   elsewhere.
 
+pub mod archive;
 mod browser;
+pub mod channels;
 pub mod contacts;
 pub mod emoji;
-pub mod format;
-pub mod channels;
-pub mod guide;
 pub(crate) mod files;
+pub mod find;
+pub mod format;
+pub mod forward;
+pub mod guide;
 pub mod identity;
 mod input;
+pub mod map;
 mod messages;
 pub mod network;
+pub mod node;
 pub mod notify;
 pub mod paths;
 pub mod reach;
-mod saver;
-pub mod node;
 pub mod reticulum;
-pub mod archive;
-pub mod map;
-pub mod find;
-pub mod forward;
+mod saver;
 pub mod search;
-pub mod shrink;
 mod settings;
+pub mod shrink;
 pub mod traffic;
 
 use std::collections::{HashMap, VecDeque};
@@ -97,15 +97,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 7] = [
-        Tab::Messages,
-        Tab::Channels,
-        Tab::Network,
-        Tab::Browser,
-        Tab::Node,
-        Tab::Status,
-        Tab::Reticulum,
-    ];
+    pub const ALL: [Tab; 7] = [Tab::Messages, Tab::Channels, Tab::Network, Tab::Browser, Tab::Node, Tab::Status, Tab::Reticulum];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -144,7 +136,10 @@ pub enum PromptKind {
     ConfirmImportIdentity(PathBuf),
     /// Where to save a copy of the identity.
     BackUpIdentity,
-    ConfirmDeleteMessage { key: String, id: String },
+    ConfirmDeleteMessage {
+        key: String,
+        id: String,
+    },
     ConfirmDeleteConversation(String),
     ConfirmBlock(String),
     /// Add an RRC hub by address or `rrc://` link.
@@ -522,10 +517,7 @@ pub struct App {
 }
 
 pub(crate) fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64()
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()
 }
 
 impl App {
@@ -539,20 +531,13 @@ impl App {
     ) -> Self {
         let channels = crate::app::channels::Channels::load(&store.rrc_hubs, &paths.rrc_history);
         // The node uses this client's identity, so its address is known now.
-        let node_hash = rns_identity::destination::Destination::hash_from_name_and_identity(
-            nomad_core::NOMAD_NODE_ASPECT,
-            Some(&identity_hash),
-        );
+        let node_hash =
+            rns_identity::destination::Destination::hash_from_name_and_identity(nomad_core::NOMAD_NODE_ASPECT, Some(&identity_hash));
         let node = node::Node::new(node_hash, settings.node_enabled);
-        let pn_hash = rns_identity::destination::Destination::hash_from_name_and_identity(
-            crate::lxmf::PROPAGATION_ASPECT,
-            Some(&identity_hash),
-        );
+        let pn_hash =
+            rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::PROPAGATION_ASPECT, Some(&identity_hash));
         let pn = node::PnHost::new(pn_hash, crate::lxmf::pn::PnConfig::from_settings(&settings, &paths));
-        let cache = Cache::new(
-            paths.cache.clone(),
-            std::time::Duration::from_secs(settings.cache_hours * 3600),
-        );
+        let cache = Cache::new(paths.cache.clone(), std::time::Duration::from_secs(settings.cache_hours * 3600));
         let settings_file = Settings::load(&paths.settings).unwrap_or_else(|_| settings.clone());
         let (decoded_tx, decoded_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = Self {
@@ -759,11 +744,7 @@ impl App {
     }
 
     fn show(&mut self, text: String, kind: NoticeKind) {
-        self.notice = Some(Notice {
-            text,
-            kind,
-            at: Instant::now(),
-        });
+        self.notice = Some(Notice { text, kind, at: Instant::now() });
     }
 
     /// Something done, in the log and the footer.
@@ -835,11 +816,7 @@ impl App {
             let editing = if current.rows > 1 { browser::field_to_line(&current.value) } else { current.value.clone() };
             let mut input = TextInput::with_text(&editing);
             input.insert_str(text);
-            self.prompt = Some(Prompt {
-                kind: PromptKind::EditField(field),
-                title: format!("Field: {}", current.name),
-                input,
-            });
+            self.prompt = Some(Prompt { kind: PromptKind::EditField(field), title: format!("Field: {}", current.name), input });
         } else if self.tab == Tab::Messages && text.trim().starts_with("lxm://") {
             if let Err(e) = self.read_paper(text) {
                 self.warn(e);
@@ -891,12 +868,7 @@ impl App {
                 if kind == PeerKind::Lxmf {
                     self.resend_on_announce(&key);
                 }
-                let peer = self.store.peers.entry(key).or_insert(Peer {
-                    kind,
-                    name: None,
-                    hops,
-                    last_seen: 0,
-                });
+                let peer = self.store.peers.entry(key).or_insert(Peer { kind, name: None, hops, last_seen: 0 });
                 peer.kind = kind;
                 peer.hops = hops;
                 peer.last_seen = now() as i64;
@@ -1018,11 +990,8 @@ impl App {
                 if let Some(page) = &mut self.browser.page
                     && let Some(field) = page.fields.get_mut(f)
                 {
-                    field.value = if field.rows > 1 {
-                        browser::field_from_line(prompt.input.text())
-                    } else {
-                        prompt.input.text().to_string()
-                    };
+                    field.value =
+                        if field.rows > 1 { browser::field_from_line(prompt.input.text()) } else { prompt.input.text().to_string() };
                 }
             }
             // A contact's link (or its QR code) works here too.
@@ -1155,11 +1124,7 @@ impl App {
     }
 
     fn open_prompt(&mut self, kind: PromptKind, title: &str, initial: &str) {
-        self.prompt = Some(Prompt {
-            kind,
-            title: title.to_string(),
-            input: TextInput::with_text(initial),
-        });
+        self.prompt = Some(Prompt { kind, title: title.to_string(), input: TextInput::with_text(initial) });
     }
 
     fn switch_tab(&mut self, tab: Tab) {

@@ -34,11 +34,8 @@ pub fn glyph(name: &str) -> Option<char> {
 /// names first, at most `limit`.
 pub fn search(query: &str, limit: usize) -> Vec<(&'static str, char)> {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    let mut found: Vec<(&'static str, char)> = ICONS
-        .iter()
-        .filter(|(name, _)| words.iter().all(|w| name.contains(w.as_str())))
-        .map(|(name, glyph)| (*name, *glyph))
-        .collect();
+    let mut found: Vec<(&'static str, char)> =
+        ICONS.iter().filter(|(name, _)| words.iter().all(|w| name.contains(w.as_str()))).map(|(name, glyph)| (*name, *glyph)).collect();
     found.sort_by_key(|(name, _)| (name.len(), *name));
     found.truncate(limit);
     found

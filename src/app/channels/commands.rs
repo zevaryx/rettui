@@ -1,6 +1,5 @@
 //! The channel input line: chat messages and slash commands.
 
-
 use super::{ChatLine, LineKind, Target};
 use crate::app::{App, Prompt, PromptKind};
 use crate::net::Hash;
@@ -29,8 +28,22 @@ pub const HELP: &[&str] = &[
 
 /// Commands the hub implements; sent verbatim.
 const HUB_COMMANDS: &[&str] = &[
-    "who", "names", "topic", "mode", "kick", "ban", "invite", "op", "deop", "voice", "devoice",
-    "register", "unregister", "kline", "stats", "reload",
+    "who",
+    "names",
+    "topic",
+    "mode",
+    "kick",
+    "ban",
+    "invite",
+    "op",
+    "deop",
+    "voice",
+    "devoice",
+    "register",
+    "unregister",
+    "kline",
+    "stats",
+    "reload",
 ];
 
 impl App {
@@ -48,15 +61,8 @@ impl App {
             let bytes = text.trim().len();
             let limit = self.channels.hubs[index].limits.max_msg_bytes;
             self.prompt = Some(Prompt {
-                kind: PromptKind::ConfirmSplit {
-                    hub: self.channels.hubs[index].hash,
-                    room,
-                    parts: parts.clone(),
-                },
-                title: format!(
-                    "{bytes} bytes is over this hub's {limit}-byte limit. Send as {} messages? Type y",
-                    parts.len()
-                ),
+                kind: PromptKind::ConfirmSplit { hub: self.channels.hubs[index].hash, room, parts: parts.clone() },
+                title: format!("{bytes} bytes is over this hub's {limit}-byte limit. Send as {} messages? Type y", parts.len()),
                 input: TextInput::default(),
             });
         }
@@ -128,8 +134,7 @@ impl App {
         if super::whisper_peer(room).is_some() && matches!(name.as_str(), "me" | "part" | "leave" | "topic" | "who" | "names") {
             return error(self, format!("/{name} is for rooms; this is a whisper conversation (x closes it)"));
         }
-        let needs_connection = matches!(name.as_str(), "me" | "msg" | "ping" | "list")
-            || HUB_COMMANDS.contains(&name.as_str());
+        let needs_connection = matches!(name.as_str(), "me" | "msg" | "ping" | "list") || HUB_COMMANDS.contains(&name.as_str());
         if needs_connection && !connected {
             return error(self, format!("/{name}: not connected (use /connect)"));
         }
@@ -146,10 +151,7 @@ impl App {
                 };
                 let target = rrc::normalize_room(target);
                 self.join(index, &target, words.next(), false);
-                self.channels.selected = Some(Target {
-                    hub: self.channels.hubs[index].hash,
-                    room: Some(target),
-                });
+                self.channels.selected = Some(Target { hub: self.channels.hubs[index].hash, room: Some(target) });
                 self.mark_channel_read();
             }
             "part" | "leave" => {

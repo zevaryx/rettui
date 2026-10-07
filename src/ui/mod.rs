@@ -4,22 +4,22 @@
 //! [`chrome`] draws the sidebar, footer and prompt around the current tab;
 //! each tab has its own module, mirroring `app/`.
 
+mod archive;
 mod browser;
 mod channels;
 mod chrome;
 mod contact;
-mod guide;
-mod keys;
-mod archive;
-mod map;
-mod forward;
-mod search;
 mod editor;
 mod emoji;
+mod forward;
+mod guide;
+mod keys;
+mod map;
 mod messages;
 mod network;
 mod node;
 mod reticulum;
+mod search;
 mod status;
 
 use chrono::Local;
@@ -147,18 +147,13 @@ fn human_bytes(bytes: u64) -> String {
         value /= 1000.0;
         unit += 1;
     }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
+    if unit == 0 { format!("{bytes} B") } else { format!("{value:.1} {}", UNITS[unit]) }
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [sidebar, main] =
         Layout::horizontal([Constraint::Length(sidebar_width(frame.area().width)), Constraint::Min(20)]).areas(frame.area());
-    let [body, footer] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(main);
+    let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(main);
 
     draw_sidebar(frame, app, sidebar);
     match app.tab {

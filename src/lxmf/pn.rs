@@ -25,9 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lxmf_core::constants::{
-    MESSAGE_EXPIRY, PEERING_COST, PROPAGATION_COST_FLEX, PROPAGATION_COST_MIN, PeerError, SYNC_LIMIT,
-};
+use lxmf_core::constants::{MESSAGE_EXPIRY, PEERING_COST, PROPAGATION_COST_FLEX, PROPAGATION_COST_MIN, PeerError, SYNC_LIMIT};
 use lxmf_core::handlers::{PropagationNodeAnnounceData, get_propagation_node_app_data};
 use lxmf_core::propagation_node::{OfferRequestContext, PropagationNode, PropagationNodeConfig};
 use lxmf_core::stamper::validate_pn_stamp;
@@ -67,8 +65,7 @@ impl PnConfig {
             storage_bytes: settings.pn_storage_mb.max(1).saturating_mul(1_000_000),
             transfer_kb: settings.pn_transfer_kb.clamp(1, SYNC_LIMIT as u64),
             dir: paths.propagation.clone(),
-            announce_interval: (settings.announce_interval_mins > 0)
-                .then(|| Duration::from_secs(settings.announce_interval_mins * 60)),
+            announce_interval: (settings.announce_interval_mins > 0).then(|| Duration::from_secs(settings.announce_interval_mins * 60)),
         })
     }
 }
@@ -280,7 +277,15 @@ impl HostedPn {
             .map_err(|e| e.to_string())?
             .map_err(|e| format!("Could not open the message store {}: {e}", config.dir.display()))?;
         let node = Arc::new(Mutex::new(node));
-        let ingest = Arc::new(Ingest { node: node.clone(), counters: Counters::default(), min_stamp, lxmf_hash, identity: identity.clone(), ring: ring.to_path_buf(), deliver });
+        let ingest = Arc::new(Ingest {
+            node: node.clone(),
+            counters: Counters::default(),
+            min_stamp,
+            lxmf_hash,
+            identity: identity.clone(),
+            ring: ring.to_path_buf(),
+            deliver,
+        });
         let peers: Arc<Mutex<HashSet<[u8; 16]>>> = Arc::default();
 
         // Clients may send up to the transfer limit; peers up to a sync's.
@@ -387,7 +392,8 @@ impl HostedPn {
         let (handle, config, cull_node) = (announcer, config.clone(), node.clone());
         let announcer = tokio::spawn(async move {
             let announce = async || {
-                let options = DestinationAnnounceOptions { app_data: Some(announce_data(&config)), ..DestinationAnnounceOptions::default() };
+                let options =
+                    DestinationAnnounceOptions { app_data: Some(announce_data(&config)), ..DestinationAnnounceOptions::default() };
                 if let Err(e) = handle.announce(options).await {
                     tracing::warn!("propagation node announce failed: {e}");
                 }
@@ -471,7 +477,11 @@ mod tests {
     fn ingest(dir: &std::path::Path, stamp_cost: u8) -> (Ingest, mpsc::UnboundedReceiver<Vec<u8>>, Identity) {
         let identity = Identity::new();
         let lxmf_hash = Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&identity.hash));
-        let config = PropagationNodeConfig { max_storage: 1_000_000, min_stamp_cost: stamp_cost - PROPAGATION_COST_FLEX, ..PropagationNodeConfig::default() };
+        let config = PropagationNodeConfig {
+            max_storage: 1_000_000,
+            min_stamp_cost: stamp_cost - PROPAGATION_COST_FLEX,
+            ..PropagationNodeConfig::default()
+        };
         let node = PropagationNode::with_storage(config, [9; 16], dir.to_path_buf()).unwrap();
         let (deliver, delivered) = mpsc::unbounded_channel();
         let ingest = Ingest {
@@ -492,7 +502,10 @@ mod tests {
         let mut message = LxMessage::new(to, [3; 16], "", "kept for you", DeliveryMethod::Propagated);
         message.sign(&Identity::new().get_signing_key().unwrap()).unwrap();
         message
-            .pack_propagated_encrypted_with_stamp(|plain| recipient.encrypt(plain, None).map_err(|e| MessageError::PackFailed(e.to_string())), cost)
+            .pack_propagated_encrypted_with_stamp(
+                |plain| recipient.encrypt(plain, None).map_err(|e| MessageError::PackFailed(e.to_string())),
+                cost,
+            )
             .unwrap()
             .0
     }

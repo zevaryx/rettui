@@ -101,8 +101,7 @@ impl Policy {
         if self.exempt.contains(&message.source_hash) {
             return true;
         }
-        let tokens: Vec<Vec<u8>> =
-            self.tickets.inbound_tokens(&message.source_hash, now()).into_iter().map(|t| t.to_vec()).collect();
+        let tokens: Vec<Vec<u8>> = self.tickets.inbound_tokens(&message.source_hash, now()).into_iter().map(|t| t.to_vec()).collect();
         message.validate_stamp_with_tickets(cost, Some(&tokens))
     }
 

@@ -214,10 +214,7 @@ mod tests {
 
         let snap = app.paths.uploads.join("snap.jpg");
         let mut jpeg = Vec::new();
-        image::load_from_memory(&photo(2000, 1500))
-            .unwrap()
-            .write_with_encoder(JpegEncoder::new_with_quality(&mut jpeg, 100))
-            .unwrap();
+        image::load_from_memory(&photo(2000, 1500)).unwrap().write_with_encoder(JpegEncoder::new_with_quality(&mut jpeg, 100)).unwrap();
         std::fs::write(&snap, &jpeg).unwrap();
 
         let files = app.shrink_pictures(vec![uploaded.clone(), yours.clone(), notes.clone(), snap.clone()]);
@@ -255,7 +252,10 @@ mod tests {
         app.delivery_mode = crate::lxmf::DeliveryMode::Direct;
         app.send_compose();
         let sent = &app.store.conversations[&key].messages.last().unwrap().attachments[0];
-        assert!(sent.path.starts_with(&app.paths.uploads) && sent.name == "mine.jpg" && sent.size < std::fs::metadata(&yours).unwrap().len(), "{sent:?}");
+        assert!(
+            sent.path.starts_with(&app.paths.uploads) && sent.name == "mine.jpg" && sent.size < std::fs::metadata(&yours).unwrap().len(),
+            "{sent:?}"
+        );
         assert!(yours.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

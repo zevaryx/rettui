@@ -20,10 +20,7 @@ pub(crate) fn unique_path(dir: &Path, name: &str) -> PathBuf {
         Some((stem, ext)) => (stem.to_string(), format!(".{ext}")),
         None => (name.clone(), String::new()),
     };
-    (1..)
-        .map(|i| dir.join(format!("{stem}-{i}{ext}")))
-        .find(|p| !p.exists())
-        .expect("an unused name exists")
+    (1..).map(|i| dir.join(format!("{stem}-{i}{ext}"))).find(|p| !p.exists()).expect("an unused name exists")
 }
 
 /// A path typed, pasted or dropped into a prompt. A terminal given a file
@@ -86,9 +83,7 @@ fn percent_decode(text: &str) -> String {
 
 pub(super) fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
-        Some(rest) => directories::BaseDirs::new()
-            .map(|d| d.home_dir().join(rest))
-            .unwrap_or_else(|| PathBuf::from(path)),
+        Some(rest) => directories::BaseDirs::new().map(|d| d.home_dir().join(rest)).unwrap_or_else(|| PathBuf::from(path)),
         None => PathBuf::from(path),
     }
 }

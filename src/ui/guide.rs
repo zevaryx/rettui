@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use super::{dim, picked_style, block, wrap};
+use super::{block, dim, picked_style, wrap};
 use crate::app::App;
 use crate::app::guide::{self, ENTRY_POINTS, Guide, GuideRow, GuideView, LINKS};
 use crate::app::reach::Reach;
@@ -63,10 +63,14 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     let selected = rows.get(state.row).copied();
     let choices = &state.shown(&view);
 
-    let intro: Vec<Line<'static>> = wrap(guide::INTRO, inner_width).into_iter().map(|l| Line::styled(l, Style::default().fg(dim()))).collect();
+    let intro: Vec<Line<'static>> =
+        wrap(guide::INTRO, inner_width).into_iter().map(|l| Line::styled(l, Style::default().fg(dim()))).collect();
     let status = match (view.interfaces_online, view.heard) {
         (0, _) => Line::styled("○ Not connected to anyone yet", Style::default().fg(Color::Yellow)),
-        (n, 0) => Line::styled(format!("◌ {n} interface{} online, nobody heard yet", if n == 1 { "" } else { "s" }), Style::default().fg(Color::Yellow)),
+        (n, 0) => Line::styled(
+            format!("◌ {n} interface{} online, nobody heard yet", if n == 1 { "" } else { "s" }),
+            Style::default().fg(Color::Yellow),
+        ),
         (n, heard) => Line::styled(
             format!("● Connected: {n} interface{} online, {heard} peers and nodes heard", if n == 1 { "" } else { "s" }),
             Style::default().fg(Color::Green),
@@ -77,7 +81,8 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     let mut body: Vec<Line<'static>> = Vec::new();
     let mut placed: Vec<(usize, GuideRow)> = Vec::new();
     let mut row_line = |body: &mut Vec<Line<'static>>, row: GuideRow, spans: Vec<Span<'static>>| {
-        let style = if Some(row) == selected { Style::default().bg(super::selected_bg()).add_modifier(Modifier::BOLD) } else { Style::default() };
+        let style =
+            if Some(row) == selected { Style::default().bg(super::selected_bg()).add_modifier(Modifier::BOLD) } else { Style::default() };
         placed.push((body.len(), row));
         body.push(Line::from(spans).style(style));
     };
@@ -96,7 +101,8 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     };
     row_line(&mut body, GuideRow::Identity, [vec![Span::styled("Identity    ", Style::default().fg(dim()))], identity].concat());
     if view.external {
-        for line in wrap(&format!("{}: add entry points in that program's Reticulum config.", crate::reticulum::EXTERNAL_NOTE), inner_width) {
+        for line in wrap(&format!("{}: add entry points in that program's Reticulum config.", crate::reticulum::EXTERNAL_NOTE), inner_width)
+        {
             body.push(Line::styled(line, Style::default().fg(dim())));
         }
     } else {
@@ -117,7 +123,10 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
                 reach @ Reach::Down(_) => vec![Span::styled(format!("[ ] {name}{}", reach.label()), Style::default().fg(dim()))],
                 reach => {
                     let color = if matches!(reach, Reach::Up(_)) { Color::Green } else { dim() };
-                    vec![Span::raw(format!("{} {name}", check(choices.connect[i]))), Span::styled(reach.label(), Style::default().fg(color))]
+                    vec![
+                        Span::raw(format!("{} {name}", check(choices.connect[i]))),
+                        Span::styled(reach.label(), Style::default().fg(color)),
+                    ]
                 }
             };
             row_line(&mut body, GuideRow::Connect(i), spans);
@@ -134,7 +143,11 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         };
         row_line(&mut body, GuideRow::Discover, vec![Span::raw(discover)]);
     }
-    row_line(&mut body, GuideRow::AutoPropagation, vec![Span::raw(format!("{} Pick a propagation node automatically", check(choices.auto_propagation)))]);
+    row_line(
+        &mut body,
+        GuideRow::AutoPropagation,
+        vec![Span::raw(format!("{} Pick a propagation node automatically", check(choices.auto_propagation)))],
+    );
     // The last line of a row with a warning under it, to keep in view
     // with it.
     let mut warned: Option<(GuideRow, usize)> = None;
@@ -146,7 +159,11 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     }
     body.push(Line::styled("Learn more", Style::default().fg(dim())));
     for (i, (title, ..)) in LINKS.iter().enumerate() {
-        row_line(&mut body, GuideRow::Link(i), vec![Span::raw("↗ "), Span::styled(*title, Style::default().add_modifier(Modifier::UNDERLINED))]);
+        row_line(
+            &mut body,
+            GuideRow::Link(i),
+            vec![Span::raw("↗ "), Span::styled(*title, Style::default().add_modifier(Modifier::UNDERLINED))],
+        );
     }
 
     // The two buttons share a line.
@@ -219,12 +236,7 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     lines.resize(help_at + help_room, Line::default());
 
     let height = (lines.len() as u16 + 2).min(area.height);
-    let rect = Rect {
-        x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    };
+    let rect = Rect { x: area.x + area.width.saturating_sub(width) / 2, y: area.y + area.height.saturating_sub(height) / 2, width, height };
     frame.render_widget(Clear, rect);
     let guide_block = block("Getting started", true).padding(Padding::horizontal(1));
     let inner = guide_block.inner(rect);
@@ -318,7 +330,9 @@ mod tests {
         // As the entry points answer: how quickly, the 3 fastest ticked;
         // or greyed out and not to be ticked.
         let count = crate::app::guide::ENTRY_POINTS.len();
-        let answered = |ms: [u64; 6]| ms.map(|ms| if ms == 0 { Reach::Down("refused") } else { Reach::Up(std::time::Duration::from_millis(ms)) }).to_vec();
+        let answered = |ms: [u64; 6]| {
+            ms.map(|ms| if ms == 0 { Reach::Down("refused") } else { Reach::Up(std::time::Duration::from_millis(ms)) }).to_vec()
+        };
         app.entry_reach.set(answered([0, 120, 250, 382, 600, 90]));
         app.guide.as_mut().unwrap().row = 2;
         let screen = draw(&mut app);
@@ -328,7 +342,12 @@ mod tests {
         assert!(screen.contains("[x] RNS Simply Equipped       up · 250 ms"), "{screen}");
         assert!(screen.contains("[x] Ratspeak & Colorado Mesh  up · 90 ms"), "{screen}");
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Connect(0)).unwrap();
-        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
         assert!(draw(&mut app).contains("[ ] RNS Between The Borders   down · refused"));
         assert!(draw(&mut app).contains("It didn't answer just now (refused)"));
         // None answering: said.
@@ -339,11 +358,21 @@ mod tests {
         // Discovery is ticked to start with; a click on its row unticks it.
         assert!(screen.contains("[x] Also find entry points"), "{screen}");
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Discover).unwrap();
-        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
         assert!(!app.guide.as_ref().unwrap().choices.discover);
         // Not now closes it for good.
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Later).unwrap();
-        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
         assert!(app.guide.is_none() && app.saved_settings().unwrap().welcomed);
         // Taller, it all fits, the intro too.
         app.open_guide();
@@ -356,9 +385,18 @@ mod tests {
         // Apply adds the ones ticked, as shown.
         app.entry_reach.set(answered([0, 120, 250, 382, 600, 90]));
         let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Apply).unwrap();
-        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
         let config = std::fs::read_to_string(dir.join("rns").join("config")).unwrap();
-        let added: Vec<&str> = crate::app::guide::ENTRY_POINTS.iter().map(|entry| entry.host).filter(|host| config.contains(&format!("target_host = {host}"))).collect();
+        let added: Vec<&str> = crate::app::guide::ENTRY_POINTS
+            .iter()
+            .map(|entry| entry.host)
+            .filter(|host| config.contains(&format!("target_host = {host}")))
+            .collect();
         assert_eq!(added, ["rmap.world", "rns.simplyequipped.com", "rns.ratspeak.org"], "{config}");
         std::fs::remove_dir_all(&dir).unwrap();
     }

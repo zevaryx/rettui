@@ -89,10 +89,7 @@ impl App {
         let known: BTreeSet<&Vec<u8>> = hub.members.values().flatten().chain(hub.nicks.keys()).collect();
         let matches: Vec<&Vec<u8>> = known
             .into_iter()
-            .filter(|h| {
-                hub.nicks.get(*h).is_some_and(|n| n.to_lowercase() == who)
-                    || (who.len() >= 6 && hex::encode(h).starts_with(&who))
-            })
+            .filter(|h| hub.nicks.get(*h).is_some_and(|n| n.to_lowercase() == who) || (who.len() >= 6 && hex::encode(h).starts_with(&who)))
             .collect();
         match matches.as_slice() {
             [one] => Ok((*one).clone()),
@@ -173,10 +170,7 @@ impl App {
         }
         if let Some(user) = self.rrc_user(hub, target) {
             self.channels.picker = None;
-            self.channels.menu = Some(UserMenu {
-                user,
-                list: ListState::default().with_selected(Some(0)),
-            });
+            self.channels.menu = Some(UserMenu { user, list: ListState::default().with_selected(Some(0)) });
         }
     }
 
@@ -184,16 +178,11 @@ impl App {
     pub(crate) fn open_member_picker(&mut self) {
         let Some((hub, room)) = self.channels.active() else { return };
         let own = self.identity_hash.to_vec();
-        let members: Vec<(String, Vec<u8>)> =
-            self.channels.hubs[hub].members_of(&room).into_iter().filter(|(_, id)| *id != own).collect();
+        let members: Vec<(String, Vec<u8>)> = self.channels.hubs[hub].members_of(&room).into_iter().filter(|(_, id)| *id != own).collect();
         if members.is_empty() {
             return self.warn("Nobody else is here (join a room, or try /who)");
         }
-        self.channels.picker = Some(MemberPicker {
-            room,
-            members,
-            list: ListState::default().with_selected(Some(0)),
-        });
+        self.channels.picker = Some(MemberPicker { room, members, list: ListState::default().with_selected(Some(0)) });
     }
 
     pub(crate) fn member_picker_key(&mut self, key: KeyEvent) {
@@ -267,10 +256,7 @@ impl App {
             }
             UserAction::Lxmf => {
                 if !user.lxmf_known {
-                    self.log(format!(
-                        "No LXMF announce seen from {} yet; the message will wait until a path to them is found",
-                        user.name
-                    ));
+                    self.log(format!("No LXMF announce seen from {} yet; the message will wait until a path to them is found", user.name));
                 }
                 self.open_conversation(hex::encode(user.lxmf));
             }

@@ -11,13 +11,13 @@ use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use super::browser::token_style;
 use super::editor::draw_text_editor;
-use super::{accent, dim, selected_bg, block, human_bytes};
+use super::{accent, block, dim, human_bytes, selected_bg};
 use crate::app::App;
 use crate::app::format::{Action, RIBBON};
 use crate::app::node::{NodeStatus, PageView, Preview};
+use crate::nomad::host::HostConfig;
 use crate::nomad::micron;
 use crate::nomad::micron::source::tokenize;
-use crate::nomad::host::HostConfig;
 
 pub(super) fn draw_node(frame: &mut Frame, app: &mut App, area: Rect) {
     // Wide enough for the 32-character node address.
@@ -39,10 +39,11 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     };
     let running = app.node.status == NodeStatus::Running;
     let name = app.settings.node_name.clone().unwrap_or_else(|| app.settings.display_name.clone());
-    let requests = app.node.stats.as_ref().map_or_else(
-        || "–".to_string(),
-        |s| format!("{} ({} pages, {} files)", s.request_count, s.page_hits, s.file_hits),
-    );
+    let requests = app
+        .node
+        .stats
+        .as_ref()
+        .map_or_else(|| "–".to_string(), |s| format!("{} ({} pages, {} files)", s.request_count, s.page_hits, s.file_hits));
     let dir = HostConfig::dir(&app.settings, &app.paths).display().to_string();
     let lines = vec![
         Line::from(vec![label("Node"), state]),
@@ -98,9 +99,7 @@ fn draw_pages(frame: &mut Frame, app: &mut App, area: Rect) {
             ListItem::new(Line::from(spans))
         })
         .collect();
-    let list = List::new(items)
-        .block(list_block)
-        .highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
+    let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, area, &mut app.node.list);
 }
 
@@ -158,21 +157,15 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
             inner = text;
         }
         app.regions.node_editor = draw_text_editor(frame, &mut editor.area, inner, editing, wrap, |text| {
-            tokenize(text)
-                .into_iter()
-                .map(|line| line.into_iter().map(|(token, text)| (token_style(token), text)).collect())
-                .collect()
+            tokenize(text).into_iter().map(|line| line.into_iter().map(|(token, text)| (token_style(token), text)).collect()).collect()
         });
     }
 
     let Some(preview_area) = preview_area else { return };
     // Shown alone, the preview carries the page's title and keys.
     let preview_title = if editor_area.is_some() { "Preview".to_string() } else { format!("{title} · preview") };
-    let preview_block = if editor_area.is_some() {
-        block(&preview_title, false)
-    } else {
-        block(&preview_title, editing).title_top(hints.right_aligned())
-    };
+    let preview_block =
+        if editor_area.is_some() { block(&preview_title, false) } else { block(&preview_title, editing).title_top(hints.right_aligned()) };
     let preview_inner = preview_block.inner(preview_area);
     frame.render_widget(preview_block, preview_area);
     app.regions.node_preview = preview_inner;
@@ -216,7 +209,13 @@ fn draw_ribbon(frame: &mut Frame, area: Rect, buttons: &mut Vec<(Rect, Action)>)
     let mut x = area.x;
     'groups: for (g, group) in RIBBON.iter().enumerate() {
         for (i, action) in group.iter().enumerate() {
-            let gap = if i > 0 { " " } else if g > 0 { SEPARATOR } else { "" };
+            let gap = if i > 0 {
+                " "
+            } else if g > 0 {
+                SEPARATOR
+            } else {
+                ""
+            };
             let label = if short { action.short() } else { action.label() };
             let needed = (gap.chars().count() + label.len()) as u16;
             if x + needed > area.right() {

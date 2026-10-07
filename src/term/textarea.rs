@@ -76,11 +76,7 @@ pub fn graphemes(line: &str) -> Vec<(usize, usize, usize)> {
     line.graphemes(true)
         .map(|g| {
             let chars = g.chars().count();
-            let width = if g.chars().any(char::is_control) {
-                g.chars().map(|c| c.width().unwrap_or(1)).sum()
-            } else {
-                g.width()
-            };
+            let width = if g.chars().any(char::is_control) { g.chars().map(|c| c.width().unwrap_or(1)).sum() } else { g.width() };
             let entry = (at, chars, width);
             at += chars;
             entry
@@ -372,11 +368,7 @@ impl TextArea {
         if kind == EditKind::Typing && self.last_edit == Some(EditKind::Typing) {
             return;
         }
-        self.undo.push(Snapshot {
-            lines: self.lines.clone(),
-            row: self.row,
-            col: self.col,
-        });
+        self.undo.push(Snapshot { lines: self.lines.clone(), row: self.row, col: self.col });
         if self.undo.len() > MAX_UNDO {
             self.undo.remove(0);
         }
@@ -387,11 +379,7 @@ impl TextArea {
     fn restore(&mut self, from_undo: bool) -> bool {
         let (source, target) = if from_undo { (&mut self.undo, &mut self.redo) } else { (&mut self.redo, &mut self.undo) };
         let Some(snapshot) = source.pop() else { return false };
-        target.push(Snapshot {
-            lines: std::mem::replace(&mut self.lines, snapshot.lines),
-            row: self.row,
-            col: self.col,
-        });
+        target.push(Snapshot { lines: std::mem::replace(&mut self.lines, snapshot.lines), row: self.row, col: self.col });
         self.row = snapshot.row;
         self.col = snapshot.col;
         self.anchor = None;
@@ -437,7 +425,14 @@ impl TextArea {
         // Moving with Shift selects; moving without it drops the selection.
         let moving = matches!(
             key.code,
-            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
+            KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End
         );
         if moving {
             if !key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -627,11 +622,8 @@ mod tests {
     fn wrapping_breaks_at_spaces_and_moves_by_rows() {
         let mut area = TextArea::new("one two three four\nabcdefghijkl\n");
         // Width 9 (one column kept for the cursor): rows break after spaces.
-        let rows: Vec<String> = area
-            .wrapped_rows(8)
-            .iter()
-            .map(|&(l, s, e)| area.lines()[l].chars().skip(s).take(e - s).collect())
-            .collect();
+        let rows: Vec<String> =
+            area.wrapped_rows(8).iter().map(|&(l, s, e)| area.lines()[l].chars().skip(s).take(e - s).collect()).collect();
         assert_eq!(rows, ["one two ", "three ", "four", "abcdefgh", "ijkl", ""]);
         area.scroll_wrapped(3, 9);
         // Down moves one wrapped row, keeping the column.

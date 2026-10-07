@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use super::{accent, dim, picked_style, selected_bg, block, wrap};
+use super::{accent, block, dim, picked_style, selected_bg, wrap};
 use crate::app::App;
 use crate::app::channels::users::UserAction;
 use crate::app::channels::{ChatLine, HubStatus, LineKind, Row, whisper_peer};
@@ -28,9 +28,7 @@ fn nick_color(src: Option<&str>) -> Color {
         Color::Rgb(0x7f, 0xdb, 0xca),
         Color::Rgb(0xff, 0x8f, 0xb3),
     ];
-    let seed = src
-        .and_then(|s| u8::from_str_radix(s.get(..2)?, 16).ok())
-        .unwrap_or(0);
+    let seed = src.and_then(|s| u8::from_str_radix(s.get(..2)?, 16).ok()).unwrap_or(0);
     PALETTE[seed as usize % PALETTE.len()]
 }
 
@@ -69,30 +67,19 @@ fn chat_lines(
     whisper: bool,
 ) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
     let (own_nick, own_id) = own;
-    let time = Local
-        .timestamp_millis_opt(line.ts as i64)
-        .single()
-        .map(|t| format!("{} ", crate::clock::time(&t, true)))
-        .unwrap_or_default();
-    let name = line.nick.clone().or_else(|| line.own.then(|| own_nick.to_string())).unwrap_or_else(|| {
-        line.src
-            .as_deref()
-            .and_then(|s| hex::decode(s).ok())
-            .map(|h| hub.name_of(&h))
-            .unwrap_or_default()
-    });
+    let time =
+        Local.timestamp_millis_opt(line.ts as i64).single().map(|t| format!("{} ", crate::clock::time(&t, true))).unwrap_or_default();
+    let name = line
+        .nick
+        .clone()
+        .or_else(|| line.own.then(|| own_nick.to_string()))
+        .unwrap_or_else(|| line.src.as_deref().and_then(|s| hex::decode(s).ok()).map(|h| hub.name_of(&h)).unwrap_or_default());
     let color = if line.own { accent() } else { nick_color(line.src.as_deref()) };
     // In a whisper conversation, whispers read like ordinary chat.
     let kind = if whisper && line.kind == LineKind::Private { LineKind::Msg } else { line.kind };
     let (prefix, text_style): (Vec<Span<'static>>, Style) = match kind {
-        LineKind::Msg => (
-            vec![Span::styled(format!("<{name}> "), Style::default().fg(color).bold())],
-            Style::default(),
-        ),
-        LineKind::Action => (
-            vec![Span::styled(format!("* {name} "), Style::default().fg(color).italic())],
-            Style::default().italic(),
-        ),
+        LineKind::Msg => (vec![Span::styled(format!("<{name}> "), Style::default().fg(color).bold())], Style::default()),
+        LineKind::Action => (vec![Span::styled(format!("* {name} "), Style::default().fg(color).italic())], Style::default().italic()),
         LineKind::Private if line.own => (
             vec![Span::styled(format!("» to {name}: "), Style::default().fg(Color::LightMagenta).bold())],
             Style::default().fg(Color::LightMagenta),
@@ -101,14 +88,8 @@ fn chat_lines(
             vec![Span::styled(format!("» {name} (private): "), Style::default().fg(Color::LightMagenta).bold())],
             Style::default().fg(Color::LightMagenta),
         ),
-        LineKind::Notice => (
-            vec![Span::styled("-hub- ", Style::default().fg(Color::LightCyan))],
-            Style::default().fg(Color::Gray),
-        ),
-        LineKind::Error => (
-            vec![Span::styled("! ", Style::default().fg(Color::LightRed).bold())],
-            Style::default().fg(Color::LightRed),
-        ),
+        LineKind::Notice => (vec![Span::styled("-hub- ", Style::default().fg(Color::LightCyan))], Style::default().fg(Color::Gray)),
+        LineKind::Error => (vec![Span::styled("! ", Style::default().fg(Color::LightRed).bold())], Style::default().fg(Color::LightRed)),
         LineKind::System => (vec![Span::styled("— ", Style::default().fg(dim()))], Style::default().fg(dim())),
     };
     let mut text_style = text_style;
@@ -179,8 +160,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     // The line being written is the room's on screen.
     app.channels.sync_draft();
     let active = app.channels.active();
-    let show_members =
-        area.width >= 90 && active.as_ref().is_some_and(|(_, room)| !room.is_empty() && whisper_peer(room).is_none());
+    let show_members = area.width >= 90 && active.as_ref().is_some_and(|(_, room)| !room.is_empty() && whisper_peer(room).is_none());
     let [list_area, chat_area, members_area] = Layout::horizontal([
         Constraint::Length(super::side_width(area.width, 30)),
         Constraint::Min(20),
@@ -213,10 +193,8 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
                         HubStatus::Disconnected => ("○", dim()),
                     };
                     let name = hub.hub_name.clone().unwrap_or_else(|| hub.name.clone());
-                    let mut spans = vec![
-                        Span::styled(format!("{dot} "), Style::default().fg(color)),
-                        Span::styled(name, Style::default().bold()),
-                    ];
+                    let mut spans =
+                        vec![Span::styled(format!("{dot} "), Style::default().fg(color)), Span::styled(name, Style::default().bold())];
                     if hub.notify == Some(NotifyLevel::Off) {
                         spans.push(Span::styled(" muted", Style::default().fg(dim())));
                     }
@@ -241,10 +219,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
                     // Whisper conversations: "@" where rooms have "#".
                     let hub = &app.channels.hubs[*i];
                     let name = hub.whispers().into_iter().find(|(k, _)| k == key).map_or_else(|| hub.whisper_name(key), |(_, n)| n);
-                    let mut spans = vec![
-                        Span::styled("  @ ", Style::default().fg(Color::LightMagenta)),
-                        Span::raw(name),
-                    ];
+                    let mut spans = vec![Span::styled("  @ ", Style::default().fg(Color::LightMagenta)), Span::raw(name)];
                     if let Some(count) = hub.unread.get(key).filter(|c| **c > 0) {
                         spans.push(Span::raw(" "));
                         spans.push(Span::styled(format!(" {count} "), Style::default().fg(Color::Black).bg(Color::LightRed).bold()));
@@ -258,14 +233,11 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             .collect();
         let selected = app.channel_row_index(&rows);
         app.channels.list.select(selected);
-        let list = List::new(items)
-            .block(list_block)
-            .highlight_style(Style::default().bg(selected_bg()).bold());
+        let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold());
         frame.render_stateful_widget(list, list_area, &mut app.channels.list);
     }
 
-    let [history_area, input_area] =
-        Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);
+    let [history_area, input_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);
     app.regions.channel_rooms.clear();
     let Some((index, room)) = active else {
         frame.render_widget(block("", false), chat_area);
@@ -330,7 +302,11 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         let auto = if hub.auto_connect { "on" } else { "off" };
         for line in [
             Line::from(vec![label("Status"), status]),
-            Line::from(vec![label("Address"), Span::raw(hex::encode(hub.hash)), Span::styled(format!("  {}", hub.aspect), Style::default().fg(dim()))]),
+            Line::from(vec![
+                label("Address"),
+                Span::raw(hex::encode(hub.hash)),
+                Span::styled(format!("  {}", hub.aspect), Style::default().fg(dim())),
+            ]),
             Line::from(vec![label("Nick"), Span::raw(nick)]),
             Line::from(vec![label("Auto"), Span::raw(format!("reconnect {auto} (a to toggle)"))]),
             Line::from(vec![
@@ -366,7 +342,8 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
                     lines.push((Line::from(spans), Link::Room(name.clone())));
                 }
             }
-            Some(_) => lines.push((Line::styled("No public rooms on this hub; /join <name> to create one", Style::default().fg(dim())), Link::None)),
+            Some(_) => lines
+                .push((Line::styled("No public rooms on this hub; /join <name> to create one", Style::default().fg(dim())), Link::None)),
             None => {}
         }
         lines.push((Line::raw(""), Link::None));
@@ -385,8 +362,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             whole = false;
             break;
         }
-        let (rendered, name_cols) =
-            chat_lines(line, hub, width, (&own_nick, &app.identity_hash), &people, whisper.is_some());
+        let (rendered, name_cols) = chat_lines(line, hub, width, (&own_nick, &app.identity_hash), &people, whisper.is_some());
         let user = line.src.as_deref().and_then(|s| hex::decode(s).ok());
         for (i, row) in rendered.into_iter().enumerate().rev() {
             let link = match (i, name_cols, &user) {
@@ -431,22 +407,13 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         (None, true) => "commands".to_string(),
         (None, false) => format!("#{room}"),
     };
-    let input_title = if app.channels.typing {
-        format!("{target} as {nick}")
-    } else {
-        format!("Press Enter to write · {target}")
-    };
+    let input_title = if app.channels.typing { format!("{target} as {nick}") } else { format!("Press Enter to write · {target}") };
     let input_block = block(&input_title, app.channels.typing);
     let input_inner = input_block.inner(input_area);
     app.regions.channel_input = input_area;
     let cursor = app.channels.input.cursor_column();
     let offset = cursor.saturating_sub(input_inner.width.saturating_sub(1) as usize);
-    frame.render_widget(
-        Paragraph::new(app.channels.input.text())
-            .scroll((0, offset as u16))
-            .block(input_block),
-        input_area,
-    );
+    frame.render_widget(Paragraph::new(app.channels.input.text()).scroll((0, offset as u16)).block(input_block), input_area);
     if app.channels.typing {
         frame.set_cursor_position(Position::new(input_inner.x + (cursor - offset) as u16, input_inner.y));
     }
@@ -455,8 +422,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         let members = hub.members_of(&room);
         let own = app.identity_hash.to_vec();
         let members_title = format!("Members {}", members.len());
-        let members_block = block(&members_title, false)
-            .title_bottom(Line::styled(" m message ", Style::default().fg(dim())));
+        let members_block = block(&members_title, false).title_bottom(Line::styled(" m message ", Style::default().fg(dim())));
         let members_inner = members_block.inner(members_area);
         let items: Vec<ListItem> = members
             .iter()
@@ -512,7 +478,10 @@ fn draw_mentions(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, b
                 let chosen = Style::default().fg(Color::Black).bg(color).bold();
                 Line::from(vec![Span::styled("›@", chosen), Span::styled(format!("{name} "), chosen)])
             } else {
-                Line::from(vec![Span::styled(" @", Style::default().fg(dim())), Span::styled(name.clone(), Style::default().fg(color).bold())])
+                Line::from(vec![
+                    Span::styled(" @", Style::default().fg(dim())),
+                    Span::styled(name.clone(), Style::default().fg(color).bold()),
+                ])
             };
             ListItem::new(line)
         })
@@ -538,45 +507,43 @@ enum Link {
 fn draw_popup(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.channel_popup = Rect::default();
     let in_room = app.in_room();
-    let (title, items, list, bottom): (String, Vec<ListItem>, &mut ratatui::widgets::ListState, &str) =
-        if let Some(menu) = &mut app.channels.menu {
-            let user = &menu.user;
-            let lxmf = hex::encode(user.lxmf);
-            let dim = Style::default().fg(dim());
-            let items = UserAction::ALL
-                .iter()
-                .map(|action| {
-                    let line = match action {
-                        UserAction::Mention if in_room => {
-                            Line::from(vec![Span::raw(" Mention  "), Span::styled(format!("@{}", user.name), dim)])
-                        }
-                        UserAction::Mention => Line::styled(" Mention (in rooms only)", dim),
-                        UserAction::Whisper if user.whisper => Line::from(vec![Span::raw(" Whisper through the hub  "), Span::styled("/msg", dim)]),
-                        UserAction::Whisper => Line::styled(" Whisper (this hub does not pass them)", dim),
-                        UserAction::Lxmf if user.lxmf_known => Line::from(vec![Span::raw(" LXMF message  "), Span::styled(lxmf.clone(), dim)]),
-                        UserAction::Lxmf => Line::from(vec![Span::raw(" LXMF message  "), Span::styled("(no announce seen yet)", dim)]),
-                        UserAction::CopyLxmf => Line::raw(" Copy LXMF address"),
-                        UserAction::CopyIdentity => Line::raw(" Copy identity hash"),
-                    };
-                    ListItem::new(line)
-                })
-                .collect();
-            (user.name.clone(), items, &mut menu.list, " @ mention · w whisper · l LXMF · Esc close ")
-        } else if let Some(picker) = &mut app.channels.picker {
-            let items = picker.members.iter().map(|(name, _)| ListItem::new(format!(" {name}"))).collect();
-            let title = if picker.room.is_empty() { "Message a user".to_string() } else { format!("Message someone in #{}", picker.room) };
-            (title, items, &mut picker.list, " Enter pick · Esc close ")
-        } else {
-            return;
-        };
+    let (title, items, list, bottom): (String, Vec<ListItem>, &mut ratatui::widgets::ListState, &str) = if let Some(menu) =
+        &mut app.channels.menu
+    {
+        let user = &menu.user;
+        let lxmf = hex::encode(user.lxmf);
+        let dim = Style::default().fg(dim());
+        let items = UserAction::ALL
+            .iter()
+            .map(|action| {
+                let line = match action {
+                    UserAction::Mention if in_room => {
+                        Line::from(vec![Span::raw(" Mention  "), Span::styled(format!("@{}", user.name), dim)])
+                    }
+                    UserAction::Mention => Line::styled(" Mention (in rooms only)", dim),
+                    UserAction::Whisper if user.whisper => {
+                        Line::from(vec![Span::raw(" Whisper through the hub  "), Span::styled("/msg", dim)])
+                    }
+                    UserAction::Whisper => Line::styled(" Whisper (this hub does not pass them)", dim),
+                    UserAction::Lxmf if user.lxmf_known => Line::from(vec![Span::raw(" LXMF message  "), Span::styled(lxmf.clone(), dim)]),
+                    UserAction::Lxmf => Line::from(vec![Span::raw(" LXMF message  "), Span::styled("(no announce seen yet)", dim)]),
+                    UserAction::CopyLxmf => Line::raw(" Copy LXMF address"),
+                    UserAction::CopyIdentity => Line::raw(" Copy identity hash"),
+                };
+                ListItem::new(line)
+            })
+            .collect();
+        (user.name.clone(), items, &mut menu.list, " @ mention · w whisper · l LXMF · Esc close ")
+    } else if let Some(picker) = &mut app.channels.picker {
+        let items = picker.members.iter().map(|(name, _)| ListItem::new(format!(" {name}"))).collect();
+        let title = if picker.room.is_empty() { "Message a user".to_string() } else { format!("Message someone in #{}", picker.room) };
+        (title, items, &mut picker.list, " Enter pick · Esc close ")
+    } else {
+        return;
+    };
     let width = 60.min(area.width);
     let height = (items.len() as u16 + 2).min(area.height.saturating_sub(2)).max(3);
-    let rect = Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 3,
-        width,
-        height,
-    };
+    let rect = Rect { x: area.x + (area.width - width) / 2, y: area.y + area.height.saturating_sub(height) / 3, width, height };
     frame.render_widget(ratatui::widgets::Clear, rect);
     let popup_block = block(&title, true).title_bottom(Line::styled(bottom, Style::default().fg(dim())));
     app.regions.channel_popup = popup_block.inner(rect);

@@ -181,9 +181,7 @@ impl App {
             state.rows.push(RnsRow::Option(i));
         }
         let row = selected_key
-            .and_then(|key| {
-                state.rows.iter().position(|r| matches!(r, RnsRow::Option(i) if state.options[*i].key == key))
-            })
+            .and_then(|key| state.rows.iter().position(|r| matches!(r, RnsRow::Option(i) if state.options[*i].key == key)))
             .or_else(|| state.rows.iter().position(|r| matches!(r, RnsRow::Option(_))));
         state.option_list.select(row);
     }
@@ -388,12 +386,8 @@ impl App {
 
     fn rns_pick(&mut self, title: &str, choices: Vec<(String, String)>, current: &str, purpose: PickFor) {
         let index = choices.iter().position(|(v, _)| v.eq_ignore_ascii_case(current)).unwrap_or(0);
-        self.rns.picker = Some(Picker {
-            title: title.to_string(),
-            choices,
-            list: ListState::default().with_selected(Some(index)),
-            purpose,
-        });
+        self.rns.picker =
+            Some(Picker { title: title.to_string(), choices, list: ListState::default().with_selected(Some(index)), purpose });
     }
 
     pub(super) fn rns_picker_key(&mut self, key: KeyEvent) {
@@ -476,10 +470,7 @@ impl App {
     fn rns_open_text(&mut self) {
         self.rns_reload();
         let text = self.rns.text.clone();
-        self.rns.editor = Some(RnsText {
-            area: TextArea::new(&text),
-            saved: text,
-        });
+        self.rns.editor = Some(RnsText { area: TextArea::new(&text), saved: text });
     }
 
     pub(super) fn rns_editor_key(&mut self, key: KeyEvent) {

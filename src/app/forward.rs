@@ -144,7 +144,9 @@ impl App {
         let stamp = chrono::Local::now().format("%Y-%m-%d");
         let file: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
         let path = unique_path(&dir, &format!("{}-{stamp}.txt", file.trim_matches('_').chars().take(40).collect::<String>()));
-        std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, text)).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
+        std::fs::create_dir_all(&dir)
+            .and_then(|()| std::fs::write(&path, text))
+            .map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
         Ok(path)
     }
 }
@@ -179,11 +181,8 @@ pub fn transcript<'a>(name: &str, key: &str, messages: impl Iterator<Item = &'a 
             out.push_str(&format!("  [{note}]\n"));
         }
         if !message.reactions.is_empty() {
-            let reactions: Vec<String> = message
-                .reactions
-                .iter()
-                .map(|r| format!("{} ({})", r.emoji, if r.incoming { name } else { "You" }))
-                .collect();
+            let reactions: Vec<String> =
+                message.reactions.iter().map(|r| format!("{} ({})", r.emoji, if r.incoming { name } else { "You" })).collect();
             out.push_str(&format!("  [reactions: {}]\n", reactions.join(", ")));
         }
     }
@@ -259,15 +258,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let alice = "ab".repeat(16);
         let mut store = Store::default();
-        let kept = Message { id: "new".into(), content: "Kept here".into(), timestamp: 1_790_000_100.0, state: MessageState::Delivered, ..Message::default() };
+        let kept = Message {
+            id: "new".into(),
+            content: "Kept here".into(),
+            timestamp: 1_790_000_100.0,
+            state: MessageState::Delivered,
+            ..Message::default()
+        };
         store.conversations.insert(alice.clone(), Conversation { messages: vec![kept], archived: 1, ..Conversation::default() });
         let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), store);
         let old = crate::store::Archived {
             conversation: alice.clone(),
-            message: Message { id: "old".into(), incoming: true, content: "From the archive".into(), timestamp: 1_790_000_000.0, ..Message::default() },
+            message: Message {
+                id: "old".into(),
+                incoming: true,
+                content: "From the archive".into(),
+                timestamp: 1_790_000_000.0,
+                ..Message::default()
+            },
         };
         std::fs::create_dir_all(&app.paths.archive).unwrap();
-        std::fs::write(crate::store::archive_month(&app.paths.archive, 1_790_000_000.0), crate::store::encode_archive(&[old]).unwrap()).unwrap();
+        std::fs::write(crate::store::archive_month(&app.paths.archive, 1_790_000_000.0), crate::store::encode_archive(&[old]).unwrap())
+            .unwrap();
         let path = app.export_conversation(&alice).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.starts_with("Conversation with <ababababab"), "{text}");

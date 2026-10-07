@@ -33,9 +33,7 @@ pub fn state(app: &App) -> Value {
         SyncState::Done(at, Ok(n)) => json!({ "state": "done", "at": crate::clock::time(at, false), "count": n }),
         SyncState::Done(at, Err(e)) => json!({ "state": "failed", "at": crate::clock::time(at, false), "error": e }),
     };
-    let propagation = app.settings.propagation_node.as_ref().map(|hash| {
-        json!({ "hash": hash, "name": app.store.display_name(hash) })
-    });
+    let propagation = app.settings.propagation_node.as_ref().map(|hash| json!({ "hash": hash, "name": app.store.display_name(hash) }));
     // How it was picked, when it's picked automatically.
     let auto_propagation = app.auto_pick_label();
     let hosting = match &app.pn.status {
@@ -137,11 +135,17 @@ pub fn guide(app: &App) -> Value {
 pub fn guide_reach(app: &App) -> Value {
     let view = app.guide_view();
     let picked = crate::app::guide::picked(&view);
-    Value::Array(view.reach.into_iter().zip(picked).map(|(r, on)| {
-        let mut entry = reach(r);
-        entry["on"] = on.into();
-        entry
-    }).collect())
+    Value::Array(
+        view.reach
+            .into_iter()
+            .zip(picked)
+            .map(|(r, on)| {
+                let mut entry = reach(r);
+                entry["on"] = on.into();
+                entry
+            })
+            .collect(),
+    )
 }
 
 fn reach(reach: crate::app::reach::Reach) -> Value {
@@ -380,8 +384,7 @@ pub fn peers(app: &App, kind: Option<&str>, query: &str, limit: Option<usize>, s
         app.store.peers.iter().filter(|(_, p)| kind.is_none_or(|kind| kind_name(p.kind) == kind)).collect()
     };
     let heard = of_kind.len();
-    let mut peers: Vec<_> =
-        of_kind.into_iter().filter(|(hash, p)| network::matches(&terms, hash, p) && app.goes_via(hash, via)).collect();
+    let mut peers: Vec<_> = of_kind.into_iter().filter(|(hash, p)| network::matches(&terms, hash, p) && app.goes_via(hash, via)).collect();
     let total = peers.len();
     sort.sort(&mut peers);
     peers.truncate(limit.unwrap_or(usize::MAX));
@@ -651,7 +654,6 @@ pub fn node(app: &App) -> Value {
     })
 }
 
-
 /// The Reticulum config for the web editor: file state, sections, and the
 /// options of one section (the first when `section` is not found).
 pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
@@ -660,10 +662,7 @@ pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
     let (text, exists) = rns::load(&path)?;
     let (config, check) = rns::check(&text);
     let sections = rns::sections(&text);
-    let current = section
-        .and_then(Section::from_id)
-        .filter(|s| sections.contains(s))
-        .unwrap_or(Section::Reticulum);
+    let current = section.and_then(Section::from_id).filter(|s| sections.contains(s)).unwrap_or(Section::Reticulum);
     let describe = |s: &Section| {
         let values = match s {
             Section::Interface(name) => config.as_ref().and_then(|c| c.subsection("interfaces", name)),
@@ -734,8 +733,12 @@ mod tests {
         assert_eq!((newest["total"].as_u64(), newest["heard"].as_u64()), (Some(3), Some(3)));
         assert_eq!(newest["peers"].as_array().unwrap().len(), 2);
         // By name, or kept to those whose path goes through an interface.
-        let names = |found: &Value| found["peers"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(names(&peers(&app, None, "", None, network::NetSort::Name, None)), ["Alpha Library", "Alpha person", "Beta Wiki", "Gamma"]);
+        let names =
+            |found: &Value| found["peers"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            names(&peers(&app, None, "", None, network::NetSort::Name, None)),
+            ["Alpha Library", "Alpha person", "Beta Wiki", "Gamma"]
+        );
         app.routes.insert("ab".repeat(16), "RNode LoRa".into());
         let via = peers(&app, None, "", None, heard, Some("RNode LoRa"));
         assert_eq!((names(&via), via["peers"][0]["via"].as_str()), (vec!["Alpha person".to_string()], Some("RNode LoRa")));

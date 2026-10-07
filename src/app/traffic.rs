@@ -45,11 +45,7 @@ pub fn rate(bytes_per_sec: f64) -> String {
         value /= 1000.0;
         unit += 1;
     }
-    if unit == 0 || value >= 9.95 {
-        format!("{value:.0} {}", UNITS[unit])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
+    if unit == 0 || value >= 9.95 { format!("{value:.0} {}", UNITS[unit]) } else { format!("{value:.1} {}", UNITS[unit]) }
 }
 
 #[cfg(test)]

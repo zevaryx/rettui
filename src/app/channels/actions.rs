@@ -29,10 +29,7 @@ impl App {
             }
         };
         self.tab = Tab::Channels;
-        self.channels.selected = Some(crate::app::channels::Target {
-            hub: hash,
-            room: room.clone(),
-        });
+        self.channels.selected = Some(crate::app::channels::Target { hub: hash, room: room.clone() });
         match room {
             Some(room) if !self.channels.hubs[index].rooms.contains(&room) => {
                 self.join(index, &room, None, false);
@@ -56,10 +53,7 @@ impl App {
         let room_text = room.as_ref().map(|r| format!(" #{r}")).unwrap_or_default();
         self.prompt = Some(Prompt {
             kind: PromptKind::ConfirmHub { hash, aspect, room },
-            title: format!(
-                "Open RRC hub {}{room_text}? It will learn your identity. Type y",
-                &hex::encode(hash)[..12]
-            ),
+            title: format!("Open RRC hub {}{room_text}? It will learn your identity. Type y", &hex::encode(hash)[..12]),
             input: TextInput::default(),
         });
     }
@@ -180,10 +174,7 @@ impl App {
     pub fn join_listed_room(&mut self, room: &str) {
         let Some((index, _)) = self.channels.active() else { return };
         self.join_room(index, room);
-        self.channels.selected = Some(Target {
-            hub: self.channels.hubs[index].hash,
-            room: Some(rrc::normalize_room(room)),
-        });
+        self.channels.selected = Some(Target { hub: self.channels.hubs[index].hash, room: Some(rrc::normalize_room(room)) });
         self.mark_channel_read();
     }
 
@@ -194,11 +185,7 @@ impl App {
             KeyCode::Enter | KeyCode::Char('i') if self.channels.active().is_some() => {
                 self.channels.typing = true;
             }
-            KeyCode::Char('n') => self.open_prompt(
-                PromptKind::AddHub,
-                "Add RRC hub (address, or rrc://address/room)",
-                "",
-            ),
+            KeyCode::Char('n') => self.open_prompt(PromptKind::AddHub, "Add RRC hub (address, or rrc://address/room)", ""),
             KeyCode::Char('m') => self.open_member_picker(),
             KeyCode::Char('c') => self.toggle_selected_connection(),
             KeyCode::Char('a') => self.toggle_auto_connect(),
@@ -303,13 +290,7 @@ impl App {
             self.select_channel_row(index);
         } else if self.regions.channel_input.contains(at) && self.channels.active().is_some() {
             self.channels.typing = true;
-        } else if let Some((_, room)) = self
-            .regions
-            .channel_rooms
-            .iter()
-            .find(|(rect, _)| rect.contains(at))
-            .cloned()
-        {
+        } else if let Some((_, room)) = self.regions.channel_rooms.iter().find(|(rect, _)| rect.contains(at)).cloned() {
             self.join_listed_room(&room);
         }
     }

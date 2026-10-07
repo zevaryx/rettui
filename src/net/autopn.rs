@@ -72,11 +72,7 @@ pub struct Pick {
 pub fn shortlist(candidates: &HashMap<Hash, Candidate>, now: i64, current: Option<Hash>, hosted: Option<Hash>) -> Vec<Candidate> {
     let fresh = |c: &Candidate| now.saturating_sub(c.heard) <= FRESH.as_secs() as i64;
     let affordable = |c: &Candidate| c.stamp_cost.is_none_or(|cost| cost <= MAX_STAMP_COST);
-    let mut list: Vec<Candidate> = candidates
-        .values()
-        .filter(|c| Some(c.hash) != hosted && fresh(c) && affordable(c))
-        .copied()
-        .collect();
+    let mut list: Vec<Candidate> = candidates.values().filter(|c| Some(c.hash) != hosted && fresh(c) && affordable(c)).copied().collect();
     list.sort_by_key(|c| (c.hops, std::cmp::Reverse(c.heard), c.hash));
     let mut shortlist: Vec<Candidate> = list.iter().take(PROBED).copied().collect();
     // The node picked before is checked too, wherever it is in the list.
@@ -101,11 +97,8 @@ pub fn choose(probes: &[Probe], current: Option<Hash>) -> Option<(Hash, u8, Dura
     let answered: Vec<(Hash, u8, Duration)> =
         probes.iter().filter_map(|p| p.answer.as_ref().ok().map(|rtt| (p.hash, p.hops, *rtt))).collect();
     let fastest = answered.iter().map(|(.., rtt)| *rtt).min()?;
-    let best = answered
-        .iter()
-        .filter(|(.., rtt)| comparable(*rtt, fastest))
-        .min_by_key(|(hash, hops, rtt)| (*hops, *rtt, *hash))
-        .copied()?;
+    let best =
+        answered.iter().filter(|(.., rtt)| comparable(*rtt, fastest)).min_by_key(|(hash, hops, rtt)| (*hops, *rtt, *hash)).copied()?;
     match answered.iter().find(|(hash, ..)| Some(*hash) == current) {
         Some(&kept) if fastest * 2 > kept.2 => Some(kept),
         _ => Some(best),
@@ -154,12 +147,12 @@ mod tests {
             candidate(1, 2, 1, Some(16)),
             candidate(2, 2, 2, Some(16)),
             candidate(3, 3, 1, Some(16)),
-            candidate(4, 2, 30, Some(16)),  // not heard for a day
-            candidate(5, 1, 1, Some(40)),   // asks too much
-            candidate(6, 1, 1, Some(16)),   // hosted here
-            candidate(7, 5, 1, None),       // its announce wasn't kept: allowed
+            candidate(4, 2, 30, Some(16)), // not heard for a day
+            candidate(5, 1, 1, Some(40)),  // asks too much
+            candidate(6, 1, 1, Some(16)),  // hosted here
+            candidate(7, 5, 1, None),      // its announce wasn't kept: allowed
             candidate(8, 4, 1, Some(16)),
-            candidate(9, 6, 1, Some(16)),   // the one picked before, far away
+            candidate(9, 6, 1, Some(16)), // the one picked before, far away
         ]
         .into_iter()
         .map(|c| (c.hash, c))

@@ -8,10 +8,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{accent, dim, selected_bg, block, highlighted};
+use super::{accent, block, dim, highlighted, selected_bg};
+use crate::app::App;
 use crate::app::network::search_terms;
 use crate::app::search::snippet;
-use crate::app::App;
 
 /// Widest a name is shown in a result.
 const NAME_WIDTH: usize = 18;
@@ -131,7 +131,13 @@ mod tests {
         let mut store = Store::default();
         let mut conversation = Conversation::default();
         let text = "Meet at the repeater site on the hill, by the old water tower, at noon tomorrow".to_string();
-        conversation.messages.push(Message { id: "m1".into(), content: text, timestamp: 1.0, state: MessageState::Delivered, ..Default::default() });
+        conversation.messages.push(Message {
+            id: "m1".into(),
+            content: text,
+            timestamp: 1.0,
+            state: MessageState::Delivered,
+            ..Default::default()
+        });
         store.conversations.insert("aa".repeat(16), conversation);
         let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), store);
         app.tab = crate::app::Tab::Messages;
@@ -148,4 +154,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

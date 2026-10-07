@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use super::{accent, dim, block, wrap};
+use super::{accent, block, dim, wrap};
 use crate::app::App;
 
 pub(super) fn draw_archive(frame: &mut Frame, app: &mut App) {
@@ -22,8 +22,7 @@ pub(super) fn draw_archive(frame: &mut Frame, app: &mut App) {
     let name = app.store.display_name(&reader.key);
     let count = reader.messages.len();
     let title = format!("Archive · {name} · {count} {}", if count == 1 { "message" } else { "messages" });
-    let outer = block(&title, true)
-        .title_bottom(Line::styled(" ↑↓ PgUp PgDn Home End scroll · Esc close ", Style::default().fg(dim())));
+    let outer = block(&title, true).title_bottom(Line::styled(" ↑↓ PgUp PgDn Home End scroll · Esc close ", Style::default().fg(dim())));
     let inner = outer.inner(rect);
     let columns = inner.width as usize;
 

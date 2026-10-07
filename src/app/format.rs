@@ -409,11 +409,7 @@ fn comment(area: &mut TextArea) {
     let new = (first..=last)
         .map(|i| {
             let line = &lines[i];
-            if all {
-                line.strip_prefix("# ").or_else(|| line.strip_prefix('#')).unwrap_or(line).to_string()
-            } else {
-                format!("# {line}")
-            }
+            if all { line.strip_prefix("# ").or_else(|| line.strip_prefix('#')).unwrap_or(line).to_string() } else { format!("# {line}") }
         })
         .collect();
     let (row, _) = area.cursor();
@@ -452,10 +448,7 @@ mod tests {
         assert_eq!(area.text(), "a`_`_b");
         assert_eq!(area.cursor(), (0, 3));
         // Undo takes it all back at once.
-        area.handle(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('z'),
-            crossterm::event::KeyModifiers::CONTROL,
-        ));
+        area.handle(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char('z'), crossterm::event::KeyModifiers::CONTROL));
         assert_eq!(area.text(), "ab");
     }
 

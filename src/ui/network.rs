@@ -7,7 +7,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
-use super::{dim, selected_bg, ago, block, highlighted};
+use super::{ago, block, dim, highlighted, selected_bg};
 use crate::app::{App, NetFilter};
 use crate::net::PeerKind;
 
@@ -89,10 +89,7 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
                 PeerKind::Nomad => ("NODE", Color::LightGreen),
                 PeerKind::Propagation => ("PROP", Color::LightYellow),
             };
-            let mut spans = vec![
-                Span::styled(format!(" {tag} "), Style::default().fg(Color::Black).bg(color)),
-                Span::raw(" "),
-            ];
+            let mut spans = vec![Span::styled(format!(" {tag} "), Style::default().fg(Color::Black).bg(color)), Span::raw(" ")];
             let shown = match &peer.name {
                 Some(name) => {
                     spans.extend(highlighted(name, name_width, &terms, Style::default()));
@@ -106,10 +103,7 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
             spans.push(Span::raw(" ".repeat(name_width.saturating_sub(shown) + 1)));
             spans.extend(highlighted(hash, usize::MAX, &terms, Style::default().fg(dim())));
             spans.extend([
-                Span::styled(
-                    format!("  {} hop{}", peer.hops, if peer.hops == 1 { "" } else { "s" }),
-                    Style::default().fg(dim()),
-                ),
+                Span::styled(format!("  {} hop{}", peer.hops, if peer.hops == 1 { "" } else { "s" }), Style::default().fg(dim())),
                 Span::styled(
                     if peer.last_seen == 0 { "  not heard".to_string() } else { format!("  {} ago", ago(peer.last_seen)) },
                     Style::default().fg(dim()),
@@ -143,23 +137,14 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             format!("Nothing heard matches “{}”. Esc clears the search.", app.net_search.input.text().trim())
         };
-        frame.render_widget(
-            Paragraph::new(message)
-                .style(Style::default().fg(dim()))
-                .wrap(Wrap { trim: true })
-                .block(list_block),
-            area,
-        );
+        frame.render_widget(Paragraph::new(message).style(Style::default().fg(dim())).wrap(Wrap { trim: true }).block(list_block), area);
         return;
     }
     app.peers.select(Some(selected));
     *app.peers.offset_mut() = offset;
     // The window's own state: the selection relative to its first row.
     let mut window = ListState::default().with_selected(Some(selected - offset));
-    let list = List::new(items)
-        .block(list_block)
-        .highlight_style(Style::default().bg(selected_bg()).bold())
-        .highlight_symbol("▌");
+    let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold()).highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut window);
 }
 

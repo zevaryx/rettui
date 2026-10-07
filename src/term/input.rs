@@ -12,10 +12,7 @@ pub struct TextInput {
 
 impl TextInput {
     pub fn with_text(text: &str) -> Self {
-        Self {
-            text: text.to_string(),
-            cursor: text.chars().count(),
-        }
+        Self { text: text.to_string(), cursor: text.chars().count() }
     }
 
     pub fn text(&self) -> &str {
@@ -28,10 +25,7 @@ impl TextInput {
     }
 
     fn byte_index(&self, chars: usize) -> usize {
-        self.text
-            .char_indices()
-            .nth(chars)
-            .map_or(self.text.len(), |(i, _)| i)
+        self.text.char_indices().nth(chars).map_or(self.text.len(), |(i, _)| i)
     }
 
     /// Insert pasted text at the cursor. Inputs are single-line, so line

@@ -4,8 +4,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::network::{match_mask, matches_text, search_terms};
 use super::App;
+use super::network::{match_mask, matches_text, search_terms};
 use crate::store::{Message, Store};
 use crate::term::input::TextInput;
 
@@ -47,16 +47,14 @@ pub fn search(store: &Store, query: &str, only: Option<&str>) -> Vec<Hit> {
         .filter(|(key, _)| only.is_none_or(|only| only == key.as_str()))
         .flat_map(|(key, conversation)| {
             let count = conversation.messages.len();
-            conversation.messages.iter().enumerate().filter(|(_, m)| matches_text(&terms, &searched(m))).map(
-                move |(index, m)| Hit {
-                    key: key.clone(),
-                    id: m.id.clone(),
-                    index,
-                    newer: count - 1 - index,
-                    timestamp: m.timestamp,
-                    incoming: m.incoming,
-                },
-            )
+            conversation.messages.iter().enumerate().filter(|(_, m)| matches_text(&terms, &searched(m))).map(move |(index, m)| Hit {
+                key: key.clone(),
+                id: m.id.clone(),
+                index,
+                newer: count - 1 - index,
+                timestamp: m.timestamp,
+                incoming: m.incoming,
+            })
         })
         .collect();
     hits.sort_by(|a, b| b.timestamp.total_cmp(&a.timestamp).then_with(|| a.id.cmp(&b.id)));
@@ -70,12 +68,7 @@ pub fn search(store: &Store, query: &str, only: Option<&str>) -> Vec<Hit> {
 pub fn snippet(message: &Message, query: &str, width: usize) -> String {
     let terms = search_terms(query);
     let texts = searched(message);
-    let text = texts
-        .iter()
-        .find(|t| match_mask(t, &terms).contains(&true))
-        .or(texts.first())
-        .copied()
-        .unwrap_or_default();
+    let text = texts.iter().find(|t| match_mask(t, &terms).contains(&true)).or(texts.first()).copied().unwrap_or_default();
     let flat: Vec<char> = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     let width = width.max(8);
     if flat.len() <= width {
@@ -268,4 +261,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

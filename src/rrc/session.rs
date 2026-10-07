@@ -99,19 +99,13 @@ impl Sessions {
         let is_send = matches!(command, SessionCommand::Send(_));
         let delivered = tx.is_some_and(|tx| tx.send(command).is_ok());
         if is_send && !delivered {
-            let _ = ev.send(NetEvent::Rrc {
-                hub,
-                event: RrcEvent::SendFailed("not connected to this hub".into()),
-            });
+            let _ = ev.send(NetEvent::Rrc { hub, event: RrcEvent::SendFailed("not connected to this hub".into()) });
         }
     }
 }
 
 fn hello(identity_hash: &[u8], nick: Option<&str>) -> Vec<u8> {
-    Envelope::new(t::HELLO, identity_hash)
-        .body(rrc::hello_body())
-        .nick(nick)
-        .encode()
+    Envelope::new(t::HELLO, identity_hash).body(rrc::hello_body()).nick(nick).encode()
 }
 
 async fn run(
@@ -157,14 +151,11 @@ async fn session(
     emit(RrcEvent::Status("Connecting".into()));
     // The hub drops everything until the Link identifies us.
     let options = crate::net::link_options("rettui.rrc", true);
-    let LinkSession {
-        handle,
-        mut events,
-        mut resource_offers,
-    } = match crate::net::connect(runtime, hub, identity.clone(), options, &progress).await {
-        Ok(session) => session,
-        Err(e) => return Some(format!("Link failed: {e}")),
-    };
+    let LinkSession { handle, mut events, mut resource_offers } =
+        match crate::net::connect(runtime, hub, identity.clone(), options, &progress).await {
+            Ok(session) => session,
+            Err(e) => return Some(format!("Link failed: {e}")),
+        };
 
     let own = identity.hash;
     let mut nick = config.nick;

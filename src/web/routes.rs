@@ -26,8 +26,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Fetched, Notice, WebState, push, views};
-use crate::app::notify::Notification;
 use crate::app::files::unique_path;
+use crate::app::notify::Notification;
 use crate::app::{Location, resolve_url};
 use crate::lxmf::DeliveryMode;
 use crate::net::{Hash, NetCommand, parse_hash};
@@ -168,10 +168,7 @@ pub fn router(state: WebState) -> Router {
 async fn certificate_authority(State(state): State<WebState>) -> Response {
     match &state.ca {
         Some(der) => (
-            [
-                (header::CONTENT_TYPE, "application/x-x509-ca-cert"),
-                (header::CONTENT_DISPOSITION, "attachment; filename=\"rettui-ca.crt\""),
-            ],
+            [(header::CONTENT_TYPE, "application/x-x509-ca-cert"), (header::CONTENT_DISPOSITION, "attachment; filename=\"rettui-ca.crt\"")],
             der.as_ref().clone(),
         )
             .into_response(),
@@ -206,9 +203,7 @@ const PUBLIC: [&str; 6] =
 /// header or an `X-Rettui-Token` header.
 fn presented_tokens(headers: &axum::http::HeaderMap) -> impl Iterator<Item = &str> {
     let text = |name| headers.get_all(name).into_iter().filter_map(|v| v.to_str().ok());
-    let cookies = text(header::COOKIE)
-        .flat_map(|v| v.split(';'))
-        .filter_map(|c| c.trim().strip_prefix(COOKIE)?.strip_prefix('='));
+    let cookies = text(header::COOKIE).flat_map(|v| v.split(';')).filter_map(|c| c.trim().strip_prefix(COOKIE)?.strip_prefix('='));
     let bearer = text(header::AUTHORIZATION).filter_map(|v| {
         let (scheme, token) = v.trim().split_once(' ')?;
         scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
@@ -219,10 +214,7 @@ fn presented_tokens(headers: &axum::http::HeaderMap) -> impl Iterator<Item = &st
 
 async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
-    let query_token = request
-        .uri()
-        .query()
-        .and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")).map(str::to_string));
+    let query_token = request.uri().query().and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")).map(str::to_string));
     let mut response = if let Some(token) = query_token.filter(|_| path == "/") {
         if same(&token, &state.token()) {
             let secure = if state.https { "; Secure" } else { "" };
@@ -238,9 +230,7 @@ async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Re
             next.run(request).await
         } else if path.starts_with("/api/") {
             let mut response = ApiError(StatusCode::UNAUTHORIZED, "not logged in".into()).into_response();
-            response
-                .headers_mut()
-                .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer realm=\"rettui\""));
+            response.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer realm=\"rettui\""));
             response
         } else {
             (StatusCode::UNAUTHORIZED, axum::response::Html(LOGIN_PAGE)).into_response()
@@ -300,17 +290,12 @@ const MIN_COMPRESSED: usize = 1024;
 
 /// Whether `Accept-Encoding` takes gzip (and not with `q=0`).
 fn accepts_gzip(headers: &axum::http::HeaderMap) -> bool {
-    headers
-        .get_all(header::ACCEPT_ENCODING)
-        .into_iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .any(|coding| {
-            let mut parts = coding.split(';').map(str::trim);
-            let name = parts.next().unwrap_or_default();
-            let refused = parts.any(|p| p.strip_prefix("q=").and_then(|q| q.parse::<f32>().ok()) == Some(0.0));
-            (name.eq_ignore_ascii_case("gzip") || name == "*") && !refused
-        })
+    headers.get_all(header::ACCEPT_ENCODING).into_iter().filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(',')).any(|coding| {
+        let mut parts = coding.split(';').map(str::trim);
+        let name = parts.next().unwrap_or_default();
+        let refused = parts.any(|p| p.strip_prefix("q=").and_then(|q| q.parse::<f32>().ok()) == Some(0.0));
+        (name.eq_ignore_ascii_case("gzip") || name == "*") && !refused
+    })
 }
 
 // ---- static files -------------------------------------------------------
@@ -406,8 +391,7 @@ static EMOJI: std::sync::LazyLock<Asset> = std::sync::LazyLock::new(|| {
     let groups: Vec<Value> = crate::emoji::groups()
         .iter()
         .map(|group| {
-            let emoji: Vec<Value> =
-                group.emoji.iter().map(|e| json!([e.as_str(), e.name(), e.shortcodes().collect::<Vec<_>>()])).collect();
+            let emoji: Vec<Value> = group.emoji.iter().map(|e| json!([e.as_str(), e.name(), e.shortcodes().collect::<Vec<_>>()])).collect();
             json!({ "name": group.name, "icon": group.icon, "emoji": emoji })
         })
         .collect();
@@ -479,7 +463,8 @@ async fn sign_out_others(State(state): State<WebState>) -> Result<Response, ApiE
     let token = state.new_token().map_err(bad)?;
     let secure = if state.https { "; Secure" } else { "" };
     let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}");
-    let _ = state.write(|o| o.app.log("Signed every other browser out of the web UI (a new login link is printed where rettui runs)")).await;
+    let _ =
+        state.write(|o| o.app.log("Signed every other browser out of the web UI (a new login link is printed where rettui runs)")).await;
     Ok(([(header::SET_COOKIE, cookie)], axum::Json(json!({ "ok": true }))).into_response())
 }
 
@@ -584,25 +569,17 @@ fn notify_event(id: u64, notification: &Notification, replay: bool) -> Option<Ev
 /// A browser reconnecting says the last notification it had (the
 /// `Last-Event-ID` header, which browsers send by themselves, or `?since=`),
 /// and first gets those it missed that are still unread.
-async fn events(
-    State(state): State<WebState>,
-    Query(query): Query<EventsQuery>,
-    headers: axum::http::HeaderMap,
-) -> impl IntoResponse {
+async fn events(State(state): State<WebState>, Query(query): Query<EventsQuery>, headers: axum::http::HeaderMap) -> impl IntoResponse {
     // Listening before looking back, so nothing falls in between.
     let receivers = (state.changes.subscribe(), state.notices.subscribe());
-    let since = headers
-        .get("last-event-id")
-        .and_then(|v| v.to_str().ok()?.trim().parse::<u64>().ok())
-        .or(query.since);
+    let since = headers.get("last-event-id").and_then(|v| v.to_str().ok()?.trim().parse::<u64>().ok()).or(query.since);
     let missed = match since {
         Some(since) => state.read(move |o| o.missed(since)).await.unwrap_or_default(),
         None => Vec::new(),
     };
     // Live notifications from before these were sent already.
     let caught_up = missed.iter().map(|(id, _)| *id).max().unwrap_or(0);
-    let replay: Vec<Result<Event, Infallible>> =
-        missed.iter().filter_map(|(id, n)| notify_event(*id, n, true)).map(Ok).collect();
+    let replay: Vec<Result<Event, Infallible>> = missed.iter().filter_map(|(id, n)| notify_event(*id, n, true)).map(Ok).collect();
     // Every browser signed out since: the stream ends (and a reconnect
     // needs the new token).
     let mut signed_out = state.signed_out.subscribe();
@@ -803,9 +780,7 @@ async fn forget_path(State(state): State<WebState>, Path(key): Path<String>) -> 
 fn address(text: &str) -> Result<String, ApiError> {
     let text = text.trim();
     let text = text.strip_prefix("lxmf@").or_else(|| text.strip_prefix("lxmf://")).unwrap_or(text);
-    parse_hash(text)
-        .map(hex::encode)
-        .ok_or_else(|| bad("An LXMF address is 32 hex characters"))
+    parse_hash(text).map(hex::encode).ok_or_else(|| bad("An LXMF address is 32 hex characters"))
 }
 
 #[derive(Deserialize)]
@@ -916,11 +891,7 @@ impl LocationBody {
     }
 }
 
-async fn send_message(
-    State(state): State<WebState>,
-    Path(key): Path<String>,
-    axum::Json(body): axum::Json<SendBody>,
-) -> ApiResult {
+async fn send_message(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<SendBody>) -> ApiResult {
     let key = address(&key)?;
     let mode = DeliveryMode::parse(&body.mode).ok_or_else(|| bad(format!("unknown delivery mode {}", body.mode)))?;
     if let Some(location) = body.location {
@@ -962,11 +933,8 @@ async fn send_message(
             .await
             .map_err(|e| bad(e.to_string()))?;
     }
-    let result = state
-        .write(move |o| {
-            o.app.send_message(key, body.content, files, mode, body.reply_to).map_err(|(e, _, files)| (e, files))
-        })
-        .await?;
+    let result =
+        state.write(move |o| o.app.send_message(key, body.content, files, mode, body.reply_to).map_err(|(e, _, files)| (e, files))).await?;
     match result {
         // Its id: a paper message's link shows on it once written.
         Ok(id) => Ok(axum::Json(json!({ "ok": true, "id": format!("local-{id}") }))),
@@ -1128,13 +1096,10 @@ struct PictureBody {
 /// Read in a paper message from a picture of its QR code (for browsers
 /// that can't find one themselves, or can't use the camera).
 async fn scan_paper(State(state): State<WebState>, axum::Json(body): axum::Json<PictureBody>) -> ApiResult {
-    let picture = base64::engine::general_purpose::STANDARD
-        .decode(body.image.as_bytes())
-        .map_err(|_| bad("The picture is not valid base64"))?;
-    let link = tokio::task::spawn_blocking(move || crate::lxmf::paper::scan(&picture))
-        .await
-        .map_err(|e| bad(e.to_string()))?
-        .map_err(bad)?;
+    let picture =
+        base64::engine::general_purpose::STANDARD.decode(body.image.as_bytes()).map_err(|_| bad("The picture is not valid base64"))?;
+    let link =
+        tokio::task::spawn_blocking(move || crate::lxmf::paper::scan(&picture)).await.map_err(|e| bad(e.to_string()))?.map_err(bad)?;
     read_paper_link(&state, link).await
 }
 
@@ -1179,10 +1144,7 @@ async fn qr_code(Query(query): Query<TextQuery>) -> Result<Response, ApiError> {
 
 /// Header-safe file name.
 fn file_name(name: &str) -> String {
-    let name: String = name
-        .chars()
-        .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
-        .collect();
+    let name: String = name.chars().filter(|c| !c.is_control() && *c != '"' && *c != '\\').collect();
     if name.is_empty() { "download".into() } else { name }
 }
 
@@ -1197,11 +1159,7 @@ fn file_response(data: Vec<u8>, name: &str, inline: bool) -> Response {
         image::guess_format(&data).map(|f| f.to_mime_type()).unwrap_or("application/octet-stream")
     };
     let shown = content_type.starts_with("image/") || content_type.starts_with("audio/");
-    let disposition = format!(
-        "{}; filename=\"{}\"",
-        if inline && shown { "inline" } else { "attachment" },
-        file_name(name)
-    );
+    let disposition = format!("{}; filename=\"{}\"", if inline && shown { "inline" } else { "attachment" }, file_name(name));
     (
         [
             (header::CONTENT_TYPE, content_type.to_string()),
@@ -1230,7 +1188,9 @@ async fn export_conversation(State(state): State<WebState>, Path(key): Path<Stri
     let key = address(&key)?;
     let wanted = key.clone();
     let (name, kept) = state
-        .read(move |o| (o.app.store.display_name(&wanted), o.app.store.conversations.get(&wanted).map(|c| c.messages.clone()).unwrap_or_default()))
+        .read(move |o| {
+            (o.app.store.display_name(&wanted), o.app.store.conversations.get(&wanted).map(|c| c.messages.clone()).unwrap_or_default())
+        })
         .await?;
     let dir = state.paths.archive.clone();
     let (text, file) = tokio::task::spawn_blocking(move || {
@@ -1243,7 +1203,8 @@ async fn export_conversation(State(state): State<WebState>, Path(key): Path<Stri
     .map_err(|e| bad(e.to_string()))?
     .map_err(bad)?;
     let disposition = format!("attachment; filename=\"{}\"", file_name(&file));
-    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()), (header::CONTENT_DISPOSITION, disposition)], text).into_response())
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()), (header::CONTENT_DISPOSITION, disposition)], text)
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -1262,10 +1223,7 @@ async fn forward_message(State(state): State<WebState>, Path(key): Path<String>,
     Ok(axum::Json(json!({ "ok": true, "id": format!("local-{id}") })))
 }
 
-async fn attachment(
-    State(state): State<WebState>,
-    Path((key, id, index)): Path<(String, String, usize)>,
-) -> Result<Response, ApiError> {
+async fn attachment(State(state): State<WebState>, Path((key, id, index)): Path<(String, String, usize)>) -> Result<Response, ApiError> {
     let (wanted, asked) = (key.clone(), id.clone());
     let found = state
         .read(move |o| {
@@ -1314,7 +1272,9 @@ async fn peers(State(state): State<WebState>, Query(query): Query<PeersQuery>) -
     let sort = query.sort.as_deref().and_then(crate::app::network::NetSort::parse).unwrap_or_default();
     Ok(axum::Json(
         state
-            .read(move |o| views::peers(&o.app, query.kind.as_deref(), &query.q, query.limit, sort, query.via.as_deref().filter(|v| !v.is_empty())))
+            .read(move |o| {
+                views::peers(&o.app, query.kind.as_deref(), &query.q, query.limit, sort, query.via.as_deref().filter(|v| !v.is_empty()))
+            })
             .await?,
     ))
 }
@@ -1513,7 +1473,8 @@ async fn hub_action(
                 }
                 // Open the whisper conversation with a user.
                 "whisper" => {
-                    let identity = hex::decode(body.src.trim()).ok().filter(|id| id.len() == 16).ok_or_else(|| bad("not a user identity"))?;
+                    let identity =
+                        hex::decode(body.src.trim()).ok().filter(|id| id.len() == 16).ok_or_else(|| bad("not a user identity"))?;
                     let key = app.open_whisper(index, &identity);
                     return Ok(json!({ "ok": true, "room": key }));
                 }
@@ -1568,11 +1529,7 @@ async fn render_page(state: &WebState, location: Location, fetched: Fetched) -> 
     let saved_url = url.clone();
     let (node_name, identified, saved) = state
         .read(move |o| {
-            (
-                o.app.store.display_name(&hex::encode(node)),
-                o.app.identifies_to(node),
-                o.app.store.saved.iter().any(|b| b.url == saved_url),
-            )
+            (o.app.store.display_name(&hex::encode(node)), o.app.identifies_to(node), o.app.store.saved.iter().any(|b| b.url == saved_url))
         })
         .await?;
     Ok(axum::Json(json!({
@@ -1980,12 +1937,8 @@ mod tests {
         server.abort();
         let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
         let head = String::from_utf8_lossy(&raw[..split]).to_string();
-        let headers = head
-            .lines()
-            .skip(1)
-            .filter_map(|l| l.split_once(':'))
-            .map(|(k, v)| (k.trim().to_lowercase(), v.trim().to_string()))
-            .collect();
+        let headers =
+            head.lines().skip(1).filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_lowercase(), v.trim().to_string())).collect();
         let mut body = raw[split + 4..].to_vec();
         // Chunked (a compressed body has no known length).
         if head.to_lowercase().contains("transfer-encoding: chunked") {

@@ -36,10 +36,7 @@ const K_NICK: u64 = 7;
 const K_DST: u64 = 8;
 
 pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
 pub(super) fn key(k: u64) -> Value {
@@ -51,9 +48,7 @@ pub(super) fn as_u64(value: &Value) -> Option<u64> {
 }
 
 pub(super) fn get(map: &[(Value, Value)], k: u64) -> Option<&Value> {
-    map.iter()
-        .find(|(key, _)| as_u64(key) == Some(k))
-        .map(|(_, value)| value)
+    map.iter().find(|(key, _)| as_u64(key) == Some(k)).map(|(_, value)| value)
 }
 
 pub(super) fn bytes(value: &Value) -> Option<Vec<u8>> {
@@ -80,16 +75,7 @@ pub struct Envelope {
 
 impl Envelope {
     pub fn new(t: u64, src: &[u8]) -> Self {
-        Self {
-            t,
-            id: rand::random::<[u8; 8]>().to_vec(),
-            ts: now_ms(),
-            src: src.to_vec(),
-            room: None,
-            body: None,
-            nick: None,
-            dst: None,
-        }
+        Self { t, id: rand::random::<[u8; 8]>().to_vec(), ts: now_ms(), src: src.to_vec(), room: None, body: None, nick: None, dst: None }
     }
 
     pub fn room(mut self, room: &str) -> Self {
@@ -181,11 +167,7 @@ mod tests {
 
     #[test]
     fn envelope_round_trip() {
-        let env = Envelope::new(t::MSG, &[7; 16])
-            .room("general")
-            .text("hello")
-            .nick(Some("zev"))
-            .dst(&[9; 16]);
+        let env = Envelope::new(t::MSG, &[7; 16]).room("general").text("hello").nick(Some("zev")).dst(&[9; 16]);
         let back = Envelope::decode(&env.encode()).unwrap();
         assert_eq!(back, env);
         assert_eq!(back.body_text(), Some("hello"));
@@ -195,7 +177,8 @@ mod tests {
     fn decodes_python_encoding() {
         // cbor2.dumps({0:1, 1:20, 2:b'\x01'*8, 3:1700000000000, 4:b'\x02'*16,
         //              5:'general', 6:'hi', 7:'bob'})
-        let hex = "a80001011402480101010101010101031b0000018bcfe56800045002020202020202020202020202020202056767656e6572616c066268690763626f62";
+        let hex =
+            "a80001011402480101010101010101031b0000018bcfe56800045002020202020202020202020202020202056767656e6572616c066268690763626f62";
         let bytes = hex::decode(hex).unwrap();
         let env = Envelope::decode(&bytes).unwrap();
         assert_eq!((env.t, env.room.as_deref(), env.body_text()), (t::MSG, Some("general"), Some("hi")));

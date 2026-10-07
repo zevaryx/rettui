@@ -163,13 +163,7 @@ mod tests {
         assert_eq!(kinds(&lines[1]), [(Token::Comment, "# note")]);
         assert_eq!(
             kinds(&lines[2]),
-            [
-                (Token::Structure, ">>"),
-                (Token::Text, "Title "),
-                (Token::Tag, "`!"),
-                (Token::Text, "bold"),
-                (Token::Tag, "`!"),
-            ]
+            [(Token::Structure, ">>"), (Token::Text, "Title "), (Token::Tag, "`!"), (Token::Text, "bold"), (Token::Tag, "`!"),]
         );
         assert_eq!(kinds(&lines[3]), [(Token::Structure, "-=")]);
         assert_eq!(kinds(&lines[5]), [(Token::Literal, "`!raw")]);
@@ -203,10 +197,7 @@ mod tests {
     #[test]
     fn every_character_is_kept() {
         let source = "<>`!a`[x`y\n`(alt (1)`:/m.png) `<24|f`v> ` `FT12\n`tc\n`+>`:a `{b\r\n";
-        let rebuilt: Vec<String> = tokenize(source)
-            .iter()
-            .map(|l| l.iter().map(|(_, s)| s.as_str()).collect())
-            .collect();
+        let rebuilt: Vec<String> = tokenize(source).iter().map(|l| l.iter().map(|(_, s)| s.as_str()).collect()).collect();
         assert_eq!(rebuilt.join("\n"), source.replace('\r', ""));
     }
 }

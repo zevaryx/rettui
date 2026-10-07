@@ -32,7 +32,10 @@ const INDENT: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Interactive {
-    Link { url: String, fields: Vec<String> },
+    Link {
+        url: String,
+        fields: Vec<String>,
+    },
     Field(usize),
     /// A collapsible heading (its fold): activating it folds or opens it.
     Fold(usize),
@@ -220,9 +223,7 @@ fn heading_style(level: usize) -> Style {
         2 => (0x11, 0x99),
         _ => (0x00, 0x77),
     };
-    Style::default()
-        .fg(Color::Rgb(fg, fg, fg))
-        .bg(Color::Rgb(bg, bg, bg))
+    Style::default().fg(Color::Rgb(fg, fg, fg)).bg(Color::Rgb(bg, bg, bg))
 }
 
 /// Parse a Micron colour: three hex digits (`f80`), grayscale (`g50`), or
@@ -490,11 +491,7 @@ impl Parser<'_> {
                 indent: self.content_indent(),
                 align: Alignment::Left,
                 fill: self.row_fill(),
-                spans: vec![MSpan {
-                    text: line.replace('\t', "    "),
-                    style: self.format.style(),
-                    item: None,
-                }],
+                spans: vec![MSpan { text: line.replace('\t', "    "), style: self.format.style(), item: None }],
                 section: None,
             });
             return;
@@ -503,7 +500,8 @@ impl Parser<'_> {
             match self.table.take() {
                 Some(table) => self.page.lines.push(MLine::Table(table)),
                 None => {
-                    let table = Table { indent: self.content_indent(), align, max_width, columns: Vec::new(), header: false, rows: Vec::new() };
+                    let table =
+                        Table { indent: self.content_indent(), align, max_width, columns: Vec::new(), header: false, rows: Vec::new() };
                     self.table = Some(table);
                 }
             }
@@ -607,11 +605,7 @@ impl Parser<'_> {
                 (Some(ch), None) if !ch.is_control() => ch,
                 _ => '\u{2500}',
             };
-            self.page.lines.push(MLine::Divider {
-                indent: self.content_indent(),
-                ch,
-                style: self.format.style(),
-            });
+            self.page.lines.push(MLine::Divider { indent: self.content_indent(), ch, style: self.format.style() });
             return;
         }
         let spans = self.inline(line, Style::default());
@@ -689,11 +683,7 @@ impl Parser<'_> {
         macro_rules! flush {
             () => {
                 if !buf.is_empty() {
-                    spans.push(MSpan {
-                        text: std::mem::take(&mut buf),
-                        style: base.patch(self.format.style()),
-                        item: None,
-                    });
+                    spans.push(MSpan { text: std::mem::take(&mut buf), style: base.patch(self.format.style()), item: None });
                 }
             };
         }
@@ -784,8 +774,14 @@ impl Parser<'_> {
                         let mut parts = body.split('`');
                         let url = parts.next().unwrap_or_default().trim().to_string();
                         let refresh = parts.next().and_then(|r| r.trim().parse().ok()).filter(|r: &u64| *r > 0);
-                        let fields: Vec<String> =
-                            parts.next().unwrap_or_default().split('|').map(str::trim).filter(|f| !f.is_empty()).map(str::to_string).collect();
+                        let fields: Vec<String> = parts
+                            .next()
+                            .unwrap_or_default()
+                            .split('|')
+                            .map(str::trim)
+                            .filter(|f| !f.is_empty())
+                            .map(str::to_string)
+                            .collect();
                         let pid = fields.iter().find_map(|f| f.strip_prefix("pid=")).map(str::to_string);
                         if !url.is_empty() {
                             self.page.partials.push(Partial { url, refresh, fields, pid });
@@ -815,9 +811,7 @@ impl Parser<'_> {
                     }
                     let alt = parts.first().copied().unwrap_or_default();
                     let alt = if alt.is_empty() { "image" } else { alt };
-                    let width = parts
-                        .iter()
-                        .find_map(|p| p.strip_prefix("w=")?.parse().ok());
+                    let width = parts.iter().find_map(|p| p.strip_prefix("w=")?.parse().ok());
                     let url = if parts.len() > 1 { parts[parts.len() - 1] } else { "" };
                     self.images.push(MLine::Image {
                         indent: self.content_indent(),
@@ -852,25 +846,13 @@ impl Parser<'_> {
             [] => ("", "", ""),
         };
         let label = if label.is_empty() { url } else { label };
-        let fields = fields
-            .split('|')
-            .map(str::trim)
-            .filter(|f| !f.is_empty())
-            .map(str::to_string)
-            .collect();
+        let fields = fields.split('|').map(str::trim).filter(|f| !f.is_empty()).map(str::to_string).collect();
         let mut style = base.patch(self.format.style()).add_modifier(Modifier::UNDERLINED);
         if self.format.fg.is_none() {
             style = style.fg(Color::LightBlue);
         }
-        let item = self.item(Interactive::Link {
-            url: url.to_string(),
-            fields,
-        });
-        MSpan {
-            text: label.to_string(),
-            style,
-            item: Some(item),
-        }
+        let item = self.item(Interactive::Link { url: url.to_string(), fields });
+        MSpan { text: label.to_string(), style, item: Some(item) }
     }
 
     /// Fields look like `name`default`, `24|name`default`, `!24|pass``,
@@ -882,11 +864,7 @@ impl Parser<'_> {
         let field = match parts.first().copied() {
             Some(kind @ ("?" | "^")) => Field {
                 name: parts.get(1).copied().unwrap_or_default().to_string(),
-                kind: if kind == "?" {
-                    FieldKind::Checkbox
-                } else {
-                    FieldKind::Radio
-                },
+                kind: if kind == "?" { FieldKind::Checkbox } else { FieldKind::Radio },
                 value: parts.get(2).copied().unwrap_or_default().to_string(),
                 checked: parts.get(3).is_some_and(|p| *p == "*"),
                 label: default.to_string(),
@@ -922,10 +900,7 @@ impl Parser<'_> {
 
 /// Seconds from a page's `#!c=N` cache directive (`0` means do not cache).
 pub fn cache_directive(source: &str) -> Option<u64> {
-    source
-        .lines()
-        .take_while(|line| line.starts_with("#!"))
-        .find_map(|line| line.strip_prefix("#!c=")?.trim().parse().ok())
+    source.lines().take_while(|line| line.starts_with("#!")).find_map(|line| line.strip_prefix("#!c=")?.trim().parse().ok())
 }
 
 /// A request's `var_anchor` (a link's `anchor=name`): where on the page it
@@ -1070,11 +1045,7 @@ mod tests {
     use crate::term::images::{Graphics, Picture};
 
     fn text(layout: &Layout) -> Vec<String> {
-        layout
-            .lines
-            .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
-            .collect()
+        layout.lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
     }
 
     #[test]
@@ -1135,20 +1106,10 @@ mod tests {
 
     #[test]
     fn links_and_fields() {
-        let page = parse(
-            "`[Home`:/page/index.mu] `[abc`deadbeef:/page/x.mu`q|v=1]\n`<16|q`hi> `<?|opt|yes|*`Opt>",
-        );
+        let page = parse("`[Home`:/page/index.mu] `[abc`deadbeef:/page/x.mu`q|v=1]\n`<16|q`hi> `<?|opt|yes|*`Opt>");
         assert_eq!(page.items.len(), 4);
-        assert_eq!(
-            page.items[0],
-            Interactive::Link {
-                url: ":/page/index.mu".into(),
-                fields: vec![]
-            }
-        );
-        let Interactive::Link { fields, .. } = &page.items[1] else {
-            panic!()
-        };
+        assert_eq!(page.items[0], Interactive::Link { url: ":/page/index.mu".into(), fields: vec![] });
+        let Interactive::Link { fields, .. } = &page.items[1] else { panic!() };
         let submitted = page.request_fields(fields);
         assert_eq!(submitted.get("field_q").map(String::as_str), Some("hi"));
         assert_eq!(submitted.get("var_v").map(String::as_str), Some("1"));
@@ -1214,9 +1175,7 @@ mod tests {
     #[test]
     fn kitty_images_reserve_rows() {
         let mut png = Vec::new();
-        image::DynamicImage::new_rgba8(200, 100)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
+        image::DynamicImage::new_rgba8(200, 100).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
         let page = parse("top\n`c`(Pic`:/media/p.png)\nbottom");
         let images = HashMap::from([(":/media/p.png".to_string(), Picture::decode(&png).unwrap())]);
         let gfx = Graphics::for_tests(ratatui_image::picker::ProtocolType::Kitty);
@@ -1231,9 +1190,7 @@ mod tests {
 
     #[test]
     fn image_alt_text_may_contain_parentheses() {
-        let page = parse(
-            "`(Swapfest, Aug 23 (photo: JohnC)`w=80`a=c`:/media/img/a.webp) after\n`(broken (x)",
-        );
+        let page = parse("`(Swapfest, Aug 23 (photo: JohnC)`w=80`a=c`:/media/img/a.webp) after\n`(broken (x)");
         assert_eq!(page.image_urls(), vec![":/media/img/a.webp".to_string()]);
         let out = text(&page.layout(80, None, &HashMap::new(), None));
         assert!(out.iter().any(|l| l.contains("[image: Swapfest, Aug 23 (photo: JohnC)]")));
@@ -1245,9 +1202,8 @@ mod tests {
     #[test]
     fn random_markup_never_panics() {
         const ALPHABET: &[char] = &[
-            '`', '[', ']', '(', ')', '<', '>', '!', '*', '_', 'F', 'f', 'B', 'b', 'T', 'g', 'c',
-            'l', 'r', 'a', '=', '|', '?', '^', '\\', '#', '-', '0', '9', 'e', ':', '/', ' ',
-            '\n', 'é', '全', 't', '{', '}', '+', 'x', '5',
+            '`', '[', ']', '(', ')', '<', '>', '!', '*', '_', 'F', 'f', 'B', 'b', 'T', 'g', 'c', 'l', 'r', 'a', '=', '|', '?', '^', '\\',
+            '#', '-', '0', '9', 'e', ':', '/', ' ', '\n', 'é', '全', 't', '{', '}', '+', 'x', '5',
         ];
         let mut seed: u64 = 0x5eed;
         for _ in 0..3000 {
@@ -1326,7 +1282,8 @@ mod tests {
 
     #[test]
     fn tables_with_aligned_columns_and_a_header() {
-        let source = "`t\n| Name | Price | Qty |\n| ---- | :---: | --: |\n| `[Apple`:/a] | Free | `!5`! |\n| Orange | Ask, nicely | 3 |\n`t\nafter";
+        let source =
+            "`t\n| Name | Price | Qty |\n| ---- | :---: | --: |\n| `[Apple`:/a] | Free | `!5`! |\n| Orange | Ask, nicely | 3 |\n`t\nafter";
         let page = parse(source);
         let layout = page.layout(40, None, &HashMap::new(), None);
         let out = text(&layout);
@@ -1396,7 +1353,15 @@ mod tests {
     fn partials_load_in_their_place() {
         let source = "top\n`{abcd:/page/p.mu`10`pid=32|name}\n`[Hi`p:32]\nName: `<name`Jo>";
         let page = parse(source);
-        assert_eq!(page.partials, [Partial { url: "abcd:/page/p.mu".into(), refresh: Some(10), fields: vec!["pid=32".into(), "name".into()], pid: Some("32".into()) }]);
+        assert_eq!(
+            page.partials,
+            [Partial {
+                url: "abcd:/page/p.mu".into(),
+                refresh: Some(10),
+                fields: vec!["pid=32".into(), "name".into()],
+                pid: Some("32".into())
+            }]
+        );
         assert_eq!(page.partials_with_ids("31|32"), [0]);
         assert_eq!(text(&page.layout(40, None, &HashMap::new(), None))[1], "loading…");
         // Loaded: its lines in place, its links and fields part of the page,

@@ -75,18 +75,12 @@ fn scan(lines: &[String]) -> Vec<Kind> {
 
 /// Write a value the way ConfigObj reads it back.
 pub fn format_value(value: &str) -> String {
-    let needs_quotes = value.contains(['#', ',', '\n', '"', '\''])
-        || value != value.trim()
-        || value.is_empty();
+    let needs_quotes = value.contains(['#', ',', '\n', '"', '\'']) || value != value.trim() || value.is_empty();
     if !needs_quotes {
         value.to_string()
     } else if value.contains('\n') || (value.contains('"') && value.contains('\'')) {
         // The closing quotes must not run into the value's own.
-        if value.contains("'''") || value.ends_with('\'') {
-            format!("\"\"\"{value}\"\"\"")
-        } else {
-            format!("'''{value}'''")
-        }
+        if value.contains("'''") || value.ends_with('\'') { format!("\"\"\"{value}\"\"\"") } else { format!("'''{value}'''") }
     } else if value.contains('"') {
         format!("'{value}'")
     } else {
@@ -124,11 +118,7 @@ impl Doc {
         let trailing_newline = text.ends_with('\n') || text.is_empty();
         let lines: Vec<String> = text.lines().map(str::to_string).collect();
         let kinds = scan(&lines);
-        Self {
-            lines,
-            kinds,
-            trailing_newline,
-        }
+        Self { lines, kinds, trailing_newline }
     }
 
     pub fn text(&self) -> String {
@@ -176,12 +166,7 @@ impl Doc {
 
     fn span(&self, header: usize, end: usize, depth: usize) -> Span {
         let own_end = (header + 1..end).find(|&i| self.header(i).is_some()).unwrap_or(end);
-        Span {
-            header,
-            own_end,
-            end,
-            depth,
-        }
+        Span { header, own_end, end, depth }
     }
 
     /// The key lines directly in a section.
@@ -233,12 +218,10 @@ impl Doc {
         if let Some((i, ..)) = self.keys(span).next() {
             return self.indent_of(i);
         }
-        let sibling = (0..self.lines.len())
-            .filter(|&i| self.header(i).is_some_and(|(d, _)| d == span.depth))
-            .find_map(|h| {
-                let next = self.lines.get(h + 1).map(|_| h + 1)?;
-                matches!(self.kinds[next], Kind::Key { .. }).then(|| self.indent_of(next))
-            });
+        let sibling = (0..self.lines.len()).filter(|&i| self.header(i).is_some_and(|(d, _)| d == span.depth)).find_map(|h| {
+            let next = self.lines.get(h + 1).map(|_| h + 1)?;
+            matches!(self.kinds[next], Kind::Key { .. }).then(|| self.indent_of(next))
+        });
         sibling.unwrap_or_else(|| "    ".repeat(span.depth.saturating_sub(1)))
     }
 
@@ -289,10 +272,7 @@ impl Doc {
             self.add_section(path);
         }
         let span = self.find(path).expect("section exists");
-        let existing = self
-            .keys(&span)
-            .find(|(_, k, _)| *k == key || aliases.contains(k))
-            .map(|(i, k, last)| (i, k.to_string(), last));
+        let existing = self.keys(&span).find(|(_, k, _)| *k == key || aliases.contains(k)).map(|(i, k, last)| (i, k.to_string(), last));
         match (existing, value) {
             (Some((i, found, last)), Some(value)) => {
                 let line = &self.lines[i];
@@ -332,10 +312,8 @@ impl Doc {
     /// last key are left, as they usually introduce what follows.
     pub fn remove(&mut self, path: &[&str]) -> Result<(), String> {
         let span = self.find(path).ok_or_else(|| format!("No section {}", path.join("/")))?;
-        let last_key = (span.header..span.end)
-            .rev()
-            .find(|&i| !matches!(self.kinds[i], Kind::Other))
-            .map_or(span.header, |i| match self.kinds[i] {
+        let last_key =
+            (span.header..span.end).rev().find(|&i| !matches!(self.kinds[i], Kind::Other)).map_or(span.header, |i| match self.kinds[i] {
                 Kind::Key { last, .. } => last,
                 _ => i,
             });

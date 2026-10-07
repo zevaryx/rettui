@@ -54,15 +54,8 @@ pub type Known = Arc<std::sync::Mutex<KnownIdentities>>;
 
 impl KnownIdentities {
     pub fn load(path: &Path) -> Known {
-        let entries = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
-        Arc::new(std::sync::Mutex::new(Self {
-            path: path.to_path_buf(),
-            entries,
-            dirty: false,
-        }))
+        let entries = std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+        Arc::new(std::sync::Mutex::new(Self { path: path.to_path_buf(), entries, dirty: false }))
     }
 
     /// Write the file if anything changed, off the async threads.
@@ -113,11 +106,7 @@ impl KnownIdentities {
     fn get(&self, destination: Hash) -> Option<Remote> {
         let entry = self.entries.get(&hex::encode(destination))?;
         let identity = Identity::from_public_key(&hex::decode(&entry.key).ok()?).ok()?;
-        Some(Remote {
-            identity,
-            app_data: entry.app_data.as_deref().and_then(|d| hex::decode(d).ok()),
-            ratchet: None,
-        })
+        Some(Remote { identity, app_data: entry.app_data.as_deref().and_then(|d| hex::decode(d).ok()), ratchet: None })
     }
 }
 
@@ -130,11 +119,7 @@ pub struct Remote {
 
 impl From<RecalledDestination> for Remote {
     fn from(recalled: RecalledDestination) -> Self {
-        Self {
-            identity: recalled.identity,
-            app_data: recalled.app_data,
-            ratchet: recalled.ratchet,
-        }
+        Self { identity: recalled.identity, app_data: recalled.app_data, ratchet: recalled.ratchet }
     }
 }
 
@@ -272,10 +257,8 @@ pub async fn probe(
         return Ok(Probe { rtt: outcome.rtt, hops: hops.or(Some(outcome.hops)), kind, by_link: false });
     }
     let started = std::time::Instant::now();
-    let LinkSession { handle, .. } = runtime
-        .connect_link(to, Identity::new(), link_options("rettui.probe", false))
-        .await
-        .map_err(|e| format!("No answer: {e}"))?;
+    let LinkSession { handle, .. } =
+        runtime.connect_link(to, Identity::new(), link_options("rettui.probe", false)).await.map_err(|e| format!("No answer: {e}"))?;
     let rtt = started.elapsed();
     handle.close().await;
     Ok(Probe { rtt, hops, kind, by_link: true })
@@ -404,8 +387,7 @@ pub async fn ping(runtime: &ReticulumHandle, known: &Known, to: Hash) -> Result<
     let started = std::time::Instant::now();
     // Their answer's radio readings are kept, for an RNode to report.
     let options = LinkConnectOptions { track_phy_stats: true, ..link_options("rettui.ping", false) };
-    let LinkSession { handle, .. } =
-        runtime.connect_link(to, Identity::new(), options).await.map_err(|e| format!("No answer: {e}"))?;
+    let LinkSession { handle, .. } = runtime.connect_link(to, Identity::new(), options).await.map_err(|e| format!("No answer: {e}"))?;
     let rtt = started.elapsed();
     let heard = handle.phy_stats();
     handle.close().await;
@@ -413,12 +395,7 @@ pub async fn ping(runtime: &ReticulumHandle, known: &Known, to: Hash) -> Result<
 }
 
 pub fn link_options(label: &str, identify: bool) -> LinkConnectOptions {
-    LinkConnectOptions {
-        path_timeout: PATH_TIMEOUT,
-        client_label: label.to_string(),
-        identify,
-        ..LinkConnectOptions::default()
-    }
+    LinkConnectOptions { path_timeout: PATH_TIMEOUT, client_label: label.to_string(), identify, ..LinkConnectOptions::default() }
 }
 
 #[cfg(test)]

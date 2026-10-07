@@ -15,7 +15,6 @@ use crate::nomad::micron::source::visible;
 pub(super) use crate::term::textarea::Highlighted;
 use crate::term::textarea::{TextArea, display_width};
 
-
 /// Whether the char at `(line, col)` is inside the selection.
 fn is_selected(selection: Option<((usize, usize), (usize, usize))>, line: usize, col: usize) -> bool {
     selection.is_some_and(|(start, end)| (line, col) >= start && (line, col) < end)

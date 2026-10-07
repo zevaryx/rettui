@@ -6,7 +6,7 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
-use super::{accent, dim, selected_bg, block, human_bytes, wrap};
+use super::{accent, block, dim, human_bytes, selected_bg, wrap};
 use crate::app::node::NodeStatus;
 use crate::app::{App, NetState, SyncState};
 use crate::config::{Effect, FIELDS, FieldKind};
@@ -76,11 +76,7 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).bold());
     frame.render_stateful_widget(list, list_area, &mut app.settings_list);
-    let help = app
-        .settings_list
-        .selected()
-        .and_then(|i| FIELDS.get(i))
-        .map_or("", |f| f.help);
+    let help = app.settings_list.selected().and_then(|i| FIELDS.get(i)).map_or("", |f| f.help);
     frame.render_widget(Paragraph::new(Span::styled(format!(" {help}"), Style::default().fg(dim()).italic())), help_area);
 }
 
@@ -95,13 +91,9 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     ])
     .areas(area);
     draw_settings(frame, app, settings);
-    let [ifaces, log] =
-        Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(rest);
+    let [ifaces, log] = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(rest);
 
-    let address = app
-        .lxmf_hash
-        .map(hex::encode)
-        .unwrap_or_else(|| "(starting)".to_string());
+    let address = app.lxmf_hash.map(hex::encode).unwrap_or_else(|| "(starting)".to_string());
     let network = match &app.net_state {
         NetState::Starting => "starting".to_string(),
         NetState::Online => "online".to_string(),
@@ -135,14 +127,8 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![label("Propagation node"), Span::raw(propagation)]),
         Line::from(vec![label("Last sync"), Span::raw(sync)]),
         Line::from([vec![label("Hosting messages")], hosting(app)].concat()),
-        Line::from(vec![
-            label("RNS config"),
-            Span::raw(app.settings.rns_config.clone().unwrap_or_else(|| "rsReticulum default".into())),
-        ]),
-        Line::from(vec![
-            label("Data"),
-            Span::raw(app.paths.store.parent().map(|p| p.display().to_string()).unwrap_or_default()),
-        ]),
+        Line::from(vec![label("RNS config"), Span::raw(app.settings.rns_config.clone().unwrap_or_else(|| "rsReticulum default".into()))]),
+        Line::from(vec![label("Data"), Span::raw(app.paths.store.parent().map(|p| p.display().to_string()).unwrap_or_default())]),
         Line::from(vec![label("Known"), Span::raw(format!("{} destinations", app.store.peers.len()))]),
     ];
     let mut lines = lines;
@@ -168,10 +154,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
             Line::from(vec![
                 Span::styled(format!("{dot} "), Style::default().fg(color)),
                 Span::raw(i.name.clone()),
-                Span::styled(
-                    format!("  ↓{} ↑{}{details}", human_bytes(i.rx_bytes), human_bytes(i.tx_bytes)),
-                    Style::default().fg(dim()),
-                ),
+                Span::styled(format!("  ↓{} ↑{}{details}", human_bytes(i.rx_bytes), human_bytes(i.tx_bytes)), Style::default().fg(dim())),
             ])
         })
         .collect();
@@ -187,10 +170,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         iface_lines
     };
-    frame.render_widget(
-        Paragraph::new(iface_lines).wrap(ratatui::widgets::Wrap { trim: true }).block(block("Interfaces", false)),
-        ifaces,
-    );
+    frame.render_widget(Paragraph::new(iface_lines).wrap(ratatui::widgets::Wrap { trim: true }).block(block("Interfaces", false)), ifaces);
 
     let rows = log_rows(app.log.iter(), log.width.saturating_sub(2) as usize, log.height.saturating_sub(2) as usize);
     frame.render_widget(Paragraph::new(rows).block(block("Log", false)), log);
@@ -249,7 +229,14 @@ mod tests {
         app.tab = crate::app::Tab::Status;
         assert!(screen(&mut app).contains("Hosting messages  ◌ starting"));
         app.on_net(NetEvent::Pn(PnEvent::Started { hash: [7; 16] }));
-        app.on_net(NetEvent::Pn(PnEvent::Stats(PnStats { messages: 3, bytes: 2400, received: 4, served: 1, peers: 1, ..PnStats::default() })));
+        app.on_net(NetEvent::Pn(PnEvent::Stats(PnStats {
+            messages: 3,
+            bytes: 2400,
+            received: 4,
+            served: 1,
+            peers: 1,
+            ..PnStats::default()
+        })));
         let shown = screen(&mut app);
         assert!(shown.contains(&hex::encode([7; 16])) && shown.contains("3 kept (2.4 KB) · 4 in · 1 collected"), "{shown}");
         assert!(shown.contains("1 peer") && !shown.contains("1 peers"), "{shown}");
@@ -283,11 +270,14 @@ mod tests {
         .map(String::from)
         .to_vec();
         let rows: Vec<String> = log_rows(log.iter(), 40, 4).iter().map(|l| l.to_string()).collect();
-        assert_eq!(rows, [
-            "12:00:01  Interface Dead Link: TCP",
-            "          connect failed: Connection",
-            "          refused (os error 111)",
-            "12:00:02  Newest",
-        ]);
+        assert_eq!(
+            rows,
+            [
+                "12:00:01  Interface Dead Link: TCP",
+                "          connect failed: Connection",
+                "          refused (os error 111)",
+                "12:00:02  Newest",
+            ]
+        );
     }
 }

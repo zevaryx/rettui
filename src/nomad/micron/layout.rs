@@ -35,9 +35,7 @@ const MAX_IMAGE_ROWS: usize = 40;
 
 /// The interactive item drawn at a layout cell, if any.
 pub fn hit_at(hits: &[(usize, usize, usize, usize)], row: usize, col: usize) -> Option<usize> {
-    hits.iter()
-        .find(|(r, x0, x1, _)| *r == row && (*x0..*x1).contains(&col))
-        .map(|(.., item)| *item)
+    hits.iter().find(|(r, x0, x1, _)| *r == row && (*x0..*x1).contains(&col)).map(|(.., item)| *item)
 }
 
 /// Where a row of `used` columns starts inside `width` for an alignment.
@@ -208,13 +206,7 @@ impl Page {
         pieces
     }
 
-    pub fn layout(
-        &self,
-        width: usize,
-        selected: Option<usize>,
-        images: &HashMap<String, Picture>,
-        graphics: Option<&Graphics>,
-    ) -> Layout {
+    pub fn layout(&self, width: usize, selected: Option<usize>, images: &HashMap<String, Picture>, graphics: Option<&Graphics>) -> Layout {
         let width = width.max(1);
         let mut out = Layout {
             lines: Vec::new(),
@@ -255,13 +247,7 @@ impl Page {
                         Span::styled(" ".repeat(width - indent - count * cw), fill),
                     ]));
                 }
-                MLine::Image {
-                    indent,
-                    align,
-                    url,
-                    alt,
-                    width: wanted,
-                } => {
+                MLine::Image { indent, align, url, alt, width: wanted } => {
                     let indent = (*indent).min(width - 1);
                     let avail = wanted.unwrap_or(width).min(width - indent);
                     match images.get(url).and_then(|p| p.rows(graphics, avail, MAX_IMAGE_ROWS)) {
@@ -282,9 +268,7 @@ impl Page {
                                 Span::raw(" ".repeat(indent)),
                                 Span::styled(
                                     format!("[image: {alt}]"),
-                                    Style::default()
-                                        .fg(Color::DarkGray)
-                                        .add_modifier(Modifier::ITALIC),
+                                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
                                 ),
                             ])
                             .alignment(*align),
@@ -299,13 +283,7 @@ impl Page {
                 }
                 MLine::FieldBlock { indent, item, style } => self.field_block(&mut out, width, *indent, *item, *style, selected),
                 MLine::Table(table) => self.table(&mut out, width, table, selected),
-                MLine::Text {
-                    indent,
-                    align,
-                    fill,
-                    spans,
-                    section,
-                } => {
+                MLine::Text { indent, align, fill, spans, section } => {
                     if let Some(fold) = section.and_then(|s| s.fold)
                         && !self.folds[fold].open
                     {

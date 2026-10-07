@@ -38,9 +38,8 @@ pub struct Tile {
 /// such a tile.
 pub fn tile_url(template: &str, z: u32, x: u32, y: u32) -> Option<String> {
     let across = 1u32 << z.min(MAX_ZOOM);
-    (z <= MAX_ZOOM && x < across && y < across).then(|| {
-        template.replace("{z}", &z.to_string()).replace("{x}", &x.to_string()).replace("{y}", &y.to_string()).replace("{s}", "a")
-    })
+    (z <= MAX_ZOOM && x < across && y < across)
+        .then(|| template.replace("{z}", &z.to_string()).replace("{x}", &x.to_string()).replace("{y}", &y.to_string()).replace("{s}", "a"))
 }
 
 /// Where it's kept: apart for each place tiles come from, so changing it
@@ -107,11 +106,7 @@ fn fetch(url: &str) -> Result<Tile, String> {
     let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).user_agent(USER_AGENT).try_proxy_from_env(true).build();
     let response = agent.get(url).call().map_err(|e| format!("Couldn't fetch the map tile: {e}"))?;
     let mut data = Vec::new();
-    response
-        .into_reader()
-        .take(MAX_TILE_BYTES + 1)
-        .read_to_end(&mut data)
-        .map_err(|e| format!("Couldn't fetch the map tile: {e}"))?;
+    response.into_reader().take(MAX_TILE_BYTES + 1).read_to_end(&mut data).map_err(|e| format!("Couldn't fetch the map tile: {e}"))?;
     if data.len() as u64 > MAX_TILE_BYTES {
         return Err("The map tile was too big".into());
     }

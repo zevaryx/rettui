@@ -222,10 +222,9 @@ impl Paths {
     pub fn new(base: Option<PathBuf>) -> Result<Self> {
         let base = match base {
             Some(base) => base,
-            None => directories::ProjectDirs::from("", "", "rettui")
-                .context("could not determine a data directory")?
-                .data_dir()
-                .to_path_buf(),
+            None => {
+                directories::ProjectDirs::from("", "", "rettui").context("could not determine a data directory")?.data_dir().to_path_buf()
+            }
         };
         fs::create_dir_all(&base).with_context(|| format!("creating {}", base.display()))?;
         Ok(Self {
@@ -398,13 +397,7 @@ pub const FIELDS: &[Field] = &[
         kind: FieldKind::Optional,
         effect: Effect::Now,
     },
-    Field {
-        key: "icon_color",
-        label: "Icon colour",
-        help: "Your icon's colour, as #rrggbb",
-        kind: FieldKind::Color,
-        effect: Effect::Now,
-    },
+    Field { key: "icon_color", label: "Icon colour", help: "Your icon's colour, as #rrggbb", kind: FieldKind::Color, effect: Effect::Now },
     Field {
         key: "icon_background",
         label: "Icon background",
@@ -735,9 +728,7 @@ pub fn field(key: &str) -> Option<&'static Field> {
 
 pub fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
-        Some(rest) => directories::BaseDirs::new()
-            .map(|d| d.home_dir().join(rest))
-            .unwrap_or_else(|| PathBuf::from(path)),
+        Some(rest) => directories::BaseDirs::new().map(|d| d.home_dir().join(rest)).unwrap_or_else(|| PathBuf::from(path)),
         None => PathBuf::from(path),
     }
 }
@@ -754,18 +745,11 @@ fn between(value: &str, (low, high): (u64, u64)) -> Result<u64, String> {
 /// One of `choices`.
 fn choice(value: &str, choices: &[&str]) -> Result<String, String> {
     let value = value.trim().to_lowercase();
-    if choices.contains(&value.as_str()) {
-        Ok(value)
-    } else {
-        Err(format!("one of {}", choices.join(", ")))
-    }
+    if choices.contains(&value.as_str()) { Ok(value) } else { Err(format!("one of {}", choices.join(", "))) }
 }
 
 fn number(value: &str, max: u64) -> Result<u64, String> {
-    let n: u64 = value
-        .trim()
-        .parse()
-        .map_err(|_| format!("{:?} is not a whole number", value.trim()))?;
+    let n: u64 = value.trim().parse().map_err(|_| format!("{:?} is not a whole number", value.trim()))?;
     if n > max {
         return Err(format!("at most {max}"));
     }
@@ -897,7 +881,9 @@ impl Settings {
                 if let Some(url) = optional(value) {
                     let web = url.starts_with("https://") || url.starts_with("http://");
                     if !web || !["{z}", "{x}", "{y}"].iter().all(|part| url.contains(part)) {
-                        return Err(fail("a web address with {z}, {x} and {y} in it, as https://tile.openstreetmap.org/{z}/{x}/{y}.png".into()));
+                        return Err(fail(
+                            "a web address with {z}, {x} and {y} in it, as https://tile.openstreetmap.org/{z}/{x}/{y}.png".into(),
+                        ));
                     }
                 }
                 self.map_tiles = optional(value);
@@ -969,9 +955,9 @@ impl Settings {
             "propagation_node" => {
                 self.propagation_node = match optional(value) {
                     None => None,
-                    Some(text) => Some(hex::encode(
-                        crate::net::parse_hash(&text).ok_or_else(|| fail("an address is 32 hex characters".into()))?,
-                    )),
+                    Some(text) => {
+                        Some(hex::encode(crate::net::parse_hash(&text).ok_or_else(|| fail("an address is 32 hex characters".into()))?))
+                    }
                 };
             }
             "home" => {
@@ -1007,10 +993,7 @@ impl Settings {
 /// directory, since the shared-instance RPC key derives from it. Prefer the
 /// standard Python RNS locations when they exist.
 pub fn default_rns_config() -> Option<String> {
-    python_rns_dirs()
-        .into_iter()
-        .find(|dir| dir.join("config").is_file())
-        .map(|dir| dir.to_string_lossy().into_owned())
+    python_rns_dirs().into_iter().find(|dir| dir.join("config").is_file()).map(|dir| dir.to_string_lossy().into_owned())
 }
 
 /// Where Python Reticulum (and so NomadNet, Sideband and rnsd) keeps its
@@ -1036,13 +1019,10 @@ pub fn is_shared_rns_dir(dir: &Path) -> bool {
 /// Load the identity, creating one on first run.
 pub fn load_identity(path: &Path) -> Result<Identity> {
     if path.exists() {
-        return Identity::from_file(path)
-            .map_err(|e| anyhow::anyhow!("loading identity {}: {e}", path.display()));
+        return Identity::from_file(path).map_err(|e| anyhow::anyhow!("loading identity {}: {e}", path.display()));
     }
     let identity = Identity::new();
-    identity
-        .to_file(path)
-        .map_err(|e| anyhow::anyhow!("saving identity {}: {e}", path.display()))?;
+    identity.to_file(path).map_err(|e| anyhow::anyhow!("saving identity {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

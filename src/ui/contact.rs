@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{accent, dim, picked_style, ago, block, wrap};
+use super::{accent, ago, block, dim, picked_style, wrap};
 use crate::app::App;
 use crate::app::contacts::{CardAction, PingState, ping_label, trust_label};
 
@@ -61,7 +61,9 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
     }
     lines.push(field("Address", key.clone()));
     match app.store.peers.get(&key) {
-        Some(peer) => lines.push(field("Heard", format!("{} ago, {} hop{}", ago(peer.last_seen), peer.hops, if peer.hops == 1 { "" } else { "s" }))),
+        Some(peer) => {
+            lines.push(field("Heard", format!("{} ago, {} hop{}", ago(peer.last_seen), peer.hops, if peer.hops == 1 { "" } else { "s" })))
+        }
         None => lines.push(field("Heard", "not yet (no announce)")),
     }
     lines.push(field("Trust", trust_label(contact.trust, app.is_known(&key))));
@@ -107,12 +109,8 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
     lines.extend(rows);
 
     let height = (lines.len() as u16 + 2).min(area.height);
-    let rect = Rect {
-        x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + (area.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    };
+    let rect =
+        Rect { x: area.x + (area.width.saturating_sub(width)) / 2, y: area.y + (area.height.saturating_sub(height)) / 2, width, height };
     frame.render_widget(Clear, rect);
     let card = block("Contact", true).padding(ratatui::widgets::Padding::horizontal(1));
     let inner = card.inner(rect);
@@ -173,7 +171,12 @@ mod tests {
         assert!(screen.contains("Ping      answered in 420 ms, 3 hops away"), "{screen}");
         // Its Close button closes it.
         let (rect, _) = *app.regions.card_buttons.iter().find(|(_, a)| *a == CardAction::Close).unwrap();
-        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: rect.x + 1, row: rect.y, modifiers: KeyModifiers::NONE });
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
         assert!(app.contact_card.is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -44,19 +44,11 @@ pub async fn fetch(
 
     for attempt in 0..2 {
         let handle = node_link(runtime, links, node, identity.as_ref(), progress).await?;
-        match handle
-            .request(&request.route, &request.body, Some(timeout))
-            .await
-        {
+        match handle.request(&request.route, &request.body, Some(timeout)).await {
             Ok(response) => {
-                return Ok(FetchedContent {
-                    data: response.data,
-                    metadata: response.metadata,
-                });
+                return Ok(FetchedContent { data: response.data, metadata: response.metadata });
             }
-            Err(e @ (LinkSessionError::LinkNotActive | LinkSessionError::SessionClosed))
-                if attempt == 0 =>
-            {
+            Err(e @ (LinkSessionError::LinkNotActive | LinkSessionError::SessionClosed)) if attempt == 0 => {
                 tracing::debug!("NomadNet link to {} went away ({e}); reconnecting", hex::encode(node));
                 links.lock().await.remove(&node);
             }
@@ -93,11 +85,7 @@ async fn node_link(
     let session = crate::net::connect(runtime, node, local, link_options("rettui.nomad", identify), progress)
         .await
         .map_err(|e| format!("Could not connect to node: {e}"))?;
-    let LinkSession {
-        handle,
-        mut events,
-        mut resource_offers,
-    } = session;
+    let LinkSession { handle, mut events, mut resource_offers } = session;
 
     // Drain session events so the session never stalls, and forget the Link
     // when it closes. Unsolicited Resources are refused.
@@ -115,10 +103,7 @@ async fn node_link(
             }
         }
         let mut links = links_for_task.lock().await;
-        if links
-            .get(&node)
-            .is_some_and(|(h, _)| h.link_id() == handle_for_task.link_id())
-        {
+        if links.get(&node).is_some_and(|(h, _)| h.link_id() == handle_for_task.link_id()) {
             links.remove(&node);
         }
     });

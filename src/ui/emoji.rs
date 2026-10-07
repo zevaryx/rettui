@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{dim, picked_style, block};
+use super::{block, dim, picked_style};
 use crate::app::App;
 use crate::app::emoji::EmojiHit;
 use crate::emoji;
@@ -70,7 +70,8 @@ fn draw_picker(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bou
         (false, 0) => "Emoji · used lately".to_string(),
         (false, tab) => format!("Emoji · {}", emoji::groups()[tab - 1].name),
     };
-    let hint = if target == crate::app::emoji::EmojiTarget::Reaction { " Enter react · Esc close " } else { " Enter insert · Esc close " };
+    let hint =
+        if target == crate::app::emoji::EmojiTarget::Reaction { " Enter react · Esc close " } else { " Enter insert · Esc close " };
     let popup = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
     let inner = popup.inner(area);
     frame.render_widget(Clear, area);
@@ -79,7 +80,10 @@ fn draw_picker(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bou
 
     // The search, with the cursor at its end.
     let search = if picker.search.text().is_empty() {
-        Line::from(vec![Span::styled("Search ", Style::default().fg(dim())), Span::styled("a name, or Tab for groups", Style::default().fg(dim()).italic())])
+        Line::from(vec![
+            Span::styled("Search ", Style::default().fg(dim())),
+            Span::styled("a name, or Tab for groups", Style::default().fg(dim()).italic()),
+        ])
     } else {
         Line::from(vec![Span::styled("Search ", Style::default().fg(dim())), Span::raw(picker.search.text().to_string())])
     };
@@ -129,7 +133,10 @@ fn draw_picker(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bou
     // What the chosen one is called (its shortcode first: names run long).
     let name = choices.get(picker.pick).map(|chosen| {
         let code = emoji::shortcode_for(chosen, picker.search.text()).map(|c| format!(":{c}:  ")).unwrap_or_default();
-        Line::from(vec![Span::raw(format!("{} {code}", chosen.as_str())), Span::styled(chosen.name().to_string(), Style::default().fg(dim()))])
+        Line::from(vec![
+            Span::raw(format!("{} {code}", chosen.as_str())),
+            Span::styled(chosen.name().to_string(), Style::default().fg(dim())),
+        ])
     });
     let name_row = Rect { y: grid.bottom(), height: 1, ..inner };
     frame.render_widget(Paragraph::new(name.unwrap_or_default()), name_row);

@@ -3,15 +3,15 @@
 use std::path::PathBuf;
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::buffer::Buffer;
 use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 
 use unicode_width::UnicodeWidthStr;
 
-use super::{accent, dim, picked_style, selected_bg, block, human_bytes, time_label, wrap};
+use super::{accent, block, dim, human_bytes, picked_style, selected_bg, time_label, wrap};
 use crate::app::{App, HistoryHit, QrKind};
 use crate::lxmf::DeliveryMode;
 use crate::markdown::{self, TextFormat};
@@ -94,12 +94,10 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let list_block = block("Conversations", !app.composing);
     app.regions.conversations = list_block.inner(list_area);
     if order.is_empty() {
-        let hint = Paragraph::new(
-            "No conversations yet.\n\nPress n to message an LXMF address, or pick a peer in the Network tab.",
-        )
-        .wrap(Wrap { trim: true })
-        .style(Style::default().fg(dim()))
-        .block(list_block);
+        let hint = Paragraph::new("No conversations yet.\n\nPress n to message an LXMF address, or pick a peer in the Network tab.")
+            .wrap(Wrap { trim: true })
+            .style(Style::default().fg(dim()))
+            .block(list_block);
         frame.render_widget(hint, list_area);
     } else {
         let items: Vec<ListItem> = order
@@ -125,21 +123,14 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(Span::styled(" ?", Style::default().fg(Color::Yellow)));
                 }
                 let preview = conversation.messages.last().map(Message::opening).unwrap_or_default();
-                ListItem::new(vec![
-                    Line::from(spans),
-                    Line::styled(format!("  {preview}"), Style::default().fg(dim())),
-                ])
+                ListItem::new(vec![Line::from(spans), Line::styled(format!("  {preview}"), Style::default().fg(dim()))])
             })
             .collect();
-        let list = List::new(items)
-            .block(list_block)
-            .highlight_style(Style::default().bg(selected_bg()).bold())
-            .highlight_symbol("▌");
+        let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold()).highlight_symbol("▌");
         frame.render_stateful_widget(list, list_area, &mut app.conversations);
     }
 
-    let [history_area, compose_area] =
-        Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);
+    let [history_area, compose_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);
 
     let Some(key) = app.active_conversation.clone() else {
         frame.render_widget(block("", false), chat_area);
@@ -151,10 +142,8 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = format!("{name}  {key}");
     let mut history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
     if !app.is_known(&key) {
-        history_block = history_block.title_bottom(Line::styled(
-            " not one of your contacts · c to trust or block them ",
-            Style::default().fg(Color::Yellow),
-        ));
+        history_block = history_block
+            .title_bottom(Line::styled(" not one of your contacts · c to trust or block them ", Style::default().fg(Color::Yellow)));
     } else if app.store.conversations.get(&key).is_some_and(|c| c.muted) {
         history_block = history_block.title_bottom(Line::styled(" notifications off · N turns them on ", Style::default().fg(dim())));
     }
@@ -184,27 +173,17 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut lines: Vec<HistoryRow> = Vec::new();
         let mut placements: Vec<Placement<PathBuf>> = Vec::new();
         let mut buttons: Vec<HistoryButton> = Vec::new();
-        let (who, color) = if message.incoming {
-            (name.as_str(), Color::LightMagenta)
-        } else {
-            ("You", accent())
-        };
+        let (who, color) = if message.incoming { (name.as_str(), Color::LightMagenta) } else { ("You", accent()) };
         let status = match &message.state {
             MessageState::Received { verified: true } => Span::raw(""),
-            MessageState::Received { verified: false } => {
-                Span::styled(" unverified", Style::default().fg(Color::Yellow))
-            }
+            MessageState::Received { verified: false } => Span::styled(" unverified", Style::default().fg(Color::Yellow)),
             MessageState::Sending => Span::styled(" sending…", Style::default().fg(dim())),
             MessageState::Delivered if message.paper.is_some() => {
                 Span::styled(" ✓ paper message · P shows its QR code", Style::default().fg(Color::Green))
             }
             MessageState::Delivered => Span::styled(" ✓", Style::default().fg(Color::Green)),
-            MessageState::Propagated => {
-                Span::styled(" ✓ via propagation node", Style::default().fg(Color::Green))
-            }
-            MessageState::Failed(e) => {
-                Span::styled(format!(" failed: {e}"), Style::default().fg(Color::Red))
-            }
+            MessageState::Propagated => Span::styled(" ✓ via propagation node", Style::default().fg(Color::Green)),
+            MessageState::Failed(e) => Span::styled(format!(" failed: {e}"), Style::default().fg(Color::Red)),
         };
         let mut header = Line::from(vec![
             Span::styled(who.to_string(), Style::default().fg(color).bold()),
@@ -295,12 +274,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             {
                 let max_cols = inner_width.min(MAX_PREVIEW_COLS);
                 if let Some(size) = picture.rows(graphics.as_ref(), max_cols, MAX_PREVIEW_ROWS) {
-                    placements.push(Placement {
-                        row: lines.len(),
-                        col: 0,
-                        size,
-                        key: attachment.path.clone(),
-                    });
+                    placements.push(Placement { row: lines.len(), col: 0, size, key: attachment.path.clone() });
                     for _ in 0..size.height {
                         lines.push((Line::raw(""), path.clone()));
                     }
@@ -321,10 +295,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 }
                 None => Line::from(vec![
                     Span::styled("📎 ", Style::default().fg(Color::Yellow)),
-                    Span::styled(
-                        attachment.name.clone(),
-                        Style::default().add_modifier(Modifier::UNDERLINED),
-                    ),
+                    Span::styled(attachment.name.clone(), Style::default().add_modifier(Modifier::UNDERLINED)),
                     Span::styled(format!("  {}", human_bytes(attachment.size)), Style::default().fg(dim())),
                 ]),
             };
@@ -376,8 +347,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     let top = max_scroll - app.message_scroll;
-    let (visible, rows): (Vec<Line>, Vec<Option<HistoryHit>>) =
-        lines.into_iter().skip(top).take(height).unzip();
+    let (visible, rows): (Vec<Line>, Vec<Option<HistoryHit>>) = lines.into_iter().skip(top).take(height).unzip();
     app.regions.history = history_inner;
     app.regions.history_rows = rows;
     app.regions.history_buttons = buttons
@@ -389,16 +359,13 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     frame.render_widget(Paragraph::new(visible).block(history_block), history_area);
-    draw_placements(&placements, top, history_inner, frame.buffer_mut(), |path| {
-        app.picture_ref(path)
-    });
+    draw_placements(&placements, top, history_inner, frame.buffer_mut(), |path| app.picture_ref(path));
 
     let mode = match app.delivery_mode {
         DeliveryMode::Paper => "paper (a QR code to pass on, not sent)",
         mode => mode.label(),
     };
-    let mut compose_title =
-        if app.composing { format!("Write · {mode}") } else { format!("Press Enter to write · {mode}") };
+    let mut compose_title = if app.composing { format!("Write · {mode}") } else { format!("Press Enter to write · {mode}") };
     if !app.attachments.is_empty() {
         let names: Vec<String> = app
             .attachments
@@ -428,12 +395,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     // Keep the cursor visible for long input.
     let cursor = app.compose.cursor_column();
     let offset = cursor.saturating_sub(inner.width.saturating_sub(1) as usize);
-    frame.render_widget(
-        Paragraph::new(app.compose.text())
-            .scroll((0, offset as u16))
-            .block(compose_block),
-        compose_area,
-    );
+    frame.render_widget(Paragraph::new(app.compose.text()).scroll((0, offset as u16)).block(compose_block), compose_area);
     if app.composing {
         frame.set_cursor_position(Position::new(inner.x + (cursor - offset) as u16, inner.y));
     }
@@ -467,8 +429,7 @@ pub(super) fn draw_paper(frame: &mut Frame, app: &App) {
         QrKind::Paper => ("Paper message", "Scan it into the recipient's app (Sideband, rettui…)"),
         QrKind::Address => ("Your address", "Scan it in Columba or rettui to add you as a contact"),
     };
-    let paper_block = block(title, true)
-        .title_bottom(Line::styled(" y copy link · s save image · Esc close ", Style::default().fg(dim())));
+    let paper_block = block(title, true).title_bottom(Line::styled(" y copy link · s save image · Esc close ", Style::default().fg(dim())));
     let inner = paper_block.inner(rect);
     frame.render_widget(paper_block, rect);
     match &view.qr {
@@ -577,9 +538,9 @@ mod tests {
 
     #[test]
     fn replies_are_picked_shown_and_sent() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::net::PeerKind;
         use crate::store::{Conversation, Message, MessageState, Peer};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let dir = std::env::temp_dir().join(format!("rettui-replies-ui-{}", std::process::id()));
         let key = "ab".repeat(16);
         let said = |n: u8, content: &str| Message {
@@ -661,7 +622,15 @@ mod tests {
                 incoming: true,
                 content: "Here".into(),
                 state: MessageState::Received { verified: true },
-                location: Some(Location { latitude: 51.5, longitude: -0.12, altitude: None, speed: None, bearing: None, accuracy: Some(8.0), updated: None }),
+                location: Some(Location {
+                    latitude: 51.5,
+                    longitude: -0.12,
+                    altitude: None,
+                    speed: None,
+                    bearing: None,
+                    accuracy: Some(8.0),
+                    updated: None,
+                }),
                 notes: vec!["Stopped sharing their location".into()],
                 reactions: vec![
                     reaction("👍", true, MessageState::Received { verified: true }),

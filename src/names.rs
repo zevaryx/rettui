@@ -108,7 +108,20 @@ mod tests {
         let clean = |name: &str| clean(name).unwrap_or_default();
         // Kept: letters of any script, accents, emoji (and their joiners,
         // skin tones, keycaps and flags).
-        for name in ["Alice", "🆎 Alex", "Zoë", "Nguyễn Văn Ánh", "हिन्दी", "ภาษาไทย", "فارسی‌زبان", "👩‍👩‍👧 family", "👍🏽", "1️⃣", "🇳🇴", "🏴\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}"] {
+        for name in [
+            "Alice",
+            "🆎 Alex",
+            "Zoë",
+            "Nguyễn Văn Ánh",
+            "हिन्दी",
+            "ภาษาไทย",
+            "فارسی‌زبان",
+            "👩‍👩‍👧 family",
+            "👍🏽",
+            "1️⃣",
+            "🇳🇴",
+            "🏴\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}",
+        ] {
             assert_eq!(clean(name), name, "{name:?}");
         }
         // Compatibility forms read as what they look like.

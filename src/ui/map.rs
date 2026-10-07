@@ -52,42 +52,36 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
     let title = format!("Map · {} · {across}", places[selected].name);
     let hints = if view.span.is_some() { " +/- zoom · 0 all " } else { " + zoom in " };
     let outer = block(&title, true).title_bottom(Line::styled(hints, Style::default().fg(dim())));
-    let canvas = Canvas::default()
-        .block(outer)
-        .marker(Marker::Braille)
-        .x_bounds(lons)
-        .y_bounds(lats)
-        .paint(|ctx| {
-            // The coastlines are points a few kilometres apart at best:
-            // closer in, they'd only be specks.
-            if lats[1] - lats[0] >= COASTLINES {
-                ctx.draw(&Map { color: dim(), resolution: MapResolution::High });
-                ctx.layer();
+    let canvas = Canvas::default().block(outer).marker(Marker::Braille).x_bounds(lons).y_bounds(lats).paint(|ctx| {
+        // The coastlines are points a few kilometres apart at best:
+        // closer in, they'd only be specks.
+        if lats[1] - lats[0] >= COASTLINES {
+            ctx.draw(&Map { color: dim(), resolution: MapResolution::High });
+            ctx.layer();
+        }
+        // The one picked last, so it's on top.
+        let order = (0..places.len()).filter(|&i| i != selected).chain([selected]);
+        for i in order {
+            let place = &places[i];
+            let (mark, colour) = match place.key {
+                None => ('◆', Color::Yellow),
+                Some(_) if i == selected => ('●', accent()),
+                Some(_) => ('●', Color::LightMagenta),
+            };
+            let mut style = Style::default().fg(colour);
+            if i == selected {
+                style = style.add_modifier(Modifier::BOLD);
             }
-            // The one picked last, so it's on top.
-            let order = (0..places.len()).filter(|&i| i != selected).chain([selected]);
-            for i in order {
-                let place = &places[i];
-                let (mark, colour) = match place.key {
-                    None => ('◆', Color::Yellow),
-                    Some(_) if i == selected => ('●', accent()),
-                    Some(_) => ('●', Color::LightMagenta),
-                };
-                let mut style = Style::default().fg(colour);
-                if i == selected {
-                    style = style.add_modifier(Modifier::BOLD);
-                }
-                let name: String = place.name.chars().take(24).collect();
-                ctx.print(place.location.longitude, place.location.latitude, Line::styled(format!("{mark} {name}"), style));
-            }
-        });
+            let name: String = place.name.chars().take(24).collect();
+            ctx.print(place.location.longitude, place.location.latitude, Line::styled(format!("{mark} {name}"), style));
+        }
+    });
     frame.render_widget(Clear, rect);
     frame.render_widget(canvas, map_area);
 
     // The places: name, then when and how far.
     let here = app.settings.own_location();
-    let list_block = block("Places", false)
-        .title_bottom(Line::styled(" ↑↓ · Enter open · o map · Esc ", Style::default().fg(dim())));
+    let list_block = block("Places", false).title_bottom(Line::styled(" ↑↓ · Enter open · o map · Esc ", Style::default().fg(dim())));
     let list_inner = list_block.inner(list_area);
     let rows = usize::from(list_inner.height / 2).max(1);
     let first = selected.saturating_sub(rows - 1);
@@ -96,7 +90,10 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
         let picked = i == selected;
         let base = if picked { Style::default().bg(selected_bg()) } else { Style::default() };
         let mark = if place.key.is_none() { "◆ " } else { "● " };
-        lines.push(Line::from(vec![Span::styled(mark, base.fg(accent())), Span::styled(place.name.clone(), base.add_modifier(Modifier::BOLD))]));
+        lines.push(Line::from(vec![
+            Span::styled(mark, base.fg(accent())),
+            Span::styled(place.name.clone(), base.add_modifier(Modifier::BOLD)),
+        ]));
         let mut about = match place.at {
             Some(at) => format!("  {} ago", ago(at as i64)),
             None => "  this station (settings)".to_string(),

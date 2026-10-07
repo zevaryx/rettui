@@ -186,7 +186,11 @@ mod tests {
         let info = PathInfo { hops: 3, via: Some([0x0a; 16]), interface: "RMAP World".into(), expires: now + 6 * 86_400 + 60 };
         app.on_net(NetEvent::Path { to, result: Ok(info.clone()) });
         assert_eq!(app.path_lookups[&key], PathLookup::Done(Ok(info.clone())));
-        assert!(app.notice.as_ref().unwrap().text.ends_with("3 hops via <0a0a0a0a…> on RMAP World, kept for 6 days"), "{}", app.notice.as_ref().unwrap().text);
+        assert!(
+            app.notice.as_ref().unwrap().text.ends_with("3 hops via <0a0a0a0a…> on RMAP World, kept for 6 days"),
+            "{}",
+            app.notice.as_ref().unwrap().text
+        );
         let direct = PathInfo { hops: 1, via: None, interface: "Auto".into(), expires: now + 90 * 60 };
         assert_eq!(path_label(&direct, now), "heard directly on Auto, kept for 1 h");
         app.on_net(NetEvent::Path { to, result: Err("No path found".into()) });

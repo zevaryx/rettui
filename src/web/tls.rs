@@ -18,8 +18,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
-    KeyUsagePurpose,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose,
 };
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -81,8 +80,7 @@ pub fn prepare(how: &Https, dir: &Path, listening: IpAddr) -> Result<Served> {
             if chain.is_empty() {
                 return Err(anyhow!("{} has no certificate in it", cert.display()));
             }
-            let key = PrivateKeyDer::from_pem_file(key)
-                .with_context(|| format!("could not read the private key in {}", key.display()))?;
+            let key = PrivateKeyDer::from_pem_file(key).with_context(|| format!("could not read the private key in {}", key.display()))?;
             (chain, key, None, Vec::new())
         }
         Https::Own => {
@@ -201,9 +199,8 @@ fn own_certificates(dir: &Path, names: &[String]) -> Result<Own> {
 
     let now = chrono::Utc::now().timestamp();
     let issued: Option<Issued> = std::fs::read(&issued_path).ok().and_then(|b| serde_json::from_slice(&b).ok());
-    let current = issued.is_some_and(|i| i.names == names && i.not_after - now > RENEW_DAYS * 86_400)
-        && key_path.exists()
-        && cert_path.exists();
+    let current =
+        issued.is_some_and(|i| i.names == names && i.not_after - now > RENEW_DAYS * 86_400) && key_path.exists() && cert_path.exists();
     if !current {
         let key = KeyPair::generate().context("making a key")?;
         let mut params = CertificateParams::new(names.to_vec()).context("this computer's names")?;
@@ -318,9 +315,9 @@ async fn to_https(mut tcp: TcpStream) -> std::io::Result<()> {
         request.extend_from_slice(&buffer[..read]);
     }
     let response = match https_location(&String::from_utf8_lossy(&request)) {
-        Some(location) => format!(
-            "HTTP/1.1 301 Moved Permanently\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        ),
+        Some(location) => {
+            format!("HTTP/1.1 301 Moved Permanently\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        }
         None => "HTTP/1.1 400 Bad Request\r\nContent-Length: 30\r\nConnection: close\r\n\r\nThis is an HTTPS address only".into(),
     };
     tcp.write_all(response.as_bytes()).await?;

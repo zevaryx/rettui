@@ -17,9 +17,6 @@ mod text;
 
 pub use envelope::{DEFAULT_ASPECT, Envelope, now_ms, t};
 pub use hub::{
-    Limits, ResourceAnnouncement, Welcome, hello_body, parse_resource_envelope,
-    parse_room_info, parse_room_list, parse_welcome, parse_who,
+    Limits, ResourceAnnouncement, Welcome, hello_body, parse_resource_envelope, parse_room_info, parse_room_list, parse_welcome, parse_who,
 };
-pub use text::{
-    complete_names, mention_prefix, mention_ranges, normalize_nick, normalize_room, parse_link, split_message, user_mentions,
-};
+pub use text::{complete_names, mention_prefix, mention_ranges, normalize_nick, normalize_room, parse_link, split_message, user_mentions};

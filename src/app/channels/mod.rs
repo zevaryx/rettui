@@ -22,7 +22,6 @@ use crate::rrc::{self, Envelope, Limits, t};
 use crate::store::{HubConfig, NotifyLevel};
 use crate::term::input::TextInput;
 
-
 /// Lines kept per room (NomadNet keeps 500).
 const MAX_LINES: usize = 500;
 
@@ -113,11 +112,7 @@ impl ChatLine {
     /// Byte ranges of `@name` mentions of `people` (a room's
     /// [`Hub::mentionable`]), each with who is mentioned; ranges inside
     /// `highlights` (mentions of us, shown their own way) are left out.
-    pub fn user_mentions<'a>(
-        &self,
-        people: &'a [(String, Vec<u8>)],
-        highlights: &[(usize, usize)],
-    ) -> Vec<(usize, usize, &'a [u8])> {
+    pub fn user_mentions<'a>(&self, people: &'a [(String, Vec<u8>)], highlights: &[(usize, usize)]) -> Vec<(usize, usize, &'a [u8])> {
         if !matches!(self.kind, LineKind::Msg | LineKind::Action | LineKind::Private) || !self.text.contains('@') {
             return Vec::new();
         }
@@ -244,10 +239,7 @@ impl Hub {
 
     /// Nick for a member: learned nick, else a short hash.
     pub fn name_of(&self, hash: &[u8]) -> String {
-        self.nicks
-            .get(hash)
-            .cloned()
-            .unwrap_or_else(|| hex::encode(hash).chars().take(12).collect())
+        self.nicks.get(hash).cloned().unwrap_or_else(|| hex::encode(hash).chars().take(12).collect())
     }
 
     /// What a user goes by here: their nick now, else the one on their
@@ -288,12 +280,8 @@ impl Hub {
 
     /// Whisper conversations, as (buffer key, the other user's name), by name.
     pub fn whispers(&self) -> Vec<(String, String)> {
-        let mut whispers: Vec<(String, String)> = self
-            .buffers
-            .keys()
-            .filter(|key| whisper_peer(key).is_some())
-            .map(|key| (key.clone(), self.whisper_name(key)))
-            .collect();
+        let mut whispers: Vec<(String, String)> =
+            self.buffers.keys().filter(|key| whisper_peer(key).is_some()).map(|key| (key.clone(), self.whisper_name(key))).collect();
         // Several people can share a nick: tell them apart by identity.
         let names: Vec<String> = whispers.iter().map(|(_, name)| name.to_lowercase()).collect();
         for (key, name) in &mut whispers {
@@ -307,11 +295,8 @@ impl Hub {
 
     /// A room's members as (name, identity), sorted by name.
     pub fn members_of(&self, room: &str) -> Vec<(String, Vec<u8>)> {
-        let mut members: Vec<(String, Vec<u8>)> = self
-            .members
-            .get(room)
-            .map(|m| m.iter().map(|h| (self.name_of(h), h.clone())).collect())
-            .unwrap_or_default();
+        let mut members: Vec<(String, Vec<u8>)> =
+            self.members.get(room).map(|m| m.iter().map(|h| (self.name_of(h), h.clone())).collect()).unwrap_or_default();
         members.sort_by_key(|(n, _)| n.to_lowercase());
         members
     }
@@ -372,11 +357,8 @@ impl Hub {
             .iter()
             .filter(|(room, _)| !room.is_empty())
             .map(|(room, lines)| {
-                let lines = lines
-                    .iter()
-                    .filter(|l| matches!(l.kind, LineKind::Msg | LineKind::Action | LineKind::Private))
-                    .cloned()
-                    .collect();
+                let lines =
+                    lines.iter().filter(|l| matches!(l.kind, LineKind::Msg | LineKind::Action | LineKind::Private)).cloned().collect();
                 (room.clone(), lines)
             })
             .collect()
@@ -565,14 +547,8 @@ impl Channels {
 
     fn select_row(&mut self, row: &Row) {
         self.selected = Some(match row {
-            Row::Hub(i) => Target {
-                hub: self.hubs[*i].hash,
-                room: None,
-            },
-            Row::Room(i, room) | Row::Whisper(i, room) => Target {
-                hub: self.hubs[*i].hash,
-                room: Some(room.clone()),
-            },
+            Row::Hub(i) => Target { hub: self.hubs[*i].hash, room: None },
+            Row::Room(i, room) | Row::Whisper(i, room) => Target { hub: self.hubs[*i].hash, room: Some(room.clone()) },
         });
         self.scroll = 0;
     }
@@ -591,10 +567,7 @@ impl Channels {
             channels.hubs.push(hub);
         }
         if let Some(first) = channels.hubs.first() {
-            channels.selected = Some(Target {
-                hub: first.hash,
-                room: first.rooms.iter().next().cloned(),
-            });
+            channels.selected = Some(Target { hub: first.hash, room: first.rooms.iter().next().cloned() });
         }
         channels
     }
@@ -637,9 +610,7 @@ impl App {
     /// Whether a buffer is on screen right now, in a window that has the
     /// focus (what arrives while the user is away counts as unread).
     fn is_viewing(&self, index: usize, room: &str) -> bool {
-        self.focused
-            && self.tab == Tab::Channels
-            && self.channels.active().is_some_and(|(i, r)| i == index && r == room)
+        self.focused && self.tab == Tab::Channels && self.channels.active().is_some_and(|(i, r)| i == index && r == room)
     }
 
     /// Add a line to a buffer, counting it unread unless it is on screen.
@@ -735,11 +706,7 @@ impl App {
         hub.manual = false;
         hub.reconnect_at = None;
         hub.status = HubStatus::Connecting("Starting".into());
-        let command = NetCommand::RrcConnect {
-            hub: hub.hash,
-            aspect: hub.aspect.clone(),
-            nick,
-        };
+        let command = NetCommand::RrcConnect { hub: hub.hash, aspect: hub.aspect.clone(), nick };
         self.send(command);
     }
 
@@ -873,10 +840,7 @@ mod tests {
         hub.rooms.insert("b".into());
         hub.buffers.insert("a".into(), Vec::new()); // parted, with history
         channels.hubs.push(hub);
-        assert_eq!(
-            channels.rows(),
-            vec![Row::Hub(0), Row::Room(0, "a".into()), Row::Room(0, "b".into())]
-        );
+        assert_eq!(channels.rows(), vec![Row::Hub(0), Row::Room(0, "a".into()), Row::Room(0, "b".into())]);
     }
 
     #[test]
@@ -896,12 +860,7 @@ mod tests {
         // Rooms first, then whispers by name; whispers are never rooms.
         assert_eq!(
             channels.rows(),
-            vec![
-                Row::Hub(0),
-                Row::Room(0, "general".into()),
-                Row::Whisper(0, whisper_key(&amy)),
-                Row::Whisper(0, whisper_key(&zed)),
-            ]
+            vec![Row::Hub(0), Row::Room(0, "general".into()), Row::Whisper(0, whisper_key(&amy)), Row::Whisper(0, whisper_key(&zed)),]
         );
         assert_eq!(channels.hubs[0].listed_rooms(), ["general"]);
     }

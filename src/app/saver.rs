@@ -18,12 +18,23 @@ type Encode = Box<dyn FnOnce() -> Result<Vec<u8>> + Send>;
 type Task = Box<dyn FnOnce() -> Result<Vec<String>> + Send>;
 
 enum Job {
-    Write { path: PathBuf, what: String, encode: Encode },
+    Write {
+        path: PathBuf,
+        what: String,
+        encode: Encode,
+    },
     /// Added to the end of the file; never replaced by a later job.
-    Append { path: PathBuf, what: String, encode: Encode },
+    Append {
+        path: PathBuf,
+        what: String,
+        encode: Encode,
+    },
     Remove(PathBuf),
     /// Anything else, in turn; what it returns goes to the log.
-    Run { what: String, task: Task },
+    Run {
+        what: String,
+        task: Task,
+    },
 }
 
 impl Job {
@@ -91,39 +102,24 @@ impl Saver {
                 }
             })
             .expect("spawning the save thread");
-        Self {
-            jobs: Some(jobs),
-            reports,
-            worker: Some(worker),
-        }
+        Self { jobs: Some(jobs), reports, worker: Some(worker) }
     }
 
     /// Encode and write `path` in the background; `what` names it in errors.
     pub fn write(&self, path: PathBuf, what: impl Into<String>, encode: impl FnOnce() -> Result<Vec<u8>> + Send + 'static) {
-        self.send(Job::Write {
-            path,
-            what: what.into(),
-            encode: Box::new(encode),
-        });
+        self.send(Job::Write { path, what: what.into(), encode: Box::new(encode) });
     }
 
     /// Encode and add to the end of `path` in the background (creating it);
     /// `what` names it in errors.
     pub fn append(&self, path: PathBuf, what: impl Into<String>, encode: impl FnOnce() -> Result<Vec<u8>> + Send + 'static) {
-        self.send(Job::Append {
-            path,
-            what: what.into(),
-            encode: Box::new(encode),
-        });
+        self.send(Job::Append { path, what: what.into(), encode: Box::new(encode) });
     }
 
     /// Run `task` in the background after what's already waiting; the lines
     /// it returns go to the log. `what` names it in errors.
     pub fn run(&self, what: impl Into<String>, task: impl FnOnce() -> Result<Vec<String>> + Send + 'static) {
-        self.send(Job::Run {
-            what: what.into(),
-            task: Box::new(task),
-        });
+        self.send(Job::Run { what: what.into(), task: Box::new(task) });
     }
 
     /// Delete `path` after any writes to it that are already waiting.

@@ -82,7 +82,12 @@ impl App {
             .filter(|(key, _)| self.store.contact(key).trust != Trust::Blocked)
             .filter_map(|(key, conversation)| {
                 let newest = conversation.messages.iter().rev().filter(|m| m.incoming).find(|m| m.location.is_some() || stopped(m))?;
-                Some(Placed { key: Some(key.clone()), name: self.store.display_name(key), location: newest.location?, at: Some(newest.timestamp) })
+                Some(Placed {
+                    key: Some(key.clone()),
+                    name: self.store.display_name(key),
+                    location: newest.location?,
+                    at: Some(newest.timestamp),
+                })
             })
             .collect();
         placed.sort_by(|a, b| b.at.unwrap_or(0.0).total_cmp(&a.at.unwrap_or(0.0)).then_with(|| a.name.cmp(&b.name)));

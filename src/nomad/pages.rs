@@ -115,9 +115,7 @@ impl Pages {
         }
         match self.store.read_page_rel(rel) {
             Ok(bytes) => Ok(bytes),
-            Err(nomad_core::NomadError::NotFound(_) | nomad_core::NomadError::PathTraversal) => {
-                Ok(not_found(path).into_bytes())
-            }
+            Err(nomad_core::NomadError::NotFound(_) | nomad_core::NomadError::PathTraversal) => Ok(not_found(path).into_bytes()),
             Err(e) => Err(format!("{path}: {e}")),
         }
     }
@@ -166,9 +164,7 @@ impl Pages {
         if !scripts && is_executable(&target) {
             return Err(format!("{path} is a script; edit it on the host"));
         }
-        self.store
-            .write_page_rel(path, content.as_bytes())
-            .map_err(|e| format!("Could not save {path}: {e}"))?;
+        self.store.write_page_rel(path, content.as_bytes()).map_err(|e| format!("Could not save {path}: {e}"))?;
         if let Some(metadata) = existing {
             // The write replaces the file; put its permissions back.
             let _ = std::fs::set_permissions(&target, metadata.permissions());

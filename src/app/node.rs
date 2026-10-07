@@ -316,12 +316,7 @@ impl App {
     fn open_page(&mut self, path: &str) {
         match self.node_read(path) {
             Ok((text, executable)) => {
-                self.node.editor = Some(Editor {
-                    path: path.to_string(),
-                    area: TextArea::new(&text),
-                    saved: text,
-                    executable,
-                });
+                self.node.editor = Some(Editor { path: path.to_string(), area: TextArea::new(&text), saved: text, executable });
                 self.node.editing = true;
             }
             Err(e) => self.fail(e),
@@ -382,17 +377,15 @@ impl App {
                 }
                 Err(e) => self.fail(e),
             },
-            PromptKind::ConfirmDeletePage(path) if text.eq_ignore_ascii_case("y") => {
-                match self.node_delete(&path) {
-                    Ok(()) => {
-                        if self.node.editor.as_ref().is_some_and(|e| e.path == path) {
-                            self.node.editor = None;
-                            self.node.editing = false;
-                        }
+            PromptKind::ConfirmDeletePage(path) if text.eq_ignore_ascii_case("y") => match self.node_delete(&path) {
+                Ok(()) => {
+                    if self.node.editor.as_ref().is_some_and(|e| e.path == path) {
+                        self.node.editor = None;
+                        self.node.editing = false;
                     }
-                    Err(e) => self.fail(e),
                 }
-            }
+                Err(e) => self.fail(e),
+            },
             _ => {}
         }
     }

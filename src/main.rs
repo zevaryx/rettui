@@ -9,8 +9,8 @@ mod lxmf;
 mod markdown;
 mod names;
 mod net;
-mod reticulum;
 mod nomad;
+mod reticulum;
 mod rrc;
 mod store;
 mod term;
@@ -23,8 +23,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
-    EnableMouseCapture, Event, EventStream, KeyEventKind,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, Event,
+    EventStream, KeyEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
@@ -38,7 +38,10 @@ use crate::config::{Paths, Settings};
 use crate::store::Store;
 
 #[derive(Parser)]
-#[command(version, about = "Reticulum client for the terminal and the browser: LXMF messaging, NomadNet browsing and hosting, and RRC chat")]
+#[command(
+    version,
+    about = "Reticulum client for the terminal and the browser: LXMF messaging, NomadNet browsing and hosting, and RRC chat"
+)]
 struct Cli {
     /// Directory for rettui's identity, settings and messages.
     #[arg(long, global = true)]
@@ -172,16 +175,9 @@ async fn main() -> Result<()> {
     // Everything goes to the log file, at the level set (changed while
     // running); interface trouble also goes to the log on screen.
     let (filter, reload) = tracing_subscriber::reload::Layer::new(logging::starting_filter(&settings.log_level));
-    logging::set_reloader(move |level| {
-        reload.reload(tracing_subscriber::EnvFilter::new(level)).map_err(|e| e.to_string())
-    });
+    logging::set_reloader(move |level| reload.reload(tracing_subscriber::EnvFilter::new(level)).map_err(|e| e.to_string()));
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(std::sync::Mutex::new(log_file))
-                .with_ansi(false)
-                .with_filter(filter),
-        )
+        .with(tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(log_file)).with_ansi(false).with_filter(filter))
         .with(net::iface_log::layer())
         .init();
 
@@ -200,10 +196,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Address { link }) => {
-            let hash = rns_identity::destination::Destination::hash_from_name_and_identity(
-                lxmf::LXMF_ASPECT,
-                Some(&identity.hash),
-            );
+            let hash = rns_identity::destination::Destination::hash_from_name_and_identity(lxmf::LXMF_ASPECT, Some(&identity.hash));
             if link {
                 println!("{}", lxmf::identity_link(hash, &identity.get_public_key()));
             } else {
@@ -211,18 +204,8 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Some(Command::Fetch {
-            url,
-            raw,
-            identify,
-            output,
-        }) => cli::fetch(&settings, &url, raw, identify.then_some(identity), output).await,
-        Some(Command::Send {
-            address,
-            message,
-            attach,
-            mode,
-        }) => {
+        Some(Command::Fetch { url, raw, identify, output }) => cli::fetch(&settings, &url, raw, identify.then_some(identity), output).await,
+        Some(Command::Send { address, message, attach, mode }) => {
             let Some(mode) = lxmf::DeliveryMode::parse(&mode) else {
                 bail!("unknown delivery mode {mode}; use auto, direct, propagated or paper");
             };
@@ -232,9 +215,7 @@ async fn main() -> Result<()> {
         Some(Command::Sync { node }) => cli::sync(&settings, &paths, identity, node.as_deref()).await,
         Some(Command::Ping { address }) => cli::ping(&settings, &paths, identity, &address).await,
         Some(Command::Path { table: true, .. }) => cli::path_table(&settings).await,
-        Some(Command::Path { address, drop, .. }) => {
-            cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await
-        }
+        Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         None => run_tui(settings, paths, identity).await,
     }
@@ -250,8 +231,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         announce: settings.announce_schedule(),
         propagation_node: settings.propagation_node.as_deref().and_then(net::parse_hash),
         auto_propagation: settings.auto_propagation_node,
-        sync_interval: (settings.sync_interval_mins > 0)
-            .then(|| Duration::from_secs(settings.sync_interval_mins * 60)),
+        sync_interval: (settings.sync_interval_mins > 0).then(|| Duration::from_secs(settings.sync_interval_mins * 60)),
         known_identities: paths.known_identities.clone(),
         host: nomad::host::HostConfig::from_settings(settings, paths),
         propagation: lxmf::pn::PnConfig::from_settings(settings, paths),

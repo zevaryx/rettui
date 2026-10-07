@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use lxmf_core::constants::{
-    FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TELEMETRY, FIELD_TICKET, RENDERER_MARKDOWN,
-    RENDERER_MICRON,
+    FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TELEMETRY,
+    FIELD_TICKET, RENDERER_MARKDOWN, RENDERER_MICRON,
 };
 use lxmf_core::handlers::{parse_pn_announce_data, stamp_cost_from_app_data};
 use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
@@ -25,8 +25,7 @@ pub(super) async fn build_message(
     outgoing: &Outgoing,
     app_data: Option<&[u8]>,
 ) -> Result<LxMessage, String> {
-    let mut message =
-        LxMessage::new(outgoing.to, source, "", &outgoing.content, DeliveryMethod::Direct);
+    let mut message = LxMessage::new(outgoing.to, source, "", &outgoing.content, DeliveryMethod::Direct);
     message.timestamp = outgoing.timestamp;
     message.stamp_cost = app_data.and_then(stamp_cost_from_app_data);
     message.determine_compression_support(app_data);
@@ -36,13 +35,8 @@ pub(super) async fn build_message(
     let mut files = Vec::new();
     let mut image_set = false;
     for path in &outgoing.attachments {
-        let data = tokio::fs::read(path)
-            .await
-            .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "file".to_string());
+        let data = tokio::fs::read(path).await.map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".to_string());
         if !image_set && is_image_name(&name) {
             let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
             let ext = if ext == "jpeg" { "jpg".to_string() } else { ext };
@@ -53,9 +47,7 @@ pub(super) async fn build_message(
         }
     }
     if !files.is_empty() {
-        message
-            .set_msgpack_field(FIELD_FILE_ATTACHMENTS, encode(&Value::Array(files)))
-            .map_err(|e| e.to_string())?;
+        message.set_msgpack_field(FIELD_FILE_ATTACHMENTS, encode(&Value::Array(files))).map_err(|e| e.to_string())?;
     }
     // Both as bytes (msgpack `bin`), as Columba and MeshChatX send them.
     if let Some(reply) = &outgoing.reply {
@@ -65,9 +57,7 @@ pub(super) async fn build_message(
         }
     }
     if let Some(reaction) = &outgoing.reaction {
-        message
-            .set_msgpack_field(FIELD_REACTION, super::fields::reaction_field(reaction))
-            .map_err(|e| e.to_string())?;
+        message.set_msgpack_field(FIELD_REACTION, super::fields::reaction_field(reaction)).map_err(|e| e.to_string())?;
     }
     if let Some((mode, recording)) = &outgoing.audio {
         message.set_audio_field(*mode, recording).map_err(|e| e.to_string())?;
@@ -77,9 +67,7 @@ pub(super) async fn build_message(
         message.set_field(FIELD_TELEMETRY, super::fields::telemetry_field(location, outgoing.timestamp as i64));
     }
     if let Some(appearance) = &outgoing.appearance {
-        message
-            .set_msgpack_field(FIELD_ICON_APPEARANCE, super::fields::appearance_field(appearance))
-            .map_err(|e| e.to_string())?;
+        message.set_msgpack_field(FIELD_ICON_APPEARANCE, super::fields::appearance_field(appearance)).map_err(|e| e.to_string())?;
     }
     // How its text is written, for clients that format it.
     if let Some(format) = outgoing.format
@@ -97,20 +85,12 @@ pub(super) async fn build_message(
     }
     message.outbound_ticket = outgoing.stamp_ticket;
 
-    let key = identity
-        .get_signing_key()
-        .ok_or("Local identity has no signing key")?;
+    let key = identity.get_signing_key().ok_or("Local identity has no signing key")?;
     message.sign(&key).map_err(|e| e.to_string())?;
     Ok(message)
 }
 
-pub async fn send(
-    runtime: &ReticulumHandle,
-    known: &Known,
-    identity: &Identity,
-    source: Hash,
-    outgoing: Outgoing,
-) -> Result<Sent, String> {
+pub async fn send(runtime: &ReticulumHandle, known: &Known, identity: &Identity, source: Hash, outgoing: Outgoing) -> Result<Sent, String> {
     if outgoing.mode == DeliveryMode::Paper {
         return Err("A paper message isn't sent: it's written as a link (see lxmf::paper)".into());
     }
@@ -122,9 +102,7 @@ pub async fn send(
         (Ok(hash), ..) => Ok(Sent { delivered: Delivered::Direct, hash }),
         (Err(e), DeliveryMode::Auto, Some(_)) => {
             tracing::info!("direct delivery failed ({e}); using propagation node");
-            propagate(runtime, known, identity, source, &outgoing)
-                .await
-                .map_err(|pe| format!("direct: {e}; propagation: {pe}"))
+            propagate(runtime, known, identity, source, &outgoing).await.map_err(|pe| format!("direct: {e}; propagation: {pe}"))
         }
         (Err(e), ..) => Err(e),
     }
@@ -156,11 +134,10 @@ async fn send_direct(
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
 
-    let LinkSession {
-        handle, mut events, ..
-    } = crate::net::connect(runtime, outgoing.to, Identity::new(), link_options("rettui.lxmf", false), &|_| {})
-        .await
-        .map_err(|e| format!("Link failed: {e}"))?;
+    let LinkSession { handle, mut events, .. } =
+        crate::net::connect(runtime, outgoing.to, Identity::new(), link_options("rettui.lxmf", false), &|_| {})
+            .await
+            .map_err(|e| format!("Link failed: {e}"))?;
 
     let result = if packed.len() <= handle.mdu() {
         match handle.send_packet(packed).await {
@@ -181,9 +158,7 @@ async fn propagate(
     source: Hash,
     outgoing: &Outgoing,
 ) -> Result<Sent, String> {
-    let node = outgoing
-        .propagation_node
-        .ok_or("No propagation node selected (pick one in the Network tab)")?;
+    let node = outgoing.propagation_node.ok_or("No propagation node selected (pick one in the Network tab)")?;
     // The recipient may be offline: only its key is needed, not a path.
     let recipient = lookup(runtime, known, outgoing.to).await?;
     // This client's own node takes it without a Link.
@@ -197,18 +172,13 @@ async fn propagate(
         }
     };
 
-    let mut message =
-        build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
+    let mut message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
     let hash = hash_of(&message)?;
     let (recipient_identity, ratchet) = (recipient.identity, recipient.ratchet);
     let packed = tokio::task::spawn_blocking(move || {
         message.get_stamp();
         message.pack_propagated_encrypted_with_stamp(
-            |plaintext| {
-                recipient_identity
-                    .encrypt(plaintext, ratchet.as_ref())
-                    .map_err(|e| MessageError::PackFailed(e.to_string()))
-            },
+            |plaintext| recipient_identity.encrypt(plaintext, ratchet.as_ref()).map_err(|e| MessageError::PackFailed(e.to_string())),
             stamp_cost,
         )
     })
@@ -221,25 +191,18 @@ async fn propagate(
         tokio::task::spawn_blocking(move || local.submit(&packed)).await.map_err(|e| e.to_string())??;
         return Ok(Sent { delivered: Delivered::Propagated, hash });
     }
-    let LinkSession { handle, .. } = crate::net::connect(runtime, node, identity.clone(), link_options("rettui.propagation", true), &|_| {})
-        .await
-        .map_err(|e| format!("Link to propagation node failed: {e}"))?;
+    let LinkSession { handle, .. } =
+        crate::net::connect(runtime, node, identity.clone(), link_options("rettui.propagation", true), &|_| {})
+            .await
+            .map_err(|e| format!("Link to propagation node failed: {e}"))?;
     let result = send_resource(&handle, packed).await;
     handle.close().await;
     result.map(|()| Sent { delivered: Delivered::Propagated, hash })
 }
 
 async fn send_resource(handle: &LinkSessionHandle, data: Vec<u8>) -> Result<(), String> {
-    let transfer = handle
-        .send_resource_bytes(
-            data,
-            ResourceOptions {
-                auto_compress: true,
-                metadata: None,
-            },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    let transfer =
+        handle.send_resource_bytes(data, ResourceOptions { auto_compress: true, metadata: None }).await.map_err(|e| e.to_string())?;
     match tokio::time::timeout(DELIVERY_TIMEOUT, transfer.concluded()).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => Err(format!("Transfer failed: {e}")),
@@ -247,10 +210,7 @@ async fn send_resource(handle: &LinkSessionHandle, data: Vec<u8>) -> Result<(), 
     }
 }
 
-async fn wait_for_proof(
-    events: &mut mpsc::Receiver<LinkSessionEvent>,
-    packet_hash: [u8; 32],
-) -> Result<(), String> {
+async fn wait_for_proof(events: &mut mpsc::Receiver<LinkSessionEvent>, packet_hash: [u8; 32]) -> Result<(), String> {
     let wait = async {
         while let Some(event) = events.recv().await {
             match event {
@@ -265,7 +225,5 @@ async fn wait_for_proof(
         }
         Err("Link closed before delivery".to_string())
     };
-    tokio::time::timeout(DELIVERY_TIMEOUT, wait)
-        .await
-        .unwrap_or_else(|_| Err("Timed out waiting for delivery proof".to_string()))
+    tokio::time::timeout(DELIVERY_TIMEOUT, wait).await.unwrap_or_else(|_| Err("Timed out waiting for delivery proof".to_string()))
 }

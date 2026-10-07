@@ -406,7 +406,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let key = "ab".repeat(16);
         let mut store = Store::default();
-        let message = Message { id: "x".into(), incoming: true, content: "hi".into(), state: MessageState::Received { verified: true }, ..Message::default() };
+        let message = Message {
+            id: "x".into(),
+            incoming: true,
+            content: "hi".into(),
+            state: MessageState::Received { verified: true },
+            ..Message::default()
+        };
         store.conversations.insert(key.clone(), Conversation { messages: vec![message], ..Default::default() });
         let mut app = crate::app::test_app(&dir, Settings::default(), store);
         app.open_newest_conversation();
@@ -442,7 +448,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
         let (alice, bob) = ("ab".repeat(16), "cd".repeat(16));
-        let from = |source: u8, n: u8| InboundMessage { id: Some([n; 32]), source: [source; 16], content: format!("hi {n}"), ..Default::default() };
+        let from = |source: u8, n: u8| InboundMessage {
+            id: Some([n; 32]),
+            source: [source; 16],
+            content: format!("hi {n}"),
+            ..Default::default()
+        };
         app.on_message(from(0xab, 1));
         assert!(!app.is_known(&alice), "never written to");
         assert_eq!(app.card_actions(&alice)[4..7], [CardAction::Trust, CardAction::LeaveAsIs, CardAction::Block]);

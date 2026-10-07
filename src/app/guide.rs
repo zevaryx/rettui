@@ -43,7 +43,12 @@ pub struct EntryPoint {
 /// Mainnet (`dublin.connect.reticulum.network:4965`): that name no longer
 /// exists, like its Amsterdam twin, which mesh-client counts as shut down.
 pub const ENTRY_POINTS: &[EntryPoint] = &[
-    EntryPoint { region: "Primary & global backbone", name: "RNS Between The Borders", host: "reticulum.betweentheborders.com", port: 4242 },
+    EntryPoint {
+        region: "Primary & global backbone",
+        name: "RNS Between The Borders",
+        host: "reticulum.betweentheborders.com",
+        port: 4242,
+    },
     EntryPoint { region: "Primary & global backbone", name: "RMAP World", host: "rmap.world", port: 4242 },
     EntryPoint { region: "Primary & global backbone", name: "RNS Simply Equipped", host: "rns.simplyequipped.com", port: 4242 },
     EntryPoint { region: "Primary & global backbone", name: "RNS Beleth", host: "rns.beleth.net", port: 4242 },
@@ -403,7 +408,8 @@ impl App {
     pub(super) fn watch_connection(&mut self) {
         let Some((names, since)) = &mut self.connect_watch else { return };
         let since = *since;
-        let online: Vec<String> = names.iter().filter(|name| self.interfaces.iter().any(|i| &i.name == *name && i.online)).cloned().collect();
+        let online: Vec<String> =
+            names.iter().filter(|name| self.interfaces.iter().any(|i| &i.name == *name && i.online)).cloned().collect();
         names.retain(|name| !online.contains(name));
         let waiting = (since.elapsed() >= CONNECT_WAIT).then(|| std::mem::take(names));
         if names.is_empty() {
@@ -481,13 +487,11 @@ impl App {
             GuideRow::Discover => choices.discover = !choices.discover,
             GuideRow::AutoPropagation => choices.auto_propagation = !choices.auto_propagation,
             GuideRow::Link(i) => self.open_url(LINKS[i].1),
-            GuideRow::Apply => {
-                match self.apply_guide(&shown, false) {
-                    Ok(done) if done.is_empty() => self.notify("All set"),
-                    Ok(done) => self.notify(done.join("; ")),
-                    Err(e) => self.fail(e),
-                }
-            }
+            GuideRow::Apply => match self.apply_guide(&shown, false) {
+                Ok(done) if done.is_empty() => self.notify("All set"),
+                Ok(done) => self.notify(done.join("; ")),
+                Err(e) => self.fail(e),
+            },
             GuideRow::Later => {
                 self.finish_guide();
                 self.confirm("The guide is in the Status tab (g) whenever you want it");
@@ -597,7 +601,8 @@ mod tests {
         assert!(app.take_rns_restart());
         // Once Reticulum is back, it says as each connects; and, for one
         // that doesn't, why.
-        let iface = |name: &str, online| crate::net::InterfaceInfo { name: name.into(), online, rx_bytes: 0, tx_bytes: 0, ..Default::default() };
+        let iface =
+            |name: &str, online| crate::net::InterfaceInfo { name: name.into(), online, rx_bytes: 0, tx_bytes: 0, ..Default::default() };
         let ratspeak = ENTRY_POINTS[ratspeak].name;
         app.on_net(crate::net::NetEvent::Interfaces(vec![iface("RMAP World", false), iface(ratspeak, false)]));
         assert_eq!(app.connect_watch.as_ref().map(|(names, _)| names.len()), Some(2));
@@ -608,7 +613,11 @@ mod tests {
         app.on_net(crate::net::NetEvent::Log(format!("Interface {ratspeak}: TCP connect failed: Connection refused (os error 111)")));
         app.on_tick();
         let notice = app.notice.as_ref().unwrap();
-        assert!(notice.text.starts_with("Couldn't reach Ratspeak & Colorado Mesh yet") && notice.text.contains("Nothing accepted"), "{}", notice.text);
+        assert!(
+            notice.text.starts_with("Couldn't reach Ratspeak & Colorado Mesh yet") && notice.text.contains("Nothing accepted"),
+            "{}",
+            notice.text
+        );
         assert!(app.connect_watch.is_none());
         let saved = app.saved_settings().unwrap();
         assert_eq!((saved.display_name.as_str(), saved.welcomed), ("Zev", true));

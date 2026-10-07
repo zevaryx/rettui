@@ -21,9 +21,7 @@ impl Clipboard {
         let system = if osc52_only {
             None
         } else {
-            arboard::Clipboard::new()
-                .inspect_err(|e| tracing::info!("no system clipboard ({e}); using OSC 52"))
-                .ok()
+            arboard::Clipboard::new().inspect_err(|e| tracing::info!("no system clipboard ({e}); using OSC 52")).ok()
         };
         Self { system }
     }

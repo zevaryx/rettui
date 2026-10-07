@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{accent, dim, block};
+use super::{accent, block, dim};
 use crate::app::node::PageView;
 use crate::app::{App, BrowserFocus, BrowserPane, Tab};
 
@@ -51,13 +51,10 @@ pub fn keys(app: &App) -> Keys {
         Tab::Channels if app.channels.typing && app.mention_matches().is_some() => {
             typing("Mentioning", &[("Tab/Enter", "mention"), ("↑↓", "choose"), ("Esc", "close")])
         }
-        _ if app.emoji.is_some() => typing(
-            "Emoji",
-            &[("Enter", "insert"), ("arrows", "choose"), ("Tab", "group"), ("type", "search"), ("Esc", "close")],
-        ),
-        _ if app.shortcode_matches().is_some() => {
-            typing("Emoji by name", &[("Tab/Enter", "pick"), ("↑↓", "choose"), ("Esc", "close")])
+        _ if app.emoji.is_some() => {
+            typing("Emoji", &[("Enter", "insert"), ("arrows", "choose"), ("Tab", "group"), ("type", "search"), ("Esc", "close")])
         }
+        _ if app.shortcode_matches().is_some() => typing("Emoji by name", &[("Tab/Enter", "pick"), ("↑↓", "choose"), ("Esc", "close")]),
         Tab::Channels if app.channels.typing => typing(
             "Writing in a channel",
             &[
@@ -70,13 +67,10 @@ pub fn keys(app: &App) -> Keys {
                 ("PgUp/Dn", "scroll"),
             ],
         ),
-        Tab::Channels if app.channels.menu.is_some() => typing(
-            "User menu",
-            &[("Enter", "do"), ("w", "whisper"), ("l", "LXMF"), ("↑↓", "select"), ("Esc", "close")],
-        ),
-        Tab::Channels if app.channels.picker.is_some() => {
-            typing("Members", &[("Enter", "pick"), ("↑↓", "select"), ("Esc", "close")])
+        Tab::Channels if app.channels.menu.is_some() => {
+            typing("User menu", &[("Enter", "do"), ("w", "whisper"), ("l", "LXMF"), ("↑↓", "select"), ("Esc", "close")])
         }
+        Tab::Channels if app.channels.picker.is_some() => typing("Members", &[("Enter", "pick"), ("↑↓", "select"), ("Esc", "close")]),
         Tab::Channels => mode(
             "Channels",
             &[
@@ -94,39 +88,21 @@ pub fn keys(app: &App) -> Keys {
                 ("Home/End", "first/last"),
             ],
         ),
-        Tab::Messages if app.message_search.is_some() => typing(
-            "Search messages",
-            &[("Enter", "open"), ("↑↓", "select"), ("Tab", "here/all"), ("Esc", "close"), ("^V", "paste")],
-        ),
-        Tab::Messages if app.forward.is_some() => typing(
-            "Forward to",
-            &[("Enter", "forward"), ("↑↓", "select"), ("Esc", "cancel"), ("^V", "paste")],
-        ),
-        Tab::Messages if app.map.is_some() => mode(
-            "Map",
-            &[
-                ("↑↓", "pick"),
-                ("Enter", "open"),
-                ("+/-", "zoom"),
-                ("0", "all"),
-                ("o", "OpenStreetMap"),
-                ("Esc", "close"),
-            ],
-        ),
-        Tab::Messages if app.archive_reader.is_some() => mode(
-            "Archive",
-            &[("↑↓", "scroll"), ("PgUp/Dn", "page"), ("Home/End", "oldest/newest"), ("Esc", "close")],
-        ),
+        Tab::Messages if app.message_search.is_some() => {
+            typing("Search messages", &[("Enter", "open"), ("↑↓", "select"), ("Tab", "here/all"), ("Esc", "close"), ("^V", "paste")])
+        }
+        Tab::Messages if app.forward.is_some() => {
+            typing("Forward to", &[("Enter", "forward"), ("↑↓", "select"), ("Esc", "cancel"), ("^V", "paste")])
+        }
+        Tab::Messages if app.map.is_some() => {
+            mode("Map", &[("↑↓", "pick"), ("Enter", "open"), ("+/-", "zoom"), ("0", "all"), ("o", "OpenStreetMap"), ("Esc", "close")])
+        }
+        Tab::Messages if app.archive_reader.is_some() => {
+            mode("Archive", &[("↑↓", "scroll"), ("PgUp/Dn", "page"), ("Home/End", "oldest/newest"), ("Esc", "close")])
+        }
         Tab::Messages if app.composing && app.reply.is_some() => typing(
             "Replying",
-            &[
-                ("Enter", "send"),
-                ("↑↓", "other"),
-                ("Esc", "no reply"),
-                ("^E", "emoji"),
-                ("^O", "attach"),
-                ("^V", "paste"),
-            ],
+            &[("Enter", "send"), ("↑↓", "other"), ("Esc", "no reply"), ("^E", "emoji"), ("^O", "attach"), ("^V", "paste")],
         ),
         Tab::Messages if app.composing => typing(
             "Writing",
@@ -349,10 +325,9 @@ pub fn keys(app: &App) -> Keys {
                 ("PgUp/Dn", "page"),
             ],
         ),
-        Tab::Node if app.node.editing && app.node.editor.is_some() && app.node.view == PageView::Preview => typing(
-            "Preview",
-            &[("^S", "save"), ("Esc", "pages"), ("^P", "view"), ("↑↓", "scroll"), ("PgUp/Dn", "page")],
-        ),
+        Tab::Node if app.node.editing && app.node.editor.is_some() && app.node.view == PageView::Preview => {
+            typing("Preview", &[("^S", "save"), ("Esc", "pages"), ("^P", "view"), ("↑↓", "scroll"), ("PgUp/Dn", "page")])
+        }
         Tab::Node if app.node.editing && app.node.editor.is_some() => typing(
             "Editing a page",
             &[
@@ -381,13 +356,10 @@ pub fn keys(app: &App) -> Keys {
                 ("↑↓", "select"),
             ],
         ),
-        Tab::Reticulum if app.rns.picker.is_some() => {
-            typing("Choose", &[("Enter", "pick"), ("↑↓", "select"), ("Esc", "cancel")])
+        Tab::Reticulum if app.rns.picker.is_some() => typing("Choose", &[("Enter", "pick"), ("↑↓", "select"), ("Esc", "cancel")]),
+        Tab::Reticulum if app.rns.editor.is_some() => {
+            typing("Config as text", &[("^S", "save"), ("Esc", "close"), ("^Z/^Y", "undo/redo"), ("^V", "paste")])
         }
-        Tab::Reticulum if app.rns.editor.is_some() => typing(
-            "Config as text",
-            &[("^S", "save"), ("Esc", "close"), ("^Z/^Y", "undo/redo"), ("^V", "paste")],
-        ),
         Tab::Reticulum => mode(
             "Reticulum",
             &[
@@ -505,12 +477,7 @@ pub(super) fn draw_keys(frame: &mut Frame, app: &App) {
 
     let width = (column * columns + 4).min(area.width as usize) as u16;
     let height = (lines.len() + 2).min(area.height as usize) as u16;
-    let rect = Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
-        width,
-        height,
-    };
+    let rect = Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height };
     frame.render_widget(Clear, rect);
     let title = format!("Keys · {}", keys.title);
     frame.render_widget(Paragraph::new(lines).block(block(&title, true).padding(ratatui::widgets::Padding::horizontal(1))), rect);

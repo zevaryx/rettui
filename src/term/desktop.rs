@@ -294,11 +294,7 @@ mod xdg {
 
     /// The notification service's signals, on this connection.
     async fn listen(bus: &zbus::Connection) -> Result<zbus::MessageStream, String> {
-        let rule = zbus::MatchRule::builder()
-            .msg_type(zbus::message::Type::Signal)
-            .interface(SERVICE)
-            .map_err(|e| e.to_string())?
-            .build();
+        let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(SERVICE).map_err(|e| e.to_string())?.build();
         zbus::MessageStream::for_match_rule(rule, bus, None).await.map_err(|e| e.to_string())
     }
 
@@ -420,7 +416,14 @@ mod platform_tests {
         // Stands in for powershell.exe: writes what it was given.
         let fake = dir.join("powershell.exe");
         let seen = dir.join("seen");
-        std::fs::write(&fake, format!("#!/bin/sh\nprintf '%s\\n%s\\n%s\\n%s\\n' \"$4\" \"$RETTUI_TOAST_TITLE\" \"$RETTUI_TOAST_BODY\" \"$WSLENV\" > '{}'\n", seen.display())).unwrap();
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n%s\\n' \"$4\" \"$RETTUI_TOAST_TITLE\" \"$RETTUI_TOAST_BODY\" \"$WSLENV\" > '{}'\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();

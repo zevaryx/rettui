@@ -107,10 +107,7 @@ pub fn search_terms(query: &str) -> Vec<Vec<char>> {
         .split_whitespace()
         .map(|word| {
             let word = word.trim_start_matches('<').trim_end_matches('>');
-            let word = ["lxmf@", "lxmf://", "nomadnetwork://"]
-                .iter()
-                .find_map(|prefix| word.strip_prefix(prefix))
-                .unwrap_or(word);
+            let word = ["lxmf@", "lxmf://", "nomadnetwork://"].iter().find_map(|prefix| word.strip_prefix(prefix)).unwrap_or(word);
             let word = match word.split_once(':') {
                 Some((hash, _)) if !hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()) => hash,
                 _ => word,
@@ -130,9 +127,7 @@ pub(crate) fn find_all(haystack: &[char], needle: &[char]) -> Vec<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return Vec::new();
     }
-    (0..=haystack.len() - needle.len())
-        .filter(|&i| haystack[i..i + needle.len()] == *needle)
-        .collect()
+    (0..=haystack.len() - needle.len()).filter(|&i| haystack[i..i + needle.len()] == *needle).collect()
 }
 
 /// Which chars of `text` are part of a match, for highlighting.
@@ -228,11 +223,8 @@ impl App {
         let key = hex::encode(hash);
         // Picking one by hand stops picking them automatically.
         let auto = self.settings.auto_propagation_node;
-        let changes: &[(&str, &str)] = if auto {
-            &[("propagation_node", &key), ("auto_propagation_node", "false")]
-        } else {
-            &[("propagation_node", &key)]
-        };
+        let changes: &[(&str, &str)] =
+            if auto { &[("propagation_node", &key), ("auto_propagation_node", "false")] } else { &[("propagation_node", &key)] };
         if let Err(e) = self.update_settings(changes) {
             return self.fail(e);
         }
@@ -480,20 +472,11 @@ mod tests {
     use super::*;
 
     fn search(text: &str) -> Vec<Vec<char>> {
-        NetSearch {
-            input: TextInput::with_text(text),
-            typing: false,
-        }
-        .terms()
+        NetSearch { input: TextInput::with_text(text), typing: false }.terms()
     }
 
     fn peer(name: Option<&str>) -> Peer {
-        Peer {
-            kind: PeerKind::Nomad,
-            name: name.map(str::to_string),
-            hops: 1,
-            last_seen: 0,
-        }
+        Peer { kind: PeerKind::Nomad, name: name.map(str::to_string), hops: 1, last_seen: 0 }
     }
 
     #[test]
@@ -529,11 +512,11 @@ mod tests {
 
     #[test]
     fn picking_the_propagation_node_automatically() {
-        use std::time::Duration;
         use crate::config::Settings;
         use crate::net::NetEvent;
         use crate::net::autopn::Pick;
         use crate::store::Store;
+        use std::time::Duration;
         let dir = std::env::temp_dir().join(format!("rettui-autopn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (near, far) = ("aa".repeat(16), "bb".repeat(16));
@@ -542,7 +525,8 @@ mod tests {
         store.peers.insert(far.clone(), Peer { kind: PeerKind::Propagation, name: None, hops: 5, last_seen: 90 });
         store.peers.insert("cc".repeat(16), peer(Some("a page node")));
         let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), store);
-        let commands = |net: &mut tokio::sync::mpsc::UnboundedReceiver<NetCommand>| std::iter::from_fn(|| net.try_recv().ok()).collect::<Vec<_>>();
+        let commands =
+            |net: &mut tokio::sync::mpsc::UnboundedReceiver<NetCommand>| std::iter::from_fn(|| net.try_recv().ok()).collect::<Vec<_>>();
         // Turning it on warns, and starts from the nodes heard before.
         let notes = app.update_settings(&[("auto_propagation_node", "true")]).unwrap();
         assert!(notes.iter().any(|n| n.contains("could lose them")), "{notes:?}");
@@ -607,11 +591,7 @@ mod tests {
     #[test]
     fn mask_marks_every_match() {
         let mask = match_mask("Ärger mesh MESH", &search("mesh är"));
-        let marked: String = "Ärger mesh MESH"
-            .chars()
-            .zip(mask)
-            .map(|(c, m)| if m { c } else { '.' })
-            .collect();
+        let marked: String = "Ärger mesh MESH".chars().zip(mask).map(|(c, m)| if m { c } else { '.' }).collect();
         assert_eq!(marked, "Är....mesh.MESH");
     }
 }

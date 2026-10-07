@@ -308,8 +308,7 @@ impl App {
         }
         // The emoji picker and the `:name` list take clicks and the wheel
         // over them; a click elsewhere closes the picker.
-        let over_emoji = self.regions.emoji_popup.contains(at)
-            && (self.emoji.is_some() || self.shortcode_matches().is_some());
+        let over_emoji = self.regions.emoji_popup.contains(at) && (self.emoji.is_some() || self.shortcode_matches().is_some());
         match mouse.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if over_emoji => {
                 let delta = if mouse.kind == MouseEventKind::ScrollUp { -1 } else { 1 };
@@ -332,9 +331,7 @@ impl App {
             MouseEventKind::ScrollDown => self.scroll(at, 3),
             // On a page, press starts a text selection; a release without
             // dragging is a click (follow a link, edit a field).
-            MouseEventKind::Down(MouseButton::Left)
-                if self.tab == Tab::Browser && self.regions.page.contains(at) =>
-            {
+            MouseEventKind::Down(MouseButton::Left) if self.tab == Tab::Browser && self.regions.page.contains(at) => {
                 let (row, col) = self.page_cell(at);
                 self.browser.focus = BrowserFocus::Page;
                 self.browser.selection = Some(Selection::at(row, col));
@@ -374,9 +371,7 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left) if self.tab == Tab::Node && self.node.dragging => self.drag_node(at),
             MouseEventKind::Up(MouseButton::Left) if self.node.dragging => self.node.dragging = false,
             MouseEventKind::Down(MouseButton::Left) => {
-                let double = self.last_click.is_some_and(|(when, pos)| {
-                    pos.y == at.y && when.elapsed() < DOUBLE_CLICK
-                });
+                let double = self.last_click.is_some_and(|(when, pos)| pos.y == at.y && when.elapsed() < DOUBLE_CLICK);
                 self.last_click = Some((Instant::now(), at));
                 self.click(at, double);
             }

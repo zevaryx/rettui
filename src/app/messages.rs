@@ -53,16 +53,8 @@ impl App {
 
     pub(super) fn on_message(&mut self, message: crate::lxmf::InboundMessage) {
         let key = hex::encode(message.source);
-        let id = message
-            .id
-            .map(hex::encode)
-            .unwrap_or_else(|| format!("in-{}", message.timestamp));
-        if self
-            .store
-            .conversations
-            .get(&key)
-            .is_some_and(|c| c.messages.iter().any(|m| m.id == id))
-        {
+        let id = message.id.map(hex::encode).unwrap_or_else(|| format!("in-{}", message.timestamp));
+        if self.store.conversations.get(&key).is_some_and(|c| c.messages.iter().any(|m| m.id == id)) {
             // A duplicate (e.g. direct and propagated copies).
             if message.paper {
                 self.notify(format!("You have this message from {} already", self.store.display_name(&key)));
@@ -130,12 +122,8 @@ impl App {
             let (name, data) = a.file();
             (name, data, false, Some(a.codec()))
         });
-        let files: Vec<(String, &[u8], bool, Option<String>)> = message
-            .attachments
-            .iter()
-            .map(|a| (a.name.clone(), a.data.as_slice(), a.image, None))
-            .chain(audio)
-            .collect();
+        let files: Vec<(String, &[u8], bool, Option<String>)> =
+            message.attachments.iter().map(|a| (a.name.clone(), a.data.as_slice(), a.image, None)).chain(audio).collect();
         if !files.is_empty() {
             let dir = self.paths.downloads.join(&key[..key.len().min(12)]);
             if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -156,9 +144,7 @@ impl App {
             title: message.title.clone(),
             content: message.content.clone(),
             timestamp: message.timestamp,
-            state: MessageState::Received {
-                verified: message.verified,
-            },
+            state: MessageState::Received { verified: message.verified },
             attachments,
             reply: message.reply.clone().map(|reply| ReplyTo { hash: hex::encode(reply.to), quote: reply.quote }),
             location,
@@ -168,8 +154,7 @@ impl App {
         };
         // On screen, in a window that has the focus: what arrives while the
         // user is away counts as unread.
-        let is_active = paper
-            || (self.focused && self.tab == Tab::Messages && self.active_conversation.as_deref() == Some(key.as_str()));
+        let is_active = paper || (self.focused && self.tab == Tab::Messages && self.active_conversation.as_deref() == Some(key.as_str()));
         // What the notification says: the text, else what came with it.
         let preview = if !message.content.trim().is_empty() {
             notify::body(&stored.text())
@@ -189,16 +174,12 @@ impl App {
         let summary = stored.opening();
         let conversation = self.store.conversations.entry(key.clone()).or_default();
         let muted = conversation.muted;
-        if quiet
-            && conversation.messages.last().is_some_and(|last| last.same_quiet_kind(&stored) && last.timestamp <= stored.timestamp)
-        {
+        if quiet && conversation.messages.last().is_some_and(|last| last.same_quiet_kind(&stored) && last.timestamp <= stored.timestamp) {
             conversation.messages.pop();
         }
         conversation.messages.push(stored);
         // Messages downloaded later may be older than ones already shown.
-        conversation
-            .messages
-            .sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
+        conversation.messages.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
         conversation.adopt_strays();
         if !is_active && !quiet {
             conversation.unread += 1;
@@ -268,11 +249,8 @@ impl App {
         let emoji = lxmf::fields::clean_reaction(emoji).ok_or("Nothing to react with")?;
         let to = parse_hash(key).ok_or("An LXMF address is 32 hex characters")?;
         let conversation = self.store.conversations.get_mut(key).ok_or("There's no such conversation")?;
-        let message = conversation
-            .messages
-            .iter_mut()
-            .find(|m| m.id == message_id)
-            .ok_or("The message reacted to isn't in this conversation")?;
+        let message =
+            conversation.messages.iter_mut().find(|m| m.id == message_id).ok_or("The message reacted to isn't in this conversation")?;
         let hash = message.lxmf_hash().ok_or("That message hasn't been sent, so there's nothing to react to yet")?.to_string();
         match message.reactions.iter().position(|r| !r.incoming && r.emoji == emoji) {
             Some(at) if matches!(message.reactions[at].state, MessageState::Failed(_)) => {
@@ -322,11 +300,7 @@ impl App {
         let muted = !self.store.conversations.get(&key).is_some_and(|c| c.muted);
         if self.set_conversation_muted(&key, muted) {
             let name = self.store.display_name(&key);
-            self.notify(if muted {
-                format!("No notifications from {name}")
-            } else {
-                format!("Notifications from {name} are on")
-            });
+            self.notify(if muted { format!("No notifications from {name}") } else { format!("Notifications from {name} are on") });
         }
     }
 
@@ -347,8 +321,7 @@ impl App {
     fn keep_conversation_selection(&mut self) {
         let order = self.conversation_order();
         if let Some(active) = &self.active_conversation {
-            self.conversations
-                .select(order.iter().position(|k| k == active));
+            self.conversations.select(order.iter().position(|k| k == active));
         } else if let Some(first) = order.first() {
             // First conversation ever: show it. Unread is cleared only once
             // the Messages tab is actually viewed.
@@ -637,10 +610,7 @@ impl App {
         let attachments: Vec<StoredAttachment> = files
             .iter()
             .map(|path| StoredAttachment {
-                name: path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
+                name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
                 size: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
                 image: crate::lxmf::is_image_path(path),
                 path: path.clone(),
@@ -656,31 +626,24 @@ impl App {
             .collect();
         let total: u64 = attachments.iter().map(|a| a.size).sum();
         if total > LARGE_MESSAGE_BYTES {
-            self.warn(format!(
-                "Sending {total} bytes of attachments; many clients reject direct transfers over 1 MB"
-            ));
+            self.warn(format!("Sending {total} bytes of attachments; many clients reject direct transfers over 1 MB"));
         }
         let id = self.store.next_local_id;
         self.store.next_local_id += 1;
         let timestamp = now();
         // Written in Markdown, and marked so (unless that's turned off).
         let format = (self.settings.markdown_messages && !content.trim().is_empty()).then_some(TextFormat::Markdown);
-        self.store
-            .conversations
-            .entry(key)
-            .or_default()
-            .messages
-            .push(Message {
-                id: format!("local-{id}"),
-                content: content.clone(),
-                timestamp,
-                state: MessageState::Sending,
-                attachments,
-                reply: reply.clone(),
-                format,
-                location,
-                ..Message::default()
-            });
+        self.store.conversations.entry(key).or_default().messages.push(Message {
+            id: format!("local-{id}"),
+            content: content.clone(),
+            timestamp,
+            state: MessageState::Sending,
+            attachments,
+            reply: reply.clone(),
+            format,
+            location,
+            ..Message::default()
+        });
         self.store_dirty = true;
         self.keep_conversation_selection();
         // Someone written to is a contact, spared the stamp.
@@ -721,7 +684,8 @@ impl App {
     /// Reply to the message at `index` in the open conversation, bringing
     /// it into view, and write.
     fn reply_to_index(&mut self, index: usize) {
-        let Some(message) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)?.messages.get(index)) else {
+        let Some(message) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)?.messages.get(index))
+        else {
             return;
         };
         if message.lxmf_hash().is_none() {
@@ -750,11 +714,7 @@ impl App {
     pub(super) fn move_reply(&mut self, older: bool) {
         let repliable = self.repliable();
         let Some((current, _)) = self.reply_target() else { return self.start_reply() };
-        let next = if older {
-            repliable.iter().rev().find(|&&i| i < current)
-        } else {
-            repliable.iter().find(|&&i| i > current)
-        };
+        let next = if older { repliable.iter().rev().find(|&&i| i < current) } else { repliable.iter().find(|&&i| i > current) };
         if let Some(&index) = next {
             self.reply_to_index(index);
         }
@@ -770,7 +730,8 @@ impl App {
     /// Pick the message at `index` in the open conversation (or put it down
     /// if it's picked), bringing it into view.
     fn pick_index(&mut self, index: usize) {
-        let Some(message) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)?.messages.get(index)) else {
+        let Some(message) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)?.messages.get(index))
+        else {
             return;
         };
         if self.picked.as_deref() == Some(message.id.as_str()) {
@@ -803,7 +764,8 @@ impl App {
 
     /// Do `action` with the message at `index` in the open conversation.
     pub(super) fn message_action(&mut self, index: usize, action: MessageAction) {
-        let Some(message) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)?.messages.get(index)) else {
+        let Some(message) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)?.messages.get(index))
+        else {
             return;
         };
         let id = message.id.clone();
@@ -991,9 +953,8 @@ impl App {
         }
         if conversation.archived > 0 {
             let (archive, key) = (self.paths.archive.clone(), key.to_string());
-            self.saver.run("delete the conversation's archived messages", move || {
-                crate::store::remove_from_archive(&archive, &key, &owned)
-            });
+            self.saver
+                .run("delete the conversation's archived messages", move || crate::store::remove_from_archive(&archive, &key, &owned));
         }
         self.store_dirty = true;
         self.update_policy(false);
@@ -1032,7 +993,8 @@ impl App {
     /// Open what the picked message brought: its first file, else its
     /// location on a map.
     fn open_picked(&mut self, index: usize) {
-        let Some(message) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)?.messages.get(index)) else {
+        let Some(message) = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key)?.messages.get(index))
+        else {
             return;
         };
         if let Some(attachment) = message.attachments.first() {
@@ -1592,7 +1554,8 @@ mod tests {
     fn announces_save_the_peers_not_the_store() {
         let dir = temp_dir("announce");
         let mut app = app(&dir, Store::default(), 1000, 0);
-        let announce = crate::net::NetEvent::Announce { kind: crate::net::PeerKind::Lxmf, hash: [7; 16], name: Some("Bob".into()), hops: 2 };
+        let announce =
+            crate::net::NetEvent::Announce { kind: crate::net::PeerKind::Lxmf, hash: [7; 16], name: Some("Bob".into()), hops: 2 };
         app.on_net(announce);
         assert!(app.peers_dirty && !app.store_dirty);
         let paths = app.paths.clone();
@@ -1675,9 +1638,8 @@ mod tests {
         let mut app = app(&dir, Store::default(), 1000, 0);
         let tower = Appearance { icon: "radio-tower".into(), foreground: [255; 3], background: [0, 0, 128] };
         let antenna = Appearance { icon: "antenna".into(), ..tower.clone() };
-        let with = |n: u8, content: &str, icon: &Appearance| {
-            from_them(n, content, Extras { appearance: Some(icon.clone()), ..Extras::default() })
-        };
+        let with =
+            |n: u8, content: &str, icon: &Appearance| from_them(n, content, Extras { appearance: Some(icon.clone()), ..Extras::default() });
         app.on_message(with(2, "hello", &tower));
         assert_eq!(app.store.contact(&key()).icon.as_ref(), Some(&tower));
         // An older message's icon doesn't replace a newer one's.
@@ -1754,7 +1716,15 @@ mod tests {
         let dir = temp_dir("quiet");
         let mut app = app(&dir, Store::default(), 1000, 0);
         app.set_focus(false);
-        let at = |lat: f64| Location { latitude: lat, longitude: 1.0, altitude: None, speed: None, bearing: None, accuracy: None, updated: None };
+        let at = |lat: f64| Location {
+            latitude: lat,
+            longitude: 1.0,
+            altitude: None,
+            speed: None,
+            bearing: None,
+            accuracy: None,
+            updated: None,
+        };
         let update = |n: u8, lat: f64| {
             from_them(n, "", Extras { telemetry: Some(Telemetry { time: None, location: Some(at(lat)) }), ..Extras::default() })
         };
@@ -1863,7 +1833,9 @@ mod tests {
         let dir = temp_dir("voice");
         let mut app = app(&dir, Store::default(), 1000, 0);
         app.set_focus(false);
-        let voice = |n: u8, mode: u8, data: &[u8]| from_them(n, "", Extras { audio: Some(Audio::new(mode, data.to_vec()).decoded()), ..Extras::default() });
+        let voice = |n: u8, mode: u8, data: &[u8]| {
+            from_them(n, "", Extras { audio: Some(Audio::new(mode, data.to_vec()).decoded()), ..Extras::default() })
+        };
         app.on_message(voice(1, 0x10, b"OggS opus"));
         app.on_message(voice(2, 0x04, &[0; 60]));
         app.on_message(voice(3, 0x03, b"\x01\x02"));
