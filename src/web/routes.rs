@@ -815,6 +815,14 @@ async fn send_message(
         tokio::fs::write(&path, data).await.map_err(|e| bad(e.to_string()))?;
         files.push(path);
     }
+    // Pictures made smaller (as the setting has it), away from the app:
+    // it takes a while with photos.
+    if files.iter().any(|f| crate::lxmf::is_image_path(f)) && mode != DeliveryMode::Paper {
+        let size = state.read(|o| o.app.settings.picture_size.clone()).await?;
+        files = tokio::task::spawn_blocking(move || crate::app::shrink::shrink_files(files, &size, &dir))
+            .await
+            .map_err(|e| bad(e.to_string()))?;
+    }
     let result = state
         .write(move |o| {
             o.app.send_message(key, body.content, files, mode, body.reply_to).map_err(|(e, _, files)| (e, files))

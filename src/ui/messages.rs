@@ -397,7 +397,12 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         let names: Vec<String> = app
             .attachments
             .iter()
-            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .filter_map(|p| {
+                let name = p.file_name()?.to_string_lossy().into_owned();
+                // Pictures go smaller, as the setting has it.
+                let smaller = crate::app::shrink::shrinks(p, &app.settings.picture_size);
+                Some(if smaller { format!("{name} (smaller)") } else { name })
+            })
             .collect();
         compose_title.push_str(&format!(" · 📎 {}", names.join(", ")));
     }

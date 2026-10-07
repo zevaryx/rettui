@@ -51,6 +51,8 @@ pub fn state(app: &App) -> Value {
         "display_name": app.settings.display_name,
         "external_shared_instance": app.uses_external_shared_instance(),
         "wrap_lines": app.settings.wrap_lines,
+        // How big pictures sent may be (the composer says they'll shrink).
+        "picture_size": app.settings.picture_size,
         "lxmf_address": app.lxmf_hash.map(hex::encode),
         // With the public key, for others to add you (`lxma://`).
         "identity_link": app.identity_link(),

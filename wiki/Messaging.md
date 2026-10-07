@@ -41,6 +41,26 @@ MeshChat, NomadNet and other LXMF clients).
 - **Attachments:**
   - The first image goes in the LXMF image field, which Sideband and MeshChat
     show inline. Other files are sent as file attachments.
+  - Pictures are made smaller before they're sent, as Sideband and MeshChat
+    do. A photo straight from a phone is megabytes, which takes minutes over
+    a radio link, if it gets there at all: propagation nodes usually take
+    256 KB at most. *Send pictures at* (Status, `picture_size`) picks how
+    small:
+    - **small:** at most 480 pixels on the longest side, about 20–40 KB. For
+      LoRa.
+    - **medium** (the default): 1024 pixels, about 100–200 KB.
+    - **large:** 2048 pixels, often over 500 KB, too big for most
+      propagation nodes.
+    - **original:** as they are.
+
+    A picture is turned the way its camera noted and sent as a JPEG (a PNG
+    if it's partly see-through). That leaves out its metadata, such as where
+    a photo was taken. GIFs go as they are, since they may move, and so does
+    a picture that wouldn't get smaller. The picture on your computer isn't
+    changed: the smaller copy is saved in `uploads/` (see
+    [Data and Storage](Data-and-Storage)), and goes when the message is
+    deleted. While you write, a picture to be shrunk shows *(smaller)* in
+    the TUI, and *sent smaller* in the web UI.
   - Received attachments are saved automatically, and images get an inline
     preview. `o` opens the newest attachment with your desktop's default app.
   - Many clients refuse direct transfers over about 1 MB, and rettui warns

@@ -31,6 +31,7 @@ mod saver;
 pub mod node;
 pub mod reticulum;
 pub mod search;
+pub mod shrink;
 mod settings;
 pub mod traffic;
 

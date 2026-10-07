@@ -250,6 +250,13 @@ function stickToBottom(node, update) {
   if (atBottom) node.scrollTop = node.scrollHeight;
 }
 
+// Whether a file attached is a picture that goes smaller, as the setting
+// has it (not a GIF, which may move): see shrink.rs.
+function shrinks(file) {
+  const size = app.status?.picture_size;
+  return !!size && size !== 'original' && /\.(jpe?g|png|webp|bmp)$/i.test(file.name);
+}
+
 function readFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2162,8 +2169,12 @@ app.views.messages = {
   },
 
   renderChips() {
-    this.chips.replaceChildren(...this.pending.map((file, i) => el('span', { class: 'chip' },
-      `${file.name} (${humanBytes(file.size)})`,
+    const size = app.status?.picture_size;
+    this.chips.replaceChildren(...this.pending.map((file, i) => el('span', {
+      class: 'chip',
+      title: shrinks(file) ? `Sent smaller (${size}), as set in Status: Send pictures at` : '',
+    },
+      `${file.name} (${humanBytes(file.size)}${shrinks(file) ? ', sent smaller' : ''})`,
       el('button', { text: '×', title: 'Remove', onclick: () => {
         this.pending.splice(i, 1);
         this.renderChips();
@@ -2598,7 +2609,8 @@ app.views.messages = {
       pending.map((f) => el('div', { class: 'attachment dim', text: `📎 ${f.name}` }))));
     const files = [];
     for (const file of pending) files.push({ name: file.name, data: await readFile(file) });
-    const total = pending.reduce((n, f) => n + f.size, 0);
+    // Pictures that go smaller don't count: rettui warns of what they come to.
+    const total = pending.filter((f) => !shrinks(f)).reduce((n, f) => n + f.size, 0);
     if (total > 1_000_000) toast(`Sending ${humanBytes(total)} of attachments; many clients reject direct transfers over 1 MB`);
     const mode = this.mode;
     const sent = await attempt(() => api.post(`/conversations/${echo.key}/send`, { content, mode, files, reply_to: reply?.id }));

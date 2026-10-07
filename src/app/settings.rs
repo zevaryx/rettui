@@ -110,6 +110,7 @@ impl App {
                 "ignore_unknown_senders" => self.settings.ignore_unknown_senders = after.ignore_unknown_senders,
                 "resend_on_announce" => self.settings.resend_on_announce = after.resend_on_announce,
                 "markdown_messages" => self.settings.markdown_messages = after.markdown_messages,
+                "picture_size" => self.settings.picture_size = after.picture_size.clone(),
                 "stamp_cost" | "max_message_kb" => {
                     self.settings.stamp_cost = after.stamp_cost;
                     self.settings.max_message_kb = after.max_message_kb;

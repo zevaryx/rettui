@@ -60,7 +60,9 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `rrc/`: RRC chat history, one file per hub
 - `rettui.log`: logging, set with `RETTUI_LOG=debug`
 - `downloads/`: received attachments (one folder per sender) and NomadNet files
-- `uploads/`: files attached to messages sent from the web UI
+- `uploads/`: files attached to messages sent from the web UI, and the
+  smaller copies of pictures sent (see
+  [Messaging](Messaging))
 - `node/`: your node's `pages/` and `files/`
 - `propagation/`: messages your [propagation node](Hosting-a-Node#propagation-node)
   keeps for others, one file each, encrypted for their recipients

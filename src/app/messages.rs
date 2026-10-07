@@ -374,13 +374,18 @@ impl App {
             return;
         }
         let content = self.compose.take();
-        let files = std::mem::take(&mut self.attachments);
+        let originals = std::mem::take(&mut self.attachments);
+        let files = self.shrink_pictures(originals.clone());
         let reply = self.reply.take();
         if let Err((e, content, files)) = self.send_message(key.clone(), content, files, self.delivery_mode, reply.clone()) {
-            // Keep what was written so it can be sent once the problem is fixed.
+            // Keep what was written so it can be sent once the problem is
+            // fixed, with the files picked rather than smaller copies.
             self.warn(e);
+            for file in files.iter().filter(|f| !originals.contains(f)) {
+                crate::store::remove_owned(file, std::slice::from_ref(&self.paths.uploads));
+            }
             self.compose = TextInput::with_text(&content);
-            self.attachments = files;
+            self.attachments = originals;
             self.reply = reply;
             return;
         }

@@ -84,6 +84,9 @@ pub struct Settings {
     /// Mark the messages you write as Markdown (LXMF's renderer field), so
     /// clients that format it show them formatted.
     pub markdown_messages: bool,
+    /// How big pictures you send may be: one of
+    /// [`crate::app::shrink::PICTURE_SIZES`] (smaller ones are made first).
+    pub picture_size: String,
     /// Host an LXMF propagation node (messages kept in `propagation/`).
     pub pn_enabled: bool,
     /// Name the propagation node announces; the display name when unset.
@@ -131,6 +134,7 @@ impl Default for Settings {
             identity_backed_up: false,
             show_first_steps: false,
             markdown_messages: true,
+            picture_size: "medium".into(),
             pn_enabled: false,
             pn_name: None,
             // lxmd's defaults.
@@ -417,6 +421,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "picture_size",
+        label: "Send pictures at",
+        help: "Pictures you send are made smaller first, as Sideband and MeshChat do, to fit: small (480 pixels on the longest side, for LoRa), medium (1024), large (2048, often too big for a propagation node), or original (as they are). GIFs go as they are. A picture made smaller leaves out its metadata, such as where a photo was taken",
+        kind: FieldKind::Choice(crate::app::shrink::PICTURE_SIZES),
+        effect: Effect::Now,
+    },
+    Field {
         key: "messages_kept",
         label: "Messages kept",
         help: "Newest messages each conversation keeps and shows; older ones move to the archive (archive/ in the data directory). 0 keeps all",
@@ -659,6 +670,7 @@ impl Settings {
             "stamp_cost" => self.stamp_cost.to_string(),
             "max_message_kb" => self.max_message_kb.to_string(),
             "markdown_messages" => self.markdown_messages.to_string(),
+            "picture_size" => self.picture_size.clone(),
             "pn_enabled" => self.pn_enabled.to_string(),
             "pn_name" => self.pn_name.clone().unwrap_or_default(),
             "pn_stamp_cost" => self.pn_stamp_cost.to_string(),
@@ -697,6 +709,7 @@ impl Settings {
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
             "markdown_messages" => self.markdown_messages = toggle(value).map_err(fail)?,
+            "picture_size" => self.picture_size = choice(value, crate::app::shrink::PICTURE_SIZES).map_err(fail)?,
             "pn_name" => {
                 if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
                     return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));
