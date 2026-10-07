@@ -102,7 +102,9 @@ pub async fn send(
     attachments: Vec<PathBuf>,
     mode: DeliveryMode,
 ) -> Result<()> {
-    let to = crate::net::parse_hash(to).ok_or_else(|| anyhow!("expected a 32 hex char LXMF address"))?;
+    // An address, or an lxma:// link (with their key, to write before
+    // hearing them announce).
+    let (to, key) = crate::lxmf::parse_contact(to).map_err(|e| anyhow!(e))?;
     if let Some(missing) = attachments.iter().find(|path| !path.is_file()) {
         bail!("{} is not a file", missing.display());
     }
@@ -112,6 +114,9 @@ pub async fn send(
     let node = settings.propagation_node.as_deref().and_then(crate::net::parse_hash);
     let (commands, mut events) = net::spawn(options(settings, paths, identity, false, node));
     wait_started(&mut events).await?;
+    if let Some(public_key) = key {
+        let _ = commands.send(NetCommand::Remember { to, public_key });
+    }
     let content = message.to_string();
     let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let _ = commands.send(if mode == DeliveryMode::Paper {

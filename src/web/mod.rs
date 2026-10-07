@@ -361,8 +361,13 @@ pub struct WebState {
     /// This client's identity, to open paper messages (see
     /// [`routes`]' `read_paper`).
     identity: std::sync::Arc<Identity>,
-    token: String,
+    /// The login secret (see [`routes`]); replaced to sign every browser
+    /// out, which `signed_out` counts so live-update streams end.
+    token: std::sync::Arc<std::sync::RwLock<String>>,
+    signed_out: tokio::sync::watch::Sender<u64>,
     paths: std::sync::Arc<Paths>,
+    /// How the web UI is reached, for the new link once the token changes.
+    link_base: String,
     /// Served over HTTPS (`--https`), so the login cookie is `Secure`.
     https: bool,
     /// rettui's own certificate authority (DER), for devices to install.
@@ -370,6 +375,23 @@ pub struct WebState {
 }
 
 impl WebState {
+    fn token(&self) -> String {
+        self.token.read().unwrap().clone()
+    }
+
+    /// Sign every browser out: a new login secret (saved), live-update
+    /// streams ended, and push notifications to browsers stopped. The new
+    /// link is printed where rettui runs. The new token.
+    fn new_token(&self) -> Result<String, String> {
+        let token = hex::encode(rand::random::<[u8; 24]>());
+        crate::config::write_private(&self.paths.web_token, token.as_bytes()).map_err(|e| format!("Couldn't save the new token: {e}"))?;
+        *self.token.write().unwrap() = token.clone();
+        self.signed_out.send_modify(|n| *n += 1);
+        self.push.unsubscribe_all()?;
+        println!("Every other browser was signed out. The new link: {}/?token={token}", self.link_base);
+        Ok(token)
+    }
+
     async fn run<T: Send + 'static>(
         &self,
         changes: bool,
@@ -504,6 +526,12 @@ pub async fn run(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
 
+    let scheme = if served.is_some() { "https" } else { "http" };
+    let shown = if address.ip().is_unspecified() {
+        format!("127.0.0.1:{}", address.port())
+    } else {
+        address.to_string()
+    };
     let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
     let (changes, _) = broadcast::channel(64);
     let (notices, _) = broadcast::channel(64);
@@ -513,8 +541,10 @@ pub async fn run(
         notices: notices.clone(),
         push: push.clone(),
         identity: std::sync::Arc::new(identity.clone()),
-        token: token.clone(),
+        token: std::sync::Arc::new(std::sync::RwLock::new(token.clone())),
+        signed_out: tokio::sync::watch::channel(0).0,
         paths: std::sync::Arc::new(paths),
+        link_base: format!("{scheme}://{shown}"),
         https: served.is_some(),
         ca: served.as_ref().and_then(|s| s.ca.clone()),
     };
@@ -525,13 +555,6 @@ pub async fn run(
             tokio::spawn(async move { axum::serve(listener, router).await })
         }
         None => tokio::spawn(async move { axum::serve(listener, router).await }),
-    };
-    let scheme = if served.is_some() { "https" } else { "http" };
-
-    let shown = if address.ip().is_unspecified() {
-        format!("127.0.0.1:{}", address.port())
-    } else {
-        address.to_string()
     };
     println!("rettui web UI: {scheme}://{shown}/?token={token}");
     println!("The link logs this browser in; keep it private. Ctrl-C stops rettui.");

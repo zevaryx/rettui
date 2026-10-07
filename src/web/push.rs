@@ -219,6 +219,14 @@ impl WebPush {
         save(&self.path, &subscriptions)
     }
 
+    /// Stop pushing to every browser (all were signed out).
+    pub fn unsubscribe_all(&self) -> Result<(), String> {
+        let mut subscriptions = self.subscriptions.lock().unwrap();
+        subscriptions.clear();
+        self.showing.lock().unwrap().clear();
+        save(&self.path, &subscriptions)
+    }
+
     /// Whether the browser with this subscription shows the web UI now.
     pub fn set_showing(&self, endpoint: &str, showing: bool) {
         let mut browsers = self.showing.lock().unwrap();

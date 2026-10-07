@@ -88,6 +88,7 @@ enum Command {
     },
     /// Send one LXMF message.
     Send {
+        /// LXMF address, or an lxma:// link (with their key).
         address: String,
         message: String,
         /// Attach a file (repeatable).

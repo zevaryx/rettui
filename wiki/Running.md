@@ -101,7 +101,7 @@ rettui --web [ADDRESS]      # the web UI (default 127.0.0.1:8740)
 rettui --web [ADDRESS] --https                          # over HTTPS, with rettui's own certificate
 rettui --web [ADDRESS] --tls-cert FILE --tls-key FILE   # over HTTPS, with yours
 rettui fetch <hash>[:/page/x.mu] [--raw] [--identify] [-o FILE]
-rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]
+rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]  # address or lxma:// link
 rettui listen [--seconds N]  # announce, then print incoming messages
 rettui sync [--node HASH]    # download messages from the propagation node
 rettui ping <address>        # how long a Link takes to set up, and how many hops away

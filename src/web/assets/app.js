@@ -4720,6 +4720,14 @@ app.views.status = {
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Known'), el('span', { text: `${s.known} destinations` }),
       label('Notifications'), notifications.describe(),
+      // A link shared too widely, or a lost phone: everyone else out.
+      label('Browsers'), el('div', { class: 'row' },
+        el('span', { class: 'dim', text: 'This one stays signed in' }),
+        el('button', { text: 'Sign out the others', title: 'A new login link (printed where rettui runs): every other browser, and scripts with the old token, must log in again; push notifications stop until browsers turn them on again',
+          onclick: async () => {
+            if (!confirm('Sign every other browser out? They (and scripts using the old token) need the new link, printed where rettui runs, to log in again.')) return;
+            if (await attempt(() => api.post('/sign-out-others'), 'Every other browser was signed out')) notifications.checkPush().catch(() => {});
+          } })),
       // With --https and rettui's own certificate.
       ...(s.own_certificate ? [label('Certificate'), el('div', {},
         el('div', { class: 'row' },

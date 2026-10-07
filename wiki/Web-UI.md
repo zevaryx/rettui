@@ -10,6 +10,13 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   across restarts. Keep it private. Anyone with the link can read and send your
   messages as you. The login page also takes the token (the part after
   `token=`) pasted in.
+- **Signing the others out:** if the link got around, or a phone with it
+  was lost, **Sign out the others** (Status, *Browsers*) makes a new token.
+  Every other browser, and scripts using the old token, must log in again
+  with the new link, printed where rettui runs (and saved in `web_token`).
+  Their live updates and push notifications stop at once; the browser that
+  asked stays signed in. Deleting `web_token` while rettui is stopped does
+  the same at the next start.
 - **Installing:** phones and desktop browsers can install the web UI as an
   app of its own (on an iPhone, Share → Add to Home Screen), which opens full
   screen. An iPhone's Home Screen app keeps its own login: paste the token

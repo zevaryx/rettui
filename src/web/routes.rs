@@ -82,6 +82,7 @@ pub fn router(state: WebState) -> Router {
         .route("/push/showing", post(push_showing))
         .route("/conversations", get(conversations).post(new_conversation))
         .route("/search", get(search_messages))
+        .route("/sign-out-others", post(sign_out_others))
         .route("/icons", get(icons))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/archive", get(conversation_archive))
@@ -221,7 +222,7 @@ async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Re
         .query()
         .and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")).map(str::to_string));
     let mut response = if let Some(token) = query_token.filter(|_| path == "/") {
-        if same(&token, &state.token) {
+        if same(&token, &state.token()) {
             let secure = if state.https { "; Secure" } else { "" };
             let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}");
             (StatusCode::SEE_OTHER, [(header::LOCATION, "./".to_string()), (header::SET_COOKIE, cookie)]).into_response()
@@ -229,7 +230,8 @@ async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Re
             (StatusCode::UNAUTHORIZED, axum::response::Html(LOGIN_PAGE)).into_response()
         }
     } else {
-        let logged_in = presented_tokens(request.headers()).any(|t| same(t, &state.token));
+        let current = state.token();
+        let logged_in = presented_tokens(request.headers()).any(|t| same(t, &current));
         if logged_in || PUBLIC.contains(&path.as_str()) {
             next.run(request).await
         } else if path.starts_with("/api/") {
@@ -468,6 +470,17 @@ async fn brand(Path(name): Path<String>) -> Response {
 
 // ---- state and live updates ----------------------------------------------
 
+/// Sign every other browser out: a new login secret, kept by this
+/// browser's cookie (scripts using the old one need the new one, from the
+/// data directory's `web_token`).
+async fn sign_out_others(State(state): State<WebState>) -> Result<Response, ApiError> {
+    let token = state.new_token().map_err(bad)?;
+    let secure = if state.https { "; Secure" } else { "" };
+    let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}");
+    let _ = state.write(|o| o.app.log("Signed every other browser out of the web UI (a new login link is printed where rettui runs)")).await;
+    Ok(([(header::SET_COOKIE, cookie)], axum::Json(json!({ "ok": true }))).into_response())
+}
+
 #[derive(Deserialize)]
 struct IconQuery {
     #[serde(default)]
@@ -553,10 +566,15 @@ async fn events(
     let caught_up = missed.iter().map(|(id, _)| *id).max().unwrap_or(0);
     let replay: Vec<Result<Event, Infallible>> =
         missed.iter().filter_map(|(id, n)| notify_event(*id, n, true)).map(Ok).collect();
-    let live = futures_util::stream::unfold(receivers, move |(mut changes, mut notices)| async move {
+    // Every browser signed out since: the stream ends (and a reconnect
+    // needs the new token).
+    let mut signed_out = state.signed_out.subscribe();
+    signed_out.mark_unchanged();
+    let live = futures_util::stream::unfold((receivers, signed_out), move |((mut changes, mut notices), mut signed_out)| async move {
         use tokio::sync::broadcast::error::RecvError;
         let event = loop {
             tokio::select! {
+                _ = signed_out.changed() => return None,
                 change = changes.recv() => break match change {
                     Ok((version, scope)) => Event::default().data(format!("{version} {}", scope.name())),
                     // Missed some: one event covers them.
@@ -579,7 +597,7 @@ async fn events(
                 },
             }
         };
-        Some((Ok(event), (changes, notices)))
+        Some((Ok(event), ((changes, notices), signed_out)))
     });
     let stream = Sse::new(futures_util::StreamExt::chain(futures_util::stream::iter(replay), live)).keep_alive(KeepAlive::default());
     // Behind nginx, sent as they come rather than buffered (other proxies
