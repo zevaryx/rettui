@@ -127,6 +127,10 @@ impl App {
             self.message_search_key(key);
             return;
         }
+        if self.archive_reader.is_some() && self.tab == Tab::Messages {
+            self.archive_key(key);
+            return;
+        }
         if self.net_search.typing && self.tab == Tab::Network {
             match key.code {
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
@@ -227,6 +231,18 @@ impl App {
                     _ if self.regions.message_search_box.contains(at) => {}
                     _ => self.message_search = None,
                 }
+            }
+            return;
+        }
+        // The archive: the wheel scrolls it, a click outside closes it.
+        if self.archive_reader.is_some() && self.tab == Tab::Messages {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.scroll_archive(true),
+                MouseEventKind::ScrollDown => self.scroll_archive(false),
+                MouseEventKind::Down(_) if !self.regions.archive.contains(Position::new(mouse.column, mouse.row)) => {
+                    self.archive_reader = None;
+                }
+                _ => {}
             }
             return;
         }

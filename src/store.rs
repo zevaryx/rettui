@@ -509,6 +509,35 @@ pub fn remove_from_archive(dir: &Path, conversation: &str, owned: &[PathBuf]) ->
     Ok(if removed > 0 { vec![format!("Deleted {removed} archived message(s) of the deleted conversation")] } else { Vec::new() })
 }
 
+/// A conversation's messages in the archive, oldest first (lines it can't
+/// read are left out). Reads every month, so it's for when they're asked
+/// for, away from the screen where that may take a while.
+pub fn read_archive(dir: &Path, conversation: &str) -> Result<Vec<Message>> {
+    let months: Vec<PathBuf> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.file_name().is_some_and(|n| n.to_string_lossy().ends_with(ARCHIVE_EXTENSION)))
+            .collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut messages = Vec::new();
+    for path in months {
+        let mut text = String::new();
+        flate2::read::MultiGzDecoder::new(std::fs::File::open(&path)?).read_to_string(&mut text)?;
+        // Only lines that name it are read through.
+        for line in text.lines().filter(|l| l.contains(conversation)) {
+            if let Ok(archived) = serde_json::from_str::<Archived>(line)
+                && archived.conversation == conversation
+            {
+                messages.push(archived.message);
+            }
+        }
+    }
+    messages.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
+    Ok(messages)
+}
+
 /// Delete `path` if it's in one of the `owned` folders (files rettui saved:
 /// downloads and uploads), not a file of yours sent from elsewhere.
 pub fn remove_owned(path: &Path, owned: &[PathBuf]) -> bool {
@@ -1041,6 +1070,28 @@ mod tests {
         let ids: Vec<&str> = archived.iter().map(|a| a.message.id.as_str()).collect();
         assert_eq!(ids, ["1", "2", "3"]);
         assert!(archived.iter().all(|a| a.conversation == "ab".repeat(16)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_conversations_archive_is_read_oldest_first() {
+        let dir = temp_dir("archive-read");
+        let message = |conversation: &str, id: &str, timestamp: f64| Archived {
+            conversation: conversation.into(),
+            message: Message { id: id.into(), timestamp, content: format!("message {id}"), ..Message::default() },
+        };
+        let (alice, bob) = ("ab".repeat(16), "cd".repeat(16));
+        // Two months, out of order, with someone else's between.
+        let october = archive_month(&dir, 1_791_000_000.0);
+        std::fs::write(&october, encode_archive(&[message(&alice, "late", 1_791_000_000.0), message(&bob, "bob", 1_791_000_001.0)]).unwrap()).unwrap();
+        let september = archive_month(&dir, 1_790_000_000.0);
+        let mut bytes = encode_archive(&[message(&alice, "early", 1_790_000_000.0)]).unwrap();
+        bytes.extend(gzip(b"not json, but naming abababababababababababababababab\n").unwrap());
+        std::fs::write(&september, bytes).unwrap();
+        let read = read_archive(&dir, &alice).unwrap();
+        assert_eq!(read.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["early", "late"]);
+        assert_eq!(read_archive(&dir, &bob).unwrap().len(), 1);
+        assert!(read_archive(&dir.join("none"), &alice).unwrap().is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

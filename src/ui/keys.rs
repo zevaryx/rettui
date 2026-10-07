@@ -98,6 +98,10 @@ pub fn keys(app: &App) -> Keys {
             "Search messages",
             &[("Enter", "open"), ("↑↓", "select"), ("Tab", "here/all"), ("Esc", "close"), ("^V", "paste")],
         ),
+        Tab::Messages if app.archive_reader.is_some() => mode(
+            "Archive",
+            &[("↑↓", "scroll"), ("PgUp/Dn", "page"), ("Home/End", "oldest/newest"), ("Esc", "close")],
+        ),
         Tab::Messages if app.composing && app.reply.is_some() => typing(
             "Replying",
             &[
@@ -166,6 +170,7 @@ pub fn keys(app: &App) -> Keys {
                 ("p", "read paper"),
                 ("P", "show paper"),
                 ("N", "notify"),
+                ("H", "archive"),
                 ("X", "delete"),
                 ("↑↓", "select"),
                 ("PgUp/Dn", "scroll"),

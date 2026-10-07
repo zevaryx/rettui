@@ -130,7 +130,9 @@ for you, as Sideband does when none is set:
 
 Find messages by what they say: every word typed must be found, in any
 order, in a message's text, title, attachments' names or what rettui noted
-of it. Results are newest first (the newest 200 at most), each with who
+of it. It looks through the messages each conversation keeps; older ones
+moved to the archive open from their conversation (see
+[Data and Storage](Data-and-Storage#message-history)). Results are newest first (the newest 200 at most), each with who
 it's with, when, and the part that matched.
 
 - **In the TUI:** `/` in the Messages tab opens the search over all

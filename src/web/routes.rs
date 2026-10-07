@@ -84,6 +84,7 @@ pub fn router(state: WebState) -> Router {
         .route("/search", get(search_messages))
         .route("/icons", get(icons))
         .route("/conversations/{key}", get(conversation))
+        .route("/conversations/{key}/archive", get(conversation_archive))
         .route("/conversations/{key}/read", post(read_conversation))
         .route("/conversations/{key}/notify", post(mute_conversation))
         .route("/conversations/{key}/send", post(send_message))
@@ -1088,10 +1089,23 @@ fn file_response(data: Vec<u8>, name: &str, inline: bool) -> Response {
         .into_response()
 }
 
+/// A conversation's messages in the archive (see `store::read_archive`),
+/// oldest first; read away from the app, as there may be many months.
+async fn conversation_archive(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
+    let key = address(&key)?;
+    let dir = state.paths.archive.clone();
+    let messages = tokio::task::spawn_blocking(move || crate::store::read_archive(&dir, &key))
+        .await
+        .map_err(|e| bad(e.to_string()))?
+        .map_err(|e| bad(format!("Couldn't read the archive: {e}")))?;
+    Ok(axum::Json(views::archived(messages)))
+}
+
 async fn attachment(
     State(state): State<WebState>,
     Path((key, id, index)): Path<(String, String, usize)>,
 ) -> Result<Response, ApiError> {
+    let (wanted, asked) = (key.clone(), id.clone());
     let found = state
         .read(move |o| {
             let message = o.app.store.conversations.get(&key)?.messages.iter().find(|m| m.id == id)?;
@@ -1099,6 +1113,21 @@ async fn attachment(
             Some((attachment.path.clone(), attachment.name.clone()))
         })
         .await?;
+    // Not among those kept: an archived message's, maybe.
+    let found = match found {
+        Some(found) => Some(found),
+        None => {
+            let (dir, wanted) = (state.paths.archive.clone(), address(&wanted)?);
+            tokio::task::spawn_blocking(move || {
+                let messages = crate::store::read_archive(&dir, &wanted).ok()?;
+                let attachment = messages.into_iter().find(|m| m.id == asked)?.attachments.into_iter().nth(index)?;
+                Some((attachment.path, attachment.name))
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+    };
     let (path, name) = found.ok_or_else(|| not_found("attachment"))?;
     let data = tokio::fs::read(&path).await.map_err(|_| not_found("attachment file"))?;
     Ok(file_response(data, &name, true))

@@ -250,6 +250,14 @@ fn message(m: &Message, conversation: &Conversation) -> Value {
     })
 }
 
+/// Archived messages (oldest first), as a conversation's are shown, with
+/// replies found among them.
+pub fn archived(messages: Vec<Message>) -> Value {
+    let conversation = Conversation { messages, ..Conversation::default() };
+    let shown: Vec<Value> = conversation.messages.iter().map(|m| message(m, &conversation)).collect();
+    json!({ "messages": shown })
+}
+
 /// A conversation: its newest `last` messages if asked (what the page
 /// shows; live updates refetch it), and how many there are in all.
 pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {

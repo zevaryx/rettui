@@ -2391,22 +2391,34 @@ app.views.messages = {
       this.modeFor = key;
     }
     this.modeKept = kept;
-    if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key })) return;
-    this.header.replaceChildren(
+    if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key, archive: this.archive?.key === key && this.archive.messages.length })) return;
+    this.header.replaceChildren(...[
       conversation.icon ? avatar(conversation.icon, conversation.name) : null,
       el('span', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }),
       bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
       el('button', { text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
-      el('button', { text: 'Copy address', onclick: () => copy(key, 'LXMF address') }));
+      el('button', { text: 'Copy address', onclick: () => copy(key, 'LXMF address') })].filter(Boolean));
     // The newest messages only, unless asked for all: those not loaded, and
     // any loaded but not shown.
     const from = this.showAll === key ? 0 : Math.max(0, conversation.messages.length - this.LIMIT);
     const hidden = from + (conversation.total ?? conversation.messages.length) - conversation.messages.length;
     // Older still are in the archive, which rettui doesn't show.
-    const archived = conversation.archived
-      ? el('div', { class: 'show-more' }, el('span', { class: 'dim', style: 'overflow-wrap:anywhere', text: `${conversation.archived} older ${conversation.archived === 1 ? 'message was' : 'messages were'} moved to the archive (${conversation.archive})` }))
-      : null;
+    // Older still are in the archive: shown (read only) when asked for.
+    const archive = this.archive?.key === key ? this.archive.messages : null;
+    const archived = archive
+      ? el('div', { class: 'archive-block' },
+        el('div', { class: 'archive-mark dim', text: archive.length
+          ? `From the archive: ${archive.length} older ${archive.length === 1 ? 'message' : 'messages'}, only to read`
+          : 'Nothing of this conversation is in the archive now' }),
+        archive.map((m) => this.message(m, conversation, true)))
+      : conversation.archived
+        ? el('div', { class: 'show-more' }, el('button', {
+          text: `Show ${conversation.archived} archived ${conversation.archived === 1 ? 'message' : 'messages'}`,
+          title: `Older messages, moved to the archive (${conversation.archive})`,
+          onclick: (e) => this.openArchive(key, e.currentTarget),
+        }))
+        : null;
     const earlier = hidden ? el('div', { class: 'show-more' }, el('button', { text: `Show ${hidden} earlier messages`, onclick: () => {
       this.showAll = key;
       this.update();
@@ -2438,7 +2450,27 @@ app.views.messages = {
     if (done) this.update();
   },
 
-  message(m, conversation) {
+  // The open conversation's archived messages, above the rest (and all
+  // those kept, so nothing's missing between).
+  async openArchive(key, button) {
+    button.disabled = true;
+    button.textContent = 'Reading the archive…';
+    const read = await attempt(() => api.get(`/conversations/${key}/archive`));
+    if (!read) {
+      button.disabled = false;
+      return;
+    }
+    this.archive = { key, messages: read.messages };
+    this.showAll = key;
+    const top = this.history.scrollHeight - this.history.scrollTop;
+    await this.update();
+    // Where it was: the archive goes in above.
+    this.history.scrollTop = this.history.scrollHeight - top;
+  },
+
+  // A message as shown; an `archived` one is only to read (it's not kept,
+  // so it can't be replied to, reacted to or deleted here).
+  message(m, conversation, archived = false) {
     const state = {
       received: m.state.verified ? null : el('span', { class: 'state-warn', text: ' unverified' }),
       sending: el('span', { class: 'dim', text: this.paperWaiting?.id === m.id ? ' writing the paper message…' : ' sending…' }),
@@ -2451,19 +2483,20 @@ app.views.messages = {
     }[m.state.kind];
     const base = `api/conversations/${conversation.key}/attachments/${encodeURIComponent(m.id)}/`;
     const author = m.incoming ? conversation.name : 'You';
-    const reactButton = m.can_reply ? el('button', { class: 'inline reply-button', text: '🙂 React', title: 'React to this message' }) : null;
+    const actions = !archived;
+    const reactButton = actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '🙂 React', title: 'React to this message' }) : null;
     reactButton?.addEventListener('click', () => emojiPicker.toggle(reactButton, reactButton, (e) => this.react(conversation.key, m.id, e)));
-    return el('div', { class: 'message ' + (m.incoming ? 'in' : 'out'), dataset: { id: m.id } },
+    return el('div', { class: 'message ' + (m.incoming ? 'in' : 'out') + (archived ? ' archived' : ''), dataset: { id: m.id } },
       el('div', { class: 'meta' },
         el('span', { class: 'author ' + (m.incoming ? 'in' : 'out'), text: author }),
         el('span', { class: 'dim', text: '  ' + timeLabel(m.timestamp) }),
         state,
-        m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
+        actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
           onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null,
         reactButton,
-        m.state.kind === 'failed' ? el('button', { class: 'inline', text: '↻ Retry', title: 'Send it again',
+        actions && m.state.kind === 'failed' ? el('button', { class: 'inline', text: '↻ Retry', title: 'Send it again',
           onclick: () => this.retry(conversation.key, m.id) }) : null,
-        el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) })),
+        actions ? el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) }) : null),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
       m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content', text: m.content }) : null,

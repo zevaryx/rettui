@@ -10,6 +10,7 @@ mod chrome;
 mod contact;
 mod guide;
 mod keys;
+mod archive;
 mod search;
 mod editor;
 mod emoji;
@@ -151,6 +152,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if app.message_search.is_some() && app.tab == Tab::Messages {
         search::draw_message_search(frame, app);
+    }
+    if app.archive_reader.is_some() && app.tab == Tab::Messages {
+        archive::draw_archive(frame, app);
     }
     if app.prompt.is_some() {
         draw_prompt(frame, app);

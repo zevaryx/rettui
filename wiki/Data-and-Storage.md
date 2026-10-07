@@ -83,6 +83,14 @@ rettui keeps its data in `~/.local/share/rettui/`:
   `archive/` rather than being deleted, so the store rettui loads and saves
   stays small. `0` keeps every message in the store. The first launch after
   upgrading archives what's over it, and says so in the log.
+- **Reading the archive:** a conversation's archived messages open from
+  the conversation, only to read (they can't be replied to or deleted one
+  by one). In the TUI, press `H` in Messages: they open over the tab, the
+  newest at the bottom; `↑↓`, `PgUp`/`PgDn` and the mouse wheel scroll, and
+  `Home` goes to the oldest. In the web UI, scroll to the top of the
+  conversation and press **Show N archived messages**: they go in above,
+  with their files and pictures. [Searching](Messaging#searching) looks
+  through the messages kept, not the archive.
 - **Message storage** (`message_storage_mb`, no limit by default): the most
   disk, in megabytes, that the store and the archive may use together.
   Past it, the oldest months of the archive are deleted, oldest first. If

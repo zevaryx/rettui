@@ -30,6 +30,7 @@ pub mod reach;
 mod saver;
 pub mod node;
 pub mod reticulum;
+pub mod archive;
 pub mod search;
 pub mod shrink;
 mod settings;
@@ -232,6 +233,8 @@ pub struct Regions {
     pub message_search: Rect,
     pub message_search_first: usize,
     pub message_search_box: Rect,
+    /// The archive reader's box (`H` in Messages).
+    pub archive: Rect,
     pub browser_list: Rect,
     pub conversations: Rect,
     pub history: Rect,
@@ -419,6 +422,8 @@ pub struct App {
     pub scroll_to: Option<usize>,
     /// The message search (`/` in Messages), while open.
     pub message_search: Option<search::MessageSearch>,
+    /// A conversation's archived messages, open to read (`H`).
+    pub archive_reader: Option<archive::ArchiveReader>,
     /// The emoji picker, over the input being written in.
     pub emoji: Option<emoji::EmojiPicker>,
     /// The `:name` list while typing one.
@@ -564,6 +569,7 @@ impl App {
             policy_sent: None,
             scroll_to: None,
             message_search: None,
+            archive_reader: None,
             emoji: None,
             shortcode: emoji::Shortcode::default(),
             message_scroll: 0,
@@ -1225,7 +1231,7 @@ impl App {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         discriminant(&self.tab).hash(&mut h);
         (self.composing, self.prompt.is_some(), self.net_search.typing, self.keys_help).hash(&mut h);
-        self.message_search.is_some().hash(&mut h);
+        (self.message_search.is_some(), self.archive_reader.is_some()).hash(&mut h);
         // Emoji over the view, which some terminals draw narrower than
         // they should (see `take_full_redraw`).
         if let Some(picker) = &self.emoji {

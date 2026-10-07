@@ -336,9 +336,10 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let archived = app.store.conversations.get(&key).map_or(0, |c| c.archived);
     if groups.len() == count && archived > 0 {
         let note = format!(
-            "{archived} older {} moved to the archive ({})",
+            "{archived} older {} moved to the archive ({}): H shows {}",
             if archived == 1 { "message was" } else { "messages were" },
-            app.paths.archive.display()
+            app.paths.archive.display(),
+            if archived == 1 { "it" } else { "them" },
         );
         let mut rows: Vec<HistoryRow> =
             wrap(&note, inner_width).into_iter().map(|l| (Line::styled(l, Style::default().fg(DIM)), None)).collect();
