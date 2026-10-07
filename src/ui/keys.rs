@@ -402,6 +402,7 @@ pub fn keys(app: &App) -> Keys {
                 ("g", "guide"),
                 ("b", "back up"),
                 ("i", "identity"),
+                ("U", "install update"),
                 ("^R", "restart"),
                 ("↑↓", "select"),
             ],
