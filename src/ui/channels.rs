@@ -353,16 +353,32 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     let height = inner.height as usize;
     // Only the rows that can be on screen: wrap messages from the newest back
     // until the view (and however far it is scrolled up) is full.
+    let show_joins = app.settings.show_joins;
+    let buffer = hub.buffers.get(&room).map(Vec::as_slice).unwrap_or_default();
+    // A line a search found: scrolled to once (to about the middle), and
+    // marked while its room is open.
+    let found = app.channels.found.as_ref().filter(|(h, r, _)| *h == hub.hash && *r == room).map(|(.., i)| *i);
+    if let Some(at) = app.channels.jump_to.take() {
+        let after: usize = buffer
+            .iter()
+            .skip(at + 1)
+            .filter(|l| l.shown(show_joins))
+            .map(|l| chat_lines(l, hub, width, (&own_nick, &app.identity_hash), &people, whisper.is_some()).0.len())
+            .sum();
+        app.channels.scroll = after.saturating_sub(height / 2);
+    }
     let needed = app.channels.scroll + height;
     let mut tail: Vec<(Line, Link)> = Vec::new();
     let mut whole = true;
-    let show_joins = app.settings.show_joins;
-    for line in hub.buffers.get(&room).map(Vec::as_slice).unwrap_or_default().iter().rev().filter(|l| l.shown(show_joins)) {
+    for (at, line) in buffer.iter().enumerate().rev().filter(|(_, l)| l.shown(show_joins)) {
         if tail.len() >= needed {
             whole = false;
             break;
         }
-        let (rendered, name_cols) = chat_lines(line, hub, width, (&own_nick, &app.identity_hash), &people, whisper.is_some());
+        let (mut rendered, name_cols) = chat_lines(line, hub, width, (&own_nick, &app.identity_hash), &people, whisper.is_some());
+        if found == Some(at) {
+            rendered = rendered.into_iter().map(|row| row.patch_style(Style::default().bg(selected_bg()))).collect();
+        }
         let user = line.src.as_deref().and_then(|s| hex::decode(s).ok());
         for (i, row) in rendered.into_iter().enumerate().rev() {
             let link = match (i, name_cols, &user) {

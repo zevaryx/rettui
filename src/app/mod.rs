@@ -439,6 +439,8 @@ pub struct App {
     pub scroll_to: Option<usize>,
     /// The message search (`/` in Messages), while open.
     pub message_search: Option<search::MessageSearch>,
+    /// The channel search (`/` in Channels).
+    pub channel_search: Option<search::MessageSearch>,
     /// When commands from each sender were last answered (see
     /// `answer_commands`), to answer at most one a minute.
     pub(crate) answered: HashMap<String, Instant>,
@@ -592,6 +594,7 @@ impl App {
             policy_sent: None,
             scroll_to: None,
             message_search: None,
+            channel_search: None,
             archive_reader: None,
             answered: HashMap::new(),
             forward: None,
@@ -813,6 +816,8 @@ impl App {
             self.paste_network_search(text);
         } else if self.message_search.is_some() && self.tab == Tab::Messages {
             self.paste_message_search(text);
+        } else if self.channel_search.is_some() && self.tab == Tab::Channels {
+            self.paste_channel_search(text);
         } else if self.forward.is_some() && self.tab == Tab::Messages {
             self.paste_forward(text);
         } else if self.browser.find.is_some() && self.tab == Tab::Browser {
@@ -1258,6 +1263,7 @@ impl App {
         discriminant(&self.tab).hash(&mut h);
         (self.composing, self.prompt.is_some(), self.net_search.typing, self.keys_help).hash(&mut h);
         (self.message_search.is_some(), self.archive_reader.is_some(), self.forward.is_some(), self.map.is_some()).hash(&mut h);
+        self.channel_search.is_some().hash(&mut h);
         // Emoji over the view, which some terminals draw narrower than
         // they should (see `take_full_redraw`).
         if let Some(picker) = &self.emoji {

@@ -122,6 +122,7 @@ pub fn router(state: WebState) -> Router {
         .route("/first-steps/hide", post(hide_first_steps))
         .route("/channels", get(channels).post(add_hub))
         .route("/channels/{hub}/room", get(room))
+        .route("/channels/search", get(search_channels))
         .route("/channels/{hub}/{action}", post(hub_action))
         .route("/page", get(page).post(submit_form))
         .route("/partial", post(partial))
@@ -530,6 +531,27 @@ struct SearchQuery {
     /// One conversation's key, to search only there.
     #[serde(rename = "in")]
     within: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChannelSearchQuery {
+    q: String,
+    /// One room's hub and buffer key, to search only there.
+    #[serde(default)]
+    hub: Option<String>,
+    #[serde(default)]
+    room: Option<String>,
+}
+
+/// Channel lines matching the search words, newest first (see
+/// [`crate::app::channels::search`]).
+async fn search_channels(State(state): State<WebState>, Query(query): Query<ChannelSearchQuery>) -> ApiResult {
+    let within = match &query.hub {
+        Some(hub) => Some((hub_hash(hub)?, query.room.clone().unwrap_or_default())),
+        None => None,
+    };
+    let view = state.read(move |o| views::channel_search(&o.app, &query.q, within.as_ref().map(|(h, r)| (*h, r.as_str())))).await?;
+    Ok(axum::Json(view))
 }
 
 /// Messages matching the search words, newest first (see

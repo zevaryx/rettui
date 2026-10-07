@@ -5,6 +5,7 @@
 mod actions;
 mod commands;
 mod events;
+pub mod search;
 pub mod users;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -176,7 +177,7 @@ pub struct Hub {
 }
 
 impl Hub {
-    fn new(hash: Hash, aspect: String, name: String) -> Self {
+    pub(crate) fn new(hash: Hash, aspect: String, name: String) -> Self {
         Self {
             hash,
             aspect,
@@ -449,6 +450,10 @@ pub struct Channels {
     pub input: TextInput,
     pub typing: bool,
     pub scroll: usize,
+    /// A line a search found: its hub, buffer and place, marked while its
+    /// room is open; and the place to scroll to, once.
+    pub found: Option<(Hash, String, usize)>,
+    pub jump_to: Option<usize>,
     /// Popups: actions for a user, or picking one of the room's members.
     pub menu: Option<users::UserMenu>,
     pub picker: Option<users::MemberPicker>,
@@ -546,6 +551,9 @@ impl Channels {
     }
 
     fn select_row(&mut self, row: &Row) {
+        // A line found is marked until another room is picked.
+        self.found = None;
+        self.jump_to = None;
         self.selected = Some(match row {
             Row::Hub(i) => Target { hub: self.hubs[*i].hash, room: None },
             Row::Room(i, room) | Row::Whisper(i, room) => Target { hub: self.hubs[*i].hash, room: Some(room.clone()) },

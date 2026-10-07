@@ -3391,10 +3391,30 @@ app.views.channels = {
       el('button', { class: 'primary', text: 'Send', onclick: () => this.send() }));
     this.members = el('div', { class: 'scroll' });
     this.membersPanel = el('section', { class: 'panel members' }, el('header', { text: 'Members' }), this.members);
+    // Searching what was said, as Messages searches messages.
+    this.search = el('input', {
+      type: 'search',
+      class: 'pane-search',
+      placeholder: 'Search channels  ( / )',
+      value: this.query || '',
+      oninput: () => {
+        this.query = this.search.value;
+        clearTimeout(this.searchTimer);
+        this.searchTimer = setTimeout(() => this.query.trim() ? this.runSearch() : this.endSearch(), 150);
+      },
+      onkeydown: (e) => {
+        if (e.key === 'Escape' && this.query) {
+          e.preventDefault();
+          this.search.value = '';
+          this.query = '';
+          this.endSearch();
+        }
+      },
+    });
     root.append(
       el('section', { class: 'panel side' },
         el('header', {}, el('span', { class: 'title grow', text: 'Channels' }),
-          el('button', { text: '+ Add hub', onclick: () => this.addHub() })),
+          el('button', { text: '+ Add hub', onclick: () => this.addHub() }), this.search),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.body, this.inputBar),
       this.membersPanel);
@@ -3458,7 +3478,8 @@ app.views.channels = {
           whisper.unread ? el('span', { class: 'badge mention', text: whisper.unread }) : null));
       }
     }
-    if (changed(this, 'list', { hubs, selected: this.selected })) {
+    if (this.query?.trim()) this.runSearch();
+    else if (changed(this, 'list', { hubs, selected: this.selected })) {
       this.list.replaceChildren(...(items.length ? items : [el('div', { class: 'empty', text: 'No hubs yet. Add one by address or rrc:// link; NomadNet pages can also link to hubs.' })]));
     }
 
@@ -3478,6 +3499,65 @@ app.views.channels = {
     const unreadNow = view.whisper_with ? whisperEntry?.unread : room ? current?.rooms.find((r) => r.name === room)?.unread : current?.unread;
     if (current && unreadNow && showing('channels')) api.post(`/channels/${hash}/read`, { room }).catch(() => {});
     this.renderRoom(hash, room, view);
+  },
+
+  // Lines found by the search, newest first, in the list's place: where,
+  // who, a part of it, and when.
+  async runSearch() {
+    const request = (this.searchRequest = (this.searchRequest || 0) + 1);
+    const query = this.query;
+    const params = new URLSearchParams({ q: query });
+    const here = this.searchHere && this.selected;
+    if (here) {
+      params.set('hub', this.selected.hub);
+      params.set('room', this.selected.room);
+    }
+    const found = await api.get('/channels/search?' + params).catch(() => null);
+    if (!found || request !== this.searchRequest || query !== this.query) return;
+    const terms = searchTerms(query);
+    const where = (hit) => hit.whisper ? `@${hit.whisper} · ${hit.hub_name}` : hit.room ? `#${hit.room} · ${hit.hub_name}` : hit.hub_name;
+    const open = this.selected && this.hubs?.find((h) => h.hash === this.selected.hub);
+    const openName = open && (this.selected.room ? where({ ...this.selected, hub_name: open.name, whisper: open.whispers.find((w) => w.key === this.selected.room)?.name }) : open.name);
+    const scope = open ? el('label', { class: 'search-scope' },
+      el('input', { type: 'checkbox', checked: !!here, onchange: (e) => {
+        this.searchHere = e.target.checked;
+        this.runSearch();
+      } }), ` In ${openName}`) : null;
+    const count = found.hits.length ? `${found.full ? 'The newest ' : ''}${found.hits.length} found` : 'Nothing found';
+    this.list.replaceChildren(
+      el('div', { class: 'search-status dim' }, el('span', { class: 'grow', text: count }), scope),
+      ...found.hits.map((hit) => el('div', { class: 'list-item', onclick: () => this.openHit(hit) },
+        el('div', { class: 'main' },
+          el('div', { class: 'name', text: where(hit) }),
+          el('div', { class: 'sub hit' }, hit.nick ? `${hit.nick}: ` : '', ...highlighted(hit.snippet, terms))),
+        el('div', { class: 'dim', style: 'font-size:12px;text-align:right', text: timeLabel(hit.ts / 1000) }))));
+  },
+
+  // Back to the hubs and rooms.
+  endSearch() {
+    this.searchRequest = (this.searchRequest || 0) + 1;
+    delete (this.snapshots || {}).list;
+    this.update();
+  },
+
+  // Open a line found: its room, all of it, scrolled to the line.
+  openHit(hit) {
+    this.showAll = hit.hub + '/' + hit.room;
+    this.jumpTo = { key: hit.hub + '/' + hit.room, ts: hit.ts };
+    this.select(hit.hub, hit.room);
+  },
+
+  // The line a search opened, once it's drawn: in view, flashed.
+  showFound(viewKey) {
+    if (!this.jumpTo || this.jumpTo.key !== viewKey) return;
+    const node = this.body.querySelector(`.chat-line[data-ts="${this.jumpTo.ts}"]`);
+    if (!node) return;
+    this.jumpTo = null;
+    this.body.pinned = false;
+    node.scrollIntoView({ block: 'center' });
+    node.classList.remove('flash');
+    void node.offsetWidth;
+    node.classList.add('flash');
   },
 
   // The newest lines, which is what shows (all of them once asked for).
@@ -3571,6 +3651,7 @@ app.views.channels = {
     } else {
       stickToBottom(this.body, render);
     }
+    this.showFound(viewKey);
 
     if (whisper) {
       this.membersPanel.classList.add('hidden');
@@ -3717,7 +3798,7 @@ app.views.channels = {
         case 'error': prefix = el('span', { class: 'prefix', text: '! ' }); break;
         default: prefix = el('span', { class: 'prefix', text: '— ' });
       }
-      return el('div', { class: 'chat-line ' + kind },
+      return el('div', { class: 'chat-line ' + kind, dataset: { ts: line.ts } },
         el('span', { class: 'time', text: time }),
         el('span', { class: 'body' }, prefix,
           el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [], line.mentions || [])),
@@ -5756,6 +5837,7 @@ const KEYS = [
     ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
     ['Ctrl+E', 'emoji, in the message box'],
     ['Enter / Shift+Enter', 'send, or a new line, in the message box']]],
+  ['Channels', [['/', 'search what was said in every room']]],
   ['Network', [['/', 'search by name or address']]],
   ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],
     ['/', 'search the nodes and saved pages']]],
@@ -5795,6 +5877,10 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     setPane(app.views.messages, 'list');
     app.views.messages.search.focus();
+  } else if (e.key === '/' && app.tab === 'channels') {
+    e.preventDefault();
+    setPane(app.views.channels, 'list');
+    app.views.channels.search.focus();
   } else if (e.key === '/' && app.tab === 'browser') {
     e.preventDefault();
     setPane(app.views.browser, 'list');

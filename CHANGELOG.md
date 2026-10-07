@@ -9,6 +9,7 @@ Changes since v1.5.1.
 ### Added
 - **Messaging**
   - Search messages, in one conversation or all of them (`/`).
+  - Search channel history: what was said in every RRC room and whisper conversation, or the one open (`/` in Channels).
   - Pin conversations (`*`) and mark all read (`R`).
   - Forward a message (`f`), and export a conversation as text (`E`).
   - Read archived messages (`H`).

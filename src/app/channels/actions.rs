@@ -186,6 +186,7 @@ impl App {
                 self.channels.typing = true;
             }
             KeyCode::Char('n') => self.open_prompt(PromptKind::AddHub, "Add RRC hub (address, or rrc://address/room)", ""),
+            KeyCode::Char('/') => self.open_channel_search(),
             KeyCode::Char('m') => self.open_member_picker(),
             KeyCode::Char('c') => self.toggle_selected_connection(),
             KeyCode::Char('a') => self.toggle_auto_connect(),

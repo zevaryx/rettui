@@ -127,6 +127,10 @@ impl App {
             self.message_search_key(key);
             return;
         }
+        if self.channel_search.is_some() && self.tab == Tab::Channels {
+            self.channel_search_key(key);
+            return;
+        }
         if self.archive_reader.is_some() && self.tab == Tab::Messages {
             self.archive_key(key);
             return;
@@ -238,6 +242,20 @@ impl App {
                     Some(hit) if list.contains(at) => self.open_hit(&hit),
                     _ if self.regions.message_search_box.contains(at) => {}
                     _ => self.message_search = None,
+                }
+            }
+            return;
+        }
+        // The channel search, the same way.
+        if self.channel_search.is_some() && self.tab == Tab::Channels {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                let at = Position::new(mouse.column, mouse.row);
+                let list = self.regions.message_search;
+                let index = self.regions.message_search_first + at.y.saturating_sub(list.y) as usize;
+                match self.channel_search_hits().get(index).cloned() {
+                    Some(hit) if list.contains(at) => self.open_channel_hit(&hit),
+                    _ if self.regions.message_search_box.contains(at) => {}
+                    _ => self.channel_search = None,
                 }
             }
             return;

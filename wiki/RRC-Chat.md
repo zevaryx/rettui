@@ -48,6 +48,14 @@ tab.
 - **History:** each hub's messages are kept on disk between runs.
 - **Long messages:** messages over the hub's size limit are offered as a
   split into several messages.
+- **Searching:** `/` in the Channels tab (in the web UI, the search box
+  above the hubs, or `/`) finds what was said in every hub's rooms and
+  whisper conversations, as rettui keeps them: every word you type, in any
+  order, in the line or the name of who said it, the newest first (200 at
+  most). `Tab` (or *In #room*) keeps it to the room open. Opening one shows
+  its room at that line, marked; in the web UI the whole room loads if the
+  line is further back than what shows. Joins, leaves and errors aren't
+  searched.
 - **Drafts:** what you write stays with its room or whisper conversation,
   as in [Messaging](Messaging), and in the web UI outlives reloading the page.
 - **Connections:** hubs reconnect automatically with backoff (toggle with

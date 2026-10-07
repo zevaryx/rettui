@@ -71,10 +71,14 @@ pub fn keys(app: &App) -> Keys {
             typing("User menu", &[("Enter", "do"), ("w", "whisper"), ("l", "LXMF"), ("↑↓", "select"), ("Esc", "close")])
         }
         Tab::Channels if app.channels.picker.is_some() => typing("Members", &[("Enter", "pick"), ("↑↓", "select"), ("Esc", "close")]),
+        Tab::Channels if app.channel_search.is_some() => {
+            typing("Search channels", &[("Enter", "open"), ("↑↓", "select"), ("Tab", "here/all"), ("Esc", "close"), ("^V", "paste")])
+        }
         Tab::Channels => mode(
             "Channels",
             &[
                 ("Enter", "write"),
+                ("/", "search"),
                 ("m", "message"),
                 ("n", "add hub"),
                 ("c", "connect"),

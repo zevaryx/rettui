@@ -66,8 +66,12 @@ pub fn search(store: &Store, query: &str, only: Option<&str>) -> Vec<Hit> {
 /// text (or else its title, an attachment's name, a note), on one line, at
 /// most `width` characters, cut with "…".
 pub fn snippet(message: &Message, query: &str, width: usize) -> String {
+    snippet_of(&searched(message), query, width)
+}
+
+/// [`snippet`] of the first of `texts` with a match (else the first).
+pub fn snippet_of(texts: &[&str], query: &str, width: usize) -> String {
     let terms = search_terms(query);
-    let texts = searched(message);
     let text = texts.iter().find(|t| match_mask(t, &terms).contains(&true)).or(texts.first()).copied().unwrap_or_default();
     let flat: Vec<char> = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     let width = width.max(8);
@@ -92,7 +96,8 @@ pub fn snippet(message: &Message, query: &str, width: usize) -> String {
     out
 }
 
-/// The terminal UI's message search (`/` in Messages).
+/// The terminal UI's message search (`/` in Messages), and the channel
+/// search (`/` in Channels).
 #[derive(Default)]
 pub struct MessageSearch {
     pub input: TextInput,

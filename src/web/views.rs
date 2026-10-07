@@ -324,9 +324,6 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
     })
 }
 
-/// Messages found by a search: each with its conversation, when it was,
-/// who sent it, how many newer follow it there (to know whether it's among
-/// those loaded), and a line of it around what matched.
 /// Everyone's newest location, for the map (see `App::locations`): this
 /// station's first if it's set, then the newest; and whether there are
 /// tiles to draw it on, and whose they are.
@@ -361,6 +358,9 @@ pub fn locations(app: &App) -> Value {
     })
 }
 
+/// Messages found by a search: each with its conversation, when it was,
+/// who sent it, how many newer follow it there (to know whether it's among
+/// those loaded), and a line of it around what matched.
 pub fn search(app: &App, query: &str, within: Option<&str>) -> Value {
     let hits = crate::app::search::search(&app.store, query, within);
     let full = hits.len() >= crate::app::search::MAX_HITS;
@@ -376,6 +376,32 @@ pub fn search(app: &App, query: &str, within: Option<&str>) -> Value {
                 "incoming": hit.incoming,
                 "newer": hit.newer,
                 "snippet": crate::app::search::snippet(message, query, 80),
+            }))
+        })
+        .collect();
+    json!({ "query": query, "hits": found, "full": full })
+}
+
+/// Channel lines found by a search: each with its hub and room (as the
+/// page names them), when, who said it, and a line of it around what
+/// matched.
+pub fn channel_search(app: &App, query: &str, within: Option<(crate::net::Hash, &str)>) -> Value {
+    let hits = crate::app::channels::search::search(&app.channels, query, within);
+    let full = hits.len() >= crate::app::channels::search::MAX_HITS;
+    let found: Vec<Value> = hits
+        .iter()
+        .filter_map(|hit| {
+            let hub = app.channels.hubs.iter().find(|h| h.hash == hit.hub)?;
+            let line = hub.buffers.get(&hit.room)?.get(hit.index)?;
+            let whisper = hub.whispers().into_iter().find(|(key, _)| *key == hit.room).map(|(_, name)| name);
+            Some(json!({
+                "hub": hex::encode(hit.hub),
+                "hub_name": hub.name,
+                "room": hit.room,
+                "whisper": whisper,
+                "ts": hit.ts,
+                "nick": if line.own { Some("You".to_string()) } else { line.nick.clone() },
+                "snippet": crate::app::search::snippet_of(&[line.text.as_str()], query, 80),
             }))
         })
         .collect();

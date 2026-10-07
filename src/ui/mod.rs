@@ -178,6 +178,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.message_search.is_some() && app.tab == Tab::Messages {
         search::draw_message_search(frame, app);
     }
+    if app.channel_search.is_some() && app.tab == Tab::Channels {
+        search::draw_channel_search(frame, app);
+    }
     if app.archive_reader.is_some() && app.tab == Tab::Messages {
         archive::draw_archive(frame, app);
     }
