@@ -101,7 +101,7 @@ pub fn wav_samples(data: &[u8]) -> Result<Vec<i16>, String> {
         at += 8 + len + (len & 1);
     }
     match (format, samples) {
-        (Some((1, 1, SAMPLE_RATE, 16)), Some(body)) => Ok(body.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()),
+        (Some((1, 1, SAMPLE_RATE, 16)), Some(body)) => Ok(body.as_chunks::<2>().0.iter().map(|&b| i16::from_le_bytes(b)).collect()),
         (Some(_), Some(_)) => Err("A recording is sent from 16-bit mono 8 kHz PCM".into()),
         _ => Err("Not a WAV file with sound in it".into()),
     }
