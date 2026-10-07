@@ -72,8 +72,9 @@ To build it yourself: `git clone --recursive` this repository, then
 
 ## Documentation
 
-Everything else is in the [wiki](https://github.com/zevaryx/rettui/wiki) (its pages are also in [wiki/](wiki) in
-this repository):
+Everything else is on the documentation site,
+[zevaryx.github.io/rettui](https://zevaryx.github.io/rettui/), and in the
+[wiki](https://github.com/zevaryx/rettui/wiki): both are built from [wiki/](wiki) in this repository.
 
 - **Getting started:** [Installing](https://github.com/zevaryx/rettui/wiki/Installing) ·
   [Running](https://github.com/zevaryx/rettui/wiki/Running) · [Using the TUI](https://github.com/zevaryx/rettui/wiki/Using-the-TUI) ·

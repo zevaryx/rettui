@@ -1,0 +1,80 @@
+# The documentation site (https://zevaryx.github.io/rettui/), built with
+# Zensical from the pages in wiki/. docs/build.py writes the pages and this
+# file, with the navigation from wiki/_Sidebar.md, to docs/_build; see
+# docs/README.md.
+
+[project]
+site_name = "rettui"
+site_description = "A Reticulum client for the terminal and the browser: LXMF messaging, NomadNet browsing and hosting, and RRC chat"
+site_url = "https://zevaryx.github.io/rettui/"
+repo_url = "https://github.com/zevaryx/rettui"
+repo_name = "zevaryx/rettui"
+copyright = "rettui is licensed under the AGPL-3.0-or-later"
+docs_dir = "pages"
+site_dir = "site"
+# The navigation, from wiki/_Sidebar.md (written by docs/build.py).
+#NAV#
+
+[project.theme]
+language = "en"
+features = [
+  "content.code.copy",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
+
+# As the system has it, or chosen: light or dark, in rettui's cyan.
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "cyan"
+accent = "cyan"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "cyan"
+accent = "cyan"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+pymdownx.betterem = {}
+pymdownx.details = {}
+pymdownx.emoji.emoji_generator = "zensical.extensions.emoji.to_svg"
+pymdownx.emoji.emoji_index = "zensical.extensions.emoji.twemoji"
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.magiclink = {}
+pymdownx.superfences = {}
+pymdownx.tasklist.custom_checkbox = true
+pymdownx.tilde = {}

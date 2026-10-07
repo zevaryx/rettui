@@ -58,6 +58,13 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   copies `wiki/` to this wiki when it changes on `main` or `dev`, or when
   run from *Actions > Wiki > Run workflow*. Edit the pages in `wiki/`, not here: the
   next publish replaces the wiki with them.
+- **Docs** ([docs.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/docs.yml))
+  builds the [documentation site](https://zevaryx.github.io/rettui/) from
+  `wiki/` with Zensical, and publishes it to GitHub Pages from `main`. Pull
+  requests that change `wiki/` only build it: a link to a page or heading
+  that doesn't exist, or a page left out of `_Sidebar.md`, fails the build.
+  `python3 docs/build.py serve` shows it locally (see
+  [docs/README.md](https://github.com/zevaryx/rettui/blob/main/docs/README.md)).
 
 Both image workflows push through
 [docker.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/docker.yml).

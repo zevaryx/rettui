@@ -12,3 +12,4 @@
 
 # Local packaging output (the release workflow builds these in CI).
 /dist/
+/docs/_build/

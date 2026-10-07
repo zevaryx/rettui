@@ -1,0 +1,2 @@
+# What docs/build.py needs to build the site (pip install -r docs/requirements.txt).
+zensical==0.0.68
