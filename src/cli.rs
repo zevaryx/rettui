@@ -1,5 +1,5 @@
 //! Non-interactive commands: send, listen, sync, fetch, path and probe
-//! from the shell.
+//! from the shell, and updating, backing up and restoring.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -383,6 +383,27 @@ pub async fn update(yes: bool) -> Result<()> {
     }
     println!("Downloading rettui {}…", release.version);
     let done = tokio::task::spawn_blocking(move || install::install_release(&release)).await?.map_err(|e| anyhow::anyhow!(e))?;
+    println!("{done}.");
+    Ok(())
+}
+
+/// Back up the data directory to `file` (default: today's name, here).
+pub fn backup(paths: &Paths, file: Option<PathBuf>, options: crate::backup::Options) -> Result<()> {
+    if !paths.settings.exists() && !paths.identity.exists() {
+        bail!("{} has nothing of rettui's to back up (another --data-dir?)", paths.base.display());
+    }
+    let file = file.unwrap_or_else(|| PathBuf::from(crate::backup::default_name()));
+    let count = crate::backup::write_file(&paths.base, &file, options).map_err(|e| anyhow!("Couldn't back up: {e}"))?;
+    println!("Backed up {count} files from {} to {}.", paths.base.display(), file.display());
+    if options.identity {
+        println!("It has your identity: keep it private, as whoever has it can pose as you and read what's sent to you.");
+    }
+    Ok(())
+}
+
+/// Restore the backup `file` into the data directory.
+pub fn restore(paths: &Paths, file: &Path, force: bool) -> Result<()> {
+    let done = crate::backup::restore(file, &paths.base, force).map_err(|e| anyhow!(e))?;
     println!("{done}.");
     Ok(())
 }

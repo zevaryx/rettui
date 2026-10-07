@@ -1,4 +1,5 @@
 mod app;
+mod backup;
 mod cli;
 mod clock;
 mod config;
@@ -158,6 +159,34 @@ enum Command {
         #[arg(long, short)]
         yes: bool,
     },
+    /// Back up rettui's settings, contacts, messages and identity to one
+    /// file, to restore on another computer or after a reinstall.
+    ///
+    /// The identity is the private key behind your addresses: keep the
+    /// file private. Attachments are left out unless asked for; caches,
+    /// logs and the web UI's login aren't kept.
+    Backup {
+        /// The file to write (default: rettui-backup-<date>.tar.gz here).
+        file: Option<PathBuf>,
+        /// Include attachments received and sent.
+        #[arg(long)]
+        with_files: bool,
+        /// Leave the identity out (restored, rettui makes a new one, with
+        /// new addresses).
+        #[arg(long)]
+        without_identity: bool,
+    },
+    /// Restore a backup into the data directory, with rettui stopped.
+    ///
+    /// A data directory that has an identity or messages already is left
+    /// alone, unless --force: then what the backup replaces is moved aside
+    /// first, into a before-restore-<time> folder.
+    Restore {
+        file: PathBuf,
+        /// Restore over what's there (moved aside first).
+        #[arg(long)]
+        force: bool,
+    },
     /// Download waiting messages from the propagation node.
     Sync {
         /// Propagation node to use instead of the configured one.
@@ -172,6 +201,15 @@ async fn main() -> Result<()> {
     // What updating on Windows left (the program it replaced).
     update::install::tidy();
     let paths = Paths::new(cli.data_dir)?;
+    // Before anything is loaded (and, in a new data directory, made).
+    match &cli.command {
+        Some(Command::Backup { file, with_files, without_identity }) => {
+            let options = backup::Options { identity: !without_identity, files: *with_files };
+            return cli::backup(&paths, file.clone(), options);
+        }
+        Some(Command::Restore { file, force }) => return cli::restore(&paths, file, *force),
+        _ => {}
+    }
     let mut settings = Settings::load(&paths.settings)?;
     if cli.rns_config.is_some() {
         settings.rns_config = cli.rns_config;
@@ -233,6 +271,7 @@ async fn main() -> Result<()> {
         Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         Some(Command::Update { yes }) => cli::update(yes).await,
+        Some(Command::Backup { .. } | Command::Restore { .. }) => unreachable!("handled before loading"),
         None => run_tui(settings, paths, identity).await,
     }
 }

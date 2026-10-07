@@ -4,7 +4,8 @@ rettui keeps its data in `~/.local/share/rettui/`:
   Reticulum program uses (Python's raw 64-byte key). Lose it and the
   address is gone for good, so keep a copy: `b` in the Status tab saves one
   where you choose, readable only by you. Whoever has it can pose as you
-  and read what's sent to you, so keep copies private.
+  and read what's sent to you, so keep copies private. `B` backs up
+  everything else with it (see *Backups* below).
   To keep the address you have in Sideband, NomadNet, MeshChat or another
   rettui, `i` in the Status tab (or the getting-started guide) uses that
   program's identity file from the next start; the one it replaces is kept
@@ -79,6 +80,43 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `web_push_key`: the web UI's key for background notifications (Web Push),
   and `web_push.json`: the browsers that turned them on. Deleting the key
   makes browsers subscribe again the next time they open rettui.
+
+## Backups
+
+A backup is one `.tar.gz` file holding what's yours to keep:
+`settings.json`, the store (conversations, contacts, saved pages, RRC
+hubs), `peers.json.gz`, the `archive/` of older messages,
+`known_identities.json`, `tickets.json`, RRC history (`rrc/`), your node's
+pages and files (`node/`) and, unless left out, the `identity`. Caches,
+the log, ratchets, the propagation node's messages and the web UI's login,
+certificates and push keys aren't kept: rettui makes them again.
+Attachments (`downloads/`, `uploads/`) are left out unless asked for.
+
+- **Terminal UI:** `B` in the Status tab asks where to save it (your home
+  folder, `rettui-backup-<date>.tar.gz`, to begin with), with your
+  identity, once what's waiting to be saved is written. The log says when
+  it's done.
+- **Web UI:** **Download a backup** (Status, *Backup*). It never has the
+  identity (the login link would otherwise give away the key): back that
+  up in the terminal UI, or with `rettui backup`.
+- **Command line:** `rettui backup [FILE]` (by default
+  `rettui-backup-<date>.tar.gz` here); `--with-files` adds attachments,
+  `--without-identity` leaves the identity out. It reads what's saved, so
+  with rettui running it's what was saved last (every 10 seconds).
+
+A backup with the identity is as private as the identity itself: the file
+is made readable only by you, and whoever has it can pose as you and read
+what's sent to you. rettui never writes over a file that's there already.
+
+To restore, stop rettui, then `rettui restore FILE` (with `--data-dir DIR`
+for another data directory). Into a data directory that's empty, or new,
+it just unpacks. One that has an identity or messages already is left
+alone, unless `--force`: then what the backup replaces is first moved into
+a `before-restore-<time>/` folder there. A restored backup without an
+identity gets a new one on the next start, with new addresses: restore
+yours too (`i` in the Status tab, or copy it over `identity`) to keep
+them. Restoring takes only rettui's own files from the backup, and never
+writes outside the data directory.
 
 ## Message history
 

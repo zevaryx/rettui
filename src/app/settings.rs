@@ -255,6 +255,7 @@ impl App {
             KeyCode::Char('c') => self.show_address_qr(),
             KeyCode::Char('g') => self.open_guide(),
             KeyCode::Char('b') => self.ask_identity_backup(),
+            KeyCode::Char('B') => self.ask_backup(),
             KeyCode::Char('x') if !self.first_steps().is_empty() => {
                 self.hide_first_steps();
                 self.confirm("First steps hidden");

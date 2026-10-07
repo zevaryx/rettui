@@ -109,6 +109,9 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   - **For scripts:** `?last=N` on `/api/conversations/<address>` and on
     `/api/channels/<hub>/room` asks for just the newest N, and `total` or
     `total_lines` says how many there are in all.
+- **Backup:** **Download a backup** (Status, *Backup*) saves settings,
+  contacts and messages to one file, without your identity; see
+  [Backups](Data-and-Storage#backups).
 - **Theme:** dark (rettui's own), light, or as the device is set (and
   following it when it changes): *Theme* in the Status page. Each browser
   keeps its own. Times and dates follow the *Clock* and *Dates* settings.

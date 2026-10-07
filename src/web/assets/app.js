@@ -5506,6 +5506,11 @@ app.views.status = {
       label('Hosting messages'), hosting,
       label('RNS config'), el('span', { class: 'mono', text: s.rns_config || 'rsReticulum default' }),
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
+      label('Backup'), el('div', {},
+        el('button', { text: 'Download a backup', title: 'Settings, contacts and messages, in one file to restore with rettui restore',
+          onclick: () => el('a', { href: 'api/backup', download: '' }).click() }),
+        el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text:
+          'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' })),
       label('Known'), el('span', { text: `${s.known} destinations` }),
       ...(s.update ? [label('Update'), s.update.installed
         ? el('strong', { class: 'online', text: `rettui ${s.update.version} installed: start rettui again to use it` })

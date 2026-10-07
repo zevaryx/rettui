@@ -199,6 +199,8 @@ impl Default for Settings {
 
 #[derive(Clone)]
 pub struct Paths {
+    /// The data directory itself.
+    pub base: PathBuf,
     pub settings: PathBuf,
     pub identity: PathBuf,
     pub store: PathBuf,
@@ -262,6 +264,7 @@ impl Paths {
             propagation: base.join("propagation"),
             map_tiles: base.join("map-tiles"),
             update_check: base.join("update-check.json"),
+            base,
         })
     }
 }

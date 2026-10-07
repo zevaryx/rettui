@@ -86,6 +86,7 @@ pub fn router(state: WebState) -> Router {
         .route("/icons", get(icons))
         .route("/locations", get(locations))
         .route("/update/install", post(install_update))
+        .route("/backup", get(download_backup))
         .route("/map/tiles/{z}/{x}/{y}", get(map_tile))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/archive", get(conversation_archive))
@@ -491,6 +492,63 @@ async fn icons(Query(query): Query<IconQuery>) -> axum::Json<Value> {
 async fn install_update(State(state): State<WebState>) -> ApiResult {
     let doing = state.write(|o| o.app.install_update()).await?.map_err(bad)?;
     Ok(axum::Json(json!({ "ok": true, "doing": doing })))
+}
+
+/// A backup of settings, contacts and messages, to download: never with
+/// the identity, nor attachments (see [`crate::backup`]).
+async fn download_backup(State(state): State<WebState>) -> Result<Response, ApiError> {
+    let dir = state.paths.cache.clone();
+    std::fs::create_dir_all(&dir).map_err(|e| bad(format!("Couldn't make {}: {e}", dir.display())))?;
+    let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    let path = dir.join(format!("backup-{nanos}.tar.gz"));
+    let (done, made) = tokio::sync::oneshot::channel();
+    let to = path.clone();
+    state.write(move |o| o.app.back_up_for_download(to, done)).await?;
+    made.await.map_err(|_| bad("The backup wasn't made"))?.map_err(|e| bad(format!("Couldn't back up: {e}")))?;
+    let body = send_then_delete(path).await.map_err(|e| bad(format!("Couldn't read the backup: {e}")))?;
+    let disposition = format!("attachment; filename=\"{}\"", crate::backup::default_name());
+    Ok(([(header::CONTENT_TYPE, "application/gzip".to_string()), (header::CONTENT_DISPOSITION, disposition)], body).into_response())
+}
+
+/// A file's contents as a response body, read as it's sent; the file is
+/// deleted once it's sent (or the download stops).
+async fn send_then_delete(path: PathBuf) -> std::io::Result<axum::body::Body> {
+    use tokio::io::AsyncReadExt;
+    struct Sending {
+        file: Option<tokio::fs::File>,
+        path: PathBuf,
+    }
+    impl Drop for Sending {
+        fn drop(&mut self) {
+            self.file = None;
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(e) => {
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+    };
+    let sending = Sending { file: Some(file), path };
+    let chunks = futures_util::stream::unfold(sending, |mut sending| async move {
+        let mut chunk = vec![0; 64 * 1024];
+        let read = sending.file.as_mut()?.read(&mut chunk).await;
+        match read {
+            Ok(0) => None,
+            Ok(n) => {
+                chunk.truncate(n);
+                Some((Ok(axum::body::Bytes::from(chunk)), sending))
+            }
+            Err(e) => {
+                // Said, then the end.
+                sending.file = None;
+                Some((Err(e), sending))
+            }
+        }
+    });
+    Ok(axum::body::Body::from_stream(chunks))
 }
 
 #[derive(Deserialize)]

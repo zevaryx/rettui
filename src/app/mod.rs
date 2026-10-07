@@ -14,6 +14,7 @@
 //!   elsewhere.
 
 pub mod archive;
+mod backup;
 mod browser;
 pub mod channels;
 pub mod contacts;
@@ -141,6 +142,8 @@ pub enum PromptKind {
     ConfirmImportIdentity(PathBuf),
     /// Where to save a copy of the identity.
     BackUpIdentity,
+    /// Where to save a backup of everything.
+    BackUpAll,
     ConfirmDeleteMessage {
         key: String,
         id: String,
@@ -1052,6 +1055,7 @@ impl App {
             kind @ (PromptKind::ImportIdentity | PromptKind::ConfirmImportIdentity(_) | PromptKind::BackUpIdentity) => {
                 self.submit_identity_prompt(kind, &text)
             }
+            PromptKind::BackUpAll => self.submit_backup_prompt(&text),
             PromptKind::ContactNotes(key) => {
                 // Lines were shown as ↵ to edit on one line.
                 let notes = prompt.input.text().replace(" ↵ ", "\n").replace('↵', "\n");
