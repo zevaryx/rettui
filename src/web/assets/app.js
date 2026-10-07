@@ -2179,6 +2179,7 @@ app.views.messages = {
     // `:name` completion, and the picker's button.
     this.emojiList = shortcodes(this.text);
     this.emojiButton = emojiButton(this.text);
+    this.readAll = el('button', { class: 'hidden', text: '✓ All read', title: 'Mark every conversation read', onclick: () => this.markAllRead() });
     this.fileInput = el('input', {
       type: 'file',
       multiple: true,
@@ -2216,7 +2217,7 @@ app.views.messages = {
       el('section', { class: 'panel side' },
         el('header', {}, el('span', { class: 'title grow', text: 'Conversations' }),
           el('button', { text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
-          el('button', { text: '+ New', onclick: () => this.newConversation() }), this.search),
+          el('button', { text: '+ New', onclick: () => this.newConversation() }), this.readAll, this.search),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose));
     this.renderChips();
@@ -2263,6 +2264,8 @@ app.views.messages = {
     this.warmRecent(conversations);
     // Icons beside every name once someone has one (letters for the rest).
     const icons = conversations.some((c) => c.icon);
+    // Everything read at once, when anything is unread.
+    this.readAll.classList.toggle('hidden', !conversations.some((c) => c.unread));
     // Message requests come last, under a heading of their own.
     const requests = conversations.filter((c) => c.request).length;
     const requestsMark = el('div', { class: 'list-heading', text: `Message requests (${requests})`,
@@ -2278,6 +2281,7 @@ app.views.messages = {
     icons ? avatar(c.icon, c.name) : null,
     el('div', { class: 'main' },
       el('div', { class: 'name' }, c.name, c.muted ? mutedMark() : null,
+        c.pinned ? el('span', { class: 'pin-mark', text: ' 📌', title: 'Pinned to the top' }) : null,
         c.unknown && !c.request ? el('span', { class: 'unknown-mark', text: ' ?', title: 'Not one of your contacts' }) : null),
       el('div', { class: 'sub', text: c.last ? `${c.last.incoming ? '' : 'You: '}${c.last.text}` : 'No messages yet' })),
     el('div', { class: 'dim', style: 'font-size:12px;text-align:right' },
@@ -2400,6 +2404,9 @@ app.views.messages = {
       conversation.icon ? avatar(conversation.icon, conversation.name) : null,
       el('span', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }),
+      el('button', { class: 'pin-button' + (conversation.pinned ? ' on' : ''), text: '📌',
+        title: conversation.pinned ? 'Unpin it from the top of the list' : 'Pin it to the top of the list',
+        onclick: () => this.setPinned(key, !conversation.pinned) }),
       bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
       el('button', { text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
       el('button', { text: 'Copy address', onclick: () => copy(key, 'LXMF address') })].filter(Boolean));
@@ -2460,6 +2467,18 @@ app.views.messages = {
       if (this.selected === key) this.selected = null;
       this.cache.delete(key);
       setPane(this, 'list');
+      this.update();
+    }
+  },
+
+  async setPinned(key, pinned) {
+    if (await attempt(() => api.post(`/conversations/${key}/pin`, { pinned }), pinned ? 'Pinned to the top' : 'Unpinned')) this.update();
+  },
+
+  async markAllRead() {
+    const done = await attempt(() => api.post('/conversations/read-all'));
+    if (done) {
+      toast(done.marked ? `Marked ${done.marked} ${done.marked === 1 ? 'conversation' : 'conversations'} read` : 'Nothing is unread');
       this.update();
     }
   },

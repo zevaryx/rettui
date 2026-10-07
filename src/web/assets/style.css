@@ -192,6 +192,9 @@ a { color: var(--accent); }
 .list-item:hover { background: var(--raised); }
 .list-item.selected { background: var(--selected); border-left-color: var(--accent); }
 .list-item .main { flex: 1; min-width: 0; }
+.pin-button { filter: grayscale(1); opacity: 0.6; }
+.pin-button.on { filter: none; opacity: 1; border-color: var(--accent); }
+.pin-mark { font-size: 11px; }
 .iface-details { font-size: 12px; padding-left: 1.4em; }
 /* Archived messages, shown above the rest when asked for: only to read. */
 .archive-block { border-bottom: 1px dashed var(--border); margin-bottom: 12px; }

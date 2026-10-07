@@ -170,14 +170,17 @@ impl App {
         self.settings.requests() && self.store.conversations.contains_key(key) && !self.is_known(key)
     }
 
-    /// Conversations, newest first; message requests after the rest.
+    /// Conversations, newest first: pinned ones at the top, message
+    /// requests after the rest.
     pub fn conversation_order(&self) -> Vec<String> {
-        let order = self.store.conversation_order();
-        if !self.settings.requests() {
-            return order;
-        }
-        let (requests, rest): (Vec<String>, Vec<String>) = order.into_iter().partition(|key| !self.is_known(key));
-        rest.into_iter().chain(requests).collect()
+        let mut order = self.store.conversation_order();
+        // A stable sort keeps each group newest first.
+        order.sort_by_key(|key| match () {
+            _ if self.is_request(key) => 2,
+            _ if self.store.conversations[key].pinned => 0,
+            _ => 1,
+        });
+        order
     }
 
     /// Unread messages, but for requests'.
@@ -508,6 +511,42 @@ mod tests {
         app.set_trust(&alice, Trust::Unknown).unwrap();
         app.update_settings(&[("unknown_senders", "show")]).unwrap();
         assert!(!app.is_request(&alice));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pinned_go_first_and_all_can_be_read_at_once() {
+        use crate::lxmf::InboundMessage;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let dir = std::env::temp_dir().join(format!("rettui-pins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.set_focus(false);
+        app.tab = crate::app::Tab::Messages;
+        let from = |source: u8, at: f64| InboundMessage {
+            id: Some([source; 32]),
+            source: [source; 16],
+            content: "hi".into(),
+            timestamp: at,
+            ..Default::default()
+        };
+        let (old, mid, new) = ("aa".repeat(16), "bb".repeat(16), "cc".repeat(16));
+        app.on_message(from(0xaa, 10.0));
+        app.on_message(from(0xbb, 20.0));
+        app.on_message(from(0xcc, 30.0));
+        assert_eq!(app.conversation_order(), [new.clone(), mid.clone(), old.clone()]);
+        app.set_pinned(&old, true).unwrap();
+        assert_eq!(app.conversation_order(), [old.clone(), new.clone(), mid.clone()]);
+        // `*` on the open one (the oldest, pinned) unpins it.
+        app.active_conversation = Some(old.clone());
+        app.on_key(KeyEvent::new(KeyCode::Char('*'), KeyModifiers::NONE));
+        assert!(!app.store.conversations[&old].pinned);
+        assert_eq!(app.conversation_order()[2], old);
+        // `R`: all read.
+        assert!(app.unread_messages() >= 2);
+        app.on_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        assert_eq!(app.unread_messages(), 0);
+        assert!(app.set_pinned(&"dd".repeat(16), true).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

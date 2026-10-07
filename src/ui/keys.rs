@@ -171,6 +171,8 @@ pub fn keys(app: &App) -> Keys {
                 ("P", "show paper"),
                 ("N", "notify"),
                 ("H", "archive"),
+                ("*", "pin"),
+                ("R", "all read"),
                 ("X", "delete"),
                 ("↑↓", "select"),
                 ("PgUp/Dn", "scroll"),

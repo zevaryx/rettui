@@ -176,6 +176,7 @@ pub fn conversations(app: &App) -> Value {
                 "named": app.store.peers.get(&key).is_some_and(|p| p.name.is_some()),
                 "unread": conversation.unread,
                 "muted": conversation.muted,
+                "pinned": conversation.pinned,
                 // Not a contact: not trusted, nor ever written to.
                 "unknown": !app.is_known(&key),
                 // A message request (see App::is_request): listed apart.
@@ -274,6 +275,7 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
         "name": app.store.display_name(key),
         "unread": app.store.conversations.get(key).map_or(0, |c| c.unread),
         "muted": app.store.conversations.get(key).is_some_and(|c| c.muted),
+        "pinned": app.store.conversations.get(key).is_some_and(|c| c.pinned),
         "icon": icon(app.store.contacts.get(key).and_then(|c| c.icon.as_ref())),
         // Older messages moved to the archive (not in `total`).
         "archived": app.store.conversations.get(key).map_or(0, |c| c.archived),

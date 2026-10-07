@@ -4,6 +4,11 @@ MeshChat, NomadNet and other LXMF clients).
 - **Conversations:** a conversation per peer, with unread counts in the
   list and the sidebar. Start one by address (`n`), from the Network tab, or
   from an `lxmf@` link on a page.
+- **Pinning:** a pinned conversation stays at the top of the list, newest
+  pinned first. `*` pins or unpins the open one in the TUI; in the web UI,
+  it's the 📌 button above the conversation.
+- **Marking all read:** `R` in the TUI's Messages tab, or **✓ All read**
+  above the web UI's conversations (shown while anything is unread).
 - **Drafts:** what you write (and attach) stays with its conversation.
   Opening another one doesn't carry it over, and coming back brings it back.
   A message that fails to send goes back to the conversation it was for.

@@ -87,6 +87,8 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/archive", get(conversation_archive))
         .route("/conversations/{key}/read", post(read_conversation))
         .route("/conversations/{key}/notify", post(mute_conversation))
+        .route("/conversations/{key}/pin", post(pin_conversation))
+        .route("/conversations/read-all", post(read_all_conversations))
         .route("/conversations/{key}/send", post(send_message))
         .route("/conversations/{key}/react", post(react))
         .route("/conversations/{key}/retry", post(retry))
@@ -774,6 +776,24 @@ async fn conversation(State(state): State<WebState>, Path(key): Path<String>, Qu
 
 async fn read_conversation(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
     state.write(move |o| o.app.mark_conversation_read(&key)).await?;
+    ok()
+}
+
+/// Mark every conversation read.
+async fn read_all_conversations(State(state): State<WebState>) -> ApiResult {
+    let marked = state.write(|o| o.app.mark_all_read()).await?;
+    Ok(axum::Json(json!({ "ok": true, "marked": marked })))
+}
+
+#[derive(Deserialize)]
+struct PinBody {
+    pinned: bool,
+}
+
+/// Pin a conversation to the top of the list, or unpin it.
+async fn pin_conversation(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<PinBody>) -> ApiResult {
+    let key = address(&key)?;
+    state.write(move |o| o.app.set_pinned(&key, body.pinned)).await?.map_err(bad)?;
     ok()
 }
 

@@ -274,6 +274,9 @@ pub struct Conversation {
     /// No notifications for new messages here.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub muted: bool,
+    /// Kept at the top of the list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
     /// How many older messages have been moved to the archive.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub archived: usize,

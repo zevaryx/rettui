@@ -116,6 +116,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 if conversation.muted {
                     spans.push(Span::styled(" muted", Style::default().fg(DIM)));
                 }
+                if conversation.pinned {
+                    spans.push(Span::styled(" pinned", Style::default().fg(ACCENT)));
+                }
                 if app.is_request(key) {
                     spans.push(Span::styled(" request", Style::default().fg(Color::Black).bg(Color::Yellow)));
                 } else if !app.is_known(key) {

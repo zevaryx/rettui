@@ -1073,6 +1073,39 @@ impl App {
         self.keep_within_storage(true);
     }
 
+    /// Pin a conversation to the top of the list, or unpin it.
+    pub fn set_pinned(&mut self, key: &str, pinned: bool) -> Result<(), String> {
+        let conversation = self.store.conversations.get_mut(key).ok_or("There's no such conversation")?;
+        if conversation.pinned != pinned {
+            conversation.pinned = pinned;
+            self.store_dirty = true;
+            self.keep_conversation_selection();
+        }
+        Ok(())
+    }
+
+    /// Pin the open conversation, or unpin it (`*`).
+    pub(super) fn toggle_pinned(&mut self) {
+        let Some(key) = self.active_conversation.clone() else { return };
+        let pinned = !self.store.conversations.get(&key).is_some_and(|c| c.pinned);
+        let name = self.store.display_name(&key);
+        match self.set_pinned(&key, pinned) {
+            Ok(()) if pinned => self.confirm(format!("Pinned {name} to the top")),
+            Ok(()) => self.confirm(format!("Unpinned {name}")),
+            Err(e) => self.warn(e),
+        }
+    }
+
+    /// Mark every conversation read (requests' too); how many had unread
+    /// messages.
+    pub fn mark_all_read(&mut self) -> usize {
+        let unread: Vec<String> = self.store.conversations.iter().filter(|(_, c)| c.unread > 0).map(|(k, _)| k.clone()).collect();
+        for key in &unread {
+            self.mark_conversation_read(key);
+        }
+        unread.len()
+    }
+
     pub fn mark_conversation_read(&mut self, key: &str) {
         if let Some(conversation) = self.store.conversations.get_mut(key)
             && conversation.unread > 0
@@ -1137,6 +1170,12 @@ impl App {
             KeyCode::Char('m') if self.active_conversation.is_some() => self.start_picking(),
             KeyCode::Char('/') => self.open_message_search(),
             KeyCode::Char('H') if self.active_conversation.is_some() => self.open_archive(),
+            KeyCode::Char('*') => self.toggle_pinned(),
+            KeyCode::Char('R') => match self.mark_all_read() {
+                0 => self.confirm("Nothing is unread"),
+                1 => self.confirm("Marked 1 conversation read"),
+                n => self.confirm(format!("Marked {n} conversations read")),
+            },
             KeyCode::Char('c') if self.active_conversation.is_some() => self.contact_card = self.active_conversation.clone(),
             KeyCode::Char('X') => {
                 if let Some(key) = self.active_conversation.clone() {
