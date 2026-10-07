@@ -32,6 +32,20 @@ shows your identity, your interfaces and the log.
   heard over the LoRa radio, say, rather than the internet.
 - **Acting on a row:** message a peer, browse a node, or use a propagation
   node for sync, and copy any address.
+- **Announces as they're heard:** `a` (or **Announces** in the web UI)
+  shows every announce in place of the list, as it arrives, of every kind:
+  LXMF peers, NomadNet and propagation nodes, RRC hubs, LXST calls, and
+  whatever else announces on the network (tagged OTHER, with a name when
+  its announce carries one as text). The list keeps one row per peer or
+  node; this shows each announce, with when it was heard, so it's where to
+  see who's announcing how often, or what's on a new interface. It follows
+  the newest; moving up holds it where you are (`End`, or scrolling to the
+  bottom in the web UI, follows again). Filter by kind (`f`), search
+  (`/`) and keep to an interface (`i`) as in the list; `Enter` opens what
+  rettui can, and `P`, `T` and `y` find a path, probe and copy. rettui
+  keeps the newest 1000 heard since it started. A burst of announces on
+  an interface that just came up is held back by Reticulum (as it is for
+  every program on it), so some may show up later, or not at all.
 - **Paths:** to reach a destination, rettui needs a path to it: which
   interface it goes out on, and through which transport node. Announces
   bring paths; for one not heard yet, rettui asks for a path, up to three

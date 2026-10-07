@@ -13,6 +13,7 @@
 //! - [`notify`]: notifications for what arrives while the user looks
 //!   elsewhere.
 
+pub mod announces;
 pub mod archive;
 mod backup;
 mod browser;
@@ -488,6 +489,8 @@ pub struct App {
     /// (`i`), if one.
     pub net_sort: network::NetSort,
     pub net_via: Option<String>,
+    /// Every announce heard, for the announce viewer.
+    pub announce_log: announces::AnnounceLog,
     /// The interface each destination with a path goes through, by address.
     pub routes: HashMap<String, String>,
     pub net_search: NetSearch,
@@ -625,6 +628,7 @@ impl App {
             net_filter: NetFilter::All,
             net_sort: network::NetSort::Heard,
             net_via: None,
+            announce_log: announces::AnnounceLog::default(),
             routes: HashMap::new(),
             net_search: NetSearch::default(),
             browser: Browser::default(),
@@ -901,6 +905,7 @@ impl App {
                 }
                 self.peers_dirty = true;
             }
+            NetEvent::Heard(heard) => self.on_heard(heard),
             NetEvent::Announced => {
                 self.announced = true;
                 self.log("Announced LXMF destination");

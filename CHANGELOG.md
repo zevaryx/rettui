@@ -27,6 +27,7 @@ Changes since v1.5.1.
   - Probe any destination (`T`).
   - New `rettui path` and `rettui probe` commands, like rnpath and rnprobe.
   - Sort the Network list (`s`), or keep it to one interface (`i`).
+  - An announce viewer (`a` in Network): every announce as it's heard, of every kind (RRC hubs, calls and others too), with when, how far and through which interface.
   - Pings report RSSI/SNR when answered over an RNode.
   - Status shows rnstatus-style interface details.
 - **Browser**

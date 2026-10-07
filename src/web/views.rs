@@ -451,6 +451,35 @@ pub fn peers(app: &App, kind: Option<&str>, query: &str, limit: Option<usize>, s
     })
 }
 
+/// Announces heard after `after`, of a kind, matching a search and kept to
+/// an interface, oldest first; `last` is the newest heard, to ask after.
+pub fn announces(app: &App, after: Option<u64>, filter: crate::app::announces::HeardFilter, query: &str, via: Option<&str>) -> Value {
+    let terms = network::search_terms(query);
+    let log = &app.announce_log;
+    let rows: Vec<Value> = log
+        .after(after)
+        .filter(|entry| filter.shows(entry.heard.kind))
+        .filter_map(|entry| {
+            let hash = entry.address();
+            let name = entry.heard.name.as_deref();
+            (network::matches_text(&terms, &[name.unwrap_or_default(), &hash]) && app.goes_via(&hash, via)).then(|| {
+                json!({
+                    "seq": entry.seq, "at": entry.at, "kind": entry.heard.kind.key(), "tag": entry.heard.kind.tag(),
+                    "aspect": entry.heard.aspect, "name": name, "hash": hash, "hops": entry.heard.hops,
+                    "via": app.routes.get(hash.as_str()),
+                })
+            })
+        })
+        .collect();
+    json!({
+        "announces": rows,
+        "last": log.entries.back().map(|entry| entry.seq),
+        "last_minute": log.last_minute(),
+        "kept": crate::app::announces::KEPT,
+        "interfaces": app.route_interfaces(),
+    })
+}
+
 fn hub_status(status: &HubStatus) -> Value {
     match status {
         HubStatus::Connected => json!({ "kind": "connected" }),

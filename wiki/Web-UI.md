@@ -118,7 +118,8 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 - **Keys:** `?` lists them all. `1`–`7` switch sections, `/` searches the
   Network list (in Messages, [the messages](Messaging#searching); in
   Channels, [what was said](RRC-Chat); in the Browser, its nodes and saved
-  pages), and `Esc` leaves a text box. In
+  pages), `a` in Network shows [announces as they're heard](Network), and
+  `Esc` leaves a text box. In
   Messages, `j`/`k` move to the next or previous conversation, `i` puts you
   in the message box, `r` replies to their newest message, `n` starts a new
   conversation, `*` pins one, `L` shares a location and `M` opens

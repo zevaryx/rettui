@@ -4152,6 +4152,9 @@ function highlighted(text, terms) {
 app.views.network = {
   filter: 'all',
   sort: 'heard',
+  // The list of what's been heard, or every announce as it's heard.
+  mode: 'list',
+  heardKind: 'all',
   via: '',
   query: '',
   selected: null,
@@ -4178,13 +4181,19 @@ app.views.network = {
         }
       },
     });
-    const filter = el('select', { onchange: (e) => {
+    const filter = this.filterSelect = el('select', { onchange: (e) => {
       this.filter = e.target.value;
       this.limit = 200;
       this.update();
     } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes'], ['blocked', 'Blocked']]
       .map(([value, text]) => el('option', { value, text, selected: value === this.filter })));
-    const sort = el('select', { title: 'Order', onchange: (e) => {
+    this.heardSelect = el('select', { onchange: (e) => {
+      this.heardKind = e.target.value;
+      this.update();
+    } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes'], ['other', 'Everything else']]
+      .map(([value, text]) => el('option', { value, text, selected: value === this.heardKind })));
+    this.modeButton = el('button', { title: 'Every announce as it\'s heard, of every kind, or the list of what\'s been heard  ( a )', onclick: () => this.toggleMode() });
+    const sort = this.sortSelect = el('select', { title: 'Order', onchange: (e) => {
       this.sort = e.target.value;
       this.update();
     } }, [['heard', 'Last heard'], ['name', 'Name'], ['hops', 'Nearest']]
@@ -4199,7 +4208,7 @@ app.views.network = {
     this.title = el('span', { class: 'title grow' });
     this.table = el('div', { class: 'scroll' });
     root.append(el('div', { class: 'column grow' },
-      el('section', { class: 'panel' }, el('header', {}, this.search, filter, sort, this.viaSelect,
+      el('section', { class: 'panel' }, el('header', {}, this.search, filter, this.heardSelect, sort, this.viaSelect, this.modeButton,
         el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
         el('button', { text: 'Find a path…', title: 'Find the path to any address', onclick: () => {
@@ -4207,14 +4216,36 @@ app.views.network = {
           if (address?.trim()) pathDialog(address.trim().replace(/^<|>$/g, ''));
         } }))),
       el('section', { class: 'panel grow' }, el('header', {}, this.title), this.table)));
+    this.showMode();
   },
 
   limit: 200,
   request: 0,
 
+  toggleMode() {
+    this.mode = this.mode === 'list' ? 'announces' : 'list';
+    this.showMode();
+    this.update();
+  },
+
+  showMode() {
+    const heard = this.mode === 'announces';
+    this.modeButton.textContent = heard ? 'Heard list' : 'Announces';
+    this.filterSelect.classList.toggle('hidden', heard);
+    this.sortSelect.classList.toggle('hidden', heard);
+    this.heardSelect.classList.toggle('hidden', !heard);
+    // Drawn afresh.
+    this.data = null;
+    this.snapshots = {};
+    this.viaShown = null;
+    this.heardKey = null;
+    this.heardBody = null;
+  },
+
   // Only the rows shown are fetched (there can be thousands of peers);
   // rettui filters, searches and counts the rest.
   async update() {
+    if (this.mode === 'announces') return this.updateHeard();
     const request = ++this.request;
     const params = new URLSearchParams({ q: this.query, limit: this.limit, sort: this.sort });
     if (this.filter !== 'all') params.set('kind', this.filter);
@@ -4293,6 +4324,99 @@ app.views.network = {
           this.limit += 200;
           this.update();
         } })) : null));
+  },
+
+  // The announce viewer: those after the last fetched, every 2 seconds
+  // while it's shown, kept to the newest rettui keeps.
+  async updateHeard() {
+    clearTimeout(this.heardPoll);
+    const request = ++this.request;
+    const params = new URLSearchParams({ q: this.query });
+    if (this.heardKind !== 'all') params.set('kind', this.heardKind);
+    if (this.via) params.set('via', this.via);
+    // Another kind, search or interface: from the start.
+    const key = params.toString();
+    if (key !== this.heardKey) {
+      this.heardKey = key;
+      this.heard = [];
+      this.heardAfter = null;
+      this.heardBody = null;
+    }
+    if (this.heardAfter != null) params.set('after', this.heardAfter);
+    let data;
+    try {
+      data = await api.get('/announces?' + params);
+    } finally {
+      if (app.tab === 'network' && this.mode === 'announces') this.heardPoll = setTimeout(() => this.update(), 2000);
+    }
+    if (request !== this.request || this.mode !== 'announces' || key !== this.heardKey) return;
+    this.heard.push(...data.announces);
+    if (this.heard.length > data.kept) this.heard.splice(0, this.heard.length - data.kept);
+    if (data.last != null) this.heardAfter = data.last;
+    this.renderHeard(data, data.announces);
+  },
+
+  renderHeard(data, fresh) {
+    const terms = searchTerms(this.query);
+    const interfaces = [...new Set([...(data.interfaces || []), ...(this.via ? [this.via] : [])])];
+    if (interfaces.join('\n') !== this.viaShown) {
+      this.viaShown = interfaces.join('\n');
+      this.viaSelect.replaceChildren(el('option', { value: '', text: 'Any interface' }),
+        ...interfaces.map((name) => el('option', { value: name, text: `Via ${name}`, selected: name === this.via })));
+    }
+    this.viaSelect.classList.toggle('hidden', !interfaces.length);
+    const kindName = { all: 'all', lxmf: 'LXMF peers', nomad: 'NomadNet nodes', propagation: 'propagation nodes', other: 'everything else' }[this.heardKind];
+    this.title.textContent = `Announces · ${kindName}${this.via ? ` · via ${this.via}` : ''} · ${this.heard.length}${terms.length ? ' matching' : ''} · ${data.last_minute} in the last minute`;
+    if (!this.heard.length) {
+      this.heardBody = null;
+      this.table.replaceChildren(el('div', { class: 'empty', text: terms.length
+        ? `No announce heard matches “${this.query.trim()}”. Esc clears the search.`
+        : data.last == null ? 'No announces heard since rettui started. They appear here as they arrive, of every kind: LXMF peers, NomadNet and propagation nodes, RRC hubs and whatever else announces.'
+          : 'None of this kind heard since rettui started.' }));
+      return;
+    }
+    if (!this.heardBody) {
+      this.heardBody = el('tbody');
+      this.table.replaceChildren(el('table', { class: 'net-table heard-table' },
+        el('thead', {}, el('tr', {}, ['Heard', '', 'Name', 'Address', 'Hops', 'Via', ''].map((h) => el('th', { text: h })))), this.heardBody));
+      this.table.pinned = true;
+      fresh = this.heard;
+    }
+    // Following the newest, unless scrolled up to look at older ones.
+    stickToBottom(this.table, () => {
+      this.heardBody.append(...fresh.map((a) => this.heardRow(a, terms)));
+      while (this.heardBody.children.length > this.heard.length) this.heardBody.firstElementChild.remove();
+    });
+    this.table.pinned = null;
+  },
+
+  heardRow(a, terms) {
+    const opens = { lxmf: 'Message', nomad: 'Browse', propagation: 'Use for sync' }[a.kind];
+    return el('tr', {
+      class: a.hash === this.selected ? 'selected' : '',
+      onclick: (e) => {
+        this.selected = a.hash;
+        for (const row of e.currentTarget.parentNode.children) row.classList.remove('selected');
+        e.currentTarget.classList.add('selected');
+      },
+      ondblclick: () => opens && this.open(a),
+    },
+    el('td', { class: 'dim', text: clockTime(new Date(a.at * 1000), true) }),
+    el('td', {}, el('span', { class: 'tag ' + a.kind, text: a.tag, title: a.aspect || 'A kind rettui doesn\'t know' })),
+    el('td', { class: 'name' }, a.name ? highlighted(a.name, terms) : el('span', { class: 'dim', text: '(unnamed)' })),
+    el('td', { class: 'mono dim' }, highlighted(a.hash, terms)),
+    el('td', { class: 'dim', text: `${a.hops} hop${a.hops === 1 ? '' : 's'}` }),
+    el('td', { class: 'dim', text: a.via || '' }),
+    el('td', {}, el('div', { class: 'actions' },
+      opens ? el('button', { text: opens, onclick: () => this.open(a) }) : null,
+      el('button', { text: 'Path', title: 'Find the path to it, or forget it', onclick: (e) => {
+        e.stopPropagation();
+        pathDialog(a.hash, a.name);
+      } }),
+      el('button', { text: 'Copy', onclick: (e) => {
+        e.stopPropagation();
+        copy(a.hash, 'address');
+      } }))));
   },
 
   open(peer) {
@@ -5906,7 +6030,7 @@ const KEYS = [
     ['Ctrl+E', 'emoji, in the message box'],
     ['Enter / Shift+Enter', 'send, or a new line, in the message box']]],
   ['Channels', [['/', 'search what was said in every room']]],
-  ['Network', [['/', 'search by name or address']]],
+  ['Network', [['/', 'search by name or address'], ['a', 'announces as they\'re heard, or the list']]],
   ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],
     ['/', 'search the nodes and saved pages']]],
 ];
@@ -5941,6 +6065,8 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === '/' && app.tab === 'network') {
     e.preventDefault();
     app.views.network.search.focus();
+  } else if (e.key === 'a' && app.tab === 'network') {
+    app.views.network.toggleMode();
   } else if (e.key === '/' && app.tab === 'messages') {
     e.preventDefault();
     setPane(app.views.messages, 'list');

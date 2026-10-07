@@ -206,7 +206,7 @@ impl App {
         self.network_rows().get(i).map(|(k, p)| ((*k).clone(), p.kind))
     }
 
-    fn open_peer(&mut self, key: String, kind: PeerKind) {
+    pub(super) fn open_peer(&mut self, key: String, kind: PeerKind) {
         match kind {
             PeerKind::Lxmf => self.open_conversation(key),
             PeerKind::Nomad => {
@@ -330,7 +330,7 @@ impl App {
         self.network_search_changed();
     }
 
-    fn clear_network_search(&mut self) {
+    pub(super) fn clear_network_search(&mut self) {
         self.net_search.input.take();
         self.net_search.typing = false;
         self.network_search_changed();
@@ -342,7 +342,49 @@ impl App {
         self.peers = ListState::default().with_selected(any.then_some(0));
     }
 
+    /// Keep the list (and the announce viewer) to the next interface with
+    /// paths through it, then to any.
+    pub(super) fn cycle_net_via(&mut self) {
+        let names = self.route_interfaces();
+        let at = self.net_via.as_ref().and_then(|via| names.iter().position(|n| n == via));
+        self.net_via = match at {
+            None => names.first().cloned(),
+            Some(i) => names.get(i + 1).cloned(),
+        };
+        self.peers.select(Some(0));
+        match &self.net_via {
+            Some(via) => self.confirm(format!("Network list: through {via} only")),
+            None if names.is_empty() => self.warn("No paths are known yet, so no interface to keep the list to"),
+            None => self.confirm("Network list: through any interface"),
+        }
+    }
+
+    /// What `y`, `P`, `T` and `D` do with the address selected (`P` asks
+    /// for one when none is).
+    pub(super) fn address_action(&mut self, action: char, address: Option<String>) {
+        match (action, address) {
+            ('y', Some(key)) => self.copy(&key, "address"),
+            // A path to it (or any address typed), found or shown.
+            ('P', current) => self.open_prompt(PromptKind::FindPath, "Find a path to (address)", &current.unwrap_or_default()),
+            // Probed, as rnprobe does.
+            ('T', Some(key)) => {
+                if let Err(e) = self.probe(&key) {
+                    self.warn(e);
+                }
+            }
+            ('D', Some(key)) => {
+                if let Err(e) = self.forget_path(&key) {
+                    self.warn(e);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn network_key(&mut self, key: KeyEvent) {
+        if self.announce_log.open {
+            return self.announces_key(key);
+        }
         // One pass over the (possibly thousands of) rows for both.
         let (count, selected) = {
             let rows = self.network_rows();
@@ -363,21 +405,8 @@ impl App {
                 self.peers.select(Some(0));
                 self.confirm(format!("Network list: {}", self.net_sort.label()));
             }
-            // Kept to the next interface with paths through it, then all.
-            KeyCode::Char('i') => {
-                let names = self.route_interfaces();
-                let at = self.net_via.as_ref().and_then(|via| names.iter().position(|n| n == via));
-                self.net_via = match at {
-                    None => names.first().cloned(),
-                    Some(i) => names.get(i + 1).cloned(),
-                };
-                self.peers.select(Some(0));
-                match &self.net_via {
-                    Some(via) => self.confirm(format!("Network list: through {via} only")),
-                    None if names.is_empty() => self.warn("No paths are known yet, so no interface to keep the list to"),
-                    None => self.confirm("Network list: through any interface"),
-                }
-            }
+            KeyCode::Char('i') => self.cycle_net_via(),
+            KeyCode::Char('a') => self.toggle_announce_viewer(),
             KeyCode::Char('f') => {
                 self.net_filter = match self.net_filter {
                     NetFilter::All => NetFilter::Peers,
@@ -405,32 +434,7 @@ impl App {
                     self.set_propagation_node(&key);
                 }
             }
-            KeyCode::Char('y') => {
-                if let Some((key, _)) = selected {
-                    self.copy(&key, "address");
-                }
-            }
-            // A path to the selected destination (or any address typed),
-            // found or shown; or forgotten.
-            KeyCode::Char('P') => {
-                let current = selected.map(|(key, _)| key).unwrap_or_default();
-                self.open_prompt(PromptKind::FindPath, "Find a path to (address)", &current);
-            }
-            // Probe the selected destination, as rnprobe does.
-            KeyCode::Char('T') => {
-                if let Some((key, _)) = selected
-                    && let Err(e) = self.probe(&key)
-                {
-                    self.warn(e);
-                }
-            }
-            KeyCode::Char('D') => {
-                if let Some((key, _)) = selected
-                    && let Err(e) = self.forget_path(&key)
-                {
-                    self.warn(e);
-                }
-            }
+            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D')) => self.address_action(c, selected.map(|(key, _)| key)),
             // Block an LXMF peer, or unblock one.
             KeyCode::Char('b') => {
                 if let Some((key, PeerKind::Lxmf)) = selected {
@@ -452,6 +456,9 @@ impl App {
         if self.regions.net_search.contains(at) {
             self.net_search.typing = true;
             return;
+        }
+        if self.announce_log.open {
+            return self.click_announces(at, double);
         }
         let area = self.regions.peers;
         if area.contains(at) {

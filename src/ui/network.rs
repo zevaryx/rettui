@@ -10,6 +10,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 use super::{ago, block, dim, highlighted, selected_bg};
 use crate::app::{App, NetFilter};
 use crate::net::PeerKind;
+use crate::net::heard::Kind;
 
 /// Longest name shown before the address column.
 const NAME_WIDTH: usize = 32;
@@ -42,6 +43,9 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
 pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     let [search_area, area] = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).areas(area);
     draw_search(frame, app, search_area);
+    if app.announce_log.open {
+        return draw_announces(frame, app, area);
+    }
     let terms = app.net_search.terms();
 
     let filter = match app.net_filter {
@@ -144,6 +148,94 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     *app.peers.offset_mut() = offset;
     // The window's own state: the selection relative to its first row.
     let mut window = ListState::default().with_selected(Some(selected - offset));
+    let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold()).highlight_symbol("▌");
+    frame.render_stateful_widget(list, area, &mut window);
+}
+
+/// The announce viewer: every announce heard, oldest first, following the
+/// newest.
+fn draw_announces(frame: &mut Frame, app: &mut App, area: Rect) {
+    let terms = app.net_search.terms();
+    let rows = app.heard_rows();
+    let total = rows.len();
+    let log = &app.announce_log;
+    let mut title = format!("Announces · {}", log.filter.label());
+    if let Some(via) = &app.net_via {
+        title.push_str(&format!(" · via {via}"));
+    }
+    title.push_str(&format!(" · {total}{} · {} in the last minute", if terms.is_empty() { "" } else { " matching" }, log.last_minute()));
+    if log.held {
+        title.push_str(" · End follows the newest");
+    }
+    let height = area.height.saturating_sub(2) as usize;
+    let name_width = (area.width.saturating_sub(2) as usize).saturating_sub(ROW_WITHOUT_NAME + 10).clamp(MIN_NAME_WIDTH, NAME_WIDTH);
+    let selected = app.heard_selected(total);
+    let mut offset = log.list.offset().min(total.saturating_sub(height.max(1)));
+    match selected {
+        Some(i) if i < offset => offset = i,
+        Some(i) if height > 0 && i >= offset + height => offset = i + 1 - height,
+        _ => {}
+    }
+    let items: Vec<ListItem> = rows
+        .iter()
+        .skip(offset)
+        .take(height)
+        .map(|entry| {
+            let heard = &entry.heard;
+            let color = match heard.kind {
+                Kind::Lxmf => Color::LightMagenta,
+                Kind::Nomad => Color::LightGreen,
+                Kind::Propagation => Color::LightYellow,
+                Kind::Rrc => Color::LightCyan,
+                Kind::Phone => Color::LightBlue,
+                Kind::Other => Color::Gray,
+            };
+            let at = chrono::DateTime::from_timestamp(entry.at as i64, 0).map(|t| t.with_timezone(&chrono::Local));
+            let time = at.map(|t| crate::clock::time(&t, true)).unwrap_or_default();
+            let mut spans = vec![
+                Span::styled(format!("{time} "), Style::default().fg(dim())),
+                Span::styled(format!(" {:<5} ", heard.kind.tag()), Style::default().fg(Color::Black).bg(color)),
+                Span::raw(" "),
+            ];
+            let shown = match &heard.name {
+                Some(name) => {
+                    spans.extend(highlighted(name, name_width, &terms, Style::default()));
+                    name.chars().count().min(name_width)
+                }
+                None => {
+                    spans.push(Span::styled("(unnamed)", Style::default().fg(dim())));
+                    "(unnamed)".len()
+                }
+            };
+            spans.push(Span::raw(" ".repeat(name_width.saturating_sub(shown) + 1)));
+            let address = entry.address();
+            spans.extend(highlighted(&address, usize::MAX, &terms, Style::default().fg(dim())));
+            spans.push(Span::styled(format!("  {} hop{}", heard.hops, if heard.hops == 1 { "" } else { "s" }), Style::default().fg(dim())));
+            if let Some(interface) = app.routes.get(address.as_str()) {
+                spans.push(Span::styled(format!("  via {interface}"), Style::default().fg(dim())));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    let list_block = block(&title, true);
+    app.regions.peers = list_block.inner(area);
+    if items.is_empty() {
+        let message = if !terms.is_empty() {
+            format!("No announce heard matches “{}”. Esc clears the search.", app.net_search.input.text().trim())
+        } else if app.announce_log.entries.is_empty() {
+            "No announces heard since rettui started. They appear here as they arrive, of every kind: LXMF peers, NomadNet and propagation nodes, RRC hubs and whatever else announces. a goes back to the list.".to_string()
+        } else {
+            "None of this kind heard since rettui started. f shows another kind.".to_string()
+        };
+        frame.render_widget(Paragraph::new(message).style(Style::default().fg(dim())).wrap(Wrap { trim: true }).block(list_block), area);
+        return;
+    }
+    let log = &mut app.announce_log;
+    *log.list.offset_mut() = offset;
+    if log.held {
+        log.list.select(selected);
+    }
+    let mut window = ListState::default().with_selected(selected.map(|i| i - offset));
     let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold()).highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut window);
 }

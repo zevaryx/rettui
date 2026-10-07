@@ -181,6 +181,22 @@ pub fn keys(app: &App) -> Keys {
         Tab::Network if app.net_search.typing => {
             typing("Network search", &[("Enter", "done"), ("Esc", "clear"), ("↑↓", "select"), ("^V", "paste")])
         }
+        Tab::Network if app.announce_log.open => mode(
+            "Announces",
+            &[
+                ("Enter", "open"),
+                ("a", "list"),
+                ("f", "kind"),
+                ("/", "search"),
+                ("End", "newest"),
+                ("P", "path"),
+                ("T", "probe"),
+                ("y", "copy"),
+                ("i", "interface"),
+                ("Esc", "back"),
+                ("↑↓", "select"),
+            ],
+        ),
         Tab::Network if !app.net_search.input.text().is_empty() => mode(
             "Network, searched",
             &[
@@ -212,6 +228,7 @@ pub fn keys(app: &App) -> Keys {
                 ("f", "filter"),
                 ("s", "sort"),
                 ("i", "interface"),
+                ("a", "announces"),
                 ("D", "forget path"),
                 ("↑↓", "select"),
             ],

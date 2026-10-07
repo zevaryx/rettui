@@ -416,6 +416,12 @@ impl App {
             Tab::Channels => {
                 self.channels.scroll = self.channels.scroll.saturating_add_signed(-delta);
             }
+            Tab::Network if self.announce_log.open => {
+                let key = if delta < 0 { KeyCode::Up } else { KeyCode::Down };
+                for _ in 0..delta.unsigned_abs() {
+                    self.announces_key(KeyEvent::from(key));
+                }
+            }
             Tab::Network => {
                 let count = self.network_rows().len();
                 if count > 0 {

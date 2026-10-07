@@ -87,6 +87,7 @@ pub fn router(state: WebState) -> Router {
         .route("/locations", get(locations))
         .route("/update/install", post(install_update))
         .route("/backup", get(download_backup))
+        .route("/announces", get(announces))
         .route("/map/tiles/{z}/{x}/{y}", get(map_tile))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/archive", get(conversation_archive))
@@ -1404,6 +1405,28 @@ async fn peers(State(state): State<WebState>, Query(query): Query<PeersQuery>) -
             })
             .await?,
     ))
+}
+
+#[derive(Deserialize)]
+struct AnnouncesQuery {
+    /// Only those after this one (by its `seq`).
+    after: Option<u64>,
+    /// `lxmf`, `nomad`, `propagation` or `other`; every kind when left out.
+    kind: Option<String>,
+    #[serde(default)]
+    q: String,
+    /// Only those whose path goes through this interface.
+    via: Option<String>,
+}
+
+/// The announce viewer's: every announce heard, oldest first.
+async fn announces(State(state): State<WebState>, Query(query): Query<AnnouncesQuery>) -> ApiResult {
+    let filter = match query.kind.as_deref().filter(|k| !k.is_empty()) {
+        None => crate::app::announces::HeardFilter::All,
+        Some(kind) => crate::app::announces::HeardFilter::parse(kind).ok_or_else(|| bad(format!("unknown kind {kind}")))?,
+    };
+    let via = query.via.filter(|v| !v.is_empty());
+    Ok(axum::Json(state.read(move |o| views::announces(&o.app, query.after, filter, &query.q, via.as_deref())).await?))
 }
 
 #[derive(Deserialize)]

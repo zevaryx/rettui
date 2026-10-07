@@ -7,6 +7,7 @@
 //! [`crate::nomad`] and [`crate::rrc`].
 
 pub mod autopn;
+pub mod heard;
 pub mod iface_log;
 mod reannounce;
 mod remote;
@@ -289,6 +290,8 @@ pub enum NetEvent {
         hops: u8,
     },
     Announced,
+    /// Any announce heard, of any kind, for the announce viewer.
+    Heard(heard::Heard),
     Message(Box<InboundMessage>),
     Delivery {
         id: u64,
@@ -561,6 +564,12 @@ async fn run(
     let mut lxmf_announces = subscribe(&runtime, LXMF_ASPECT).await?;
     let mut nomad_announces = subscribe(&runtime, NOMAD_NODE_ASPECT).await?;
     let mut pn_announces = subscribe(&runtime, PROPAGATION_ASPECT).await?;
+    // Everything, for the announce viewer. Missing some on a busy network
+    // is no loss there, so they aren't counted as missed.
+    let mut all_announces = runtime
+        .subscribe_announces_with_capacity(None, false, ANNOUNCE_BUFFER)
+        .await
+        .map_err(|e| format!("Could not subscribe to announces: {e}"))?;
 
     let links: LinkCache = Arc::new(Mutex::new(HashMap::new()));
 
@@ -937,6 +946,10 @@ async fn run(
                     }
                 }
             }
+            Some(announce) = all_announces.recv() => {
+                let heard = heard::heard(announce.destination_hash, announce.name_hash, announce.app_data.as_deref(), announce.hops);
+                let _ = ev.send(NetEvent::Heard(heard));
+            }
             Some(announce) = lxmf_announces.recv() => {
                 if let Some(key) = &announce.public_key {
                     known.lock().unwrap().remember(announce.destination_hash, key, announce.app_data.as_deref());
@@ -1064,6 +1077,7 @@ async fn run(
         let _ = lxmf_announces.close().await;
         let _ = nomad_announces.close().await;
         let _ = pn_announces.close().await;
+        let _ = all_announces.close().await;
     })
     .await;
     let _ = tokio::time::timeout(quick, delivery.close()).await;

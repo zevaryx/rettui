@@ -57,6 +57,9 @@
   --green-bg: #3fcf8e;
   --magenta-bg: #d670d6;
   --red-bg: #f26d6d;
+  --cyan-bg: #6fd3e8;
+  --blue-bg: #8fb8ff;
+  --grey-bg: #b4b4c0;
   /* Text on the accent colour, and the rest the light theme changes. */
   --on-accent: #0b0b10;
   --warn-bg: #3b3520;
@@ -515,6 +518,17 @@ td.name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .tag.lxmf { background: var(--magenta-bg); }
 .tag.nomad { background: var(--green-bg); }
 .tag.propagation { background: var(--yellow-bg); }
+.tag.rrc { background: var(--cyan-bg); }
+.tag.phone { background: var(--blue-bg); }
+.tag.other { background: var(--grey-bg); }
+/* The announce viewer: a time first, then as the Network list. */
+.heard-table th:nth-child(1) { width: 6.5em; }
+.heard-table th:nth-child(2) { width: 4.6em; }
+.heard-table th:nth-child(3) { width: auto; }
+.heard-table th:nth-child(4) { width: 25em; }
+.heard-table th:nth-child(5) { width: 5.5em; }
+.heard-table th:nth-child(6) { width: 10em; }
+.heard-table th:nth-child(7) { width: 19em; }
 mark { background: var(--yellow-bg); color: #111; border-radius: 2px; }
 .star { color: var(--yellow); }
 .actions { display: flex; gap: 6px; }
