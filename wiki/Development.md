@@ -28,6 +28,8 @@ writes the store and chat history in the background.
 The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/main/.github/workflows):
 
 - **CI** ([ci.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/ci.yml)) runs on every pull request:
+  - a formatting check: run `cargo fmt` before committing (`rustfmt.toml`
+    has rettui's style; `cargo fmt --check` says what it would change);
   - Clippy, with warnings as errors;
   - the tests on Linux, Windows and macOS.
 - **Build** ([build.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/build.yml)) builds the binaries

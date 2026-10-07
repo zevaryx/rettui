@@ -1,0 +1,5 @@
+# Commits git blame skips (GitHub does this by itself; locally, run
+# git config blame.ignoreRevsFile .git-blame-ignore-revs).
+
+# style: Format the code with rustfmt
+49c38b4ac042db1a17a21bd6b06eee3085d5fec3
