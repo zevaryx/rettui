@@ -4681,7 +4681,8 @@ app.views.status = {
         : 'None: add one in the Reticulum section to reach other peers.';
     this.interfaces.replaceChildren(...(s.interfaces.length ? s.interfaces.map((i) => el('div', { class: 'iface' },
       el('span', { class: i.online ? 'online' : 'offline', text: i.online ? '● ' : '○ ' }), i.name,
-      el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` })))
+      el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` }),
+      i.details?.length ? el('div', { class: 'iface-details dim', text: i.details.join(' · ') }) : null))
       : [el('div', { class: 'empty', text: noInterfaces })]));
     stickToBottom(this.log, () => this.log.replaceChildren(...s.log.map((line) => el('div', { text: line }))));
     // Pick up changes made elsewhere (the TUI's editor, or by hand).

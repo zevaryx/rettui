@@ -189,7 +189,9 @@ everywhere else), and notes for you alone.
 - **In the web UI:** the **Contact** button above the conversation.
 - **Ping:** rettui finds a path to them and times setting up a Link to
   their LXMF address (closed straight away; nothing is sent over it), then
-  shows how long it took and how many hops away they are. Any LXMF client
+  shows how long it took and how many hops away they are, and how well
+  their answer was heard (RSSI, SNR, link quality) when it came in over a
+  radio that reports it, such as an RNode. Any LXMF client
   answers, while it's running. The card keeps the last answer; `rettui
   ping <address>` does it from the command line.
 - **Sharing your address:** `c` in the Status tab (TUI), or **QR code** next

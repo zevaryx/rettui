@@ -59,7 +59,7 @@ mod tests {
     use super::*;
 
     fn iface(rx: u64, tx: u64) -> InterfaceInfo {
-        InterfaceInfo { name: "i".into(), online: true, rx_bytes: rx, tx_bytes: tx }
+        InterfaceInfo { name: "i".into(), online: true, rx_bytes: rx, tx_bytes: tx, ..Default::default() }
     }
 
     #[test]

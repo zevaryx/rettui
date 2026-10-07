@@ -597,7 +597,7 @@ mod tests {
         assert!(app.take_rns_restart());
         // Once Reticulum is back, it says as each connects; and, for one
         // that doesn't, why.
-        let iface = |name: &str, online| crate::net::InterfaceInfo { name: name.into(), online, rx_bytes: 0, tx_bytes: 0 };
+        let iface = |name: &str, online| crate::net::InterfaceInfo { name: name.into(), online, rx_bytes: 0, tx_bytes: 0, ..Default::default() };
         let ratspeak = ENTRY_POINTS[ratspeak].name;
         app.on_net(crate::net::NetEvent::Interfaces(vec![iface("RMAP World", false), iface(ratspeak, false)]));
         assert_eq!(app.connect_watch.as_ref().map(|(names, _)| names.len()), Some(2));

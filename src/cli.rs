@@ -203,7 +203,8 @@ pub async fn ping(settings: &Settings, paths: &Paths, identity: Identity, addres
         match event {
             NetEvent::Pinged { result: Ok(ping), .. } => {
                 let hops = ping.hops.map_or_else(String::new, |h| format!(", {h} hop{} away", if h == 1 { "" } else { "s" }));
-                println!("{} answered in {} ms{hops}", hex::encode(to), ping.rtt.as_millis());
+                let signal = ping.signal.map_or_else(String::new, |s| format!(", heard at {}", s.label()));
+                println!("{} answered in {} ms{hops}{signal}", hex::encode(to), ping.rtt.as_millis());
                 return Ok(());
             }
             NetEvent::Pinged { result: Err(e), .. } => bail!("{e}"),

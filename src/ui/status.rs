@@ -163,11 +163,13 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|i| {
             let (dot, color) = if i.online { ("●", Color::Green) } else { ("○", Color::Red) };
+            // Its rate, MTU and the rest, as rnstatus shows them.
+            let details: String = i.details().iter().map(|d| format!(" · {d}")).collect();
             Line::from(vec![
                 Span::styled(format!("{dot} "), Style::default().fg(color)),
                 Span::raw(i.name.clone()),
                 Span::styled(
-                    format!("  ↓{} ↑{}", human_bytes(i.rx_bytes), human_bytes(i.tx_bytes)),
+                    format!("  ↓{} ↑{}{details}", human_bytes(i.rx_bytes), human_bytes(i.tx_bytes)),
                     Style::default().fg(DIM),
                 ),
             ])

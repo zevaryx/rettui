@@ -182,12 +182,68 @@ impl Stop {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct InterfaceInfo {
     pub name: String,
     pub online: bool,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
+    /// Bits per second, as Reticulum takes it (for a radio, its air rate).
+    pub bitrate: u64,
+    pub mtu: u32,
+    /// Its interface mode (full, gateway, access point, roaming, boundary).
+    pub mode: String,
+    /// Connected clients, for a server interface.
+    pub clients: Option<u64>,
+    /// Announces waiting to go out, and held back for being too frequent.
+    pub announce_queue: Option<u64>,
+    pub held_announces: u64,
+    /// Packets it couldn't send.
+    pub tx_drops: u64,
+}
+
+impl InterfaceInfo {
+    /// What else there is to know of it, as rnstatus says it: its rate,
+    /// MTU, mode if not full, clients, and what's held or dropped.
+    pub fn details(&self) -> Vec<String> {
+        let mut details = Vec::new();
+        if self.bitrate > 0 {
+            details.push(bit_rate(self.bitrate));
+        }
+        if self.mtu > 0 {
+            details.push(format!("MTU {}", self.mtu));
+        }
+        if !self.mode.is_empty() && !self.mode.eq_ignore_ascii_case("full") {
+            details.push(format!("mode {}", self.mode.replace('_', " ").to_lowercase()));
+        }
+        if let Some(clients) = self.clients {
+            details.push(format!("{clients} client{}", if clients == 1 { "" } else { "s" }));
+        }
+        if let Some(queued) = self.announce_queue.filter(|&n| n > 0) {
+            details.push(format!("{queued} announce{} queued", if queued == 1 { "" } else { "s" }));
+        }
+        if self.held_announces > 0 {
+            details.push(format!("{} announce{} held", self.held_announces, if self.held_announces == 1 { "" } else { "s" }));
+        }
+        if self.tx_drops > 0 {
+            details.push(format!("{} dropped", self.tx_drops));
+        }
+        details
+    }
+}
+
+/// A rate in bits per second, as rnstatus shows it.
+pub fn bit_rate(bits: u64) -> String {
+    let bits = bits as f64;
+    if bits >= 1e9 {
+        format!("{:.2} Gbps", bits / 1e9)
+    } else if bits >= 1e6 {
+        format!("{:.2} Mbps", bits / 1e6)
+    } else if bits >= 1e3 {
+        format!("{:.2} kbps", bits / 1e3)
+    } else {
+        format!("{bits:.0} bps")
+    }
 }
 
 #[derive(Debug)]
@@ -625,6 +681,13 @@ async fn run(
                             online: i.online,
                             rx_bytes: i.rx_bytes,
                             tx_bytes: i.tx_bytes,
+                            bitrate: i.bitrate,
+                            mtu: i.mtu,
+                            mode: i.mode,
+                            clients: i.clients,
+                            announce_queue: i.announce_queue,
+                            held_announces: i.held_announces,
+                            tx_drops: i.tx_drops,
                         })
                         .collect();
                     let _ = ev.send(NetEvent::Interfaces(interfaces));
@@ -1019,6 +1082,23 @@ async fn announce(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn interface_details_as_rnstatus_gives_them() {
+        let lora = super::InterfaceInfo {
+            name: "RNode LoRa".into(),
+            online: true,
+            bitrate: 1_200,
+            mtu: 508,
+            mode: "full".into(),
+            held_announces: 2,
+            ..Default::default()
+        };
+        assert_eq!(lora.details(), ["1.20 kbps", "MTU 508", "2 announces held"]);
+        let server = super::InterfaceInfo { bitrate: 10_000_000, mode: "ACCESS_POINT".into(), clients: Some(1), tx_drops: 3, ..Default::default() };
+        assert_eq!(server.details(), ["10.00 Mbps", "mode access point", "1 client", "3 dropped"]);
+        assert!(super::InterfaceInfo::default().details().is_empty());
+    }
+
     use super::*;
     use lxmf_core::handlers::get_announce_app_data;
 

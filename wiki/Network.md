@@ -84,6 +84,16 @@ shows your identity, your interfaces and the log.
   no I2P router running, no IPv6 for the Auto interface (common in Docker
   containers), and an interface that has stopped retrying.
   The command-line commands print the same lines.
+- **Interfaces:** the Status tab lists each one, online (●) or not (○),
+  with what it has received (↓) and sent (↑), and what rnstatus shows of
+  it: its rate (for a radio, the air rate), MTU, mode if not *full*,
+  clients (for a server), and announces queued or held back and packets
+  dropped, when there are any.
+- **Signal:** a [ping](Messaging#contacts) says how well the answer was
+  heard (RSSI, SNR and link quality, as rnprobe does) when it came in over
+  a radio that reports it, such as an RNode. Received messages don't show
+  it: the Reticulum library rettui uses doesn't pass those readings on for
+  them.
 - **Traffic:** the corner of the sidebar, under the interface count, shows how
   fast data is coming in (↓) and going out (↑) over all interfaces, updated
   every few seconds. In the web UI, hovering over it shows the totals.

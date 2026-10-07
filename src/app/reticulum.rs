@@ -585,7 +585,7 @@ mod tests {
         let identity = rns_identity::identity::Identity::new();
         let start = |app: &mut crate::app::App, interface: &str| {
             app.on_net(NetEvent::Started { lxmf_hash: [5; 16], public_key: identity.get_public_key() });
-            let online = InterfaceInfo { name: interface.into(), online: true, rx_bytes: 0, tx_bytes: 0 };
+            let online = InterfaceInfo { name: interface.into(), online: true, rx_bytes: 0, tx_bytes: 0, ..Default::default() };
             app.on_net(NetEvent::Interfaces(vec![online.clone()]));
             app.on_net(NetEvent::Interfaces(vec![online]));
         };

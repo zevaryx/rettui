@@ -180,7 +180,7 @@ mod tests {
         app.tab = crate::app::Tab::Network;
         let shown = screen(&mut app);
         assert!(shown.contains("Not connected to anyone yet") && shown.contains("getting-started guide"), "{shown}");
-        app.interfaces.push(InterfaceInfo { name: "RMAP World".into(), online: true, rx_bytes: 0, tx_bytes: 0 });
+        app.interfaces.push(InterfaceInfo { name: "RMAP World".into(), online: true, rx_bytes: 0, tx_bytes: 0, ..Default::default() });
         let shown = screen(&mut app);
         assert!(shown.contains("Listening for announces") && shown.contains("every few hours") && shown.contains("Press A"), "{shown}");
         std::fs::remove_dir_all(&dir).unwrap();

@@ -358,6 +358,40 @@ pub struct Ping {
     pub rtt: std::time::Duration,
     /// How far away they are, if the path table says.
     pub hops: Option<u8>,
+    /// How well their answer was heard, if it came in over a radio that
+    /// says (an RNode): RSSI in dBm, SNR in dB, and link quality in %.
+    pub signal: Option<Signal>,
+}
+
+/// Radio readings of a packet heard (Reticulum's `get_rssi`, `get_snr` and
+/// `get_q`): each only if the interface reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Signal {
+    pub rssi: Option<f64>,
+    pub snr: Option<f64>,
+    pub q: Option<f64>,
+}
+
+impl Signal {
+    /// None if nothing was reported.
+    fn of(rssi: Option<f64>, snr: Option<f64>, q: Option<f64>) -> Option<Self> {
+        (rssi.is_some() || snr.is_some() || q.is_some()).then_some(Self { rssi, snr, q })
+    }
+
+    /// As rnprobe says it: "RSSI -91 dBm, SNR 4.0 dB, link quality 87%".
+    pub fn label(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(rssi) = self.rssi {
+            parts.push(format!("RSSI {rssi:.0} dBm"));
+        }
+        if let Some(snr) = self.snr {
+            parts.push(format!("SNR {snr:.1} dB"));
+        }
+        if let Some(q) = self.q {
+            parts.push(format!("link quality {q:.0}%"));
+        }
+        parts.join(", ")
+    }
 }
 
 /// Ping an LXMF address: find a path, then time setting up a Link to it
@@ -368,13 +402,14 @@ pub async fn ping(runtime: &ReticulumHandle, known: &Known, to: Hash) -> Result<
     lookup(runtime, known, to).await?;
     let hops = runtime.hops_to(to).await.ok().filter(|&h| h < rns_transport::constants::PATHFINDER_M);
     let started = std::time::Instant::now();
-    let LinkSession { handle, .. } = runtime
-        .connect_link(to, Identity::new(), link_options("rettui.ping", false))
-        .await
-        .map_err(|e| format!("No answer: {e}"))?;
+    // Their answer's radio readings are kept, for an RNode to report.
+    let options = LinkConnectOptions { track_phy_stats: true, ..link_options("rettui.ping", false) };
+    let LinkSession { handle, .. } =
+        runtime.connect_link(to, Identity::new(), options).await.map_err(|e| format!("No answer: {e}"))?;
     let rtt = started.elapsed();
+    let heard = handle.phy_stats();
     handle.close().await;
-    Ok(Ping { rtt, hops })
+    Ok(Ping { rtt, hops, signal: Signal::of(heard.rssi, heard.snr, heard.q) })
 }
 
 pub fn link_options(label: &str, identify: bool) -> LinkConnectOptions {
@@ -389,6 +424,14 @@ pub fn link_options(label: &str, identify: bool) -> LinkConnectOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn radio_readings_read_as_rnprobe_says_them() {
+        assert_eq!(Signal::of(None, None, None), None);
+        let heard = Signal::of(Some(-91.4), Some(4.25), Some(87.0)).unwrap();
+        assert_eq!(heard.label(), "RSSI -91 dBm, SNR 4.2 dB, link quality 87%");
+        assert_eq!(Signal::of(None, Some(-3.0), None).unwrap().label(), "SNR -3.0 dB");
+    }
 
     #[test]
     fn remembers_in_memory_and_keeps_app_data_from_named_announces() {

@@ -70,6 +70,8 @@ pub fn state(app: &App) -> Value {
         "known": app.store.peers.len(),
         "interfaces": app.interfaces.iter().map(|i| json!({
             "name": i.name, "online": i.online, "rx": i.rx_bytes, "tx": i.tx_bytes,
+            // Its rate, MTU and the rest, as rnstatus shows them.
+            "details": i.details(),
         })).collect::<Vec<_>>(),
         "interfaces_online": online,
         // Until they're all taken.

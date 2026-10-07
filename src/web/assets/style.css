@@ -192,6 +192,7 @@ a { color: var(--accent); }
 .list-item:hover { background: var(--raised); }
 .list-item.selected { background: var(--selected); border-left-color: var(--accent); }
 .list-item .main { flex: 1; min-width: 0; }
+.iface-details { font-size: 12px; padding-left: 1.4em; }
 /* Archived messages, shown above the rest when asked for: only to read. */
 .archive-block { border-bottom: 1px dashed var(--border); margin-bottom: 12px; }
 .archive-mark { text-align: center; padding: 4px 0 12px; }

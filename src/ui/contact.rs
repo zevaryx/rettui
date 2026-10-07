@@ -165,7 +165,7 @@ mod tests {
         // Ping (p): asked of the network, and shown when it answers.
         app.on_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char('p'), KeyModifiers::NONE));
         assert_eq!(app.pings.get(&key), Some(&crate::app::contacts::PingState::Waiting));
-        let ping = crate::net::Ping { rtt: std::time::Duration::from_millis(420), hops: Some(3) };
+        let ping = crate::net::Ping { rtt: std::time::Duration::from_millis(420), hops: Some(3), signal: None };
         app.on_net(crate::net::NetEvent::Pinged { to: [0xab; 16], result: Ok(ping) });
         terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
         let buffer = terminal.backend().buffer();

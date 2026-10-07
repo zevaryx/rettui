@@ -62,7 +62,8 @@ pub fn ping_label(state: &PingState) -> String {
                 Some(n) => format!(", {n} hops away"),
                 None => String::new(),
             };
-            format!("answered in {} ms{hops}", ping.rtt.as_millis())
+            let signal = ping.signal.map_or_else(String::new, |s| format!(", heard at {}", s.label()));
+            format!("answered in {} ms{hops}{signal}", ping.rtt.as_millis())
         }
         PingState::Done { result: Err(e), .. } => e.clone(),
     }
