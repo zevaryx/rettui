@@ -64,6 +64,7 @@ Changes since v1.5.1.
 - A documentation site, [zevaryx.github.io/rettui](https://zevaryx.github.io/rettui), built from `wiki/` with Zensical.
 - Instructions for running rettui as a systemd service.
 - The code is formatted with rustfmt, and CI checks it.
+- A release's notes are its section of this changelog; tagging fails without one.
 
 ### Known limitations
 - Received messages don't show RSSI/SNR; this needs an rsReticulum change.

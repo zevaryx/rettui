@@ -41,13 +41,18 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   - They're named after the version and commit, for example
     `rettui-v1.2.0-a4e545b-x86_64-unknown-linux-gnu.tar.gz`.
 - **Release** ([release.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/release.yml)) runs when a
-  tag starting with `v` is pushed. It:
-  1. checks the tag matches the version in `Cargo.toml`;
+  tag starting with `v` is pushed. Before tagging, add the release to
+  [CHANGELOG.md](https://github.com/zevaryx/rettui/blob/main/CHANGELOG.md) under a `## v1.7.0` heading (a
+  prerelease, `v1.7.0-rc.1`, may have its own, or uses the release's). It:
+  1. checks the tag matches the version in `Cargo.toml`, and that
+     `CHANGELOG.md` has its section;
   2. builds every platform with the Build workflow;
   3. pushes the Docker image to `ghcr.io`, using those Linux binaries
      (the Dockerfile's `prebuilt` stage);
-  4. creates a GitHub release with the archives, `SHA256SUMS` and
-     generated notes.
+  4. creates a GitHub release with the archives and `SHA256SUMS`, and
+     the tag's section of `CHANGELOG.md` (printed by
+     `.github/scripts/release-notes.sh v1.7.0`) as its notes, with the
+     Docker image's name.
 
   A tag containing a hyphen (`v1.3.0-rc.1`) makes a prerelease. Its image
   gets only the version tag, not `latest`.

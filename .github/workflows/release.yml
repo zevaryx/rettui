@@ -2,7 +2,8 @@ name: Release
 
 # Pushing a version tag (v1.2.0, or v1.3.0-rc.1 for a prerelease) builds
 # every platform, publishes the Docker image to GitHub's container registry
-# and makes a GitHub release with the archives attached.
+# and makes a GitHub release with the archives attached, and the tag's
+# section of CHANGELOG.md as its notes.
 on:
   push:
     tags: ["v*"]
@@ -23,6 +24,9 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match the version in Cargo.toml ($version)"
             exit 1
           fi
+      # Before anything is built: a release needs its notes.
+      - name: CHANGELOG.md has the release
+        run: .github/scripts/release-notes.sh "$GITHUB_REF_NAME" > /dev/null
 
   build:
     needs: check
@@ -50,6 +54,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            CHANGELOG.md
+            .github/scripts
+
       - uses: actions/download-artifact@v8
         with:
           pattern: rettui-*
@@ -68,10 +78,13 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}:${TAG#v}"
           prerelease=()
           if [[ "$TAG" == *-* ]]; then prerelease=(--prerelease); fi
+          {
+            .github/scripts/release-notes.sh "$TAG"
+            printf '\n**Docker:** `docker pull %s`\n' "$image"
+          } > notes.md
           gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "rettui $TAG" \
-            --notes "Docker: \`docker pull $image\`" \
-            --generate-notes \
+            --notes-file notes.md \
             "${prerelease[@]}"
