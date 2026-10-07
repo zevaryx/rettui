@@ -56,6 +56,7 @@ Changes since v1.5.1.
 - Updated to rsReticulum 1.3.0 and rsLXMF main. rsReticulum follows the `rettui` branch of zevaryx/rsReticulum until [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) is merged upstream.
 
 ### Fixed
+- Background notifications, map tiles and update checks failed behind a proxy that inspects HTTPS: they now trust the computer's own certificates as well as the bundled ones.
 - Destinations whose first path request went unanswered could only be reached after their next announce ([#10](https://github.com/zevaryx/rettui/issues/10)).
 - The `P`/`T` hints were missing while a Network search was active.
 

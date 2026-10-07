@@ -75,7 +75,10 @@ Checking downloads and installs nothing. To update:
 
 The check is one HTTPS request a day to GitHub's API (`api.github.com`),
 through the proxy set in the environment if there is one, with rettui's
-name and version as its user agent. What it found is kept in
+name and version as its user agent. Like rettui's other requests to the
+web (background notifications, map tiles), it trusts this computer's
+certificates as well as the ones rettui comes with, so it works behind a
+proxy that inspects HTTPS. What it found is kept in
 `update-check.json` in the data directory, so starting again doesn't
 ask again. If it can't reach GitHub (offline, say), it tries again an
 hour later, without a word. GitHub sees your IP address, as any website

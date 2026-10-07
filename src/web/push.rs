@@ -272,7 +272,7 @@ struct Sender {
 
 impl Sender {
     fn run(self, pushes: mpsc::Receiver<Push>) {
-        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(20)).try_proxy_from_env(true).build();
+        let agent = crate::https::agent(Duration::from_secs(20)).build();
         // Out of reach (no internet, say) is said once, until it works again.
         let mut unreachable = false;
         while let Ok(push) = pushes.recv() {

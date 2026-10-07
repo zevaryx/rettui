@@ -79,13 +79,9 @@ pub fn newer(current: &str, candidate: &str) -> bool {
 }
 
 /// What asks GitHub: saying it's rettui and which version, through the
-/// proxy set in the environment if any.
+/// proxy set in the environment if any, trusting what `crate::https` does.
 fn agent(timeout: Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout(timeout)
-        .user_agent(&format!("rettui/{VERSION} (+https://github.com/zevaryx/rettui)"))
-        .try_proxy_from_env(true)
-        .build()
+    crate::https::agent(timeout).user_agent(&format!("rettui/{VERSION} (+https://github.com/zevaryx/rettui)")).build()
 }
 
 /// The newest release, from GitHub. Blocking: for a thread of its own.

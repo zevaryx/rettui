@@ -3,6 +3,7 @@ mod cli;
 mod clock;
 mod config;
 mod emoji;
+mod https;
 mod icons;
 mod logging;
 mod lxmf;

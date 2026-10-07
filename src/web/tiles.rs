@@ -103,7 +103,7 @@ pub fn tile(dir: &Path, template: &str, z: u32, x: u32, y: u32) -> Result<Tile, 
 
 fn fetch(url: &str) -> Result<Tile, String> {
     use std::io::Read;
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(15)).user_agent(USER_AGENT).try_proxy_from_env(true).build();
+    let agent = crate::https::agent(Duration::from_secs(15)).user_agent(USER_AGENT).build();
     let response = agent.get(url).call().map_err(|e| format!("Couldn't fetch the map tile: {e}"))?;
     let mut data = Vec::new();
     response.into_reader().take(MAX_TILE_BYTES + 1).read_to_end(&mut data).map_err(|e| format!("Couldn't fetch the map tile: {e}"))?;
