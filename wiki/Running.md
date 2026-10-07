@@ -103,11 +103,24 @@ rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]
 rettui listen [--seconds N]  # announce, then print incoming messages
 rettui sync [--node HASH]    # download messages from the propagation node
 rettui ping <address>        # how long a Link takes to set up, and how many hops away
+rettui path <address> [-d]   # find the path to any destination (-d: forget it)
+rettui path -t               # list every path known
+rettui probe <address> [--name NAME]  # time an answer, as rnprobe does
 rettui address [--link]      # print your LXMF address (--link: as an lxma:// link with your key)
 ```
 
 `--data-dir DIR` uses another data directory, and `--rns-config DIR` another
 Reticulum config.
+
+`path` and `probe` take any destination's address: an LXMF address, a
+NomadNet node, a propagation node or an RRC hub. A path not known is asked
+for up to three times over a minute; each request after the first is
+printed as it goes. With rettui, rnsd or another Reticulum program running
+as the shared instance, `path` shows, finds and forgets that instance's
+paths; otherwise, the paths the last run with this Reticulum config saved.
+`probe --name` gives a destination's full name (such as `rnsh.listen`) for
+kinds rettui can't tell, which are sent a probe packet they must prove. See
+[Network](Network) for how paths and probes work.
 
 `send --mode paper` writes a [paper message](Messaging#paper-messages)
 instead of sending it. It prints the `lxm://` link, and before it the QR code

@@ -252,6 +252,8 @@ impl Scope {
             // Hub connections, rooms and whispers (their notifications go
             // out on their own).
             NetEvent::Rrc { .. } => Scope::CHANNELS,
+            // Only the terminal UI's browser shows it.
+            NetEvent::FetchProgress { .. } => Scope::NONE,
             _ => Scope::ALL,
         }
     }

@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 
-use super::App;
+use super::{App, PromptKind};
 use crate::net::autopn::Pick;
 use crate::net::{Hash, NetCommand, PeerKind, parse_hash};
 use crate::store::{Peer, Trust};
@@ -323,6 +323,27 @@ impl App {
             KeyCode::Char('y') => {
                 if let Some((key, _)) = selected {
                     self.copy(&key, "address");
+                }
+            }
+            // A path to the selected destination (or any address typed),
+            // found or shown; or forgotten.
+            KeyCode::Char('P') => {
+                let current = selected.map(|(key, _)| key).unwrap_or_default();
+                self.open_prompt(PromptKind::FindPath, "Find a path to (address)", &current);
+            }
+            // Probe the selected destination, as rnprobe does.
+            KeyCode::Char('T') => {
+                if let Some((key, _)) = selected
+                    && let Err(e) = self.probe(&key)
+                {
+                    self.warn(e);
+                }
+            }
+            KeyCode::Char('D') => {
+                if let Some((key, _)) = selected
+                    && let Err(e) = self.forget_path(&key)
+                {
+                    self.warn(e);
                 }
             }
             // Block an LXMF peer, or unblock one.

@@ -9,7 +9,7 @@ use rns_identity::destination::Destination;
 use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
-use crate::net::{Hash, Known, NetEvent, ensure_path, lookup};
+use crate::net::{Hash, Known, NetEvent, lookup};
 use crate::rrc::{self, Envelope, t};
 
 /// NomadNet retries HELLO up to five times before giving up.
@@ -137,11 +137,12 @@ async fn session(
     identity: &Identity,
     config: SessionConfig,
     commands: &mut mpsc::UnboundedReceiver<SessionCommand>,
-    emit: &impl Fn(RrcEvent),
+    emit: &(impl Fn(RrcEvent) + Send + Sync),
 ) -> Option<String> {
     let hub = config.hub;
     emit(RrcEvent::Status("Finding hub".into()));
-    if let Err(e) = ensure_path(runtime, hub).await {
+    let progress = |text: String| emit(RrcEvent::Status(text));
+    if let Err(e) = crate::net::find_path(runtime, hub, &progress).await {
         return Some(e);
     }
     let remote = match lookup(runtime, known, hub).await {
@@ -160,7 +161,7 @@ async fn session(
         handle,
         mut events,
         mut resource_offers,
-    } = match runtime.connect_link(hub, identity.clone(), options).await {
+    } = match crate::net::connect(runtime, hub, identity.clone(), options, &progress).await {
         Ok(session) => session,
         Err(e) => return Some(format!("Link failed: {e}")),
     };

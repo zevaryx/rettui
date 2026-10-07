@@ -5,9 +5,14 @@ narrower than 110 columns get a sidebar of icons and narrower side lists, so
 
 ## Keys
 
+The footer shows the most used keys of what's on screen, as many as fit,
+and `? keys` at its right edge: `?` lists them all, with those that work in
+every tab. While typing, `?` is typed, so it says `F1 keys` instead, and F1
+lists them. Any key, or a click, closes the list.
+
 | Tab | Keys |
 | --- | ---- |
-| All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
+| All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `?` list the keys of what's on screen (`F1` while typing), `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
 | Messages | `↑↓` pick a conversation, `Enter` write, `r` [reply](Messaging#replies) to their newest message, `m` pick a message, `c` [contact card](Messaging#contacts), `X` delete the conversation, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `p` read a [paper message](Messaging#paper-messages), `P` show the newest paper message written, `N` turn the conversation's notifications off or on, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
 | A picked message (`m`) | `↑↓` pick another, `r` / `Enter` reply, `e` [react](Messaging#reactions-locations-commands-and-voice-messages), `y` copy its text, `o` open its file or location, `t` [send it again](Messaging#message-actions) if it failed, `x` delete it, `Esc` done |
 | Contact card (`c`) | `r` your name for them, `e` notes, `t` [trust](Messaging#blocking-and-spam) (or stop), `l` leave an unknown sender as is, `b` block (or unblock), `y` copy their address, `X` delete the conversation, `Esc` close |
@@ -17,7 +22,7 @@ narrower than 110 columns get a sidebar of icons and narrower side lists, so
 | A paper message's QR code | `y` copy the link, `s` save the code as an SVG image, any other key (or a click) closes it |
 | Channels | `↑↓` pick a hub, room or whisper conversation, `Enter` write (text or `/commands`), `n` add a hub, `c` connect or disconnect, `a` toggle auto-connect, `J` show or hide joins and leaves, `N` next notification choice for the hub, room or whisper conversation, `x` leave a room, close a whisper conversation, or remove a hub, `y` copy an `rrc://` link, `m` message a user in the room, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
 | User menu (click a name, or `m`) | `w` open your whisper conversation, `l` LXMF message, `Enter` pick (also copy their LXMF address or identity), `Esc` close |
-| Network | `↑↓` select, `y` copy the selected address, `Enter` message a peer, browse a node, or pick a propagation node; `p` use the selected propagation node; `b` block or unblock an LXMF peer; `f` filter (all, LXMF peers, NomadNet nodes, propagation nodes, blocked); `/` search by name or address (`Enter` done, `Esc` clear) |
+| Network | `↑↓` select, `y` copy the selected address, `Enter` message a peer, browse a node, or pick a propagation node; `p` use the selected propagation node; `b` block or unblock an LXMF peer; `P` [find a path](Network) to the selected address (or one typed), `D` forget its path, `T` probe it; `f` filter (all, LXMF peers, NomadNet nodes, propagation nodes, blocked); `/` search by name or address (`Enter` done, `Esc` clear) |
 | Browser (both panes) | `←`/`→` move between the node pane and the page, `t` switch Saved/Nodes, `/` [search](NomadNet-Browsing#searching) both lists (`Enter` done, `Esc` clear), `g` go to an address, `y` copy the current address, `s` save the current page, `b` back, `r` refresh from the network, `R` clear the whole cache, `I` identify to this node (toggle), `H` home, `u` view the page's Micron source (toggle), `Esc` cancel loading |
 | Browser, node pane | `↑↓` select, `Enter` open beside the list, `s` save the selected node's home page (Nodes), `x` remove a saved page (Saved), `Esc` clear the search |
 | Browser, page | `Tab`/`Shift-Tab` move between links and fields, `Enter` follow a link or edit a field, `L` copy the selected link, `Y` copy the whole page (the raw source when viewing source), `Ctrl-V` paste into the selected field, `Esc` clear the selection or leave the source view, `↑↓` / `PgUp`/`PgDn` scroll |

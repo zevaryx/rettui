@@ -146,8 +146,7 @@ async fn send_direct(
 
     let LinkSession {
         handle, mut events, ..
-    } = runtime
-        .connect_link(outgoing.to, Identity::new(), link_options("rettui.lxmf", false))
+    } = crate::net::connect(runtime, outgoing.to, Identity::new(), link_options("rettui.lxmf", false), &|_| {})
         .await
         .map_err(|e| format!("Link failed: {e}"))?;
 
@@ -210,8 +209,7 @@ async fn propagate(
         tokio::task::spawn_blocking(move || local.submit(&packed)).await.map_err(|e| e.to_string())??;
         return Ok(Sent { delivered: Delivered::Propagated, hash });
     }
-    let LinkSession { handle, .. } = runtime
-        .connect_link(node, identity.clone(), link_options("rettui.propagation", true))
+    let LinkSession { handle, .. } = crate::net::connect(runtime, node, identity.clone(), link_options("rettui.propagation", true), &|_| {})
         .await
         .map_err(|e| format!("Link to propagation node failed: {e}"))?;
     let result = send_resource(&handle, packed).await;

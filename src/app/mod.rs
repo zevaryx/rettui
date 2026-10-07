@@ -25,6 +25,7 @@ mod input;
 mod messages;
 pub mod network;
 pub mod notify;
+pub mod paths;
 pub mod reach;
 mod saver;
 pub mod node;
@@ -117,6 +118,8 @@ impl Tab {
 pub enum PromptKind {
     NewConversation,
     GoTo,
+    /// An address to find a path to (see [`paths`]).
+    FindPath,
     EditField(usize),
     /// A `settings.json` entry, by key.
     EditSetting(&'static str),
@@ -371,6 +374,8 @@ pub struct App {
     pub should_quit: bool,
     /// Repaint the whole screen at the next draw (Ctrl-L).
     pub full_redraw: bool,
+    /// The list of keys is open (`?`, or F1).
+    pub keys_help: bool,
     /// What the screen was showing at the last draw (see [`App::view_key`]).
     shown_view: u64,
     pub sync: SyncState,
@@ -397,6 +402,10 @@ pub struct App {
     auto_error: Option<String>,
     /// Pings to contacts (by address): waiting, or how they went.
     pub pings: HashMap<String, contacts::PingState>,
+    /// Paths looked for on request, and probes, by address (see
+    /// [`paths`]).
+    pub path_lookups: HashMap<String, paths::PathLookup>,
+    pub probes: HashMap<String, paths::ProbeState>,
     /// The contacts last told to the network actor (trusted, and spared the
     /// stamp), so it's told only of changes.
     policy_sent: Option<(Vec<Hash>, Vec<Hash>)>,
@@ -527,6 +536,7 @@ impl App {
             log: VecDeque::new(),
             should_quit: false,
             full_redraw: false,
+            keys_help: false,
             shown_view: 0,
             sync: SyncState::Idle,
             conversations: ListState::default(),
@@ -539,6 +549,8 @@ impl App {
             contact_card: None,
             guide: None,
             pings: HashMap::new(),
+            path_lookups: HashMap::new(),
+            probes: HashMap::new(),
             auto_pick: None,
             auto_error: None,
             policy_sent: None,
@@ -851,8 +863,17 @@ impl App {
                 self.on_delivery(id, result);
             }
             NetEvent::Pinged { to, result } => self.on_pinged(to, result),
+            NetEvent::Path { to, result } => self.on_path(to, result),
+            NetEvent::PathProgress { to, text } => self.on_path_progress(to, text),
+            NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
+            NetEvent::Probed { to, result } => self.on_probed(to, result),
             NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
+            NetEvent::FetchProgress { id, text } => {
+                if let Some(pending) = self.browser.loading.as_mut().filter(|pending| pending.id == id) {
+                    pending.status = Some(text);
+                }
+            }
             NetEvent::Paper { id, result } => self.on_paper(id, result),
             NetEvent::SyncStarted => self.sync = SyncState::Running(Instant::now()),
             NetEvent::Synced(result) => {
@@ -928,6 +949,11 @@ impl App {
                 Some(location) => self.navigate(location),
                 None => self.warn(format!("Not a NomadNet address: {text}")),
             },
+            PromptKind::FindPath => {
+                if let Err(e) = self.find_path_to(&text) {
+                    self.warn(e);
+                }
+            }
             PromptKind::EditSetting(key) => self.update_setting(key, prompt.input.text()),
             PromptKind::EditField(f) => {
                 if let Some(page) = &mut self.browser.page
@@ -1187,7 +1213,7 @@ impl App {
         use std::mem::discriminant;
         let mut h = std::collections::hash_map::DefaultHasher::new();
         discriminant(&self.tab).hash(&mut h);
-        (self.composing, self.prompt.is_some(), self.net_search.typing).hash(&mut h);
+        (self.composing, self.prompt.is_some(), self.net_search.typing, self.keys_help).hash(&mut h);
         // Emoji over the view, which some terminals draw narrower than
         // they should (see `take_full_redraw`).
         if let Some(picker) = &self.emoji {

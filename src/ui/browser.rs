@@ -32,9 +32,10 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     let (url_text, url_style) = match (&app.browser.loading, &app.browser.location) {
         (Some(pending), _) => (
             format!(
-                "{}  loading {}s…  (Esc to cancel)",
+                "{}  loading {}s…{}  (Esc to cancel)",
                 pending.location.url(),
-                pending.started.elapsed().as_secs()
+                pending.started.elapsed().as_secs(),
+                pending.status.as_deref().map(|status| format!("  {status}…")).unwrap_or_default()
             ),
             Style::default().fg(Color::Yellow),
         ),

@@ -9,6 +9,7 @@ mod channels;
 mod chrome;
 mod contact;
 mod guide;
+mod keys;
 mod editor;
 mod emoji;
 mod messages;
@@ -149,6 +150,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if app.prompt.is_some() {
         draw_prompt(frame, app);
+    }
+    if app.keys_help {
+        keys::draw_keys(frame, app);
     }
 }
 

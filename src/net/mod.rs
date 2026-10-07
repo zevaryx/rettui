@@ -29,7 +29,10 @@ use crate::nomad::host::{self, HostConfig};
 use crate::nomad::{self, FetchedContent, LinkCache};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
-pub use remote::{Known, KnownIdentities, Ping, ensure_path, link_options, lookup};
+pub use remote::{
+    Known, KnownIdentities, PathInfo, Ping, Probe, Progress, connect, drop_path, ensure_path, find_path, link_options, lookup,
+    paths, probe, trace_path,
+};
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -95,6 +98,15 @@ pub enum NetCommand {
     SetContacts { trusted: Vec<Hash>, exempt: Vec<Hash> },
     /// Ping an LXMF address (answered with [`NetEvent::Pinged`]).
     Ping(Hash),
+    /// Find the path to any destination, asking for one if it isn't known
+    /// (answered with [`NetEvent::Path`]).
+    FindPath(Hash),
+    /// Forget the path to a destination (answered with
+    /// [`NetEvent::PathForgotten`]).
+    ForgetPath(Hash),
+    /// Probe any destination (answered with [`NetEvent::Probed`]; how
+    /// finding a path goes, with [`NetEvent::PathProgress`]).
+    Probe(Hash),
     /// Remember the public key of an LXMF address (from an `lxma://` link),
     /// to write to it before hearing its announce.
     Remember { to: Hash, public_key: [u8; 64] },
@@ -194,11 +206,20 @@ pub enum NetEvent {
     Message(Box<InboundMessage>),
     Delivery { id: u64, result: Result<lxmf::Sent, String> },
     Pinged { to: Hash, result: Result<Ping, String> },
+    /// The path to a destination, or why none was found; and how finding it
+    /// goes, meanwhile.
+    Path { to: Hash, result: Result<PathInfo, String> },
+    PathProgress { to: Hash, text: String },
+    /// A path forgotten (`had`: there was one).
+    PathForgotten { to: Hash, had: bool },
+    Probed { to: Hash, result: Result<Probe, String> },
     /// A propagation node picked automatically (or why none was).
     PropagationPicked(Result<autopn::Pick, String>),
     /// A paper message written: its `lxm://` link and hash.
     Paper { id: u64, result: Result<(String, [u8; 32]), String> },
     Fetched { id: u64, result: Result<FetchedContent, String> },
+    /// How a fetch is going, when finding a path takes a while.
+    FetchProgress { id: u64, text: String },
     SyncStarted,
     Synced(Result<usize, String>),
     Interfaces(Vec<InterfaceInfo>),
@@ -654,6 +675,30 @@ async fn run(
                             let _ = ev.send(NetEvent::Pinged { to, result });
                         });
                     }
+                    NetCommand::FindPath(to) => {
+                        let (runtime, ev) = (runtime.clone(), ev.clone());
+                        tokio::spawn(async move {
+                            let progress = |text: String| {
+                                let _ = ev.send(NetEvent::PathProgress { to, text });
+                            };
+                            let result = remote::trace_path(&runtime, to, &progress).await;
+                            let _ = ev.send(NetEvent::Path { to, result });
+                        });
+                    }
+                    NetCommand::Probe(to) => {
+                        let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
+                        tokio::spawn(async move {
+                            let progress = |text: String| {
+                                let _ = ev.send(NetEvent::PathProgress { to, text });
+                            };
+                            let result = remote::probe(&runtime, &known, to, None, &progress).await;
+                            let _ = ev.send(NetEvent::Probed { to, result });
+                        });
+                    }
+                    NetCommand::ForgetPath(to) => {
+                        let had = remote::drop_path(&runtime, to).await;
+                        let _ = ev.send(NetEvent::PathForgotten { to, had });
+                    }
                     NetCommand::Blackhole { to, block, quiet } => {
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
                         tokio::spawn(async move {
@@ -753,7 +798,10 @@ async fn run(
                         let (runtime, links, ev) = (runtime.clone(), links.clone(), ev.clone());
                         let identity = identify.then(|| identity.clone());
                         tokio::spawn(async move {
-                            let result = nomad::fetch(&runtime, &links, node, &path, &fields, identity).await;
+                            let progress = |text: String| {
+                                let _ = ev.send(NetEvent::FetchProgress { id, text });
+                            };
+                            let result = nomad::fetch(&runtime, &links, node, &path, &fields, identity, &progress).await;
                             let _ = ev.send(NetEvent::Fetched { id, result });
                         });
                     }

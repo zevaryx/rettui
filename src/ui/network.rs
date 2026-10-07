@@ -153,6 +153,7 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -161,10 +162,14 @@ mod tests {
     use crate::store::Store;
 
     fn screen(app: &mut crate::app::App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        screen_at(app, 120)
+    }
+
+    fn screen_at(app: &mut crate::app::App, width: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
         terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
-        (0..30).map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+        (0..30).map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
     }
 
     #[test]
@@ -178,6 +183,27 @@ mod tests {
         app.interfaces.push(InterfaceInfo { name: "RMAP World".into(), online: true, rx_bytes: 0, tx_bytes: 0 });
         let shown = screen(&mut app);
         assert!(shown.contains("Listening for announces") && shown.contains("every few hours") && shown.contains("Press A"), "{shown}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn path_and_probe_are_hinted_while_a_search_is_in_effect() {
+        let dir = std::env::temp_dir().join(format!("rettui-net-hints-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.tab = crate::app::Tab::Network;
+        let footer = |app: &mut crate::app::App, width| screen_at(app, width).lines().last().unwrap().to_string();
+        let plain = footer(&mut app, 80);
+        assert!(plain.contains("P path  T probe"), "{plain}");
+        // While typing, P and T go into the box.
+        app.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.on_paste("node");
+        let typing = footer(&mut app, 160);
+        assert!(!typing.contains("probe"), "{typing}");
+        // Done typing, the rows found can be traced and probed.
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let found = footer(&mut app, 80);
+        assert!(found.contains("Esc clear") && found.contains("P path  T probe"), "{found}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

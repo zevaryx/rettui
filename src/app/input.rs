@@ -25,6 +25,16 @@ impl App {
             self.full_redraw = true;
             return;
         }
+        // The list of keys: any key closes it, and does nothing else.
+        if self.keys_help {
+            self.keys_help = false;
+            return;
+        }
+        // F1 lists the keys while typing too (`?` would be typed).
+        if key.code == KeyCode::F(1) {
+            self.keys_help = true;
+            return;
+        }
         if let Some(view) = &self.paper_view {
             match key.code {
                 KeyCode::Char('y') => {
@@ -159,6 +169,10 @@ impl App {
                 self.should_quit = true;
                 return;
             }
+            KeyCode::Char('?') => {
+                self.keys_help = true;
+                return;
+            }
             KeyCode::Char(c @ '1'..='7') => {
                 self.switch_tab(Tab::ALL[c as usize - '1' as usize]);
                 return;
@@ -186,6 +200,12 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, mouse: MouseEvent) {
+        if self.keys_help {
+            if let MouseEventKind::Down(_) = mouse.kind {
+                self.keys_help = false;
+            }
+            return;
+        }
         if self.paper_view.is_some() {
             if let MouseEventKind::Down(_) = mouse.kind {
                 self.paper_view = None;

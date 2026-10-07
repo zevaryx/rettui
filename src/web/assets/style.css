@@ -214,6 +214,12 @@ a { color: var(--accent); }
 .guide .guide-status.warn { color: var(--yellow); }
 .guide .guide-warning { margin: 2px 0 8px 28px; }
 .guide .guide-warning[hidden] { display: none; }
+.dialog.path { width: min(560px, 92vw); }
+.path-dialog .path-status { font-family: var(--mono); margin: 12px 0; }
+.path-dialog .path-status.waiting { color: var(--yellow); }
+.path-dialog .path-status.found { color: var(--green); }
+.path-dialog .path-status.failed { color: var(--red); }
+.path-dialog .buttons { display: flex; gap: 8px; margin-top: 12px; }
 .guide .guide-entries { margin: 14px 0 0; }
 .guide .guide-region { margin: 12px 0 0; font-size: 0.85em; }
 .guide .guide-option .help[hidden] { display: none; }
@@ -379,7 +385,8 @@ td.name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .net-table th:nth-child(3) { width: 25em; }
 .net-table th:nth-child(4) { width: 5.5em; }
 .net-table th:nth-child(5) { width: 7em; }
-.net-table th:nth-child(6) { width: 16em; }
+.net-table th:nth-child(6) { width: 20em; }
+.net-table .actions { flex-wrap: wrap; }
 .net-table td.name { max-width: none; }
 .tag { font-family: var(--mono); font-size: 11.5px; font-weight: 700; color: #111; padding: 1px 5px; border-radius: 3px; }
 .tag.lxmf { background: var(--magenta); }
