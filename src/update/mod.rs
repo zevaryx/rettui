@@ -5,8 +5,11 @@
 //!
 //! The question is one HTTPS request to GitHub's API, through the proxy
 //! set in the environment if any, saying only that it's rettui and which
-//! version. Nothing is downloaded or installed: the UIs say a newer release
-//! is out and link to its page.
+//! version. Nothing is downloaded or installed by it: the UIs say a newer
+//! release is out and link to its page. Installing one is asked for apart,
+//! and only release builds can (see [`install`]).
+
+pub mod install;
 
 use std::path::Path;
 use std::time::Duration;
@@ -75,13 +78,19 @@ pub fn newer(current: &str, candidate: &str) -> bool {
     }
 }
 
-/// The newest release, from GitHub. Blocking: for a thread of its own.
-pub fn fetch() -> Result<Release, String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(20))
+/// What asks GitHub: saying it's rettui and which version, through the
+/// proxy set in the environment if any.
+fn agent(timeout: Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout(timeout)
         .user_agent(&format!("rettui/{VERSION} (+https://github.com/zevaryx/rettui)"))
         .try_proxy_from_env(true)
-        .build();
+        .build()
+}
+
+/// The newest release, from GitHub. Blocking: for a thread of its own.
+pub fn fetch() -> Result<Release, String> {
+    let agent = agent(Duration::from_secs(20));
     let fail = |e: String| format!("Couldn't check for updates: {e}");
     let response = agent.get(LATEST).set("Accept", "application/vnd.github+json").call().map_err(|e| fail(e.to_string()))?;
     let body = response.into_string().map_err(|e| fail(e.to_string()))?;

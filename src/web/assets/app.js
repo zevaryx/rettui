@@ -5363,9 +5363,19 @@ app.views.status = {
       label('RNS config'), el('span', { class: 'mono', text: s.rns_config || 'rsReticulum default' }),
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Known'), el('span', { text: `${s.known} destinations` }),
-      ...(s.update ? [label('Update'), el('span', {},
-        el('strong', { class: 'update-note', text: `rettui ${s.update.version} is out ` }),
-        el('a', { href: s.update.url, target: '_blank', rel: 'noopener noreferrer', text: 'what\'s new ↗' }))] : []),
+      ...(s.update ? [label('Update'), s.update.installed
+        ? el('strong', { class: 'online', text: `rettui ${s.update.version} installed: start rettui again to use it` })
+        : el('div', { class: 'row' },
+          el('strong', { class: 'update-note', text: `rettui ${s.update.version} is out` }),
+          el('a', { href: s.update.url, target: '_blank', rel: 'noopener noreferrer', text: 'what\'s new ↗' }),
+          s.update.installing ? el('span', { class: 'dim', text: 'installing…' })
+            : s.update.installable ? el('button', { text: 'Install', title: 'Download it from GitHub, check it, and put it in place of this one', onclick: async () => {
+              if (!confirm(`Install rettui ${s.update.version} in place of this one? rettui carries on as it is until it's started again.`)) return;
+              const done = await attempt(() => api.post('/update/install'));
+              if (done) toast(done.doing);
+              loadNow();
+            } })
+              : el('span', { class: 'dim', text: s.update.how }))] : []),
       label('Notifications'), notifications.describe(),
       label('Theme'), el('select', { title: 'This browser\'s colours', onchange: (e) => theme.set(e.target.value) },
         [['dark', 'Dark'], ['light', 'Light'], ['auto', 'As the device is set']]

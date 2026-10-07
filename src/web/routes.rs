@@ -85,6 +85,7 @@ pub fn router(state: WebState) -> Router {
         .route("/sign-out-others", post(sign_out_others))
         .route("/icons", get(icons))
         .route("/locations", get(locations))
+        .route("/update/install", post(install_update))
         .route("/map/tiles/{z}/{x}/{y}", get(map_tile))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/archive", get(conversation_archive))
@@ -479,6 +480,13 @@ struct IconQuery {
 async fn icons(Query(query): Query<IconQuery>) -> axum::Json<Value> {
     let found = crate::icons::search(&query.q, 120);
     axum::Json(json!(found.iter().map(|(name, glyph)| json!({ "name": name, "glyph": glyph.to_string() })).collect::<Vec<_>>()))
+}
+
+/// Install the newer release found in this one's place (it carries on
+/// downloading; the status says how it went).
+async fn install_update(State(state): State<WebState>) -> ApiResult {
+    let doing = state.write(|o| o.app.install_update()).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "ok": true, "doing": doing })))
 }
 
 /// Everyone's newest location, for the map.

@@ -52,11 +52,26 @@ a day** in the getting-started guide, or turn on *Check for updates*
 - Status says which release, with a link to what's new;
 - the log says so, once.
 
-Nothing is downloaded or installed. To update, put the new release's
-binary in place of the old one, and start it again; the data directory
-stays as it is. With Docker, `docker compose pull` then
-`docker compose up -d`; from source, `git pull --recurse-submodules` and
-build again.
+Checking downloads and installs nothing. To update:
+
+- **A binary from the releases page** can install the new release itself,
+  when you ask: `U` in the terminal UI's Status tab, **Install** beside the
+  update in the web UI's Status page, or `rettui update` (which checks
+  first, whether or not *Check for updates* is on, and asks before
+  installing; `--yes` doesn't ask). It downloads the release's archive for
+  your system from GitHub with its `SHA256SUMS`, checks the one against
+  the other, and runs the new `rettui` once (`--version`) to be sure it
+  works on your computer before it replaces the old one. rettui carries on
+  as it was: start it again (for a service, restart it) to use the new
+  one. The checksums come from the same release, so they catch a download
+  gone wrong, not a release that isn't rettui's.
+- **By hand:** put the new release's binary in place of the old one, and
+  start it again. The data directory stays as it is.
+- **Docker:** `docker compose pull`, then `docker compose up -d`. (A
+  container's rettui doesn't replace itself: it would be lost with the
+  container.)
+- **From source:** `git pull --recurse-submodules`, and build again.
+- **A package manager's:** update it with that one.
 
 The check is one HTTPS request a day to GitHub's API (`api.github.com`),
 through the proxy set in the environment if there is one, with rettui's

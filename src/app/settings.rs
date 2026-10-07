@@ -260,6 +260,7 @@ impl App {
                 self.confirm("First steps hidden");
             }
             KeyCode::Char('i') => self.ask_identity_file(),
+            KeyCode::Char('U') => self.ask_install_update(),
             _ => {}
         }
     }

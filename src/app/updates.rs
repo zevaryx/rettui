@@ -7,7 +7,8 @@
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use super::{App, now};
+use super::{App, PromptKind, now};
+use crate::update::install::{self, Install};
 use crate::update::{self, Checked, Release};
 
 pub struct Updates {
@@ -21,11 +22,34 @@ pub struct Updates {
     told: Option<String>,
     /// How it asks (tests don't go online).
     pub(crate) fetch: fn() -> Result<Release, String>,
+    /// How this copy is updated: in place, or how instead (looked at once).
+    pub install: Install,
+    /// The version being installed, and where the answer comes.
+    installing: Option<(String, Receiver<Result<String, String>>)>,
+    /// The version installed this run, waiting for rettui to start again.
+    pub installed: Option<String>,
+    /// How it installs one (tests don't go online either).
+    pub(crate) installer: fn(&Release) -> Result<String, String>,
 }
 
 impl Updates {
     pub fn load(path: &std::path::Path) -> Self {
-        Self { checked: Checked::load(path), asking: None, failed: None, told: None, fetch: update::fetch }
+        Self {
+            checked: Checked::load(path),
+            asking: None,
+            failed: None,
+            told: None,
+            fetch: update::fetch,
+            install: Install::here(),
+            installing: None,
+            installed: None,
+            installer: install::install_release,
+        }
+    }
+
+    /// Installing a newer release, now.
+    pub fn installing(&self) -> bool {
+        self.installing.is_some()
     }
 }
 
@@ -39,6 +63,21 @@ impl App {
     /// again when a day has gone by (an hour, after one that couldn't be
     /// made).
     pub(super) fn updates_tick(&mut self) {
+        if let Some((version, answer)) = &self.updates.installing {
+            match answer.try_recv() {
+                Ok(Ok(done)) => {
+                    self.updates.installed = Some(version.clone());
+                    self.updates.installing = None;
+                    self.notify(done);
+                }
+                Ok(Err(e)) => {
+                    self.updates.installing = None;
+                    self.fail(e);
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => self.updates.installing = None,
+            }
+        }
         if let Some(asking) = &self.updates.asking {
             match asking.try_recv() {
                 Ok(Ok(release)) => {
@@ -81,6 +120,46 @@ impl App {
                 let _ = tx.send(fetch());
             });
             self.updates.asking = Some(rx);
+        }
+    }
+
+    /// Install the newer release found in this one's place (in a thread
+    /// of its own): what's happening, or why it can't be.
+    pub fn install_update(&mut self) -> Result<String, String> {
+        let release = self.update_available().cloned().ok_or("There's no newer release to install (Check for updates finds them)")?;
+        if let Install::Elsewhere(how) = &self.updates.install {
+            return Err(how.clone());
+        }
+        if self.updates.installing() {
+            return Err(format!("Installing rettui {} already", release.version));
+        }
+        if self.updates.installed.as_deref() == Some(release.version.as_str()) {
+            return Err(format!("rettui {} is installed: start rettui again to use it", release.version));
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let installer = self.updates.installer;
+        let wanted = release.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(installer(&wanted));
+        });
+        self.updates.installing = Some((release.version.clone(), rx));
+        let doing = format!("Installing rettui {}: downloading it", release.version);
+        self.log(doing.clone());
+        Ok(doing)
+    }
+
+    /// Ask before installing the newer release (`U` in Status), or say why
+    /// it can't be.
+    pub(super) fn ask_install_update(&mut self) {
+        let Some(release) = self.update_available().cloned() else {
+            return self.warn("There's no newer release to install (Check for updates finds them)");
+        };
+        match &self.updates.install {
+            Install::InPlace { exe, .. } => {
+                let question = format!("Install rettui {} in place of {}? (y/n)", release.version, exe.display());
+                self.open_prompt(PromptKind::ConfirmInstallUpdate, &question, "");
+            }
+            Install::Elsewhere(how) => self.warn(how.clone()),
         }
     }
 
@@ -169,6 +248,48 @@ mod tests {
         settle(&mut app);
         assert!(app.update_available().is_none());
         assert!(!app.log.iter().any(|l| l.contains("is out")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_newer_release_is_installed_when_asked_where_it_can_be() {
+        let dir = std::env::temp_dir().join(format!("rettui-updates-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, on(), crate::store::Store::default());
+        // Nothing found yet: nothing to install.
+        assert!(app.install_update().unwrap_err().contains("no newer release"));
+        app.updates.fetch = release;
+        app.on_tick();
+        settle(&mut app);
+        // A build from source (as tests are) says how instead.
+        assert!(app.install_update().unwrap_err().starts_with("Built from source"));
+        // A release build: installed, in a thread, and said.
+        app.updates.install = super::Install::InPlace { exe: dir.join("rettui"), target: "x86_64-unknown-linux-gnu" };
+        app.updates.installer = |r| Ok(format!("Installed rettui {}: start rettui again to use it", r.version));
+        assert!(app.install_update().unwrap().contains("Installing rettui 99.0.0"));
+        assert!(app.install_update().unwrap_err().contains("already"));
+        for _ in 0..200 {
+            app.on_tick();
+            if !app.updates.installing() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(app.updates.installed.as_deref(), Some("99.0.0"));
+        assert!(app.log.iter().any(|l| l.contains("Installed rettui 99.0.0")));
+        assert!(app.install_update().unwrap_err().contains("start rettui again"));
+        // One that fails says why.
+        app.updates.installed = None;
+        app.updates.installer = |_| Err("The download isn't what the release's SHA256SUMS says".into());
+        app.install_update().unwrap();
+        for _ in 0..200 {
+            app.on_tick();
+            if !app.updates.installing() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.updates.installed.is_none() && app.log.iter().any(|l| l.contains("SHA256SUMS")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

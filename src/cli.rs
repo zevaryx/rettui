@@ -353,3 +353,36 @@ pub async fn fetch(settings: &Settings, url: &str, raw: bool, identity: Option<I
     }
     Ok(())
 }
+
+/// `rettui update`: the newest release, and installing it in this one's
+/// place if it's newer and this copy can be (asking first, unless `yes`).
+pub async fn update(yes: bool) -> Result<()> {
+    use crate::update::install::{self, Install};
+    let release = tokio::task::spawn_blocking(crate::update::fetch).await?.map_err(|e| anyhow::anyhow!(e))?;
+    if !crate::update::newer(crate::update::VERSION, &release.version) {
+        println!("rettui {} is the newest release (this is {}).", release.version, crate::update::VERSION);
+        return Ok(());
+    }
+    println!("rettui {} is out (this is {}): {}", release.version, crate::update::VERSION, release.url);
+    let exe = match Install::here() {
+        Install::InPlace { exe, .. } => exe,
+        Install::Elsewhere(how) => {
+            println!("{how}.");
+            return Ok(());
+        }
+    };
+    if !yes {
+        print!("Install it in place of {}? [y/N] ", exe.display());
+        std::io::Write::flush(&mut std::io::stdout())?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+            println!("Not installed.");
+            return Ok(());
+        }
+    }
+    println!("Downloading rettui {}…", release.version);
+    let done = tokio::task::spawn_blocking(move || install::install_release(&release)).await?.map_err(|e| anyhow::anyhow!(e))?;
+    println!("{done}.");
+    Ok(())
+}

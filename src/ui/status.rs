@@ -133,11 +133,22 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     ];
     let mut lines = lines;
     if let Some(release) = app.update_available() {
-        lines.push(Line::from(vec![
-            label("Update"),
-            Span::styled(format!("rettui {} is out", release.version), Style::default().fg(Color::Yellow).bold()),
-            Span::raw(format!("  {}", release.url)),
-        ]));
+        let mut spans = vec![label("Update")];
+        if app.updates.installed.as_deref() == Some(release.version.as_str()) {
+            spans.push(Span::styled(
+                format!("rettui {} installed: start rettui again to use it", release.version),
+                Style::default().fg(Color::Green).bold(),
+            ));
+        } else {
+            spans.push(Span::styled(format!("rettui {} is out", release.version), Style::default().fg(Color::Yellow).bold()));
+            if app.updates.installing() {
+                spans.push(Span::raw("  installing…"));
+            } else if app.updates.install.in_place() {
+                spans.push(Span::raw("  U installs it"));
+            }
+            spans.push(Span::styled(format!("  {}", release.url), Style::default().fg(dim())));
+        }
+        lines.push(Line::from(spans));
     }
     // Until they're all taken: each step's mark, and the next to take.
     if let Some(next) = steps.iter().find(|step| !step.done) {

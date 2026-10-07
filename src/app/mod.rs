@@ -179,6 +179,8 @@ pub enum PromptKind {
     Format(format::Action),
     /// A location to share with someone (by address).
     ShareLocation(String),
+    /// Install the newer release found, in this one's place.
+    ConfirmInstallUpdate,
 }
 
 /// What a QR code over the tab shows.
@@ -1076,6 +1078,14 @@ impl App {
                 }
             }
             PromptKind::ShareLocation(key) => self.submit_share_location(key, &text),
+            PromptKind::ConfirmInstallUpdate => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    match self.install_update() {
+                        Ok(doing) => self.confirm(doing),
+                        Err(e) => self.warn(e),
+                    }
+                }
+            }
             PromptKind::Attach if !text.is_empty() => self.add_attachment(&text),
             PromptKind::Attach => self.composing = true,
             PromptKind::DisplayName if !text.is_empty() => {

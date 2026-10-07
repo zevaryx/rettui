@@ -30,6 +30,9 @@ COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 # Set PUID and PGID (or GUID) for the owner of /data, and PORT for the port;
 # they default to 1000, 1000 and 8740 in the entrypoint.
 ENV HOME=/data
+# A container's rettui is the image's: updated by pulling a new image, not
+# by replacing itself (see src/update/install.rs).
+ENV RETTUI_CONTAINER=1
 VOLUME /data
 EXPOSE 8740
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

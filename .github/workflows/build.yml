@@ -58,6 +58,10 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
+        # Marks the binary as a release build for its target, which can
+        # update itself (see src/update/install.rs).
+        env:
+          RETTUI_RELEASE_TARGET: ${{ matrix.target }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package

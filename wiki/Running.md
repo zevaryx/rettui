@@ -113,6 +113,7 @@ rettui ping <address>        # how long a Link takes to set up, and how many hop
 rettui path <address> [-d]   # find the path to any destination (-d: forget it)
 rettui path -t               # list every path known
 rettui probe <address> [--name NAME]  # time an answer, as rnprobe does
+rettui update [--yes]  # check for a newer release, and install it (see Installing)
 rettui address [--link]      # print your LXMF address (--link: as an lxma:// link with your key)
 ```
 

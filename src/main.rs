@@ -146,6 +146,17 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Check for a newer release, and install it in this one's place.
+    ///
+    /// Only the binaries from the releases page update themselves (checked
+    /// against the release's SHA256SUMS, and run once before they replace
+    /// this one); a build from source, a container or a package manager's
+    /// says how to update instead. Start rettui again afterwards.
+    Update {
+        /// Install it without asking.
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// Download waiting messages from the propagation node.
     Sync {
         /// Propagation node to use instead of the configured one.
@@ -157,6 +168,8 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    // What updating on Windows left (the program it replaced).
+    update::install::tidy();
     let paths = Paths::new(cli.data_dir)?;
     let mut settings = Settings::load(&paths.settings)?;
     if cli.rns_config.is_some() {
@@ -218,6 +231,7 @@ async fn main() -> Result<()> {
         Some(Command::Path { table: true, .. }) => cli::path_table(&settings).await,
         Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
+        Some(Command::Update { yes }) => cli::update(yes).await,
         None => run_tui(settings, paths, identity).await,
     }
 }

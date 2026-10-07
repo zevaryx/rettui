@@ -56,7 +56,20 @@ pub fn state(app: &App) -> Value {
         // How big pictures sent may be (the composer says they'll shrink).
         "picture_size": app.settings.picture_size,
         // A newer release, if one's out and update checks are on.
-        "update": app.update_available().map(|r| json!({ "version": r.version, "url": r.url })),
+        "update": app.update_available().map(|r| {
+            let how = match &app.updates.install {
+                crate::update::install::Install::InPlace { .. } => None,
+                crate::update::install::Install::Elsewhere(how) => Some(how.clone()),
+            };
+            json!({
+                "version": r.version, "url": r.url,
+                // Whether Install can put it in this one's place, else how
+                // to update instead; and how installing it is going.
+                "installable": how.is_none(), "how": how,
+                "installing": app.updates.installing(),
+                "installed": app.updates.installed.as_deref() == Some(r.version.as_str()),
+            })
+        }),
         // This station's location, to share (see the Location setting).
         "location": app.settings.own_location().map(|l| json!({ "latitude": l.latitude, "longitude": l.longitude })),
         "lxmf_address": app.lxmf_hash.map(hex::encode),
