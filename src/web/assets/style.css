@@ -358,6 +358,35 @@ header .avatar.icon { font-size: 17px; }
 .attachment.voice { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .attachment.voice audio { height: 32px; max-width: 100%; }
 .message .location { margin-top: 2px; }
+/* The map (🗺): tiles under the places, a list beside (under, on phones). */
+.dialog.map-dialog { width: min(1100px, 100%); height: min(780px, 100%); overflow: hidden; }
+.map-body { flex: 1; display: flex; gap: 10px; min-height: 0; }
+.map { position: relative; flex: 1; min-height: 240px; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--sunken); touch-action: none; user-select: none; cursor: grab; }
+.map.dragging { cursor: grabbing; }
+.map-tiles, .map-marks { position: absolute; inset: 0; }
+.map-tile { position: absolute; left: 0; top: 0; width: 256px; height: 256px; max-width: none; pointer-events: none; }
+.map-tile.missing { visibility: hidden; }
+.map-tiles.none { background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 64px 64px; }
+.map-marker { position: absolute; left: 0; top: 0; width: 0; height: 0; min-height: 0; padding: 0; border: 0; background: none; overflow: visible; }
+.map-marker > .avatar, .map-pin { position: absolute; left: -12px; top: -12px; width: 24px; height: 24px; box-shadow: 0 0 0 2px var(--panel); }
+.map-pin { border-radius: 50%; background: var(--magenta); }
+.map-marker.station .map-pin { background: var(--yellow); border-radius: 4px; transform: rotate(45deg) scale(.8); }
+.map-label { position: absolute; left: 16px; top: -10px; white-space: nowrap; padding: 1px 6px; border-radius: 4px; background: var(--panel); color: var(--text); font-size: 12px; border: 1px solid var(--border); }
+.map-marker.picked { z-index: 1; }
+.map-marker.picked .map-label { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.map-circle { position: absolute; left: 0; top: 0; border-radius: 50%; background: #4fd6e026; border: 1px solid #4fd6e080; pointer-events: none; }
+.map-controls { position: absolute; top: 8px; left: 8px; z-index: 2; display: flex; flex-direction: column; gap: 4px; }
+.map-controls button { width: 32px; height: 32px; padding: 0; font-size: 16px; }
+.map-credit { position: absolute; right: 0; bottom: 0; z-index: 2; padding: 1px 6px; font-size: 11px; background: #ffffffcc; color: #333; border-top-left-radius: 4px; }
+.map-list { width: 260px; overflow-y: auto; }
+.map-list .list-item { cursor: pointer; }
+.map-actions { gap: 8px; align-items: center; margin-top: 2px; font-size: 12px; }
+.map-actions .inline { margin-left: 0; }
+@media (max-width: 700px) {
+  .map-body { flex-direction: column; }
+  .map-list { width: auto; max-height: 35%; }
+}
+.dialog.share-location input { width: 100%; }
 .message .note { font-style: italic; font-size: 12.5px; }
 .stranger { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px; margin-bottom: 10px; border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: 6px; font-size: 13px; }
 .unknown-mark { color: var(--yellow); font-weight: 700; }

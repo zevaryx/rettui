@@ -84,6 +84,8 @@ pub fn router(state: WebState) -> Router {
         .route("/search", get(search_messages))
         .route("/sign-out-others", post(sign_out_others))
         .route("/icons", get(icons))
+        .route("/locations", get(locations))
+        .route("/map/tiles/{z}/{x}/{y}", get(map_tile))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/archive", get(conversation_archive))
         .route("/conversations/{key}/export", get(export_conversation))
@@ -494,6 +496,41 @@ async fn icons(Query(query): Query<IconQuery>) -> axum::Json<Value> {
     axum::Json(json!(found.iter().map(|(name, glyph)| json!({ "name": name, "glyph": glyph.to_string() })).collect::<Vec<_>>()))
 }
 
+/// Everyone's newest location, for the map.
+async fn locations(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::locations(&o.app)).await?))
+}
+
+/// A few map tiles fetched at once, at most (the rest wait their turn):
+/// what a map being looked at needs, not more.
+static FETCHING_TILES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+/// A map tile, from the Map tiles setting's source: kept, or fetched and
+/// kept (see `tiles`).
+async fn map_tile(State(state): State<WebState>, Path((z, x, y)): Path<(u32, u32, u32)>) -> Result<Response, ApiError> {
+    let template = state.read(|o| o.app.settings.map_tiles.clone()).await?;
+    let template = template.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no map tiles are set (Map tiles)".into()))?;
+    if super::tiles::tile_url(&template, z, x, y).is_none() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "there's no such tile".into()));
+    }
+    let dir = state.paths.map_tiles.clone();
+    let (kept_dir, kept_template) = (dir.clone(), template.clone());
+    let kept = tokio::task::spawn_blocking(move || super::tiles::fresh(&kept_dir, &kept_template, z, x, y))
+        .await
+        .map_err(|e| bad(e.to_string()))?;
+    let tile = match kept {
+        Some(tile) => tile,
+        None => {
+            let _turn = FETCHING_TILES.acquire().await.map_err(|e| bad(e.to_string()))?;
+            tokio::task::spawn_blocking(move || super::tiles::tile(&dir, &template, z, x, y))
+                .await
+                .map_err(|e| bad(e.to_string()))?
+                .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?
+        }
+    };
+    Ok(([(header::CONTENT_TYPE, tile.kind), (header::CACHE_CONTROL, "private, max-age=86400")], tile.data).into_response())
+}
+
 #[derive(Deserialize)]
 struct SearchQuery {
     q: String,
@@ -853,6 +890,30 @@ struct SendBody {
     /// base64. It's sent as Codec2.
     #[serde(default)]
     voice: Option<String>,
+    /// A location to share (sent as Sideband sends one).
+    #[serde(default)]
+    location: Option<LocationBody>,
+}
+
+#[derive(Deserialize)]
+struct LocationBody {
+    latitude: f64,
+    longitude: f64,
+    /// Metres, as the browser gives them.
+    #[serde(default)]
+    accuracy: Option<f64>,
+    #[serde(default)]
+    altitude: Option<f64>,
+}
+
+impl LocationBody {
+    fn checked(self) -> Result<crate::lxmf::Location, ApiError> {
+        let mut at = crate::lxmf::Location::parse(&format!("{}, {}", self.latitude, self.longitude))
+            .ok_or_else(|| bad("A location is a latitude from -90 to 90 and a longitude from -180 to 180"))?;
+        at.accuracy = self.accuracy.filter(|a| a.is_finite() && *a >= 0.0);
+        at.altitude = self.altitude.filter(|a| a.is_finite());
+        Ok(at)
+    }
 }
 
 async fn send_message(
@@ -862,6 +923,15 @@ async fn send_message(
 ) -> ApiResult {
     let key = address(&key)?;
     let mode = DeliveryMode::parse(&body.mode).ok_or_else(|| bad(format!("unknown delivery mode {}", body.mode)))?;
+    if let Some(location) = body.location {
+        if !body.files.is_empty() || body.voice.is_some() {
+            return Err(bad("A location goes on its own, or with text"));
+        }
+        let location = location.checked()?;
+        let (content, reply) = (body.content, body.reply_to);
+        let id = state.write(move |o| o.app.share_location(key, location, content, mode, reply)).await?.map_err(bad)?;
+        return Ok(axum::Json(json!({ "ok": true, "id": format!("local-{id}") })));
+    }
     if let Some(recording) = &body.voice {
         if !body.files.is_empty() {
             return Err(bad("A voice message goes on its own, or with text, not with files"));

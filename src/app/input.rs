@@ -135,6 +135,10 @@ impl App {
             self.forward_key(key);
             return;
         }
+        if self.map.is_some() && self.tab == Tab::Messages {
+            self.map_key(key);
+            return;
+        }
         if self.net_search.typing && self.tab == Tab::Network {
             match key.code {
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
@@ -250,6 +254,27 @@ impl App {
                     _ if self.regions.forward_box.contains(at) => {}
                     _ => self.forward = None,
                 }
+            }
+            return;
+        }
+        // The map: the wheel zooms it, a click on a place in its list picks
+        // it, a click outside closes it.
+        if self.map.is_some() && self.tab == Tab::Messages {
+            let at = Position::new(mouse.column, mouse.row);
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.zoom_map(true),
+                MouseEventKind::ScrollDown => self.zoom_map(false),
+                MouseEventKind::Down(_) if self.regions.map_list.contains(at) => {
+                    let index = self.regions.map_first + (at.y - self.regions.map_list.y) as usize / 2;
+                    let count = self.locations().len();
+                    if let Some(map) = self.map.as_mut()
+                        && index < count
+                    {
+                        map.selected = index;
+                    }
+                }
+                MouseEventKind::Down(_) if !self.regions.map.contains(at) => self.map = None,
+                _ => {}
             }
             return;
         }

@@ -11,6 +11,7 @@ mod contact;
 mod guide;
 mod keys;
 mod archive;
+mod map;
 mod forward;
 mod search;
 mod editor;
@@ -187,6 +188,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if app.forward.is_some() && app.tab == Tab::Messages {
         forward::draw_forward(frame, app);
+    }
+    if app.map.is_some() && app.tab == Tab::Messages {
+        map::draw_map(frame, app);
     }
     if app.prompt.is_some() {
         draw_prompt(frame, app);

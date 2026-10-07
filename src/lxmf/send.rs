@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use lxmf_core::constants::{
-    FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TICKET, RENDERER_MARKDOWN,
+    FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TELEMETRY, FIELD_TICKET, RENDERER_MARKDOWN,
     RENDERER_MICRON,
 };
 use lxmf_core::handlers::{parse_pn_announce_data, stamp_cost_from_app_data};
@@ -71,6 +71,10 @@ pub(super) async fn build_message(
     }
     if let Some((mode, recording)) = &outgoing.audio {
         message.set_audio_field(*mode, recording).map_err(|e| e.to_string())?;
+    }
+    // As Sideband sends it: the readings in bytes (msgpack `bin`).
+    if let Some(location) = &outgoing.location {
+        message.set_field(FIELD_TELEMETRY, super::fields::telemetry_field(location, outgoing.timestamp as i64));
     }
     if let Some(appearance) = &outgoing.appearance {
         message

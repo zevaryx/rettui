@@ -146,6 +146,8 @@ pub struct Outgoing {
     pub appearance: Option<fields::Appearance>,
     /// A voice message: its LXMF audio mode, and the recording in it.
     pub audio: Option<(u8, Vec<u8>)>,
+    /// Where we are, shared (as Sideband shares it, in telemetry).
+    pub location: Option<Location>,
 }
 
 impl Outgoing {
@@ -166,6 +168,7 @@ impl Outgoing {
             format: None,
             appearance: None,
             audio: None,
+            location: None,
         }
     }
 }

@@ -102,6 +102,12 @@ impl App {
                 Err(why) => why,
             });
         }
+        if extras.commands.contains(&lxmf::fields::Command::TelemetryRequest) && !paper {
+            notes.push(match self.answer_location_request(&key) {
+                Ok(()) => "Answered with this station's location (Location requests)".into(),
+                Err(why) => why,
+            });
+        }
         // Their icon alone isn't a message either (it's kept, above).
         if bare && notes.is_empty() && extras.reaction.is_none() && extras.appearance.is_some() && extras.telemetry.is_none() {
             return;
@@ -455,6 +461,31 @@ impl App {
         Ok(())
     }
 
+    /// Send this station's location to `key`, who asked for it, if they're
+    /// someone whose location requests are answered and didn't ask a
+    /// moment ago; else why not.
+    fn answer_location_request(&mut self, key: &str) -> Result<(), String> {
+        let allowed = match self.settings.location_requests.as_str() {
+            "trusted" => self.store.contact(key).trust == Trust::Trusted,
+            "contacts" => self.is_known(key),
+            _ => return Err("Not answered: Location requests is off".into()),
+        };
+        if !allowed {
+            return Err(format!("Not answered: Location requests is set to {} only", self.settings.location_requests));
+        }
+        let location = self.settings.own_location().ok_or("Not answered: this station's Location isn't set")?;
+        // Kept apart from other commands' answers, which may come with it.
+        let asked = format!("{key}:location");
+        let now = Instant::now();
+        if self.answered.get(&asked).is_some_and(|at| now.duration_since(*at) < ANSWER_EVERY) {
+            return Err("Not answered: one was answered less than a minute ago".into());
+        }
+        self.answered.insert(asked, now);
+        let mode = self.delivery_for(key);
+        let mode = if mode == DeliveryMode::Paper { DeliveryMode::Auto } else { mode };
+        self.share_location(key.to_string(), location, String::new(), mode, None).map(|_| ()).map_err(|e| format!("Not answered: {e}"))
+    }
+
     /// Our icon, as the settings have it (none unless one's set).
     pub fn own_appearance(&self) -> Option<lxmf::fields::Appearance> {
         let icon = self.settings.icon.clone()?;
@@ -525,7 +556,21 @@ impl App {
         mode: DeliveryMode,
         reply: Option<String>,
     ) -> Result<u64, (String, String, Vec<PathBuf>)> {
-        self.send_with_voice(key, content, files, mode, reply, None)
+        self.send_with(key, content, files, mode, reply, None, None)
+    }
+
+    /// Share a location with `key`, with any text, as Sideband shares one:
+    /// in LXMF's telemetry field, which Sideband and Columba show on their
+    /// maps.
+    pub fn share_location(
+        &mut self,
+        key: String,
+        location: lxmf::Location,
+        content: String,
+        mode: DeliveryMode,
+        reply: Option<String>,
+    ) -> Result<u64, String> {
+        self.send_with(key, content, Vec::new(), mode, reply, None, Some(location)).map_err(|(e, ..)| e)
     }
 
     /// Send a voice message recorded in the web UI (a WAV file: 8 kHz mono
@@ -551,14 +596,15 @@ impl App {
             return Err(format!("Couldn't keep the recording: {e}"));
         }
         let voice = Voice { mode: lxmf::voice::SEND_MODE, frames, wav: wav.clone() };
-        self.send_with_voice(key, content, Vec::new(), mode, reply, Some(voice)).map_err(|(e, ..)| {
+        self.send_with(key, content, Vec::new(), mode, reply, Some(voice), None).map_err(|(e, ..)| {
             let _ = std::fs::remove_file(&wav);
             let _ = std::fs::remove_file(wav.with_extension("codec2"));
             e
         })
     }
 
-    fn send_with_voice(
+    #[allow(clippy::too_many_arguments)]
+    fn send_with(
         &mut self,
         key: String,
         content: String,
@@ -566,14 +612,15 @@ impl App {
         mode: DeliveryMode,
         reply: Option<String>,
         voice: Option<Voice>,
+        location: Option<lxmf::Location>,
     ) -> Result<u64, (String, String, Vec<PathBuf>)> {
         let Some(to) = parse_hash(&key) else {
             return Err(("An LXMF address is 32 hex characters".into(), content, files));
         };
-        if content.trim().is_empty() && files.is_empty() && voice.is_none() {
+        if content.trim().is_empty() && files.is_empty() && voice.is_none() && location.is_none() {
             return Err(("Nothing to send".into(), content, files));
         }
-        if mode == DeliveryMode::Paper && (!files.is_empty() || voice.is_some()) {
+        if mode == DeliveryMode::Paper && (!files.is_empty() || voice.is_some() || location.is_some()) {
             return Err(("A paper message carries text only".into(), content, files));
         }
         if mode == DeliveryMode::Propagated && self.propagation_node().is_none() {
@@ -631,6 +678,7 @@ impl App {
                 attachments,
                 reply: reply.clone(),
                 format,
+                location,
                 ..Message::default()
             });
         self.store_dirty = true;
@@ -646,7 +694,8 @@ impl App {
         } else {
             let appearance = self.own_appearance();
             let audio = voice.map(|v| (v.mode, v.frames));
-            let message = lxmf::Outgoing { reply, format, appearance, audio, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            let message =
+                lxmf::Outgoing { reply, format, appearance, audio, location, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
             self.send(NetCommand::SendMessage { id, message: Box::new(message) });
         }
         Ok(id)
@@ -868,11 +917,11 @@ impl App {
         if let Some(missing) = message.attachments.iter().find(|a| !a.path.is_file()) {
             return Err(format!("{} isn't there any more, so it can't be sent again", missing.name));
         }
-        if mode == DeliveryMode::Paper && (!files.is_empty() || audio.is_some()) {
+        if mode == DeliveryMode::Paper && (!files.is_empty() || audio.is_some() || message.location.is_some()) {
             return Err("A paper message carries text only".into());
         }
         message.state = MessageState::Sending;
-        let (content, timestamp, format) = (message.content.clone(), message.timestamp, message.format);
+        let (content, timestamp, format, location) = (message.content.clone(), message.timestamp, message.format, message.location);
         let reply = message.reply.clone().and_then(|reply| {
             let to = hex::decode(&reply.hash).ok()?.try_into().ok()?;
             Some(lxmf::Reply { to, quote: reply.quote })
@@ -883,7 +932,8 @@ impl App {
         } else {
             let appearance = self.own_appearance();
             let audio = audio.map(|frames| (lxmf::voice::SEND_MODE, frames));
-            let message = lxmf::Outgoing { reply, format, appearance, audio, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            let message =
+                lxmf::Outgoing { reply, format, appearance, audio, location, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
             self.send(NetCommand::SendMessage { id: number, message: Box::new(message) });
         }
         Ok(())
@@ -1278,6 +1328,8 @@ impl App {
             KeyCode::Char('m') if self.active_conversation.is_some() => self.start_picking(),
             KeyCode::Char('/') => self.open_message_search(),
             KeyCode::Char('H') if self.active_conversation.is_some() => self.open_archive(),
+            KeyCode::Char('L') if self.active_conversation.is_some() => self.open_share_location(),
+            KeyCode::Char('M') => self.open_map(),
             KeyCode::Char('*') => self.toggle_pinned(),
             KeyCode::Char('E') => {
                 if let Some(key) = self.active_conversation.clone() {

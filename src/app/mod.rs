@@ -31,6 +31,7 @@ mod saver;
 pub mod node;
 pub mod reticulum;
 pub mod archive;
+pub mod map;
 pub mod find;
 pub mod forward;
 pub mod search;
@@ -177,6 +178,8 @@ pub enum PromptKind {
     /// The page editor's formatting that needs an answer (a colour, an
     /// address, a field name).
     Format(format::Action),
+    /// A location to share with someone (by address).
+    ShareLocation(String),
 }
 
 /// What a QR code over the tab shows.
@@ -237,6 +240,10 @@ pub struct Regions {
     pub message_search_box: Rect,
     /// The archive reader's box (`H` in Messages).
     pub archive: Rect,
+    /// The map's box, and its list of places (two rows each).
+    pub map: Rect,
+    pub map_list: Rect,
+    pub map_first: usize,
     /// The forward list's box and its rows (`f` on a picked message).
     pub forward_box: Rect,
     pub forward_list: Rect,
@@ -438,6 +445,8 @@ pub struct App {
     pub archive_reader: Option<archive::ArchiveReader>,
     /// Where to forward a picked message to (`f`).
     pub forward: Option<forward::ForwardPicker>,
+    /// The map of where everyone was (`M` in Messages).
+    pub map: Option<map::MapView>,
     /// The emoji picker, over the input being written in.
     pub emoji: Option<emoji::EmojiPicker>,
     /// The `:name` list while typing one.
@@ -512,7 +521,7 @@ pub struct App {
     pub focused: bool,
 }
 
-fn now() -> f64 {
+pub(crate) fn now() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -592,6 +601,7 @@ impl App {
             archive_reader: None,
             answered: HashMap::new(),
             forward: None,
+            map: None,
             emoji: None,
             shortcode: emoji::Shortcode::default(),
             message_scroll: 0,
@@ -1088,6 +1098,7 @@ impl App {
                     }
                 }
             }
+            PromptKind::ShareLocation(key) => self.submit_share_location(key, &text),
             PromptKind::Attach if !text.is_empty() => self.add_attachment(&text),
             PromptKind::Attach => self.composing = true,
             PromptKind::DisplayName if !text.is_empty() => {
@@ -1263,7 +1274,7 @@ impl App {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         discriminant(&self.tab).hash(&mut h);
         (self.composing, self.prompt.is_some(), self.net_search.typing, self.keys_help).hash(&mut h);
-        (self.message_search.is_some(), self.archive_reader.is_some(), self.forward.is_some()).hash(&mut h);
+        (self.message_search.is_some(), self.archive_reader.is_some(), self.forward.is_some(), self.map.is_some()).hash(&mut h);
         // Emoji over the view, which some terminals draw narrower than
         // they should (see `take_full_redraw`).
         if let Some(picker) = &self.emoji {

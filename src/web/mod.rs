@@ -18,6 +18,7 @@
 
 mod push;
 mod routes;
+mod tiles;
 pub mod tls;
 mod views;
 

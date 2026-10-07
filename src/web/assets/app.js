@@ -1494,6 +1494,236 @@ function formattedContent(html) {
   return node;
 }
 
+// ---- Map ----------------------------------------------------------------------
+
+// A map to drag and zoom: tiles in Web Mercator (as OpenStreetMap's are),
+// fetched through rettui (see the Map tiles setting), with `places` on it
+// and their accuracy around them. With no tiles, a grid. `onPick` hears
+// about a place clicked.
+function slippyMap(data, places, onPick) {
+  const TILE = 256;
+  const [LEAST, MOST] = [1, 19];
+  const project = (lat, lon, z) => {
+    const n = TILE * 2 ** z;
+    const s = Math.sin(Math.max(-85.05, Math.min(85.05, lat)) * Math.PI / 180);
+    return [(lon + 180) / 360 * n, (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n];
+  };
+  const unproject = (x, y, z) => {
+    const n = TILE * 2 ** z;
+    return [Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI, x / n * 360 - 180];
+  };
+  let zoom = 3;
+  let center = [20, 0];
+  const tiles = el('div', { class: 'map-tiles' + (data.tiles ? '' : ' none') });
+  const marks = el('div', { class: 'map-marks' });
+  const button = (text, title, onclick) => el('button', { type: 'button', text, title, onclick });
+  const node = el('div', { class: 'map' }, tiles, marks,
+    el('div', { class: 'map-controls' },
+      button('+', 'Closer', () => zoomAt(1)),
+      button('−', 'Further', () => zoomAt(-1)),
+      button('⤢', 'All of them', () => fit())),
+    data.tiles && data.credit?.includes('OpenStreetMap')
+      ? el('a', { class: 'map-credit', href: 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener noreferrer', text: data.credit })
+      : el('span', { class: 'map-credit', text: data.tiles ? data.credit || '' : 'No map tiles (the Map tiles setting is empty)' }));
+  const shown = new Map();
+  for (const p of places) {
+    p.circle = el('div', { class: 'map-circle', hidden: true });
+    p.marker = el('button', { type: 'button', class: 'map-marker' + (p.key ? '' : ' station'), title: p.label, onclick: () => onPick(p) },
+      p.icon ? avatar(p.icon, p.name) : el('span', { class: 'map-pin' }),
+      el('span', { class: 'map-label', text: p.name }));
+    marks.append(p.circle, p.marker);
+  }
+  const size = () => [node.clientWidth || 600, node.clientHeight || 400];
+  function draw() {
+    const [w, h] = size();
+    const [cx, cy] = project(center[0], center[1], zoom);
+    // Whole pixels, so tiles meet without seams.
+    const [left, top] = [Math.round(cx - w / 2), Math.round(cy - h / 2)];
+    if (data.tiles) {
+      const n = 2 ** zoom;
+      const wanted = new Set();
+      for (let tx = Math.floor(left / TILE); tx <= Math.floor((left + w) / TILE); tx++) {
+        for (let ty = Math.max(0, Math.floor(top / TILE)); ty <= Math.min(n - 1, Math.floor((top + h) / TILE)); ty++) {
+          const id = `${zoom}/${tx}/${ty}`;
+          wanted.add(id);
+          let img = shown.get(id);
+          if (!img) {
+            // Round the world and back, east and west.
+            const x = ((tx % n) + n) % n;
+            img = el('img', { class: 'map-tile', alt: '', draggable: false, src: `api/map/tiles/${zoom}/${x}/${ty}` });
+            img.addEventListener('error', () => img.classList.add('missing'));
+            shown.set(id, img);
+            tiles.append(img);
+          }
+          img.style.transform = `translate(${tx * TILE - left}px, ${ty * TILE - top}px)`;
+        }
+      }
+      for (const [id, img] of shown) {
+        if (!wanted.has(id)) {
+          img.remove();
+          shown.delete(id);
+        }
+      }
+    } else {
+      tiles.style.backgroundPosition = `${-left}px ${-top}px`;
+    }
+    for (const p of places) {
+      const [x, y] = project(p.latitude, p.longitude, zoom);
+      p.marker.style.transform = `translate(${Math.round(x - left)}px, ${Math.round(y - top)}px)`;
+      // How far off it may be, once that shows.
+      const perPixel = 156543.03 * Math.cos(p.latitude * Math.PI / 180) / 2 ** zoom;
+      const radius = (p.accuracy || 0) / perPixel;
+      p.circle.hidden = radius < 8;
+      Object.assign(p.circle.style, { width: `${2 * radius}px`, height: `${2 * radius}px`, transform: `translate(${x - left - radius}px, ${y - top - radius}px)` });
+    }
+  }
+  // Closer or further, the spot at (px, py) staying where it is.
+  function zoomAt(step, px, py) {
+    const next = Math.max(LEAST, Math.min(MOST, zoom + step));
+    if (next === zoom) return;
+    const [w, h] = size();
+    px ??= w / 2;
+    py ??= h / 2;
+    const [cx, cy] = project(center[0], center[1], zoom);
+    const spot = unproject(cx - w / 2 + px, cy - h / 2 + py, zoom);
+    zoom = next;
+    const [sx, sy] = project(spot[0], spot[1], zoom);
+    center = unproject(sx - px + w / 2, sy - py + h / 2, zoom);
+    draw();
+  }
+  // All of them in view, as close as that goes (a street's worth for one).
+  function fit(among = places) {
+    if (!among.length) return draw();
+    const [w, h] = size();
+    zoom = among.length === 1 ? 15 : LEAST;
+    for (let z = MOST; among.length > 1 && z >= LEAST; z--) {
+      const xs = among.map((p) => project(p.latitude, p.longitude, z));
+      const across = Math.max(...xs.map(([x]) => x)) - Math.min(...xs.map(([x]) => x));
+      const down = Math.max(...xs.map(([, y]) => y)) - Math.min(...xs.map(([, y]) => y));
+      if (across <= w - 120 && down <= h - 80) {
+        zoom = Math.min(z, 16);
+        break;
+      }
+    }
+    const xs = among.map((p) => project(p.latitude, p.longitude, zoom));
+    const mid = (values) => (Math.max(...values) + Math.min(...values)) / 2;
+    center = unproject(mid(xs.map(([x]) => x)), mid(xs.map(([, y]) => y)), zoom);
+    draw();
+  }
+  // Dragged with a finger or the mouse; two fingers pinch.
+  const pointers = new Map();
+  let pinch = null;
+  node.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, a')) return;
+    node.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, [e.clientX, e.clientY]);
+    node.classList.add('dragging');
+  });
+  node.addEventListener('pointermove', (e) => {
+    const was = pointers.get(e.pointerId);
+    if (!was) return;
+    pointers.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pointers.size === 1) {
+      const [cx, cy] = project(center[0], center[1], zoom);
+      center = unproject(cx - (e.clientX - was[0]), cy - (e.clientY - was[1]), zoom);
+      center[0] = Math.max(-85, Math.min(85, center[0]));
+      draw();
+    } else if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const apart = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      if (pinch === null) pinch = apart;
+      else if (apart / pinch > 1.5 || apart / pinch < 0.66) {
+        zoomAt(apart > pinch ? 1 : -1);
+        pinch = apart;
+      }
+    }
+  });
+  const lift = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (!pointers.size) node.classList.remove('dragging');
+  };
+  node.addEventListener('pointerup', lift);
+  node.addEventListener('pointercancel', lift);
+  node.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const box = node.getBoundingClientRect();
+    zoomAt(e.deltaY < 0 ? 1 : -1, e.clientX - box.left, e.clientY - box.top);
+  }, { passive: false });
+  node.addEventListener('dblclick', (e) => {
+    if (e.target.closest('button, a')) return;
+    const box = node.getBoundingClientRect();
+    zoomAt(1, e.clientX - box.left, e.clientY - box.top);
+  });
+  const resized = new ResizeObserver(() => draw());
+  resized.observe(node);
+  return {
+    node, fit, draw,
+    // One place in the middle, close enough to see where.
+    show(p) {
+      zoom = Math.max(zoom, 13);
+      center = [p.latitude, p.longitude];
+      draw();
+    },
+    stop: () => resized.disconnect(),
+  };
+}
+
+// Where everyone was, from the newest location each has shared (and this
+// station, if its Location is set), on a map and in a list. With `at`, a
+// message's location is shown as well (it may not be their newest).
+async function mapDialog({ at = null, name = '', key = null } = {}) {
+  const data = await attempt(() => api.get('/locations'));
+  if (!data) return;
+  const places = data.places.slice();
+  let focus = key ? places.find((p) => p.key === key) : null;
+  if (at && !(focus && focus.latitude === at.latitude && focus.longitude === at.longitude)) {
+    focus = { ...at, name: name ? `${name} (this message)` : 'This message', key: null, at: null, icon: null };
+    places.push(focus);
+  }
+  if (!places.length) return toast('No one has shared a location yet (📍 in the message box shares one)');
+  const rows = new Map();
+  const pick = (p) => {
+    for (const q of places) {
+      q.marker.classList.toggle('picked', q === p);
+      rows.get(q)?.classList.toggle('selected', q === p);
+    }
+    rows.get(p)?.scrollIntoView({ block: 'nearest' });
+    view.show(p);
+  };
+  const view = slippyMap(data, places, (p) => pick(p));
+  const list = el('div', { class: 'map-list' });
+  const station = data.here ? data.places[0] : null;
+  const close = dialog('Map', (close) => {
+    for (const p of places) {
+      const about = [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away].filter(Boolean).join(' · ');
+      const row = el('div', { class: 'list-item', onclick: () => pick(p) },
+        p.icon ? avatar(p.icon, p.name) : null,
+        el('div', { class: 'main' },
+          el('div', { class: 'name', text: p.name }),
+          el('div', { class: 'sub', text: about || p.label }),
+          el('div', { class: 'row map-actions' },
+            p.key ? el('button', { class: 'inline', text: 'Messages', title: 'Open your conversation', onclick: (e) => {
+              e.stopPropagation();
+              close();
+              app.views.messages.selected = p.key;
+              switchTab('messages', { focus: true });
+              setPane(app.views.messages, 'detail');
+            } }) : null,
+            el('a', { href: p.map, target: '_blank', rel: 'noopener noreferrer', text: 'OpenStreetMap ↗', onclick: (e) => e.stopPropagation() }))));
+      rows.set(p, row);
+      list.append(row);
+    }
+    return [el('div', { class: 'map-body' }, view.node, list)];
+  }, { className: 'map-dialog', onclose: () => view.stop() });
+  // Once it's on the page and has a size.
+  requestAnimationFrame(() => {
+    view.fit();
+    if (focus) pick(focus);
+  });
+  return close;
+}
+
 // ---- Paper messages ---------------------------------------------------------
 
 // A dialog over the page: closed by its buttons, Escape or a click beside
@@ -2346,6 +2576,7 @@ app.views.messages = {
       el('div', { class: 'row' },
         el('button', { text: '📎 Attach', onclick: () => this.fileInput.click() }),
         this.micButton = el('button', { text: '🎤', title: 'Record a voice message (sent as Codec2, as Sideband and MeshChat play)', onclick: () => this.toggleRecording() }),
+        el('button', { text: '📍', title: 'Share a location ( L )', onclick: () => this.shareLocation() }),
         this.emojiButton,
         mode,
         el('span', { class: 'grow' }),
@@ -2355,7 +2586,9 @@ app.views.messages = {
       el('section', { class: 'panel side' },
         el('header', {}, el('span', { class: 'title grow', text: 'Conversations' }),
           el('button', { text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
-          el('button', { text: '+ New', onclick: () => this.newConversation() }), this.readAll, this.search),
+          el('button', { text: '+ New', onclick: () => this.newConversation() }),
+          el('button', { text: '🗺', title: 'Map of the locations shared with you ( M )', onclick: () => mapDialog({ key: this.selected }) }),
+          this.readAll, this.search),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose));
     this.renderChips();
@@ -2704,7 +2937,75 @@ app.views.messages = {
       this.setPinned(this.selected, !pinned);
       return true;
     }
+    if (e.key === 'L' && this.selected) {
+      this.shareLocation();
+      return true;
+    }
+    if (e.key === 'M') {
+      mapDialog({ key: this.selected });
+      return true;
+    }
     return false;
+  },
+
+  // Share a location with the open conversation, as Sideband shares one:
+  // where this device is (browsers only say on a secure page), this
+  // station's (the Location setting), or one typed.
+  shareLocation() {
+    const key = this.selected;
+    if (!key) return;
+    if (this.mode === 'paper') return toast('A paper message carries text only: pick another delivery to share a location');
+    const name = this.names?.get(key) || 'them';
+    const station = app.status?.location;
+    const typed = (p) => `${p.latitude}, ${p.longitude}`;
+    // From the device: how accurate, and how high, too.
+    let device = null;
+    const coords = el('input', { type: 'text', inputmode: 'decimal', placeholder: 'latitude, longitude (e.g. 51.5074, -0.1278)',
+      value: station ? typed(station) : '', oninput: () => { device = null; } });
+    const status = el('p', { class: 'dim' });
+    const here = el('button', { type: 'button', text: '📍 Where this device is', onclick: () => {
+      if (!window.isSecureContext || !navigator.geolocation) {
+        return toast('Browsers only tell a secure page where the device is: open rettui over HTTPS (start it with --https), or at localhost', true);
+      }
+      status.textContent = 'Asking the browser…';
+      navigator.geolocation.getCurrentPosition((found) => {
+        const c = found.coords;
+        device = { latitude: Number(c.latitude.toFixed(6)), longitude: Number(c.longitude.toFixed(6)), accuracy: c.accuracy, altitude: c.altitude };
+        coords.value = typed(device);
+        status.textContent = `Within about ${Math.round(c.accuracy)} m`;
+      }, (e) => {
+        status.textContent = '';
+        toast(e.code === 1 ? 'The browser wasn\'t allowed to say where this device is' : `Couldn't tell where this device is: ${e.message}`, true);
+      }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 60000 });
+    } });
+    const share = async (close) => {
+      const match = coords.value.trim().replace(/^geo:/i, '').match(/^(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)/);
+      if (!match) return toast('A location is latitude, longitude in degrees, as 51.5074, -0.1278', true);
+      const location = device || { latitude: Number(match[1]), longitude: Number(match[2]) };
+      const echo = this.echo(key, el('div', { class: 'message out echo' },
+        el('div', { class: 'meta' },
+          el('span', { class: 'author out', text: 'You' }),
+          el('span', { class: 'dim', text: '  ' + timeLabel(Date.now() / 1000) }),
+          el('span', { class: 'dim', text: ' sending…' })),
+        el('div', { class: 'location', text: `📍 ${location.latitude}, ${location.longitude}` })));
+      close();
+      const sent = await attempt(() => api.post(`/conversations/${key}/send`, { content: '', mode: this.mode, location }));
+      echo.done(!sent);
+    };
+    dialog('Share a location', (close) => [
+      el('p', {}, `With ${name}, as Sideband shares one: Sideband and Columba show it on their maps.`),
+      el('div', { class: 'row' }, here, station ? el('button', { type: 'button', text: 'This station\'s', title: 'The Location setting', onclick: () => {
+        device = null;
+        coords.value = typed(station);
+        status.textContent = '';
+      } }) : null),
+      coords,
+      status,
+      el('div', { class: 'row actions' }, el('span', { class: 'grow' }),
+        el('button', { type: 'button', text: 'Cancel', onclick: () => close() }),
+        el('button', { type: 'button', class: 'primary', text: 'Share', onclick: () => share(close) })),
+    ], { className: 'share-location' });
+    setTimeout(() => coords.focus(), 50);
   },
 
   // The open conversation's archived messages, above the rest (and all
@@ -2758,7 +3059,8 @@ app.views.messages = {
       m.title ? el('div', { class: 'title', text: m.title }) : null,
       m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content', text: m.content }) : null,
       m.location ? el('div', { class: 'location' }, '📍 ',
-        el('a', { href: m.location.map, target: '_blank', rel: 'noopener noreferrer', text: m.location.label, title: 'Show it on a map' })) : null,
+        el('a', { href: m.location.map, target: '_blank', rel: 'noopener noreferrer', text: m.location.label, title: 'Show it on OpenStreetMap' }),
+        el('button', { class: 'inline', text: 'Map', title: 'Show it on the map, with everyone else\'s', onclick: () => mapDialog({ at: m.location, name: m.incoming ? conversation.name : 'You', key: m.incoming ? conversation.key : null }) })) : null,
       (m.notes || []).map((note) => el('div', { class: 'note dim', text: note })),
       m.attachments.map((a) => {
         const url = base + a.index;
@@ -5422,7 +5724,8 @@ async function restartReticulum() {
 const KEYS = [
   ['Anywhere', [['1–7', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
   ['Messages', [['j / k', 'next or previous conversation'], ['i', 'write (the message box)'], ['r', 'reply to their newest message'],
-    ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['/', 'search messages'], ['Ctrl+E', 'emoji, in the message box'],
+    ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
+    ['Ctrl+E', 'emoji, in the message box'],
     ['Enter / Shift+Enter', 'send, or a new line, in the message box']]],
   ['Network', [['/', 'search by name or address']]],
   ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],

@@ -78,6 +78,15 @@ pub struct Settings {
     /// Answer Sideband's ping, echo and signal report commands: one of
     /// [`ANSWER_COMMANDS`] (whose commands are answered).
     pub answer_commands: String,
+    /// Where this station is, as `latitude, longitude`: shared from the
+    /// terminal, and sent to answer location requests if they're answered.
+    pub location: Option<String>,
+    /// Answer location requests (Sideband's telemetry requests) with
+    /// [`Settings::location`]: one of [`ANSWER_COMMANDS`].
+    pub location_requests: String,
+    /// Where the web UI's map gets its tiles (`{z}`, `{x}` and `{y}` in
+    /// it), fetched and kept by rettui; none draws the map without them.
+    pub map_tiles: Option<String>,
     /// Proof-of-work stamp cost asked of senders who aren't contacts
     /// (announced); 0 asks none.
     pub stamp_cost: u64,
@@ -151,6 +160,9 @@ impl Default for Settings {
             unknown_senders: "show".into(),
             resend_on_announce: true,
             answer_commands: "off".into(),
+            location: None,
+            location_requests: "off".into(),
+            map_tiles: Some(OSM_TILES.into()),
             stamp_cost: 0,
             // LXMF's own default delivery limit (NomadNet's is 500).
             max_message_kb: 1000,
@@ -202,6 +214,8 @@ pub struct Paths {
     pub node: PathBuf,
     /// Messages kept by the hosted propagation node.
     pub propagation: PathBuf,
+    /// Map tiles fetched for the web UI's map.
+    pub map_tiles: PathBuf,
 }
 
 impl Paths {
@@ -233,6 +247,7 @@ impl Paths {
             web_push: base.join("web_push.json"),
             node: base.join("node"),
             propagation: base.join("propagation"),
+            map_tiles: base.join("map-tiles"),
         })
     }
 }
@@ -278,6 +293,11 @@ impl Settings {
             settings.unknown_senders = "ignore".into();
         }
         Ok(settings)
+    }
+
+    /// Where this station is, if that's set.
+    pub fn own_location(&self) -> Option<crate::lxmf::Location> {
+        self.location.as_deref().and_then(crate::lxmf::Location::parse)
     }
 
     /// Whether messages from unknown senders are kept aside as requests.
@@ -467,6 +487,27 @@ pub const FIELDS: &[Field] = &[
         label: "Answer commands",
         help: "Answer the ping, echo and signal report commands Sideband sends, as Sideband does: off; trusted (only from contacts you trust); or contacts (any contact). Answers go as messages, shown in the conversation, at most one a minute to each sender",
         kind: FieldKind::Choice(ANSWER_COMMANDS),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "location",
+        label: "Location",
+        help: "Where this station is, as latitude, longitude (e.g. 51.5074, -0.1278): what L shares in the terminal, and the answer to location requests if they're answered. Set it for a station that stays put; the web UI can share where its device is instead. Empty for none",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "location_requests",
+        label: "Location requests",
+        help: "Answer the location requests (telemetry requests) Sideband sends with this station's Location: off; trusted (only from contacts you trust); or contacts (any contact). Answers are shown in the conversation, at most one a minute to each sender",
+        kind: FieldKind::Choice(ANSWER_COMMANDS),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "map_tiles",
+        label: "Map tiles",
+        help: "Where the web UI's map gets its pictures, with {z}, {x} and {y} for the zoom and the tile (OpenStreetMap's by default). rettui fetches them, so browsers need no internet of their own, and keeps them in map-tiles/ in the data directory to show again offline. Empty draws the map without them: just the places, on a grid",
+        kind: FieldKind::Optional,
         effect: Effect::Now,
     },
     Field {
@@ -671,6 +712,10 @@ pub const ANNOUNCE_MINS: (u64, u64) = (60, 360);
 /// Whose commands are answered: no one's, trusted contacts', or any
 /// contact's.
 pub const ANSWER_COMMANDS: &[&str] = &["off", "trusted", "contacts"];
+/// OpenStreetMap's own map tiles (their tile usage policy asks that apps
+/// say who they are, keep tiles a while and credit OpenStreetMap, which
+/// rettui does).
+pub const OSM_TILES: &str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 /// What can become of messages from unknown senders.
 pub const UNKNOWN_SENDERS: &[&str] = &["show", "requests", "ignore"];
 /// The ways of announcing on its own.
@@ -774,6 +819,9 @@ impl Settings {
             "unknown_senders" => self.unknown_senders.clone(),
             "resend_on_announce" => self.resend_on_announce.to_string(),
             "answer_commands" => self.answer_commands.clone(),
+            "location" => self.location.clone().unwrap_or_default(),
+            "location_requests" => self.location_requests.clone(),
+            "map_tiles" => self.map_tiles.clone().unwrap_or_default(),
             "stamp_cost" => self.stamp_cost.to_string(),
             "max_message_kb" => self.max_message_kb.to_string(),
             "markdown_messages" => self.markdown_messages.to_string(),
@@ -834,6 +882,26 @@ impl Settings {
             "unknown_senders" => self.unknown_senders = choice(value, UNKNOWN_SENDERS).map_err(fail)?,
             "resend_on_announce" => self.resend_on_announce = toggle(value).map_err(fail)?,
             "answer_commands" => self.answer_commands = choice(value, ANSWER_COMMANDS).map_err(fail)?,
+            "location" => {
+                self.location = match optional(value) {
+                    None => None,
+                    Some(text) => {
+                        let at = crate::lxmf::Location::parse(&text)
+                            .ok_or_else(|| fail("latitude, longitude in degrees, as 51.5074, -0.1278".into()))?;
+                        Some(format!("{}, {}", at.latitude, at.longitude))
+                    }
+                };
+            }
+            "location_requests" => self.location_requests = choice(value, ANSWER_COMMANDS).map_err(fail)?,
+            "map_tiles" => {
+                if let Some(url) = optional(value) {
+                    let web = url.starts_with("https://") || url.starts_with("http://");
+                    if !web || !["{z}", "{x}", "{y}"].iter().all(|part| url.contains(part)) {
+                        return Err(fail("a web address with {z}, {x} and {y} in it, as https://tile.openstreetmap.org/{z}/{x}/{y}.png".into()));
+                    }
+                }
+                self.map_tiles = optional(value);
+            }
             "stamp_cost" => self.stamp_cost = number(value, MAX_STAMP_COST).map_err(fail)?,
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,

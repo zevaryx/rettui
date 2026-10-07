@@ -194,7 +194,66 @@ impl Location {
         }
         text
     }
+
+    /// Just where: no height, speed, heading or accuracy.
+    pub fn at(latitude: f64, longitude: f64) -> Self {
+        Self { latitude, longitude, altitude: None, speed: None, bearing: None, accuracy: None, updated: None }
+    }
+
+    /// A location as typed: latitude and longitude in degrees, apart by a
+    /// comma or a space (`51.5074, -0.1278`), or a `geo:` link.
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        let text = text.strip_prefix("geo:").map_or(text, |rest| rest.split([';', '?']).next().unwrap_or(""));
+        let mut parts = text.split([',', ' ']).filter(|p| !p.is_empty()).map(|p| p.trim().parse::<f64>());
+        let (Some(Ok(latitude)), Some(Ok(longitude))) = (parts.next(), parts.next()) else { return None };
+        // An altitude may follow a `geo:` link's two; nothing else may.
+        if parts.next().is_some_and(|p| p.is_err()) || parts.next().is_some() {
+            return None;
+        }
+        let fine = latitude.is_finite() && longitude.is_finite();
+        (fine && (-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude))
+            .then(|| Self::at(latitude, longitude))
+    }
+
+    /// How far it is to `other`, in metres (along the ground, the Earth
+    /// taken as round).
+    pub fn distance_to(&self, other: &Location) -> f64 {
+        let (a, b) = (self.latitude.to_radians(), other.latitude.to_radians());
+        let dlat = b - a;
+        let dlon = (other.longitude - self.longitude).to_radians();
+        let h = (dlat / 2.0).sin().powi(2) + a.cos() * b.cos() * (dlon / 2.0).sin().powi(2);
+        2.0 * EARTH_RADIUS * h.sqrt().min(1.0).asin()
+    }
+
+    /// Which way `other` is from here, in degrees from north (setting out).
+    pub fn bearing_to(&self, other: &Location) -> f64 {
+        let (a, b) = (self.latitude.to_radians(), other.latitude.to_radians());
+        let dlon = (other.longitude - self.longitude).to_radians();
+        let y = dlon.sin() * b.cos();
+        let x = a.cos() * b.sin() - a.sin() * b.cos() * dlon.cos();
+        y.atan2(x).to_degrees().rem_euclid(360.0)
+    }
+
+    /// How far and which way `other` is: `350 m NE`, `12.4 km S`.
+    pub fn away(&self, other: &Location) -> String {
+        let metres = self.distance_to(other);
+        let distance = match metres {
+            m if m < 1000.0 => format!("{m:.0} m"),
+            m if m < 100_000.0 => format!("{:.1} km", m / 1000.0),
+            m => format!("{:.0} km", m / 1000.0),
+        };
+        if metres < 1.0 {
+            return "here".into();
+        }
+        const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+        let point = POINTS[((self.bearing_to(other) + 22.5) / 45.0) as usize % 8];
+        format!("{distance} {point}")
+    }
 }
+
+/// The Earth's mean radius, in metres.
+const EARTH_RADIUS: f64 = 6_371_008.8;
 
 /// A telemetry update: when it was taken, and the location in it if any.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -244,6 +303,26 @@ fn location_of(value: &Value) -> Option<Location> {
     })
 }
 
+/// `FIELD_TELEMETRY`'s value for a location, as Sideband packs it (and
+/// Columba reads it): sensor readings in msgpack, in bytes, with the time
+/// and the location, all seven of its parts there (Sideband reads none if
+/// one is missing), each a big-endian integer. What isn't known is 0.
+pub fn telemetry_field(location: &Location, time: i64) -> Vec<u8> {
+    let int = |v: Option<f64>, scale: f64| (v.unwrap_or(0.0) * scale).round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+    let unsigned = |v: Option<f64>| (v.unwrap_or(0.0) * 1e2).round().clamp(0.0, f64::from(u32::MAX)) as u32;
+    let accuracy = (location.accuracy.unwrap_or(0.0) * 1e2).round().clamp(0.0, f64::from(u16::MAX)) as u16;
+    let reading = Value::Array(vec![
+        Value::Binary(int(Some(location.latitude), 1e6).to_be_bytes().to_vec()),
+        Value::Binary(int(Some(location.longitude), 1e6).to_be_bytes().to_vec()),
+        Value::Binary(int(location.altitude, 1e2).to_be_bytes().to_vec()),
+        Value::Binary(unsigned(location.speed).to_be_bytes().to_vec()),
+        Value::Binary(int(location.bearing, 1e2).to_be_bytes().to_vec()),
+        Value::Binary(accuracy.to_be_bytes().to_vec()),
+        Value::from(location.updated.unwrap_or(time)),
+    ]);
+    encode(&Value::Map(vec![(Value::from(SENSOR_TIME), Value::from(time)), (Value::from(SENSOR_LOCATION), reading)]))
+}
+
 /// The telemetry a message carries, if any.
 pub fn telemetry_of(message: &LxMessage) -> Option<Telemetry> {
     let Value::Map(sensors) = unwrapped(value(message, FIELD_TELEMETRY)?)? else {
@@ -281,7 +360,7 @@ impl Command {
     /// What it asked, in words.
     pub fn describe(&self) -> String {
         match self {
-            Command::TelemetryRequest => "Asked for your location (rettui doesn't share it)".into(),
+            Command::TelemetryRequest => "Asked for your location".into(),
             Command::Ping => "Pinged you with a command".into(),
             Command::Echo(text) => format!("Asked for an echo of “{}”", text.trim()),
             Command::SignalReport => "Asked for a signal report".into(),
@@ -316,6 +395,10 @@ pub fn commands_of(message: &LxMessage) -> Vec<Command> {
         .filter_map(|(id, argument)| id.as_u64().map(|id| Command::from(id, argument)))
         .collect()
 }
+
+/// What's said of a message saying its sender stopped sharing their
+/// location.
+pub const STOPPED_SHARING: &str = "Stopped sharing their location";
 
 /// Whether a message says its sender stopped sharing their location
 /// (Columba's `{"cease": true}` in `FIELD_CUSTOM_META`).
@@ -456,7 +539,7 @@ impl Extras {
             notes.push("Sent a telemetry update without a location".into());
         }
         if self.ceased {
-            notes.push("Stopped sharing their location".into());
+            notes.push(STOPPED_SHARING.into());
         }
         for command in &self.commands {
             let note = command.describe();
@@ -559,6 +642,51 @@ mod tests {
         assert_eq!(got.location, None);
         let extras = Extras { telemetry: Some(got), ..Extras::default() };
         assert_eq!(extras.notes(true), ["Sent a telemetry update without a location"]);
+    }
+
+    #[test]
+    fn a_location_sent_as_sideband_packs_it() {
+        let at = Location { altitude: Some(35.5), accuracy: Some(12.0), ..Location::at(51.50735, -0.127758) };
+        let mut sent = message();
+        sent.set_field(FIELD_TELEMETRY, telemetry_field(&at, 1_790_000_000));
+        let got = telemetry_of(&received(&sent)).unwrap();
+        assert_eq!(got.time, Some(1_790_000_000));
+        let back = got.location.unwrap();
+        assert_eq!((back.latitude, back.longitude, back.altitude, back.accuracy), (51.50735, -0.127758, Some(35.5), Some(12.0)));
+        // What isn't known goes as 0, so Sideband reads all of it.
+        assert_eq!((back.speed, back.bearing, back.updated), (Some(0.0), Some(0.0), Some(1_790_000_000)));
+        // In bytes, as Sideband sends it: {1: time, 2: [bin 4, bin 4, ...]}.
+        let Some(Value::Binary(packed)) = value(&received(&sent), FIELD_TELEMETRY) else { panic!("not bytes") };
+        assert_eq!(&packed[..2], [0x82, 0x01]);
+        assert!(packed.windows(6).any(|w| w == [0xc4, 4, 0x03, 0x11, 0xf0, 0x96]));
+        // An accuracy too big for its two bytes is as big as they hold.
+        let rough = Location { accuracy: Some(5000.0), ..at };
+        let mut sent = message();
+        sent.set_field(FIELD_TELEMETRY, telemetry_field(&rough, 1));
+        assert_eq!(telemetry_of(&received(&sent)).unwrap().location.unwrap().accuracy, Some(655.35));
+    }
+
+    #[test]
+    fn locations_typed_and_how_far_apart() {
+        let london = Location::parse("51.5074, -0.1278").unwrap();
+        assert_eq!((london.latitude, london.longitude), (51.5074, -0.1278));
+        assert_eq!(Location::parse("51.5074 -0.1278"), Some(london));
+        assert_eq!(Location::parse(" geo:51.5074,-0.1278;u=35 "), Some(london));
+        assert_eq!(Location::parse("geo:51.5074,-0.1278,20"), Some(london));
+        for wrong in ["", "51.5", "north", "95, 0", "0, 181", "1, 2, 3, 4", "1, 2, x", "NaN, 0"] {
+            assert_eq!(Location::parse(wrong), None, "{wrong}");
+        }
+        let paris = Location::at(48.8566, 2.3522);
+        let km = london.distance_to(&paris) / 1000.0;
+        assert!((km - 343.5).abs() < 1.0, "{km}");
+        let bearing = london.bearing_to(&paris);
+        assert!((bearing - 148.1).abs() < 1.0, "{bearing}");
+        assert_eq!(london.away(&paris), "344 km SE");
+        assert_eq!(paris.away(&london), "344 km NW");
+        let near = Location::at(51.5074, -0.1228);
+        assert_eq!(london.away(&near), "346 m E");
+        assert_eq!(london.away(&Location::at(51.6, -0.1278)), "10.3 km N");
+        assert_eq!(london.away(&london), "here");
     }
 
     #[test]

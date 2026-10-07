@@ -301,9 +301,10 @@ rettui shows what each one is, rather than an empty message:
   messages gets a notification; it isn't counted as unread.
 - **Locations** (Sideband and Columba telemetry, field `0x02`) show as a
   line with the coordinates. Click it (or open it, below) to see it on
-  OpenStreetMap. Location updates don't notify you or count as unread, and
-  a newer one replaces the one before it while nothing else was said in
-  between, so a shared location doesn't fill the conversation.
+  OpenStreetMap, or on [the map](#locations-and-the-map). Location updates
+  don't notify you or count as unread, and a newer one replaces the one
+  before it while nothing else was said in between, so a shared location
+  doesn't fill the conversation.
 - **Commands** (Sideband's, field `0x09`), such as asking for your location
   or a ping, are shown in words, and don't notify you.
   - *Answer commands* (Status, `answer_commands`) answers pings, echoes and
@@ -313,8 +314,9 @@ rettui shows what each one is, rather than an empty message:
     *trusted* answers only contacts you trust, *contacts* any contact. The
     answers go as messages, shown in the conversation, at most once a
     minute to each sender; the command's line says whether, or why not.
-  - Requests for your location aren't answered: rettui doesn't share it.
-    Plugin commands aren't run.
+  - Requests for your location are answered only if *Location requests*
+    says so (see [below](#locations-and-the-map)). Plugin commands aren't
+    run.
 - **Voice messages** (field `0x07`) are saved with the attachments, and
   play in the web UI and in most players (`o` in the TUI opens them):
   - Opus recordings are saved as `.ogg` files, as they came.
@@ -334,6 +336,60 @@ rettui shows what each one is, rather than an empty message:
     attachments.
 - A message with nothing rettui can show says so, naming the fields it
   carried, without a notification.
+
+## Locations and the map
+
+You can share a location as Sideband does (LXMF's telemetry field, with
+the time, latitude, longitude and, if known, height and accuracy), so
+Sideband and Columba show it on their maps:
+
+- **In the TUI:** `L` in a conversation asks for a location (latitude,
+  longitude, such as `51.5074, -0.1278`, or a `geo:` link), filled in with
+  this station's *Location* (Status, `location`) if it's set; `Enter`
+  shares it.
+- **In the web UI:** the 📍 button beside the microphone (or `L`) offers
+  where the device is (the browser asks you first; browsers only say on a
+  secure page, so open the web UI at `localhost` or over [HTTPS](Web-UI)),
+  this station's *Location*, or one typed.
+
+A location goes as its own message, the way the conversation's messages go
+(not on paper: a paper message carries text only), and shows in the
+conversation like anyone's. It's sent once: rettui doesn't keep sending
+where you are.
+
+*Location requests* (Status, `location_requests`) answers Sideband's
+requests for your location with this station's *Location*: *off* (the
+default), *trusted* (only contacts you trust) or *contacts* (any contact).
+As with *Answer commands*, the answer is a message in the conversation, at
+most one a minute to each sender, and the request's line says whether it
+was answered, or why not. With no *Location* set, nothing is sent.
+
+The **map** shows everyone's newest location, the newest first, and this
+station's if it's set. Someone who said they'd stopped sharing (as Columba
+does) isn't on it, nor is anyone blocked.
+
+- **In the TUI:** `M` in Messages opens it, on the open conversation's
+  place if they shared one. It draws the coastlines when it's zoomed out
+  far enough to show them, with each place on it, and lists them with how
+  long ago and how far from this station. `↑↓` pick a place, `+`/`-` (or
+  the mouse wheel) zoom in on it and out, `0` shows them all again,
+  `Enter` opens the conversation, `o` opens the place on OpenStreetMap,
+  `Esc` closes it.
+- **In the web UI:** 🗺 beside **+ New** (or `M`), or **Map** beside a
+  location in a conversation. Drag it, zoom with the wheel, a double click,
+  two fingers or `+`/`−`, and `⤢` shows them all. A click on a place or in
+  the list shows it; the list also opens the conversation, or the place on
+  OpenStreetMap. How far each may be off shows as a circle around it.
+
+The web map's pictures (tiles) come from *Map tiles* (Status, `map_tiles`):
+OpenStreetMap's by default, or any other address with `{z}`, `{x}` and
+`{y}` in it. rettui fetches them itself, so a phone with no internet of its
+own still gets them as long as the computer running rettui has it, and the
+page loads nothing from elsewhere. They're kept a month in `map-tiles/`
+(up to 200 MB, the oldest going first), so places looked at before still
+show without the internet. The tile server learns which parts of the map
+are looked at, as with any online map; with *Map tiles* empty, nothing is
+fetched, and the places are drawn on a plain grid.
 
 To react, pick a message and choose an emoji:
 

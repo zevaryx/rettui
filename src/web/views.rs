@@ -57,6 +57,8 @@ pub fn state(app: &App) -> Value {
         "date_style": app.settings.date_style,
         // How big pictures sent may be (the composer says they'll shrink).
         "picture_size": app.settings.picture_size,
+        // This station's location, to share (see the Location setting).
+        "location": app.settings.own_location().map(|l| json!({ "latitude": l.latitude, "longitude": l.longitude })),
         "lxmf_address": app.lxmf_hash.map(hex::encode),
         // With the public key, for others to add you (`lxma://`).
         "identity_link": app.identity_link(),
@@ -304,6 +306,40 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
 /// Messages found by a search: each with its conversation, when it was,
 /// who sent it, how many newer follow it there (to know whether it's among
 /// those loaded), and a line of it around what matched.
+/// Everyone's newest location, for the map (see `App::locations`): this
+/// station's first if it's set, then the newest; and whether there are
+/// tiles to draw it on, and whose they are.
+pub fn locations(app: &App) -> Value {
+    let here = app.settings.own_location();
+    let places: Vec<Value> = app
+        .locations()
+        .iter()
+        .map(|p| {
+            let l = &p.location;
+            json!({
+                "key": p.key, "name": p.name, "at": p.at,
+                "icon": p.key.as_deref().map_or_else(|| icon(app.own_appearance().as_ref()), |k| icon(app.store.contact(k).icon.as_ref())),
+                "latitude": l.latitude, "longitude": l.longitude, "accuracy": l.accuracy, "altitude": l.altitude,
+                "label": l.label(), "map": l.map_url(),
+                // How far and which way from this station.
+                "away": here.filter(|_| p.key.is_some()).map(|h| h.away(l)),
+            })
+        })
+        .collect();
+    let tiles = app.settings.map_tiles.as_deref();
+    let credit = match tiles {
+        None => None,
+        Some(url) if url.contains("openstreetmap.org") => Some("© OpenStreetMap contributors".to_string()),
+        Some(url) => url.split("//").nth(1).and_then(|rest| rest.split('/').next()).map(|host| format!("Tiles: {host}")),
+    };
+    json!({
+        "places": places,
+        "tiles": tiles.is_some(),
+        "credit": credit,
+        "here": here.map(|h| json!({ "latitude": h.latitude, "longitude": h.longitude })),
+    })
+}
+
 pub fn search(app: &App, query: &str, within: Option<&str>) -> Value {
     let hits = crate::app::search::search(&app.store, query, within);
     let full = hits.len() >= crate::app::search::MAX_HITS;

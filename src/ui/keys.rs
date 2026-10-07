@@ -102,6 +102,17 @@ pub fn keys(app: &App) -> Keys {
             "Forward to",
             &[("Enter", "forward"), ("↑↓", "select"), ("Esc", "cancel"), ("^V", "paste")],
         ),
+        Tab::Messages if app.map.is_some() => mode(
+            "Map",
+            &[
+                ("↑↓", "pick"),
+                ("Enter", "open"),
+                ("+/-", "zoom"),
+                ("0", "all"),
+                ("o", "OpenStreetMap"),
+                ("Esc", "close"),
+            ],
+        ),
         Tab::Messages if app.archive_reader.is_some() => mode(
             "Archive",
             &[("↑↓", "scroll"), ("PgUp/Dn", "page"), ("Home/End", "oldest/newest"), ("Esc", "close")],
@@ -176,6 +187,8 @@ pub fn keys(app: &App) -> Keys {
                 ("P", "show paper"),
                 ("N", "notify"),
                 ("H", "archive"),
+                ("L", "share location"),
+                ("M", "map"),
                 ("*", "pin"),
                 ("R", "all read"),
                 ("E", "export"),
