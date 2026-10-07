@@ -116,6 +116,12 @@ impl App {
                     self.settings.icon_background = after.icon_background.clone();
                 }
                 "picture_size" => self.settings.picture_size = after.picture_size.clone(),
+                "log_level" => {
+                    self.settings.log_level = after.log_level.clone();
+                    if let Some(note) = crate::logging::set_level(&after.log_level) {
+                        notes.push(note);
+                    }
+                }
                 "stamp_cost" | "max_message_kb" => {
                     self.settings.stamp_cost = after.stamp_cost;
                     self.settings.max_message_kb = after.max_message_kb;

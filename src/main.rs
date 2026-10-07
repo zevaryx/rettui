@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod emoji;
 mod icons;
+mod logging;
 mod lxmf;
 mod markdown;
 mod names;
@@ -165,17 +166,18 @@ async fn main() -> Result<()> {
         .append(true)
         .open(&paths.log)
         .with_context(|| format!("opening {}", paths.log.display()))?;
-    // Everything goes to the log file; interface trouble also goes to the
-    // log on screen.
+    // Everything goes to the log file, at the level set (changed while
+    // running); interface trouble also goes to the log on screen.
+    let (filter, reload) = tracing_subscriber::reload::Layer::new(logging::starting_filter(&settings.log_level));
+    logging::set_reloader(move |level| {
+        reload.reload(tracing_subscriber::EnvFilter::new(level)).map_err(|e| e.to_string())
+    });
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::sync::Mutex::new(log_file))
                 .with_ansi(false)
-                .with_filter(
-                    tracing_subscriber::EnvFilter::try_from_env("RETTUI_LOG")
-                        .unwrap_or_else(|_| "warn".into()),
-                ),
+                .with_filter(filter),
         )
         .with(net::iface_log::layer())
         .init();

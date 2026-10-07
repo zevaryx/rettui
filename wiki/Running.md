@@ -134,3 +134,92 @@ By default, rettui uses the first Reticulum config it finds in `/etc/reticulum`,
 `~/.config/reticulum`, or `~/.reticulum`. If a shared instance is already running
 from that config (rnsd, NomadNet, Sideband), rettui joins it. Use `--rns-config DIR`
 to choose a different config. The Reticulum tab edits that config file.
+
+## Running as a service
+
+To keep the web UI up without a terminal open (on a home server, or a
+Raspberry Pi with an RNode), run `rettui --web` as a systemd service. The
+login link is printed to the service's log; it's also in `web_token` in the
+data directory (`https://…/?token=` followed by its contents).
+
+**For your own user** (no root needed), save this as
+`~/.config/systemd/user/rettui.service`, with the path to rettui (`which
+rettui`) and the flags you want:
+
+```ini
+[Unit]
+Description=rettui web UI
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=%h/.cargo/bin/rettui --web 127.0.0.1:8740
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+Then:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now rettui
+loginctl enable-linger "$USER"     # keep it running while you're logged out
+journalctl --user -u rettui -e     # the login link, and anything printed
+```
+
+**For the whole machine**, as a user of its own, save it as
+`/etc/systemd/system/rettui.service`:
+
+```ini
+[Unit]
+Description=rettui web UI
+Wants=network-online.target
+After=network-online.target rnsd.service
+
+[Service]
+User=rettui
+Group=rettui
+# An RNode on a serial port needs the dialout group (uucp on some systems).
+SupplementaryGroups=dialout
+ExecStart=/usr/local/bin/rettui --data-dir /var/lib/rettui --rns-config /var/lib/rettui/reticulum --web 0.0.0.0:8740 --https
+StateDirectory=rettui
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```sh
+sudo useradd --system --home-dir /var/lib/rettui --shell /usr/sbin/nologin rettui
+sudo systemctl daemon-reload
+sudo systemctl enable --now rettui
+sudo journalctl -u rettui -e
+```
+
+Things to know:
+
+- **The Reticulum config:** Reticulum keeps its storage beside its config,
+  so the service must be able to write there. The user unit uses the first
+  config found (below), as for you. The system unit above keeps its own in
+  `/var/lib/rettui/reticulum` (made on the first start; set it up in the
+  web UI's Reticulum section), since `ProtectSystem=strict` makes `/etc`
+  read-only and `ProtectHome=true` hides home directories.
+- **rnsd:** to join an rnsd service as a shared instance instead, use its
+  config (`--rns-config /etc/reticulum`), add `ReadWritePaths=/etc/reticulum`,
+  and keep `After=rnsd.service` so rettui starts once it's up.
+- **Listening:** `0.0.0.0` reaches it from other devices. Prefer `--https`
+  (see [Web UI](Web-UI)), a VPN, or a reverse proxy in front of it,
+  as anyone with the link can read and send your messages.
+- **Logs:** what rettui prints goes to the journal; its own log is
+  `rettui.log` in the data directory, as detailed as *Log level* (Status)
+  says.
+- **Stopping:** `systemctl stop` lets rettui leave its RRC hubs and save
+  everything, as Ctrl-C does.

@@ -95,6 +95,8 @@ pub struct Settings {
     /// How big pictures you send may be: one of
     /// [`crate::app::shrink::PICTURE_SIZES`] (smaller ones are made first).
     pub picture_size: String,
+    /// How much goes to `rettui.log`: one of [`crate::logging::LEVELS`].
+    pub log_level: String,
     /// Host an LXMF propagation node (messages kept in `propagation/`).
     pub pn_enabled: bool,
     /// Name the propagation node announces; the display name when unset.
@@ -147,6 +149,7 @@ impl Default for Settings {
             show_first_steps: false,
             markdown_messages: true,
             picture_size: "medium".into(),
+            log_level: "warn".into(),
             pn_enabled: false,
             pn_name: None,
             // lxmd's defaults.
@@ -601,6 +604,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "log_level",
+        label: "Log level",
+        help: "How much goes to rettui.log in the data directory: error, warn (the default), info, debug, or trace (a great deal, for tracking a problem down). RETTUI_LOG, if set when rettui starts, decides instead",
+        kind: FieldKind::Choice(crate::logging::LEVELS),
+        effect: Effect::Now,
+    },
+    Field {
         key: "rns_config",
         label: "Reticulum config",
         help: "Reticulum config directory; empty uses the standard one (and joins a running rnsd)",
@@ -723,6 +733,7 @@ impl Settings {
             "max_message_kb" => self.max_message_kb.to_string(),
             "markdown_messages" => self.markdown_messages.to_string(),
             "picture_size" => self.picture_size.clone(),
+            "log_level" => self.log_level.clone(),
             "pn_enabled" => self.pn_enabled.to_string(),
             "pn_name" => self.pn_name.clone().unwrap_or_default(),
             "pn_stamp_cost" => self.pn_stamp_cost.to_string(),
@@ -779,6 +790,7 @@ impl Settings {
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
             "markdown_messages" => self.markdown_messages = toggle(value).map_err(fail)?,
             "picture_size" => self.picture_size = choice(value, crate::app::shrink::PICTURE_SIZES).map_err(fail)?,
+            "log_level" => self.log_level = choice(value, crate::logging::LEVELS).map_err(fail)?,
             "pn_name" => {
                 if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
                     return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));
