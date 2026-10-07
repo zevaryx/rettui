@@ -334,6 +334,96 @@ function avatar(icon, name) {
   });
 }
 
+// Recording a voice message: the microphone's sound, as it comes, made 8 kHz
+// mono 16-bit (what Codec2 takes, which rettui sends it as) when it stops.
+// Plain Web Audio, so every browser can, Safari too; browsers only give
+// the microphone to a secure page (HTTPS, or localhost).
+const recorder = {
+  // Longest recording (five minutes, as rettui takes).
+  MAX_SECONDS: 300,
+  RATE: 8000,
+
+  available() {
+    return !!navigator.mediaDevices?.getUserMedia && window.isSecureContext;
+  },
+
+  async start() {
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    this.context = new AudioContextClass();
+    const source = this.context.createMediaStreamSource(this.stream);
+    this.processor = this.context.createScriptProcessor(4096, 1, 1);
+    this.chunks = [];
+    this.processor.onaudioprocess = (e) => this.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    source.connect(this.processor);
+    this.processor.connect(this.context.destination);
+    this.started = Date.now();
+  },
+
+  seconds() {
+    return this.started ? (Date.now() - this.started) / 1000 : 0;
+  },
+
+  // Stop: the recording as a WAV file (base64), and how long it is; none if
+  // cancelled.
+  async stop(keep = true) {
+    const rate = this.context?.sampleRate || 48000;
+    this.processor?.disconnect();
+    for (const track of this.stream?.getTracks() || []) track.stop();
+    await this.context?.close().catch(() => {});
+    const chunks = this.chunks || [];
+    this.stream = this.context = this.processor = this.chunks = null;
+    this.started = 0;
+    if (!keep) return null;
+    const length = chunks.reduce((n, c) => n + c.length, 0);
+    const all = new Float32Array(length);
+    let at = 0;
+    for (const chunk of chunks) {
+      all.set(chunk, at);
+      at += chunk.length;
+    }
+    // 8 kHz: each sample the mean of those it stands for (so nothing above
+    // 4 kHz folds back down), at most five minutes.
+    const step = rate / this.RATE;
+    const count = Math.min(Math.floor(length / step), this.MAX_SECONDS * this.RATE);
+    const samples = new Int16Array(count);
+    for (let i = 0; i < count; i++) {
+      const from = Math.floor(i * step);
+      const to = Math.max(from + 1, Math.floor((i + 1) * step));
+      let sum = 0;
+      for (let j = from; j < to; j++) sum += all[j];
+      samples[i] = Math.max(-1, Math.min(1, sum / (to - from))) * 0x7fff;
+    }
+    if (!count) return null;
+    const wav = this.wav(samples);
+    return { wav: wav.base64, url: URL.createObjectURL(new Blob([wav.bytes], { type: 'audio/wav' })), seconds: count / this.RATE };
+  },
+
+  // Samples as a WAV file: its bytes, and base64.
+  wav(samples) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const text = (at, s) => [...s].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)));
+    text(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    text(8, 'WAVEfmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, this.RATE, true);
+    view.setUint32(28, this.RATE * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    text(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    new Int16Array(buffer, 44).set(samples);
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return { bytes, base64: btoa(binary) };
+  },
+};
+
 // Whether a file attached is a picture that goes smaller, as the setting
 // has it (not a GIF, which may move): see shrink.rs.
 function shrinks(file) {
@@ -2255,6 +2345,7 @@ app.views.messages = {
       el('div', { class: 'row' }, this.text),
       el('div', { class: 'row' },
         el('button', { text: '📎 Attach', onclick: () => this.fileInput.click() }),
+        this.micButton = el('button', { text: '🎤', title: 'Record a voice message (sent as Codec2, as Sideband and MeshChat play)', onclick: () => this.toggleRecording() }),
         this.emojiButton,
         mode,
         el('span', { class: 'grow' }),
@@ -2281,9 +2372,55 @@ app.views.messages = {
     if (address) openConversation(address);
   },
 
+  // Record a voice message, or stop and keep it to send.
+  async toggleRecording() {
+    if (recorder.started) {
+      clearInterval(this.recordingTimer);
+      const recording = await recorder.stop();
+      this.micButton.textContent = '🎤';
+      this.micButton.classList.remove('on');
+      this.cancelRecording?.remove();
+      if (recording) this.voice = recording;
+      this.renderChips();
+      return;
+    }
+    if (!recorder.available()) {
+      return toast('Browsers only let a secure page use the microphone: open rettui over HTTPS (start it with --https), or at localhost');
+    }
+    if (this.pending.length) return toast('A voice message goes on its own, or with text: take the files off first');
+    try {
+      await recorder.start();
+    } catch (e) {
+      return toast(`Couldn't record: ${e.message || e}`);
+    }
+    this.micButton.classList.add('on');
+    const tick = () => {
+      const seconds = Math.floor(recorder.seconds());
+      this.micButton.textContent = `⏹ ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+      if (seconds >= recorder.MAX_SECONDS) this.toggleRecording();
+    };
+    tick();
+    this.recordingTimer = setInterval(tick, 250);
+    this.cancelRecording = el('button', { text: '✕', title: 'Throw the recording away', onclick: async () => {
+      clearInterval(this.recordingTimer);
+      await recorder.stop(false);
+      this.micButton.textContent = '🎤';
+      this.micButton.classList.remove('on');
+      this.cancelRecording.remove();
+    } });
+    this.micButton.after(this.cancelRecording);
+  },
+
   renderChips() {
     const size = app.status?.picture_size;
-    this.chips.replaceChildren(...this.pending.map((file, i) => el('span', {
+    const voice = this.voice ? [el('span', { class: 'chip voice-chip' },
+      el('span', { text: `🎤 ${Math.round(this.voice.seconds)} s, as Codec2 ` }),
+      el('audio', { controls: true, preload: 'auto', src: this.voice.url }),
+      el('button', { text: '×', title: 'Throw it away', onclick: () => {
+        this.voice = null;
+        this.renderChips();
+      } }))] : [];
+    this.chips.replaceChildren(...voice, ...this.pending.map((file, i) => el('span', {
       class: 'chip',
       title: shrinks(file) ? `Sent smaller (${size}), as set in Status: Send pictures at` : '',
     },
@@ -2450,7 +2587,7 @@ app.views.messages = {
     this.header.replaceChildren(...[
       conversation.icon ? avatar(conversation.icon, conversation.name) : null,
       el('span', { class: 'title', text: conversation.name }),
-      el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }),
+      el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: key }),
       el('button', { class: 'pin-button' + (conversation.pinned ? ' on' : ''), text: '📌',
         title: conversation.pinned ? 'Unpin it from the top of the list' : 'Pin it to the top of the list',
         onclick: () => this.setPinned(key, !conversation.pinned) }),
@@ -2841,7 +2978,10 @@ app.views.messages = {
     const content = this.text.value;
     const pending = this.pending;
     const reply = this.replyTo;
-    if (!content.trim() && !pending.length) return;
+    const voice = this.voice;
+    if (!content.trim() && !pending.length && !voice) return;
+    if (recorder.started) return toast('Stop recording first (⏹)');
+    this.voice = null;
     // Take the message out of the box at once, so a second Enter (or a
     // double click) while this one is on its way has nothing to send, and
     // anything typed meanwhile is kept.
@@ -2858,16 +2998,21 @@ app.views.messages = {
         el('span', { class: 'dim', text: ' sending…' })),
       reply ? el('div', { class: 'reply-quote' }, el('span', { class: 'quote-author', text: `${reply.author}: ` }), reply.text) : null,
       content ? el('div', { class: 'content', text: content }) : null,
-      pending.map((f) => el('div', { class: 'attachment dim', text: `📎 ${f.name}` }))));
+      pending.map((f) => el('div', { class: 'attachment dim', text: `📎 ${f.name}` })),
+      voice ? el('div', { class: 'attachment dim', text: `🎤 Voice message, ${Math.round(voice.seconds)} s` }) : null));
     const files = [];
     for (const file of pending) files.push({ name: file.name, data: await readFile(file) });
     // Pictures that go smaller don't count: rettui warns of what they come to.
     const total = pending.filter((f) => !shrinks(f)).reduce((n, f) => n + f.size, 0);
     if (total > 1_000_000) toast(`Sending ${humanBytes(total)} of attachments; many clients reject direct transfers over 1 MB`);
     const mode = this.mode;
-    const sent = await attempt(() => api.post(`/conversations/${echo.key}/send`, { content, mode, files, reply_to: reply?.id }));
+    const sent = await attempt(() => api.post(`/conversations/${echo.key}/send`, { content, mode, files, reply_to: reply?.id, voice: voice?.wav }));
     echo.done(!sent);
     if (!sent) {
+      if (voice && !this.voice) {
+        this.voice = voice;
+        this.renderChips();
+      }
       // Put it back to try again, in the conversation it was for.
       draftRestore(this, echo.key, { text: content, files: pending, reply });
       return;

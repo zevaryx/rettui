@@ -144,6 +144,8 @@ pub struct Outgoing {
     pub format: Option<crate::markdown::TextFormat>,
     /// Our icon, if one's set (sent with each message, as Sideband does).
     pub appearance: Option<fields::Appearance>,
+    /// A voice message: its LXMF audio mode, and the recording in it.
+    pub audio: Option<(u8, Vec<u8>)>,
 }
 
 impl Outgoing {
@@ -163,6 +165,7 @@ impl Outgoing {
             local_node: None,
             format: None,
             appearance: None,
+            audio: None,
         }
     }
 }

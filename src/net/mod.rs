@@ -130,7 +130,7 @@ pub enum NetCommand {
     },
     Sync,
     /// Send a message (its propagation node is the one set here).
-    SendMessage { id: u64, message: lxmf::Outgoing },
+    SendMessage { id: u64, message: Box<lxmf::Outgoing> },
     Fetch {
         id: u64,
         node: Hash,
@@ -822,7 +822,7 @@ async fn run(
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone(), policy.clone());
                         let (stamp_ticket, ticket) = policy.lock().unwrap().for_outgoing(message.to);
                         let local_node = pn_local.clone();
-                        let outgoing = lxmf::Outgoing { propagation_node, stamp_ticket, ticket, local_node, ..message };
+                        let outgoing = lxmf::Outgoing { propagation_node, stamp_ticket, ticket, local_node, ..*message };
                         let (to, gives_ticket) = (outgoing.to, outgoing.ticket.is_some());
                         tokio::spawn(async move {
                             let result = lxmf::send(&runtime, &known, &identity, lxmf_hash, outgoing).await;

@@ -120,7 +120,7 @@ pub async fn send(
     let _ = commands.send(if mode == DeliveryMode::Paper {
         NetCommand::WritePaper { id: 1, paper: crate::lxmf::paper::Paper { to, content, timestamp, reply: None, format: None } }
     } else {
-        NetCommand::SendMessage { id: 1, message: crate::lxmf::Outgoing::text(to, content, attachments, mode, timestamp) }
+        NetCommand::SendMessage { id: 1, message: Box::new(crate::lxmf::Outgoing::text(to, content, attachments, mode, timestamp)) }
     });
     while let Some(event) = events.recv().await {
         match event {

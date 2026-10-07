@@ -25,6 +25,14 @@ const PAPER_FAILED: &str = "Not written: ";
 /// A failed message sent again when its recipient announced isn't sent
 /// again so for this long.
 const RESEND_GAP: Duration = Duration::from_secs(10 * 60);
+/// A voice message to send: its LXMF audio mode, its frames, and the WAV
+/// file of them kept to play.
+struct Voice {
+    mode: u8,
+    frames: Vec<u8>,
+    wav: PathBuf,
+}
+
 /// Commands from someone are answered at most this often.
 const ANSWER_EVERY: Duration = Duration::from_secs(60);
 
@@ -290,7 +298,7 @@ impl App {
             appearance: self.own_appearance(),
             ..lxmf::Outgoing::text(to, String::new(), Vec::new(), mode, timestamp)
         };
-        self.send(NetCommand::SendMessage { id, message });
+        self.send(NetCommand::SendMessage { id, message: Box::new(message) });
         Ok(())
     }
 
@@ -517,13 +525,55 @@ impl App {
         mode: DeliveryMode,
         reply: Option<String>,
     ) -> Result<u64, (String, String, Vec<PathBuf>)> {
+        self.send_with_voice(key, content, files, mode, reply, None)
+    }
+
+    /// Send a voice message recorded in the web UI (a WAV file: 8 kHz mono
+    /// 16-bit), with any text, as Codec2 in LXMF's audio field, the way
+    /// Sideband and MeshChat send theirs. What was sent is kept to play:
+    /// the WAV file of the Codec2 frames, and the frames beside it.
+    pub fn send_voice(
+        &mut self,
+        key: String,
+        content: String,
+        recording: &[u8],
+        mode: DeliveryMode,
+        reply: Option<String>,
+    ) -> Result<u64, String> {
+        let samples = lxmf::voice::wav_samples(recording)?;
+        let frames = lxmf::voice::codec2_encode(lxmf::voice::SEND_MODE, &samples).ok_or("Nothing was recorded")?;
+        let played = lxmf::voice::codec2_wav(lxmf::voice::SEND_MODE, &frames).ok_or("Nothing was recorded")?;
+        let wav = super::files::unique_path(&self.paths.uploads, "voice-message.wav");
+        let kept = std::fs::create_dir_all(&self.paths.uploads)
+            .and_then(|()| std::fs::write(&wav, &played))
+            .and_then(|()| std::fs::write(wav.with_extension("codec2"), &frames));
+        if let Err(e) = kept {
+            return Err(format!("Couldn't keep the recording: {e}"));
+        }
+        let voice = Voice { mode: lxmf::voice::SEND_MODE, frames, wav: wav.clone() };
+        self.send_with_voice(key, content, Vec::new(), mode, reply, Some(voice)).map_err(|(e, ..)| {
+            let _ = std::fs::remove_file(&wav);
+            let _ = std::fs::remove_file(wav.with_extension("codec2"));
+            e
+        })
+    }
+
+    fn send_with_voice(
+        &mut self,
+        key: String,
+        content: String,
+        files: Vec<PathBuf>,
+        mode: DeliveryMode,
+        reply: Option<String>,
+        voice: Option<Voice>,
+    ) -> Result<u64, (String, String, Vec<PathBuf>)> {
         let Some(to) = parse_hash(&key) else {
             return Err(("An LXMF address is 32 hex characters".into(), content, files));
         };
-        if content.trim().is_empty() && files.is_empty() {
+        if content.trim().is_empty() && files.is_empty() && voice.is_none() {
             return Err(("Nothing to send".into(), content, files));
         }
-        if mode == DeliveryMode::Paper && !files.is_empty() {
+        if mode == DeliveryMode::Paper && (!files.is_empty() || voice.is_some()) {
             return Err(("A paper message carries text only".into(), content, files));
         }
         if mode == DeliveryMode::Propagated && self.propagation_node().is_none() {
@@ -549,6 +599,13 @@ impl App {
                 path: path.clone(),
                 voice: None,
             })
+            .chain(voice.as_ref().map(|v| StoredAttachment {
+                name: "voice-message.wav".into(),
+                size: std::fs::metadata(&v.wav).map(|m| m.len()).unwrap_or(0),
+                image: false,
+                path: v.wav.clone(),
+                voice: Some(lxmf::fields::Audio::new(v.mode, Vec::new()).codec()),
+            }))
             .collect();
         let total: u64 = attachments.iter().map(|a| a.size).sum();
         if total > LARGE_MESSAGE_BYTES {
@@ -588,8 +645,9 @@ impl App {
             self.send(NetCommand::WritePaper { id, paper: lxmf::paper::Paper { to, content, timestamp, reply, format } });
         } else {
             let appearance = self.own_appearance();
-            let message = lxmf::Outgoing { reply, format, appearance, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
-            self.send(NetCommand::SendMessage { id, message });
+            let audio = voice.map(|v| (v.mode, v.frames));
+            let message = lxmf::Outgoing { reply, format, appearance, audio, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            self.send(NetCommand::SendMessage { id, message: Box::new(message) });
         }
         Ok(id)
     }
@@ -804,11 +862,13 @@ impl App {
         if !matches!(message.state, MessageState::Failed(_)) {
             return Err("Only a message that failed can be sent again".into());
         }
-        let files: Vec<PathBuf> = message.attachments.iter().map(|a| a.path.clone()).collect();
+        // A recording goes as its Codec2 frames again, the rest as files.
+        let audio = message.attachments.iter().find_map(|a| a.frames_path()).and_then(|path| std::fs::read(path).ok());
+        let files: Vec<PathBuf> = message.attachments.iter().filter(|a| a.frames_path().is_none()).map(|a| a.path.clone()).collect();
         if let Some(missing) = message.attachments.iter().find(|a| !a.path.is_file()) {
             return Err(format!("{} isn't there any more, so it can't be sent again", missing.name));
         }
-        if mode == DeliveryMode::Paper && !files.is_empty() {
+        if mode == DeliveryMode::Paper && (!files.is_empty() || audio.is_some()) {
             return Err("A paper message carries text only".into());
         }
         message.state = MessageState::Sending;
@@ -822,8 +882,9 @@ impl App {
             self.send(NetCommand::WritePaper { id: number, paper: lxmf::paper::Paper { to, content, timestamp, reply, format } });
         } else {
             let appearance = self.own_appearance();
-            let message = lxmf::Outgoing { reply, format, appearance, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
-            self.send(NetCommand::SendMessage { id: number, message });
+            let audio = audio.map(|frames| (lxmf::voice::SEND_MODE, frames));
+            let message = lxmf::Outgoing { reply, format, appearance, audio, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            self.send(NetCommand::SendMessage { id: number, message: Box::new(message) });
         }
         Ok(())
     }
@@ -843,7 +904,9 @@ impl App {
         let message = conversation.messages.remove(at);
         conversation.unread = conversation.unread.min(conversation.messages.len());
         for attachment in &message.attachments {
-            crate::store::remove_owned(&attachment.path, &owned);
+            for file in attachment.files() {
+                crate::store::remove_owned(&file, &owned);
+            }
             self.pictures.remove(&attachment.path);
         }
         for id in [&mut self.picked, &mut self.reply, &mut self.reacting] {
@@ -861,8 +924,8 @@ impl App {
     pub fn delete_conversation(&mut self, key: &str) -> bool {
         let Some(conversation) = self.store.conversations.remove(key) else { return false };
         let owned = self.owned_folders();
-        for attachment in conversation.messages.iter().flat_map(|m| &m.attachments) {
-            crate::store::remove_owned(&attachment.path, &owned);
+        for file in conversation.messages.iter().flat_map(|m| &m.attachments).flat_map(StoredAttachment::files) {
+            crate::store::remove_owned(&file, &owned);
         }
         // Their folder of downloads, if that leaves it empty.
         let _ = std::fs::remove_dir(self.paths.downloads.join(&key[..key.len().min(12)]));
@@ -1697,6 +1760,47 @@ mod tests {
         app.on_message(ping(4));
         assert_eq!(mine(&app).len(), 2);
         assert!(app.store.conversations[&key()].messages.iter().any(|m| m.notes.iter().any(|n| n.contains("less than a minute ago"))));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_recording_goes_as_codec2_and_again_the_same() {
+        use crate::net::{NetCommand, NetEvent};
+        let dir = temp_dir("send-voice");
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, crate::config::Settings::default(), Store::default());
+        // A second of a tone, as the web UI uploads it.
+        let tone: Vec<i16> = (0..8000).map(|i| ((i as f32 * 0.25).sin() * 8000.0) as i16).collect();
+        let mut wav = b"RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x80\x3e\0\0\x02\0\x10\0data".to_vec();
+        wav.extend((tone.len() as u32 * 2).to_le_bytes());
+        wav.extend(tone.iter().flat_map(|s| s.to_le_bytes()));
+        while net.try_recv().is_ok() {}
+        let id = app.send_voice(key(), String::new(), &wav, DeliveryMode::Direct, None).unwrap();
+        let sent: Vec<NetCommand> = std::iter::from_fn(|| net.try_recv().ok()).collect();
+        let audio = sent.iter().find_map(|c| match c {
+            NetCommand::SendMessage { message, .. } => message.audio.clone(),
+            _ => None,
+        });
+        // 50 frames of 8 bytes: a second at 3200 bit/s.
+        let (mode, frames) = audio.unwrap();
+        assert_eq!((mode, frames.len()), (crate::lxmf::voice::SEND_MODE, 400));
+        let stored = app.store.conversations[&key()].messages.last().unwrap().clone();
+        let attachment = &stored.attachments[0];
+        assert_eq!((attachment.name.as_str(), attachment.voice.as_deref()), ("voice-message.wav", Some("Codec2 3200")));
+        assert!(attachment.playable() && attachment.frames_path().is_some());
+        // Failed, then sent again: the same frames, not the WAV as a file.
+        app.on_net(NetEvent::Delivery { id, result: Err("no path".into()) });
+        app.retry_message(&key(), &stored.id, DeliveryMode::Direct).unwrap();
+        let again = std::iter::from_fn(|| net.try_recv().ok()).find_map(|c| match c {
+            NetCommand::SendMessage { message, .. } => Some(*message),
+            _ => None,
+        });
+        let again = again.unwrap();
+        assert_eq!((again.audio.map(|(_, f)| f), again.attachments.len()), (Some(frames), 0));
+        // Deleted: both its files go.
+        let (wav_path, frames_path) = (attachment.path.clone(), attachment.frames_path().unwrap());
+        app.delete_message(&key(), &stored.id).unwrap();
+        assert!(!wav_path.exists() && !frames_path.exists());
+        assert!(app.send_voice(key(), String::new(), b"not a wav", DeliveryMode::Direct, None).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

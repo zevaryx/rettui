@@ -69,6 +69,9 @@ pub(super) async fn build_message(
             .set_msgpack_field(FIELD_REACTION, super::fields::reaction_field(reaction))
             .map_err(|e| e.to_string())?;
     }
+    if let Some((mode, recording)) = &outgoing.audio {
+        message.set_audio_field(*mode, recording).map_err(|e| e.to_string())?;
+    }
     if let Some(appearance) = &outgoing.appearance {
         message
             .set_msgpack_field(FIELD_ICON_APPEARANCE, super::fields::appearance_field(appearance))

@@ -323,6 +323,15 @@ rettui shows what each one is, rather than an empty message:
     files (8 kHz mono). The 3200, 2400, 1600, 1400, 1300 and 1200 modes are
     decoded, up to ten minutes; 700C, 450 and 450PWB aren't yet, so those
     are saved as they came (`.codec2`) and marked as not playable.
+  - **Recording one** (web UI): the 🎤 button beside **Attach** records
+    from the microphone; press it again (⏹ shows how long so far) to stop,
+    listen to it, then **Send** it, with text if you like. It goes as
+    Codec2 at 3200 bit/s (about 400 bytes a second, so a minute is 24 KB:
+    light enough for LoRa), which Sideband, MeshChat and Columba play; you
+    hear what they will. Up to five minutes. Browsers only let a secure
+    page use the microphone: open the web UI at `localhost`, or over
+    [HTTPS](Web-UI). The TUI can't record, but sends audio files as
+    attachments.
 - A message with nothing rettui can show says so, naming the fields it
   carried, without a notification.
 

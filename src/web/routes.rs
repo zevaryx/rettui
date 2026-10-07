@@ -42,7 +42,7 @@ const TOKEN_HEADER: &str = "x-rettui-token";
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 /// Scripts only from this server; page content is inert HTML. Inline style
 /// attributes carry Micron colours.
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 pub struct ApiError(StatusCode, String);
 
@@ -849,6 +849,10 @@ struct SendBody {
     /// The id of the message it replies to.
     #[serde(default)]
     reply_to: Option<String>,
+    /// A voice message recorded in the page: a WAV file (8 kHz mono 16-bit),
+    /// base64. It's sent as Codec2.
+    #[serde(default)]
+    voice: Option<String>,
 }
 
 async fn send_message(
@@ -858,6 +862,16 @@ async fn send_message(
 ) -> ApiResult {
     let key = address(&key)?;
     let mode = DeliveryMode::parse(&body.mode).ok_or_else(|| bad(format!("unknown delivery mode {}", body.mode)))?;
+    if let Some(recording) = &body.voice {
+        if !body.files.is_empty() {
+            return Err(bad("A voice message goes on its own, or with text, not with files"));
+        }
+        let recording =
+            base64::engine::general_purpose::STANDARD.decode(recording.as_bytes()).map_err(|_| bad("The recording isn't valid base64"))?;
+        let (content, reply) = (body.content, body.reply_to);
+        let id = state.write(move |o| o.app.send_voice(key, content, &recording, mode, reply)).await?.map_err(bad)?;
+        return Ok(axum::Json(json!({ "ok": true, "id": format!("local-{id}") })));
+    }
     // Uploaded files are kept like received ones, so the message can show them.
     let dir = state.paths.uploads.clone();
     let mut files: Vec<PathBuf> = Vec::new();

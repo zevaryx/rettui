@@ -65,6 +65,18 @@ impl StoredAttachment {
     pub fn playable(&self) -> bool {
         self.voice.is_some() && self.path.extension().is_some_and(|e| e == "ogg" || e == "wav")
     }
+
+    /// For a voice message recorded here, the Codec2 frames it went as,
+    /// kept beside the WAV file played (to send the same again).
+    pub fn frames_path(&self) -> Option<PathBuf> {
+        self.voice.as_ref()?;
+        Some(self.path.with_extension("codec2")).filter(|p| p.is_file())
+    }
+
+    /// The files it has: the one shown, and the frames of a recording.
+    pub fn files(&self) -> Vec<PathBuf> {
+        std::iter::once(self.path.clone()).chain(self.frames_path()).collect()
+    }
 }
 
 /// A reaction to a message.
@@ -490,8 +502,8 @@ pub fn remove_from_archive(dir: &Path, conversation: &str, owned: &[PathBuf]) ->
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
             match serde_json::from_str::<Archived>(line) {
                 Ok(archived) if archived.conversation == conversation => {
-                    for attachment in &archived.message.attachments {
-                        remove_owned(&attachment.path, owned);
+                    for file in archived.message.attachments.iter().flat_map(StoredAttachment::files) {
+                        remove_owned(&file, owned);
                     }
                     gone += 1;
                 }

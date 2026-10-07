@@ -71,6 +71,68 @@ fn wav(samples: &[i16]) -> Vec<u8> {
     out
 }
 
+/// The mode voice messages recorded here go in: Codec2 at 3200 bit/s, the
+/// clearest it has (400 bytes a second, so a minute is 24 KB), which
+/// Sideband, MeshChat and Columba play.
+pub const SEND_MODE: u8 = AM_CODEC2_3200;
+/// Longest recording sent (five minutes).
+pub const MAX_SEND_SECONDS: usize = 300;
+
+/// A WAV file's samples, if it's what a recording is sent from: PCM,
+/// 16-bit, mono, 8 kHz.
+pub fn wav_samples(data: &[u8]) -> Result<Vec<i16>, String> {
+    if !is_wav(data) {
+        return Err("Not a WAV file".into());
+    }
+    let (mut format, mut samples) = (None, None);
+    let mut at = 12;
+    while at + 8 <= data.len() {
+        let id = &data[at..at + 4];
+        let len = u32::from_le_bytes(data[at + 4..at + 8].try_into().unwrap()) as usize;
+        let body = &data[at + 8..(at + 8 + len).min(data.len())];
+        match id {
+            b"fmt " if body.len() >= 16 => {
+                let word = |i: usize| u16::from_le_bytes([body[i], body[i + 1]]);
+                let rate = u32::from_le_bytes(body[4..8].try_into().unwrap());
+                format = Some((word(0), word(2), rate, word(14)));
+            }
+            b"data" => samples = Some(body),
+            _ => {}
+        }
+        // Chunks are padded to an even length.
+        at += 8 + len + (len & 1);
+    }
+    match (format, samples) {
+        (Some((1, 1, SAMPLE_RATE, 16)), Some(body)) => {
+            Ok(body.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect())
+        }
+        (Some(_), Some(_)) => Err("A recording is sent from 16-bit mono 8 kHz PCM".into()),
+        _ => Err("Not a WAV file with sound in it".into()),
+    }
+}
+
+/// Samples (8 kHz mono) as Codec2 frames in `mode`: whole frames, the last
+/// one filled out with silence; at most [`MAX_SEND_SECONDS`].
+pub fn codec2_encode(mode: u8, samples: &[i16]) -> Option<Vec<u8>> {
+    let mut codec = Codec2::new(codec2_mode(mode)?);
+    let frame_bytes = codec.bits_per_frame().div_ceil(8);
+    let frame_samples = codec.samples_per_frame();
+    let samples = &samples[..samples.len().min(MAX_SEND_SECONDS * SAMPLE_RATE as usize)];
+    if samples.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(samples.len().div_ceil(frame_samples) * frame_bytes);
+    let mut frame = vec![0i16; frame_samples];
+    let mut bits = vec![0u8; frame_bytes];
+    for chunk in samples.chunks(frame_samples) {
+        frame[..chunk.len()].copy_from_slice(chunk);
+        frame[chunk.len()..].fill(0);
+        codec.encode(&mut bits, &frame);
+        out.extend_from_slice(&bits);
+    }
+    Some(out)
+}
+
 /// Whether bytes are a WAV file.
 pub fn is_wav(data: &[u8]) -> bool {
     data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WAVE"
@@ -128,5 +190,42 @@ mod tests {
         let wav = codec2_wav(AM_CODEC2_3200, &[0; 8 * 3 + 5]).unwrap();
         assert_eq!(wav.len(), 44 + 3 * 160 * 2);
         assert!(codec2_wav(AM_CODEC2_2400, &[0; 6]).is_some());
+    }
+
+    #[test]
+    fn recordings_encode_to_codec2_and_back() {
+        // Speech: the reference recording, decoded, as a WAV file.
+        let speech = codec2_wav(AM_CODEC2_1200, BITS_1200).unwrap();
+        let samples = wav_samples(&speech).unwrap();
+        assert_eq!(samples.len(), 32_000);
+        let frames = codec2_encode(SEND_MODE, &samples).unwrap();
+        // 3200: 8 bytes for each 160 samples (20 ms): four seconds, 1.6 KB.
+        assert_eq!(frames.len(), 200 * 8);
+        let again = wav_samples(&codec2_wav(SEND_MODE, &frames).unwrap()).unwrap();
+        assert_eq!(again.len(), samples.len());
+        // The same sound: the loudness of each 40 ms follows.
+        let rms = |s: &[i16]| -> Vec<f64> {
+            s.chunks(320).map(|f| (f.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>() / 320.0).sqrt()).collect()
+        };
+        let (a, b) = (rms(&samples), rms(&again));
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let (ma, mb) = (mean(&a), mean(&b));
+        let cov: f64 = a.iter().zip(&b).map(|(x, y)| (x - ma) * (y - mb)).sum();
+        let var = |v: &[f64], m: f64| v.iter().map(|x| (x - m) * (x - m)).sum::<f64>();
+        let correlation = cov / (var(&a, ma) * var(&b, mb)).sqrt();
+        assert!(correlation > 0.9, "loudness follows: {correlation}");
+        assert!((0.7..1.4).contains(&(mb / ma)), "as loud overall: {ma} and {mb}");
+        // A part frame at the end is filled out.
+        assert_eq!(codec2_encode(SEND_MODE, &samples[..170]).unwrap().len(), 16);
+        assert!(codec2_encode(SEND_MODE, &[]).is_none());
+    }
+
+    #[test]
+    fn only_8_khz_mono_16_bit_wavs_are_taken() {
+        assert_eq!(wav_samples(&wav(&[1, -2, 3])).unwrap(), [1, -2, 3]);
+        let mut stereo = wav(&[0; 4]);
+        stereo[22] = 2;
+        assert!(wav_samples(&stereo).unwrap_err().contains("16-bit mono 8 kHz"));
+        assert!(wav_samples(b"OggS not a wav").is_err());
     }
 }
