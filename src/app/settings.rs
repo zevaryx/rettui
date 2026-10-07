@@ -330,6 +330,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let (mut app, _commands) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
         let node_dir = dir.join("pages").display().to_string();
+        let offline_map = dir.join("region.mbtiles");
+        crate::web::mbtiles::sample(&offline_map, "png");
+        let offline_map = offline_map.display().to_string();
         let address = "ab".repeat(16);
         let home = format!("{address}:/page/index.mu");
         // These change what every test draws or logs (global), and are
@@ -352,6 +355,7 @@ mod tests {
                     "propagation_node" => address.clone(),
                     "location" => "1.5, 2.5".into(),
                     "map_tiles" => String::new(),
+                    "map_tiles_file" => offline_map.clone(),
                     "home" => home.clone(),
                     "node_name" => "Hilltop".into(),
                     "node_dir" => node_dir.clone(),
@@ -386,6 +390,10 @@ mod tests {
         refused(&mut app, "rns_config", &elsewhere);
         refused(&mut app, "rns_config", "");
         refused(&mut app, "node_dir", &elsewhere);
+        // Nor a file to read map tiles from.
+        let offline_map = dir.join("region.mbtiles");
+        crate::web::mbtiles::sample(&offline_map, "png");
+        refused(&mut app, "map_tiles_file", &offline_map.display().to_string());
         assert_eq!(app.saved_settings().unwrap().display_name, "rettui user", "nothing is saved when one is refused");
         // Scripts can be turned off, not back on.
         app.update_settings_from_web(&[("node_executable_pages", "false")]).unwrap();

@@ -28,7 +28,7 @@ pub(crate) fn unique_path(dir: &Path, name: &str) -> PathBuf {
 /// such with `\` (on Unix), or give it as a `file://` address: those are
 /// undone. Text that names a file as it is stays as it is, so a path that
 /// worked before still does.
-pub(super) fn path_from_input(text: &str) -> PathBuf {
+pub(crate) fn path_from_input(text: &str) -> PathBuf {
     let text = text.trim();
     let literal = expand_home(text);
     if text.is_empty() || literal.exists() {

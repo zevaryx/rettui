@@ -16,6 +16,7 @@
 //! - [`views`]: JSON snapshots of the app state.
 //! - [`push`]: Web Push.
 
+pub mod mbtiles;
 mod push;
 mod routes;
 mod tiles;

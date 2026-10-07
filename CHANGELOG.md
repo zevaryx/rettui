@@ -22,6 +22,7 @@ Changes since v1.5.1.
   - Share a location (`L` / 📍) in Sideband's telemetry format, once or live (as Columba does: updates for a while, then a message saying it stopped).
   - Answer location requests (*Location requests*, off by default).
   - A map of shared locations in both UIs (`M`). Map tiles are fetched and cached by rettui.
+  - An offline map: *Offline map* names an MBTiles file whose tiles the web map shows first, with no internet at all (enlarged past the file's closest zoom).
 - **Network**
   - Find or forget the path to any destination: `P` / `D`, or the Path dialog in the web UI ([#10](https://github.com/zevaryx/rettui/issues/10)).
   - Probe any destination (`T`).

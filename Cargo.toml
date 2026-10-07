@@ -79,6 +79,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 notify-rust = "4.18.1"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 codec2 = "0.3.1"
+# Offline map tiles from an MBTiles file (SQLite), for the web UI's map;
+# SQLite built in, so nothing needs installing.
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
 # Unpacking a release to update to (see src/update/install.rs): .tar.gz
 # for Linux and macOS, .zip for Windows.
 tar = { version = "0.4", default-features = false }

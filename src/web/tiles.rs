@@ -51,7 +51,7 @@ fn kept_path(dir: &Path, template: &str, z: u32, x: u32, y: u32) -> PathBuf {
 }
 
 /// What kind of picture `data` is, from how it starts: PNG, JPEG or WebP.
-fn picture_kind(data: &[u8]) -> Option<&'static str> {
+pub(super) fn picture_kind(data: &[u8]) -> Option<&'static str> {
     if data.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
     } else if data.starts_with(&[0xff, 0xd8, 0xff]) {

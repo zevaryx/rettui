@@ -412,6 +412,17 @@ show without the internet. The tile server learns which parts of the map
 are looked at, as with any online map; with *Map tiles* empty, nothing is
 fetched, and the places are drawn on a plain grid.
 
+For a map with no internet at all, *Offline map* (Status,
+`map_tiles_file`) names an MBTiles file: tiles in one SQLite file, as
+MOBAC, QGIS, TileMill and others make them (raster tiles: PNG, JPEG or
+WebP pictures; vector tiles aren't drawn). Its tiles come first; any it
+hasn't come from *Map tiles*, if that's set. Zoomed in closer than the
+file goes, its closest tiles are shown enlarged (up to six levels), rather
+than nothing. The file's credit (its `attribution`) shows in the corner.
+It names a file on the computer running rettui, so it's set in the
+terminal UI or `settings.json`; the web UI shows it, but can't change it.
+The file is only read.
+
 To react, pick a message and choose an emoji:
 
 - **In the TUI:** `m` picks the newest message, and `↑↓` pick another (or

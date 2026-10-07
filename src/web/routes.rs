@@ -600,8 +600,43 @@ static FETCHING_TILES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_ne
 /// A map tile, from the Map tiles setting's source: kept, or fetched and
 /// kept (see `tiles`).
 async fn map_tile(State(state): State<WebState>, Path((z, x, y)): Path<(u32, u32, u32)>) -> Result<Response, ApiError> {
-    let template = state.read(|o| o.app.settings.map_tiles.clone()).await?;
-    let template = template.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no map tiles are set (Map tiles)".into()))?;
+    let (template, file) = state.read(|o| (o.app.settings.map_tiles.clone(), o.app.settings.map_tiles_file.clone())).await?;
+    let cache = [(header::CACHE_CONTROL, "private, max-age=86400")];
+    // The offline map's first.
+    if let Some(file) = &file {
+        let file = file.clone();
+        let found = tokio::task::spawn_blocking(move || super::mbtiles::tile(std::path::Path::new(&file), z, x, y))
+            .await
+            .map_err(|e| bad(e.to_string()))?;
+        match found {
+            Ok(Some(tile)) => return Ok(([(header::CONTENT_TYPE, tile.kind)], cache, tile.data).into_response()),
+            Ok(None) => {}
+            Err(e) => tracing::debug!("offline map tile {z}/{x}/{y}: {e}"),
+        }
+    }
+    // Else from the web; failing that (or with none set), a part of one
+    // the offline map has further out, enlarged.
+    let fetched = match template {
+        Some(template) => web_tile(&state, template, z, x, y).await,
+        None => Err(ApiError(StatusCode::NOT_FOUND, "no map tiles are set (Map tiles), and the offline map hasn't this one".into())),
+    };
+    match (fetched, file) {
+        (Ok(tile), _) => Ok(([(header::CONTENT_TYPE, tile.kind)], cache, tile.data).into_response()),
+        (Err(e), Some(file)) => {
+            let enlarged = tokio::task::spawn_blocking(move || super::mbtiles::enlarged(std::path::Path::new(&file), z, x, y))
+                .await
+                .map_err(|e| bad(e.to_string()))?;
+            match enlarged {
+                Ok(Some(tile)) => Ok(([(header::CONTENT_TYPE, tile.kind)], cache, tile.data).into_response()),
+                _ => Err(e),
+            }
+        }
+        (Err(e), None) => Err(e),
+    }
+}
+
+/// Tile `z`/`x`/`y` from `template` on the web, as kept if it's fresh.
+async fn web_tile(state: &WebState, template: String, z: u32, x: u32, y: u32) -> Result<super::tiles::Tile, ApiError> {
     if super::tiles::tile_url(&template, z, x, y).is_none() {
         return Err(ApiError(StatusCode::NOT_FOUND, "there's no such tile".into()));
     }
@@ -610,17 +645,16 @@ async fn map_tile(State(state): State<WebState>, Path((z, x, y)): Path<(u32, u32
     let kept = tokio::task::spawn_blocking(move || super::tiles::fresh(&kept_dir, &kept_template, z, x, y))
         .await
         .map_err(|e| bad(e.to_string()))?;
-    let tile = match kept {
-        Some(tile) => tile,
+    match kept {
+        Some(tile) => Ok(tile),
         None => {
             let _turn = FETCHING_TILES.acquire().await.map_err(|e| bad(e.to_string()))?;
             tokio::task::spawn_blocking(move || super::tiles::tile(&dir, &template, z, x, y))
                 .await
                 .map_err(|e| bad(e.to_string()))?
-                .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?
+                .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))
         }
-    };
-    Ok(([(header::CONTENT_TYPE, tile.kind), (header::CACHE_CONTROL, "private, max-age=86400")], tile.data).into_response())
+    }
 }
 
 #[derive(Deserialize)]

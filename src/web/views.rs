@@ -354,14 +354,24 @@ pub fn locations(app: &App) -> Value {
         })
         .collect();
     let tiles = app.settings.map_tiles.as_deref();
-    let credit = match tiles {
+    let file = app.settings.map_tiles_file.as_deref().map(std::path::Path::new);
+    let web_credit = match tiles {
         None => None,
         Some(url) if url.contains("openstreetmap.org") => Some("© OpenStreetMap contributors".to_string()),
         Some(url) => url.split("//").nth(1).and_then(|rest| rest.split('/').next()).map(|host| format!("Tiles: {host}")),
     };
+    // The offline map's own credit (or its name), then the web's.
+    let file_credit = file.map(|file| {
+        crate::web::mbtiles::credit(file)
+            .unwrap_or_else(|| format!("Tiles: {}", file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
+    });
+    let credit = match (file_credit, web_credit) {
+        (Some(file), Some(web)) if file != web => Some(format!("{file} · {web}")),
+        (file, web) => file.or(web),
+    };
     json!({
         "places": places,
-        "tiles": tiles.is_some(),
+        "tiles": tiles.is_some() || file.is_some(),
         "credit": credit,
         "here": here.map(|h| json!({ "latitude": h.latitude, "longitude": h.longitude })),
     })

@@ -92,6 +92,9 @@ pub struct Settings {
     /// Where the web UI's map gets its tiles (`{z}`, `{x}` and `{y}` in
     /// it), fetched and kept by rettui; none draws the map without them.
     pub map_tiles: Option<String>,
+    /// An MBTiles file the web UI's map takes its tiles from first (any it
+    /// hasn't come from [`Settings::map_tiles`]).
+    pub map_tiles_file: Option<String>,
     /// Proof-of-work stamp cost asked of senders who aren't contacts
     /// (announced); 0 asks none.
     pub stamp_cost: u64,
@@ -174,6 +177,7 @@ impl Default for Settings {
             location: None,
             location_requests: "off".into(),
             map_tiles: Some(OSM_TILES.into()),
+            map_tiles_file: None,
             stamp_cost: 0,
             // LXMF's own default delivery limit (NomadNet's is 500).
             max_message_kb: 1000,
@@ -390,7 +394,7 @@ impl Field {
             // Another config directory could hold pipe interfaces, whose
             // commands Reticulum runs; another node folder could hold
             // executable pages, or share files that aren't meant to be.
-            "rns_config" | "node_dir" => WebAccess::TerminalOnly,
+            "rns_config" | "node_dir" | "map_tiles_file" => WebAccess::TerminalOnly,
             "node_executable_pages" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }
@@ -518,6 +522,13 @@ pub const FIELDS: &[Field] = &[
         key: "map_tiles",
         label: "Map tiles",
         help: "Where the web UI's map gets its pictures, with {z}, {x} and {y} for the zoom and the tile (OpenStreetMap's by default). rettui fetches them, so browsers need no internet of their own, and keeps them in map-tiles/ in the data directory to show again offline. Empty draws the map without them: just the places, on a grid",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "map_tiles_file",
+        label: "Offline map",
+        help: "An MBTiles file of map tiles (pictures: png, jpg or webp), as MOBAC, QGIS or TileMill make them, for the web UI's map with no internet at all. Its tiles come first; any it hasn't come from Map tiles, if that's set. It names a file on this computer, so it's set in the terminal UI or settings.json, not the web UI",
         kind: FieldKind::Optional,
         effect: Effect::Now,
     },
@@ -847,6 +858,7 @@ impl Settings {
             "location" => self.location.clone().unwrap_or_default(),
             "location_requests" => self.location_requests.clone(),
             "map_tiles" => self.map_tiles.clone().unwrap_or_default(),
+            "map_tiles_file" => self.map_tiles_file.clone().unwrap_or_default(),
             "stamp_cost" => self.stamp_cost.to_string(),
             "max_message_kb" => self.max_message_kb.to_string(),
             "markdown_messages" => self.markdown_messages.to_string(),
@@ -940,6 +952,16 @@ impl Settings {
                     }
                 }
                 self.map_tiles = optional(value);
+            }
+            "map_tiles_file" => {
+                self.map_tiles_file = match optional(value) {
+                    None => None,
+                    Some(text) => {
+                        let path = crate::app::files::path_from_input(&text);
+                        crate::web::mbtiles::describe(&path).map_err(fail)?;
+                        Some(path.display().to_string())
+                    }
+                };
             }
             "stamp_cost" => self.stamp_cost = number(value, MAX_STAMP_COST).map_err(fail)?,
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
