@@ -202,9 +202,13 @@ fn replace(exe: &Path, program: &[u8], version: &str, check: impl Fn(&Path) -> R
         format!("Couldn't {what}: {e}")
     };
     std::fs::write(&new, program).map_err(|e| fail("write the new rettui", &e))?;
-    // As this one is: runnable, by whoever could run it.
-    if let Ok(meta) = std::fs::metadata(exe) {
-        let _ = std::fs::set_permissions(&new, meta.permissions());
+    // As this one is, and runnable by whoever can read it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(exe).map(|m| m.permissions().mode() & 0o777).unwrap_or(0o755);
+        let runnable = mode | 0o100 | ((mode & 0o444) >> 2);
+        let _ = std::fs::set_permissions(&new, std::fs::Permissions::from_mode(runnable));
     }
     match check(&new) {
         Ok(said) if said.split_whitespace().any(|word| word == version) => {}
