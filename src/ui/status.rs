@@ -292,7 +292,8 @@ mod tests {
     fn a_newer_release_shows_by_the_version_and_in_status() {
         let dir = std::env::temp_dir().join(format!("rettui-update-status-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        let settings = Settings { update_check: true, ..Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, Store::default());
         app.tab = crate::app::Tab::Status;
         let version = crate::update::VERSION;
         let shown = screen(&mut app);

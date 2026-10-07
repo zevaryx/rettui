@@ -110,7 +110,8 @@ pub struct Settings {
     /// How much goes to `rettui.log`: one of [`crate::logging::LEVELS`].
     pub log_level: String,
     /// Ask GitHub once a day whether there's a newer release (see
-    /// `crate::update`).
+    /// `crate::update`). Off unless turned on (the getting-started guide
+    /// recommends it).
     pub update_check: bool,
     /// How times and dates read: one of [`crate::clock::CLOCKS`], and of
     /// [`crate::clock::DATE_STYLES`].
@@ -175,7 +176,7 @@ impl Default for Settings {
             markdown_messages: true,
             picture_size: "medium".into(),
             log_level: "warn".into(),
-            update_check: true,
+            update_check: false,
             clock: "24-hour".into(),
             tui_theme: "dark".into(),
             date_style: "month-day".into(),
@@ -695,7 +696,7 @@ pub const FIELDS: &[Field] = &[
     Field {
         key: "update_check",
         label: "Check for updates",
-        help: "Once a day, ask GitHub for the newest rettui release, and say so (by the version, and in Status) when it's newer than this one. It's one HTTPS request to api.github.com (through the proxy set in the environment, if any), saying it's rettui and which version; nothing is downloaded or installed. Off: never asked",
+        help: "Recommended: once a day, ask GitHub for the newest rettui release, and say so (by the version, and in Status) when it's newer than this one. It's one HTTPS request to api.github.com (through the proxy set in the environment, if any), saying it's rettui and which version; nothing is downloaded or installed. GitHub sees your IP address, so leave it off if you use Reticulum to stay off the internet. Off by default",
         kind: FieldKind::Toggle,
         effect: Effect::Now,
     },

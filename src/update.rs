@@ -1,6 +1,6 @@
 //! Update checks: once a day, the newest release on GitHub, and whether
-//! it's newer than this build (the Check for updates setting, on unless
-//! turned off). The answer is kept in `update-check.json`, so a restart
+//! it's newer than this build (the Check for updates setting: off unless
+//! turned on, which the getting-started guide recommends). The answer is kept in `update-check.json`, so a restart
 //! doesn't ask again, and an update found is still shown offline.
 //!
 //! The question is one HTTPS request to GitHub's API, through the proxy

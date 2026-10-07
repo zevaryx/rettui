@@ -42,7 +42,10 @@ ratspeak/rsReticulum in `.gitmodules` and pin its `main`.
 
 ## Updating
 
-rettui checks once a day whether a newer release is out. When one is:
+rettui can check once a day whether a newer release is out. It's
+recommended, but off until you turn it on: tick **Check for updates once
+a day** in the getting-started guide, or turn on *Check for updates*
+(Status, `update_check`). When a newer release is out:
 
 - the version beside the name, top left, is marked ↑ (in yellow, in both
   UIs), and opens the new release's page;
@@ -60,5 +63,6 @@ through the proxy set in the environment if there is one, with rettui's
 name and version as its user agent. What it found is kept in
 `update-check.json` in the data directory, so starting again doesn't
 ask again. If it can't reach GitHub (offline, say), it tries again an
-hour later, without a word. *Check for updates* (Status,
-`update_check`) off never asks.
+hour later, without a word. GitHub sees your IP address, as any website
+does, so leave it off if you use Reticulum to stay off the internet
+(over Tor or I2P, say). Off, it never asks.

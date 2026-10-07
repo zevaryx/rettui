@@ -1,5 +1,6 @@
 //! Checking for a newer rettui (see `crate::update`): asked in a thread of
-//! its own, once a day while Check for updates is on, and the answer kept.
+//! its own, once a day while Check for updates is on (it's off unless
+//! turned on), and the answer kept.
 //! A newer release is said once a run, and shown by the version (top left
 //! in the TUI, in the web UI's sidebar) and in Status.
 
@@ -98,6 +99,11 @@ mod tests {
         Ok(Release { version: "99.0.0".into(), url: "https://github.com/zevaryx/rettui/releases/tag/v99.0.0".into() })
     }
 
+    /// Settings with update checks turned on.
+    fn on() -> crate::config::Settings {
+        crate::config::Settings { update_check: true, ..crate::config::Settings::default() }
+    }
+
     /// Tick until the check's answer is in.
     fn settle(app: &mut crate::app::App) {
         for _ in 0..200 {
@@ -114,7 +120,7 @@ mod tests {
     fn a_newer_release_is_found_kept_and_said_once() {
         let dir = std::env::temp_dir().join(format!("rettui-updates-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        let mut app = crate::app::test_app(&dir, on(), crate::store::Store::default());
         app.updates.fetch = release;
         app.on_tick();
         settle(&mut app);
@@ -128,12 +134,13 @@ mod tests {
         assert_eq!(Checked::load(&app.paths.update_check).latest, Some(found.clone()));
         app.on_tick();
         assert!(app.updates.asking.is_none());
-        let mut again = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        let mut again = crate::app::test_app(&dir, on(), crate::store::Store::default());
         again.updates.fetch = || panic!("asked again within a day");
         again.on_tick();
         assert_eq!(again.update_available(), Some(&found));
-        // Turned off: nothing shown, nothing asked.
-        let off = crate::config::Settings { update_check: false, ..crate::config::Settings::default() };
+        // Off, as it is to start with: nothing shown, nothing asked.
+        let off = crate::config::Settings::default();
+        assert!(!off.update_check);
         let _ = std::fs::remove_dir_all(&dir);
         let mut quiet = crate::app::test_app(&dir, off, crate::store::Store::default());
         quiet.updates.fetch = || panic!("asked with update checks off");
@@ -147,7 +154,7 @@ mod tests {
     fn a_check_that_fails_is_tried_again_later_and_an_older_release_is_not_news() {
         let dir = std::env::temp_dir().join(format!("rettui-updates-failed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        let mut app = crate::app::test_app(&dir, on(), crate::store::Store::default());
         app.updates.fetch = || Err("Couldn't check for updates: offline".into());
         app.on_tick();
         settle(&mut app);

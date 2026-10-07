@@ -104,6 +104,7 @@ pub const AUTO_PROPAGATION_HELP: &str = "A propagation node keeps messages for y
 /// Shown under picking a propagation node automatically while it's ticked
 /// (it is to start with, the first time the guide opens).
 pub const AUTO_PROPAGATION_WARNING: &str = "Warning: anyone can run a propagation node near you. The one picked sees who your messages are for and when you collect them, and could lose them; it can't read them. Where you can, pick one you trust in the Network tab.";
+pub const UPDATE_CHECK_HELP: &str = "Recommended: once a day, rettui asks GitHub whether a newer release is out, and says so; nothing is downloaded. GitHub sees your IP address, so leave it off if you use Reticulum to stay off the internet (over Tor or I2P, say). It's in Status too.";
 pub const APPLY_HELP: &str = "Saves your choices. If the Reticulum config changes, Reticulum restarts to connect.";
 pub const LATER_HELP: &str = "Closes the guide; it's in the Status tab (g) whenever you want it.";
 
@@ -153,6 +154,8 @@ pub struct GuideChoices {
     pub connect: Vec<bool>,
     pub discover: bool,
     pub auto_propagation: bool,
+    /// Check for updates (recommended, but off unless ticked).
+    pub update_check: bool,
 }
 
 /// The guide open in the terminal UI: the row picked, the choices, and
@@ -203,6 +206,7 @@ pub enum GuideRow {
     Connect(usize),
     Discover,
     AutoPropagation,
+    UpdateCheck,
     Link(usize),
     Apply,
     Later,
@@ -215,7 +219,7 @@ impl Guide {
             rows.extend((0..ENTRY_POINTS.len()).map(GuideRow::Connect));
             rows.push(GuideRow::Discover);
         }
-        rows.push(GuideRow::AutoPropagation);
+        rows.extend([GuideRow::AutoPropagation, GuideRow::UpdateCheck]);
         rows.extend((0..LINKS.len()).map(GuideRow::Link));
         rows.extend([GuideRow::Apply, GuideRow::Later]);
         rows
@@ -263,12 +267,15 @@ impl App {
     /// asked. The first time it opens, picking a propagation node
     /// automatically too, unless one was picked by hand (with
     /// [`AUTO_PROPAGATION_WARNING`] under it); after that, it's as set.
+    /// Checking for updates is as set: off to start with, though
+    /// recommended.
     pub fn guide_defaults(&self) -> GuideChoices {
         let view = self.guide_view();
         let fresh = !view.has_own_interfaces;
         let connect = picked(&view);
         let auto_propagation = view.auto_propagation || (!self.settings.welcomed && self.settings.propagation_node.is_none());
-        GuideChoices { name: view.name, connect, discover: fresh || view.has_discovery, auto_propagation }
+        let update_check = self.settings.update_check;
+        GuideChoices { name: view.name, connect, discover: fresh || view.has_discovery, auto_propagation, update_check }
     }
 
     /// Try the entry points, unless they were a moment ago (or another
@@ -287,7 +294,8 @@ impl App {
     pub fn apply_guide(&mut self, choices: &GuideChoices, restricted: bool) -> Result<Vec<String>, String> {
         let mut done = Vec::new();
         let auto = if choices.auto_propagation { "true" } else { "false" };
-        let mut changes = vec![("auto_propagation_node", auto)];
+        let updates = if choices.update_check { "true" } else { "false" };
+        let mut changes = vec![("auto_propagation_node", auto), ("update_check", updates)];
         let name = choices.name.trim();
         if !name.is_empty() {
             changes.push(("display_name", name));
@@ -486,6 +494,7 @@ impl App {
             }
             GuideRow::Discover => choices.discover = !choices.discover,
             GuideRow::AutoPropagation => choices.auto_propagation = !choices.auto_propagation,
+            GuideRow::UpdateCheck => choices.update_check = !choices.update_check,
             GuideRow::Link(i) => self.open_url(LINKS[i].1),
             GuideRow::Apply => match self.apply_guide(&shown, false) {
                 Ok(done) if done.is_empty() => self.notify("All set"),
@@ -536,6 +545,8 @@ mod tests {
         // still being tried in the list's order.
         let defaults = app.guide_defaults();
         assert_eq!((defaults.name.as_str(), defaults.discover, defaults.auto_propagation), ("rettui user", true, true));
+        // Update checks: recommended, but off unless ticked.
+        assert!(!defaults.update_check);
         // Picking a propagation node automatically, unless one was picked
         // by hand.
         app.settings.propagation_node = Some("ab".repeat(16));
@@ -587,8 +598,11 @@ mod tests {
         app.entry_reach.set(reach);
         // Applying: the name, the entry points in the Reticulum config, and
         // a restart to connect.
-        let choices = GuideChoices { name: "Zev".into(), connect: all, discover: true, auto_propagation: false };
+        let choices = GuideChoices { name: "Zev".into(), connect: all, discover: true, auto_propagation: false, update_check: true };
         let done = app.apply_guide(&choices, false).unwrap();
+        // Ticked, update checks are on from now (and kept).
+        assert!(app.settings.update_check && app.settings_file.update_check);
+        assert!(app.guide_defaults().update_check);
         assert!(done.iter().any(|d| d.contains("Added RMAP World (rmap.world:4242)")), "{done:?}");
         assert!(done.iter().any(|d| d.contains("Added Ratspeak & Colorado Mesh (rns.ratspeak.org:4242)")), "{done:?}");
         assert_eq!(done.iter().filter(|d| d.starts_with("Added")).count(), 2, "{done:?}");

@@ -36,6 +36,7 @@ fn help(row: Option<GuideRow>, reach: impl Fn(usize) -> Reach) -> String {
         }
         Some(GuideRow::Discover) => guide::DISCOVER_HELP.to_string(),
         Some(GuideRow::AutoPropagation) => guide::AUTO_PROPAGATION_HELP.to_string(),
+        Some(GuideRow::UpdateCheck) => guide::UPDATE_CHECK_HELP.to_string(),
         Some(GuideRow::Link(i)) => match LINKS[i] {
             (_, url, Some(note)) => format!("{note} {url} · Enter opens it, y copies it"),
             (_, url, None) => format!("{url} · Enter opens it, y copies it"),
@@ -157,6 +158,11 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         }
         warned = Some((GuideRow::AutoPropagation, body.len() - 1));
     }
+    row_line(
+        &mut body,
+        GuideRow::UpdateCheck,
+        vec![Span::raw(format!("{} Check for updates once a day (recommended)", check(choices.update_check)))],
+    );
     body.push(Line::styled("Learn more", Style::default().fg(dim())));
     for (i, (title, ..)) in LINKS.iter().enumerate() {
         row_line(
@@ -314,6 +320,11 @@ mod tests {
                     let screen = draw(&mut app);
                     assert!(screen.contains("[ ] Pick a propagation node automatically") && !screen.contains("Warning:"), "{screen}");
                     app.on_key(space());
+                }
+                // Recommended, but not ticked to start with.
+                GuideRow::UpdateCheck => {
+                    assert!(screen.contains("[ ] Check for updates once a day (recommended)"), "{screen}");
+                    assert!(screen.contains("GitHub sees your IP address"), "{screen}");
                 }
                 GuideRow::Connect(i) => {
                     let entry = crate::app::guide::ENTRY_POINTS[*i];

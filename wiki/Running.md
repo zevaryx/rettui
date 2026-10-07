@@ -64,6 +64,11 @@ the web UI's Status page, opens it again):
   with a warning under it while it's ticked: the node picked sees who your
   messages are for and when you collect them, and could lose them. Opened
   again later, it's as you set it.
+- **Check for updates once a day (recommended):** not ticked to start
+  with. Ticked, rettui asks GitHub once a day whether a newer release is
+  out, and says so (see [Updating](Installing#updating)); GitHub sees your
+  IP address, so leave it off if you use Reticulum to stay off the
+  internet. It's *Check for updates* in Status too.
 - **Learn more:** Reticulum's manual (getting started, understanding
   Reticulum), RMAP World's map and
   directory.rns.recipes for finding entry points, using a LoRa radio

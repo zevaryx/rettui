@@ -119,12 +119,14 @@ pub fn guide(app: &App) -> Value {
         "heard": view.heard,
         "defaults": {
             "discover": defaults.discover, "auto_propagation": defaults.auto_propagation,
+            "update_check": defaults.update_check,
         },
         "help": {
             "intro": guide::INTRO, "name": guide::NAME_HELP, "connect": guide::CONNECT_HELP,
             "identity": guide::IDENTITY_WEB_NOTE,
             "discover": guide::DISCOVER_HELP, "auto_propagation": guide::AUTO_PROPAGATION_HELP,
             "auto_propagation_warning": guide::AUTO_PROPAGATION_WARNING, "apply": guide::APPLY_HELP,
+            "update_check": guide::UPDATE_CHECK_HELP,
             "none_answered": guide::NONE_ANSWERED,
         },
         "links": guide::LINKS.iter().map(|(title, url, note)| json!({ "title": title, "url": url, "note": note })).collect::<Vec<_>>(),

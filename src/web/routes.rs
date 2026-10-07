@@ -1354,6 +1354,9 @@ struct GuideBody {
     discover: bool,
     #[serde(default)]
     auto_propagation: bool,
+    /// Missing (an older page): off, as it is to start with.
+    #[serde(default)]
+    update_check: bool,
 }
 
 /// Apply the guide's choices (Reticulum restarts if its config changes).
@@ -1363,6 +1366,7 @@ async fn apply_guide(State(state): State<WebState>, axum::Json(body): axum::Json
         connect: body.connect,
         discover: body.discover,
         auto_propagation: body.auto_propagation,
+        update_check: body.update_check,
     };
     let done = state.write(move |o| o.app.apply_guide(&choices, true)).await??;
     Ok(axum::Json(json!({ "done": done })))

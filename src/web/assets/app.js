@@ -1904,6 +1904,10 @@ async function gettingStarted() {
   autoPropagation.box.addEventListener('change', showAutoWarning);
   showAutoWarning();
   nodes.push(autoWarning);
+  // Recommended, but off unless ticked.
+  const updateCheck = option('update_check', 'Check for updates once a day (recommended)', g.help.update_check, { on: g.defaults.update_check });
+  options.push(updateCheck);
+  nodes.push(updateCheck.node);
   // The entry points' tries finish over a few seconds.
   let open = true;
   (async () => {
