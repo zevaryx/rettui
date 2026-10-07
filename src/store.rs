@@ -143,6 +143,9 @@ pub struct Message {
     /// How its text is written, if not plain (shown formatted).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<crate::markdown::TextFormat>,
+    /// Your location, shared live: the newest update, replaced by the next.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live: bool,
 }
 
 impl Message {

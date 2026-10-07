@@ -359,8 +359,24 @@ Sideband and Columba show it on their maps:
 
 A location goes as its own message, the way the conversation's messages go
 (not on paper: a paper message carries text only), and shows in the
-conversation like anyone's. It's sent once: rettui doesn't keep sending
-where you are.
+conversation like anyone's. It's sent once, unless you share it live:
+
+- **Sharing live** (as Columba does): updates for 15 minutes, an hour,
+  eight hours or until you stop, then a message saying you've stopped,
+  which Columba shows (and rettui does too). Each update replaces the one
+  before it in the conversation, so a live share is one message there,
+  and its header says *📍 live until …* with **Stop** (web UI).
+  - **In the web UI:** **📍 Share live** in the share dialog shares where
+    the device is, as it moves: rettui sends it at most once a minute, and
+    only while a page of rettui is open on that device (with no page open
+    for five minutes, updates stop until one is). On a page that can't say
+    where the device is (not HTTPS or localhost), it shares this station's
+    *Location* instead.
+  - **In the TUI:** `L`, then `live 15m`, `live 1h`, `live 8h` or `live on`
+    (until stopped), shares this station's *Location* every few minutes.
+    `L` again stops it.
+  - Live shares last while rettui runs: stopping rettui stops them (without
+    the message saying so).
 
 *Location requests* (Status, `location_requests`) answers Sideband's
 requests for your location with this station's *Location*: *off* (the

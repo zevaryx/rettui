@@ -148,6 +148,8 @@ pub struct Outgoing {
     pub audio: Option<(u8, Vec<u8>)>,
     /// Where we are, shared (as Sideband shares it, in telemetry).
     pub location: Option<Location>,
+    /// A live location share stopped (as Columba says it).
+    pub cease: bool,
 }
 
 impl Outgoing {
@@ -169,6 +171,7 @@ impl Outgoing {
             appearance: None,
             audio: None,
             location: None,
+            cease: false,
         }
     }
 }

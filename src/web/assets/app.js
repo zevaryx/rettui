@@ -514,6 +514,7 @@ function renderSidebar() {
     }, el('span', { class: 'icon', text: tab.icon }), el('span', { class: 'label', text: tab.title }), badge);
   }));
   tabs.dataset.drawn = drawn;
+  liveWatch.update();
   // The version, marked when a newer release is out (it links to that).
   const version = $('#sidebar .version');
   if (version) {
@@ -1505,6 +1506,33 @@ function formattedContent(html) {
   node.innerHTML = html;
   return node;
 }
+
+// ---- Live location ------------------------------------------------------------
+
+// While this page's device shares its location live with anyone, its
+// position goes to rettui as it moves (at most every 30 seconds; rettui
+// sends at most one update a minute).
+const liveWatch = {
+  id: null,
+  last: 0,
+  async post(found) {
+    const c = found.coords;
+    this.last = Date.now();
+    await api.post('/live/position', { latitude: c.latitude, longitude: c.longitude, accuracy: c.accuracy, altitude: c.altitude }).catch(() => {});
+  },
+  // Watching when a share is the device's, not otherwise.
+  update() {
+    const wanted = (app.status?.live || []).some((s) => s.source === 'device') && window.isSecureContext && navigator.geolocation;
+    if (wanted && this.id === null) {
+      this.id = navigator.geolocation.watchPosition((found) => {
+        if (Date.now() - this.last >= 30000) this.post(found);
+      }, () => {}, { enableHighAccuracy: true, maximumAge: 30000 });
+    } else if (!wanted && this.id !== null) {
+      navigator.geolocation.clearWatch(this.id);
+      this.id = null;
+    }
+  },
+};
 
 // ---- Map ----------------------------------------------------------------------
 
@@ -2840,6 +2868,11 @@ app.views.messages = {
       el('button', { class: 'pin-button' + (conversation.pinned ? ' on' : ''), text: '📌',
         title: conversation.pinned ? 'Unpin it from the top of the list' : 'Pin it to the top of the list',
         onclick: () => this.setPinned(key, !conversation.pinned) }),
+      conversation.live ? el('span', { class: 'live-chip', title: conversation.live.source === 'device' ? 'Sharing where this device is, while a page of rettui is open on it' : 'Sharing this station\'s Location' },
+        conversation.live.until ? `📍 live until ${clockTime(new Date(conversation.live.until * 1000))}` : '📍 live',
+        el('button', { class: 'inline', text: 'Stop', onclick: async () => {
+          if (await attempt(() => api.post(`/conversations/${key}/live/stop`), 'Stopped sharing your location live')) loadNow();
+        } })) : null,
       bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
       el('button', { text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
       el('button', { text: 'Copy address', onclick: () => copy(key, 'LXMF address') })].filter(Boolean));
@@ -3008,6 +3041,29 @@ app.views.messages = {
       const sent = await attempt(() => api.post(`/conversations/${key}/send`, { content: '', mode: this.mode, location }));
       echo.done(!sent);
     };
+    // Live: where this device is, as it moves (while a page is open), or
+    // else this station's Location; for a while, or until stopped.
+    const deviceOk = window.isSecureContext && !!navigator.geolocation;
+    const liveSource = deviceOk ? 'device' : station ? 'station' : null;
+    const howLong = el('select', { title: 'How long to share it live' },
+      [[15, '15 minutes'], [60, '1 hour'], [480, '8 hours'], [0, 'Until I stop']].map(([m, text]) => el('option', { value: m, text })));
+    const shareLive = async (close) => {
+      if (liveSource === 'device') {
+        const ok = await new Promise((resolve) => navigator.geolocation.getCurrentPosition(
+          (found) => resolve(found), () => resolve(null), { enableHighAccuracy: true, timeout: 20000, maximumAge: 60000 }));
+        if (!ok) return toast('The browser didn\'t say where this device is, so it isn\'t shared', true);
+        const started = await attempt(() => api.post(`/conversations/${key}/live`, { minutes: Number(howLong.value), source: 'device' }));
+        if (!started) return;
+        await liveWatch.post(ok);
+        toast(started.doing);
+      } else {
+        const started = await attempt(() => api.post(`/conversations/${key}/live`, { minutes: Number(howLong.value), source: 'station' }));
+        if (!started) return;
+        toast(started.doing);
+      }
+      close();
+      loadNow();
+    };
     dialog('Share a location', (close) => [
       el('p', {}, `With ${name}, as Sideband shares one: Sideband and Columba show it on their maps.`),
       el('div', { class: 'row' }, here, station ? el('button', { type: 'button', text: 'This station\'s', title: 'The Location setting', onclick: () => {
@@ -3020,6 +3076,13 @@ app.views.messages = {
       el('div', { class: 'row actions' }, el('span', { class: 'grow' }),
         el('button', { type: 'button', text: 'Cancel', onclick: () => close() }),
         el('button', { type: 'button', class: 'primary', text: 'Share', onclick: () => share(close) })),
+      el('h4', { class: 'live-heading', text: 'Or share it live' }),
+      el('p', { class: 'dim', text: liveSource === 'device'
+        ? 'Where this device is, as it moves, at most once a minute, while a page of rettui is open on it; then they\'re told you stopped.'
+        : liveSource === 'station' ? 'This station\'s Location, every few minutes (this page can\'t say where this device is: it isn\'t a secure page).'
+          : 'Set this station\'s Location in Status, or open rettui over HTTPS (or at localhost) to share where this device is.' }),
+      el('div', { class: 'row' }, howLong, el('span', { class: 'grow' }),
+        el('button', { type: 'button', text: '📍 Share live', disabled: !liveSource, onclick: () => shareLive(close) })),
     ], { className: 'share-location' });
     setTimeout(() => coords.focus(), 50);
   },

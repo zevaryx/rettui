@@ -151,17 +151,38 @@ impl App {
         }
     }
 
-    /// Ask where to say you are (`L`): this station's location to start.
+    /// Ask where to say you are (`L`): this station's location to start;
+    /// or, while sharing live with them, whether to stop.
     pub(super) fn open_share_location(&mut self) {
         let Some(key) = self.active_conversation.clone() else { return };
+        if self.live_share(&key).is_some() {
+            let question = format!("Stop sharing your location live with {}? (y/n)", self.store.display_name(&key));
+            return self.open_prompt(PromptKind::ConfirmStopLive(key), &question, "");
+        }
         let here = self.settings.location.clone().unwrap_or_default();
-        self.open_prompt(PromptKind::ShareLocation(key), "Share a location (latitude, longitude)", &here);
+        let title = "Share a location (latitude, longitude), or this station's live (live 15m, 1h, 8h or on)";
+        self.open_prompt(PromptKind::ShareLocation(key), title, &here);
     }
 
-    /// Share the location typed with `key`, the way their messages go.
+    /// Share the location typed with `key`, the way their messages go; or,
+    /// for `live …`, this station's, live.
     pub(super) fn submit_share_location(&mut self, key: String, text: &str) {
         if text.trim().is_empty() {
             return;
+        }
+        if let Some(how_long) = text.trim().strip_prefix("live") {
+            let minutes = match how_long.trim().to_lowercase().as_str() {
+                "on" | "" => Some(0),
+                h if h.ends_with('h') => h.trim_end_matches('h').trim().parse::<u64>().ok().map(|h| h * 60),
+                m => m.trim_end_matches('m').trim().parse::<u64>().ok().filter(|m| *m > 0),
+            };
+            let Some(minutes) = minutes else {
+                return self.warn("How long to share live: live 15m, live 1h, live 8h, or live on (until stopped)");
+            };
+            return match self.start_live(&key, minutes, super::live::Source::Station) {
+                Ok(doing) => self.confirm(doing),
+                Err(e) => self.warn(e),
+            };
         }
         let Some(location) = Location::parse(text) else {
             return self.warn("A location is latitude, longitude in degrees, as 51.5074, -0.1278");

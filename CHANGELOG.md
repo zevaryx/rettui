@@ -19,7 +19,7 @@ Changes since v1.5.1.
   - Voice messages can be recorded in the web UI and are sent as Codec2.
   - Answer Sideband's ping, echo and signal-report commands (*Answer commands*, off by default).
 - **Locations**
-  - Share a location (`L` / 📍) in Sideband's telemetry format.
+  - Share a location (`L` / 📍) in Sideband's telemetry format, once or live (as Columba does: updates for a while, then a message saying it stopped).
   - Answer location requests (*Location requests*, off by default).
   - A map of shared locations in both UIs (`M`). Map tiles are fetched and cached by rettui.
 - **Network**

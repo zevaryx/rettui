@@ -388,6 +388,9 @@ header .avatar.icon { font-size: 17px; }
   .map-list { width: auto; max-height: 35%; }
 }
 .dialog.share-location input { width: 100%; }
+.dialog.share-location .live-heading { margin: 8px 0 0; font-size: 13px; }
+.live-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: var(--green-bg); color: var(--on-accent); font-size: 12px; white-space: nowrap; }
+.live-chip .inline { margin-left: 2px; }
 .message .note { font-style: italic; font-size: 12.5px; }
 .stranger { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px; margin-bottom: 10px; border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: 6px; font-size: 13px; }
 .unknown-mark { color: var(--yellow); font-weight: 700; }

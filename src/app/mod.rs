@@ -25,6 +25,7 @@ pub mod forward;
 pub mod guide;
 pub mod identity;
 mod input;
+pub mod live;
 pub mod map;
 mod messages;
 pub mod network;
@@ -181,6 +182,8 @@ pub enum PromptKind {
     ShareLocation(String),
     /// Install the newer release found, in this one's place.
     ConfirmInstallUpdate,
+    /// Stop sharing a location live with someone (by address).
+    ConfirmStopLive(String),
 }
 
 /// What a QR code over the tab shows.
@@ -473,6 +476,8 @@ pub struct App {
     saver: saver::Saver,
     /// Checking for a newer rettui (see [`updates`]).
     pub(crate) updates: updates::Updates,
+    /// Locations shared live (see [`live`]).
+    pub(crate) live: live::Live,
 
     pub peers: ListState,
     pub net_filter: NetFilter,
@@ -612,6 +617,7 @@ impl App {
             decoded_rx: Some(decoded_rx),
             saver: saver::Saver::new(),
             updates,
+            live: live::Live::default(),
             peers: ListState::default(),
             net_filter: NetFilter::All,
             net_sort: network::NetSort::Heard,
@@ -1083,6 +1089,14 @@ impl App {
                 }
             }
             PromptKind::ShareLocation(key) => self.submit_share_location(key, &text),
+            PromptKind::ConfirmStopLive(key) => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    match self.stop_live(&key) {
+                        Ok(()) => self.confirm("Stopped sharing your location live"),
+                        Err(e) => self.warn(e),
+                    }
+                }
+            }
             PromptKind::ConfirmInstallUpdate => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
                     match self.install_update() {
@@ -1294,6 +1308,7 @@ impl App {
     /// Periodic work (called about twice a second).
     pub fn on_tick(&mut self) {
         self.updates_tick();
+        self.live_tick();
         self.channels_tick();
         self.watch_connection();
         self.refresh_partials();

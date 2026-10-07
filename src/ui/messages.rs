@@ -139,7 +139,10 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
     let name = app.store.display_name(&key);
-    let title = format!("{name}  {key}");
+    let title = match app.live_share(&key) {
+        Some(share) => format!("{name}  {key}  {}", crate::app::live::label(share)),
+        None => format!("{name}  {key}"),
+    };
     let mut history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
     if !app.is_known(&key) {
         history_block = history_block

@@ -72,6 +72,9 @@ pub fn state(app: &App) -> Value {
         }),
         // This station's location, to share (see the Location setting).
         "location": app.settings.own_location().map(|l| json!({ "latitude": l.latitude, "longitude": l.longitude })),
+        // Locations shared live, and from where (a browser posts its
+        // device's position while any is the device's).
+        "live": app.live.shares.iter().map(|(key, share)| crate::app::live::describe(key, share)).collect::<Vec<_>>(),
         "lxmf_address": app.lxmf_hash.map(hex::encode),
         // With the public key, for others to add you (`lxma://`).
         "identity_link": app.identity_link(),
@@ -320,6 +323,8 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
             "delivery": app.delivery_for(key).label(),
         },
         "archive": app.paths.archive.display().to_string(),
+        // Your location, shared with them live.
+        "live": app.live_share(key).map(|share| crate::app::live::describe(key, share)),
         "messages": messages,
     })
 }

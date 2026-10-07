@@ -94,6 +94,9 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/read", post(read_conversation))
         .route("/conversations/{key}/notify", post(mute_conversation))
         .route("/conversations/{key}/pin", post(pin_conversation))
+        .route("/conversations/{key}/live", post(start_live))
+        .route("/conversations/{key}/live/stop", post(stop_live))
+        .route("/live/position", post(live_position))
         .route("/conversations/read-all", post(read_all_conversations))
         .route("/conversations/{key}/send", post(send_message))
         .route("/conversations/{key}/react", post(react))
@@ -488,6 +491,42 @@ async fn icons(Query(query): Query<IconQuery>) -> axum::Json<Value> {
 async fn install_update(State(state): State<WebState>) -> ApiResult {
     let doing = state.write(|o| o.app.install_update()).await?.map_err(bad)?;
     Ok(axum::Json(json!({ "ok": true, "doing": doing })))
+}
+
+#[derive(Deserialize)]
+struct LiveBody {
+    /// How long: minutes, 0 until stopped.
+    #[serde(default)]
+    minutes: u64,
+    /// `device` (positions come from the page) or `station` (the Location
+    /// setting).
+    source: String,
+}
+
+/// Start sharing a location live with them.
+async fn start_live(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<LiveBody>) -> ApiResult {
+    let key = address(&key)?;
+    let source = match body.source.as_str() {
+        "device" => crate::app::live::Source::Device,
+        "station" => crate::app::live::Source::Station,
+        other => return Err(bad(format!("unknown source {other}"))),
+    };
+    let doing = state.write(move |o| o.app.start_live(&key, body.minutes, source)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "ok": true, "doing": doing })))
+}
+
+/// Stop sharing a location live with them (they're told).
+async fn stop_live(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
+    let key = address(&key)?;
+    state.write(move |o| o.app.stop_live(&key)).await?.map_err(bad)?;
+    ok()
+}
+
+/// Where the device sharing its location live is now.
+async fn live_position(State(state): State<WebState>, axum::Json(body): axum::Json<LocationBody>) -> ApiResult {
+    let location = body.checked()?;
+    state.write(move |o| o.app.device_position(location)).await?;
+    ok()
 }
 
 /// Everyone's newest location, for the map.

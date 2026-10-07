@@ -408,6 +408,12 @@ pub fn ceased(message: &LxMessage) -> bool {
     named(&meta, "cease").and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// `FIELD_CUSTOM_META`'s value saying a location share has stopped, as
+/// Columba sends it (and [`ceased`] reads it).
+pub fn cease_field() -> Vec<u8> {
+    encode(&Value::Map(vec![(Value::from("cease"), Value::from(true))]))
+}
+
 /// A voice message: the audio mode, and the recording.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Audio {
@@ -746,8 +752,7 @@ mod tests {
     #[test]
     fn a_stopped_location_share() {
         let mut stop = message();
-        let meta = encode(&Value::Map(vec![(Value::from("cease"), Value::from(true))]));
-        stop.set_field(FIELD_CUSTOM_META, meta);
+        stop.set_field(FIELD_CUSTOM_META, cease_field());
         assert!(ceased(&received(&stop)));
         assert!(!ceased(&received(&message())));
     }
