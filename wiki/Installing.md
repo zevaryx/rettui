@@ -20,6 +20,23 @@ the checksums.
   run `xattr -d com.apple.quarantine rettui`.
 - **Docker:** see [Docker](Docker) for the image.
 
+## Packages
+
+- **Debian, Ubuntu, Raspberry Pi OS:** each release has a Debian package
+  for x86-64 (`rettui_<version>_amd64.deb`) and ARM64
+  (`rettui_<version>_arm64.deb`): `sudo apt install ./rettui_<version>_amd64.deb`.
+  It puts `rettui` in `/usr/bin`; a newer release's package installs over
+  it the same way.
+- **Arch Linux:** each release has the `PKGBUILD` of the AUR's
+  `rettui-bin` package (the ready-built binary): put it in a folder of
+  its own and run `makepkg -si` there. Once it's published to the AUR,
+  an AUR helper installs it (`yay -S rettui-bin`).
+- **Homebrew** (macOS and Linux): each release has a formula,
+  `rettui.rb`, for a tap; once there's one, `brew install` installs from
+  it.
+
+Installed by a package manager, rettui leaves [updating](#updating) to it.
+
 ## Building from source
 
 ```sh
@@ -71,7 +88,8 @@ Checking downloads and installs nothing. To update:
   container's rettui doesn't replace itself: it would be lost with the
   container.)
 - **From source:** `git pull --recurse-submodules`, and build again.
-- **A package manager's:** update it with that one.
+- **A package manager's** (a Debian package, the AUR's, Homebrew's):
+  update it with that one, as with anything else it installed.
 
 The check is one HTTPS request a day to GitHub's API (`api.github.com`),
 through the proxy set in the environment if there is one, with rettui's

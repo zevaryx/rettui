@@ -70,6 +70,7 @@ Changes since v1.5.1.
 - Instructions for running rettui as a systemd service.
 - The code is formatted with rustfmt, and CI checks it.
 - A release's notes are its section of this changelog; tagging fails without one.
+- Releases carry Debian packages (x86-64 and ARM64), a Homebrew formula and the AUR's `rettui-bin` PKGBUILD.
 
 ### Known limitations
 - Messages received over a Link (most direct messages) don't show RSSI/SNR: rsReticulum doesn't say how a Link's packets were heard.

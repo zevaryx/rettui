@@ -2,8 +2,9 @@ name: Release
 
 # Pushing a version tag (v1.2.0, or v1.3.0-rc.1 for a prerelease) builds
 # every platform, publishes the Docker image to GitHub's container registry
-# and makes a GitHub release with the archives attached, and the tag's
-# section of CHANGELOG.md as its notes.
+# and makes a GitHub release with the archives and Debian packages
+# attached (and, for a release, a Homebrew formula and the AUR's PKGBUILD),
+# and the tag's section of CHANGELOG.md as its notes.
 on:
   push:
     tags: ["v*"]
@@ -66,9 +67,25 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Debian packages of the Linux binaries (in the checksums too).
+      - name: Debian packages
+        run: |
+          for archive in dist/*-unknown-linux-gnu.tar.gz; do
+            .github/scripts/package-deb.sh "$GITHUB_REF_NAME" "$archive" dist
+          done
+
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS
+
+      # For a Homebrew tap and the AUR's rettui-bin, from the checksums (a
+      # release's, not a prerelease's): attached, to publish from.
+      - name: Homebrew formula and AUR package
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          .github/scripts/homebrew-formula.sh "$GITHUB_REF_NAME" dist/SHA256SUMS > dist/rettui.rb
+          .github/scripts/aur-pkgbuild.sh "$GITHUB_REF_NAME" dist/SHA256SUMS aur
+          cp aur/PKGBUILD dist/PKGBUILD
 
       - name: Publish
         env:

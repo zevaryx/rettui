@@ -49,10 +49,17 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   2. builds every platform with the Build workflow;
   3. pushes the Docker image to `ghcr.io`, using those Linux binaries
      (the Dockerfile's `prebuilt` stage);
-  4. creates a GitHub release with the archives and `SHA256SUMS`, and
-     the tag's section of `CHANGELOG.md` (printed by
-     `.github/scripts/release-notes.sh v1.7.0`) as its notes, with the
-     Docker image's name.
+  4. makes Debian packages of the Linux binaries
+     (`.github/scripts/package-deb.sh`): `rettui_1.7.0_amd64.deb` and
+     `rettui_1.7.0_arm64.deb`;
+  5. for a release (not a prerelease), writes a Homebrew formula
+     (`rettui.rb`, by `.github/scripts/homebrew-formula.sh`) and the
+     AUR's `rettui-bin` package (`PKGBUILD` and `.SRCINFO`, by
+     `.github/scripts/aur-pkgbuild.sh`) from the checksums;
+  6. creates a GitHub release with the archives, the packages,
+     `SHA256SUMS`, `rettui.rb` and `PKGBUILD`, and the tag's section of
+     `CHANGELOG.md` (printed by `.github/scripts/release-notes.sh v1.7.0`)
+     as its notes, with the Docker image's name.
 
   A tag containing a hyphen (`v1.3.0-rc.1`) makes a prerelease. Its image
   gets only the version tag, not `latest`.
@@ -82,3 +89,26 @@ To release, bump `version` in `Cargo.toml`, commit, then:
 git tag v1.2.1
 git push origin v1.2.1
 ```
+
+### Homebrew and the AUR
+
+Publishing there needs accounts of their own, so a release only attaches
+what they take; the scripts write the same from any release's
+`SHA256SUMS`.
+
+- **Homebrew:** a tap is a GitHub repository named `homebrew-<name>`
+  (for example `zevaryx/homebrew-rettui`). Put the release's `rettui.rb`
+  in it at `Formula/rettui.rb` and push; then anyone can
+  `brew install zevaryx/rettui/rettui`, and `brew upgrade` once the next
+  release's formula is pushed.
+- **AUR:** with an AUR account and its SSH key, the first time
+  `git clone ssh://aur@aur.archlinux.org/rettui-bin.git` (an empty
+  repository, until something is pushed). For each release, write the
+  package into it and push:
+
+  ```sh
+  .github/scripts/aur-pkgbuild.sh v1.2.1 SHA256SUMS rettui-bin
+  cd rettui-bin && git commit -am "1.2.1" && git push
+  ```
+
+  Then `yay -S rettui-bin` (or any AUR helper) installs it.
