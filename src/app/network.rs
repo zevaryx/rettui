@@ -20,6 +20,61 @@ pub enum NetFilter {
     Blocked,
 }
 
+/// How the Network list is sorted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NetSort {
+    /// Last heard first.
+    #[default]
+    Heard,
+    /// By name (those without one, by address, after).
+    Name,
+    /// Nearest first.
+    Hops,
+}
+
+impl NetSort {
+    pub fn next(self) -> Self {
+        match self {
+            NetSort::Heard => NetSort::Name,
+            NetSort::Name => NetSort::Hops,
+            NetSort::Hops => NetSort::Heard,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            NetSort::Heard => "heard",
+            NetSort::Name => "name",
+            NetSort::Hops => "hops",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [NetSort::Heard, NetSort::Name, NetSort::Hops].into_iter().find(|s| s.key() == text)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            NetSort::Heard => "last heard first",
+            NetSort::Name => "by name",
+            NetSort::Hops => "nearest first",
+        }
+    }
+
+    /// Sort `rows` this way (ties: last heard first, then by address).
+    pub fn sort(self, rows: &mut [(&String, &Peer)]) {
+        let heard = |a: &(&String, &Peer), b: &(&String, &Peer)| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0));
+        match self {
+            NetSort::Heard => rows.sort_by(heard),
+            NetSort::Name => rows.sort_by_cached_key(|(hash, peer)| {
+                let name = peer.name.as_deref().map(str::to_lowercase);
+                (name.is_none(), name.unwrap_or_default(), (*hash).clone())
+            }),
+            NetSort::Hops => rows.sort_by(|a, b| a.1.hops.cmp(&b.1.hops).then_with(|| heard(a, b))),
+        }
+    }
+}
+
 fn hops_label(hops: u8) -> String {
     format!("{hops} hop{}", if hops == 1 { "" } else { "s" })
 }
@@ -107,13 +162,22 @@ pub fn matches_text(terms: &[Vec<char>], texts: &[&str]) -> bool {
 }
 
 impl App {
+    /// Whether `hash`'s path goes through the interface the Network list is
+    /// kept to (`via`), if it's kept to one.
+    pub fn goes_via(&self, hash: &str, via: Option<&str>) -> bool {
+        via.is_none_or(|via| self.routes.get(hash).is_some_and(|interface| interface == via))
+    }
+
     pub fn network_rows(&self) -> Vec<(&String, &Peer)> {
         let terms = self.net_search.terms();
+        let via = self.net_via.as_deref();
         if self.net_filter == NetFilter::Blocked {
             let blocked = self.store.contacts.iter().filter(|(_, c)| c.trust == Trust::Blocked);
-            let mut rows: Vec<_> =
-                blocked.map(|(hash, _)| (hash, self.store.peers.get(hash).unwrap_or(&UNHEARD))).filter(|(hash, p)| matches(&terms, hash, p)).collect();
-            rows.sort_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
+            let mut rows: Vec<_> = blocked
+                .map(|(hash, _)| (hash, self.store.peers.get(hash).unwrap_or(&UNHEARD)))
+                .filter(|(hash, p)| matches(&terms, hash, p) && self.goes_via(hash, via))
+                .collect();
+            self.net_sort.sort(&mut rows);
             return rows;
         }
         let mut rows: Vec<_> = self
@@ -127,10 +191,19 @@ impl App {
                 NetFilter::Propagation => p.kind == PeerKind::Propagation,
                 NetFilter::Blocked => false,
             })
-            .filter(|(hash, p)| matches(&terms, hash, p))
+            .filter(|(hash, p)| matches(&terms, hash, p) && self.goes_via(hash, via))
             .collect();
-        rows.sort_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen).then_with(|| a.0.cmp(b.0)));
+        self.net_sort.sort(&mut rows);
         rows
+    }
+
+    /// The interfaces the Network list can be kept to: those with a path
+    /// through them, by name.
+    pub fn route_interfaces(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.routes.values().cloned().collect();
+        names.sort();
+        names.dedup();
+        names
     }
 
     fn selected_peer(&self) -> Option<(String, PeerKind)> {
@@ -293,6 +366,26 @@ impl App {
                 let i = self.peers.selected().map_or(0, |i| i.saturating_sub(1));
                 self.peers.select(Some(i));
             }
+            KeyCode::Char('s') => {
+                self.net_sort = self.net_sort.next();
+                self.peers.select(Some(0));
+                self.confirm(format!("Network list: {}", self.net_sort.label()));
+            }
+            // Kept to the next interface with paths through it, then all.
+            KeyCode::Char('i') => {
+                let names = self.route_interfaces();
+                let at = self.net_via.as_ref().and_then(|via| names.iter().position(|n| n == via));
+                self.net_via = match at {
+                    None => names.first().cloned(),
+                    Some(i) => names.get(i + 1).cloned(),
+                };
+                self.peers.select(Some(0));
+                match &self.net_via {
+                    Some(via) => self.confirm(format!("Network list: through {via} only")),
+                    None if names.is_empty() => self.warn("No paths are known yet, so no interface to keep the list to"),
+                    None => self.confirm("Network list: through any interface"),
+                }
+            }
             KeyCode::Char('f') => {
                 self.net_filter = match self.net_filter {
                     NetFilter::All => NetFilter::Peers,
@@ -401,6 +494,37 @@ mod tests {
             hops: 1,
             last_seen: 0,
         }
+    }
+
+    #[test]
+    fn s_sorts_and_i_keeps_to_an_interface() {
+        use crossterm::event::{KeyEvent, KeyModifiers};
+        let dir = std::env::temp_dir().join(format!("rettui-net-sort-{}", std::process::id()));
+        let mut store = crate::store::Store::default();
+        let at = |name: &str, hops: u8, last_seen: i64| Peer { kind: PeerKind::Lxmf, name: Some(name.into()), hops, last_seen };
+        store.peers.insert("aa".repeat(16), at("Zed", 1, 30));
+        store.peers.insert("bb".repeat(16), at("amy", 4, 20));
+        store.peers.insert("cc".repeat(16), at("Bo", 2, 10));
+        let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), store);
+        app.tab = crate::app::Tab::Network;
+        let names = |app: &App| app.network_rows().iter().map(|(_, p)| p.name.clone().unwrap()).collect::<Vec<_>>();
+        let press = |app: &mut App, c| app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        assert_eq!(names(&app), ["Zed", "amy", "Bo"]);
+        press(&mut app, 's');
+        assert_eq!(names(&app), ["amy", "Bo", "Zed"]);
+        press(&mut app, 's');
+        assert_eq!(names(&app), ["Zed", "Bo", "amy"]);
+        press(&mut app, 's');
+        // Through an interface: those whose path goes through it.
+        app.routes.insert("bb".repeat(16), "RNode".into());
+        app.routes.insert("cc".repeat(16), "TCP".into());
+        press(&mut app, 'i');
+        assert_eq!((app.net_via.as_deref(), names(&app)), (Some("RNode"), vec!["amy".to_string()]));
+        press(&mut app, 'i');
+        assert_eq!(names(&app), ["Bo"]);
+        press(&mut app, 'i');
+        assert_eq!((app.net_via.clone(), names(&app).len()), (None, 3));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

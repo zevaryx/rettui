@@ -1220,11 +1220,18 @@ struct PeersQuery {
     #[serde(default)]
     q: String,
     limit: Option<usize>,
+    /// `heard` (the default), `name` or `hops`.
+    sort: Option<String>,
+    /// Only those whose path goes through this interface.
+    via: Option<String>,
 }
 
 async fn peers(State(state): State<WebState>, Query(query): Query<PeersQuery>) -> ApiResult {
+    let sort = query.sort.as_deref().and_then(crate::app::network::NetSort::parse).unwrap_or_default();
     Ok(axum::Json(
-        state.read(move |o| views::peers(&o.app, query.kind.as_deref(), &query.q, query.limit)).await?,
+        state
+            .read(move |o| views::peers(&o.app, query.kind.as_deref(), &query.q, query.limit, sort, query.via.as_deref().filter(|v| !v.is_empty())))
+            .await?,
     ))
 }
 

@@ -458,6 +458,12 @@ pub struct App {
 
     pub peers: ListState,
     pub net_filter: NetFilter,
+    /// How the Network list is sorted (`s`), and the interface it's kept to
+    /// (`i`), if one.
+    pub net_sort: network::NetSort,
+    pub net_via: Option<String>,
+    /// The interface each destination with a path goes through, by address.
+    pub routes: HashMap<String, String>,
     pub net_search: NetSearch,
 
     pub browser: Browser,
@@ -595,6 +601,9 @@ impl App {
             saver: saver::Saver::new(),
             peers: ListState::default(),
             net_filter: NetFilter::All,
+            net_sort: network::NetSort::Heard,
+            net_via: None,
+            routes: HashMap::new(),
             net_search: NetSearch::default(),
             browser: Browser::default(),
             prompt: None,
@@ -926,6 +935,9 @@ impl App {
                 self.interfaces = interfaces;
                 self.note_discovery();
                 self.watch_connection();
+            }
+            NetEvent::Routes(routes) => {
+                self.routes = routes.into_iter().map(|(hash, interface)| (hex::encode(hash), interface)).collect();
             }
             NetEvent::Log(line) => self.log(line),
             NetEvent::Stopped => {}

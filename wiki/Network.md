@@ -24,6 +24,12 @@ shows your identity, your interfaces and the log.
 - **Finding:** filter by kind (`f`), or search by name or address (`/`),
   with the matches highlighted. Addresses can be pasted in any common form
   (`<hash>`, `lxmf@hash`, `hash:/page/index.mu`).
+- **Sorting and interfaces:** the list is last heard first; `s` in the TUI
+  (or the order menu in the web UI) sorts it by name or nearest first
+  instead. Each row says which interface its path goes through, when one's
+  known (from the path table, read every half minute), and `i` (or the
+  interface menu) keeps the list to those through one interface: what's
+  heard over the LoRa radio, say, rather than the internet.
 - **Acting on a row:** message a peer, browse a node, or use a propagation
   node for sync, and copy any address.
 - **Paths:** to reach a destination, rettui needs a path to it: which

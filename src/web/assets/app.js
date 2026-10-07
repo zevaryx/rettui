@@ -3463,6 +3463,8 @@ function highlighted(text, terms) {
 
 app.views.network = {
   filter: 'all',
+  sort: 'heard',
+  via: '',
   query: '',
   selected: null,
 
@@ -3494,10 +3496,22 @@ app.views.network = {
       this.update();
     } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes'], ['blocked', 'Blocked']]
       .map(([value, text]) => el('option', { value, text, selected: value === this.filter })));
+    const sort = el('select', { title: 'Order', onchange: (e) => {
+      this.sort = e.target.value;
+      this.update();
+    } }, [['heard', 'Last heard'], ['name', 'Name'], ['hops', 'Nearest']]
+      .map(([value, text]) => el('option', { value, text, selected: value === this.sort })));
+    // Kept to an interface (those with paths through them, filled in as
+    // they're known).
+    this.viaSelect = el('select', { title: 'Through which interface', onchange: (e) => {
+      this.via = e.target.value;
+      this.limit = 200;
+      this.update();
+    } });
     this.title = el('span', { class: 'title grow' });
     this.table = el('div', { class: 'scroll' });
     root.append(el('div', { class: 'column grow' },
-      el('section', { class: 'panel' }, el('header', {}, this.search, filter,
+      el('section', { class: 'panel' }, el('header', {}, this.search, filter, sort, this.viaSelect,
         el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
         el('button', { text: 'Find a path…', title: 'Find the path to any address', onclick: () => {
@@ -3514,8 +3528,9 @@ app.views.network = {
   // rettui filters, searches and counts the rest.
   async update() {
     const request = ++this.request;
-    const params = new URLSearchParams({ q: this.query, limit: this.limit });
+    const params = new URLSearchParams({ q: this.query, limit: this.limit, sort: this.sort });
     if (this.filter !== 'all') params.set('kind', this.filter);
+    if (this.via) params.set('via', this.via);
     const data = await api.get('/peers?' + params);
     // A newer search or filter was asked for while this one loaded.
     if (request !== this.request) return;
@@ -3532,7 +3547,11 @@ app.views.network = {
     const filterName = { all: 'all', lxmf: 'LXMF peers', nomad: 'NomadNet nodes', propagation: 'propagation nodes', blocked: 'blocked' }[this.filter];
     const rows = this.data.peers;
     const total = this.data.total;
-    this.title.textContent = `Heard announces · ${filterName} · ${total}${terms.length ? ' matching' : ''}`;
+    const interfaces = [...new Set([...(this.data.interfaces || []), ...(this.via ? [this.via] : [])])];
+    this.viaSelect.replaceChildren(el('option', { value: '', text: 'Any interface' }),
+      ...interfaces.map((name) => el('option', { value: name, text: `Via ${name}`, selected: name === this.via })));
+    this.viaSelect.classList.toggle('hidden', !interfaces.length);
+    this.title.textContent = `Heard announces · ${filterName}${this.via ? ` · via ${this.via}` : ''} · ${total}${terms.length ? ' matching' : ''}`;
     if (!rows.length) {
       this.table.replaceChildren(el('div', { class: 'empty', text: terms.length
         ? `Nothing heard matches “${this.data.query.trim()}”. Esc clears the search.`
@@ -3546,7 +3565,7 @@ app.views.network = {
     // The newest rows only; more on request.
     const more = total - rows.length;
     this.table.replaceChildren(el('table', { class: 'net-table' },
-      el('thead', {}, el('tr', {}, ['', 'Name', 'Address', 'Hops', 'Heard', ''].map((h) => el('th', { text: h })))),
+      el('thead', {}, el('tr', {}, ['', 'Name', 'Address', 'Hops', 'Heard', 'Via', ''].map((h) => el('th', { text: h })))),
       el('tbody', {}, rows.map((p) => el('tr', {
         class: p.hash === this.selected ? 'selected' : '',
         onclick: (e) => {
@@ -3563,6 +3582,7 @@ app.views.network = {
       el('td', { class: 'mono dim' }, highlighted(p.hash, terms)),
       el('td', { class: 'dim', text: p.last_seen ? `${p.hops} hop${p.hops === 1 ? '' : 's'}` : '' }),
       el('td', { class: 'dim', text: p.last_seen ? ago(p.last_seen) + ' ago' : 'not heard' }),
+      el('td', { class: 'dim', text: p.via || '' }),
       el('td', {}, el('div', { class: 'actions' },
         p.kind === 'lxmf' && !p.blocked ? el('button', { text: 'Message', onclick: () => this.open(p) }) : null,
         p.kind === 'lxmf' ? el('button', { class: p.blocked ? '' : 'danger', text: p.blocked ? 'Unblock' : 'Block', onclick: async (e) => {

@@ -35,6 +35,8 @@ pub use remote::{
 };
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
+/// Read the path table every so many stats intervals (30 s).
+const ROUTES_EVERY: u32 = 6;
 
 /// How long an event loop applies a burst of network events before it
 /// draws or answers requests again; the rest wait for the next turn.
@@ -279,6 +281,9 @@ pub enum NetEvent {
     SyncStarted,
     Synced(Result<usize, String>),
     Interfaces(Vec<InterfaceInfo>),
+    /// The interface each destination with a path goes through, from the
+    /// path table (read now and then, for the Network list).
+    Routes(std::collections::HashMap<Hash, String>),
     Log(String),
     Rrc { hub: Hash, event: RrcEvent },
     Host(HostEvent),
@@ -604,6 +609,8 @@ async fn run(
     };
     let mut sync_timer = timer(sync_interval);
     let mut stats_timer = tokio::time::interval(STATS_INTERVAL);
+    // The path table, every so many stats ticks (it can be long).
+    let mut routes_due = 0u32;
     let mut reannounce = reannounce::Reannounce::default();
 
     loop {
@@ -647,6 +654,14 @@ async fn run(
                 }
             }
             _ = stats_timer.tick() => {
+                if routes_due == 0 && !startup_pending {
+                    if let Ok(paths) = remote::paths(&runtime).await {
+                        let routes = paths.into_iter().map(|(hash, info)| (hash, info.interface)).collect();
+                        let _ = ev.send(NetEvent::Routes(routes));
+                    }
+                    routes_due = ROUTES_EVERY;
+                }
+                routes_due = routes_due.saturating_sub(1);
                 if known_save.as_ref().is_none_or(|save| save.is_finished()) {
                     let (known, policy) = (known.clone(), policy.clone());
                     known_save = Some(tokio::spawn(async move {

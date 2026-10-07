@@ -54,10 +54,18 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     let propagation = app.settings.propagation_node.clone();
     let rows = app.network_rows();
     let total = rows.len();
+    // How it's sorted and kept to an interface, when not as usual.
+    let mut kept = String::new();
+    if let Some(via) = &app.net_via {
+        kept.push_str(&format!(" · via {via}"));
+    }
+    if app.net_sort != crate::app::network::NetSort::Heard {
+        kept.push_str(&format!(" · {}", app.net_sort.label()));
+    }
     let title = if terms.is_empty() {
-        format!("Heard announces · {filter} · {}", rows.len())
+        format!("Heard announces · {filter}{kept} · {}", rows.len())
     } else {
-        format!("Heard announces · {filter} · {} matching", rows.len())
+        format!("Heard announces · {filter}{kept} · {} matching", rows.len())
     };
     // Only the rows on screen get drawn (there can be thousands): keep the
     // selection in view, then build items for that window.
@@ -107,6 +115,10 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(DIM),
                 ),
             ]);
+            // The interface its path goes through, if one's known.
+            if let Some(interface) = app.routes.get(hash.as_str()) {
+                spans.push(Span::styled(format!("  via {interface}"), Style::default().fg(DIM)));
+            }
             if app.store.contacts.get(hash.as_str()).is_some_and(|c| c.trust == crate::store::Trust::Blocked) {
                 spans.push(Span::styled("  ⛔ blocked", Style::default().fg(Color::LightRed)));
             }
