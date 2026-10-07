@@ -47,6 +47,13 @@ aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls", "proxy-from-env"] }
+# HTTPS for the web UI: rustls on ring (as ureq already builds it), and
+# rettui's own small certificate authority when no certificate is given.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+# Certificate dates, as rcgen takes them.
+time = { version = "0.3", default-features = false }
 # QR codes for LXMF paper messages (drawn in the terminal, SVG in the web UI).
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # Finding them in pictures (to read a paper message from a photo).

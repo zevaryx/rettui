@@ -145,10 +145,28 @@ pub fn router(state: WebState) -> Router {
         .route("/manifest.webmanifest", get(manifest))
         .route("/fonts/{name}", get(font))
         .route("/brand/{name}", get(brand))
+        .route("/rettui-ca.crt", get(certificate_authority))
         .nest("/api", api)
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .layer(middleware::from_fn(compress))
         .with_state(state)
+}
+
+/// rettui's own certificate authority, for a device to install (with
+/// `--https` and no certificate of its own): public, like any CA
+/// certificate.
+async fn certificate_authority(State(state): State<WebState>) -> Response {
+    match &state.ca {
+        Some(der) => (
+            [
+                (header::CONTENT_TYPE, "application/x-x509-ca-cert"),
+                (header::CONTENT_DISPOSITION, "attachment; filename=\"rettui-ca.crt\""),
+            ],
+            der.as_ref().clone(),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Compare secrets without an early exit.
@@ -171,7 +189,8 @@ style=\"font:inherit;padding:.4em;width:min(28em,100%);box-sizing:border-box\"><
 /// app added to a home screen; the manifest (browsers fetch it without the
 /// login cookie); and the service worker (browsers fetch it again on their
 /// own). None of them hold anything private.
-const PUBLIC: [&str; 5] = ["/brand/wordmark.png", "/brand/icon.png", "/brand/icon-512.png", "/manifest.webmanifest", "/sw.js"];
+const PUBLIC: [&str; 6] =
+    ["/brand/wordmark.png", "/brand/icon.png", "/brand/icon-512.png", "/manifest.webmanifest", "/sw.js", "/rettui-ca.crt"];
 
 /// Tokens a request carries: in the login cookie, an `Authorization: Bearer`
 /// header or an `X-Rettui-Token` header.
@@ -196,7 +215,8 @@ async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Re
         .and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")).map(str::to_string));
     let mut response = if let Some(token) = query_token.filter(|_| path == "/") {
         if same(&token, &state.token) {
-            let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000");
+            let secure = if state.https { "; Secure" } else { "" };
+            let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}");
             (StatusCode::SEE_OTHER, [(header::LOCATION, "./".to_string()), (header::SET_COOKIE, cookie)]).into_response()
         } else {
             (StatusCode::UNAUTHORIZED, axum::response::Html(LOGIN_PAGE)).into_response()
@@ -442,7 +462,11 @@ async fn brand(Path(name): Path<String>) -> Response {
 // ---- state and live updates ----------------------------------------------
 
 async fn get_state(State(state): State<WebState>) -> ApiResult {
-    Ok(axum::Json(state.read(|o| views::state(&o.app)).await?))
+    let mut view = state.read(|o| views::state(&o.app)).await?;
+    // With --https and rettui's own certificate: devices install its
+    // authority from the Status page.
+    view["own_certificate"] = json!(state.ca.is_some());
+    Ok(axum::Json(view))
 }
 
 #[derive(Deserialize)]

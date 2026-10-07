@@ -30,7 +30,36 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 
 - **Address:** it listens on 127.0.0.1 by default. Pass an address such as
   `--web 0.0.0.0:8740` to reach it from other devices, and prefer a VPN or SSH
-  tunnel over exposing it. It uses plain HTTP.
+  tunnel over exposing it. It uses plain HTTP unless started with `--https`.
+- **HTTPS:** browsers keep some things for secure pages: notifications,
+  background notifications, installing the app, and the camera and
+  microphone. A phone on the same network reaching rettui at
+  `http://192.168.…` gets none of them. Either put a proxy that serves HTTPS
+  in front of rettui (below), or start it with HTTPS of its own (it stays
+  plain HTTP otherwise):
+  - **`--https`:** with rettui's own certificate. rettui makes a small
+    certificate authority of its own (once, kept in `web-tls/` in the data
+    directory) and a certificate it signs for this computer's names and
+    addresses (made again when they change, and each year). It prints
+    them, the link, and the authority's fingerprint. Browsers warn about the
+    page until the device trusts that authority: download it from
+    `/rettui-ca.crt` (or **Download** beside *Certificate* under Status) and
+    install it:
+    - **Android:** Settings → Security → Encryption & credentials → Install
+      a certificate → CA certificate.
+    - **iPhone:** open the download, install the profile under Settings,
+      then turn it on under General → About → Certificate Trust Settings.
+    - **A computer:** in the browser's or the system's certificate settings.
+
+    A device that installs it trusts certificates rettui signs, for any
+    address, so only install it on your own devices, and keep `web-tls/`
+    private like the rest of the data directory.
+  - **`--tls-cert FILE --tls-key FILE`:** with a certificate you have, in
+    PEM files (the certificate with its chain, and its key), such as one
+    from `tailscale cert`, mkcert or Let's Encrypt.
+
+  Either way, a plain `http://` request to the port is sent on to its
+  `https://` address, and the login cookie is only sent over HTTPS.
 - **Behind a reverse proxy:** it works behind one with nothing to set,
   at a site's root or under a path such as `https://example.com/rettui/`
   (all its addresses are relative). Keep rettui on 127.0.0.1, and open the

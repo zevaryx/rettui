@@ -65,6 +65,11 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `propagation/`: messages your [propagation node](Hosting-a-Node#propagation-node)
   keeps for others, one file each, encrypted for their recipients
 - `web_token`: the web UI's login secret (delete it to log every browser out)
+- `web-tls/`: rettui's own HTTPS certificates, with `--https` (see
+  [Web UI](Web-UI)): its certificate authority (`ca.pem`, and its key
+  `ca.key`) and the certificate it signed for this computer (`cert.pem`,
+  `cert.key`). Delete the folder for a new authority, which devices then
+  install again.
 - `web_push_key`: the web UI's key for background notifications (Web Push),
   and `web_push.json`: the browsers that turned them on. Deleting the key
   makes browsers subscribe again the next time they open rettui.

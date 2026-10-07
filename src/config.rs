@@ -161,6 +161,8 @@ pub struct Paths {
     pub uploads: PathBuf,
     /// Secret for the web UI's login link.
     pub web_token: PathBuf,
+    /// rettui's own HTTPS certificates (`--https`).
+    pub web_tls: PathBuf,
     /// The web UI's key for Web Push, and the browsers subscribed.
     pub web_push_key: PathBuf,
     pub web_push: PathBuf,
@@ -194,6 +196,7 @@ impl Paths {
             archive: base.join("archive"),
             uploads: base.join("uploads"),
             web_token: base.join("web_token"),
+            web_tls: base.join("web-tls"),
             web_push_key: base.join("web_push_key"),
             web_push: base.join("web_push.json"),
             node: base.join("node"),

@@ -4265,7 +4265,8 @@ app.views.node = {
 
 app.views.status = {
   mount(root) {
-    this.info = el('div', { class: 'info' });
+    // Scrolls on its own when taller than its share, so Settings keeps room.
+    this.info = el('div', { class: 'info scroll' });
     this.form = el('div', { class: 'settings' });
     this.saveButton = el('button', { class: 'primary', text: 'Save', disabled: true, onclick: () => this.save() });
     this.revertButton = el('button', { text: 'Revert', disabled: true, onclick: () => this.loadSettings(true) });
@@ -4274,7 +4275,7 @@ app.views.status = {
     this.log = el('div', { class: 'scroll log' });
     root.append(
       el('div', { class: 'column grow' },
-        el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Identity' }),
+        el('section', { class: 'panel', style: 'max-height:55%' }, el('header', {}, el('span', { class: 'title grow', text: 'Identity' }),
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
           el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
@@ -4426,7 +4427,18 @@ app.views.status = {
       label('RNS config'), el('span', { class: 'mono', text: s.rns_config || 'rsReticulum default' }),
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Known'), el('span', { text: `${s.known} destinations` }),
-      label('Notifications'), notifications.describe());
+      label('Notifications'), notifications.describe(),
+      // With --https and rettui's own certificate.
+      ...(s.own_certificate ? [label('Certificate'), el('div', {},
+        el('div', { class: 'row' },
+          el('span', { class: 'dim', text: 'rettui\'s own, for HTTPS' }),
+          el('button', { text: 'Download', onclick: () => el('a', { href: 'rettui-ca.crt', download: 'rettui-ca.crt' }).click() })),
+        el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text:
+          'Browsers warn about rettui\'s pages until the device trusts the certificate authority that signs them. '
+          + 'Download it on each device and install it: on Android, Settings → Security → Encryption & credentials → '
+          + 'Install a certificate → CA certificate; on an iPhone, open the download, install the profile in Settings, '
+          + 'then turn it on under General → About → Certificate Trust Settings; on a computer, in the browser\'s or '
+          + 'system\'s certificate settings. Then reopen rettui.' }))] : []));
 
     const noInterfaces = s.net.state !== 'online' ? 'Reticulum is starting…'
       : s.external_shared_instance ? 'None here: the program running the shared instance (such as rnsd) has them.'

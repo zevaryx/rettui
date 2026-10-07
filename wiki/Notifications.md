@@ -35,7 +35,8 @@ both UIs.
 - **Web UI:** notifications are the browser's own. Allow them under Status
   (the **Notifications** row). Clicking one opens its conversation or room,
   and the tab's title counts what's unread. Browsers only allow notifications
-  on HTTPS or on the same computer (`localhost`). Elsewhere, and until you
+  on HTTPS (see **HTTPS** under [Web UI](Web-UI)) or on the same computer
+  (`localhost`). Elsewhere, and until you
   allow them, a note shows in the page while you're looking at it. On an
   iPhone (iOS 16.4 or later), add rettui to the Home Screen first (see
   **Installing** under [Web UI](Web-UI)).

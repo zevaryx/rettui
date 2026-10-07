@@ -47,6 +47,18 @@ struct Cli {
     /// 127.0.0.1:8740).
     #[arg(long, value_name = "ADDRESS", num_args = 0..=1, default_missing_value = web::DEFAULT_ADDRESS)]
     web: Option<String>,
+    /// Serve the web UI over HTTPS, with rettui's own certificate (devices
+    /// install its certificate authority, from /rettui-ca.crt). Without
+    /// this, or --tls-cert, it's plain HTTP.
+    #[arg(long, requires = "web")]
+    https: bool,
+    /// Serve the web UI over HTTPS with this certificate (PEM, with its
+    /// chain) instead of rettui's own.
+    #[arg(long, value_name = "FILE", requires_all = ["web", "tls_key"])]
+    tls_cert: Option<PathBuf>,
+    /// The private key (PEM) of --tls-cert.
+    #[arg(long, value_name = "FILE", requires_all = ["web", "tls_cert"])]
+    tls_key: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -172,7 +184,11 @@ async fn main() -> Result<()> {
         if cli.command.is_some() {
             bail!("--web runs the web UI; it cannot be combined with a command");
         }
-        return web::run(settings, paths, identity, &address).await;
+        let https = match (cli.tls_cert, cli.tls_key) {
+            (Some(cert), Some(key)) => Some(web::tls::Https::Files { cert, key }),
+            _ => cli.https.then_some(web::tls::Https::Own),
+        };
+        return web::run(settings, paths, identity, &address, https).await;
     }
 
     match cli.command {

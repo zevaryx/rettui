@@ -18,6 +18,7 @@
 
 mod push;
 mod routes;
+pub mod tls;
 mod views;
 
 use std::collections::{HashMap, VecDeque};
@@ -362,6 +363,10 @@ pub struct WebState {
     identity: std::sync::Arc<Identity>,
     token: String,
     paths: std::sync::Arc<Paths>,
+    /// Served over HTTPS (`--https`), so the login cookie is `Secure`.
+    https: bool,
+    /// rettui's own certificate authority (DER), for devices to install.
+    ca: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 impl WebState {
@@ -456,11 +461,22 @@ fn reachable_ip(listening: IpAddr) -> Option<IpAddr> {
         .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
 }
 
-pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: &str) -> Result<()> {
+pub async fn run(
+    settings: Settings,
+    paths: Paths,
+    identity: Identity,
+    address: &str,
+    https: Option<tls::Https>,
+) -> Result<()> {
     let address: SocketAddr = address
         .parse()
         .with_context(|| format!("--web expects an address like {DEFAULT_ADDRESS}, not {address}"))?;
     let token = load_token(&paths)?;
+    // Certificates first: a problem with them stops rettui before it starts.
+    let served = match &https {
+        Some(how) => Some(tls::prepare(how, &paths.web_tls, address.ip()).context("could not set up HTTPS")?),
+        None => None,
+    };
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("could not listen on {address}"))?;
@@ -499,24 +515,40 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         identity: std::sync::Arc::new(identity.clone()),
         token: token.clone(),
         paths: std::sync::Arc::new(paths),
+        https: served.is_some(),
+        ca: served.as_ref().and_then(|s| s.ca.clone()),
     };
     let router = routes::router(state);
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let server = match &served {
+        Some(served) => {
+            let listener = tls::TlsListener::new(listener, served.config.clone())?;
+            tokio::spawn(async move { axum::serve(listener, router).await })
+        }
+        None => tokio::spawn(async move { axum::serve(listener, router).await }),
+    };
+    let scheme = if served.is_some() { "https" } else { "http" };
 
     let shown = if address.ip().is_unspecified() {
         format!("127.0.0.1:{}", address.port())
     } else {
         address.to_string()
     };
-    println!("rettui web UI: http://{shown}/?token={token}");
+    println!("rettui web UI: {scheme}://{shown}/?token={token}");
     println!("The link logs this browser in; keep it private. Ctrl-C stops rettui.");
     println!("Scripts can send the token in an \"Authorization: Bearer\" header instead.");
+    if let Some(served) = &served
+        && let Some(fingerprint) = &served.fingerprint
+    {
+        println!("HTTPS with rettui's own certificate, for {}.", served.names.join(", "));
+        println!("Browsers warn about it until a device installs rettui's certificate authority:");
+        println!("open {scheme}://{shown}/rettui-ca.crt on it (SHA-256 {fingerprint}).");
+    }
     if !address.ip().is_loopback() {
         println!("Listening on {address}: anyone with the link can use this client.");
         // For a phone on the same network: the link at this computer's
         // address, and its QR code to scan rather than type the token.
         if let Some(ip) = reachable_ip(address.ip()) {
-            let link = format!("http://{}/?token={token}", SocketAddr::new(ip, address.port()));
+            let link = format!("{scheme}://{}/?token={token}", SocketAddr::new(ip, address.port()));
             println!("From another device on this network: {link}");
             crate::cli::print_qr(&link);
         }
