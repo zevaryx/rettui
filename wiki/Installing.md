@@ -33,8 +33,9 @@ revisions that build together:
 
 | Submodule | Revision | Why |
 | --- | --- | --- |
-| rsReticulum | `e16bd15` | The revision rsNomad's CI pins. It adds `RequestOutcome::ReplyFile` and is not on upstream `main`. |
-| rsLXMF | `d7da7f3` | The last rsLXMF built against rsReticulum 1.2 at that point. Later commits need rsReticulum 1.3. |
-| rsNomad | `05ad8ec` | `main` |
+| rsReticulum | `6825661` | 1.3.0 (upstream `main`) with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in: `RequestOutcome::ReplyFile`, file metadata and the requester's identity, which node hosting needs. It's the `rettui` branch of [zevaryx/rsReticulum](https://github.com/zevaryx/rsReticulum/tree/rettui) until that pull request is merged upstream. |
+| rsLXMF | `4a0abec` | `main` (it needs rsReticulum 1.3) |
+| rsNomad | `05ad8ec` | `main` (its tests pass against rsReticulum 1.3 too) |
 
-Move these forward together, once rsNomad supports rsReticulum 1.3.
+Once ratspeak/rsReticulum#26 is merged, point `deps/rsReticulum` back at
+ratspeak/rsReticulum in `.gitmodules` and pin its `main`.

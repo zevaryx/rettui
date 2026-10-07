@@ -1,6 +1,7 @@
 [submodule "deps/rsReticulum"]
 	path = deps/rsReticulum
-	url = https://github.com/ratspeak/rsReticulum
+	url = https://github.com/zevaryx/rsReticulum
+	branch = rettui
 [submodule "deps/rsLXMF"]
 	path = deps/rsLXMF
 	url = https://github.com/ratspeak/rsLXMF
