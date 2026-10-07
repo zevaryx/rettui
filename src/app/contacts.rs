@@ -162,6 +162,28 @@ impl App {
 
     /// Whether someone is a contact: trusted, left as is, or written to.
     /// Anyone else is an unknown sender.
+    /// A message request: a conversation with someone unknown, kept aside
+    /// (listed last, no notifications, not counted as unread) while
+    /// Unknown senders is set to requests.
+    pub fn is_request(&self, key: &str) -> bool {
+        self.settings.requests() && self.store.conversations.contains_key(key) && !self.is_known(key)
+    }
+
+    /// Conversations, newest first; message requests after the rest.
+    pub fn conversation_order(&self) -> Vec<String> {
+        let order = self.store.conversation_order();
+        if !self.settings.requests() {
+            return order;
+        }
+        let (requests, rest): (Vec<String>, Vec<String>) = order.into_iter().partition(|key| !self.is_known(key));
+        rest.into_iter().chain(requests).collect()
+    }
+
+    /// Unread messages, but for requests'.
+    pub fn unread_messages(&self) -> usize {
+        self.store.conversations.iter().filter(|(key, _)| !self.is_request(key)).map(|(_, c)| c.unread).sum()
+    }
+
     pub fn is_known(&self, key: &str) -> bool {
         matches!(self.store.contact(key).trust, Trust::Trusted | Trust::Untrusted)
             || self.store.conversations.get(key).is_some_and(|c| c.messages.iter().any(|m| !m.incoming))
@@ -434,7 +456,7 @@ mod tests {
         app.on_message(from(0xab, 3));
         assert!(app.store.conversations.contains_key(&alice));
         // Ignoring unknown senders: Bob's goes, Alice once trusted gets in.
-        app.update_settings(&[("ignore_unknown_senders", "true")]).unwrap();
+        app.update_settings(&[("unknown_senders", "ignore")]).unwrap();
         app.on_message(from(0xcd, 4));
         assert!(!app.store.conversations.contains_key(&bob));
         app.set_trust(&alice, Trust::Trusted).unwrap();
@@ -444,6 +466,47 @@ mod tests {
         app.send_message(bob.clone(), "hello".into(), Vec::new(), crate::lxmf::DeliveryMode::Auto, None).unwrap();
         app.on_message(from(0xcd, 6));
         assert_eq!(app.store.conversations[&bob].messages.len(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unknown_senders_wait_as_requests_until_accepted() {
+        use crate::lxmf::InboundMessage;
+        let dir = std::env::temp_dir().join(format!("rettui-requests-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.set_focus(false);
+        let (alice, carol) = ("ab".repeat(16), "ef".repeat(16));
+        let from = |source: u8, n: u8, at: f64| InboundMessage {
+            id: Some([n; 32]),
+            source: [source; 16],
+            content: format!("hi {n}"),
+            timestamp: at,
+            ..Default::default()
+        };
+        // Carol is a contact; Alice isn't.
+        app.on_message(from(0xef, 1, 10.0));
+        app.set_trust(&carol, Trust::Trusted).unwrap();
+        app.update_settings(&[("unknown_senders", "requests")]).unwrap();
+        let notified = app.notifications.len();
+        app.on_message(from(0xab, 2, 20.0));
+        // Kept, but aside: last in the list, no notification, not unread in
+        // all.
+        assert!(app.is_request(&alice));
+        assert_eq!(app.conversation_order(), [carol.clone(), alice.clone()]);
+        assert_eq!(app.notifications.len(), notified);
+        let carols = app.store.conversations[&carol].unread;
+        assert_eq!((app.store.conversations[&alice].unread, app.unread_messages()), (1, carols));
+        assert!(app.log.iter().any(|l| l.contains("Message request from")));
+        // Left as they are: a conversation like any other.
+        app.set_trust(&alice, Trust::Untrusted).unwrap();
+        assert!(!app.is_request(&alice));
+        assert_eq!(app.conversation_order(), [alice.clone(), carol.clone()]);
+        assert_eq!(app.unread_messages(), carols + 1);
+        // Shown as they are, there are no requests.
+        app.set_trust(&alice, Trust::Unknown).unwrap();
+        app.update_settings(&[("unknown_senders", "show")]).unwrap();
+        assert!(!app.is_request(&alice));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

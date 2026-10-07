@@ -65,9 +65,9 @@ impl App {
             if self.store.contact(&key).trust == Trust::Blocked {
                 return self.log(format!("Dropped a message from {}, who is blocked", self.store.display_name(&key)));
             }
-            if self.settings.ignore_unknown_senders && !self.is_known(&key) {
+            if self.settings.unknown_senders == "ignore" && !self.is_known(&key) {
                 return self.log(format!(
-                    "Ignored a message from {}, who isn't a contact (Ignore unknown senders is on)",
+                    "Ignored a message from {}, who isn't a contact (Unknown senders is set to ignore)",
                     self.store.display_name(&key)
                 ));
             }
@@ -189,6 +189,11 @@ impl App {
         self.keep_conversation_selection();
         if quiet {
             self.log(format!("{name}: {summary}"));
+            return;
+        }
+        // A request waits, quietly, to be looked at.
+        if self.is_request(&key) {
+            self.log(format!("Message request from {name}"));
             return;
         }
         self.log(format!("Message from {name}"));
@@ -316,7 +321,7 @@ impl App {
 
     /// Keep the list selection on the active conversation after reordering.
     fn keep_conversation_selection(&mut self) {
-        let order = self.store.conversation_order();
+        let order = self.conversation_order();
         if let Some(active) = &self.active_conversation {
             self.conversations
                 .select(order.iter().position(|k| k == active));
@@ -346,7 +351,7 @@ impl App {
     }
 
     pub(super) fn sync_active_conversation(&mut self) {
-        let order = self.store.conversation_order();
+        let order = self.conversation_order();
         let previous = self.active_conversation.clone();
         self.active_conversation = self.conversations.selected().and_then(|i| order.get(i).cloned());
         if let Some(key) = &self.active_conversation
@@ -1219,7 +1224,7 @@ mod tests {
         store.conversations.insert(bob.clone(), Conversation { messages: vec![message(2, "yo".into())], ..Default::default() });
         let mut app = crate::app::test_app(&dir, Settings::default(), store);
         let open = |app: &mut App, key: &str| {
-            let index = app.store.conversation_order().iter().position(|k| k == key).unwrap();
+            let index = app.conversation_order().iter().position(|k| k == key).unwrap();
             app.select_conversation(index);
         };
         open(&mut app, &alice);

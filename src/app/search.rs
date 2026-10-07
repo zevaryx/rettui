@@ -163,7 +163,7 @@ impl App {
     /// Open a hit's conversation, with the message picked (and shown).
     pub(super) fn open_hit(&mut self, hit: &Hit) {
         self.message_search = None;
-        let Some(position) = self.store.conversation_order().iter().position(|k| *k == hit.key) else { return };
+        let Some(position) = self.conversation_order().iter().position(|k| *k == hit.key) else { return };
         self.select_conversation(position);
         let index = self.store.conversations.get(&hit.key).and_then(|c| c.messages.iter().position(|m| m.id == hit.id));
         if let Some(index) = index {

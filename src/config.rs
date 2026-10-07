@@ -67,9 +67,11 @@ pub struct Settings {
     pub notify_messages: bool,
     /// Notifications from RRC (each hub and room has its own level).
     pub notify_rrc: bool,
-    /// Drop messages from senders who aren't contacts (not trusted, never
-    /// written to).
-    pub ignore_unknown_senders: bool,
+    /// What becomes of messages from senders who aren't contacts (not
+    /// trusted, nor left as they are, nor ever written to): one of
+    /// [`UNKNOWN_SENDERS`]. Settings files from before it said
+    /// `ignore_unknown_senders`, which is read as `ignore`.
+    pub unknown_senders: String,
     /// Send failed messages (text ones) again when their recipient
     /// announces, as MeshChat does.
     pub resend_on_announce: bool,
@@ -135,7 +137,7 @@ impl Default for Settings {
             wrap_lines: false,
             notify_messages: true,
             notify_rrc: true,
-            ignore_unknown_senders: false,
+            unknown_senders: "show".into(),
             resend_on_announce: true,
             stamp_cost: 0,
             // LXMF's own default delivery limit (NomadNet's is 500).
@@ -231,6 +233,10 @@ impl Settings {
         let text = fs::read_to_string(path)?;
         let value: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         let schedule_set = value.get("announce_schedule").is_some();
+        // From before message requests: ignoring unknown senders was a
+        // toggle.
+        let ignored = value.get("unknown_senders").is_none()
+            && value.get("ignore_unknown_senders").and_then(serde_json::Value::as_bool) == Some(true);
         let mut settings: Self = serde_json::from_value(value).with_context(|| format!("parsing {}", path.display()))?;
         // From before announcing on a random schedule: 0 minutes was off,
         // and an interval of one's own stays (6 hours, the default then,
@@ -252,7 +258,15 @@ impl Settings {
                 }
             }
         }
+        if ignored {
+            settings.unknown_senders = "ignore".into();
+        }
         Ok(settings)
+    }
+
+    /// Whether messages from unknown senders are kept aside as requests.
+    pub fn requests(&self) -> bool {
+        self.unknown_senders == "requests"
     }
 
     /// When the LXMF address is announced on its own, within
@@ -426,10 +440,10 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
-        key: "ignore_unknown_senders",
-        label: "Ignore unknown senders",
-        help: "Drop messages from anyone who isn't a contact (trusted, or someone you've written to)",
-        kind: FieldKind::Toggle,
+        key: "unknown_senders",
+        label: "Unknown senders",
+        help: "Messages from anyone who isn't a contact (trusted, left as they are, or someone you've written to). show: like anyone's, marked as from someone unknown; requests: kept aside as message requests, last in the list, with no notifications, until you trust them, leave them as they are, reply, block them or delete it; ignore: dropped",
+        kind: FieldKind::Choice(UNKNOWN_SENDERS),
         effect: Effect::Now,
     },
     Field {
@@ -603,6 +617,8 @@ const MAX_MINUTES: u64 = 525_600;
 /// not more than hourly (public gateways hold back destinations that
 /// announce more), and at least every six hours, as NomadNet does.
 pub const ANNOUNCE_MINS: (u64, u64) = (60, 360);
+/// What can become of messages from unknown senders.
+pub const UNKNOWN_SENDERS: &[&str] = &["show", "requests", "ignore"];
 /// The ways of announcing on its own.
 pub const ANNOUNCE_SCHEDULES: &[&str] = &["random", "fixed", "off"];
 const MAX_HOURS: u64 = 8_760;
@@ -701,7 +717,7 @@ impl Settings {
             "show_joins" => self.show_joins.to_string(),
             "notify_messages" => self.notify_messages.to_string(),
             "notify_rrc" => self.notify_rrc.to_string(),
-            "ignore_unknown_senders" => self.ignore_unknown_senders.to_string(),
+            "unknown_senders" => self.unknown_senders.clone(),
             "resend_on_announce" => self.resend_on_announce.to_string(),
             "stamp_cost" => self.stamp_cost.to_string(),
             "max_message_kb" => self.max_message_kb.to_string(),
@@ -756,7 +772,7 @@ impl Settings {
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,
-            "ignore_unknown_senders" => self.ignore_unknown_senders = toggle(value).map_err(fail)?,
+            "unknown_senders" => self.unknown_senders = choice(value, UNKNOWN_SENDERS).map_err(fail)?,
             "resend_on_announce" => self.resend_on_announce = toggle(value).map_err(fail)?,
             "stamp_cost" => self.stamp_cost = number(value, MAX_STAMP_COST).map_err(fail)?,
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
@@ -928,6 +944,22 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ignoring_unknown_senders_from_before_requests_is_kept() {
+        let dir = std::env::temp_dir().join(format!("rettui-unknown-senders-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let read = |json: &str| {
+            std::fs::write(&path, json).unwrap();
+            Settings::load(&path).unwrap().unknown_senders
+        };
+        assert_eq!(read(r#"{"ignore_unknown_senders": true}"#), "ignore");
+        assert_eq!(read(r#"{"ignore_unknown_senders": false}"#), "show");
+        assert_eq!(read(r#"{"ignore_unknown_senders": true, "unknown_senders": "requests"}"#), "requests");
+        assert_eq!(read("{}"), "show");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn icons_are_named_as_mdi_names_them_and_colours_are_colours() {

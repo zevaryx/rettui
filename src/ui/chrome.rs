@@ -48,7 +48,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     // Tabs a row apart when there is room, else packed.
     let spacing = if inner.height >= 2 + Tab::ALL.len() as u16 * 2 + 3 { 2 } else { 1 };
 
-    let unread: usize = app.store.conversations.values().map(|c| c.unread).sum();
+    let unread = app.unread_messages();
     let (channel_unread, mentioned) = app.channels.total_unread();
     app.regions.tabs.clear();
     for (i, tab) in Tab::ALL.iter().enumerate() {

@@ -90,7 +90,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let [list_area, chat_area] =
         Layout::horizontal([Constraint::Length(super::side_width(area.width, 30)), Constraint::Min(20)]).areas(area);
 
-    let order = app.store.conversation_order();
+    let order = app.conversation_order();
     let list_block = block("Conversations", !app.composing);
     app.regions.conversations = list_block.inner(list_area);
     if order.is_empty() {
@@ -116,7 +116,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 if conversation.muted {
                     spans.push(Span::styled(" muted", Style::default().fg(DIM)));
                 }
-                if !app.is_known(key) {
+                if app.is_request(key) {
+                    spans.push(Span::styled(" request", Style::default().fg(Color::Black).bg(Color::Yellow)));
+                } else if !app.is_known(key) {
                     spans.push(Span::styled(" ?", Style::default().fg(Color::Yellow)));
                 }
                 let preview = conversation.messages.last().map(Message::opening).unwrap_or_default();

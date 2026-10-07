@@ -44,7 +44,7 @@ pub fn state(app: &App) -> Value {
         NodeStatus::Running => json!({ "state": "running", "hash": hex::encode(app.pn.hash), "stats": app.pn.stats }),
         NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
     };
-    let message_unread: usize = app.store.conversations.values().map(|c| c.unread).sum();
+    let message_unread = app.unread_messages();
     let (channel_unread, mention) = app.channels.total_unread();
     let online = app.interfaces.iter().filter(|i| i.online).count();
     json!({
@@ -160,7 +160,6 @@ pub fn icon(appearance: Option<&crate::lxmf::fields::Appearance>) -> Value {
 
 pub fn conversations(app: &App) -> Value {
     let list: Vec<Value> = app
-        .store
         .conversation_order()
         .into_iter()
         .map(|key| {
@@ -177,6 +176,8 @@ pub fn conversations(app: &App) -> Value {
                 "muted": conversation.muted,
                 // Not a contact: not trusted, nor ever written to.
                 "unknown": !app.is_known(&key),
+                // A message request (see App::is_request): listed apart.
+                "request": app.is_request(&key),
                 "icon": icon(app.store.contacts.get(&key).and_then(|c| c.icon.as_ref())),
                 "last": last,
             })
@@ -281,6 +282,7 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
             "announced": app.store.announced_name(key),
             "trust": app.store.contact(key).trust.key(),
             "known": app.is_known(key),
+            "request": app.is_request(key),
             "trust_label": crate::app::contacts::trust_label(app.store.contact(key).trust, app.is_known(key)),
             // The last ping, if any.
             "ping": app.pings.get(key).map(crate::app::contacts::ping_label),

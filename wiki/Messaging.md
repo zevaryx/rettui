@@ -227,9 +227,19 @@ everywhere else), and notes for you alone.
     The question goes away.
   - **Block** them (below).
 
-  Turn on *Ignore unknown senders* (Status, `ignore_unknown_senders`) to
-  drop their messages altogether, as Sideband can. Anyone you've written
-  to, trusted, or left as is still gets through.
+  *Unknown senders* (Status, `unknown_senders`) decides what becomes of
+  their messages:
+  - **show** (the default): as above, like anyone's, marked `?`.
+  - **requests:** kept aside as *message requests*, as Signal does: listed
+    last, under **Message requests** in the web UI and marked *request* in
+    the TUI, with no notifications and not counted as unread. Trusting
+    them, leaving them as they are, or replying makes it a conversation
+    like any other; blocking them, or deleting it (the web UI's request
+    has **Delete** beside **Block**), gets rid of it.
+  - **ignore:** dropped altogether, as Sideband can. A settings file that
+    had *Ignore unknown senders* on reads as this.
+
+  Anyone you've written to, trusted, or left as is always gets through.
 - **Blocking** someone drops their messages, deletes the conversation with
   them, and blocks their identity in Reticulum (its blackhole list), so
   their announces and traffic are dropped too, as NomadNet does. If rettui

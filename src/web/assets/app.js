@@ -2263,8 +2263,12 @@ app.views.messages = {
     this.warmRecent(conversations);
     // Icons beside every name once someone has one (letters for the rest).
     const icons = conversations.some((c) => c.icon);
+    // Message requests come last, under a heading of their own.
+    const requests = conversations.filter((c) => c.request).length;
+    const requestsMark = el('div', { class: 'list-heading', text: `Message requests (${requests})`,
+      title: 'From people who aren\'t contacts: no notifications until you trust them, leave them as they are, or reply' });
     if (this.query.trim()) this.runSearch();
-    else if (changed(this, 'list:' + this.selected, conversations)) this.list.replaceChildren(...(conversations.length ? conversations.map((c) => el('div', {
+    else if (changed(this, 'list:' + this.selected, conversations)) this.list.replaceChildren(...(conversations.length ? conversations.flatMap((c, i) => [c.request && !conversations[i - 1]?.request ? requestsMark : null, el('div', {
       class: 'list-item' + (c.key === this.selected ? ' selected' : ''),
       dataset: { key: c.key },
       // Start loading as the button goes down; the click shows it.
@@ -2274,11 +2278,11 @@ app.views.messages = {
     icons ? avatar(c.icon, c.name) : null,
     el('div', { class: 'main' },
       el('div', { class: 'name' }, c.name, c.muted ? mutedMark() : null,
-        c.unknown ? el('span', { class: 'unknown-mark', text: ' ?', title: 'Not one of your contacts' }) : null),
+        c.unknown && !c.request ? el('span', { class: 'unknown-mark', text: ' ?', title: 'Not one of your contacts' }) : null),
       el('div', { class: 'sub', text: c.last ? `${c.last.incoming ? '' : 'You: '}${c.last.text}` : 'No messages yet' })),
     el('div', { class: 'dim', style: 'font-size:12px;text-align:right' },
       c.last ? timeLabel(c.last.timestamp) : '',
-      c.unread ? el('div', {}, el('span', { class: 'badge', text: c.unread })) : null))) :
+      c.unread ? el('div', {}, el('span', { class: 'badge' + (c.request ? ' quiet' : ''), text: c.unread })) : null))].filter(Boolean)) :
       [el('div', { class: 'empty', text: 'No conversations yet. Press + New, or message a peer from the Network tab.' })]));
     this.compose.classList.toggle('hidden', !this.selected);
     if (!this.selected) {
@@ -2427,10 +2431,14 @@ app.views.messages = {
     // Someone not a contact: trust them, leave them as they are, or block.
     const contact = conversation.contact || {};
     const banner = conversation.messages.length && !contact.known ? el('div', { class: 'stranger' },
-      el('span', { class: 'grow', text: `${conversation.name} isn't one of your contacts.` }),
+      el('span', { class: 'grow', text: contact.request
+        ? `A message request: ${conversation.name} isn't one of your contacts. Nothing from them notifies you until you trust them, leave them as they are, or reply.`
+        : `${conversation.name} isn't one of your contacts.` }),
       el('button', { text: 'Trust', title: 'No stamp asked of them, and they get tickets', onclick: () => this.setTrust(key, 'trusted', conversation) }),
       el('button', { text: 'Leave as is', onclick: () => this.setTrust(key, 'untrusted', conversation) }),
-      el('button', { class: 'danger', text: 'Block', onclick: () => this.setTrust(key, 'blocked', conversation) })) : null;
+      el('button', { class: 'danger', text: 'Block', onclick: () => this.setTrust(key, 'blocked', conversation) }),
+      contact.request ? el('button', { class: 'danger', text: 'Delete', title: 'Delete the conversation (they aren\'t blocked)',
+        onclick: () => this.deleteConversation(key, conversation) }) : null) : null;
     const render = () => this.history.replaceChildren(...(conversation.messages.length || echoes.length
       ? [banner, earlier, ...conversation.messages.slice(from).map((m) => this.message(m, conversation))].filter(Boolean)
       : [el('div', { class: 'empty', text: 'No messages yet. Say hello!' })]), ...echoes);
@@ -2441,6 +2449,18 @@ app.views.messages = {
       this.lastKey = key;
     } else {
       stickToBottom(this.history, render);
+    }
+  },
+
+  // Delete a conversation (asked first), and `close` what asked for it.
+  async deleteConversation(key, conversation, close = () => {}) {
+    if (!confirm(`Delete the conversation with ${conversation.name}, its archived messages and the files it brought?`)) return;
+    if (await attempt(() => api.post(`/conversations/${key}/delete`), 'Deleted the conversation')) {
+      close();
+      if (this.selected === key) this.selected = null;
+      this.cache.delete(key);
+      setPane(this, 'list');
+      this.update();
     }
   },
 
@@ -2604,16 +2624,7 @@ app.views.messages = {
       el('label', { class: 'field' }, el('span', { text: 'Your name for them' }), alias),
       el('label', { class: 'field' }, el('span', { text: 'Notes' }), notes),
       el('div', { class: 'row actions' },
-        el('button', { class: 'danger', text: 'Delete conversation', onclick: async () => {
-          if (!confirm(`Delete the conversation with ${conversation.name}, its archived messages and the files it brought?`)) return;
-          if (await attempt(() => api.post(`/conversations/${key}/delete`), 'Deleted the conversation')) {
-            close();
-            if (this.selected === key) this.selected = null;
-            this.cache.delete(key);
-            setPane(this, 'list');
-            this.update();
-          }
-        } }),
+        el('button', { class: 'danger', text: 'Delete conversation', onclick: () => this.deleteConversation(key, conversation, close) }),
         el('span', { class: 'grow' }),
         el('button', { class: 'primary', text: 'Save', onclick: async () => {
           if (await attempt(() => api.post(`/conversations/${key}/contact`, { alias: alias.value, notes: notes.value }), 'Saved')) {
