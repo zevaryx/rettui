@@ -55,6 +55,10 @@ network.
   the source view, and `Y` copies the source exactly as the node sent it.
 - **Copying:** drag across page text to copy it, `Y` copies the whole page,
   and `L` copies the selected link.
+- **Finding in a page:** `f` (or Ctrl-F in the TUI, or **Find** in the web
+  UI) finds text in the page shown, or in its source: every match is
+  marked, and `Enter` (or `↓`) goes to the next, `↑` (or `Shift+Enter` in
+  the web UI) the one before, with how many there are; `Esc` is done.
 - **History:** `b` (or a right-click) goes back.
 - **A node that won't answer:** while a page loads in the TUI, the address
   bar says how finding a path goes ("path request 2 of 3"). A node not heard yet

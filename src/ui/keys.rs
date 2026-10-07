@@ -223,6 +223,9 @@ pub fn keys(app: &App) -> Keys {
                 ("↑↓", "select"),
             ],
         ),
+        Tab::Browser if app.browser.find.is_some() => {
+            typing("Find in page", &[("Enter", "next"), ("↑↓", "previous/next"), ("Esc", "done"), ("^V", "paste")])
+        }
         Tab::Browser if app.browser.search.typing => {
             typing("Browser search", &[("Enter", "done"), ("Esc", "clear"), ("↑↓", "select"), ("^V", "paste")])
         }
@@ -297,6 +300,7 @@ pub fn keys(app: &App) -> Keys {
             "Browser, source",
             &[
                 ("u", "page"),
+                ("f", "find"),
                 ("Y", "copy source"),
                 ("y", "copy"),
                 ("r", "refresh"),
@@ -312,6 +316,7 @@ pub fn keys(app: &App) -> Keys {
             &[
                 ("Tab", "next"),
                 ("Enter", "open"),
+                ("f", "find"),
                 ("b", "back"),
                 ("r", "refresh"),
                 ("s", "save"),

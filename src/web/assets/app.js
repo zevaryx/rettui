@@ -2536,6 +2536,40 @@ app.views.messages = {
     if (done) this.update();
   },
 
+  // A key pressed with nothing typed into: true if it was one of the
+  // conversation keys (see KEYS).
+  key(e) {
+    const keys = [...this.list.querySelectorAll('.list-item[data-key]')].map((n) => n.dataset.key);
+    const at = keys.indexOf(this.selected);
+    if (e.key === 'j' || e.key === 'k') {
+      const next = keys[Math.max(0, Math.min(keys.length - 1, at + (e.key === 'j' ? 1 : -1)))];
+      if (next && next !== this.selected) this.select(next);
+      return true;
+    }
+    if (e.key === 'i' && this.selected) {
+      setPane(this, 'detail');
+      this.text.focus();
+      return true;
+    }
+    if (e.key === 'r' && this.selected) {
+      const replies = this.history.querySelectorAll('.message.in .reply-button');
+      const newest = [...replies].reverse().find((b) => b.textContent.includes('Reply'));
+      if (newest) newest.click();
+      else toast('Nothing of theirs to reply to here');
+      return true;
+    }
+    if (e.key === 'n') {
+      this.newConversation();
+      return true;
+    }
+    if (e.key === '*' && this.selected) {
+      const pinned = this.header.querySelector('.pin-button')?.classList.contains('on');
+      this.setPinned(this.selected, !pinned);
+      return true;
+    }
+    return false;
+  },
+
   // The open conversation's archived messages, above the rest (and all
   // those kept, so nothing's missing between).
   async openArchive(key, button) {
@@ -3721,6 +3755,7 @@ app.views.browser = {
         this.viewSource = !this.viewSource;
         this.renderPage();
       } }),
+      find: el('button', { text: 'Find', title: 'Find in the page (f)', onclick: () => this.openFind() }),
       clear: el('button', { text: 'Clear cache', onclick: async () => {
         const result = await attempt(() => api.post('/cache/clear'));
         if (result) toast(`Cleared ${result.removed} cached page(s) and image(s)`);
@@ -3728,6 +3763,22 @@ app.views.browser = {
     };
     this.status = el('div', { class: 'page-status' });
     this.content = el('div', { class: 'scroll page', onclick: (e) => this.click(e) });
+    // Finding in the page (f, or the Find button): every match marked.
+    this.findInput = el('input', { type: 'search', placeholder: 'Find in the page', oninput: () => this.find(0),
+      onkeydown: (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          this.find(e.shiftKey ? -1 : 1);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          this.closeFind();
+        }
+      } });
+    this.findCount = el('span', { class: 'dim find-count' });
+    this.findBar = el('div', { class: 'find-bar hidden' }, this.findInput, this.findCount,
+      el('button', { text: '↑', title: 'Previous (Shift+Enter)', onclick: () => this.find(-1) }),
+      el('button', { text: '↓', title: 'Next (Enter)', onclick: () => this.find(1) }),
+      el('button', { text: '×', title: 'Done (Esc)', onclick: () => this.closeFind() }));
     root.append(
       el('section', { class: 'panel side' }, el('header', {}, this.paneTabs,
         el('button', { class: 'phone-only', text: 'Address…', onclick: () => {
@@ -3737,8 +3788,8 @@ app.views.browser = {
       el('section', { class: 'panel grow pane-main' },
         el('div', { class: 'toolbar' }, this.buttons.back, this.address, el('button', { class: 'primary', text: 'Go', onclick: () => this.go(this.address.value) }),
           // Their own row on a phone.
-          el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.clear)),
-        this.status, this.content));
+          el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find, this.buttons.clear)),
+        this.status, this.findBar, this.content));
     this.renderPane();
     this.renderPage();
   },
@@ -3871,6 +3922,69 @@ app.views.browser = {
     // Server-rendered: all page text is escaped and the CSP blocks scripts.
     this.content.innerHTML = this.viewSource ? this.page.source_html : this.page.html;
     this.fillPartials();
+    if (!this.findBar.classList.contains('hidden')) this.find(0);
+  },
+
+  openFind() {
+    this.findBar.classList.remove('hidden');
+    this.findInput.focus();
+    this.findInput.select();
+    if (this.findInput.value) this.find(0);
+  },
+
+  closeFind() {
+    this.clearFind();
+    this.findBar.classList.add('hidden');
+  },
+
+  clearFind() {
+    for (const hit of this.content.querySelectorAll('mark.find-hit')) hit.replaceWith(...hit.childNodes);
+    this.content.normalize();
+    this.findHits = [];
+    this.findCount.textContent = '';
+  },
+
+  // Mark what's looked for in the page's text, and show a match: the
+  // first in view on (step 0), or the next or previous, round the page.
+  find(step) {
+    const query = this.findInput.value.toLowerCase();
+    const previous = this.findAt || 0;
+    this.clearFind();
+    if (!query) return;
+    const walker = document.createTreeWalker(this.content, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const text = node.nodeValue;
+      const lower = text.toLowerCase();
+      let at = lower.indexOf(query);
+      if (at < 0) continue;
+      const pieces = document.createDocumentFragment();
+      let from = 0;
+      while (at >= 0) {
+        pieces.append(text.slice(from, at));
+        const hit = el('mark', { class: 'find-hit', text: text.slice(at, at + query.length) });
+        pieces.append(hit);
+        this.findHits.push(hit);
+        from = at + query.length;
+        at = lower.indexOf(query, from);
+      }
+      pieces.append(text.slice(from));
+      node.replaceWith(pieces);
+    }
+    const hits = this.findHits;
+    if (!hits.length) {
+      this.findCount.textContent = 'not found';
+      return;
+    }
+    const top = this.content.getBoundingClientRect().top;
+    this.findAt = step === 0
+      ? Math.max(0, hits.findIndex((hit) => hit.getBoundingClientRect().bottom >= top))
+      : (previous + step + hits.length) % hits.length;
+    const current = hits[this.findAt];
+    current.classList.add('current');
+    current.scrollIntoView({ block: 'center' });
+    this.findCount.textContent = `${this.findAt + 1}/${hits.length}`;
   },
 
   // The shown page's partials: their HTML once loaded (by index), which
@@ -5159,6 +5273,24 @@ async function restartReticulum() {
 
 // ---- start ------------------------------------------------------------------
 
+// The keys there are (the ? key shows them), as the terminal UI's popup.
+const KEYS = [
+  ['Anywhere', [['1–7', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
+  ['Messages', [['j / k', 'next or previous conversation'], ['i', 'write (the message box)'], ['r', 'reply to their newest message'],
+    ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['/', 'search messages'], ['Ctrl+E', 'emoji, in the message box'],
+    ['Enter / Shift+Enter', 'send, or a new line, in the message box']]],
+  ['Network', [['/', 'search by name or address']]],
+  ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],
+    ['/', 'search the nodes and saved pages']]],
+];
+
+function keysDialog() {
+  dialog('Keys', () => KEYS.map(([where, keys]) => el('div', { class: 'keys-group' },
+    el('h3', { text: where }),
+    el('dl', {}, keys.flatMap(([key, what]) => [el('dt', {}, el('kbd', { text: key })), el('dd', { text: what })])))),
+  { className: 'keys-dialog' });
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) return setDrawer(false);
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
@@ -5167,7 +5299,19 @@ document.addEventListener('keydown', (e) => {
   if (typing && e.key === 'Escape' && !e.defaultPrevented) return document.activeElement.blur();
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key >= '1' && e.key <= String(TABS.length)) switchTab(TABS[Number(e.key) - 1].id);
-  else if (e.key === '/' && app.tab === 'network') {
+  else if (e.key === '?') keysDialog();
+  else if (app.tab === 'messages' && app.views.messages.key(e)) e.preventDefault();
+  else if (e.key === 'f' && app.tab === 'browser' && app.views.browser.page) {
+    e.preventDefault();
+    setPane(app.views.browser, 'detail');
+    app.views.browser.openFind();
+  } else if (e.key === 'b' && app.tab === 'browser') app.views.browser.back();
+  else if (e.key === 'g' && app.tab === 'browser') {
+    e.preventDefault();
+    setPane(app.views.browser, 'detail');
+    app.views.browser.address.focus();
+    app.views.browser.address.select();
+  } else if (e.key === '/' && app.tab === 'network') {
     e.preventDefault();
     app.views.network.search.focus();
   } else if (e.key === '/' && app.tab === 'messages') {

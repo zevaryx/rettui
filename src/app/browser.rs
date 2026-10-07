@@ -101,6 +101,8 @@ pub struct Browser {
     pub line_rows: Vec<Option<usize>>,
     /// A line to scroll to at the next layout (an anchor jumped to).
     pub jump_to: Option<usize>,
+    /// Finding text in the page (`f`).
+    pub find: Option<super::find::PageFind>,
 }
 
 /// A partial of the shown page.
@@ -713,8 +715,14 @@ impl App {
     }
 
     pub(super) fn browser_key(&mut self, key: KeyEvent) {
+        // Finding in the page: keys go to what's looked for.
+        if self.browser.find.is_some() {
+            return self.find_key(key);
+        }
         // Keys that work whichever pane has focus.
         match key.code {
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => return self.open_find(),
+            KeyCode::Char('f') => return self.open_find(),
             KeyCode::Char('g') | KeyCode::Char('o') => return self.open_goto(),
             KeyCode::Char('/') => return self.search_browser(),
             KeyCode::Char('H') => {

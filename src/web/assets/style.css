@@ -240,6 +240,16 @@ a { color: var(--accent); }
 .list-item:hover { background: var(--raised); }
 .list-item.selected { background: var(--selected); border-left-color: var(--accent); }
 .list-item .main { flex: 1; min-width: 0; }
+.find-bar { display: flex; gap: 6px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.find-bar input { flex: 1; min-width: 0; }
+.find-count { font-size: 12.5px; white-space: nowrap; }
+mark.find-hit { background: var(--yellow-bg); color: #111; }
+mark.find-hit.current { outline: 2px solid var(--accent); }
+.keys-dialog .keys-group h3 { margin: 14px 0 6px; font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+.keys-dialog dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+.keys-dialog dt { text-align: right; }
+.keys-dialog dd { margin: 0; }
+kbd { font-family: var(--mono); font-size: 12px; background: var(--raised); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
 .forward-dialog input { width: 100%; margin-bottom: 8px; }
 .forward-list { max-height: 50vh; overflow: auto; display: flex; flex-direction: column; }
 .forward-list .list-item { width: 100%; text-align: left; border: 0; border-radius: 0; background: none; font: inherit; color: inherit; }

@@ -31,6 +31,7 @@ mod saver;
 pub mod node;
 pub mod reticulum;
 pub mod archive;
+pub mod find;
 pub mod forward;
 pub mod search;
 pub mod shrink;
@@ -809,6 +810,8 @@ impl App {
             self.paste_message_search(text);
         } else if self.forward.is_some() && self.tab == Tab::Messages {
             self.paste_forward(text);
+        } else if self.browser.find.is_some() && self.tab == Tab::Browser {
+            self.paste_find(text);
         } else if self.browser.search.typing && self.tab == Tab::Browser {
             self.paste_browser_search(text);
         } else if let Some(field) = self.selected_text_field() {
@@ -1267,7 +1270,7 @@ impl App {
         }
         (self.channels.typing, self.channels.menu.is_some(), self.channels.picker.is_some()).hash(&mut h);
         (discriminant(&self.browser.pane), discriminant(&self.browser.focus), self.browser.source.is_some()).hash(&mut h);
-        self.browser.search.typing.hash(&mut h);
+        (self.browser.search.typing, self.browser.find.is_some()).hash(&mut h);
         (self.node.editing, discriminant(&self.node.view), self.node.editor.is_some()).hash(&mut h);
         (discriminant(&self.rns.focus), self.rns.picker.is_some(), self.rns.editor.is_some()).hash(&mut h);
         h.finish()

@@ -122,11 +122,11 @@ pub fn search_terms(query: &str) -> Vec<Vec<char>> {
 }
 
 /// Lowercase one char per char, so match positions line up with the text.
-fn fold(text: &str) -> Vec<char> {
+pub(crate) fn fold(text: &str) -> Vec<char> {
     text.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect()
 }
 
-fn find_all(haystack: &[char], needle: &[char]) -> Vec<usize> {
+pub(crate) fn find_all(haystack: &[char], needle: &[char]) -> Vec<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return Vec::new();
     }

@@ -102,6 +102,7 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.page = page_area;
     if view_source {
         draw_source(frame, app, page_area);
+        draw_find(frame, app, page_area);
         return;
     }
     let Some(page) = &app.browser.page else {
@@ -155,6 +156,51 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     draw_placements(&layout.placements, app.browser.scroll, page_area, frame.buffer_mut(), |url| {
         images.get(url)
     });
+    draw_find(frame, app, page_area);
+}
+
+/// Finding in the page: every match marked (the current one brighter), and
+/// what's looked for in a bar along the bottom.
+fn draw_find(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(find) = &app.browser.find else { return };
+    if area.height == 0 {
+        return;
+    }
+    let found = app.page_matches();
+    let current = find.current.min(found.len().saturating_sub(1));
+    let buf = frame.buffer_mut();
+    for (i, (row, start, end)) in found.iter().enumerate() {
+        let Some(y) = row.checked_sub(app.browser.scroll).filter(|y| *y < area.height as usize - 1) else { continue };
+        let style = if i == current {
+            Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Black).bg(Color::Yellow)
+        };
+        for x in *start..(*end).min(area.width as usize) {
+            if let Some(cell) = buf.cell_mut((area.x + x as u16, area.y + y as u16)) {
+                cell.set_style(style);
+            }
+        }
+    }
+    let query = find.input.text();
+    let count = match (query.is_empty(), found.len()) {
+        (true, _) => String::new(),
+        (false, 0) => "  not found".into(),
+        (false, n) => format!("  {}/{n}", current + 1),
+    };
+    let bar = Rect { y: area.bottom() - 1, height: 1, ..area };
+    let line = Line::from(vec![
+        Span::styled(" Find: ", Style::default().fg(Color::Black).bg(accent()).add_modifier(Modifier::BOLD)),
+        Span::raw(format!(" {query}")),
+        Span::styled(count, Style::default().fg(dim())),
+        Span::styled("   ↑↓ Enter: next · Esc: done", Style::default().fg(dim())),
+    ]);
+    frame.render_widget(ratatui::widgets::Clear, bar);
+    frame.render_widget(Paragraph::new(line), bar);
+    let cursor = 8 + find.input.cursor_column() as u16;
+    if cursor < bar.width {
+        frame.set_cursor_position(ratatui::layout::Position::new(bar.x + cursor, bar.y));
+    }
 }
 
 /// Reverse the text selected with the mouse.
@@ -449,5 +495,29 @@ mod tests {
         assert!(shown.contains("Nothing matches “cccczz”"), "{shown}");
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
 
+    #[test]
+    fn find_marks_matches_and_says_how_many() {
+        let dir = std::env::temp_dir().join(format!("rettui-ui-find-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.tab = Tab::Browser;
+        app.browser.page = Some(crate::nomad::micron::parse("Welcome to the tower\nThe Tower is up"));
+        app.browser.focus = crate::app::BrowserFocus::Page;
+        screen(&mut app);
+        app.on_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        app.on_paste("tower");
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let shown: String = (0..16).map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect();
+        assert!(shown.contains("Find:  tower  1/2"), "{shown}");
+        // Each match is marked: the cells of "tower" on yellow.
+        let marked = (0..16)
+            .flat_map(|y| (0..100).map(move |x| (x, y)))
+            .filter(|&(x, y)| matches!(buffer[(x, y)].bg, ratatui::style::Color::Yellow | ratatui::style::Color::LightYellow))
+            .count();
+        assert_eq!(marked, 10, "{shown}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
