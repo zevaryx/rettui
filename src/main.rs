@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+mod clock;
 mod config;
 mod emoji;
 mod icons;
@@ -160,6 +161,8 @@ async fn main() -> Result<()> {
     if settings.rns_config.is_none() {
         settings.rns_config = config::default_rns_config();
     }
+    clock::set(&settings.clock, &settings.date_style);
+    ui::set_theme(&settings.tui_theme);
 
     let log_file = std::fs::OpenOptions::new()
         .create(true)

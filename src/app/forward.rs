@@ -152,11 +152,7 @@ impl App {
 /// A conversation as text: who it's with, then each message, oldest first,
 /// with when it was written, who by, its text, and what came with it.
 pub fn transcript<'a>(name: &str, key: &str, messages: impl Iterator<Item = &'a Message>) -> String {
-    let when = |timestamp: f64| {
-        chrono::DateTime::from_timestamp(timestamp as i64, 0)
-            .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_default()
-    };
+    let when = crate::clock::full;
     let mut out = format!("Conversation with {name} ({key})\nExported by rettui on {}\n", when(chrono::Utc::now().timestamp() as f64));
     for message in messages {
         let who = if message.incoming { name } else { "You" };

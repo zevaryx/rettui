@@ -30,8 +30,8 @@ pub fn state(app: &App) -> Value {
     let sync = match &app.sync {
         SyncState::Idle => json!({ "state": "idle" }),
         SyncState::Running(started) => json!({ "state": "running", "secs": started.elapsed().as_secs() }),
-        SyncState::Done(at, Ok(n)) => json!({ "state": "done", "at": at.format("%H:%M").to_string(), "count": n }),
-        SyncState::Done(at, Err(e)) => json!({ "state": "failed", "at": at.format("%H:%M").to_string(), "error": e }),
+        SyncState::Done(at, Ok(n)) => json!({ "state": "done", "at": crate::clock::time(at, false), "count": n }),
+        SyncState::Done(at, Err(e)) => json!({ "state": "failed", "at": crate::clock::time(at, false), "error": e }),
     };
     let propagation = app.settings.propagation_node.as_ref().map(|hash| {
         json!({ "hash": hash, "name": app.store.display_name(hash) })
@@ -52,6 +52,9 @@ pub fn state(app: &App) -> Value {
         "icon": icon(app.own_appearance().as_ref()),
         "external_shared_instance": app.uses_external_shared_instance(),
         "wrap_lines": app.settings.wrap_lines,
+        // How times and dates read (see `clock`).
+        "clock": app.settings.clock,
+        "date_style": app.settings.date_style,
         // How big pictures sent may be (the composer says they'll shrink).
         "picture_size": app.settings.picture_size,
         "lxmf_address": app.lxmf_hash.map(hex::encode),

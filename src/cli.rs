@@ -54,9 +54,7 @@ async fn wait_started(events: &mut UnboundedReceiver<NetEvent>) -> Result<Hash> 
 }
 
 fn print_message(message: &InboundMessage, downloads: &Path) {
-    let when = chrono::DateTime::from_timestamp(message.timestamp as i64, 0)
-        .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_default();
+    let when = crate::clock::full(message.timestamp);
     let verified = if message.verified { "" } else { " (unverified)" };
     println!("From {} at {when}{verified}", hex::encode(message.source));
     if !message.title.is_empty() {

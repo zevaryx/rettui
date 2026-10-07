@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{DIM, PICKED, block};
+use super::{dim, picked_style, block};
 use crate::app::App;
 use crate::app::emoji::EmojiHit;
 use crate::emoji;
@@ -71,7 +71,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bou
         (false, tab) => format!("Emoji · {}", emoji::groups()[tab - 1].name),
     };
     let hint = if target == crate::app::emoji::EmojiTarget::Reaction { " Enter react · Esc close " } else { " Enter insert · Esc close " };
-    let popup = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(DIM)));
+    let popup = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
     let inner = popup.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(popup, area);
@@ -79,9 +79,9 @@ fn draw_picker(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bou
 
     // The search, with the cursor at its end.
     let search = if picker.search.text().is_empty() {
-        Line::from(vec![Span::styled("Search ", Style::default().fg(DIM)), Span::styled("a name, or Tab for groups", Style::default().fg(DIM).italic())])
+        Line::from(vec![Span::styled("Search ", Style::default().fg(dim())), Span::styled("a name, or Tab for groups", Style::default().fg(dim()).italic())])
     } else {
-        Line::from(vec![Span::styled("Search ", Style::default().fg(DIM)), Span::raw(picker.search.text().to_string())])
+        Line::from(vec![Span::styled("Search ", Style::default().fg(dim())), Span::raw(picker.search.text().to_string())])
     };
     frame.render_widget(Paragraph::new(search), Rect { height: 1, ..inner });
     let at = inner.x + 7 + picker.search.cursor_column() as u16;
@@ -95,7 +95,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bou
         if x + TAB > inner.right() {
             break;
         }
-        let style = if !searching && tab == picker.tab { PICKED } else { Style::default() };
+        let style = if !searching && tab == picker.tab { picked_style() } else { Style::default() };
         tabs.push(Span::styled(format!(" {icon}"), style));
         app.regions.emoji_hits.push((Rect::new(x, inner.y + 1, TAB, 1), EmojiHit::Tab(tab)));
     }
@@ -109,7 +109,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bou
         let mut spans = Vec::new();
         for (column, chosen) in choices.iter().skip(first).take(picker.columns).enumerate() {
             let index = first + column;
-            let style = if index == picker.pick { PICKED } else { Style::default() };
+            let style = if index == picker.pick { picked_style() } else { Style::default() };
             spans.push(Span::styled(format!(" {} ", chosen.as_str()), style));
             let rect = Rect::new(grid.x + column as u16 * CELL, grid.y + row as u16, CELL, 1);
             app.regions.emoji_hits.push((rect, EmojiHit::Pick(index)));
@@ -122,14 +122,14 @@ fn draw_picker(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize, bou
             (false, 0) if recent_empty => "None yet: the ones you pick show here",
             _ => "",
         };
-        lines = vec![Line::styled(why, Style::default().fg(DIM))];
+        lines = vec![Line::styled(why, Style::default().fg(dim()))];
     }
     frame.render_widget(Paragraph::new(lines), grid);
 
     // What the chosen one is called (its shortcode first: names run long).
     let name = choices.get(picker.pick).map(|chosen| {
         let code = emoji::shortcode_for(chosen, picker.search.text()).map(|c| format!(":{c}:  ")).unwrap_or_default();
-        Line::from(vec![Span::raw(format!("{} {code}", chosen.as_str())), Span::styled(chosen.name().to_string(), Style::default().fg(DIM))])
+        Line::from(vec![Span::raw(format!("{} {code}", chosen.as_str())), Span::styled(chosen.name().to_string(), Style::default().fg(dim()))])
     });
     let name_row = Rect { y: grid.bottom(), height: 1, ..inner };
     frame.render_widget(Paragraph::new(name.unwrap_or_default()), name_row);
@@ -160,13 +160,13 @@ fn draw_shortcodes(frame: &mut Frame, app: &mut App, input: Rect, scroll: usize,
         .enumerate()
         .map(|(i, (emoji, label))| {
             if i == pick {
-                ListItem::new(Line::styled(format!("›{emoji} {label} "), PICKED))
+                ListItem::new(Line::styled(format!("›{emoji} {label} "), picked_style()))
             } else {
-                ListItem::new(Line::from(vec![Span::raw(format!(" {emoji} ")), Span::styled(label.clone(), Style::default().fg(DIM))]))
+                ListItem::new(Line::from(vec![Span::raw(format!(" {emoji} ")), Span::styled(label.clone(), Style::default().fg(dim()))]))
             }
         })
         .collect();
-    let list = block("Emoji", true).title_bottom(Line::styled(" Tab pick ", Style::default().fg(DIM)));
+    let list = block("Emoji", true).title_bottom(Line::styled(" Tab pick ", Style::default().fg(dim())));
     let inner = list.inner(area);
     for row in 0..rows.len().min(inner.height as usize) {
         app.regions.emoji_hits.push((Rect::new(inner.x, inner.y + row as u16, inner.width, 1), EmojiHit::Pick(row)));

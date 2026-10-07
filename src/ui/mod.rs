@@ -21,7 +21,7 @@ mod node;
 mod reticulum;
 mod status;
 
-use chrono::{Local, TimeZone};
+use chrono::Local;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -39,13 +39,48 @@ use node::draw_node;
 use reticulum::draw_reticulum;
 use status::draw_status;
 
-const ACCENT: Color = Color::Cyan;
-const DIM: Color = Color::DarkGray;
-const SELECTED_BG: Color = Color::Rgb(0x2a, 0x2a, 0x3a);
+/// The TUI's colours (the `tui_theme` setting): for dark terminals, light
+/// ones, or basic 16-colour ones.
+pub const THEMES: &[&str] = &["dark", "light", "basic"];
+static THEME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Use the theme called `name` from the next frame on.
+pub fn set_theme(name: &str) {
+    let index = THEMES.iter().position(|t| *t == name).unwrap_or(0);
+    THEME.store(index as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn theme() -> u8 {
+    THEME.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// What stands out: titles, the focused box, your name.
+fn accent() -> Color {
+    match theme() {
+        1 => Color::Blue,
+        _ => Color::Cyan,
+    }
+}
+
+/// What stays in the background: hints, times, addresses.
+fn dim() -> Color {
+    Color::DarkGray
+}
+
+/// Behind the selected row.
+fn selected_bg() -> Color {
+    match theme() {
+        1 => Color::Rgb(0xd8, 0xe0, 0xf0),
+        2 => Color::Blue,
+        _ => Color::Rgb(0x2a, 0x2a, 0x3a),
+    }
+}
 /// The chosen row of a popup (a user's menu, the member picker): solid, so
-/// it shows on any terminal theme (`SELECTED_BG` can be close to its
+/// it shows on any terminal theme (`selected_bg()` can be close to its
 /// background).
-const PICKED: Style = Style::new().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD);
+fn picked_style() -> Style {
+    Style::new().fg(Color::Black).bg(accent()).add_modifier(Modifier::BOLD)
+}
 
 /// Width for a side pane (a list beside the main view): `preferred` when
 /// there is room, else about a third of `total`, and never below 16.
@@ -57,19 +92,12 @@ fn block(title: &str, focused: bool) -> Block<'_> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if focused { ACCENT } else { DIM }))
+        .border_style(Style::default().fg(if focused { accent() } else { dim() }))
         .title(Span::styled(format!(" {title} "), Style::default().bold()))
 }
 
 fn time_label(ts: f64) -> String {
-    let Some(time) = Local.timestamp_opt(ts as i64, 0).single() else {
-        return String::new();
-    };
-    if time.date_naive() == Local::now().date_naive() {
-        time.format("%H:%M").to_string()
-    } else {
-        time.format("%b %d %H:%M").to_string()
-    }
+    crate::clock::when(ts)
 }
 
 fn ago_secs(secs: u64) -> String {

@@ -6,7 +6,7 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
-use super::{ACCENT, DIM, SELECTED_BG, block, human_bytes, wrap};
+use super::{accent, dim, selected_bg, block, human_bytes, wrap};
 use crate::app::node::NodeStatus;
 use crate::app::{App, NetState, SyncState};
 use crate::config::{Effect, FIELDS, FieldKind};
@@ -14,13 +14,13 @@ use crate::config::{Effect, FIELDS, FieldKind};
 /// The propagation node hosted here: how it's doing, and what it holds.
 fn hosting(app: &App) -> Vec<Span<'static>> {
     match &app.pn.status {
-        NodeStatus::Off => vec![Span::styled("no (Host a propagation node, below)", Style::default().fg(DIM))],
+        NodeStatus::Off => vec![Span::styled("no (Host a propagation node, below)", Style::default().fg(dim()))],
         NodeStatus::Starting => vec![Span::styled("◌ starting", Style::default().fg(Color::Yellow))],
         NodeStatus::Failed(e) => vec![Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red))],
         NodeStatus::Running => {
             let mut spans = vec![
                 Span::styled("● ", Style::default().fg(Color::Green)),
-                Span::styled(hex::encode(app.pn.hash), Style::default().fg(ACCENT)),
+                Span::styled(hex::encode(app.pn.hash), Style::default().fg(accent())),
             ];
             if let Some(s) = &app.pn.stats {
                 let mut parts = vec![
@@ -45,7 +45,7 @@ fn hosting(app: &App) -> Vec<Span<'static>> {
 /// `settings.json`, one row per setting, with help for the selected one.
 fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
     let path = app.paths.settings.display().to_string();
-    let settings_block = block("Settings", true).title_bottom(Line::styled(format!(" {path} "), Style::default().fg(DIM)));
+    let settings_block = block("Settings", true).title_bottom(Line::styled(format!(" {path} "), Style::default().fg(dim())));
     let inner = settings_block.inner(area);
     frame.render_widget(settings_block, area);
     let [list_area, help_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
@@ -58,30 +58,30 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
             let value = app.settings_file.field_value(field.key);
             let shown = match field.kind {
                 FieldKind::Toggle => Span::raw(if value == "true" { "on" } else { "off" }),
-                FieldKind::Optional if value.is_empty() => Span::styled("(none)", Style::default().fg(DIM)),
-                FieldKind::Number if value == "0" => Span::styled("0 (off)", Style::default().fg(DIM)),
+                FieldKind::Optional if value.is_empty() => Span::styled("(none)", Style::default().fg(dim())),
+                FieldKind::Number if value == "0" => Span::styled("0 (off)", Style::default().fg(dim())),
                 _ => Span::raw(value.clone()),
             };
-            let mut spans = vec![Span::styled(format!(" {:<width$}", field.label), Style::default().fg(DIM))];
+            let mut spans = vec![Span::styled(format!(" {:<width$}", field.label), Style::default().fg(dim()))];
             // A colour shows as itself, before its code.
             if let (FieldKind::Color, Some([r, g, b])) = (field.kind, crate::icons::parse_colour(&value)) {
                 spans.push(Span::styled("██ ", Style::default().fg(ratatui::style::Color::Rgb(r, g, b))));
             }
             spans.push(shown);
             if field.effect == Effect::NextStart {
-                spans.push(Span::styled("  · next start", Style::default().fg(DIM)));
+                spans.push(Span::styled("  · next start", Style::default().fg(dim())));
             }
             ListItem::new(Line::from(spans))
         })
         .collect();
-    let list = List::new(items).highlight_style(Style::default().bg(SELECTED_BG).bold());
+    let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).bold());
     frame.render_stateful_widget(list, list_area, &mut app.settings_list);
     let help = app
         .settings_list
         .selected()
         .and_then(|i| FIELDS.get(i))
         .map_or("", |f| f.help);
-    frame.render_widget(Paragraph::new(Span::styled(format!(" {help}"), Style::default().fg(DIM).italic())), help_area);
+    frame.render_widget(Paragraph::new(Span::styled(format!(" {help}"), Style::default().fg(dim()).italic())), help_area);
 }
 
 pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -117,15 +117,15 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let sync = match &app.sync {
         SyncState::Idle => "never".to_string(),
         SyncState::Running(started) => format!("running ({}s)", started.elapsed().as_secs()),
-        SyncState::Done(at, Ok(n)) => format!("{} · {n} new", at.format("%H:%M")),
-        SyncState::Done(at, Err(e)) => format!("{} · failed: {e}", at.format("%H:%M")),
+        SyncState::Done(at, Ok(n)) => format!("{} · {n} new", crate::clock::time(at, false)),
+        SyncState::Done(at, Err(e)) => format!("{} · failed: {e}", crate::clock::time(at, false)),
     };
-    let label = |s: &str| Span::styled(format!("{s:<18}"), Style::default().fg(DIM));
+    let label = |s: &str| Span::styled(format!("{s:<18}"), Style::default().fg(dim()));
     let lines = vec![
         Line::from(vec![label("Display name"), Span::raw(app.settings.display_name.clone()).bold()]),
         Line::from(vec![
             label("LXMF address"),
-            Span::styled(address, Style::default().fg(ACCENT)),
+            Span::styled(address, Style::default().fg(accent())),
             match app.identity_pending {
                 Some(next) => Span::styled(format!("  → {} from the next start", hex::encode(next)), Style::default().fg(Color::Yellow)),
                 None => Span::raw(""),
@@ -151,7 +151,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut spans = vec![label("First steps")];
         spans.extend(steps.iter().map(|step| match step.done {
             true => Span::styled("✓", Style::default().fg(Color::Green)),
-            false => Span::styled("○", Style::default().fg(DIM)),
+            false => Span::styled("○", Style::default().fg(dim())),
         }));
         spans.push(Span::raw(format!("  next: {} ({})", next.label, next.how)));
         lines.push(Line::from(spans));
@@ -170,7 +170,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::raw(i.name.clone()),
                 Span::styled(
                     format!("  ↓{} ↑{}{details}", human_bytes(i.rx_bytes), human_bytes(i.tx_bytes)),
-                    Style::default().fg(DIM),
+                    Style::default().fg(dim()),
                 ),
             ])
         })
@@ -183,7 +183,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
             NetState::Online => "None: add one in the Reticulum tab to reach other peers.",
             _ => "Reticulum is starting…",
         };
-        vec![Line::styled(none, Style::default().fg(DIM))]
+        vec![Line::styled(none, Style::default().fg(dim()))]
     } else {
         iface_lines
     };

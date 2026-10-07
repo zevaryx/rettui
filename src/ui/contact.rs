@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{ACCENT, DIM, PICKED, ago, block, wrap};
+use super::{accent, dim, picked_style, ago, block, wrap};
 use crate::app::App;
 use crate::app::contacts::{CardAction, PingState, ping_label, trust_label};
 
@@ -17,7 +17,7 @@ const WIDTH: u16 = 64;
 
 /// A label and its value, on one row.
 fn field(label: &str, value: impl Into<String>) -> Line<'static> {
-    Line::from(vec![Span::styled(format!("{label:<10}"), Style::default().fg(DIM)), Span::raw(value.into())])
+    Line::from(vec![Span::styled(format!("{label:<10}"), Style::default().fg(dim())), Span::raw(value.into())])
 }
 
 /// A button placed in rows: its row, first column, width and action.
@@ -37,7 +37,7 @@ fn button_rows(actions: &[CardAction], width: usize) -> (Vec<Line<'static>>, Vec
         }
         placed.push((rows.len() - 1, x, w, action));
         let row = rows.last_mut().expect("there is a row");
-        row.spans.push(Span::styled(text, PICKED));
+        row.spans.push(Span::styled(text, picked_style()));
         row.spans.push(Span::raw(" "));
         x += w + 1;
     }
@@ -54,7 +54,7 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
     let contact = app.store.contact(&key);
     let name = app.store.display_name(&key);
 
-    let mut lines = vec![Line::styled(name, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))];
+    let mut lines = vec![Line::styled(name, Style::default().fg(accent()).add_modifier(Modifier::BOLD))];
     if contact.alias.is_some() {
         let theirs = app.store.announced_name(&key).unwrap_or("nothing heard yet").to_string();
         lines.push(field("Announces", theirs));
@@ -93,9 +93,9 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
     }
     lines.push(Line::raw(""));
     if contact.notes.is_empty() {
-        lines.push(Line::styled("No notes (e adds some)", Style::default().fg(DIM)));
+        lines.push(Line::styled("No notes (e adds some)", Style::default().fg(dim())));
     } else {
-        lines.push(Line::styled("Notes", Style::default().fg(DIM)));
+        lines.push(Line::styled("Notes", Style::default().fg(dim())));
         for line in contact.notes.lines().flat_map(|l| wrap(l, inner_width)) {
             lines.push(Line::raw(line));
         }

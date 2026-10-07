@@ -84,12 +84,33 @@ async function copy(text, what) {
   toast(`Copied ${what}`);
 }
 
+// A time of day as the Clock setting has it: 14:05, or 2:05 PM.
+function clockTime(date, seconds = false) {
+  const twelve = app.status?.clock === '12-hour';
+  return date.toLocaleTimeString(twelve ? 'en-US' : [], {
+    hour: twelve ? 'numeric' : '2-digit', minute: '2-digit', second: seconds ? '2-digit' : undefined, hour12: twelve,
+  });
+}
+
+// A day as the Dates setting has it: Oct 07, 07 Oct, or 10-07 (with the
+// year, for another year's).
+function clockDay(date, withYear = false) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const month = date.toLocaleDateString('en-US', { month: 'short' });
+  const [d, m, y] = [pad(date.getDate()), pad(date.getMonth() + 1), date.getFullYear()];
+  switch (app.status?.date_style) {
+    case 'day-month': return withYear ? `${d} ${month} ${y}` : `${d} ${month}`;
+    case 'year-month-day': return withYear ? `${y}-${m}-${d}` : `${m}-${d}`;
+    default: return withYear ? `${month} ${d} ${y}` : `${month} ${d}`;
+  }
+}
+
 function timeLabel(unixSeconds) {
   const date = new Date(unixSeconds * 1000);
   const now = new Date();
-  const hm = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  const hm = clockTime(date);
   if (date.toDateString() === now.toDateString()) return hm;
-  return date.toLocaleDateString([], { month: 'short', day: '2-digit' }) + ' ' + hm;
+  return clockDay(date, date.getFullYear() !== now.getFullYear()) + ' ' + hm;
 }
 
 function ago(unixSeconds) {
@@ -330,10 +351,36 @@ function readFile(file) {
 }
 
 const NICK_COLORS = ['#f14c4c', '#23d18b', '#f5f543', '#6cb6ff', '#d670d6', '#29b8db', '#ffa55a', '#b48eff', '#7fdbca', '#ff8fb3'];
+// The same, darker, to read on the light theme.
+const NICK_COLORS_LIGHT = ['#c42b2b', '#17784a', '#8a6400', '#1a5fb4', '#9a2f99', '#12698e', '#b8520a', '#6a3fd0', '#1c7d6e', '#c2306a'];
+
 function nickColor(src) {
   const seed = src ? parseInt(src.slice(0, 2), 16) || 0 : 0;
-  return NICK_COLORS[seed % NICK_COLORS.length];
+  const colors = document.documentElement.dataset.theme === 'light' ? NICK_COLORS_LIGHT : NICK_COLORS;
+  return colors[seed % colors.length];
 }
+
+// The web UI's colours, chosen in each browser: dark (rettui's own), light,
+// or as the device is set (and following it when it changes).
+const theme = {
+  query: window.matchMedia('(prefers-color-scheme: light)'),
+  chosen() {
+    try { return localStorage.getItem('rettui.theme') || 'dark'; } catch { return 'dark'; }
+  },
+  apply() {
+    const chosen = this.chosen();
+    const light = chosen === 'light' || (chosen === 'auto' && this.query.matches);
+    document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  },
+  set(chosen) {
+    try { localStorage.setItem('rettui.theme', chosen); } catch { /* this page only */ }
+    this.apply();
+    // Colours drawn by script (names in rooms) follow on the next draw.
+    app.views[app.tab]?.update?.();
+  },
+};
+theme.apply();
+theme.query.addEventListener('change', () => theme.chosen() === 'auto' && theme.set('auto'));
 
 // ---- app shell --------------------------------------------------------------
 
@@ -3154,7 +3201,7 @@ app.views.channels = {
     return el('div', { class: 'chat' }, lines.map((line) => {
       const name = line.nick || '';
       const color = line.own ? 'var(--accent)' : nickColor(line.src);
-      const time = new Date(line.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      const time = clockTime(new Date(line.ts), true);
       // Other people's names open the user menu.
       const user = !line.own && line.src && this.view?.users[line.src] && ['msg', 'action', 'private'].includes(line.kind);
       // In a whisper conversation, whispers read like ordinary chat.
@@ -4740,6 +4787,9 @@ app.views.status = {
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Known'), el('span', { text: `${s.known} destinations` }),
       label('Notifications'), notifications.describe(),
+      label('Theme'), el('select', { title: 'This browser\'s colours', onchange: (e) => theme.set(e.target.value) },
+        [['dark', 'Dark'], ['light', 'Light'], ['auto', 'As the device is set']]
+          .map(([value, text]) => el('option', { value, text, selected: value === theme.chosen() }))),
       // A link shared too widely, or a lost phone: everyone else out.
       label('Browsers'), el('div', { class: 'row' },
         el('span', { class: 'dim', text: 'This one stays signed in' }),

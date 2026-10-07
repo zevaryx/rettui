@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use super::{ACCENT, DIM, SELECTED_BG, block};
+use super::{accent, dim, selected_bg, block};
 use crate::app::App;
 
 pub(super) fn draw_forward(frame: &mut Frame, app: &mut App) {
@@ -29,7 +29,7 @@ pub(super) fn draw_forward(frame: &mut Frame, app: &mut App) {
     let cursor = picker.input.cursor_column();
     let selected = picker.selected;
     let field = Rect { x: inner.x + 2, width: inner.width.saturating_sub(2), height: 1, ..inner };
-    frame.render_widget(Paragraph::new(Span::styled("›", Style::default().fg(ACCENT).bold())), inner);
+    frame.render_widget(Paragraph::new(Span::styled("›", Style::default().fg(accent()).bold())), inner);
     let offset = cursor.saturating_sub(field.width.saturating_sub(1) as usize);
     frame.render_widget(Paragraph::new(typed.clone()).scroll((0, offset as u16)), field);
     frame.set_cursor_position(Position::new(field.x + (cursor - offset) as u16, field.y));
@@ -40,7 +40,7 @@ pub(super) fn draw_forward(frame: &mut Frame, app: &mut App) {
     } else {
         "Type a name or address · Enter forwards its text and files"
     };
-    frame.render_widget(Paragraph::new(Span::styled(hint, Style::default().fg(DIM))), Rect { y: inner.y + 1, height: 1, ..inner });
+    frame.render_widget(Paragraph::new(Span::styled(hint, Style::default().fg(dim()))), Rect { y: inner.y + 1, height: 1, ..inner });
 
     let list = Rect { y: inner.y + 3, height: inner.height.saturating_sub(3), ..inner };
     app.regions.forward_list = list;
@@ -52,12 +52,12 @@ pub(super) fn draw_forward(frame: &mut Frame, app: &mut App) {
         .skip(first)
         .take(list.height as usize)
         .map(|(i, key)| {
-            let base = if i == selected { Style::default().bg(SELECTED_BG) } else { Style::default() };
+            let base = if i == selected { Style::default().bg(selected_bg()) } else { Style::default() };
             let name = app.store.display_name(key);
             let new = if app.store.conversations.contains_key(key) { "" } else { "  (new conversation)" };
             let mut spans = vec![
                 Span::styled(name, base.add_modifier(Modifier::BOLD)),
-                Span::styled(format!("  {}{new}", &key[..12]), base.fg(DIM)),
+                Span::styled(format!("  {}{new}", &key[..12]), base.fg(dim())),
             ];
             let used: usize = spans.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum();
             if i == selected && used < list.width as usize {

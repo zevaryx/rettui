@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{ACCENT, DIM, SELECTED_BG, block, highlighted};
+use super::{accent, dim, selected_bg, block, highlighted};
 use crate::app::network::search_terms;
 use crate::app::search::snippet;
 use crate::app::App;
@@ -18,16 +18,7 @@ const NAME_WIDTH: usize = 18;
 
 /// When a message was sent: the time today, the day this year, or the date.
 fn when(timestamp: f64) -> String {
-    use chrono::{Datelike, Local, TimeZone};
-    let Some(time) = Local.timestamp_opt(timestamp as i64, 0).single() else { return String::new() };
-    let now = Local::now();
-    if time.date_naive() == now.date_naive() {
-        time.format("%H:%M").to_string()
-    } else if time.year() == now.year() {
-        time.format("%d %b").to_string()
-    } else {
-        time.format("%Y-%m-%d").to_string()
-    }
+    crate::clock::short(timestamp)
 }
 
 /// Cut `text` to `width` columns, with "…" when cut.
@@ -68,7 +59,7 @@ pub(super) fn draw_message_search(frame: &mut Frame, app: &mut App) {
     // What's typed, after a `/`.
     let query = search.input.text().to_string();
     let field = Rect { x: inner.x + 2, width: inner.width.saturating_sub(2), ..inner };
-    frame.render_widget(Paragraph::new(Span::styled("/", Style::default().fg(ACCENT).bold())), inner);
+    frame.render_widget(Paragraph::new(Span::styled("/", Style::default().fg(accent()).bold())), inner);
     let cursor = search.input.cursor_column();
     let offset = cursor.saturating_sub(field.width.saturating_sub(1) as usize);
     frame.render_widget(Paragraph::new(query.clone()).scroll((0, offset as u16)), Rect { height: 1, ..field });
@@ -89,8 +80,8 @@ pub(super) fn draw_message_search(frame: &mut Frame, app: &mut App) {
     let status_row = Rect { y: inner.y + 1, height: 1, ..inner };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(status, Style::default().fg(DIM)),
-            Span::styled(scope_hint, Style::default().fg(DIM)),
+            Span::styled(status, Style::default().fg(dim())),
+            Span::styled(scope_hint, Style::default().fg(dim())),
         ])),
         status_row,
     );
@@ -109,11 +100,11 @@ pub(super) fn draw_message_search(frame: &mut Frame, app: &mut App) {
         let who = if hit.incoming { "" } else { "You: " };
         let used = NAME_WIDTH + 2 + 13 + who.len();
         let text = snippet(message, &query, (list.width as usize).saturating_sub(used));
-        let base = if i == selected { Style::default().bg(SELECTED_BG) } else { Style::default() };
+        let base = if i == selected { Style::default().bg(selected_bg()) } else { Style::default() };
         let mut spans = vec![
             Span::styled(format!("{name:<NAME_WIDTH$}  "), base.add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{time:<11}  "), base.fg(DIM)),
-            Span::styled(who, base.fg(DIM)),
+            Span::styled(format!("{time:<11}  "), base.fg(dim())),
+            Span::styled(who, base.fg(dim())),
         ];
         spans.extend(highlighted(&text, usize::MAX, &terms, base));
         let line_width: usize = spans.iter().map(|s| s.content.width()).sum();

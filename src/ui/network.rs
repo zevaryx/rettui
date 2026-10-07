@@ -7,7 +7,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
-use super::{DIM, SELECTED_BG, ago, block, highlighted};
+use super::{dim, selected_bg, ago, block, highlighted};
 use crate::app::{App, NetFilter};
 use crate::net::PeerKind;
 
@@ -27,7 +27,7 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.net_search = area;
     let text = search.input.text();
     let content = if text.is_empty() && !search.typing {
-        Line::from(Span::styled("Press / or click here to find by name or address", Style::default().fg(DIM)))
+        Line::from(Span::styled("Press / or click here to find by name or address", Style::default().fg(dim())))
     } else {
         Line::from(text.to_string())
     };
@@ -99,25 +99,25 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
                     name.chars().count().min(name_width)
                 }
                 None => {
-                    spans.push(Span::styled("(unnamed)", Style::default().fg(DIM)));
+                    spans.push(Span::styled("(unnamed)", Style::default().fg(dim())));
                     "(unnamed)".len()
                 }
             };
             spans.push(Span::raw(" ".repeat(name_width.saturating_sub(shown) + 1)));
-            spans.extend(highlighted(hash, usize::MAX, &terms, Style::default().fg(DIM)));
+            spans.extend(highlighted(hash, usize::MAX, &terms, Style::default().fg(dim())));
             spans.extend([
                 Span::styled(
                     format!("  {} hop{}", peer.hops, if peer.hops == 1 { "" } else { "s" }),
-                    Style::default().fg(DIM),
+                    Style::default().fg(dim()),
                 ),
                 Span::styled(
                     if peer.last_seen == 0 { "  not heard".to_string() } else { format!("  {} ago", ago(peer.last_seen)) },
-                    Style::default().fg(DIM),
+                    Style::default().fg(dim()),
                 ),
             ]);
             // The interface its path goes through, if one's known.
             if let Some(interface) = app.routes.get(hash.as_str()) {
-                spans.push(Span::styled(format!("  via {interface}"), Style::default().fg(DIM)));
+                spans.push(Span::styled(format!("  via {interface}"), Style::default().fg(dim())));
             }
             if app.store.contacts.get(hash.as_str()).is_some_and(|c| c.trust == crate::store::Trust::Blocked) {
                 spans.push(Span::styled("  ⛔ blocked", Style::default().fg(Color::LightRed)));
@@ -145,7 +145,7 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         frame.render_widget(
             Paragraph::new(message)
-                .style(Style::default().fg(DIM))
+                .style(Style::default().fg(dim()))
                 .wrap(Wrap { trim: true })
                 .block(list_block),
             area,
@@ -158,7 +158,7 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut window = ListState::default().with_selected(Some(selected - offset));
     let list = List::new(items)
         .block(list_block)
-        .highlight_style(Style::default().bg(SELECTED_BG).bold())
+        .highlight_style(Style::default().bg(selected_bg()).bold())
         .highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut window);
 }

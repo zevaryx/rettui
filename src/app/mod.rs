@@ -641,7 +641,7 @@ impl App {
     }
 
     pub fn log(&mut self, line: impl Into<String>) {
-        let stamp = chrono::Local::now().format("%H:%M:%S");
+        let stamp = crate::clock::time(&chrono::Local::now(), true);
         self.log.push_back(format!("{stamp}  {}", line.into()));
         while self.log.len() > LOG_LINES {
             self.log.pop_front();

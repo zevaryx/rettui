@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::DIM;
+use super::dim;
 use crate::nomad::micron::source::visible;
 pub(super) use crate::term::textarea::Highlighted;
 use crate::term::textarea::{TextArea, display_width};
@@ -67,7 +67,7 @@ pub(super) fn draw_text_editor(
     let mut numbers = Vec::new();
     let mut rows = Vec::new();
     for (index, pieces) in styled.iter().enumerate().skip(top).take(height) {
-        numbers.push(Line::styled(format!("{:>w$}", index + 1, w = gutter_width as usize - 1), Style::default().fg(DIM)));
+        numbers.push(Line::styled(format!("{:>w$}", index + 1, w = gutter_width as usize - 1), Style::default().fg(dim())));
         // Styled graphemes (measured as the terminal draws them), cut to the
         // visible columns, with the selection shown reversed.
         let mut spans: Vec<Span> = Vec::new();
@@ -141,7 +141,7 @@ fn draw_wrapped(
         // The number only on a line's first row.
         let first = index == 0 || wrapped[index - 1].0 != line;
         let number = if first { format!("{:>w$}", line + 1, w = gutter_width - 1) } else { String::new() };
-        numbers.push(Line::styled(number, Style::default().fg(DIM)));
+        numbers.push(Line::styled(number, Style::default().fg(dim())));
         if cached.as_ref().is_none_or(|(l, _)| *l != line) {
             cached = Some((line, cells(line)));
         }

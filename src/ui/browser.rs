@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{ACCENT, DIM, SELECTED_BG, ago, ago_secs, block, highlighted};
+use super::{accent, dim, selected_bg, ago, ago_secs, block, highlighted};
 use crate::app::{App, BrowserFocus, BrowserPane, match_mask};
 use crate::net::PeerKind;
 use crate::nomad::micron::source::{Token, tokenize, visible};
@@ -45,7 +45,7 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         (None, None) => (
             "Pick a node on the left, or press g / click here to enter an address".to_string(),
-            Style::default().fg(DIM),
+            Style::default().fg(dim()),
         ),
     };
     // Badges live in the border so a long address cannot push them away.
@@ -55,7 +55,7 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     {
         badges.push(Span::styled(
             format!(" cached {} ago · r refresh ", ago_secs(age.as_secs())),
-            Style::default().fg(DIM),
+            Style::default().fg(dim()),
         ));
     }
     if identified {
@@ -76,9 +76,9 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.browser.source.is_some() {
         // A button in the title bar; `u` does the same.
         let (label, style) = if view_source {
-            (" ◂ back to page ", Style::default().fg(Color::Black).bg(ACCENT))
+            (" ◂ back to page ", Style::default().fg(Color::Black).bg(accent()))
         } else {
-            (" </> view source ", Style::default().fg(Color::White).bg(DIM))
+            (" </> view source ", Style::default().fg(Color::White).bg(dim()))
         };
         let width = label.width() as u16;
         // Right-aligned titles end just inside the top-right corner.
@@ -179,14 +179,14 @@ pub(super) fn token_style(token: Token) -> Style {
     let style = Style::default();
     match token {
         Token::Text => style,
-        Token::Comment => style.fg(DIM).add_modifier(Modifier::ITALIC),
+        Token::Comment => style.fg(dim()).add_modifier(Modifier::ITALIC),
         Token::Directive => style.fg(Color::LightMagenta),
-        Token::Structure => style.fg(ACCENT).add_modifier(Modifier::BOLD),
+        Token::Structure => style.fg(accent()).add_modifier(Modifier::BOLD),
         Token::Tag => style.fg(Color::Yellow),
         Token::Link => style.fg(Color::LightBlue),
         Token::Field => style.fg(Color::LightGreen),
         Token::Image => style.fg(Color::LightMagenta),
-        Token::Escape => style.fg(DIM),
+        Token::Escape => style.fg(dim()),
         Token::Literal => style.fg(Color::Gray),
     }
 }
@@ -249,7 +249,7 @@ fn draw_source(frame: &mut Frame, app: &mut App, area: Rect) {
         .take(height)
         .map(|(n, ..)| {
             let text = n.map(|n| format!("{n} ")).unwrap_or_default();
-            Line::from(Span::styled(text, Style::default().fg(DIM))).right_aligned()
+            Line::from(Span::styled(text, Style::default().fg(dim()))).right_aligned()
         })
         .collect();
     frame.render_widget(Paragraph::new(numbers), gutter);
@@ -293,9 +293,9 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         tabs.push((Rect::new(x, tabs_row.y, width, 1), pane));
         x += width + 1;
         let style = if pane == app.browser.pane {
-            Style::default().fg(Color::Black).bg(ACCENT).bold()
+            Style::default().fg(Color::Black).bg(accent()).bold()
         } else {
-            Style::default().fg(DIM)
+            Style::default().fg(dim())
         };
         spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
@@ -307,7 +307,7 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut spans = highlighted(name, usize::MAX, &terms, Style::default());
         if !terms.is_empty() && !match_mask(name, &terms).contains(&true) {
             spans.push(Span::raw("  "));
-            spans.extend(highlighted(address, usize::MAX, &terms, Style::default().fg(DIM)));
+            spans.extend(highlighted(address, usize::MAX, &terms, Style::default().fg(dim())));
         }
         spans
     };
@@ -321,7 +321,7 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
                 .map(|(_, b)| {
                     let open = current.as_ref().is_some_and(|(url, _)| *url == b.url);
                     let marker = if open { "▸ " } else { "  " };
-                    let mut spans = vec![Span::styled(marker, Style::default().fg(ACCENT))];
+                    let mut spans = vec![Span::styled(marker, Style::default().fg(accent()))];
                     spans.extend(row(&b.name, &b.url));
                     ListItem::new(Line::from(spans))
                 })
@@ -335,12 +335,12 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
                     let open = current.as_ref().is_some_and(|(_, node)| node == *hash);
                     let marker = if open { "▸ " } else { "  " };
                     let name = peer.name.clone().unwrap_or_else(|| format!("<{}>", &hash[..12]));
-                    let mut spans = vec![Span::styled(marker, Style::default().fg(ACCENT))];
+                    let mut spans = vec![Span::styled(marker, Style::default().fg(accent()))];
                     spans.extend(row(&name, hash));
                     if saved_urls.contains(format!("{hash}:{}", nomad_core::DEFAULT_INDEX_ROUTE).as_str()) {
                         spans.push(Span::styled(" ★", Style::default().fg(Color::Yellow)));
                     }
-                    spans.push(Span::styled(format!("  {}", ago(peer.last_seen)), Style::default().fg(DIM)));
+                    spans.push(Span::styled(format!("  {}", ago(peer.last_seen)), Style::default().fg(dim())));
                     ListItem::new(Line::from(spans))
                 })
                 .collect(),
@@ -359,12 +359,12 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_widget(
             Paragraph::new(empty_hint)
                 .wrap(Wrap { trim: true })
-                .style(Style::default().fg(DIM)),
+                .style(Style::default().fg(dim())),
             list_area,
         );
         return;
     }
-    let list = List::new(items).highlight_style(Style::default().bg(SELECTED_BG).bold());
+    let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).bold());
     let state = match app.browser.pane {
         BrowserPane::Saved => &mut app.browser.saved_list,
         BrowserPane::Nodes => &mut app.browser.nodes_list,
@@ -381,12 +381,12 @@ fn draw_pane_search(frame: &mut Frame, app: &mut App, area: Rect) {
     let search = &app.browser.search;
     let text = search.input.text();
     if text.is_empty() && !search.typing {
-        let hint = Span::styled("/ search by name or address", Style::default().fg(DIM));
+        let hint = Span::styled("/ search by name or address", Style::default().fg(dim()));
         frame.render_widget(Paragraph::new(hint), area);
         return;
     }
     let [slash, field] = Layout::horizontal([Constraint::Length(2), Constraint::Min(1)]).areas(area);
-    let slash_style = if search.typing { Style::default().fg(ACCENT).bold() } else { Style::default().fg(DIM) };
+    let slash_style = if search.typing { Style::default().fg(accent()).bold() } else { Style::default().fg(dim()) };
     frame.render_widget(Paragraph::new(Span::styled("/", slash_style)), slash);
     let cursor = search.input.cursor_column();
     let offset = cursor.saturating_sub(field.width.saturating_sub(1) as usize);

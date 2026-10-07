@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use super::{ACCENT, DIM, block, wrap};
+use super::{accent, dim, block, wrap};
 use crate::app::App;
 
 pub(super) fn draw_archive(frame: &mut Frame, app: &mut App) {
@@ -23,17 +23,15 @@ pub(super) fn draw_archive(frame: &mut Frame, app: &mut App) {
     let count = reader.messages.len();
     let title = format!("Archive · {name} · {count} {}", if count == 1 { "message" } else { "messages" });
     let outer = block(&title, true)
-        .title_bottom(Line::styled(" ↑↓ PgUp PgDn Home End scroll · Esc close ", Style::default().fg(DIM)));
+        .title_bottom(Line::styled(" ↑↓ PgUp PgDn Home End scroll · Esc close ", Style::default().fg(dim())));
     let inner = outer.inner(rect);
     let columns = inner.width as usize;
 
-    let dim = Style::default().fg(DIM);
+    let dim = Style::default().fg(dim());
     let mut lines: Vec<Line> = Vec::new();
     for message in &reader.messages {
-        let (who, colour) = if message.incoming { (name.as_str(), Color::LightMagenta) } else { ("You", ACCENT) };
-        let when = chrono::DateTime::from_timestamp(message.timestamp as i64, 0)
-            .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_default();
+        let (who, colour) = if message.incoming { (name.as_str(), Color::LightMagenta) } else { ("You", accent()) };
+        let when = crate::clock::full(message.timestamp);
         lines.push(Line::from(vec![
             Span::styled(who.to_string(), Style::default().fg(colour).add_modifier(Modifier::BOLD)),
             Span::styled(format!("  {when}"), dim),

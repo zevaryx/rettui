@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 
 use super::editor::{Highlighted, draw_text_editor};
-use super::{ACCENT, DIM, SELECTED_BG, block};
+use super::{accent, dim, selected_bg, block};
 use crate::app::App;
 use crate::app::reticulum::{RnsFocus, RnsRow, rns_truthy};
 use crate::reticulum::schema::Kind;
@@ -25,7 +25,7 @@ pub(super) fn draw_reticulum(frame: &mut Frame, app: &mut App, area: Rect) {
         let text = vec![
             Line::styled(error.clone(), Style::default().fg(Color::Red)),
             Line::raw(""),
-            Line::styled("Fix the file's permissions and press R to read it again.", Style::default().fg(DIM)),
+            Line::styled("Fix the file's permissions and press R to read it again.", Style::default().fg(dim())),
         ];
         frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }).block(block("Reticulum config", false)), area);
         return;
@@ -60,7 +60,7 @@ fn draw_file_status(frame: &mut Frame, app: &App, area: Rect) {
     let missing = "  not created yet: showing rsReticulum's defaults, saving creates it";
     let room = (area.width as usize).saturating_sub(8 + if state.exists { 0 } else { missing.len() });
     let mut lines = vec![Line::from(vec![
-        Span::styled("File  ", Style::default().fg(DIM)),
+        Span::styled("File  ", Style::default().fg(dim())),
         Span::raw(fit_path(&state.path.display().to_string(), room)),
         if state.exists { Span::raw("") } else { Span::styled(missing, Style::default().fg(Color::Yellow)) },
     ])];
@@ -71,7 +71,7 @@ fn draw_file_status(frame: &mut Frame, app: &App, area: Rect) {
     for warning in state.check.warnings.iter().take(3) {
         lines.push(Line::styled(format!("! {warning}"), Style::default().fg(Color::Yellow)));
     }
-    lines.push(Line::styled(format!("{RESTART_NOTE} (Ctrl-R)"), Style::default().fg(DIM).italic()));
+    lines.push(Line::styled(format!("{RESTART_NOTE} (Ctrl-R)"), Style::default().fg(dim()).italic()));
     if app.uses_external_shared_instance() {
         lines.push(Line::styled(EXTERNAL_NOTE, Style::default().fg(Color::Yellow).italic()));
     }
@@ -86,7 +86,7 @@ fn draw_sections(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         "Sections".to_string()
     };
-    let list_block = block(&title, focused).title_bottom(Line::styled(" a add interface ", Style::default().fg(DIM)));
+    let list_block = block(&title, focused).title_bottom(Line::styled(" a add interface ", Style::default().fg(dim())));
     app.regions.rns_sections = list_block.inner(area);
     let config = rns::check(&app.rns.text).0;
     let items: Vec<ListItem> = app
@@ -100,17 +100,17 @@ fn draw_sections(frame: &mut Frame, app: &mut App, area: Rect) {
                     .and_then(|v| v.get("enabled").or_else(|| v.get("interface_enabled")))
                     .is_none_or(rns_truthy);
                 let kind = values.and_then(|v| v.get("type")).unwrap_or("?").trim_end_matches("Interface").to_string();
-                let (dot, color) = if enabled { ("●", Color::Green) } else { ("○", DIM) };
+                let (dot, color) = if enabled { ("●", Color::Green) } else { ("○", dim()) };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("  {dot} "), Style::default().fg(color)),
                     Span::raw(name.clone()),
-                    Span::styled(format!("  {kind}"), Style::default().fg(DIM)),
+                    Span::styled(format!("  {kind}"), Style::default().fg(dim())),
                 ]))
             }
             other => ListItem::new(Line::from(vec![Span::raw(format!(" {}", other.title())).bold()])),
         })
         .collect();
-    let list = List::new(items).highlight_style(Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD));
+    let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_widget(list_block, area);
     frame.render_stateful_widget(list, app.regions.rns_sections, &mut app.rns.section_list);
 }
@@ -126,7 +126,7 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(Section::Interface(_)) => " Enter edit · d default · Space on/off · r rename · x delete · t text ",
         _ => " Enter edit · d default · t edit as text ",
     };
-    let options_block = block(&title, focused).title_bottom(Line::styled(hints, Style::default().fg(DIM)));
+    let options_block = block(&title, focused).title_bottom(Line::styled(hints, Style::default().fg(dim())));
     let inner = options_block.inner(area);
     frame.render_widget(options_block, area);
     let [list_area, help_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
@@ -139,18 +139,18 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
         .rows
         .iter()
         .map(|row| match row {
-            RnsRow::Group(title) => ListItem::new(Line::styled(title.to_string(), Style::default().fg(ACCENT).bold())),
+            RnsRow::Group(title) => ListItem::new(Line::styled(title.to_string(), Style::default().fg(accent()).bold())),
             RnsRow::Option(i) => {
                 let option = &state.options[*i];
                 let value = match option.shown() {
                     Some(v) if option.kind == Kind::Bool => Span::raw(if rns_truthy(&v) { "yes".to_string() } else { "no".to_string() }),
                     Some(v) => Span::raw(v),
-                    None if option.default.is_empty() => Span::styled("–", Style::default().fg(DIM)),
+                    None if option.default.is_empty() => Span::styled("–", Style::default().fg(dim())),
                     None if option.kind == Kind::Bool => {
                         let shown = if rns_truthy(option.default) { "yes" } else { "no" };
-                        Span::styled(format!("{shown} (default)"), Style::default().fg(DIM))
+                        Span::styled(format!("{shown} (default)"), Style::default().fg(dim()))
                     }
-                    None => Span::styled(format!("{} (default)", option.default), Style::default().fg(DIM)),
+                    None => Span::styled(format!("{} (default)", option.default), Style::default().fg(dim())),
                 };
                 let label: String = if option.label.chars().count() > label_width - 2 {
                     option.label.chars().take(label_width - 3).chain(std::iter::once('…')).collect()
@@ -158,18 +158,18 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
                     option.label.clone()
                 };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("  {label:<label_width$}"), Style::default().fg(DIM)),
+                    Span::styled(format!("  {label:<label_width$}"), Style::default().fg(dim())),
                     value,
                 ]))
             }
         })
         .collect();
-    let list = List::new(items).highlight_style(Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD));
+    let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, list_area, &mut app.rns.option_list);
 
     let help = app.rns.selected_option().map_or_else(Vec::new, |o| {
         vec![
-            Line::from(vec![Span::styled(format!(" {} ", o.key), Style::default().fg(KEY)), Span::styled(o.help, Style::default().fg(DIM).italic())]),
+            Line::from(vec![Span::styled(format!(" {} ", o.key), Style::default().fg(KEY)), Span::styled(o.help, Style::default().fg(dim()).italic())]),
         ]
     });
     frame.render_widget(Paragraph::new(help).wrap(Wrap { trim: false }), help_area);
@@ -188,16 +188,16 @@ fn draw_picker(frame: &mut Frame, app: &mut App, area: Rect) {
         height: height.min(area.height),
     };
     frame.render_widget(Clear, rect);
-    let picker_block = block(&picker.title, true).title_bottom(Line::styled(HINT, Style::default().fg(DIM)));
+    let picker_block = block(&picker.title, true).title_bottom(Line::styled(HINT, Style::default().fg(dim())));
     app.regions.rns_picker = picker_block.inner(rect);
     let items: Vec<ListItem> = picker.choices.iter().map(|(_, label)| ListItem::new(format!(" {label}"))).collect();
-    let list = List::new(items).block(picker_block).highlight_style(Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD));
+    let list = List::new(items).block(picker_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, rect, &mut picker.list);
 }
 
 /// Colours for the config file: sections, keys, values and comments.
 fn highlight(text: &str) -> Highlighted {
-    let comment = Style::default().fg(DIM);
+    let comment = Style::default().fg(dim());
     text.split('\n')
         .map(|line| {
             let trimmed = line.trim_start();
@@ -206,7 +206,7 @@ fn highlight(text: &str) -> Highlighted {
                 return vec![(comment, line.to_string())];
             }
             if trimmed.starts_with('[') {
-                return vec![(Style::default(), indent), (Style::default().fg(ACCENT).bold(), trimmed.to_string())];
+                return vec![(Style::default(), indent), (Style::default().fg(accent()).bold(), trimmed.to_string())];
             }
             let Some(eq) = trimmed.find('=') else { return vec![(Style::default(), line.to_string())] };
             let (key, rest) = trimmed.split_at(eq);
@@ -217,7 +217,7 @@ fn highlight(text: &str) -> Highlighted {
             vec![
                 (Style::default(), indent),
                 (Style::default().fg(KEY), key.to_string()),
-                (Style::default().fg(DIM), "=".to_string()),
+                (Style::default().fg(dim()), "=".to_string()),
                 (Style::default(), value[1..].to_string()),
                 (comment, note.to_string()),
             ]
@@ -236,7 +236,7 @@ fn draw_text(frame: &mut Frame, app: &mut App, area: Rect) {
         title.push_str(" ● modified");
     }
     let editor_block = block(&title, true)
-        .title_top(Line::styled(" Ctrl-S save · Esc close · Ctrl-Z/Y undo ", Style::default().fg(DIM)).right_aligned());
+        .title_top(Line::styled(" Ctrl-S save · Esc close · Ctrl-Z/Y undo ", Style::default().fg(dim())).right_aligned());
     let inner = editor_block.inner(editor_area);
     frame.render_widget(editor_block, editor_area);
     app.regions.rns_editor = draw_text_editor(frame, &mut editor.area, inner, true, wrap, highlight);

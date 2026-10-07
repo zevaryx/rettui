@@ -109,6 +109,9 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   - **For scripts:** `?last=N` on `/api/conversations/<address>` and on
     `/api/channels/<hub>/room` asks for just the newest N, and `total` or
     `total_lines` says how many there are in all.
+- **Theme:** dark (rettui's own), light, or as the device is set (and
+  following it when it changes): *Theme* in the Status page. Each browser
+  keeps its own. Times and dates follow the *Clock* and *Dates* settings.
 - **Keys:** `1`–`7` switch sections, `/` searches the Network list (in Messages,
   [the messages](Messaging#searching); in the Browser, its nodes and saved pages), and `Esc` leaves a text box. In the message box and the channel input, `Ctrl-E`
   opens the [emoji](Messaging#emoji) picker (not on a Mac or an iPhone).

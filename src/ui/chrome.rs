@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{ACCENT, DIM, SELECTED_BG, block};
+use super::{accent, dim, selected_bg, block};
 use crate::app::traffic::rate;
 use crate::app::{App, NetState, NoticeKind, SyncState, Tab};
 
@@ -22,7 +22,7 @@ pub(super) fn sidebar_width(total: u16) -> u16 {
 pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     let rail = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(DIM));
+        .border_style(Style::default().fg(dim()));
     let inner = rail.inner(area);
     frame.render_widget(rail, area);
     let width = inner.width as usize;
@@ -30,7 +30,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
 
     app.regions.version = Rect::default();
     // The logo: `rettui>_` with a cyan prompt, or just the prompt on the rail.
-    let prompt = Span::styled(">_", Style::default().fg(ACCENT).bold());
+    let prompt = Span::styled(">_", Style::default().fg(accent()).bold());
     let brand = if compact {
         Line::from(vec![Span::raw(" "), prompt])
     } else {
@@ -39,7 +39,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         // it opens the project page.
         let version = env!("CARGO_PKG_VERSION");
         if width >= 10 + 1 + version.len() {
-            spans.push(Span::styled(format!(" {version}"), Style::default().fg(DIM)));
+            spans.push(Span::styled(format!(" {version}"), Style::default().fg(dim())));
             app.regions.version = Rect::new(inner.x + 10, inner.y, version.len() as u16, 1);
         }
         Line::from(spans)
@@ -71,12 +71,12 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         let selected = *tab == app.tab;
         let base = if selected {
-            Style::default().bg(SELECTED_BG).bold()
+            Style::default().bg(selected_bg()).bold()
         } else {
             Style::default()
         };
         let mut spans = vec![
-            Span::styled(if selected { "▌" } else { " " }, base.fg(ACCENT)),
+            Span::styled(if selected { "▌" } else { " " }, base.fg(accent())),
             Span::styled(if compact { format!(" {icon} ") } else { format!(" {icon}  {}", tab.title()) }, base),
         ];
         let badge = match tab {
@@ -119,7 +119,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let mut status = vec![Line::styled(
         format!(" {}", app.settings.display_name),
-        Style::default().fg(DIM),
+        Style::default().fg(dim()),
     )];
     status.push(Line::from(match &app.net_state {
         NetState::Starting => Span::styled(" ● starting", Style::default().fg(Color::Yellow)),
@@ -137,9 +137,9 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     if let (NetState::Online, Some((rx, tx))) = (&app.net_state, app.traffic.rates) {
         status.push(Line::from(vec![
             Span::styled(" ↓", Style::default().fg(Color::Green)),
-            Span::styled(rate(rx), Style::default().fg(DIM)),
-            Span::styled(" ↑", Style::default().fg(ACCENT)),
-            Span::styled(rate(tx), Style::default().fg(DIM)),
+            Span::styled(rate(rx), Style::default().fg(dim())),
+            Span::styled(" ↑", Style::default().fg(accent())),
+            Span::styled(rate(tx), Style::default().fg(dim())),
         ]));
     }
     if let SyncState::Running(_) = app.sync {
@@ -191,14 +191,14 @@ pub(super) fn draw_prompt(frame: &mut Frame, app: &App) {
         Block::default()
             .borders(Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded)
-            .border_style(Style::default().fg(ACCENT))
+            .border_style(Style::default().fg(accent()))
     };
     let inner = prompt_block.inner(rect);
     let cursor = prompt.input.cursor_column();
     let offset = cursor.saturating_sub(inner.width.saturating_sub(1) as usize);
     frame.render_widget(prompt_block, rect);
     let asked = question.len() as u16;
-    frame.render_widget(Paragraph::new(question.join("\n")).style(Style::default().fg(super::ACCENT)), Rect { height: asked, ..inner });
+    frame.render_widget(Paragraph::new(question.join("\n")).style(Style::default().fg(super::accent())), Rect { height: asked, ..inner });
     let typed = Rect { y: inner.y + asked, height: 1, ..inner };
     frame.render_widget(
         Paragraph::new(prompt.input.text()).scroll((0, offset as u16)).style(Style::default().add_modifier(Modifier::BOLD)),

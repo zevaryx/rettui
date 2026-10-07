@@ -11,7 +11,7 @@ use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use super::browser::token_style;
 use super::editor::draw_text_editor;
-use super::{ACCENT, DIM, SELECTED_BG, block, human_bytes};
+use super::{accent, dim, selected_bg, block, human_bytes};
 use crate::app::App;
 use crate::app::format::{Action, RIBBON};
 use crate::app::node::{NodeStatus, PageView, Preview};
@@ -29,12 +29,12 @@ pub(super) fn draw_node(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
-    let label = |s: &str| Span::styled(format!("{s:<9}"), Style::default().fg(DIM));
+    let label = |s: &str| Span::styled(format!("{s:<9}"), Style::default().fg(dim()));
     let state = match &app.node.status {
         NodeStatus::Running => Span::styled("● hosting", Style::default().fg(Color::Green)),
         NodeStatus::Starting => Span::styled("◌ starting", Style::default().fg(Color::Yellow)),
         // `h` starts it (the footer and the editor pane say so).
-        NodeStatus::Off => Span::styled("○ off", Style::default().fg(DIM)),
+        NodeStatus::Off => Span::styled("○ off", Style::default().fg(dim())),
         NodeStatus::Failed(e) => Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red)),
     };
     let running = app.node.status == NodeStatus::Running;
@@ -48,11 +48,11 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![label("Node"), state]),
         Line::from(vec![
             label("Address"),
-            Span::styled(hex::encode(app.node.hash), Style::default().fg(if running { ACCENT } else { DIM })),
+            Span::styled(hex::encode(app.node.hash), Style::default().fg(if running { accent() } else { dim() })),
         ]),
         Line::from(vec![label("Name"), Span::raw(name)]),
         Line::from(vec![label("Requests"), Span::raw(requests)]),
-        Line::from(vec![label("Folder"), Span::styled(dir, Style::default().fg(DIM))]),
+        Line::from(vec![label("Folder"), Span::styled(dir, Style::default().fg(dim()))]),
     ];
     frame.render_widget(Paragraph::new(lines).block(block("Hosting", false)), area);
 }
@@ -71,7 +71,7 @@ fn draw_pages(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.node.pages.is_empty() {
         frame.render_widget(
             Paragraph::new("No pages yet. Press n to create one.")
-                .style(Style::default().fg(DIM))
+                .style(Style::default().fg(dim()))
                 .wrap(Wrap { trim: true })
                 .block(list_block),
             area,
@@ -86,21 +86,21 @@ fn draw_pages(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|page| {
             let (marker, marker_style) = match &open {
                 Some((path, true)) if *path == page.path => ("● ", Style::default().fg(Color::Yellow)),
-                Some((path, false)) if *path == page.path => ("▸ ", Style::default().fg(ACCENT)),
+                Some((path, false)) if *path == page.path => ("▸ ", Style::default().fg(accent())),
                 _ => ("  ", Style::default()),
             };
-            let name_style = if page.text { Style::default() } else { Style::default().fg(DIM) };
+            let name_style = if page.text { Style::default() } else { Style::default().fg(dim()) };
             let mut spans = vec![Span::styled(marker, marker_style), Span::styled(page.path.clone(), name_style)];
             if page.executable {
                 spans.push(Span::styled(" script", Style::default().fg(Color::LightMagenta)));
             }
-            spans.push(Span::styled(format!("  {}", human_bytes(page.size)), Style::default().fg(DIM)));
+            spans.push(Span::styled(format!("  {}", human_bytes(page.size)), Style::default().fg(dim())));
             ListItem::new(Line::from(spans))
         })
         .collect();
     let list = List::new(items)
         .block(list_block)
-        .highlight_style(Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD));
+        .highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, area, &mut app.node.list);
 }
 
@@ -117,7 +117,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
             Line::raw("Ctrl-S saves the page into the node folder. While the node is hosting,"),
             Line::raw("visitors get the new version straight away."),
             Line::raw(""),
-            Line::styled("h hosts or stops the node · b opens it in the Browser", Style::default().fg(DIM)),
+            Line::styled("h hosts or stops the node · b opens it in the Browser", Style::default().fg(dim())),
         ];
         frame.render_widget(Paragraph::new(help).wrap(Wrap { trim: false }).block(block("Editor", false)), area);
         return;
@@ -143,7 +143,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     if editor.dirty() {
         title.push_str(" ● modified");
     }
-    let hints = Line::styled(format!(" Ctrl-S save · Ctrl-P {} · Esc pages ", view.next().label()), Style::default().fg(DIM));
+    let hints = Line::styled(format!(" Ctrl-S save · Ctrl-P {} · Esc pages ", view.next().label()), Style::default().fg(dim()));
     let text = editor.area.text();
     if let Some(editor_area) = editor_area {
         // Key hints only when they fit beside the page name.
@@ -211,7 +211,7 @@ fn draw_ribbon(frame: &mut Frame, area: Rect, buttons: &mut Vec<(Rect, Action)>)
             + SEPARATOR.len() * (RIBBON.len() - 1)
     };
     let short = width(false) > area.width as usize;
-    let key_style = Style::default().fg(ACCENT).add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+    let key_style = Style::default().fg(accent()).add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
     let mut spans = Vec::new();
     let mut x = area.x;
     'groups: for (g, group) in RIBBON.iter().enumerate() {
@@ -222,7 +222,7 @@ fn draw_ribbon(frame: &mut Frame, area: Rect, buttons: &mut Vec<(Rect, Action)>)
             if x + needed > area.right() {
                 break 'groups;
             }
-            spans.push(Span::styled(gap, Style::default().fg(DIM)));
+            spans.push(Span::styled(gap, Style::default().fg(dim())));
             x += gap.chars().count() as u16;
             // The shortcut's letter, underlined (labels are ASCII).
             let at = label.to_ascii_lowercase().find(action.key()).unwrap_or(0);

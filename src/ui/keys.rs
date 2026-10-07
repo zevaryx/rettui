@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{ACCENT, DIM, block};
+use super::{accent, dim, block};
 use crate::app::node::PageView;
 use crate::app::{App, BrowserFocus, BrowserPane, Tab};
 
@@ -419,7 +419,7 @@ pub fn keys(app: &App) -> Keys {
 }
 
 fn keycap(key: &str) -> Span<'static> {
-    Span::styled(key.to_string(), Style::default().fg(Color::Black).bg(DIM))
+    Span::styled(key.to_string(), Style::default().fg(Color::Black).bg(dim()))
 }
 
 /// One hint's width: the key, a space, what it does, and two spaces.
@@ -444,7 +444,7 @@ pub(super) fn draw_hints(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::raw(format!(" {action}  ")));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
-    let all = Line::from(vec![keycap(more), Span::styled(" keys", Style::default().fg(DIM))]).right_aligned();
+    let all = Line::from(vec![keycap(more), Span::styled(" keys", Style::default().fg(dim()))]).right_aligned();
     frame.render_widget(Paragraph::new(all), area);
 }
 
@@ -468,7 +468,7 @@ pub(super) fn draw_keys(frame: &mut Frame, app: &App) {
                         lines.push(Vec::new());
                     }
                     let pad = key_width - key.width();
-                    lines[row].push(Span::styled(format!("{}{key}", " ".repeat(pad)), Style::default().fg(ACCENT).bold()));
+                    lines[row].push(Span::styled(format!("{}{key}", " ".repeat(pad)), Style::default().fg(accent()).bold()));
                     lines[row].push(Span::raw(format!(" {action:<action_width$}   ")));
                 }
                 lines
@@ -480,10 +480,10 @@ pub(super) fn draw_keys(frame: &mut Frame, app: &App) {
     let mut lines = rows(keys.keys);
     lines.push(Line::default());
     let heading = if keys.typing { "While typing, too" } else { "In every tab" };
-    lines.push(Line::from(Span::styled(heading, Style::default().fg(DIM))));
+    lines.push(Line::from(Span::styled(heading, Style::default().fg(dim()))));
     lines.extend(rows(everywhere));
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled("Any key closes this list", Style::default().fg(DIM))));
+    lines.push(Line::from(Span::styled("Any key closes this list", Style::default().fg(dim()))));
 
     let width = (column * columns + 4).min(area.width as usize) as u16;
     let height = (lines.len() + 2).min(area.height as usize) as u16;

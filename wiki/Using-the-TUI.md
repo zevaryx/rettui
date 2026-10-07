@@ -3,6 +3,13 @@ Browser, Node, Status, Reticulum) with keyboard and mouse control. Terminals
 narrower than 110 columns get a sidebar of icons and narrower side lists, so
 80×24 works well.
 
+**Colours, times and dates** are settings (Status): *Terminal colours* is
+dark (for a dark terminal, the default), light (for a light one) or basic
+(16 colours, for a terminal without full colour); *Clock* is 24-hour or
+12-hour, and *Dates* month-day (Oct 07), day-month (07 Oct) or
+year-month-day (2025-10-07). Clock and Dates go for the web UI too, and
+for exported conversations.
+
 ## Keys
 
 The footer shows the most used keys of what's on screen, as many as fit,

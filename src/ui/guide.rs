@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use super::{DIM, PICKED, block, wrap};
+use super::{dim, picked_style, block, wrap};
 use crate::app::App;
 use crate::app::guide::{self, ENTRY_POINTS, Guide, GuideRow, GuideView, LINKS};
 use crate::app::reach::Reach;
@@ -63,7 +63,7 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     let selected = rows.get(state.row).copied();
     let choices = &state.shown(&view);
 
-    let intro: Vec<Line<'static>> = wrap(guide::INTRO, inner_width).into_iter().map(|l| Line::styled(l, Style::default().fg(DIM))).collect();
+    let intro: Vec<Line<'static>> = wrap(guide::INTRO, inner_width).into_iter().map(|l| Line::styled(l, Style::default().fg(dim()))).collect();
     let status = match (view.interfaces_online, view.heard) {
         (0, _) => Line::styled("○ Not connected to anyone yet", Style::default().fg(Color::Yellow)),
         (n, 0) => Line::styled(format!("◌ {n} interface{} online, nobody heard yet", if n == 1 { "" } else { "s" }), Style::default().fg(Color::Yellow)),
@@ -77,7 +77,7 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     let mut body: Vec<Line<'static>> = Vec::new();
     let mut placed: Vec<(usize, GuideRow)> = Vec::new();
     let mut row_line = |body: &mut Vec<Line<'static>>, row: GuideRow, spans: Vec<Span<'static>>| {
-        let style = if Some(row) == selected { Style::default().bg(super::SELECTED_BG).add_modifier(Modifier::BOLD) } else { Style::default() };
+        let style = if Some(row) == selected { Style::default().bg(super::selected_bg()).add_modifier(Modifier::BOLD) } else { Style::default() };
         placed.push((body.len(), row));
         body.push(Line::from(spans).style(style));
     };
@@ -86,18 +86,18 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
             body.push(Line::styled(line, Style::default().fg(Color::Yellow)));
         }
     }
-    row_line(&mut body, GuideRow::Name, vec![Span::styled("Your name   ", Style::default().fg(DIM)), Span::raw(choices.name.clone())]);
+    row_line(&mut body, GuideRow::Name, vec![Span::styled("Your name   ", Style::default().fg(dim())), Span::raw(choices.name.clone())]);
     let identity = match (view.identity_pending, view.address) {
         (Some(next), _) => vec![Span::raw(format!("{} from the next start", hex::encode(next)))],
         (None, address) => vec![
             Span::raw(address.map(hex::encode).unwrap_or_else(|| "(starting)".into())),
-            Span::styled("  · use one you already have", Style::default().fg(DIM)),
+            Span::styled("  · use one you already have", Style::default().fg(dim())),
         ],
     };
-    row_line(&mut body, GuideRow::Identity, [vec![Span::styled("Identity    ", Style::default().fg(DIM))], identity].concat());
+    row_line(&mut body, GuideRow::Identity, [vec![Span::styled("Identity    ", Style::default().fg(dim()))], identity].concat());
     if view.external {
         for line in wrap(&format!("{}: add entry points in that program's Reticulum config.", crate::reticulum::EXTERNAL_NOTE), inner_width) {
-            body.push(Line::styled(line, Style::default().fg(DIM)));
+            body.push(Line::styled(line, Style::default().fg(dim())));
         }
     } else {
         // Under their regions' headings, each with what trying it found;
@@ -107,16 +107,16 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         for (i, entry) in ENTRY_POINTS.iter().enumerate() {
             if entry.region != region {
                 region = entry.region;
-                body.push(Line::styled(format!("Entry points · {region}"), Style::default().fg(DIM)));
+                body.push(Line::styled(format!("Entry points · {region}"), Style::default().fg(dim())));
             }
             let name = format!("{}{}  ", entry.name, " ".repeat(name_width - entry.name.width()));
             let spans = match view.reach[i] {
                 _ if view.has_entry_point[i] => {
-                    vec![Span::raw(format!("[x] {name}")), Span::styled("in your Reticulum config already", Style::default().fg(DIM))]
+                    vec![Span::raw(format!("[x] {name}")), Span::styled("in your Reticulum config already", Style::default().fg(dim()))]
                 }
-                reach @ Reach::Down(_) => vec![Span::styled(format!("[ ] {name}{}", reach.label()), Style::default().fg(DIM))],
+                reach @ Reach::Down(_) => vec![Span::styled(format!("[ ] {name}{}", reach.label()), Style::default().fg(dim()))],
                 reach => {
-                    let color = if matches!(reach, Reach::Up(_)) { Color::Green } else { DIM };
+                    let color = if matches!(reach, Reach::Up(_)) { Color::Green } else { dim() };
                     vec![Span::raw(format!("{} {name}", check(choices.connect[i]))), Span::styled(reach.label(), Style::default().fg(color))]
                 }
             };
@@ -144,14 +144,14 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         }
         warned = Some((GuideRow::AutoPropagation, body.len() - 1));
     }
-    body.push(Line::styled("Learn more", Style::default().fg(DIM)));
+    body.push(Line::styled("Learn more", Style::default().fg(dim())));
     for (i, (title, ..)) in LINKS.iter().enumerate() {
         row_line(&mut body, GuideRow::Link(i), vec![Span::raw("↗ "), Span::styled(*title, Style::default().add_modifier(Modifier::UNDERLINED))]);
     }
 
     // The two buttons share a line.
     let button = |label: &str, row: GuideRow| {
-        let style = if Some(row) == selected { PICKED } else { Style::default().fg(Color::Black).bg(DIM) };
+        let style = if Some(row) == selected { picked_style() } else { Style::default().fg(Color::Black).bg(dim()) };
         Span::styled(format!(" {label} "), style)
     };
     let (apply, later) = (" Apply ", " Not now ");
@@ -215,7 +215,7 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
         lines.push(Line::default());
     }
     let help_at = lines.len();
-    lines.extend(help_lines.into_iter().map(|line| Line::styled(line, Style::default().fg(DIM).add_modifier(Modifier::ITALIC))));
+    lines.extend(help_lines.into_iter().map(|line| Line::styled(line, Style::default().fg(dim()).add_modifier(Modifier::ITALIC))));
     lines.resize(help_at + help_room, Line::default());
 
     let height = (lines.len() as u16 + 2).min(area.height);

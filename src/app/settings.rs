@@ -116,6 +116,16 @@ impl App {
                     self.settings.icon_background = after.icon_background.clone();
                 }
                 "picture_size" => self.settings.picture_size = after.picture_size.clone(),
+                "tui_theme" => {
+                    self.settings.tui_theme = after.tui_theme.clone();
+                    crate::ui::set_theme(&after.tui_theme);
+                    self.full_redraw = true;
+                }
+                "clock" | "date_style" => {
+                    self.settings.clock = after.clock.clone();
+                    self.settings.date_style = after.date_style.clone();
+                    crate::clock::set(&after.clock, &after.date_style);
+                }
                 "log_level" => {
                     self.settings.log_level = after.log_level.clone();
                     if let Some(note) = crate::logging::set_level(&after.log_level) {

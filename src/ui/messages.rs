@@ -11,7 +11,7 @@ use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 
 use unicode_width::UnicodeWidthStr;
 
-use super::{ACCENT, DIM, PICKED, SELECTED_BG, block, human_bytes, time_label, wrap};
+use super::{accent, dim, picked_style, selected_bg, block, human_bytes, time_label, wrap};
 use crate::app::{App, HistoryHit, QrKind};
 use crate::lxmf::DeliveryMode;
 use crate::markdown::{self, TextFormat};
@@ -63,8 +63,8 @@ fn reaction_rows(reactions: &[Reaction], name: &str, width: usize) -> Vec<Line<'
             row.spans.push(Span::raw("  "));
             used += 2;
         }
-        row.spans.push(Span::styled(chip, Style::default().bg(SELECTED_BG)));
-        row.spans.push(Span::styled(who, Style::default().fg(DIM)));
+        row.spans.push(Span::styled(chip, Style::default().bg(selected_bg())));
+        row.spans.push(Span::styled(who, Style::default().fg(dim())));
         used += needed;
     }
     rows
@@ -98,7 +98,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             "No conversations yet.\n\nPress n to message an LXMF address, or pick a peer in the Network tab.",
         )
         .wrap(Wrap { trim: true })
-        .style(Style::default().fg(DIM))
+        .style(Style::default().fg(dim()))
         .block(list_block);
         frame.render_widget(hint, list_area);
     } else {
@@ -114,10 +114,10 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     ));
                 }
                 if conversation.muted {
-                    spans.push(Span::styled(" muted", Style::default().fg(DIM)));
+                    spans.push(Span::styled(" muted", Style::default().fg(dim())));
                 }
                 if conversation.pinned {
-                    spans.push(Span::styled(" pinned", Style::default().fg(ACCENT)));
+                    spans.push(Span::styled(" pinned", Style::default().fg(accent())));
                 }
                 if app.is_request(key) {
                     spans.push(Span::styled(" request", Style::default().fg(Color::Black).bg(Color::Yellow)));
@@ -127,13 +127,13 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 let preview = conversation.messages.last().map(Message::opening).unwrap_or_default();
                 ListItem::new(vec![
                     Line::from(spans),
-                    Line::styled(format!("  {preview}"), Style::default().fg(DIM)),
+                    Line::styled(format!("  {preview}"), Style::default().fg(dim())),
                 ])
             })
             .collect();
         let list = List::new(items)
             .block(list_block)
-            .highlight_style(Style::default().bg(SELECTED_BG).bold())
+            .highlight_style(Style::default().bg(selected_bg()).bold())
             .highlight_symbol("▌");
         frame.render_stateful_widget(list, list_area, &mut app.conversations);
     }
@@ -156,7 +156,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(Color::Yellow),
         ));
     } else if app.store.conversations.get(&key).is_some_and(|c| c.muted) {
-        history_block = history_block.title_bottom(Line::styled(" notifications off · N turns them on ", Style::default().fg(DIM)));
+        history_block = history_block.title_bottom(Line::styled(" notifications off · N turns them on ", Style::default().fg(dim())));
     }
     let history_inner = history_block.inner(history_area);
     let inner_width = history_inner.width as usize;
@@ -187,14 +187,14 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         let (who, color) = if message.incoming {
             (name.as_str(), Color::LightMagenta)
         } else {
-            ("You", ACCENT)
+            ("You", accent())
         };
         let status = match &message.state {
             MessageState::Received { verified: true } => Span::raw(""),
             MessageState::Received { verified: false } => {
                 Span::styled(" unverified", Style::default().fg(Color::Yellow))
             }
-            MessageState::Sending => Span::styled(" sending…", Style::default().fg(DIM)),
+            MessageState::Sending => Span::styled(" sending…", Style::default().fg(dim())),
             MessageState::Delivered if message.paper.is_some() => {
                 Span::styled(" ✓ paper message · P shows its QR code", Style::default().fg(Color::Green))
             }
@@ -208,15 +208,15 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         let mut header = Line::from(vec![
             Span::styled(who.to_string(), Style::default().fg(color).bold()),
-            Span::styled(format!("  {}", time_label(message.timestamp)), Style::default().fg(DIM)),
+            Span::styled(format!("  {}", time_label(message.timestamp)), Style::default().fg(dim())),
             status,
         ]);
         if target == Some(index) {
-            header.spans.push(Span::styled("  ↩ replying to this", Style::default().fg(ACCENT)));
-            header = header.style(Style::default().bg(SELECTED_BG));
+            header.spans.push(Span::styled("  ↩ replying to this", Style::default().fg(accent())));
+            header = header.style(Style::default().bg(selected_bg()));
         }
         if picked == Some(index) {
-            header = header.style(Style::default().bg(SELECTED_BG));
+            header = header.style(Style::default().bg(selected_bg()));
         }
         lines.push((header, Some(HistoryHit::Pick(index))));
         // The picked message's buttons, under its name.
@@ -228,11 +228,11 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 let text = format!(" {label} ({key}) ");
                 let width = text.width();
                 buttons.push((lines.len(), x, width, HistoryHit::Action(index, action)));
-                spans.push(Span::styled(text, PICKED));
+                spans.push(Span::styled(text, picked_style()));
                 spans.push(Span::raw(" "));
                 x += width + 1;
             }
-            spans.push(Span::styled("↑↓ another · Esc done", Style::default().fg(DIM)));
+            spans.push(Span::styled("↑↓ another · Esc done", Style::default().fg(dim())));
             lines.push((Line::from(spans), None));
         }
         // What it answers: a click shows that message.
@@ -245,8 +245,8 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             let text = clipped(&format!("{author}{}", quoted.text), inner_width.saturating_sub(2));
             lines.push((
                 Line::from(vec![
-                    Span::styled("▎ ", Style::default().fg(ACCENT)),
-                    Span::styled(text, Style::default().fg(DIM).add_modifier(Modifier::ITALIC)),
+                    Span::styled("▎ ", Style::default().fg(accent())),
+                    Span::styled(text, Style::default().fg(dim()).add_modifier(Modifier::ITALIC)),
                 ]),
                 quoted.index.map(HistoryHit::Original),
             ));
@@ -278,14 +278,14 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 Line::from(vec![
                     Span::raw("📍 "),
                     Span::styled(location.label(), Style::default().add_modifier(Modifier::UNDERLINED)),
-                    Span::styled("  map ↗", Style::default().fg(DIM)),
+                    Span::styled("  map ↗", Style::default().fg(dim())),
                 ]),
                 Some(HistoryHit::Link(url)),
             ));
         }
         for note in &message.notes {
             for line in wrap(note, inner_width) {
-                lines.push((Line::styled(line, Style::default().fg(DIM).add_modifier(Modifier::ITALIC)), None));
+                lines.push((Line::styled(line, Style::default().fg(dim()).add_modifier(Modifier::ITALIC)), None));
             }
         }
         for attachment in &message.attachments {
@@ -316,7 +316,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     Line::from(vec![
                         Span::styled("🎤 ", Style::default().fg(Color::Yellow)),
                         Span::styled("Voice message", Style::default().add_modifier(Modifier::UNDERLINED)),
-                        Span::styled(note, Style::default().fg(DIM)),
+                        Span::styled(note, Style::default().fg(dim())),
                     ])
                 }
                 None => Line::from(vec![
@@ -325,7 +325,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         attachment.name.clone(),
                         Style::default().add_modifier(Modifier::UNDERLINED),
                     ),
-                    Span::styled(format!("  {}", human_bytes(attachment.size)), Style::default().fg(DIM)),
+                    Span::styled(format!("  {}", human_bytes(attachment.size)), Style::default().fg(dim())),
                 ]),
             };
             lines.push((line, path));
@@ -347,7 +347,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             if archived == 1 { "it" } else { "them" },
         );
         let mut rows: Vec<HistoryRow> =
-            wrap(&note, inner_width).into_iter().map(|l| (Line::styled(l, Style::default().fg(DIM)), None)).collect();
+            wrap(&note, inner_width).into_iter().map(|l| (Line::styled(l, Style::default().fg(dim())), None)).collect();
         rows.push((Line::raw(""), None));
         groups.push((None, rows, Vec::new(), Vec::new()));
     }
@@ -419,8 +419,8 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         let room = (compose_area.width as usize).saturating_sub(hint.width() + 6);
         let text = clipped(&format!("↩ {author}: {}", target.opening()), room);
         compose_block = compose_block.title_bottom(Line::from(vec![
-            Span::styled(format!(" {text}"), Style::default().fg(ACCENT)),
-            Span::styled(hint, Style::default().fg(DIM)),
+            Span::styled(format!(" {text}"), Style::default().fg(accent())),
+            Span::styled(hint, Style::default().fg(dim())),
         ]));
     }
     let inner = compose_block.inner(compose_area);
@@ -468,13 +468,13 @@ pub(super) fn draw_paper(frame: &mut Frame, app: &App) {
         QrKind::Address => ("Your address", "Scan it in Columba or rettui to add you as a contact"),
     };
     let paper_block = block(title, true)
-        .title_bottom(Line::styled(" y copy link · s save image · Esc close ", Style::default().fg(DIM)));
+        .title_bottom(Line::styled(" y copy link · s save image · Esc close ", Style::default().fg(dim())));
     let inner = paper_block.inner(rect);
     frame.render_widget(paper_block, rect);
     match &view.qr {
         Ok(qr) if fits => {
             let caption_area = Rect { height: 1, ..inner };
-            frame.render_widget(Paragraph::new(caption).style(Style::default().fg(DIM)), caption_area);
+            frame.render_widget(Paragraph::new(caption).style(Style::default().fg(dim())), caption_area);
             let code = Rect { x: inner.x, y: inner.y + 1, width: cols, height: rows };
             draw_qr(qr, code, frame.buffer_mut());
         }

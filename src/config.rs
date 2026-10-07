@@ -97,6 +97,12 @@ pub struct Settings {
     pub picture_size: String,
     /// How much goes to `rettui.log`: one of [`crate::logging::LEVELS`].
     pub log_level: String,
+    /// How times and dates read: one of [`crate::clock::CLOCKS`], and of
+    /// [`crate::clock::DATE_STYLES`].
+    pub clock: String,
+    pub date_style: String,
+    /// The terminal UI's colours: one of [`crate::ui::THEMES`].
+    pub tui_theme: String,
     /// Host an LXMF propagation node (messages kept in `propagation/`).
     pub pn_enabled: bool,
     /// Name the propagation node announces; the display name when unset.
@@ -150,6 +156,9 @@ impl Default for Settings {
             markdown_messages: true,
             picture_size: "medium".into(),
             log_level: "warn".into(),
+            clock: "24-hour".into(),
+            tui_theme: "dark".into(),
+            date_style: "month-day".into(),
             pn_enabled: false,
             pn_name: None,
             // lxmd's defaults.
@@ -576,6 +585,27 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "tui_theme",
+        label: "Terminal colours",
+        help: "The terminal UI's colours: dark (for a dark terminal), light (for a light one), or basic (16 colours, for terminals without full colour). The web UI picks its own, in its Status page",
+        kind: FieldKind::Choice(crate::ui::THEMES),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "clock",
+        label: "Clock",
+        help: "Times as 24-hour (14:05) or 12-hour (2:05 PM), in both UIs",
+        kind: FieldKind::Choice(crate::clock::CLOCKS),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "date_style",
+        label: "Dates",
+        help: "Dates as month-day (Oct 07), day-month (07 Oct) or year-month-day (2025-10-07)",
+        kind: FieldKind::Choice(crate::clock::DATE_STYLES),
+        effect: Effect::Now,
+    },
+    Field {
         key: "wrap_lines",
         label: "Wrap editor lines",
         help: "Wrap long lines in the text editors (pages, Reticulum config) instead of scrolling sideways",
@@ -734,6 +764,9 @@ impl Settings {
             "markdown_messages" => self.markdown_messages.to_string(),
             "picture_size" => self.picture_size.clone(),
             "log_level" => self.log_level.clone(),
+            "clock" => self.clock.clone(),
+            "tui_theme" => self.tui_theme.clone(),
+            "date_style" => self.date_style.clone(),
             "pn_enabled" => self.pn_enabled.to_string(),
             "pn_name" => self.pn_name.clone().unwrap_or_default(),
             "pn_stamp_cost" => self.pn_stamp_cost.to_string(),
@@ -791,6 +824,9 @@ impl Settings {
             "markdown_messages" => self.markdown_messages = toggle(value).map_err(fail)?,
             "picture_size" => self.picture_size = choice(value, crate::app::shrink::PICTURE_SIZES).map_err(fail)?,
             "log_level" => self.log_level = choice(value, crate::logging::LEVELS).map_err(fail)?,
+            "clock" => self.clock = choice(value, crate::clock::CLOCKS).map_err(fail)?,
+            "tui_theme" => self.tui_theme = choice(value, crate::ui::THEMES).map_err(fail)?,
+            "date_style" => self.date_style = choice(value, crate::clock::DATE_STYLES).map_err(fail)?,
             "pn_name" => {
                 if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
                     return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));
