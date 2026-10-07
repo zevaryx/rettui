@@ -681,6 +681,12 @@ impl App {
                 let text = if text.is_empty() { message.opening() } else { text };
                 self.copy(&text, "the message");
             }
+            MessageAction::Forward => {
+                if message.content.trim().is_empty() && message.attachments.is_empty() {
+                    return self.warn("There's nothing in that message to forward (only its text and files are)");
+                }
+                self.open_forward(index);
+            }
             MessageAction::Retry => {
                 let Some(key) = self.active_conversation.clone() else { return };
                 match self.retry_message(&key, &id, self.delivery_mode) {
@@ -703,6 +709,9 @@ impl App {
             actions.extend([MessageAction::Reply, MessageAction::React]);
         }
         actions.push(MessageAction::Copy);
+        if !message.content.trim().is_empty() || !message.attachments.is_empty() {
+            actions.push(MessageAction::Forward);
+        }
         if !message.incoming && matches!(message.state, MessageState::Failed(_)) {
             actions.push(MessageAction::Retry);
         }
@@ -862,6 +871,7 @@ impl App {
             KeyCode::Enter | KeyCode::Char('r') => self.message_action(index, MessageAction::Reply),
             KeyCode::Char('e') => self.message_action(index, MessageAction::React),
             KeyCode::Char('y') => self.message_action(index, MessageAction::Copy),
+            KeyCode::Char('f') => self.message_action(index, MessageAction::Forward),
             KeyCode::Char('o') => self.open_picked(index),
             KeyCode::Char('t') => self.message_action(index, MessageAction::Retry),
             KeyCode::Char('x') | KeyCode::Delete => self.message_action(index, MessageAction::Delete),
@@ -1171,6 +1181,14 @@ impl App {
             KeyCode::Char('/') => self.open_message_search(),
             KeyCode::Char('H') if self.active_conversation.is_some() => self.open_archive(),
             KeyCode::Char('*') => self.toggle_pinned(),
+            KeyCode::Char('E') => {
+                if let Some(key) = self.active_conversation.clone() {
+                    match self.export_conversation(&key) {
+                        Ok(path) => self.confirm(format!("Exported to {}", path.display())),
+                        Err(e) => self.warn(e),
+                    }
+                }
+            }
             KeyCode::Char('R') => match self.mark_all_read() {
                 0 => self.confirm("Nothing is unread"),
                 1 => self.confirm("Marked 1 conversation read"),

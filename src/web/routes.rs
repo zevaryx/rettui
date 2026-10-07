@@ -85,6 +85,8 @@ pub fn router(state: WebState) -> Router {
         .route("/icons", get(icons))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/archive", get(conversation_archive))
+        .route("/conversations/{key}/export", get(export_conversation))
+        .route("/conversations/{key}/forward", post(forward_message))
         .route("/conversations/{key}/read", post(read_conversation))
         .route("/conversations/{key}/notify", post(mute_conversation))
         .route("/conversations/{key}/pin", post(pin_conversation))
@@ -1119,6 +1121,43 @@ async fn conversation_archive(State(state): State<WebState>, Path(key): Path<Str
         .map_err(|e| bad(e.to_string()))?
         .map_err(|e| bad(format!("Couldn't read the archive: {e}")))?;
     Ok(axum::Json(views::archived(messages)))
+}
+
+/// A conversation as text, archived messages and all, to save.
+async fn export_conversation(State(state): State<WebState>, Path(key): Path<String>) -> Result<Response, ApiError> {
+    let key = address(&key)?;
+    let wanted = key.clone();
+    let (name, kept) = state
+        .read(move |o| (o.app.store.display_name(&wanted), o.app.store.conversations.get(&wanted).map(|c| c.messages.clone()).unwrap_or_default()))
+        .await?;
+    let dir = state.paths.archive.clone();
+    let (text, file) = tokio::task::spawn_blocking(move || {
+        let archived = crate::store::read_archive(&dir, &key).map_err(|e| format!("Couldn't read the archive: {e}"))?;
+        let text = crate::app::forward::transcript(&name, &key, archived.iter().chain(&kept));
+        let stamp = chrono::Local::now().format("%Y-%m-%d");
+        Ok::<_, String>((text, format!("{name}-{stamp}.txt")))
+    })
+    .await
+    .map_err(|e| bad(e.to_string()))?
+    .map_err(bad)?;
+    let disposition = format!("attachment; filename=\"{}\"", file_name(&file));
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()), (header::CONTENT_DISPOSITION, disposition)], text).into_response())
+}
+
+#[derive(Deserialize)]
+struct ForwardBody {
+    /// The message forwarded (its id), and who to.
+    id: String,
+    to: String,
+}
+
+/// Send a message of this conversation on to someone else: its text and
+/// copies of its files.
+async fn forward_message(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<ForwardBody>) -> ApiResult {
+    let key = address(&key)?;
+    let to = address(&body.to)?;
+    let id = state.write(move |o| o.app.forward_message(&key, &body.id, &to)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "ok": true, "id": format!("local-{id}") })))
 }
 
 async fn attachment(

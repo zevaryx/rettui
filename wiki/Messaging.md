@@ -164,6 +164,17 @@ it's with, when, and the part that matched.
   message isn't sent again so for ten minutes after the last time, however
   often they announce. Turn it off with *Resend when they announce*
   (Status, `resend_on_announce`).
+- **Forward a message:** its text and its files go to another conversation
+  (or to an address typed in full) as a new message of yours, by how
+  messages to them go. The files are copied, so deleting either message
+  leaves the other's. In the TUI, pick it and press `f`, then type part of
+  a name or address and press `Enter`; in the web UI, it's *Forward…* in
+  the **⋯** beside it.
+- **Export a conversation:** all of it, archived messages too, as a text
+  file: who wrote what and when, with the names of files, locations and
+  reactions. `E` in the TUI's Messages tab writes it to `exports/` in the
+  downloads folder (and says where); **Export as text** in the web UI's
+  **Contact** dialog downloads it.
 - **Delete a message:** it goes from rettui, with any files rettui saved
   for it (received files, and ones uploaded in the web UI). A file you sent
   from elsewhere on your computer stays where it is. It isn't deleted from

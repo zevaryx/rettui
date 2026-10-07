@@ -31,6 +31,7 @@ mod saver;
 pub mod node;
 pub mod reticulum;
 pub mod archive;
+pub mod forward;
 pub mod search;
 pub mod shrink;
 mod settings;
@@ -235,6 +236,10 @@ pub struct Regions {
     pub message_search_box: Rect,
     /// The archive reader's box (`H` in Messages).
     pub archive: Rect,
+    /// The forward list's box and its rows (`f` on a picked message).
+    pub forward_box: Rect,
+    pub forward_list: Rect,
+    pub forward_first: usize,
     pub browser_list: Rect,
     pub conversations: Rect,
     pub history: Rect,
@@ -309,6 +314,8 @@ pub enum MessageAction {
     Reply,
     React,
     Copy,
+    /// Send it on to someone else.
+    Forward,
     /// Send a message that failed again.
     Retry,
     Delete,
@@ -321,6 +328,7 @@ impl MessageAction {
             MessageAction::Reply => ("↩ Reply", 'r'),
             MessageAction::React => ("🙂 React", 'e'),
             MessageAction::Copy => ("⧉ Copy", 'y'),
+            MessageAction::Forward => ("➦ Forward", 'f'),
             MessageAction::Retry => ("↻ Retry", 't'),
             MessageAction::Delete => ("✕ Delete", 'x'),
         }
@@ -424,6 +432,8 @@ pub struct App {
     pub message_search: Option<search::MessageSearch>,
     /// A conversation's archived messages, open to read (`H`).
     pub archive_reader: Option<archive::ArchiveReader>,
+    /// Where to forward a picked message to (`f`).
+    pub forward: Option<forward::ForwardPicker>,
     /// The emoji picker, over the input being written in.
     pub emoji: Option<emoji::EmojiPicker>,
     /// The `:name` list while typing one.
@@ -570,6 +580,7 @@ impl App {
             scroll_to: None,
             message_search: None,
             archive_reader: None,
+            forward: None,
             emoji: None,
             shortcode: emoji::Shortcode::default(),
             message_scroll: 0,
@@ -787,6 +798,8 @@ impl App {
             self.paste_network_search(text);
         } else if self.message_search.is_some() && self.tab == Tab::Messages {
             self.paste_message_search(text);
+        } else if self.forward.is_some() && self.tab == Tab::Messages {
+            self.paste_forward(text);
         } else if self.browser.search.typing && self.tab == Tab::Browser {
             self.paste_browser_search(text);
         } else if let Some(field) = self.selected_text_field() {
@@ -1231,7 +1244,7 @@ impl App {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         discriminant(&self.tab).hash(&mut h);
         (self.composing, self.prompt.is_some(), self.net_search.typing, self.keys_help).hash(&mut h);
-        (self.message_search.is_some(), self.archive_reader.is_some()).hash(&mut h);
+        (self.message_search.is_some(), self.archive_reader.is_some(), self.forward.is_some()).hash(&mut h);
         // Emoji over the view, which some terminals draw narrower than
         // they should (see `take_full_redraw`).
         if let Some(picker) = &self.emoji {

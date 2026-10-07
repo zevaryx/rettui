@@ -131,6 +131,10 @@ impl App {
             self.archive_key(key);
             return;
         }
+        if self.forward.is_some() && self.tab == Tab::Messages {
+            self.forward_key(key);
+            return;
+        }
         if self.net_search.typing && self.tab == Tab::Network {
             match key.code {
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
@@ -230,6 +234,21 @@ impl App {
                     Some(hit) if list.contains(at) => self.open_hit(&hit),
                     _ if self.regions.message_search_box.contains(at) => {}
                     _ => self.message_search = None,
+                }
+            }
+            return;
+        }
+        // Forwarding: a click on a conversation sends it there; outside
+        // the box, closes it.
+        if self.forward.is_some() && self.tab == Tab::Messages {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                let at = Position::new(mouse.column, mouse.row);
+                let list = self.regions.forward_list;
+                let index = self.regions.forward_first + at.y.saturating_sub(list.y) as usize;
+                match self.forward_targets().get(index).cloned() {
+                    Some(to) if list.contains(at) => self.forward_to(&to),
+                    _ if self.regions.forward_box.contains(at) => {}
+                    _ => self.forward = None,
                 }
             }
             return;

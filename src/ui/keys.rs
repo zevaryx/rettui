@@ -98,6 +98,10 @@ pub fn keys(app: &App) -> Keys {
             "Search messages",
             &[("Enter", "open"), ("↑↓", "select"), ("Tab", "here/all"), ("Esc", "close"), ("^V", "paste")],
         ),
+        Tab::Messages if app.forward.is_some() => typing(
+            "Forward to",
+            &[("Enter", "forward"), ("↑↓", "select"), ("Esc", "cancel"), ("^V", "paste")],
+        ),
         Tab::Messages if app.archive_reader.is_some() => mode(
             "Archive",
             &[("↑↓", "scroll"), ("PgUp/Dn", "page"), ("Home/End", "oldest/newest"), ("Esc", "close")],
@@ -147,6 +151,7 @@ pub fn keys(app: &App) -> Keys {
                 ("r", "reply"),
                 ("e", "react"),
                 ("y", "copy"),
+                ("f", "forward"),
                 ("o", "open"),
                 ("t", "retry"),
                 ("x", "delete"),
@@ -173,6 +178,7 @@ pub fn keys(app: &App) -> Keys {
                 ("H", "archive"),
                 ("*", "pin"),
                 ("R", "all read"),
+                ("E", "export"),
                 ("X", "delete"),
                 ("↑↓", "select"),
                 ("PgUp/Dn", "scroll"),

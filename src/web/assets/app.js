@@ -2608,12 +2608,47 @@ app.views.messages = {
   // What else can be done with a message.
   messageMenu(m, conversation, anchor) {
     const items = [{ text: 'Copy text', action: () => copy(m.content || this.opening(m), 'the message') }];
+    if (m.content?.trim() || m.attachments.length) items.push({ text: 'Forward…', action: () => this.forwardDialog(conversation.key, m) });
     if (m.state.kind === 'failed') items.push({ text: 'Send again', action: () => this.retry(conversation.key, m.id) });
     items.push({ text: m.attachments.length ? 'Delete (and its files)' : 'Delete', danger: true, action: async () => {
       if (!confirm(m.attachments.length ? 'Delete this message and the files it brought?' : 'Delete this message?')) return;
       if (await attempt(() => api.post(`/conversations/${conversation.key}/messages/delete`, { id: m.id }), 'Deleted the message')) this.update();
     } });
     openSheet(null, items, anchor);
+  },
+
+  // Send a message on to another conversation (or an address): its text
+  // and copies of its files.
+  async forwardDialog(from, m) {
+    const conversations = (await attempt(() => api.get('/conversations')) || []).filter((c) => !c.request);
+    const filter = el('input', { type: 'text', placeholder: 'A name, or an LXMF address', autocomplete: 'off' });
+    const list = el('div', { class: 'forward-list' });
+    const send = async (to, close) => {
+      if (await attempt(() => api.post(`/conversations/${from}/forward`, { id: m.id, to: to.key }), `Forwarded to ${to.name}`)) {
+        close();
+        this.update();
+      }
+    };
+    dialog('Forward to', (close) => {
+      const render = () => {
+        const words = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const shown = conversations.filter((c) => words.every((w) => c.name.toLowerCase().includes(w) || c.key.includes(w)));
+        // An address typed in full, even with no conversation yet.
+        const typed = filter.value.trim().replace(/^lxmf@/, '').toLowerCase();
+        if (/^[0-9a-f]{32}$/.test(typed) && !shown.some((c) => c.key === typed)) shown.unshift({ key: typed, name: `<${typed.slice(0, 12)}>`, fresh: true });
+        list.replaceChildren(...(shown.length ? shown.map((c) => el('button', { class: 'list-item', onclick: () => send(c, close) },
+          el('span', { class: 'name grow', text: c.name }),
+          el('span', { class: 'dim mono', text: c.fresh ? 'new conversation' : c.key.slice(0, 12) })))
+          : [el('div', { class: 'empty', text: 'No conversation matches: type an LXMF address (32 hex characters)' })]));
+      };
+      filter.addEventListener('input', render);
+      filter.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') list.querySelector('button')?.click();
+      });
+      render();
+      setTimeout(() => filter.focus(), 50);
+      return [el('p', { class: 'dim', text: `${this.opening(m)}${m.attachments.length ? ` (with ${m.attachments.length} ${m.attachments.length === 1 ? 'file' : 'files'})` : ''}` }), filter, list];
+    }, { className: 'forward-dialog' });
   },
 
   // Your name for them, notes about them, and deleting the conversation.
@@ -2644,6 +2679,8 @@ app.views.messages = {
       el('label', { class: 'field' }, el('span', { text: 'Notes' }), notes),
       el('div', { class: 'row actions' },
         el('button', { class: 'danger', text: 'Delete conversation', onclick: () => this.deleteConversation(key, conversation, close) }),
+        el('button', { text: 'Export as text', title: 'Save the conversation, archived messages and all, as a text file',
+          onclick: () => el('a', { href: `api/conversations/${key}/export`, download: '' }).click() }),
         el('span', { class: 'grow' }),
         el('button', { class: 'primary', text: 'Save', onclick: async () => {
           if (await attempt(() => api.post(`/conversations/${key}/contact`, { alias: alias.value, notes: notes.value }), 'Saved')) {
