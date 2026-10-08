@@ -954,6 +954,8 @@ impl Settings {
                 self.map_tiles = optional(value);
             }
             "map_tiles_file" => {
+                // The one open now, closed: another is chosen, or none.
+                crate::web::mbtiles::forget();
                 self.map_tiles_file = match optional(value) {
                     None => None,
                     Some(text) => {

@@ -57,18 +57,29 @@ fn with<T>(path: &Path, read: impl FnOnce(&Connection, &Option<String>) -> T) ->
 }
 
 /// What a file says of itself, to check it when it's chosen: its name and
-/// zoom levels.
+/// zoom levels. It's opened only for this (a file kept open can't be
+/// deleted or replaced on Windows, and one checked may not be used).
 pub fn describe(path: &Path) -> Result<String, String> {
-    with(path, |connection, _| {
-        let name = metadata(connection, "name").filter(|n| !n.trim().is_empty());
-        let zooms: Option<(u32, u32)> =
-            connection.query_row("SELECT MIN(zoom_level), MAX(zoom_level) FROM tiles", [], |row| Ok((row.get(0)?, row.get(1)?))).ok();
-        let name = name.unwrap_or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-        match zooms {
-            Some((least, most)) => format!("{name}, zoom {least} to {most}"),
-            None => format!("{name}, with no tiles"),
-        }
+    let connection = open(path)?;
+    let name = metadata(&connection, "name").filter(|n| !n.trim().is_empty());
+    let zooms: Option<(u32, u32)> =
+        connection.query_row("SELECT MIN(zoom_level), MAX(zoom_level) FROM tiles", [], |row| Ok((row.get(0)?, row.get(1)?))).ok();
+    let name = name.unwrap_or_else(|| path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    Ok(match zooms {
+        Some((least, most)) => format!("{name}, zoom {least} to {most}"),
+        None => format!("{name}, with no tiles"),
     })
+}
+
+/// Close the file kept open, if any: another is chosen, or none.
+pub fn forget() {
+    *OPEN.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// Whether `path` is the file kept open.
+#[cfg(test)]
+fn is_open(path: &Path) -> bool {
+    OPEN.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|(open, ..)| open == path)
 }
 
 /// What the file credits for its tiles (its `attribution`, as text), if
@@ -166,7 +177,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("hilltop.mbtiles");
         sample(&file, "png");
+        // Checked, it's closed again (Windows can't delete a file open).
         assert_eq!(describe(&file).unwrap(), "Hilltop, zoom 1 to 2");
+        assert!(!is_open(&file));
         assert_eq!(credit(&file).as_deref(), Some("© OpenStreetMap contributors"));
         assert_eq!(tile(&file, 1, 0, 0).unwrap().unwrap().data, b"\x89PNG\r\n\x1a\ntop left");
         assert_eq!(tile(&file, 2, 3, 3).unwrap().unwrap().kind, "image/png");
@@ -181,8 +194,12 @@ mod tests {
         std::fs::write(&text, "not a database").unwrap();
         assert!(describe(&text).unwrap_err().contains("isn't an MBTiles file"));
         assert!(describe(&dir.join("missing.mbtiles")).unwrap_err().contains("There's no file"));
-        // The first is read again once the others were tried.
+        // The first is read again once the others were tried, and closed
+        // once it's forgotten. (Whether it's open in between isn't asked:
+        // tests changing the setting meanwhile forget it too.)
         assert!(tile(&file, 1, 0, 0).unwrap().is_some());
+        forget();
+        assert!(!is_open(&file));
         // Closer than it goes: the part of one further out, enlarged.
         let real = dir.join("real.mbtiles");
         let connection = Connection::open(&real).unwrap();
