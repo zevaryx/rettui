@@ -105,3 +105,83 @@ jobs:
             --title "rettui $TAG" \
             --notes-file notes.md \
             "${prerelease[@]}"
+
+  # A release (not a prerelease) goes to the Homebrew tap and the AUR, each
+  # once its secrets are set (see Development, "Homebrew and the AUR"):
+  # without them that half is skipped, with a notice. Running it again
+  # pushes nothing new.
+  publish:
+    name: Homebrew and AUR
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+
+      # What the release has: the formula and PKGBUILD are written from it.
+      - name: The release's checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir dist
+
+      - name: Homebrew tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          # The tap's repository: HOMEBREW_TAP (a repository variable), else
+          # <owner>/homebrew-rettui.
+          TAP: ${{ vars.HOMEBREW_TAP || format('{0}/homebrew-rettui', github.repository_owner) }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::notice::No HOMEBREW_TAP_DEPLOY_KEY secret: the Homebrew tap isn't updated"
+            exit 0
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/tap_key && chmod 600 ~/.ssh/tap_key
+          # GitHub's host key, as docs.github.com publishes it.
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > ~/.ssh/known_hosts_github
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/tap_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts_github -o StrictHostKeyChecking=yes"
+          .github/scripts/homebrew-formula.sh "$TAG" dist/SHA256SUMS > rettui.rb
+          .github/scripts/publish-homebrew.sh "$TAG" rettui.rb "git@github.com:$TAP.git"
+
+      - name: AUR
+        env:
+          AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+          AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+        run: |
+          if [ -z "$AUR_KEY" ]; then
+            echo "::notice::No AUR_SSH_PRIVATE_KEY secret: the AUR package isn't updated"
+            exit 0
+          fi
+          if [ -z "$AUR_USERNAME" ] || [ -z "$AUR_EMAIL" ]; then
+            echo "::error::AUR_USERNAME and AUR_EMAIL are needed too: the package's maintainer and its commits' author"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$AUR_KEY" > ~/.ssh/aur_key && chmod 600 ~/.ssh/aur_key
+          # The AUR's host key, checked against the fingerprint
+          # aur.archlinux.org publishes.
+          # (A scan that fails is caught by the check, which says so.)
+          ssh-keyscan -t ed25519 aur.archlinux.org 2> /dev/null > ~/.ssh/known_hosts_aur || true
+          fingerprint="$(ssh-keygen -lf ~/.ssh/known_hosts_aur 2> /dev/null | awk '{ print $2 }')" || true
+          if [ "$fingerprint" != "SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4" ]; then
+            echo "::error::aur.archlinux.org's host key ($fingerprint) isn't the one it publishes"
+            exit 1
+          fi
+          AUR_MAINTAINER="$AUR_USERNAME <$AUR_EMAIL>" .github/scripts/aur-pkgbuild.sh "$TAG" dist/SHA256SUMS aur
+          # .SRCINFO as makepkg writes it, in Arch Linux (makepkg won't run
+          # as root).
+          docker run --rm -v "$PWD/aur/PKGBUILD:/PKGBUILD:ro" archlinux:base bash -euc '
+            useradd -m build
+            install -o build -m 644 /PKGBUILD /home/build/PKGBUILD
+            cd /home/build && runuser -u build -- makepkg --printsrcinfo
+          ' > srcinfo
+          mv srcinfo aur/.SRCINFO
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts_aur -o StrictHostKeyChecking=yes"
+          .github/scripts/publish-aur.sh "$TAG" aur ssh://aur@aur.archlinux.org/rettui-bin.git

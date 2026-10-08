@@ -51,7 +51,7 @@ Download `rettui` for Linux, Windows or macOS from the
 `PATH` (or install the release's Debian package:
 `sudo apt install ./rettui_<version>_amd64.deb`; see
 [Installing](https://github.com/zevaryx/rettui/wiki/Installing#packages)
-for Arch and Homebrew), then:
+for the AUR and Homebrew), then:
 
 ```sh
 rettui          # the terminal UI

@@ -27,13 +27,12 @@ the checksums.
   (`rettui_<version>_arm64.deb`): `sudo apt install ./rettui_<version>_amd64.deb`.
   It puts `rettui` in `/usr/bin`; a newer release's package installs over
   it the same way.
-- **Arch Linux:** each release has the `PKGBUILD` of the AUR's
-  `rettui-bin` package (the ready-built binary): put it in a folder of
-  its own and run `makepkg -si` there. Once it's published to the AUR,
-  an AUR helper installs it (`yay -S rettui-bin`).
-- **Homebrew** (macOS and Linux): each release has a formula,
-  `rettui.rb`, for a tap; once there's one, `brew install` installs from
-  it.
+- **Arch Linux:** the AUR's `rettui-bin` package (the ready-built
+  binary): `yay -S rettui-bin`, or any AUR helper. Each release also has
+  its `PKGBUILD`: put it in a folder of its own and run `makepkg -si`
+  there.
+- **Homebrew** (macOS and Linux): `brew install zevaryx/rettui/rettui`,
+  from rettui's tap.
 
 Installed by a package manager, rettui leaves [updating](#updating) to it.
 

@@ -59,7 +59,9 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   6. creates a GitHub release with the archives, the packages,
      `SHA256SUMS`, `rettui.rb` and `PKGBUILD`, and the tag's section of
      `CHANGELOG.md` (printed by `.github/scripts/release-notes.sh v1.7.0`)
-     as its notes, with the Docker image's name.
+     as its notes, with the Docker image's name;
+  7. for a release, publishes the formula to the Homebrew tap and the
+     package to the AUR (see *Homebrew and the AUR* below).
 
   A tag containing a hyphen (`v1.3.0-rc.1`) makes a prerelease. Its image
   gets only the version tag, not `latest`.
@@ -92,23 +94,32 @@ git push origin v1.2.1
 
 ### Homebrew and the AUR
 
-Publishing there needs accounts of their own, so a release only attaches
-what they take; the scripts write the same from any release's
-`SHA256SUMS`.
+The Release workflow's last job, *Homebrew and AUR*, publishes a release
+(not a prerelease) to both, from the release's `SHA256SUMS`. Each half
+runs once its secrets are set (*Settings → Secrets and variables →
+Actions*), and is skipped with a notice until then. Running it again
+(*Re-run jobs*) pushes nothing new, so it's safe to re-run after fixing a
+secret.
 
-- **Homebrew:** a tap is a GitHub repository named `homebrew-<name>`
-  (for example `zevaryx/homebrew-rettui`). Put the release's `rettui.rb`
-  in it at `Formula/rettui.rb` and push; then anyone can
-  `brew install zevaryx/rettui/rettui`, and `brew upgrade` once the next
-  release's formula is pushed.
-- **AUR:** with an AUR account and its SSH key, the first time
-  `git clone ssh://aur@aur.archlinux.org/rettui-bin.git` (an empty
-  repository, until something is pushed). For each release, write the
-  package into it and push:
-
-  ```sh
-  .github/scripts/aur-pkgbuild.sh v1.2.1 SHA256SUMS rettui-bin
-  cd rettui-bin && git commit -am "1.2.1" && git push
-  ```
-
+- **Homebrew:** the tap is a GitHub repository named `homebrew-rettui`
+  (`zevaryx/homebrew-rettui`; another, as `owner/name`, in the
+  repository variable `HOMEBREW_TAP`). The secret
+  `HOMEBREW_TAP_DEPLOY_KEY` is the private half of an SSH key whose
+  public half is the tap's deploy key, with write access (tap's
+  *Settings → Deploy keys*). The job writes the formula to
+  `Formula/rettui.rb` (`.github/scripts/publish-homebrew.sh`). Then
+  `brew install zevaryx/rettui/rettui` installs rettui, and
+  `brew upgrade` the next release.
+- **AUR:** the secret `AUR_SSH_PRIVATE_KEY` is the private half of an SSH
+  key whose public half is on the AUR account (*My Account → SSH Public
+  Key*); `AUR_USERNAME` and `AUR_EMAIL` are the PKGBUILD's maintainer
+  line and its commits' author, both public on the AUR. The job checks
+  the AUR's host key against the fingerprint aur.archlinux.org
+  publishes, writes `.SRCINFO` with `makepkg` (in an Arch Linux
+  container), and pushes to `rettui-bin`
+  (`.github/scripts/publish-aur.sh`); the first push makes the package.
   Then `yay -S rettui-bin` (or any AUR helper) installs it.
+
+By hand, from any release's `SHA256SUMS`: `homebrew-formula.sh` and
+`aur-pkgbuild.sh` write the formula and the package, and
+`publish-homebrew.sh` and `publish-aur.sh` push them, as the job does.

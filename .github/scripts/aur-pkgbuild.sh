@@ -3,7 +3,8 @@
 # its SHA256SUMS: PKGBUILD and .SRCINFO in <out-dir>, to commit to the
 # package's AUR repository (ssh://aur@aur.archlinux.org/rettui-bin.git).
 # The ready-built Linux binaries, x86-64 and ARM64. Installed this way,
-# rettui leaves updating to pacman (or an AUR helper).
+# rettui leaves updating to pacman (or an AUR helper). AUR_MAINTAINER, if
+# set ("Name <email>"), is the PKGBUILD's maintainer line.
 #
 #   .github/scripts/aur-pkgbuild.sh v1.7.0 dist/SHA256SUMS aur
 set -euo pipefail
@@ -33,8 +34,13 @@ base="https://github.com/$repo/releases/download/v\${pkgver}/rettui-v\${pkgver}"
 desc="Reticulum client for the terminal and the browser: LXMF messaging, NomadNet browsing and hosting, and RRC chat"
 
 mkdir -p "$out"
+maintainer=""
+if [ -n "${AUR_MAINTAINER:-}" ]; then
+  maintainer="# Maintainer: $AUR_MAINTAINER
+"
+fi
 cat > "$out/PKGBUILD" <<PKGBUILD
-pkgname=rettui-bin
+${maintainer}pkgname=rettui-bin
 pkgver=$version
 pkgrel=1
 pkgdesc="$desc"
