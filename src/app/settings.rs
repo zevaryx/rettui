@@ -262,6 +262,10 @@ impl App {
             }
             KeyCode::Char('i') => self.ask_identity_file(),
             KeyCode::Char('U') => self.ask_install_update(),
+            KeyCode::Char('u') => {
+                let doing = self.check_for_updates();
+                self.confirm(doing);
+            }
             _ => {}
         }
     }

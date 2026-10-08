@@ -554,7 +554,15 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 }
             }
             Some(image) = decoded.recv() => owner.app.on_decoded(image),
-            _ = tick.tick() => owner.app.on_tick(),
+            _ = tick.tick() => {
+                // A check for updates, or an install, that finished: Status
+                // shows it.
+                let before = owner.app.updates.shown();
+                owner.app.on_tick();
+                if owner.app.updates.shown() != before {
+                    notify(&changes, Scope::STATUS);
+                }
+            }
             _ = save.tick() => owner.app.save_if_dirty(),
             () = &mut shutdown => break Ok(()),
         }

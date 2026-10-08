@@ -1,6 +1,7 @@
 //! Checking for a newer rettui (see `crate::update`): asked in a thread of
 //! its own, once a day while Check for updates is on (it's off unless
-//! turned on), and the answer kept.
+//! turned on), or when asked (`u` in Status, Check now in the web UI), and
+//! the answer kept.
 //! A newer release is said once a run, and shown by the version (top left
 //! in the TUI, in the web UI's sidebar) and in Status.
 
@@ -16,6 +17,14 @@ pub struct Updates {
     pub checked: Checked,
     /// A check on its way: where its answer comes.
     asking: Option<Receiver<Result<Release, String>>>,
+    /// The check on its way was asked for: its answer is said, whatever it
+    /// is.
+    by_hand: bool,
+    /// A check was asked for this run: what it found is shown, even with
+    /// Check for updates off.
+    asked: bool,
+    /// Why the last check asked for couldn't be made.
+    pub error: Option<String>,
     /// When a check last couldn't be made (it's tried again an hour on).
     failed: Option<Instant>,
     /// The version the user was told of, this run.
@@ -37,6 +46,9 @@ impl Updates {
         Self {
             checked: Checked::load(path),
             asking: None,
+            by_hand: false,
+            asked: false,
+            error: None,
             failed: None,
             told: None,
             fetch: update::fetch,
@@ -51,12 +63,99 @@ impl Updates {
     pub fn installing(&self) -> bool {
         self.installing.is_some()
     }
+
+    /// Checking for a newer release, now.
+    pub fn checking(&self) -> bool {
+        self.asking.is_some()
+    }
+
+    /// What Status shows of checks and installs, to tell when it changed
+    /// (they finish on their own, between other events).
+    pub fn shown(&self) -> impl PartialEq + use<> {
+        (
+            self.checking(),
+            self.checked.clone(),
+            self.error.clone(),
+            self.asked,
+            self.installing.as_ref().map(|(version, _)| version.clone()),
+            self.installed.clone(),
+        )
+    }
+
+    /// Ask for the newest release, in a thread of its own.
+    fn ask(&mut self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let fetch = self.fetch;
+        std::thread::spawn(move || {
+            let _ = tx.send(fetch());
+        });
+        self.asking = Some(rx);
+    }
 }
 
 impl App {
-    /// A newer release, if one was found and update checks are on.
+    /// A newer release, if one was found and update checks are on (or one
+    /// was asked for this run).
     pub fn update_available(&self) -> Option<&Release> {
-        self.settings.update_check.then(|| self.updates.checked.newer_than(update::VERSION)).flatten()
+        (self.settings.update_check || self.updates.asked).then(|| self.updates.checked.newer_than(update::VERSION)).flatten()
+    }
+
+    /// Check for a newer release now (`u` in Status, Check now in the web
+    /// UI), whether or not Check for updates is on; what it finds is said.
+    pub fn check_for_updates(&mut self) -> String {
+        // One on its way already (the daily one) is said when it's in.
+        if !self.updates.checking() {
+            self.updates.ask();
+        }
+        self.updates.by_hand = true;
+        self.updates.error = None;
+        "Checking for updates…".into()
+    }
+
+    /// What's known of newer releases, beside the version in Status: a
+    /// check on its way, why the last one asked for couldn't be made, or
+    /// what the last one found, and when. With Check for updates off, and
+    /// none asked for this run, nothing found earlier is shown.
+    pub fn version_status(&self) -> String {
+        if self.updates.checking() {
+            return "checking for updates…".into();
+        }
+        if let Some(e) = &self.updates.error {
+            return format!("couldn't check for updates: {e}");
+        }
+        if !self.settings.update_check && !self.updates.asked {
+            return "Check for updates is off".into();
+        }
+        let checked = &self.updates.checked;
+        if checked.at == 0 {
+            return "not checked for updates yet".into();
+        }
+        let when = crate::clock::when(checked.at as f64);
+        match self.update_available() {
+            Some(release) => format!("rettui {} is out (checked {when})", release.version),
+            None => format!("up to date (checked {when})"),
+        }
+    }
+
+    /// What a check asked for found, said.
+    fn say_checked(&mut self) {
+        let latest = self.updates.checked.latest.clone();
+        match self.update_available().cloned() {
+            Some(release) => {
+                self.updates.told = Some(release.version.clone());
+                let how = match &self.updates.install {
+                    Install::InPlace { .. } => "U in Status installs it".to_string(),
+                    Install::Elsewhere(how) => how.clone(),
+                };
+                self.notify(format!("rettui {} is out (this is {}): {how}", release.version, update::VERSION));
+            }
+            None => match latest {
+                Some(release) if release.version != update::VERSION => {
+                    self.notify(format!("This rettui ({}) is newer than the latest release ({})", update::VERSION, release.version))
+                }
+                _ => self.notify(format!("rettui {} is the newest release", update::VERSION)),
+            },
+        }
     }
 
     /// Take a check's answer, say once if there's a newer release, and ask
@@ -87,12 +186,22 @@ impl App {
                     if let Err(e) = self.updates.checked.save(&self.paths.update_check) {
                         self.log(format!("Couldn't keep what the update check found: {e}"));
                     }
+                    if std::mem::take(&mut self.updates.by_hand) {
+                        self.updates.asked = true;
+                        self.say_checked();
+                    }
                 }
                 Ok(Err(e)) => {
                     self.updates.asking = None;
                     self.updates.failed = Some(Instant::now());
-                    // Offline is usual for a mesh client: not worth the log.
-                    tracing::debug!("{e}");
+                    if std::mem::take(&mut self.updates.by_hand) {
+                        self.warn(format!("Couldn't check for updates: {e}"));
+                        self.updates.error = Some(e);
+                    } else {
+                        // Offline is usual for a mesh client: not worth the
+                        // log, unless asked.
+                        tracing::debug!("{e}");
+                    }
                 }
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => self.updates.asking = None,
@@ -114,12 +223,7 @@ impl App {
         let since = Duration::from_secs((now() as i64 - self.updates.checked.at).unsigned_abs());
         let retry = self.updates.failed.is_none_or(|at| at.elapsed() >= update::RETRY);
         if since >= update::EVERY && retry {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let fetch = self.updates.fetch;
-            std::thread::spawn(move || {
-                let _ = tx.send(fetch());
-            });
-            self.updates.asking = Some(rx);
+            self.updates.ask();
         }
     }
 
@@ -226,6 +330,46 @@ mod tests {
         quiet.on_tick();
         assert!(quiet.update_available().is_none() && quiet.updates.asking.is_none());
         assert_eq!(quiet.version_url(), crate::config::PROJECT_URL);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_check_asked_for_says_what_it_found_with_daily_checks_off() {
+        let dir = std::env::temp_dir().join(format!("rettui-updates-by-hand-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        assert!(!app.settings.update_check);
+        assert_eq!(app.version_status(), "Check for updates is off");
+        // This version is the newest.
+        app.updates.fetch = || Ok(Release { version: crate::update::VERSION.into(), url: crate::config::PROJECT_URL.into() });
+        app.check_for_updates();
+        assert_eq!(app.version_status(), "checking for updates…");
+        settle(&mut app);
+        assert!(app.notice.as_ref().unwrap().text.ends_with("is the newest release"));
+        assert!(app.version_status().starts_with("up to date (checked "));
+        assert!(app.update_available().is_none());
+        // A build newer than the latest release (as one from dev is).
+        app.updates.fetch = || Ok(Release { version: "0.1.0".into(), url: crate::config::PROJECT_URL.into() });
+        app.check_for_updates();
+        settle(&mut app);
+        assert!(app.notice.as_ref().unwrap().text.contains("is newer than the latest release (0.1.0)"));
+        // One that can't be made says why, as the daily one doesn't.
+        app.updates.fetch = || Err("Couldn't reach GitHub: offline".into());
+        app.check_for_updates();
+        settle(&mut app);
+        assert!(app.notice.as_ref().unwrap().text.starts_with("Couldn't check for updates: Couldn't reach GitHub"));
+        assert!(app.version_status().starts_with("couldn't check for updates"));
+        // A newer one: said, shown and installable, though daily checks are
+        // off (it was asked for), and not said again by them.
+        app.updates.fetch = release;
+        app.check_for_updates();
+        settle(&mut app);
+        assert!(app.notice.as_ref().unwrap().text.starts_with("rettui 99.0.0 is out"));
+        assert_eq!(app.update_available().map(|r| r.version.as_str()), Some("99.0.0"));
+        assert!(app.version_status().starts_with("rettui 99.0.0 is out (checked "));
+        app.settings.update_check = true;
+        app.on_tick();
+        assert_eq!(app.log.iter().filter(|l| l.contains("rettui 99.0.0 is out")).count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

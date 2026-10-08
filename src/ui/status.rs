@@ -85,7 +85,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let steps = app.first_steps();
     // The settings list scrolls, so it may give way on short terminals.
     let [info, settings, rest] = Layout::vertical([
-        Constraint::Length(11 + u16::from(!steps.is_empty()) + u16::from(app.update_available().is_some())),
+        Constraint::Length(12 + u16::from(!steps.is_empty()) + u16::from(app.update_available().is_some())),
         Constraint::Max(settings_height),
         Constraint::Min(5),
     ])
@@ -123,6 +123,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
                 None => Span::raw(""),
             },
         ]),
+        version_line(app, label("Version")),
         Line::from(vec![label("Network"), Span::raw(network)]),
         Line::from(vec![label("Propagation node"), Span::raw(propagation)]),
         Line::from(vec![label("Last sync"), Span::raw(sync)]),
@@ -132,6 +133,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![label("Known"), Span::raw(format!("{} destinations", app.store.peers.len()))]),
     ];
     let mut lines = lines;
+    // A newer release: under the version.
     if let Some(release) = app.update_available() {
         let mut spans = vec![label("Update")];
         if app.updates.installed.as_deref() == Some(release.version.as_str()) {
@@ -148,7 +150,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             spans.push(Span::styled(format!("  {}", release.url), Style::default().fg(dim())));
         }
-        lines.push(Line::from(spans));
+        lines.insert(3, Line::from(spans));
     }
     // Until they're all taken: each step's mark, and the next to take.
     if let Some(next) = steps.iter().find(|step| !step.done) {
@@ -195,6 +197,29 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let rows = log_rows(app.log.iter(), log.width.saturating_sub(2) as usize, log.height.saturating_sub(2) as usize);
     frame.render_widget(Paragraph::new(rows).block(block("Log", false)), log);
+}
+
+/// This build's version and what it is, what's known of newer releases,
+/// and how to check now.
+fn version_line(app: &App, label: Span<'static>) -> Line<'static> {
+    let status = app.version_status();
+    let color = if app.updates.error.is_some() {
+        Color::Red
+    } else if app.update_available().is_some() {
+        Color::Yellow
+    } else {
+        dim()
+    };
+    let mut spans = vec![
+        label,
+        Span::raw(crate::update::VERSION).bold(),
+        Span::styled(format!(" ({})", crate::update::install::build_label()), Style::default().fg(dim())),
+        Span::styled(format!("  {status}"), Style::default().fg(color)),
+    ];
+    if !app.updates.checking() {
+        spans.push(Span::styled("  u checks now", Style::default().fg(dim())));
+    }
+    Line::from(spans)
 }
 
 /// An interface's traffic over the last minutes, in and out, as bars
@@ -269,6 +294,28 @@ mod tests {
         terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
         (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn the_version_shows_in_identity_with_how_to_check() {
+        let dir = std::env::temp_dir().join(format!("rettui-version-line-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.tab = crate::app::Tab::Status;
+        let shown = screen(&mut app);
+        let line = shown.lines().find(|l| l.contains("Version")).expect("a version line");
+        assert!(line.contains(crate::update::VERSION) && line.contains("(built from source)"), "{line}");
+        assert!(line.contains("Check for updates is off") && line.contains("u checks now"), "{line}");
+        // u checks; while it does, it says so.
+        app.updates.fetch = || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            Err("offline".into())
+        };
+        app.on_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Char('u')));
+        let shown = screen(&mut app);
+        let line = shown.lines().find(|l| l.contains("Version")).unwrap();
+        assert!(line.contains("checking for updates…") && !line.contains("u checks now"), "{line}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

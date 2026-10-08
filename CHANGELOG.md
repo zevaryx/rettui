@@ -47,6 +47,7 @@ Changes since v1.5.1.
   - The footer shows the shortest hints that fit; `?` (or `F1` while typing) lists every key.
 - **Installing and updating**
   - Update checks: once a day, rettui can ask GitHub whether a newer release is out, and marks the version (↑) and Status when one is. Off by default; the getting-started guide recommends turning it on (*Check for updates*).
+  - Status shows the version and what kind of build it is, with what the last update check found; `u` (or *Check now* in the web UI) checks at once, even with daily checks off.
   - Release binaries can install a newer release in their own place when asked (`U` in Status, Install in the web UI, or `rettui update`), checked against the release's `SHA256SUMS` and run once before they replace the old one. Builds from source, containers and package managers' are told how to update instead.
   - Packages: a Homebrew tap (`brew install zevaryx/rettui/rettui`) and the AUR (`rettui-bin`), published with each release, and Debian packages (x86-64 and ARM64) attached to it.
 - **Settings and CLI**

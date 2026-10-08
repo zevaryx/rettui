@@ -37,6 +37,15 @@ pub enum Install {
     Elsewhere(String),
 }
 
+/// What this build is, to show beside its version: a release build and
+/// its target, or a build from source.
+pub fn build_label() -> String {
+    match RELEASE_TARGET {
+        Some(target) => format!("release build for {target}"),
+        None => "built from source".into(),
+    }
+}
+
 impl Install {
     /// How this copy is updated (looked at once a run).
     pub fn here() -> Self {

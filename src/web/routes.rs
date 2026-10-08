@@ -86,6 +86,7 @@ pub fn router(state: WebState) -> Router {
         .route("/icons", get(icons))
         .route("/locations", get(locations))
         .route("/update/install", post(install_update))
+        .route("/update/check", post(check_update))
         .route("/backup", get(download_backup))
         .route("/announces", get(announces))
         .route("/map/tiles/{z}/{x}/{y}", get(map_tile))
@@ -490,6 +491,12 @@ async fn icons(Query(query): Query<IconQuery>) -> axum::Json<Value> {
 
 /// Install the newer release found in this one's place (it carries on
 /// downloading; the status says how it went).
+/// Check for a newer release now; what it finds comes as a notice.
+async fn check_update(State(state): State<WebState>) -> ApiResult {
+    let doing = state.write(|o| o.app.check_for_updates()).await?;
+    Ok(axum::Json(json!({ "ok": true, "doing": doing })))
+}
+
 async fn install_update(State(state): State<WebState>) -> ApiResult {
     let doing = state.write(|o| o.app.install_update()).await?.map_err(bad)?;
     Ok(axum::Json(json!({ "ok": true, "doing": doing })))

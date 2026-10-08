@@ -70,6 +70,15 @@ pub fn state(app: &App) -> Value {
                 "installed": app.updates.installed.as_deref() == Some(r.version.as_str()),
             })
         }),
+        // This build, and what's known of newer releases.
+        "version": {
+            "current": crate::update::VERSION,
+            "build": crate::update::install::build_label(),
+            "status": app.version_status(),
+            "checking": app.updates.checking(),
+            "error": app.updates.error.is_some(),
+            "newer": app.update_available().is_some(),
+        },
         // This station's location, to share (see the Location setting).
         "location": app.settings.own_location().map(|l| json!({ "latitude": l.latitude, "longitude": l.longitude })),
         // Locations shared live, and from where (a browser posts its

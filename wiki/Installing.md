@@ -68,6 +68,16 @@ a day** in the getting-started guide, or turn on *Check for updates*
 - Status says which release, with a link to what's new;
 - the log says so, once.
 
+*Version*, under Identity in Status, says which version this is and what
+kind of build (a release build, and for which system, or one built from
+source), and what the last check found and when. To check now, whether
+or not *Check for updates* is on: `u` in the terminal UI's Status tab,
+or **Check now** in the web UI's Status page. It says what it found
+(this is the newest release, a newer one is out, or why it couldn't
+check), and a newer one found this way shows as above, ready to install.
+With *Check for updates* off and nothing checked by hand since rettui
+started, *Version* says so rather than show an older check's answer.
+
 Checking downloads and installs nothing. To update:
 
 - **A binary from the releases page** can install the new release itself,

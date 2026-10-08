@@ -5635,11 +5635,37 @@ app.views.status = {
         off: 'no (Host a propagation node, in the settings)', starting: 'starting', failed: `failed: ${h.error}`,
       }[h.state] });
     const label = (text) => el('span', { class: 'label', text });
+    // A check for updates asked for here, finished: what it found.
+    if (this.checkAsked && !s.version.checking) {
+      this.checkAsked = false;
+      toast(s.version.status);
+    }
     this.info.replaceChildren(
       label('Display name'), el('span', { style: 'font-weight:600', text: s.display_name }),
       label('LXMF address'), el('div', { class: 'row' }, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.lxmf_address || '(starting)' }),
         s.lxmf_address ? el('button', { text: 'Copy', onclick: () => copy(s.lxmf_address, 'your LXMF address') }) : null,
         s.identity_link ? el('button', { text: 'QR code', title: 'Your address as a QR code, to be added as a contact', onclick: () => showAddress(s.identity_link) }) : null),
+      label('Version'), el('div', { class: 'row' },
+        el('span', {}, el('strong', { text: s.version.current }), el('span', { class: 'dim', text: ` (${s.version.build})` })),
+        el('span', { class: s.version.error ? 'state-bad' : s.version.newer ? 'update-note' : 'dim', text: s.version.status }),
+        s.version.checking ? null : el('button', { text: 'Check now', title: 'Ask GitHub for the newest release now (Check for updates, in the settings, asks once a day)', onclick: async () => {
+          const done = await attempt(() => api.post('/update/check'));
+          if (done) this.checkAsked = true;
+          loadNow();
+        } })),
+      ...(s.update ? [label('Update'), s.update.installed
+        ? el('strong', { class: 'online', text: `rettui ${s.update.version} installed: start rettui again to use it` })
+        : el('div', { class: 'row' },
+          el('strong', { class: 'update-note', text: `rettui ${s.update.version} is out` }),
+          el('a', { href: s.update.url, target: '_blank', rel: 'noopener noreferrer', text: 'what\'s new ↗' }),
+          s.update.installing ? el('span', { class: 'dim', text: 'installing…' })
+            : s.update.installable ? el('button', { text: 'Install', title: 'Download it from GitHub, check it, and put it in place of this one', onclick: async () => {
+              if (!confirm(`Install rettui ${s.update.version} in place of this one? rettui carries on as it is until it's started again.`)) return;
+              const done = await attempt(() => api.post('/update/install'));
+              if (done) toast(done.doing);
+              loadNow();
+            } })
+              : el('span', { class: 'dim', text: s.update.how }))] : []),
       // Until they're all taken: near the top, for those just starting.
       ...(s.first_steps.length ? [label('First steps'), el('div', { class: 'first-steps' }, ...s.first_steps.map((step) =>
         el('div', { class: step.done ? 'done' : '' },
@@ -5666,19 +5692,6 @@ app.views.status = {
         el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text:
           'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' })),
       label('Known'), el('span', { text: `${s.known} destinations` }),
-      ...(s.update ? [label('Update'), s.update.installed
-        ? el('strong', { class: 'online', text: `rettui ${s.update.version} installed: start rettui again to use it` })
-        : el('div', { class: 'row' },
-          el('strong', { class: 'update-note', text: `rettui ${s.update.version} is out` }),
-          el('a', { href: s.update.url, target: '_blank', rel: 'noopener noreferrer', text: 'what\'s new ↗' }),
-          s.update.installing ? el('span', { class: 'dim', text: 'installing…' })
-            : s.update.installable ? el('button', { text: 'Install', title: 'Download it from GitHub, check it, and put it in place of this one', onclick: async () => {
-              if (!confirm(`Install rettui ${s.update.version} in place of this one? rettui carries on as it is until it's started again.`)) return;
-              const done = await attempt(() => api.post('/update/install'));
-              if (done) toast(done.doing);
-              loadNow();
-            } })
-              : el('span', { class: 'dim', text: s.update.how }))] : []),
       label('Notifications'), notifications.describe(),
       label('Theme'), el('select', { title: 'This browser\'s colours', onchange: (e) => theme.set(e.target.value) },
         [['dark', 'Dark'], ['light', 'Light'], ['auto', 'As the device is set']]
