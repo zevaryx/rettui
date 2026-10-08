@@ -45,17 +45,19 @@ Changes since v1.5.1.
 - **Terminal UI**
   - Colour themes (dark, light, basic).
   - The footer shows the shortest hints that fit; `?` (or `F1` while typing) lists every key.
-- **Settings and CLI**
-  - Quiet hours: no notifications between two times of day, except (unless turned off) from trusted contacts.
+- **Installing and updating**
   - Update checks: once a day, rettui can ask GitHub whether a newer release is out, and marks the version (↑) and Status when one is. Off by default; the getting-started guide recommends turning it on (*Check for updates*).
   - Release binaries can install a newer release in their own place when asked (`U` in Status, Install in the web UI, or `rettui update`), checked against the release's `SHA256SUMS` and run once before they replace the old one. Builds from source, containers and package managers' are told how to update instead.
+  - Releases carry Debian packages (x86-64 and ARM64), a Homebrew formula and the AUR's `rettui-bin` PKGBUILD.
+- **Settings and CLI**
+  - Quiet hours: no notifications between two times of day, except (unless turned off) from trusted contacts.
   - Back up everything to one file and restore it: `B` in Status, `rettui backup` / `rettui restore`, or *Download a backup* in the web UI (without the identity).
   - 12-hour clock and date order.
   - *Log level* as a setting.
   - `rettui send` accepts `lxma://` links.
 
 ### Changed
-- Path requests are retried at 0, 15 and 52 s. A stale path is replaced and the Link is tried again before giving up ([#10](https://github.com/zevaryx/rettui/issues/10)).
+- Path requests are retried at 0, 15 and 52 s. A stale path is replaced and the Link is tried again before giving up ([#10](https://github.com/zevaryx/rettui/issues/10)). A page loading, an RRC hub connecting and `rettui fetch` say which request is out.
 - Pictures are sent at 1024 px by default. Set *Send pictures at* to original for the old behaviour.
 - *Ignore unknown senders* is replaced by *Unknown senders*; existing settings carry over.
 - Updated to rsReticulum 1.3.0 and rsLXMF main. rsReticulum follows the `rettui` branch of zevaryx/rsReticulum until [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) is merged upstream.
@@ -70,10 +72,9 @@ Changes since v1.5.1.
 - Instructions for running rettui as a systemd service.
 - The code is formatted with rustfmt, and CI checks it.
 - A release's notes are its section of this changelog; tagging fails without one.
-- Releases carry Debian packages (x86-64 and ARM64), a Homebrew formula and the AUR's `rettui-bin` PKGBUILD.
 
 ### Known limitations
 - Messages received over a Link (most direct messages) don't show RSSI/SNR: rsReticulum doesn't say how a Link's packets were heard.
 - LXST voice calls aren't supported because of LXST's license (CC BY-NC-ND 4.0).
 
-**Pull requests:** [#12](https://github.com/zevaryx/rettui/pull/12) Browser search · [#13](https://github.com/zevaryx/rettui/pull/13) path tools · [#16](https://github.com/zevaryx/rettui/pull/16) quality-of-life changes
+**Pull requests:** [#12](https://github.com/zevaryx/rettui/pull/12) Network and Browser search · [#13](https://github.com/zevaryx/rettui/pull/13) path tools · [#14](https://github.com/zevaryx/rettui/pull/14) documentation site · [#15](https://github.com/zevaryx/rettui/pull/15) dependency updates · [#16](https://github.com/zevaryx/rettui/pull/16) quality-of-life changes · [#17](https://github.com/zevaryx/rettui/pull/17) update checks and self-update · [#18](https://github.com/zevaryx/rettui/pull/18) more quality-of-life changes
