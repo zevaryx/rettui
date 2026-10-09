@@ -5518,22 +5518,32 @@ app.views.status = {
   },
 
   // The groups' tabs (a group with changes not saved is marked), and only
-  // the chosen group's settings.
+  // the chosen group's settings. The tabs are made once and changed in
+  // place: leaving a text box marks its change, and a tab redrawn under
+  // the pointer then would lose the click that left it.
   renderSections(changes = this.changes()) {
     const sections = this.sections || [];
     if (!sections.some((s) => s.id === this.section)) this.section = sections[0]?.id;
+    const made = JSON.stringify(sections);
+    if (this.sectionTabs.dataset.made !== made) {
+      this.sectionTabs.dataset.made = made;
+      this.sectionButtons = Object.fromEntries(sections.map((section) => [section.id, el('button', {
+        onclick: () => {
+          this.section = section.id;
+          try { localStorage.setItem('rettui.settingsGroup', section.id); } catch { /* per-browser convenience only */ }
+          this.renderSections();
+          this.form.closest('.scroll').scrollTop = 0;
+        },
+      })]));
+      this.sectionTabs.replaceChildren(...Object.values(this.sectionButtons));
+    }
     const edited = new Set((this.fields || []).filter((f) => f.key in changes).map((f) => f.section));
-    this.sectionTabs.replaceChildren(...sections.map((section) => el('button', {
-      class: section.id === this.section ? 'active' : '',
-      text: section.title + (edited.has(section.id) ? ' •' : ''),
-      title: edited.has(section.id) ? 'Changed, not saved yet' : null,
-      onclick: () => {
-        this.section = section.id;
-        try { localStorage.setItem('rettui.settingsGroup', section.id); } catch { /* per-browser convenience only */ }
-        this.renderSections();
-        this.form.closest('.scroll').scrollTop = 0;
-      },
-    })));
+    for (const section of sections) {
+      const button = this.sectionButtons[section.id];
+      button.className = section.id === this.section ? 'active' : '';
+      button.textContent = section.title + (edited.has(section.id) ? ' •' : '');
+      button.title = edited.has(section.id) ? 'Changed, not saved yet' : '';
+    }
     for (const field of this.fields || []) {
       this.inputs[field.key].closest('.setting').classList.toggle('hidden', field.section !== this.section);
     }
