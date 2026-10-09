@@ -2035,6 +2035,9 @@ async fn hosted_hub_action(
                 "ban" => app.hub_ban(body.room.as_deref(), identity, on),
                 "op" => app.hub_op(room, identity, on),
                 "voice" => app.hub_voice(room, identity, on),
+                "invite" => app.hub_invite(room, identity, on),
+                // The key in `text`; off takes it off.
+                "key" => app.hub_room_key(room, on.then_some(body.text.as_str())),
                 "topic" => app.hub_topic(room, &body.text),
                 "modes" => app.hub_modes(room, &body.text),
                 "register" => app.hub_register(room, on),

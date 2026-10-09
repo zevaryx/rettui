@@ -202,6 +202,17 @@ fn one_word(room: &str) -> Result<&str, &'static str> {
     }
 }
 
+/// Whom an action is about: their identity, or a nick the hub knows (one
+/// word, as hub commands read it).
+fn target(who: &str) -> Result<&str, String> {
+    let who = who.trim();
+    match who.split_whitespace().count() {
+        0 => Err("Who? A nick or an identity".into()),
+        1 => Ok(who),
+        _ => Err("A nick or an identity is one word".into()),
+    }
+}
+
 impl App {
     /// Start, restart or stop the hub to match the settings (nothing, if
     /// what it runs with didn't change).
@@ -289,13 +300,14 @@ impl App {
     }
 
     pub fn hub_kick(&mut self, room: &str, identity: &str) -> Result<(), String> {
-        let room = one_word(room)?;
+        let (room, identity) = (one_word(room)?, target(identity)?);
         self.hub_run(&format!("/kick {room} {identity}"))
     }
 
     /// Ban someone from a room (`None`: from the whole hub), or lift it.
     pub fn hub_ban(&mut self, room: Option<&str>, identity: &str, on: bool) -> Result<(), String> {
         let how = if on { "add" } else { "del" };
+        let identity = target(identity)?;
         match room {
             Some(room) => {
                 let room = one_word(room)?;
@@ -306,13 +318,30 @@ impl App {
     }
 
     pub fn hub_op(&mut self, room: &str, identity: &str, on: bool) -> Result<(), String> {
-        let room = one_word(room)?;
+        let (room, identity) = (one_word(room)?, target(identity)?);
         self.hub_run(&format!("/{} {room} {identity}", if on { "op" } else { "deop" }))
     }
 
     pub fn hub_voice(&mut self, room: &str, identity: &str, on: bool) -> Result<(), String> {
-        let room = one_word(room)?;
+        let (room, identity) = (one_word(room)?, target(identity)?);
         self.hub_run(&format!("/{} {room} {identity}", if on { "voice" } else { "devoice" }))
+    }
+
+    /// Invite someone to a room (or take the invite back): what an invite
+    /// only (`+i`) or keyed (`+k`) room lets in.
+    pub fn hub_invite(&mut self, room: &str, who: &str, on: bool) -> Result<(), String> {
+        let (room, who) = (one_word(room)?, target(who)?);
+        self.hub_run(&format!("/invite {room} {} {who}", if on { "add" } else { "del" }))
+    }
+
+    /// Set a room's key (`+k`), or take it off (`None`).
+    pub fn hub_room_key(&mut self, room: &str, key: Option<&str>) -> Result<(), String> {
+        let room = one_word(room)?;
+        match key.map(str::trim) {
+            Some("") => Err("A key, please (or take it off)".into()),
+            Some(key) => self.hub_run(&format!("/mode {room} +k {key}")),
+            None => self.hub_run(&format!("/mode {room} -k")),
+        }
     }
 
     pub fn hub_topic(&mut self, room: &str, topic: &str) -> Result<(), String> {
@@ -579,6 +608,8 @@ mod tests {
                 operators: vec![amy],
                 voiced: Vec::new(),
                 banned: vec!["c".repeat(32)],
+                key: None,
+                invited: Vec::new(),
             }],
             klines: vec!["b".repeat(32)],
             ..HubSnapshot::default()
@@ -671,6 +702,24 @@ mod tests {
         assert!(app.hub_kick("two words", &amy).is_err());
         assert!(app.hub_modes("lobby", "+k").is_err());
         assert!(app.hub_modes("lobby", "m").is_err());
+        // Invites and keys (the web UI's room page), and whom: one word.
+        app.hub_invite("lobby", "amy", true).unwrap();
+        app.hub_invite("lobby", &amy, false).unwrap();
+        app.hub_room_key("#lobby", Some(" open sesame ")).unwrap();
+        app.hub_room_key("lobby", None).unwrap();
+        assert_eq!(
+            runs(&mut rx),
+            [
+                "/invite lobby add amy".to_string(),
+                format!("/invite lobby del {amy}"),
+                "/mode lobby +k open sesame".into(),
+                "/mode lobby -k".into(),
+            ]
+        );
+        assert!(app.hub_room_key("lobby", Some("  ")).is_err());
+        assert!(app.hub_ban(Some("lobby"), "  ", true).is_err());
+        assert!(app.hub_op("lobby", "amy bob", true).is_err());
+        assert!(runs(&mut rx).is_empty());
 
         // Keys: o asks which room (theirs filled in), and takes away what
         // they have; B asks first; x lifts the ban picked.

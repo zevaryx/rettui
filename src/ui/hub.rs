@@ -320,6 +320,8 @@ mod tests {
                 operators: vec![amy.clone()],
                 voiced: Vec::new(),
                 banned: Vec::new(),
+                key: None,
+                invited: Vec::new(),
             }],
             klines: vec!["b".repeat(32)],
             ..HubSnapshot::default()
