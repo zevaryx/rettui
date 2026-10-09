@@ -121,13 +121,22 @@ and the other RRC clients can join it as they join rrcd.
   its topic (`t`) or modes (`m`: `+m` moderated, `+i` invite only, `+t`
   topic by operators, `+n` members only, `+p` private, `+k key`; `-` takes
   one off), or to register it (`r`). `n` makes a registered room, which
-  stays, with its topic and modes, while nobody is in it. In Bans, `x` lifts
-  the ban picked. In the web UI's Hub section, a room opens a page of its
-  settings: its topic, a switch for each mode, its key, who's in it (with
-  operator and voice to turn on or off, kick and ban), who's invited and
-  who's banned. A person opens theirs: the rooms they're in, with the same
-  for each, and disconnecting or banning them from the hub. Bans each have
-  a *Lift* button.
+  stays, with its topic and modes, while nobody is in it. In Bans, `x`
+  lifts the ban picked.
+- **The web UI's Hub section:** a room opens a page of its settings: its
+  topic, a switch for each mode, its key, who's in it (with operator and
+  voice to turn on or off, kick and ban), who's invited and who's banned,
+  with renaming and deleting it at the bottom. A person opens theirs: the
+  rooms they're in, with the same for each, and disconnecting or banning
+  them from the hub. Bans each have a *Lift* button.
+- **Renaming and deleting rooms:** neither rsRRCD nor RRC has a command for
+  them, so the hub does it itself. Renaming a room (`R` in the Hub tab)
+  moves its topic, settings, key, operators and bans to the new name, and
+  registers it. RRC can't move people from one room to another, so those
+  in it are told the new name and taken out of the old one, to rejoin it
+  there. Deleting a room (`D`, asked first) takes everyone out of it,
+  telling them it's been closed, and it's gone with its settings and bans;
+  where anyone makes rooms, anyone may make it again by joining it.
 - **Hub commands:** `:` in the Hub tab (or the web UI's console) runs a
   command as typed in a room, as the hub itself: `/stats`, `/kline list`,
   `/who lobby`, `/reload`... The hub's answers are listed beside it. The

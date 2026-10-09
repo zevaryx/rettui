@@ -66,6 +66,9 @@ pub enum HubPrompt {
     Voice(String),
     /// Ban someone from the whole hub.
     ConfirmKline(String),
+    /// A room's new name, and whether to close a room.
+    Rename(String),
+    ConfirmDelete(String),
 }
 
 /// The hub hosted here, as the app knows it.
@@ -378,6 +381,20 @@ impl App {
         Ok(())
     }
 
+    /// Close a room: everyone in it is taken out, and it goes with its
+    /// settings and bans.
+    pub fn hub_delete_room(&mut self, room: &str) -> Result<(), String> {
+        let room = one_word(room)?.to_string();
+        self.hub_act(HubAction::Delete(room))
+    }
+
+    /// Move a room to another name, with its settings and bans (those in it
+    /// are told the new name, and taken out of the old one).
+    pub fn hub_rename_room(&mut self, from: &str, to: &str) -> Result<(), String> {
+        let (from, to) = (one_word(from)?.to_string(), one_word(to)?.to_string());
+        self.hub_act(HubAction::Rename { from, to })
+    }
+
     pub fn hub_register(&mut self, room: &str, on: bool) -> Result<(), String> {
         let room = one_word(room)?.to_string();
         self.hub_act(HubAction::Register { room, on })
@@ -430,6 +447,9 @@ impl App {
             }
             HubPrompt::ConfirmKline(identity) if yes => self.hub_ban(None, &identity, true),
             HubPrompt::ConfirmKline(_) => Ok(()),
+            HubPrompt::Rename(room) => self.hub_rename_room(&room, text),
+            HubPrompt::ConfirmDelete(room) if yes => self.hub_delete_room(&room),
+            HubPrompt::ConfirmDelete(_) => Ok(()),
         };
         self.hub_result(result);
     }
@@ -520,6 +540,19 @@ impl App {
                     KeyCode::Char('r') => {
                         let result = self.hub_register(&room.name, !room.registered);
                         self.hub_result(result);
+                    }
+                    KeyCode::Char('R') => {
+                        let title = format!("Rename #{} to (those in it are told, and rejoin it there)", room.name);
+                        self.open_prompt(PromptKind::Hub(HubPrompt::Rename(room.name.clone())), &title, &room.name);
+                    }
+                    KeyCode::Char('D') => {
+                        let people = match room.members.len() {
+                            0 => String::new(),
+                            1 => ", taking out the one in it".into(),
+                            n => format!(", taking out the {n} in it"),
+                        };
+                        let title = format!("Delete #{}{people}? Type y", room.name);
+                        self.open_prompt(PromptKind::Hub(HubPrompt::ConfirmDelete(room.name)), &title, "");
                     }
                     _ => {}
                 }
@@ -744,6 +777,28 @@ mod tests {
         app.hub_key(KeyEvent::from(KeyCode::Down));
         app.hub_key(KeyEvent::from(KeyCode::Char('x')));
         assert_eq!(runs(&mut rx), [format!("/ban lobby del {}", "c".repeat(32))]);
+
+        // Rooms: R renames (its name to start from), D deletes once asked.
+        app.hub_key(KeyEvent::from(KeyCode::BackTab));
+        app.hub_key(KeyEvent::from(KeyCode::Char('R')));
+        let prompt = app.prompt.take().expect("a prompt");
+        assert_eq!((prompt.kind, prompt.input.text()), (PromptKind::Hub(HubPrompt::Rename("lobby".into())), "lobby"));
+        app.hub_prompt(HubPrompt::Rename("lobby".into()), "#hall");
+        app.hub_key(KeyEvent::from(KeyCode::Char('D')));
+        let prompt = app.prompt.take().expect("a prompt");
+        assert!(prompt.title.contains("taking out the one in it"), "{}", prompt.title);
+        app.hub_prompt(HubPrompt::ConfirmDelete("lobby".into()), "n");
+        app.hub_prompt(HubPrompt::ConfirmDelete("lobby".into()), "y");
+        let rooms: Vec<String> = commands(&mut rx)
+            .into_iter()
+            .filter_map(|c| match c {
+                NetCommand::HubAction(HubAction::Rename { from, to }) => Some(format!("rename {from} {to}")),
+                NetCommand::HubAction(HubAction::Delete(room)) => Some(format!("delete {room}")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rooms, ["rename lobby hall", "delete lobby"]);
+        assert!(app.hub_rename_room("lobby", "two words").is_err());
 
         // Replies: the newest kept, the first line said.
         app.on_net(NetEvent::Hub(HubEvent::Reply { text: "Hub stats\nusers: 1".into(), error: false }));

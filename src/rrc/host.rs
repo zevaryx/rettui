@@ -20,7 +20,7 @@
 //! - **Policy:** whether anyone may make a room by joining it (rsRRCD lets
 //!   them; Ratspeak's hub doesn't).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -238,6 +238,16 @@ pub enum HubAction {
     Register {
         room: String,
         on: bool,
+    },
+    /// Close a room: everyone in it is taken out, and it goes with its
+    /// settings and bans (neither rsRRCD nor RRC has a command for it).
+    Delete(String),
+    /// Move a room to another name, with its settings and bans. RRC can't
+    /// move people from one room to another: those in it are told the new
+    /// name and taken out of the old one.
+    Rename {
+        from: String,
+        to: String,
     },
     /// Close every Link of an identity.
     Disconnect(Hash),
@@ -487,6 +497,16 @@ impl Hub {
             }
             HubAction::Register { room, on } => {
                 let (reply, actions) = self.core.register(&room, on);
+                self.core.emit(reply);
+                self.apply(actions).await;
+            }
+            HubAction::Delete(room) => {
+                let (reply, actions) = self.core.delete_room(&room);
+                self.core.emit(reply);
+                self.apply(actions).await;
+            }
+            HubAction::Rename { from, to } => {
+                let (reply, actions) = self.core.rename_room(&from, &to);
                 self.core.emit(reply);
                 self.apply(actions).await;
             }
@@ -761,10 +781,9 @@ impl Core {
     /// Register or unregister a room, telling who's in it.
     fn register(&mut self, room: &str, on: bool) -> (HubEvent, Vec<Action>) {
         let fail = |text: String| (HubEvent::Reply { text, error: true }, Vec::new());
-        // As rettui names rooms (`#` is decoration), and then as rsRRCD does.
-        let name = match self.router.state.normalize_room(&super::normalize_room(room), &self.router.config) {
+        let name = match self.room_name(room) {
             Ok(name) => name,
-            Err(e) => return fail(e.to_string()),
+            Err(e) => return fail(e),
         };
         let rooms = &mut self.router.state.rooms;
         if on {
@@ -799,6 +818,76 @@ impl Core {
             .unwrap_or_default();
         let text = if on { format!("Registered {name}") } else { format!("Unregistered {name}") };
         (HubEvent::Reply { text, error: false }, actions)
+    }
+
+    /// A room's name as rettui names rooms (`#` is decoration), and then as
+    /// rsRRCD does.
+    fn room_name(&self, room: &str) -> Result<String, String> {
+        self.router.state.normalize_room(&super::normalize_room(room), &self.router.config).map_err(|e| e.to_string())
+    }
+
+    /// Take everyone out of a room, telling them why first: as a kick does,
+    /// so their clients leave it (rettui's, NomadNet's).
+    fn take_out(&mut self, room: &str, members: &HashSet<[u8; 16]>, why: &str) -> Vec<Action> {
+        let notice = Envelope::new(t::NOTICE, &self.identity).room(room).text(why).encode();
+        let kicked = Envelope::new(t::ERROR, &self.identity).room(room).text(&format!("kicked from {room}")).encode();
+        let mut actions = Vec::new();
+        for link in members {
+            if let Some(session) = self.router.state.sessions.get_mut(link) {
+                session.rooms.remove(room);
+            }
+            actions.push(Action::Send(*link, notice.clone()));
+            actions.push(Action::Send(*link, kicked.clone()));
+        }
+        actions
+    }
+
+    /// Close a room: everyone in it taken out, and it's gone (registered or
+    /// not) with its settings and bans. Anyone may make it again by joining
+    /// it, where anyone makes rooms.
+    fn delete_room(&mut self, room: &str) -> (HubEvent, Vec<Action>) {
+        let fail = |text: String| (HubEvent::Reply { text, error: true }, Vec::new());
+        let name = match self.room_name(room) {
+            Ok(name) => name,
+            Err(e) => return fail(e),
+        };
+        let Some(state) = self.router.state.rooms.remove(&name) else { return fail(format!("There's no room {name}")) };
+        let actions = self.take_out(&name, &state.members, &format!("{name} has been closed by the hub's host"));
+        if let Err(e) = RoomRegistry::save(&self.router.config.room_registry_path, &self.router.state.rooms) {
+            return (HubEvent::Reply { text: format!("Deleted {name}, but couldn't save the rooms: {e:#}"), error: true }, actions);
+        }
+        (HubEvent::Reply { text: format!("Deleted {name}"), error: false }, actions)
+    }
+
+    /// Move a room to another name, with its topic, settings, key,
+    /// operators, bans and invites. It's registered, so it's there while
+    /// those in it come back: RRC can't move them, so they're told the new
+    /// name and taken out of the old one.
+    fn rename_room(&mut self, from: &str, to: &str) -> (HubEvent, Vec<Action>) {
+        let fail = |text: String| (HubEvent::Reply { text, error: true }, Vec::new());
+        let (from, to) = match (self.room_name(from), self.room_name(to)) {
+            (Ok(from), Ok(to)) => (from, to),
+            (Err(e), _) | (_, Err(e)) => return fail(e),
+        };
+        if to.split_whitespace().count() != 1 {
+            return fail("Room names are one word".into());
+        }
+        if from == to {
+            return fail(format!("It's {to} already"));
+        }
+        if self.router.state.rooms.contains_key(&to) {
+            return fail(format!("There's a room {to} already"));
+        }
+        let Some(mut state) = self.router.state.rooms.remove(&from) else { return fail(format!("There's no room {from}")) };
+        let members = std::mem::take(&mut state.members);
+        state.registered = true;
+        state.last_used_ts = unix_now();
+        self.router.state.rooms.insert(to.clone(), state);
+        let actions = self.take_out(&from, &members, &format!("{from} is now {to}: join it there (/join {to})"));
+        if let Err(e) = RoomRegistry::save(&self.router.config.room_registry_path, &self.router.state.rooms) {
+            return (HubEvent::Reply { text: format!("Renamed {from} to {to}, but couldn't save the rooms: {e:#}"), error: true }, actions);
+        }
+        (HubEvent::Reply { text: format!("Renamed {from} to {to}"), error: false }, actions)
     }
 
     /// Send the panel what changed.
@@ -1088,6 +1177,64 @@ mod tests {
         // What the console's told is a reply for the panel.
         core.reply(&Envelope::new(t::NOTICE, &HUB).text("Hub stats").encode());
         assert_eq!(replies(&mut rx), [("Hub stats".to_string(), false)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rooms_are_deleted_and_renamed_with_those_in_them_told() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-delete-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        connect(&mut core, 2, BOB, "bob");
+        join(&mut core, 1, AMY, "lobby");
+        join(&mut core, 2, BOB, "lobby");
+        core.run_command("/topic lobby Say hi");
+        core.run_command(&format!("/ban lobby add {}", hex::encode([5u8; 16])));
+        // Renamed: its topic, founder and bans go with it; it's registered;
+        // those in it are told where, and taken out.
+        let (reply, actions) = core.rename_room("#Lobby", "hall");
+        assert!(matches!(reply, HubEvent::Reply { ref text, error: false } if text == "Renamed lobby to hall"), "{reply:?}");
+        let said = sent(&actions);
+        for link in [1, 2] {
+            let theirs: Vec<_> = said.iter().filter(|(to, ..)| *to == link).collect();
+            assert_eq!(theirs.len(), 2, "{said:?}");
+            assert_eq!((theirs[0].1, theirs[0].3.as_deref()), (t::NOTICE, Some("lobby is now hall: join it there (/join hall)")));
+            assert_eq!((theirs[1].1, theirs[1].2.as_deref(), theirs[1].3.as_deref()), (t::ERROR, Some("lobby"), Some("kicked from lobby")));
+        }
+        let rooms = &core.router.state.rooms;
+        assert!(!rooms.contains_key("lobby"));
+        let hall = &rooms["hall"];
+        assert_eq!((hall.topic.as_deref(), hall.founder, hall.registered), (Some("Say hi"), Some(AMY), true));
+        assert!(hall.banned.contains(&[5; 16]) && hall.members.is_empty());
+        assert!(core.router.state.sessions.values().all(|s| s.rooms.is_empty()));
+        assert!(RoomRegistry::load(&core.router.config.room_registry_path).unwrap().contains_key("hall"));
+        // They can come back to it under its new name.
+        join(&mut core, 1, AMY, "hall");
+        assert_eq!(core.router.state.rooms["hall"].members.len(), 1);
+        // Not over another room, nor to itself, nor from one there isn't.
+        join(&mut core, 2, BOB, "den");
+        for (from, to, error) in [
+            ("hall", "den", "There's a room den already"),
+            ("hall", "hall", "It's hall already"),
+            ("nowhere", "else", "There's no room nowhere"),
+        ] {
+            let (reply, actions) = core.rename_room(from, to);
+            assert!(matches!(reply, HubEvent::Reply { ref text, error: true } if text == error), "{reply:?}");
+            assert!(actions.is_empty());
+        }
+        // Deleted: whoever's in it is taken out, and it's gone, saved too.
+        let (reply, actions) = core.delete_room("hall");
+        assert!(matches!(reply, HubEvent::Reply { ref text, error: false } if text == "Deleted hall"), "{reply:?}");
+        assert_eq!(
+            sent(&actions),
+            [
+                (1, t::NOTICE, Some("hall".into()), Some("hall has been closed by the hub's host".into())),
+                (1, t::ERROR, Some("hall".into()), Some("kicked from hall".into())),
+            ]
+        );
+        assert!(!core.router.state.rooms.contains_key("hall"));
+        assert!(!RoomRegistry::load(&core.router.config.room_registry_path).unwrap().contains_key("hall"));
+        assert!(matches!(core.delete_room("hall").0, HubEvent::Reply { error: true, .. }));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

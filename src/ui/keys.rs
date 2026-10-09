@@ -441,6 +441,8 @@ pub fn keys(app: &App) -> Keys {
                 ("t", "topic"),
                 ("m", "modes"),
                 ("r", "register"),
+                ("R", "rename"),
+                ("D", "delete"),
                 ("n", "new room"),
                 (":", "command"),
                 ("a", "announce"),

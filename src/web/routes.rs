@@ -2041,6 +2041,9 @@ async fn hosted_hub_action(
                 "topic" => app.hub_topic(room, &body.text),
                 "modes" => app.hub_modes(room, &body.text),
                 "register" => app.hub_register(room, on),
+                "delete" => app.hub_delete_room(room),
+                // The new name in `text`.
+                "rename" => app.hub_rename_room(room, &body.text),
                 "disconnect" => app.hub_disconnect(identity),
                 _ => return Err(bad(format!("unknown hub action {action}"))),
             };

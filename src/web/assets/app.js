@@ -5961,8 +5961,11 @@ app.views.hub = {
     const hub = this.hub;
     const room = hub.rooms.find((r) => r.name === name);
     if (!room) {
+      // Just made or renamed: the hub hasn't said so yet.
+      const coming = this.expecting === name && Date.now() < this.expectUntil;
+      if (coming) setTimeout(() => this.renderBody(), 1000);
       return [this.pageHead('Rooms', '#' + name),
-        el('div', { class: 'empty', text: hub.status === 'running' ? 'This room isn\'t there (any more): rooms nobody\'s in go, unless they\'re registered.' : 'The hub isn\'t running.' })];
+        el('div', { class: 'empty', text: coming ? 'One moment…' : hub.status === 'running' ? 'This room isn\'t there (any more): rooms nobody\'s in go, unless they\'re registered.' : 'The hub isn\'t running.' })];
     }
     const act = (action, body) => this.act(action, { room: name, ...body });
     const on = (flag) => room.modes.startsWith('+') && room.modes.includes(flag);
@@ -6008,7 +6011,37 @@ app.views.hub = {
         act('ban', { identity: who, on: true });
         input.value = '';
       } }),
+      el('div', { class: 'hub-heading', text: 'The room' }),
+      el('div', { class: 'hub-member' },
+        el('button', { text: 'Rename…', onclick: () => this.renameRoom(room) }),
+        el('button', { class: 'danger', text: 'Delete the room', onclick: () => this.deleteRoom(room) })),
+      el('div', { class: 'hub-note dim', text: 'Renaming keeps its topic, settings and bans, and registers it. RRC can\'t move people from room to room: those in it are told the new name, and rejoin it there. Deleting takes everyone out, and it\'s gone with its settings and bans.' }),
     ];
+  },
+
+  // A room a page waits for, until the hub says it's there.
+  expect(name) {
+    this.expecting = name;
+    this.expectUntil = Date.now() + 5000;
+  },
+
+  renameRoom(room) {
+    const answer = prompt(`Rename #${room.name} to`, room.name);
+    const to = answer?.trim().replace(/^#/, '').toLowerCase();
+    if (!to || to === room.name) return;
+    if (/\s/.test(to)) return toast('Room names are one word', true);
+    if (this.hub.rooms.some((r) => r.name === to)) return toast(`There's a room #${to} already`, true);
+    this.act('rename', { room: room.name, text: to });
+    this.expect(to);
+    this.openPage({ room: to });
+  },
+
+  deleteRoom(room) {
+    const people = room.members.length === 1 ? 'The one in it is taken out. ' : room.members.length ? `The ${room.members.length} in it are taken out. ` : '';
+    const again = this.hub.open_rooms ? ' Anyone may make it again by joining it.' : '';
+    if (!confirm(`Delete #${room.name}? ${people}Its topic, settings and bans go too.${again}`)) return;
+    this.act('delete', { room: room.name });
+    this.show('rooms');
   },
 
   // Someone in a room: operator and voice to turn on or off, kick and ban.
@@ -6081,6 +6114,7 @@ app.views.hub = {
     if (!name) return;
     this.act('register', { room: name, on: true });
     this.showing = 'rooms';
+    this.expect(name);
     this.openPage({ room: name });
     setPane(this, 'detail');
   },
