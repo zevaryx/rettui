@@ -2,6 +2,32 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
+## v1.6.1
+
+Changes since v1.6.0: RRC works with every hub in use, not only rrcd. Checked against rrcd (the reference hub, with its default configuration), the Go hub (rrc-hub), rsRRCD and Ratspeak's hub, and NomadNet's client.
+
+### Added
+- Commands rettui doesn't have go to the hub as typed (such as the Go hub's `/history`, `/away` and `/seen`), and `/quote` sends any text to the hub (`/quote /help` for the hub's own help).
+- A keyed room's key is kept, so the room is rejoined after reconnecting.
+
+### Changed
+- `/nick` in a channel no longer sends a new HELLO, which rrcd and the Go hub take as a new session, out of every room. The nick goes with your next message, as in NomadNet.
+
+### Fixed
+- `/who` and `/names` replies: the Go hub's `[away]` marks broke the member list, and of a reply Ratspeak splits over several notices, all but the first showed in the room. rsRRCD's full member identities are used when it sends them.
+- On a hub that doesn't send member lists (rrcd's default), people with nicks were left out of the member list. They're listed by nick until their identity is learned.
+- The Go hub's joins and leaves (the room's whole member list each time) emptied the member list and never said who came or went.
+- A greeting sent as several notices (rrcd sends a line per notice) kept only its first line; the rest showed in whatever room was open.
+- Being kicked or banned from a room left it looking joined, and rettui rejoined it on reconnecting.
+- Topic changes showed only after rejoining.
+- History the Go hub replays on joining showed messages twice, at the time of the replay.
+- A hub command typed in a whisper conversation was sent with the conversation as its room.
+- Ratspeak's `(+N more)` at the end of a long `/list` showed as a room, and a `/list` sent over several notices kept only its first.
+- Mentions of the nick the hub gave you (the Go hub keeps nicks unique, so you may be `zev1`) weren't highlighted.
+
+### Docs and development
+- The RRC chat page says how hubs differ and what rettui does about each difference.
+
 ## v1.6.0
 
 Changes since v1.5.1.
@@ -18,10 +44,6 @@ Changes since v1.5.1.
   - Pictures are shrunk before sending, set by *Send pictures at*.
   - Voice messages can be recorded in the web UI and are sent as Codec2.
   - Answer Sideband's ping, echo and signal-report commands (*Answer commands*, off by default).
-- **Channels (RRC)**
-  - Works with the other hubs in use, not only rrcd: the Go hub (rrc-hub), rsRRCD and Ratspeak's (see *Fixed*).
-  - Commands rettui doesn't have go to the hub as typed (such as the Go hub's `/history`, `/away` and `/seen`), and `/quote` sends any text to the hub (`/quote /help` for the hub's own help).
-  - A keyed room's key is kept, so the room is rejoined after reconnecting.
 - **Locations**
   - Share a location (`L` / 📍) in Sideband's telemetry format, once or live (as Columba does: updates for a while, then a message saying it stopped).
   - Answer location requests (*Location requests*, off by default).
@@ -65,24 +87,12 @@ Changes since v1.5.1.
 - Path requests are retried at 0, 15 and 52 s. A stale path is replaced and the Link is tried again before giving up ([#10](https://github.com/zevaryx/rettui/issues/10)). A page loading, an RRC hub connecting and `rettui fetch` say which request is out.
 - Pictures are sent at 1024 px by default. Set *Send pictures at* to original for the old behaviour.
 - *Ignore unknown senders* is replaced by *Unknown senders*; existing settings carry over.
-- `/nick` in a channel no longer sends a new HELLO, which rrcd and the Go hub take as a new session, out of every room. The nick goes with your next message, as in NomadNet.
 - Updated to rsReticulum 1.3.0 and rsLXMF main. rsReticulum follows the `rettui` branch of zevaryx/rsReticulum until [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) is merged upstream.
 
 ### Fixed
 - Background notifications, map tiles and update checks failed behind a proxy that inspects HTTPS: they now trust the computer's own certificates as well as the bundled ones.
 - Destinations whose first path request went unanswered could only be reached after their next announce ([#10](https://github.com/zevaryx/rettui/issues/10)).
 - The `P`/`T` hints were missing while a Network search was active.
-- RRC, with hubs other than rrcd and with rrcd's defaults:
-  - `/who` and `/names` replies: the Go hub's `[away]` marks broke the member list, and of a reply Ratspeak splits over several notices, all but the first showed in the room. rsRRCD's full member identities are used when it sends them.
-  - On a hub that doesn't send member lists (rrcd's default), people with nicks were left out of the member list. They're listed by nick until their identity is learned.
-  - The Go hub's joins and leaves (the room's whole member list each time) emptied the member list and never said who came or went.
-  - A greeting sent as several notices (rrcd sends a line per notice) kept only its first line; the rest showed in whatever room was open.
-  - Being kicked or banned from a room left it looking joined, and rettui rejoined it on reconnecting.
-  - Topic changes showed only after rejoining.
-  - History the Go hub replays on joining showed messages twice, at the time of the replay.
-  - A hub command typed in a whisper conversation was sent with the conversation as its room.
-  - Ratspeak's `(+N more)` at the end of a long `/list` showed as a room, and a `/list` sent over several notices kept only its first.
-  - Mentions of the nick the hub gave you (the Go hub keeps nicks unique, so you may be `zev1`) weren't highlighted.
 
 ### Docs and development
 - A documentation site, [zevaryx.github.io/rettui](https://zevaryx.github.io/rettui), built from `wiki/` with Zensical.
