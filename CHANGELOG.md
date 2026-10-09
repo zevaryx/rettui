@@ -2,6 +2,24 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
+## v1.7.0
+
+Changes since v1.6.1: rettui can host an RRC hub, built on [rsRRCD](https://github.com/reticulum-spb/rsRRCD)'s. Checked with RRC clients on Python Reticulum joining it over TCP, and with rettui's own.
+
+### Added
+- **Host an RRC hub** (a setting, or `e` in the new Hub tab): rsRRCD's hub, on rettui's own Reticulum instance, that NomadNet, MeshChatX, Ratspeak, rettui and the other RRC clients join as they join rrcd. It has an identity of its own, so people who join learn its address and not your LXMF one, and it announces itself with its name (yours, or "Hub name") and greets people with "Hub greeting". You're an operator of it, and your rettui joins it as soon as it's up. Changing its settings applies as it runs, without disconnecting anyone.
+- **The Hub tab** (and the web UI's Hub section): who's connected, the rooms and the bans. Kick someone from a room, ban them from one or from the whole hub, make them an operator or voiced, or disconnect them; set a room's topic and modes, register it, or make a registered room; lift bans. A console runs hub commands as typed in a room (`/stats`, `/kline list`, `/reload`...), with the hub's answers beside it.
+- "Anyone makes rooms": off, only you make rooms on your hub, and others join the ones there are.
+- The Status tab says how the hub is doing, and backups keep its settings, its rooms and (with your identity) its identity.
+- The Network tab's announces name RRC hubs that announce their name as rrcd and rsRRCD do.
+
+### Changed
+- Eight tabs: `1`–`8` switch them.
+
+### Docs and development
+- *Hosting a Node* has a section on hosting an RRC hub.
+- rsRRCD and rsRRC are submodules in `deps/`.
+
 ## v1.6.1
 
 Changes since v1.6.0: RRC works with every hub in use, not only rrcd. Checked against rrcd (the reference hub, with its default configuration), the Go hub (rrc-hub), rsRRCD and Ratspeak's hub, and NomadNet's client.
