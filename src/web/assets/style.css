@@ -631,7 +631,10 @@ textarea.m-field { resize: vertical; vertical-align: top; }
 .node-card { grid-template-columns: 70px 1fr; }
 .node-card > span { min-width: 0; overflow-wrap: anywhere; }
 .node-card .row { flex-wrap: wrap; }
-.card-actions { padding: 0 12px 12px; }
+/* The hub hosted here: its address and buttons wrap on a narrow screen. */
+.hosted-hub > span { min-width: 0; overflow-wrap: anywhere; }
+.hosted-hub .row { flex-wrap: wrap; }
+.card-actions { padding: 0 12px 12px; flex-wrap: wrap; }
 
 @media (max-width: 1100px) {
   .editor-split { flex-direction: column; }
