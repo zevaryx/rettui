@@ -768,6 +768,7 @@ pub fn node(app: &App) -> Value {
             "requests": s.request_count, "pages": s.page_hits, "files": s.file_hits, "not_found": s.not_found_count,
         })),
         "list_error": app.node.error,
+        "files": app.node.files.iter().map(|f| json!({ "path": f.path, "size": f.size, "modified_ms": f.modified_ms })).collect::<Vec<_>>(),
         "pages": app.node.pages.iter().map(|p| json!({
             "path": p.path, "size": p.size, "modified_ms": p.modified_ms, "executable": p.executable, "text": p.text,
         })).collect::<Vec<_>>(),

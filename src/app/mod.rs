@@ -168,10 +168,12 @@ pub enum PromptKind {
         room: String,
         parts: Vec<String>,
     },
-    /// Hosted node pages.
+    /// Hosted node pages, and the pictures and files with them.
     NewPage,
-    RenamePage(String),
-    ConfirmDeletePage(String),
+    RenamePage(crate::nomad::pages::Root, String),
+    ConfirmDeletePage(crate::nomad::pages::Root, String),
+    /// The folder to move something to (empty: the top).
+    MoveNodeItem(crate::nomad::pages::Root, String),
     /// Open this page, dropping unsaved changes to the open one.
     ConfirmDiscardPage(String),
     /// Reticulum config: interfaces, an option's value, leaving the text.
@@ -1180,11 +1182,13 @@ impl App {
                 let text = prompt.input.text().to_string();
                 self.submit_rns_prompt(kind, &text);
             }
-            kind @ (PromptKind::NewPage | PromptKind::RenamePage(_) | PromptKind::ConfirmDeletePage(_)) => {
+            kind @ (PromptKind::NewPage | PromptKind::RenamePage(..) | PromptKind::ConfirmDeletePage(..)) => {
                 if !text.is_empty() {
                     self.submit_page_prompt(kind, &text);
                 }
             }
+            // Empty moves it to the top.
+            PromptKind::MoveNodeItem(root, path) => self.submit_move(root, &path, &text),
         }
     }
 

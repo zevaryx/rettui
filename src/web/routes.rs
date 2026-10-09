@@ -32,6 +32,7 @@ use crate::app::{Location, resolve_url};
 use crate::lxmf::DeliveryMode;
 use crate::net::{Hash, NetCommand, parse_hash};
 use crate::nomad::micron::{self, html};
+use crate::nomad::pages::Root;
 use crate::rrc;
 use crate::store::{Bookmark, NotifyLevel};
 
@@ -143,6 +144,8 @@ pub fn router(state: WebState) -> Router {
         .route("/node/pages", post(node_create))
         .route("/node/rename", post(node_rename))
         .route("/node/delete", post(node_delete))
+        .route("/node/move", post(node_move))
+        .route("/node/upload", post(node_upload))
         .route("/node/preview", post(node_preview))
         .route("/node/media", get(node_media))
         .route("/node/announce", post(node_announce))
@@ -1913,20 +1916,64 @@ async fn node_create(State(state): State<WebState>, axum::Json(body): axum::Json
     Ok(axum::Json(json!({ "path": path })))
 }
 
+/// Where on the node: `pages` (the default) or `files`.
+fn node_root(id: Option<&str>) -> Result<Root, ApiError> {
+    Root::from_id(id.unwrap_or("pages")).ok_or_else(|| bad("Not pages or files"))
+}
+
 #[derive(Deserialize)]
 struct RenameBody {
     from: String,
     to: String,
+    #[serde(default)]
+    root: Option<String>,
 }
 
+/// Rename (or move) something on the node; links to it in the pages
+/// follow. Never a script, from here.
 async fn node_rename(State(state): State<WebState>, axum::Json(body): axum::Json<RenameBody>) -> ApiResult {
-    let path = state.write(move |o| o.app.node_rename(&body.from, &body.to, false)).await??;
+    let root = node_root(body.root.as_deref())?;
+    let path = state.write(move |o| o.app.node_rename_in(root, &body.from, &body.to, false)).await??;
     Ok(axum::Json(json!({ "path": path })))
 }
 
-async fn node_delete(State(state): State<WebState>, axum::Json(body): axum::Json<PathQuery>) -> ApiResult {
-    state.write(move |o| o.app.node_delete(&body.path)).await??;
+#[derive(Deserialize)]
+struct NodeItemBody {
+    path: String,
+    #[serde(default)]
+    root: Option<String>,
+    /// For a move: the folder (empty: the top).
+    #[serde(default)]
+    folder: String,
+}
+
+async fn node_delete(State(state): State<WebState>, axum::Json(body): axum::Json<NodeItemBody>) -> ApiResult {
+    let root = node_root(body.root.as_deref())?;
+    state.write(move |o| o.app.node_delete_in(root, &body.path)).await??;
     ok()
+}
+
+async fn node_move(State(state): State<WebState>, axum::Json(body): axum::Json<NodeItemBody>) -> ApiResult {
+    let root = node_root(body.root.as_deref())?;
+    let path = state.write(move |o| o.app.node_move(root, &body.path, &body.folder, false)).await??;
+    Ok(axum::Json(json!({ "path": path })))
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    name: String,
+}
+
+/// A picture or a file added to the node (its bytes as the body): a
+/// picture goes with the pages, made smaller, anything else is a file to
+/// download. Where pages find it.
+async fn node_upload(State(state): State<WebState>, Query(query): Query<UploadQuery>, body: axum::body::Bytes) -> ApiResult {
+    // A picture is made smaller before the app is held.
+    let upload = tokio::task::spawn_blocking(move || crate::app::node::Upload::prepare(&query.name, &body))
+        .await
+        .map_err(|e| ApiError::from(e.to_string()))??;
+    let added = state.write(move |o| o.app.node_add_upload(upload)).await??;
+    Ok(axum::Json(json!({ "address": added.address, "image": added.image, "shrunk": added.shrunk })))
 }
 
 #[derive(Deserialize)]

@@ -13,7 +13,7 @@ or the folder set in `node_dir`.
   identity, so its address stays the same. Its name defaults to your display
   name, and it announces every `node_announce_interval_mins` (360 by default)
   or when you press `a`.
-- **Editing:** the Node tab lists the pages and has an editor with Micron
+- **Editing:** the Node tab lists what's on the node and has an editor with Micron
   colouring, undo and redo, and a live preview, in both the TUI and the web
   UI. Show the editor and the preview side by side, the editor alone, or the
   preview alone (`Ctrl-P` / `p`, or the buttons in the web UI). Saving writes
@@ -25,12 +25,38 @@ or the folder set in `node_dir`.
   cursor: bold, italic, underline and normal (removes formatting), text and
   background colour, left/centre/right alignment, three heading levels,
   divider, literal block, comment, and inserting links, images, text fields,
-  checkboxes and radio buttons. Each has an Alt shortcut, the letter
-  underlined on its button: `Alt+B` `I` `U` `N`, `F` `G` (colours), `L` `C`
-  `R`, `1` `2` `3`, `V` (divider) `T` (literal) `O` (comment), `K` (link) `M`
-  (image) `D` (field) `H` (checkbox) `A` (radio). Bold, italic and underline
-  toggle, as do headings and comments. The web UI also takes `Ctrl+B`, `I`,
-  `U` and `K`, and picks colours from a palette.
+  checkboxes and radio buttons, and uploading. Each has an Alt shortcut, the
+  letter underlined on its button: `Alt+B` `I` `U` `N`, `F` `G` (colours),
+  `L` `C` `R`, `1` `2` `3`, `V` (divider) `T` (literal) `O` (comment), `K`
+  (link) `M` (image) `D` (field) `H` (checkbox) `A` (radio) `P` (upload).
+  Bold, italic and underline toggle, as do headings and comments. The web UI
+  also takes `Ctrl+B`, `I`, `U` and `K`, and picks colours from a palette.
+- **Pictures and files:** *Upload* (`Alt+P`) adds a file to the node and puts
+  it in the page where the cursor is (the selection, if any, becomes its
+  label). The TUI asks for the file's path on this computer; the web UI
+  picks files from the device, several at once, and files dropped on the
+  page's text are added the same way. A picture (WebP, PNG, JPEG, BMP, GIF,
+  TIFF) goes to `pages/images/` and is shown in the page
+  (`` `(name`:/media/images/name.jpg) ``). To suit the mesh it's made at
+  most 1024 pixels across and written again as a JPEG (a PNG where it's
+  see-through), which leaves out its metadata, such as where a photo was
+  taken; a GIF (which may move), or one that wouldn't get smaller, stays as
+  it is. A picture can be up to 512 KB. Anything else goes to `files/`,
+  linked for visitors to download
+  (`` `[name`:/file/name] ``), up to 32 MB. Names are made safe (spaces
+  become `-`), and something already there is never replaced: the new one
+  gets `-2`, `-3`... on its name.
+- **Folders:** the list shows `pages/` (pages, and the pictures they show)
+  and `files/`, each with its folders. In the TUI, `n` makes a page in the
+  folder picked, `r` renames what's picked, `m` moves it to a folder of its
+  root (a new one is made for it, and one left empty goes), and `x` deletes
+  it. In the web UI, each has a `⋯` menu (open, show a picture, put it in the
+  open page, copy its address, rename, move, delete), and on a computer
+  anything can be dragged onto a folder of its root. Links to what's moved
+  or renamed (`:/page/`, `:/media/` and `:/file/` addresses) are changed in
+  every page, except the one open with changes not saved (the TUI says so;
+  the web UI changes them in the editor, for you to save). Scripts are never
+  changed or moved this way, and the web UI can't rename or move them.
 - **Selecting text in the editors:** Shift with the arrows, Home/End or
   PgUp/PgDn, `Ctrl-A` for everything, or drag with the mouse. Typing, pasting
   or deleting replaces the selection.
