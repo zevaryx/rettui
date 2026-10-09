@@ -5467,6 +5467,9 @@ app.views.status = {
     // Scrolls on its own when taller than its share, so Settings keeps room.
     this.info = el('div', { class: 'info scroll' });
     this.form = el('div', { class: 'settings' });
+    // The settings' groups, one shown at a time (the others keep what's
+    // typed in them until it's saved).
+    this.sectionTabs = el('div', { class: 'subtabs settings-groups' });
     this.saveButton = el('button', { class: 'primary', text: 'Save', disabled: true, onclick: () => this.save() });
     this.revertButton = el('button', { text: 'Revert', disabled: true, onclick: () => this.loadSettings(true) });
     this.settingsFooter = el('div', { class: 'settings-footer dim' });
@@ -5480,7 +5483,7 @@ app.views.status = {
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
           el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }), moreButton()), this.info),
         el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
-          this.revertButton, this.saveButton), el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
+          this.revertButton, this.saveButton), this.sectionTabs, el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
       el('div', { class: 'column', style: 'width:42%' },
         el('section', { class: 'panel', style: 'max-height:40%' }, el('header', { text: 'Interfaces' }), this.interfaces),
         el('section', { class: 'panel grow' }, el('header', { text: 'Log' }), this.log)));
@@ -5503,12 +5506,36 @@ app.views.status = {
   },
 
   markDirty() {
-    const dirty = Object.keys(this.changes()).length > 0;
+    const changes = this.changes();
+    const dirty = Object.keys(changes).length > 0;
     this.saveButton.disabled = !dirty;
     this.revertButton.disabled = !dirty;
     for (const field of this.fields || []) {
       const row = this.inputs[field.key].closest('.setting');
-      row.classList.toggle('changed', field.key in this.changes());
+      row.classList.toggle('changed', field.key in changes);
+    }
+    this.renderSections(changes);
+  },
+
+  // The groups' tabs (a group with changes not saved is marked), and only
+  // the chosen group's settings.
+  renderSections(changes = this.changes()) {
+    const sections = this.sections || [];
+    if (!sections.some((s) => s.id === this.section)) this.section = sections[0]?.id;
+    const edited = new Set((this.fields || []).filter((f) => f.key in changes).map((f) => f.section));
+    this.sectionTabs.replaceChildren(...sections.map((section) => el('button', {
+      class: section.id === this.section ? 'active' : '',
+      text: section.title + (edited.has(section.id) ? ' •' : ''),
+      title: edited.has(section.id) ? 'Changed, not saved yet' : null,
+      onclick: () => {
+        this.section = section.id;
+        try { localStorage.setItem('rettui.settingsGroup', section.id); } catch { /* per-browser convenience only */ }
+        this.renderSections();
+        this.form.closest('.scroll').scrollTop = 0;
+      },
+    })));
+    for (const field of this.fields || []) {
+      this.inputs[field.key].closest('.setting').classList.toggle('hidden', field.section !== this.section);
     }
   },
 
@@ -5522,6 +5549,10 @@ app.views.status = {
     if (!force && snapshot === this.snapshot) return;
     this.snapshot = snapshot;
     this.fields = data.fields;
+    this.sections = data.sections;
+    if (!this.section) {
+      try { this.section = localStorage.getItem('rettui.settingsGroup'); } catch { /* per-browser convenience only */ }
+    }
     this.inputs = {};
     this.form.replaceChildren(...data.fields.map((field) => {
       let input;
@@ -5635,7 +5666,7 @@ app.views.status = {
           `${h.stats.peers} peer${h.stats.peers === 1 ? '' : 's'}`,
         ].filter(Boolean).join(' · ') }) : null)
       : el('span', { class: h.state === 'off' ? 'dim' : '', text: {
-        off: 'no (Host a propagation node, in the settings)', starting: 'starting', failed: `failed: ${h.error}`,
+        off: 'no (Host a propagation node, in Settings › Hosting)', starting: 'starting', failed: `failed: ${h.error}`,
       }[h.state] });
     const label = (text) => el('span', { class: 'label', text });
     // A check for updates asked for here, finished: what it found.

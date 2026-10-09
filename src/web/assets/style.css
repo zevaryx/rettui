@@ -560,6 +560,8 @@ mark { background: var(--yellow-bg); color: #111; border-radius: 2px; }
 /* ---- browser ------------------------------------------------------------ */
 
 .subtabs { display: flex; gap: 6px; }
+/* The settings' groups, above the settings shown. */
+.settings-groups { flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 /* The Browser's search, on its own row under the Saved / Nodes tabs. */
 .panel > header .pane-search { flex: 1 1 100%; min-width: 0; }
 /* What a message search found, and whether only in the open conversation. */

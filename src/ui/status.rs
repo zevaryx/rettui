@@ -5,16 +5,17 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, human_bytes, selected_bg, wrap};
 use crate::app::node::NodeStatus;
 use crate::app::{App, NetState, SyncState};
-use crate::config::{Effect, FIELDS, FieldKind};
+use crate::config::{Effect, FieldKind, Section};
 
 /// The propagation node hosted here: how it's doing, and what it holds.
 fn hosting(app: &App) -> Vec<Span<'static>> {
     match &app.pn.status {
-        NodeStatus::Off => vec![Span::styled("no (Host a propagation node, below)", Style::default().fg(dim()))],
+        NodeStatus::Off => vec![Span::styled("no (Host a propagation node, in Settings › Hosting)", Style::default().fg(dim()))],
         NodeStatus::Starting => vec![Span::styled("◌ starting", Style::default().fg(Color::Yellow))],
         NodeStatus::Failed(e) => vec![Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red))],
         NodeStatus::Running => {
@@ -65,17 +66,41 @@ fn hosting_hub(app: &App) -> Option<Vec<Span<'static>>> {
     })
 }
 
-/// `settings.json`, one row per setting, with help for the selected one.
+/// `settings.json`, a group at a time (their tabs above), one row per
+/// setting, with help for the selected one.
 fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
     let path = app.paths.settings.display().to_string();
     let settings_block = block("Settings", true).title_bottom(Line::styled(format!(" {path} "), Style::default().fg(dim())));
     let inner = settings_block.inner(area);
     frame.render_widget(settings_block, area);
-    let [list_area, help_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let [tabs_row, list_area, help_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    // The groups: their names, or shorter ones when those don't fit.
+    let full: usize = Section::ALL.iter().map(|s| s.title().width() + 3).sum();
+    let short = full > tabs_row.width as usize;
+    let mut tabs = Vec::new();
+    let mut spans = Vec::new();
+    let mut x = tabs_row.x;
+    for section in Section::ALL {
+        let label = format!(" {} ", if short { section.short() } else { section.title() });
+        let width = label.width() as u16;
+        tabs.push((Rect::new(x, tabs_row.y, width, 1), section));
+        x += width + 1;
+        let style = if section == app.settings_section {
+            Style::default().fg(Color::Black).bg(accent()).bold()
+        } else {
+            Style::default().fg(dim())
+        };
+        spans.push(Span::styled(label, style));
+        spans.push(Span::raw(" "));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), tabs_row);
+    app.regions.settings_sections = tabs;
     app.regions.settings = list_area;
-    // Values line up two spaces after the longest label.
-    let width = FIELDS.iter().map(|f| f.label.chars().count()).max().unwrap_or(0) + 2;
-    let items: Vec<ListItem> = FIELDS
+    let fields = app.section_fields();
+    // Values line up two spaces after the group's longest label.
+    let width = fields.iter().map(|f| f.label.chars().count()).max().unwrap_or(0) + 2;
+    let items: Vec<ListItem> = fields
         .iter()
         .map(|field| {
             let value = app.settings_file.field_value(field.key);
@@ -99,12 +124,13 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).bold());
     frame.render_stateful_widget(list, list_area, &mut app.settings_list);
-    let help = app.settings_list.selected().and_then(|i| FIELDS.get(i)).map_or("", |f| f.help);
+    let help = app.settings_list.selected().and_then(|i| fields.get(i)).map_or("", |f| f.help);
     frame.render_widget(Paragraph::new(Span::styled(format!(" {help}"), Style::default().fg(dim()).italic())), help_area);
 }
 
 pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
-    let settings_height = FIELDS.len() as u16 + 3;
+    // The largest group, its tabs, its help and the box.
+    let settings_height = Section::ALL.iter().map(|s| s.fields().count()).max().unwrap_or(0) as u16 + 4;
     let steps = app.first_steps();
     // The settings list scrolls, so it may give way on short terminals.
     let [info, settings, rest] = Layout::vertical([
@@ -322,6 +348,44 @@ mod tests {
         terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
         (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn settings_are_shown_a_group_at_a_time() {
+        let dir = std::env::temp_dir().join(format!("rettui-settings-groups-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.tab = crate::app::Tab::Status;
+        let shown = screen(&mut app);
+        assert!(shown.contains(" Profile ") && shown.contains(" Notifications "), "{shown}");
+        assert!(shown.contains("Icon background") && !shown.contains("Host a node"), "{shown}");
+        // Tab: the next group (Messages); ← back.
+        let key = |app: &mut App, code| app.on_key(crossterm::event::KeyEvent::from(code));
+        key(&mut app, crossterm::event::KeyCode::Tab);
+        let shown = screen(&mut app);
+        assert!(shown.contains("Sync every (min)") && !shown.contains("Icon background"), "{shown}");
+        key(&mut app, crossterm::event::KeyCode::Left);
+        assert_eq!(app.settings_section, Section::Profile);
+        // A click on a group's tab shows it, from its first setting, which
+        // Enter edits (a toggle flips).
+        let (rect, _) = *app.regions.settings_sections.iter().find(|(_, s)| *s == Section::Hosting).unwrap();
+        app.on_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert_eq!((app.settings_section, app.settings_list.selected()), (Section::Hosting, Some(0)));
+        let shown = screen(&mut app);
+        assert!(shown.contains("Host an RRC hub") && !shown.contains("Sync every (min)"), "{shown}");
+        key(&mut app, crossterm::event::KeyCode::Enter);
+        assert!(app.settings.node_enabled, "the group's first setting (Host a node) was flipped");
+        // Down stops at the group's last setting.
+        for _ in 0..40 {
+            key(&mut app, crossterm::event::KeyCode::Down);
+        }
+        assert_eq!(app.settings_list.selected(), Some(Section::Hosting.fields().count() - 1));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

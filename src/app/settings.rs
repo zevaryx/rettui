@@ -256,6 +256,8 @@ impl App {
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_restart_prompt(),
             KeyCode::Down | KeyCode::Char('j') => self.move_setting(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_setting(-1),
+            KeyCode::Tab | KeyCode::Right => self.next_section(1),
+            KeyCode::BackTab | KeyCode::Left => self.next_section(-1),
             KeyCode::Enter | KeyCode::Char(' ') => self.edit_setting(),
             KeyCode::Char('e') => {
                 let name = self.settings.display_name.clone();
@@ -283,10 +285,29 @@ impl App {
         }
     }
 
+    /// The settings of the group shown.
+    pub(crate) fn section_fields(&self) -> Vec<&'static config::Field> {
+        self.settings_section.fields().collect()
+    }
+
     pub(super) fn move_setting(&mut self, delta: isize) {
+        let len = self.section_fields().len();
         let current = self.settings_list.selected().unwrap_or(0);
-        let next = current.saturating_add_signed(delta).min(config::FIELDS.len() - 1);
+        let next = current.saturating_add_signed(delta).min(len.saturating_sub(1));
         self.settings_list.select(Some(next));
+    }
+
+    /// Show another group of settings, from its first.
+    pub(crate) fn show_section(&mut self, section: config::Section) {
+        self.settings_section = section;
+        self.settings_list = ratatui::widgets::ListState::default().with_selected(Some(0));
+    }
+
+    fn next_section(&mut self, delta: isize) {
+        let all = config::Section::ALL;
+        let at = all.iter().position(|s| *s == self.settings_section).unwrap_or(0) as isize;
+        let next = (at + delta).rem_euclid(all.len() as isize) as usize;
+        self.show_section(all[next]);
     }
 
     /// Edit the selected setting: toggles flip, anything else opens a prompt.
@@ -295,7 +316,7 @@ impl App {
         if let Ok(saved) = self.saved_settings() {
             self.settings_file = saved;
         }
-        let Some(field) = self.settings_list.selected().and_then(|i| config::FIELDS.get(i)) else {
+        let Some(field) = self.settings_list.selected().and_then(|i| self.section_fields().get(i).copied()) else {
             return;
         };
         let current = self.settings_file.field_value(field.key);
@@ -320,12 +341,15 @@ impl App {
     }
 
     pub(super) fn click_status(&mut self, at: Position, double: bool) {
+        if let Some(&(_, section)) = self.regions.settings_sections.iter().find(|(rect, _)| rect.contains(at)) {
+            return self.show_section(section);
+        }
         let area = self.regions.settings;
         if !area.contains(at) {
             return;
         }
         let index = self.settings_list.offset() + (at.y - area.y) as usize;
-        if index < config::FIELDS.len() {
+        if index < self.section_fields().len() {
             self.settings_list.select(Some(index));
             if double {
                 self.edit_setting();

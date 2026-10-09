@@ -8,6 +8,12 @@ of the Reticulum instance it uses. Where files are kept is in
   many messages to keep and how much disk they may use, cache time, node
   and propagation node hosting, editor line wrapping and the Reticulum
   config directory.
+  They're in groups, one shown at a time, chosen from the tabs above them:
+  *Profile* (your name, icon and announces), *Messages*, *Location*,
+  *Browsing*, *Hosting* (a node, a propagation node, an RRC hub),
+  *Display*, *Notifications* and *System*. In the terminal UI, `Tab` (or
+  `←` `→`) moves between them. In the web UI, a group with changes not yet
+  saved is marked •; *Save* saves them all, whichever group they're in.
   Values are checked before saving, and most changes apply straight away (the
   editor says which ones wait for the next start).
 - **What the web UI can't change:** the Reticulum config directory and the
