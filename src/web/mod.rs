@@ -36,6 +36,7 @@ use crate::app::{App, Location, Tab};
 use crate::config::{Paths, Settings};
 use crate::net::{self, NetCommand, NetEvent};
 use crate::nomad::micron;
+use crate::rrc::host::HubEvent;
 use crate::store::Store;
 
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:8740";
@@ -216,6 +217,8 @@ impl Scope {
     pub const PEERS: Scope = Scope(4);
     /// RRC: the Channels section, and the unread counts in the sidebar.
     pub const CHANNELS: Scope = Scope(8);
+    /// The RRC hub hosted here: the Hub section (and the counts in Status).
+    pub const HUB: Scope = Scope(16);
     /// Nothing any browser shows.
     pub const NONE: Scope = Scope(0);
     /// Anything.
@@ -229,6 +232,9 @@ impl Scope {
             // Hub connections, rooms and whispers (their notifications go
             // out on their own).
             NetEvent::Rrc { .. } => Scope::CHANNELS,
+            // Who's on the hub hosted here, and what its commands came to
+            // (its starting and stopping touch more).
+            NetEvent::Hub(HubEvent::State(_) | HubEvent::Reply { .. }) => Scope::HUB,
             // Only the terminal UI's browser shows it.
             NetEvent::FetchProgress { .. } => Scope::NONE,
             // The announce viewer asks for those after the last it has
@@ -249,7 +255,8 @@ impl Scope {
         if self == Scope::ALL {
             return "all".into();
         }
-        let parts = [(Scope::STATUS, "status"), (Scope::NODE, "node"), (Scope::PEERS, "peers"), (Scope::CHANNELS, "channels")];
+        let parts =
+            [(Scope::STATUS, "status"), (Scope::NODE, "node"), (Scope::PEERS, "peers"), (Scope::CHANNELS, "channels"), (Scope::HUB, "hub")];
         parts.iter().filter(|(part, _)| self.0 & part.0 != 0).map(|(_, name)| *name).collect::<Vec<_>>().join(",")
     }
 }
@@ -320,6 +327,9 @@ mod scope_tests {
         assert_eq!(Scope::of(&NetEvent::Heard(heard)), Scope::NONE);
         assert_eq!(Scope::of(&NetEvent::Announced), Scope::ALL);
         assert_eq!(Scope::of(&NetEvent::SyncStarted), Scope::ALL);
+        // The hub hosted here: who's on it, apart from its starting.
+        assert_eq!(Scope::of(&NetEvent::Hub(HubEvent::State(Default::default()))).name(), "hub");
+        assert_eq!(Scope::of(&NetEvent::Hub(HubEvent::Stopped)), Scope::ALL);
         // A burst touches what any of it did.
         assert_eq!(Scope::STATUS.and(Scope::STATUS).name(), "status");
         assert_eq!(Scope::STATUS.and(Scope::PEERS).name(), "status,peers");

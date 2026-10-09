@@ -9,8 +9,10 @@
 //! - [`hub`]: handshake bodies and the hub's text replies.
 //! - [`text`]: room and nick rules, mentions, message splitting and links.
 //! - [`session`]: one live hub connection, run by the network actor.
+//! - [`host`]: a hub hosted here, on rsRRCD.
 
 mod envelope;
+pub mod host;
 mod hub;
 pub mod session;
 mod text;

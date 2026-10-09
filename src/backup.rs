@@ -3,10 +3,10 @@
 //!
 //! A backup is a `.tar.gz` of the data directory's own files: settings,
 //! contacts and conversations (the store, and its archive), the peers
-//! heard, known identities, stamp tickets, RRC chat history and the hosted
-//! node's pages (its default folder); the identity, unless left out (the
-//! web UI always leaves it out); and with `files`, attachments received and
-//! sent. Caches, logs, the web UI's login and certificates, ratchets and
+//! heard, known identities, stamp tickets, RRC chat history, the hosted
+//! node's pages (its default folder) and the hosted RRC hub's settings and
+//! rooms; the identity and the hub's, unless left out (the web UI always
+//! leaves them out); and with `files`, attachments received and sent. Caches, logs, the web UI's login and certificates, ratchets and
 //! the propagation node's messages aren't kept: they're made again.
 //!
 //! Restoring puts them in a data directory while rettui isn't running
@@ -24,9 +24,11 @@ const ROOT: &str = "rettui-backup";
 const MANIFEST: &str = "rettui-backup.json";
 /// Kept from the data directory: files, and folders with all they hold.
 const KEPT: &[&str] =
-    &["settings.json", "store.json.gz", "peers.json.gz", "known_identities.json", "tickets.json", "archive", "rrc", "node"];
+    &["settings.json", "store.json.gz", "peers.json.gz", "known_identities.json", "tickets.json", "archive", "rrc", "node", "rrc-hub"];
 /// The identity: the private key behind your addresses.
 const IDENTITY: &str = "identity";
+/// The hosted RRC hub's identity, behind its address: kept with yours.
+const HUB_IDENTITY: &str = "rrc-hub-identity";
 /// Attachments received and sent.
 const FILES: &[&str] = &["downloads", "uploads"];
 
@@ -51,7 +53,7 @@ struct Manifest {
 fn kept(options: Options) -> Vec<&'static str> {
     let mut names: Vec<&str> = KEPT.to_vec();
     if options.identity {
-        names.push(IDENTITY);
+        names.extend([IDENTITY, HUB_IDENTITY]);
     }
     if options.files {
         names.extend(FILES);
@@ -135,7 +137,7 @@ fn destination(path: &Path) -> Option<PathBuf> {
         return None;
     }
     let first = rel.components().next()?.as_os_str().to_str()?;
-    let allowed = first == MANIFEST || first == IDENTITY || KEPT.contains(&first) || FILES.contains(&first);
+    let allowed = [MANIFEST, IDENTITY, HUB_IDENTITY].contains(&first) || KEPT.contains(&first) || FILES.contains(&first);
     allowed.then(|| rel.to_path_buf())
 }
 
@@ -216,11 +218,13 @@ pub fn restore(archive: &Path, base: &Path, force: bool) -> Result<String, Strin
             count += 1;
         }
     }
-    // The identity is the owner's to read only.
+    // Identities are the owner's to read only.
     #[cfg(unix)]
-    if base.join(IDENTITY).is_file() {
+    for name in [IDENTITY, HUB_IDENTITY] {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(base.join(IDENTITY), std::fs::Permissions::from_mode(0o600));
+        if base.join(name).is_file() {
+            let _ = std::fs::set_permissions(base.join(name), std::fs::Permissions::from_mode(0o600));
+        }
     }
     let mut done = format!("Restored {count} files from rettui {}'s backup into {}", manifest.version, base.display());
     if !manifest.identity {
@@ -240,8 +244,11 @@ mod tests {
         std::fs::create_dir_all(dir.join("archive")).unwrap();
         std::fs::create_dir_all(dir.join("downloads/abc")).unwrap();
         std::fs::create_dir_all(dir.join("cache")).unwrap();
+        std::fs::create_dir_all(dir.join("rrc-hub")).unwrap();
         for (name, text) in [
             ("identity", "secret"),
+            ("rrc-hub-identity", "hub secret"),
+            ("rrc-hub/config.yaml", "hub: {}"),
             ("settings.json", "{}"),
             ("store.json.gz", "store"),
             ("archive/2026-10.jsonl", "old"),
@@ -262,10 +269,12 @@ mod tests {
         data(&from);
         let file = base.join("backup.tar.gz");
         let count = create(&from, std::fs::File::create(&file).unwrap(), Options { identity: true, files: false }).unwrap();
-        assert_eq!(count, 4, "identity, settings, store, archive");
+        assert_eq!(count, 6, "identities, settings, store, archive, the hub's config");
         let done = restore(&file, &to, false).unwrap();
-        assert!(done.starts_with("Restored 4 files"), "{done}");
+        assert!(done.starts_with("Restored 6 files"), "{done}");
         assert_eq!(std::fs::read_to_string(to.join("identity")).unwrap(), "secret");
+        assert_eq!(std::fs::read_to_string(to.join("rrc-hub-identity")).unwrap(), "hub secret");
+        assert_eq!(std::fs::read_to_string(to.join("rrc-hub/config.yaml")).unwrap(), "hub: {}");
         assert_eq!(std::fs::read_to_string(to.join("archive/2026-10.jsonl")).unwrap(), "old");
         for missing in ["downloads", "cache", "rettui.log", "web_token"] {
             assert!(!to.join(missing).exists(), "{missing}");
@@ -282,6 +291,7 @@ mod tests {
         let done = restore(&file, &other, false).unwrap();
         assert!(done.contains("no identity"), "{done}");
         assert!(other.join("downloads/abc/photo.jpg").exists() && !other.join("identity").exists());
+        assert!(other.join("rrc-hub/config.yaml").exists() && !other.join("rrc-hub-identity").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 

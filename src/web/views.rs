@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::app::channels::{Hub, HubStatus, LineKind};
 use crate::app::node::NodeStatus;
 use crate::app::{App, NetState, SyncState, network};
-use crate::config::{Effect, FIELDS, FieldKind, Settings, WebAccess};
+use crate::config::{Effect, FIELDS, FieldKind, Section, Settings, WebAccess};
 use crate::net::PeerKind;
 use crate::rrc;
 use crate::store::{Conversation, Message, MessageState, NotifyLevel};
@@ -40,6 +40,18 @@ pub fn state(app: &App) -> Value {
         NodeStatus::Off => json!({ "state": "off" }),
         NodeStatus::Starting => json!({ "state": "starting" }),
         NodeStatus::Running => json!({ "state": "running", "hash": hex::encode(app.pn.hash), "stats": app.pn.stats }),
+        NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
+    };
+    // The RRC hub hosted here (the Hub section has the rest).
+    let hub = match &app.hub.status {
+        NodeStatus::Off => json!({ "state": "off" }),
+        NodeStatus::Starting => json!({ "state": "starting" }),
+        NodeStatus::Running => json!({
+            "state": "running",
+            "hash": app.hub.address.map(|(hash, _)| hex::encode(hash)),
+            "people": app.hub.snapshot.people.len(),
+            "rooms": app.hub.snapshot.rooms.len(),
+        }),
         NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
     };
     let message_unread = app.unread_messages();
@@ -95,6 +107,7 @@ pub fn state(app: &App) -> Value {
         "welcome": !app.settings.welcomed,
         // The propagation node hosted here.
         "hosting": hosting,
+        "hub": hub,
         "rns_config": app.settings.rns_config,
         "data_dir": app.paths.store.parent().map(|p| p.display().to_string()),
         "known": app.store.peers.len(),
@@ -714,6 +727,8 @@ pub fn settings(app: &App, saved: &Settings) -> Value {
                 },
                 "next_start": f.effect == Effect::NextStart,
                 "value": saved.field_value(f.key),
+                // The group it's shown in.
+                "section": f.section().id(),
                 // What the web UI may do with it.
                 "web": match f.web_access() {
                     WebAccess::Change => "change",
@@ -725,6 +740,7 @@ pub fn settings(app: &App, saved: &Settings) -> Value {
         .collect();
     json!({
         "path": app.paths.settings.display().to_string(),
+        "sections": Section::ALL.iter().map(|s| json!({ "id": s.id(), "title": s.title() })).collect::<Vec<_>>(),
         "fields": fields,
         // What this session actually uses (may come from --rns-config or
         // the standard locations).
@@ -752,9 +768,48 @@ pub fn node(app: &App) -> Value {
             "requests": s.request_count, "pages": s.page_hits, "files": s.file_hits, "not_found": s.not_found_count,
         })),
         "list_error": app.node.error,
+        "files": app.node.files.iter().map(|f| json!({ "path": f.path, "size": f.size, "modified_ms": f.modified_ms })).collect::<Vec<_>>(),
         "pages": app.node.pages.iter().map(|p| json!({
             "path": p.path, "size": p.size, "modified_ms": p.modified_ms, "executable": p.executable, "text": p.text,
         })).collect::<Vec<_>>(),
+    })
+}
+
+/// The RRC hub hosted here, for the Hub section: how it's doing, who's on
+/// it, its rooms and bans, and what its commands came to.
+pub fn hub(app: &App) -> Value {
+    use crate::app::node::NodeStatus;
+    let hub = &app.hub;
+    let (status, error) = match &hub.status {
+        NodeStatus::Off => ("off", None),
+        NodeStatus::Starting => ("starting", None),
+        NodeStatus::Running => ("running", None),
+        NodeStatus::Failed(e) => ("failed", Some(e.clone())),
+    };
+    let name = hub
+        .name()
+        .map(str::to_string)
+        .unwrap_or_else(|| app.settings.hub_name.clone().unwrap_or_else(|| app.settings.display_name.clone()));
+    json!({
+        "status": status,
+        "error": error,
+        "address": hub.address.map(|(hash, _)| hex::encode(hash)),
+        "link": hub.link(),
+        "name": name,
+        "greeting": app.settings.hub_greeting,
+        "open_rooms": app.settings.hub_open_rooms,
+        "announce_mins": app.settings.hub_announce_interval_mins,
+        "dir": app.paths.rrc_hub.display().to_string(),
+        "you": hex::encode(app.identity_hash),
+        "people": hub.snapshot.people,
+        "rooms": hub.snapshot.rooms,
+        "bans": hub.bans().iter().map(|ban| json!({
+            "room": ban.room, "identity": ban.identity, "name": hub.name_of(&ban.identity),
+        })).collect::<Vec<_>>(),
+        "unidentified": hub.snapshot.unidentified,
+        "stats": hub.snapshot.stats,
+        "replies": hub.replies.iter().map(|(text, error)| json!({ "text": text, "error": error })).collect::<Vec<_>>(),
+        "replied": hub.replied,
     })
 }
 
@@ -847,6 +902,59 @@ mod tests {
         let via = peers(&app, None, "", None, heard, Some("RNode LoRa"));
         assert_eq!((names(&via), via["peers"][0]["via"].as_str()), (vec!["Alpha person".to_string()], Some("RNode LoRa")));
         assert_eq!(via["interfaces"], json!(["RNode LoRa"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_say_their_group() {
+        let dir = std::env::temp_dir().join(format!("rettui-views-groups-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        let view = settings(&app, &app.settings);
+        assert_eq!(view["sections"][0], json!({ "id": "profile", "title": "Profile" }));
+        let section = |key: &str| view["fields"].as_array().unwrap().iter().find(|f| f["key"] == key).unwrap()["section"].clone();
+        assert_eq!(
+            (section("display_name"), section("hub_enabled"), section("quiet_hours")),
+            (json!("profile"), json!("hosting"), json!("notifications"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_hub_section_has_its_people_rooms_bans_and_replies() {
+        use crate::net::NetEvent;
+        use crate::rrc::host::{HubEvent, HubRoom, HubSnapshot};
+        let dir = std::env::temp_dir().join(format!("rettui-views-hub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let settings = crate::config::Settings { hub_enabled: true, ..crate::config::Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, crate::store::Store::default());
+        assert_eq!((hub(&app)["status"].as_str(), hub(&app)["link"].as_str()), (Some("starting"), None));
+        assert_eq!(state(&app)["hub"]["state"], "starting");
+        app.on_net(NetEvent::Hub(HubEvent::Started { hash: [7; 16], public_key: [1; 64] }));
+        let room = HubRoom {
+            name: "lobby".into(),
+            registered: true,
+            modes: "+nrt".into(),
+            topic: None,
+            members: Vec::new(),
+            founder: None,
+            operators: Vec::new(),
+            voiced: Vec::new(),
+            banned: vec!["c".repeat(32)],
+            key: None,
+            invited: Vec::new(),
+        };
+        app.on_net(NetEvent::Hub(HubEvent::State(HubSnapshot { rooms: vec![room], ..HubSnapshot::default() })));
+        app.on_net(NetEvent::Hub(HubEvent::Reply { text: "no such room".into(), error: true }));
+        let view = hub(&app);
+        assert_eq!(
+            (view["status"].as_str(), view["link"].as_str()),
+            (Some("running"), Some(format!("rrc://{}", hex::encode([7; 16])).as_str()))
+        );
+        assert_eq!(view["rooms"][0]["name"], "lobby");
+        assert_eq!(view["bans"][0], json!({ "room": "lobby", "identity": "c".repeat(32), "name": "cccccccccccc" }));
+        assert_eq!((view["replies"][0]["error"].as_bool(), view["replied"].as_u64()), (Some(true), Some(1)));
+        assert_eq!(state(&app)["hub"]["rooms"], 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

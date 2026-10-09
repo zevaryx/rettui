@@ -48,6 +48,10 @@ rettui keeps its data in `~/.local/share/rettui/`:
   seconds and when rettui exits.
 - `tickets.json`: [stamp tickets](Messaging#blocking-and-spam) you gave
   trusted contacts and ones they gave you. Only you can read it.
+- `rrc-hub/` and `rrc-hub-identity`: the [RRC hub hosted
+  here](Hosting-a-Node#rrc-hub), once it has started: rsRRCD's
+  `config.yaml`, its registered rooms (`rooms.yaml`), and the hub's own
+  identity.
 - `ratchets/`: your address's ratchets, one file per address, named as
   Python LXMF names them. As in Sideband, NomadNet and MeshChat, your
   announces carry the newest of a set of keys (a new one at most every
@@ -68,7 +72,7 @@ rettui keeps its data in `~/.local/share/rettui/`:
   found, and when
 - `map-tiles/`: pictures for the web UI's [map](Messaging#locations-and-the-map),
   kept a month (200 MB at most); deleting it is harmless
-- `node/`: your node's `pages/` and `files/`
+- `node/`: your node's `pages/` (with pictures added in the editor in `pages/images/`) and `files/`
 - `propagation/`: messages your [propagation node](Hosting-a-Node#propagation-node)
   keeps for others, one file each, encrypted for their recipients
 - `web_token`: the web UI's login secret (delete it to log every browser out)
@@ -87,7 +91,8 @@ A backup is one `.tar.gz` file holding what's yours to keep:
 `settings.json`, the store (conversations, contacts, saved pages, RRC
 hubs), `peers.json.gz`, the `archive/` of older messages,
 `known_identities.json`, `tickets.json`, RRC history (`rrc/`), your node's
-pages and files (`node/`) and, unless left out, the `identity`. Caches,
+pages and files (`node/`), your hub's settings and rooms (`rrc-hub/`) and,
+unless left out, the `identity` (and the hub's, `rrc-hub-identity`). Caches,
 the log, ratchets, the propagation node's messages and the web UI's login,
 certificates and push keys aren't kept: rettui makes them again.
 Attachments (`downloads/`, `uploads/`) are left out unless asked for.

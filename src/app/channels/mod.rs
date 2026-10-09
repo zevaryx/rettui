@@ -165,6 +165,8 @@ pub struct Hub {
     motd_parts: Option<(String, Option<String>)>,
     pub limits: Limits,
     pub direct_notices: bool,
+    /// The hub hosted here: its public key, to reach it directly.
+    pub local_key: Option<[u8; 64]>,
     /// Joined rooms (rejoined automatically after reconnecting).
     pub rooms: BTreeSet<String>,
     /// Keys of keyed (`+k`) rooms, to rejoin them.
@@ -222,6 +224,7 @@ impl Hub {
             motd_parts: None,
             limits: Limits::default(),
             direct_notices: false,
+            local_key: None,
             rooms: BTreeSet::new(),
             keys: BTreeMap::new(),
             buffers: BTreeMap::from([(String::new(), Vec::new())]),
@@ -775,8 +778,40 @@ impl App {
         hub.manual = false;
         hub.reconnect_at = None;
         hub.status = HubStatus::Connecting("Starting".into());
-        let command = NetCommand::RrcConnect { hub: hub.hash, aspect: hub.aspect.clone(), nick };
+        let command = NetCommand::RrcConnect { hub: hub.hash, aspect: hub.aspect.clone(), nick, key: hub.local_key };
         self.send(command);
+    }
+
+    /// The hub hosted here is running: in the hub list (added the first
+    /// time), reached with its key, and connected unless it's set not to be.
+    pub(crate) fn connect_own_hub(&mut self, hash: Hash, key: [u8; 64], name: &str) {
+        let index = match self.channels.hubs.iter().position(|h| h.hash == hash && h.aspect == rrc::DEFAULT_ASPECT) {
+            Some(index) => index,
+            None => {
+                self.channels.hubs.push(Hub::new(hash, rrc::DEFAULT_ASPECT.into(), name.to_string()));
+                self.save_hubs();
+                self.channels.hubs.len() - 1
+            }
+        };
+        let hub = self.hub_mut(index);
+        hub.local_key = Some(key);
+        if hub.auto_connect && !hub.manual && !matches!(hub.status, HubStatus::Connected | HubStatus::Connecting(_)) {
+            hub.reconnect_at = None;
+            hub.status = HubStatus::Disconnected;
+            self.connect_hub(index);
+        }
+    }
+
+    /// The hub hosted here has stopped: leave it, without trying again until
+    /// it's back.
+    pub(crate) fn release_own_hub(&mut self, hash: Hash) {
+        let Some(index) = self.channels.hubs.iter().position(|h| h.hash == hash && h.aspect == rrc::DEFAULT_ASPECT) else { return };
+        let hub = self.hub_mut(index);
+        hub.reconnect_at = None;
+        if matches!(hub.status, HubStatus::Connected | HubStatus::Connecting(_)) {
+            hub.status = HubStatus::Disconnected;
+            self.session(index, SessionCommand::Disconnect);
+        }
     }
 
     fn disconnect_hub(&mut self, index: usize) {
@@ -808,7 +843,9 @@ impl App {
 
     pub fn start_channels(&mut self) {
         for index in 0..self.channels.hubs.len() {
-            if self.channels.hubs[index].auto_connect {
+            // The hub hosted here, once it's up (see connect_own_hub).
+            let hub = &self.channels.hubs[index];
+            if hub.auto_connect && !self.own_hub_waiting(hub.hash) {
                 self.connect_hub(index);
             }
         }

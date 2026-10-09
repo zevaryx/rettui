@@ -137,6 +137,16 @@ pub struct Settings {
     pub pn_storage_mb: u64,
     /// Largest message a client may send it, in kilobytes.
     pub pn_transfer_kb: u64,
+    /// Host an RRC hub (rsRRCD's, in `rrc-hub/`).
+    pub hub_enabled: bool,
+    /// Name the hub announces and welcomes people with; the display name
+    /// when unset.
+    pub hub_name: Option<String>,
+    /// Sent to everyone who connects (`\n` starts a new line).
+    pub hub_greeting: Option<String>,
+    pub hub_announce_interval_mins: u64,
+    /// Anyone may make a room by joining it; else only you can.
+    pub hub_open_rooms: bool,
 }
 
 impl Default for Settings {
@@ -197,6 +207,11 @@ impl Default for Settings {
             pn_stamp_cost: u64::from(lxmf_core::constants::PROPAGATION_COST),
             pn_storage_mb: 500,
             pn_transfer_kb: lxmf_core::constants::PROPAGATION_LIMIT as u64,
+            hub_enabled: false,
+            hub_name: None,
+            hub_greeting: None,
+            hub_announce_interval_mins: 360,
+            hub_open_rooms: true,
         }
     }
 }
@@ -232,6 +247,10 @@ pub struct Paths {
     pub node: PathBuf,
     /// Messages kept by the hosted propagation node.
     pub propagation: PathBuf,
+    /// The hosted RRC hub's configuration and rooms (rsRRCD's files).
+    pub rrc_hub: PathBuf,
+    /// The hosted hub's identity (backed up with yours).
+    pub rrc_hub_identity: PathBuf,
     /// Map tiles fetched for the web UI's map.
     pub map_tiles: PathBuf,
     /// What the last update check found (see `crate::update`).
@@ -266,6 +285,8 @@ impl Paths {
             web_push: base.join("web_push.json"),
             node: base.join("node"),
             propagation: base.join("propagation"),
+            rrc_hub: base.join("rrc-hub"),
+            rrc_hub_identity: base.join("rrc-hub-identity"),
             map_tiles: base.join("map-tiles"),
             update_check: base.join("update-check.json"),
             base,
@@ -398,6 +419,145 @@ impl Field {
             "node_executable_pages" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }
+    }
+}
+
+/// The groups the settings editors show settings in, one at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Profile,
+    Messages,
+    Location,
+    Browsing,
+    Hosting,
+    Display,
+    Notifications,
+    System,
+}
+
+impl Section {
+    pub const ALL: [Section; 8] = [
+        Section::Profile,
+        Section::Messages,
+        Section::Location,
+        Section::Browsing,
+        Section::Hosting,
+        Section::Display,
+        Section::Notifications,
+        Section::System,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::Profile => "Profile",
+            Section::Messages => "Messages",
+            Section::Location => "Location",
+            Section::Browsing => "Browsing",
+            Section::Hosting => "Hosting",
+            Section::Display => "Display",
+            Section::Notifications => "Notifications",
+            Section::System => "System",
+        }
+    }
+
+    /// For a narrow terminal.
+    pub fn short(self) -> &'static str {
+        match self {
+            Section::Profile => "You",
+            Section::Messages => "Msgs",
+            Section::Location => "Map",
+            Section::Browsing => "Browse",
+            Section::Hosting => "Host",
+            Section::Display => "Look",
+            Section::Notifications => "Notify",
+            Section::System => "System",
+        }
+    }
+
+    /// As the web UI names it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Section::Profile => "profile",
+            Section::Messages => "messages",
+            Section::Location => "location",
+            Section::Browsing => "browsing",
+            Section::Hosting => "hosting",
+            Section::Display => "display",
+            Section::Notifications => "notifications",
+            Section::System => "system",
+        }
+    }
+
+    /// Its settings, in the order the editors show them.
+    pub fn fields(self) -> impl Iterator<Item = &'static Field> {
+        FIELDS.iter().filter(move |field| field.section() == self)
+    }
+}
+
+/// Which settings each group has.
+const SECTIONS: &[(Section, &[&str])] = &[
+    (
+        Section::Profile,
+        &[
+            "display_name",
+            "icon",
+            "icon_color",
+            "icon_background",
+            "announce_at_start",
+            "announce_schedule",
+            "announce_random_min_mins",
+            "announce_random_max_mins",
+            "announce_interval_mins",
+        ],
+    ),
+    (
+        Section::Messages,
+        &[
+            "propagation_node",
+            "auto_propagation_node",
+            "sync_interval_mins",
+            "resend_on_announce",
+            "unknown_senders",
+            "answer_commands",
+            "stamp_cost",
+            "max_message_kb",
+            "markdown_messages",
+            "picture_size",
+            "messages_kept",
+            "message_storage_mb",
+        ],
+    ),
+    (Section::Location, &["location", "location_requests", "map_tiles", "map_tiles_file"]),
+    (Section::Browsing, &["home", "cache_hours"]),
+    (
+        Section::Hosting,
+        &[
+            "node_enabled",
+            "node_name",
+            "node_announce_interval_mins",
+            "node_dir",
+            "node_executable_pages",
+            "pn_enabled",
+            "pn_name",
+            "pn_stamp_cost",
+            "pn_storage_mb",
+            "pn_transfer_kb",
+            "hub_enabled",
+            "hub_name",
+            "hub_greeting",
+            "hub_announce_interval_mins",
+            "hub_open_rooms",
+        ],
+    ),
+    (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins"]),
+    (Section::Notifications, &["notify_messages", "notify_rrc", "quiet_hours", "quiet_hours_trusted"]),
+    (Section::System, &["log_level", "update_check", "rns_config"]),
+];
+
+impl Field {
+    /// The group it's shown in.
+    pub fn section(&self) -> Section {
+        SECTIONS.iter().find(|(_, keys)| keys.contains(&self.key)).map_or(Section::System, |(section, _)| *section)
     }
 }
 
@@ -659,6 +819,41 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "hub_enabled",
+        label: "Host an RRC hub",
+        help: "Run an RRC chat hub that people can join from NomadNet, MeshChatX, Ratspeak or rettui (rsRRCD's hub, on your Reticulum). It has an address of its own, not your LXMF one. Manage it in the Hub tab",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "hub_name",
+        label: "Hub name",
+        help: "Name your hub announces and welcomes people with; empty uses your display name",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "hub_greeting",
+        label: "Hub greeting",
+        help: "Sent to everyone who connects to your hub (\\n starts a new line); empty sends none",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "hub_announce_interval_mins",
+        label: "Hub announce (min)",
+        help: "Minutes between hub announces; 0 announces only when the hub starts",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "hub_open_rooms",
+        label: "Anyone makes rooms",
+        help: "Anyone may make a room on your hub by joining it, as on most hubs; off, only you can, and others join the ones there are",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "tui_theme",
         label: "Terminal colours",
         help: "The terminal UI's colours: dark (for a dark terminal), light (for a light one), or basic (16 colours, for terminals without full colour). The web UI picks its own, in its Status page",
@@ -873,6 +1068,11 @@ impl Settings {
             "pn_stamp_cost" => self.pn_stamp_cost.to_string(),
             "pn_storage_mb" => self.pn_storage_mb.to_string(),
             "pn_transfer_kb" => self.pn_transfer_kb.to_string(),
+            "hub_enabled" => self.hub_enabled.to_string(),
+            "hub_name" => self.hub_name.clone().unwrap_or_default(),
+            "hub_greeting" => self.hub_greeting.clone().unwrap_or_default(),
+            "hub_announce_interval_mins" => self.hub_announce_interval_mins.to_string(),
+            "hub_open_rooms" => self.hub_open_rooms.to_string(),
             _ => String::new(),
         }
     }
@@ -968,6 +1168,18 @@ impl Settings {
             "stamp_cost" => self.stamp_cost = number(value, MAX_STAMP_COST).map_err(fail)?,
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
+            "hub_enabled" => self.hub_enabled = toggle(value).map_err(fail)?,
+            "hub_open_rooms" => self.hub_open_rooms = toggle(value).map_err(fail)?,
+            "hub_name" => {
+                if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
+                    return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));
+                }
+                self.hub_name = optional(value);
+            }
+            "hub_greeting" => self.hub_greeting = optional(value),
+            "hub_announce_interval_mins" => {
+                self.hub_announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?;
+            }
             "markdown_messages" => self.markdown_messages = toggle(value).map_err(fail)?,
             "picture_size" => self.picture_size = choice(value, crate::app::shrink::PICTURE_SIZES).map_err(fail)?,
             "log_level" => self.log_level = choice(value, crate::logging::LEVELS).map_err(fail)?,
@@ -1134,6 +1346,22 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_setting_is_in_one_group() {
+        for field in FIELDS {
+            let groups = SECTIONS.iter().filter(|(_, keys)| keys.contains(&field.key)).count();
+            assert_eq!(groups, 1, "{} is in {groups} groups", field.key);
+        }
+        for (section, keys) in SECTIONS {
+            for key in *keys {
+                assert!(FIELDS.iter().any(|f| f.key == *key), "{section:?} names {key}, which isn't a setting");
+            }
+        }
+        // Each group has some, and all of them are shown somewhere.
+        assert!(Section::ALL.iter().all(|s| s.fields().next().is_some()));
+        assert_eq!(Section::ALL.iter().map(|s| s.fields().count()).sum::<usize>(), FIELDS.len());
+    }
 
     #[test]
     fn ignoring_unknown_senders_from_before_requests_is_kept() {

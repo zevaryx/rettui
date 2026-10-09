@@ -70,6 +70,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             Tab::Node => "⌂",
             Tab::Status => "ⓘ",
             Tab::Reticulum => "⛭",
+            Tab::Hub => "⊛",
         };
         let selected = *tab == app.tab;
         let base = if selected { Style::default().bg(selected_bg()).bold() } else { Style::default() };

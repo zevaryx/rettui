@@ -8,3 +8,9 @@
 [submodule "deps/rsNomad"]
 	path = deps/rsNomad
 	url = https://github.com/Colorado-Mesh/rsNomad
+[submodule "deps/rsRRCD"]
+	path = deps/rsRRCD
+	url = https://github.com/reticulum-spb/rsRRCD
+[submodule "deps/rsRRC"]
+	path = deps/rsRRC
+	url = https://github.com/reticulum-spb/rsRRC

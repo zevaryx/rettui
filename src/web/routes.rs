@@ -32,6 +32,7 @@ use crate::app::{Location, resolve_url};
 use crate::lxmf::DeliveryMode;
 use crate::net::{Hash, NetCommand, parse_hash};
 use crate::nomad::micron::{self, html};
+use crate::nomad::pages::Root;
 use crate::rrc;
 use crate::store::{Bookmark, NotifyLevel};
 
@@ -143,9 +144,13 @@ pub fn router(state: WebState) -> Router {
         .route("/node/pages", post(node_create))
         .route("/node/rename", post(node_rename))
         .route("/node/delete", post(node_delete))
+        .route("/node/move", post(node_move))
+        .route("/node/upload", post(node_upload))
         .route("/node/preview", post(node_preview))
         .route("/node/media", get(node_media))
         .route("/node/announce", post(node_announce))
+        .route("/hub", get(hosted_hub))
+        .route("/hub/{action}", post(hosted_hub_action))
         .route("/reticulum", get(reticulum))
         .route("/reticulum/options", post(reticulum_options))
         .route("/reticulum/interfaces", post(reticulum_interfaces))
@@ -1911,20 +1916,64 @@ async fn node_create(State(state): State<WebState>, axum::Json(body): axum::Json
     Ok(axum::Json(json!({ "path": path })))
 }
 
+/// Where on the node: `pages` (the default) or `files`.
+fn node_root(id: Option<&str>) -> Result<Root, ApiError> {
+    Root::from_id(id.unwrap_or("pages")).ok_or_else(|| bad("Not pages or files"))
+}
+
 #[derive(Deserialize)]
 struct RenameBody {
     from: String,
     to: String,
+    #[serde(default)]
+    root: Option<String>,
 }
 
+/// Rename (or move) something on the node; links to it in the pages
+/// follow. Never a script, from here.
 async fn node_rename(State(state): State<WebState>, axum::Json(body): axum::Json<RenameBody>) -> ApiResult {
-    let path = state.write(move |o| o.app.node_rename(&body.from, &body.to, false)).await??;
+    let root = node_root(body.root.as_deref())?;
+    let path = state.write(move |o| o.app.node_rename_in(root, &body.from, &body.to, false)).await??;
     Ok(axum::Json(json!({ "path": path })))
 }
 
-async fn node_delete(State(state): State<WebState>, axum::Json(body): axum::Json<PathQuery>) -> ApiResult {
-    state.write(move |o| o.app.node_delete(&body.path)).await??;
+#[derive(Deserialize)]
+struct NodeItemBody {
+    path: String,
+    #[serde(default)]
+    root: Option<String>,
+    /// For a move: the folder (empty: the top).
+    #[serde(default)]
+    folder: String,
+}
+
+async fn node_delete(State(state): State<WebState>, axum::Json(body): axum::Json<NodeItemBody>) -> ApiResult {
+    let root = node_root(body.root.as_deref())?;
+    state.write(move |o| o.app.node_delete_in(root, &body.path)).await??;
     ok()
+}
+
+async fn node_move(State(state): State<WebState>, axum::Json(body): axum::Json<NodeItemBody>) -> ApiResult {
+    let root = node_root(body.root.as_deref())?;
+    let path = state.write(move |o| o.app.node_move(root, &body.path, &body.folder, false)).await??;
+    Ok(axum::Json(json!({ "path": path })))
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    name: String,
+}
+
+/// A picture or a file added to the node (its bytes as the body): a
+/// picture goes with the pages, made smaller, anything else is a file to
+/// download. Where pages find it.
+async fn node_upload(State(state): State<WebState>, Query(query): Query<UploadQuery>, body: axum::body::Bytes) -> ApiResult {
+    // A picture is made smaller before the app is held.
+    let upload = tokio::task::spawn_blocking(move || crate::app::node::Upload::prepare(&query.name, &body))
+        .await
+        .map_err(|e| ApiError::from(e.to_string()))??;
+    let added = state.write(move |o| o.app.node_add_upload(upload)).await??;
+    Ok(axum::Json(json!({ "address": added.address, "image": added.image, "shrunk": added.shrunk })))
 }
 
 #[derive(Deserialize)]
@@ -1986,6 +2035,68 @@ async fn node_media(State(state): State<WebState>, Query(query): Query<PathQuery
 
 async fn node_announce(State(state): State<WebState>) -> ApiResult {
     state.write(|o| o.app.send(NetCommand::HostAnnounce)).await?;
+    ok()
+}
+
+// ---- the RRC hub hosted here ----------------------------------------------
+
+async fn hosted_hub(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::hub(&o.app)).await?))
+}
+
+#[derive(Deserialize, Default)]
+struct HostedHubBody {
+    /// The room an action is about (none: the whole hub, for `ban`).
+    #[serde(default)]
+    room: Option<String>,
+    /// Whom it's about (hex).
+    #[serde(default)]
+    identity: String,
+    /// A command, a topic, modes.
+    #[serde(default)]
+    text: String,
+    /// On or off: hosting, a ban, operator, voice, registered.
+    #[serde(default)]
+    on: Option<bool>,
+}
+
+/// What the Hub section does: hub commands, as its panel in the terminal
+/// runs them. The hub says how each went (a reply, in `GET /hub`).
+async fn hosted_hub_action(
+    State(state): State<WebState>,
+    Path(action): Path<String>,
+    body: Option<axum::Json<HostedHubBody>>,
+) -> ApiResult {
+    let body = body.map(|b| b.0).unwrap_or_default();
+    state
+        .write(move |o| -> Result<(), ApiError> {
+            let app = &mut o.app;
+            let on = body.on.unwrap_or(true);
+            let room = body.room.as_deref().unwrap_or_default();
+            let identity = body.identity.trim();
+            let result = match action.as_str() {
+                "enable" => app.update_settings_from_web(&[("hub_enabled", if on { "true" } else { "false" })]).map(|_| ()),
+                "announce" => app.hub_announce(),
+                "run" => app.hub_run(&body.text),
+                "kick" => app.hub_kick(room, identity),
+                "ban" => app.hub_ban(body.room.as_deref(), identity, on),
+                "op" => app.hub_op(room, identity, on),
+                "voice" => app.hub_voice(room, identity, on),
+                "invite" => app.hub_invite(room, identity, on),
+                // The key in `text`; off takes it off.
+                "key" => app.hub_room_key(room, on.then_some(body.text.as_str())),
+                "topic" => app.hub_topic(room, &body.text),
+                "modes" => app.hub_modes(room, &body.text),
+                "register" => app.hub_register(room, on),
+                "delete" => app.hub_delete_room(room),
+                // The new name in `text`.
+                "rename" => app.hub_rename_room(room, &body.text),
+                "disconnect" => app.hub_disconnect(identity),
+                _ => return Err(bad(format!("unknown hub action {action}"))),
+            };
+            result.map_err(bad)
+        })
+        .await??;
     ok()
 }
 

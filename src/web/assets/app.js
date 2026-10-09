@@ -44,6 +44,36 @@ async function request(method, path, body) {
   if (!response.ok) throw new Error(data.error || response.statusText);
   return data;
 }
+// A file sent as it is (not JSON): what rettui answers.
+async function upload(path, file) {
+  const response = await fetch('api' + path, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
+  if (response.status === 401) {
+    location.reload();
+    throw new Error('not logged in');
+  }
+  if (response.status === 413) throw new Error(`${file.name} is too large to send: over 64 MB, or over the limit of a proxy in front of rettui`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+
+// The folder something on the node is in ('' at the top).
+const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+
+// `text` with the address `from` changed to `to` where it is a whole
+// address (not the start of a longer one, like :/page/a in :/page/a.mu).
+function replaceAddress(text, from, to) {
+  let out = '';
+  let at = 0;
+  for (let found = text.indexOf(from); found !== -1; found = text.indexOf(from, found + from.length)) {
+    const next = text[found + from.length];
+    if (next !== undefined && /[A-Za-z0-9._\/-]/.test(next)) continue;
+    out += text.slice(at, found) + to;
+    at = found + from.length;
+  }
+  return out + text.slice(at);
+}
+
 const api = {
   get: (path) => request('GET', path),
   post: (path, body = {}) => request('POST', path, body),
@@ -511,6 +541,7 @@ const TABS = [
   { id: 'node', icon: '⌂', title: 'Node' },
   { id: 'status', icon: 'ⓘ', title: 'Status' },
   { id: 'reticulum', icon: '⛭', title: 'Reticulum' },
+  { id: 'hub', icon: '⊛', title: 'Hub' },
 ];
 
 const app = {
@@ -1419,10 +1450,12 @@ function listen() {
   // Each change says what it touched: "all", or parts such as
   // "status,peers": the counters and the log ("status"), the hosted node's
   // counters ("node"), peers heard ("peers"), RRC ("channels": the
-  // Channels section, and unread counts in the sidebar).
+  // Channels section, and unread counts in the sidebar), the hub hosted
+  // here ("hub").
   events.onmessage = (e) => {
     const parts = new Set((e.data.split(' ')[1] || 'all').split(','));
-    if (parts.has('all') || (parts.has('node') && app.tab === 'node') || (parts.has('channels') && app.tab === 'channels')) refresh();
+    if (parts.has('all') || (parts.has('node') && app.tab === 'node') || (parts.has('channels') && app.tab === 'channels')
+      || (parts.has('hub') && app.tab === 'hub')) refresh();
     else if (parts.has('peers')) refreshPeers();
     else refreshSidebar();
   };
@@ -4952,7 +4985,9 @@ const MICRON_RIBBON = [
   [['h1', 'H1', '1', 'Heading (Alt+1)'], ['h2', 'H2', '2', 'Subheading (Alt+2)'], ['h3', 'H3', '3', 'Third-level heading (Alt+3)']],
   [['divider', 'Divider', 'v', 'Divider line (Alt+V)'], ['literal', 'Literal', 't', 'Literal block, shown as written (Alt+T)'],
     ['comment', 'Comment', 'o', 'Comment lines out, or back in (Alt+O)']],
-  [['link', 'Link', 'k', 'Link (Alt+K, Ctrl+K)'], ['image', 'Image', 'm', 'Image (Alt+M)'], ['field', 'Field', 'd', 'Text field (Alt+D)'],
+  [['link', 'Link', 'k', 'Link (Alt+K, Ctrl+K)'], ['image', 'Image', 'm', 'Image (Alt+M)'],
+    ['upload', 'Upload', 'p', 'Add a picture (shown in the page) or a file (linked to download) to the node; dropping files on the page does too (Alt+P)'],
+    ['field', 'Field', 'd', 'Text field (Alt+D)'],
     ['checkbox', 'Check', 'h', 'Checkbox (Alt+H)'], ['radio', 'Radio', 'a', 'Radio button (Alt+A)']],
 ];
 const MICRON_KEYS = Object.fromEntries(MICRON_RIBBON.flat().map(([id, , key]) => [key, id]));
@@ -5171,6 +5206,16 @@ app.views.node = {
       spellcheck: false,
       placeholder: 'Pick a page on the left, or create one with + New',
       oninput: () => this.changed(),
+      // Files dropped on a page are added to the node and shown or linked
+      // to where they're dropped.
+      ondragover: (e) => {
+        if (this.open && !this.text.readOnly && e.dataTransfer.types.includes('Files')) e.preventDefault();
+      },
+      ondrop: (e) => {
+        if (!this.open || this.text.readOnly || !e.dataTransfer.files.length) return;
+        e.preventDefault();
+        this.uploadFiles([...e.dataTransfer.files]);
+      },
       onkeydown: (e) => {
         // Formatting: Alt and the key underlined in the ribbon (by the key's
         // place, so it works with any layout's Alt characters), and the
@@ -5214,8 +5259,8 @@ app.views.node = {
         el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Hosting' })), this.card,
           el('div', { class: 'row card-actions' }, this.hostButton,
             el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/node/announce'), 'Announcing the node') }))),
-        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Pages' }),
-          el('button', { text: '+ New', onclick: () => this.create() })), this.list)),
+        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Pages and files' }),
+          el('button', { text: '+ New', title: 'A new page', onclick: () => this.create() })), this.list)),
       el('section', { class: 'panel grow pane-main' },
         el('header', {}, this.title, this.buttons),
         this.banner,
@@ -5238,6 +5283,7 @@ app.views.node = {
   format(action, from) {
     if (!this.open || this.text.readOnly) return;
     if (action === 'fg' || action === 'bg') return this.palette(action, from);
+    if (action === 'upload') return this.pickFiles();
     micron.run(this.text, action);
   },
 
@@ -5311,15 +5357,239 @@ app.views.node = {
       this.list.replaceChildren(el('div', { class: 'empty state-bad', text: node.list_error }));
       return;
     }
-    this.list.replaceChildren(...(node.pages.length ? node.pages.map((page) => el('div', {
-      class: 'list-item' + (this.open?.path === page.path ? ' selected' : ''),
-      onclick: () => page.text ? this.load(page.path) : toast(`${page.path} is not a text file`, true),
-    },
-    el('span', { class: 'main' },
-      el('div', { class: 'name' + (page.text ? '' : ' dim'), text: page.path }),
-      el('div', { class: 'sub' }, humanBytes(page.size), page.executable ? el('span', { class: 'script-tag', text: ' script' }) : null)),
-    this.open?.path === page.path && this.dirty() ? el('span', { class: 'state-warn', text: '●', title: 'Unsaved changes' }) : null)) :
-      [el('div', { class: 'empty', text: 'No pages yet. Create one with + New.' })]));
+    // Not under something being dragged: drawn when it's dropped.
+    if (this.dragged) this.treeStale = true;
+    else this.renderTree();
+  },
+
+  // What's on the node: pages/ (pages, and the pictures they show) and
+  // files/ (to download), each with its folders. Something dragged onto a
+  // folder of its root moves there.
+  renderTree() {
+    const node = this.node;
+    const rows = [];
+    const folderRow = (root, path, depth) => {
+      const name = path ? path.split('/').pop() + '/' : root + '/';
+      const row = el('div', { class: 'list-item node-folder' + (path ? '' : ' node-root'), style: `padding-left:${12 + depth * 16}px`, title: path ? `${root}/${path}` : null },
+        el('span', { class: 'main' }, el('div', { class: 'name', text: name })));
+      row.addEventListener('dragover', (e) => {
+        if (this.dragged?.root !== root) return;
+        e.preventDefault();
+        row.classList.add('drop-target');
+      });
+      row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        row.classList.remove('drop-target');
+        const dragged = this.dragged;
+        this.dragged = null;
+        if (dragged?.root === root && folderOf(dragged.path) !== path) this.move(root, dragged.path, path);
+      });
+      return row;
+    };
+    const itemRow = (root, entry, depth) => {
+      const page = root === 'pages' && entry.text;
+      const picture = root === 'pages' && !entry.text;
+      const open = page && this.open?.path === entry.path;
+      const kind = entry.executable ? el('span', { class: 'script-tag', text: ' script' })
+        : picture ? el('span', { class: 'picture-tag', text: ' picture' }) : null;
+      const row = el('div', {
+        class: 'list-item node-item' + (open ? ' selected' : ''), style: `padding-left:${12 + depth * 16}px`, draggable: true, title: `${root}/${entry.path}`,
+        onclick: (e) => {
+          if (e.target.closest('button')) return;
+          if (page) this.load(entry.path);
+          else this.itemMenu(root, entry, e.currentTarget);
+        },
+      },
+      el('span', { class: 'main' },
+        el('div', { class: 'name' + (page ? '' : ' dim'), text: entry.path.split('/').pop() }),
+        el('div', { class: 'sub' }, humanBytes(entry.size), kind)),
+      open && this.dirty() ? el('span', { class: 'state-warn', text: '●', title: 'Unsaved changes' }) : null,
+      el('button', { class: 'item-more', text: '⋯', title: 'Insert, rename, move, delete', 'aria-label': 'More', onclick: (e) => this.itemMenu(root, entry, e.currentTarget) }));
+      row.addEventListener('dragstart', (e) => {
+        this.dragged = { root, path: entry.path };
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', entry.path);
+      });
+      row.addEventListener('dragend', () => {
+        this.dragged = null;
+        if (this.treeStale) {
+          this.treeStale = false;
+          this.renderTree();
+        }
+      });
+      return row;
+    };
+    const tree = (root, entries, folder, depth) => {
+      entries.filter((e) => folderOf(e.path) === folder).forEach((e) => rows.push(itemRow(root, e, depth)));
+      const subfolders = [...new Set(entries.map((e) => {
+        const rest = folder ? (e.path.startsWith(folder + '/') ? e.path.slice(folder.length + 1) : null) : e.path;
+        return rest && rest.includes('/') ? rest.split('/')[0] : null;
+      }).filter(Boolean))].sort();
+      for (const sub of subfolders) {
+        const path = folder ? `${folder}/${sub}` : sub;
+        rows.push(folderRow(root, path, depth));
+        tree(root, entries, path, depth + 1);
+      }
+    };
+    rows.push(folderRow('pages', '', 0));
+    if (node.pages.length) tree('pages', node.pages, '', 1);
+    else rows.push(el('div', { class: 'empty', text: 'No pages yet. Create one with + New.' }));
+    rows.push(folderRow('files', '', 0));
+    if (node.files.length) tree('files', node.files, '', 1);
+    else rows.push(el('div', { class: 'empty', text: 'No files to download yet: Upload, in a page\'s formatting bar, adds them.' }));
+    this.list.replaceChildren(...rows);
+  },
+
+  // Where pages find something: a page, a picture, a file to download.
+  address(root, entry) {
+    if (root === 'files') return ':/file/' + entry.path;
+    return (entry.text ? ':/page/' : ':/media/') + entry.path;
+  },
+
+  // What can be done with something on the node.
+  itemMenu(root, entry, anchor) {
+    const name = entry.path.split('/').pop();
+    const page = root === 'pages' && entry.text;
+    const picture = root === 'pages' && !entry.text;
+    const writable = this.open && !this.open.executable;
+    openSheet(`${root}/${entry.path}`, [
+      page ? { text: 'Open', action: () => this.load(entry.path) } : null,
+      picture ? { text: 'Show', action: () => this.showPicture(entry) } : null,
+      !page && writable ? { text: picture ? 'Show it in the open page' : 'Link to it in the open page', action: () => this.insertAddress(this.address(root, entry), picture) } : null,
+      page && writable && this.open.path !== entry.path ? { text: 'Link to it in the open page', action: () => this.insertAddress(this.address(root, entry), false) } : null,
+      { text: 'Copy its address', action: () => copy(this.address(root, entry), 'its address') },
+      entry.executable ? null : { text: 'Rename…', action: () => this.renameItem(root, entry) },
+      entry.executable ? null : { text: 'Move…', action: () => this.askMove(root, entry.path) },
+      entry.executable ? null : { text: 'Delete', danger: true, action: () => this.removeItem(root, entry.path, name) },
+    ].filter(Boolean), anchor);
+  },
+
+  showPicture(entry) {
+    dialog(entry.path, (close) => [
+      el('img', { class: 'node-picture', src: 'api/node/media?path=' + encodeURIComponent(entry.path), alt: entry.path }),
+      el('div', { class: 'row actions' },
+        el('span', { class: 'dim grow', text: `${humanBytes(entry.size)} · :/media/${entry.path}` }),
+        el('button', { class: 'primary', text: 'Done', onclick: close })),
+    ]);
+  },
+
+  // Markup at the cursor (around the selection, its text) for something on
+  // the node: a picture shown, or a link.
+  insertAddress(address, picture, newline = false) {
+    const t = this.text;
+    const [start, end] = [t.selectionStart, t.selectionEnd];
+    const selected = t.value.slice(start, end);
+    const name = address.split('/').pop();
+    const label = (selected && !selected.includes('\n') ? selected : picture ? name.replace(/\.[^.]*$/, '') : name).replace(/[`\[\]()<>|]/g, '');
+    micron.replace(t, start, end, (newline ? '\n' : '') + (picture ? `\`(${label}\`${address})` : `\`[${label}\`${address}]`));
+    this.changed();
+  },
+
+  pickFiles() {
+    const input = el('input', { type: 'file', multiple: true, class: 'hidden' });
+    input.addEventListener('change', () => {
+      this.uploadFiles([...input.files]);
+      input.remove();
+    });
+    document.body.append(input);
+    input.click();
+  },
+
+  // Files added to the node, each shown or linked to in the open page.
+  async uploadFiles(files) {
+    let placed = 0;
+    for (const file of files) {
+      const added = await attempt(() => upload('/node/upload?name=' + encodeURIComponent(file.name), file));
+      if (!added) continue;
+      // Several: one to a line.
+      if (this.open && !this.open.executable) this.insertAddress(added.address, added.image, placed++ > 0);
+      const where = added.address.replace(/^:/, '');
+      toast(`Added ${where}${added.shrunk ? ', made smaller' : ''}: ${added.image ? 'shown in the page' : 'linked to download'}`);
+    }
+    this.update();
+  },
+
+  async renameItem(root, entry) {
+    const to = prompt(`Rename ${root}/${entry.path} to (links to it follow)`, entry.path);
+    if (!to || to === entry.path) return;
+    const result = await attempt(() => api.post('/node/rename', { root, from: entry.path, to }));
+    if (result) this.moved(root, entry.path, result.path);
+  },
+
+  // Which folder to move something to: one there is, or a new one.
+  askMove(root, path) {
+    const now = folderOf(path);
+    const entries = root === 'pages' ? this.node.pages : this.node.files;
+    const folders = [...new Set(entries.flatMap((e) => {
+      const parts = e.path.split('/').slice(0, -1);
+      return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+    }))].sort();
+    dialog(`Move ${path.split('/').pop()}`, (close) => {
+      const go = (folder) => {
+        close();
+        if (folder !== now) this.move(root, path, folder);
+      };
+      const typed = el('input', { type: 'text', class: 'mono grow', placeholder: 'or a new one: docs/2026', spellcheck: false,
+        onkeydown: (e) => { if (e.key === 'Enter' && typed.value.trim()) go(typed.value.trim().replace(/^\/+|\/+$/g, '')); } });
+      return [
+        el('p', { class: 'dim', text: `To a folder of ${root}/. Links to it in your pages follow.` }),
+        el('div', { class: 'move-folders' }, ['', ...folders].map((folder) => el('button', {
+          class: folder === now ? 'active' : '', disabled: folder === now,
+          text: folder ? `${root}/${folder}/` : `${root}/ (the top)`, onclick: () => go(folder),
+        }))),
+        el('div', { class: 'row' }, typed, el('button', { text: 'Move', onclick: () => typed.value.trim() && go(typed.value.trim().replace(/^\/+|\/+$/g, '')) })),
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: 'Cancel', onclick: close })),
+      ];
+    });
+  },
+
+  async move(root, path, folder) {
+    const result = await attempt(() => api.post('/node/move', { root, path, folder }));
+    if (result) this.moved(root, path, result.path);
+  },
+
+  // After something moved or was renamed: the open page follows it, and its
+  // links to it (rettui changed them in the saved pages).
+  async moved(root, from, to) {
+    toast(`Moved to ${root}/${to}`);
+    const open = this.open;
+    if (open && root === 'pages' && open.path === from) {
+      open.path = to;
+      open.url = open.url.replace(/:\/page\/.*$/, ':/page/' + to);
+    }
+    if (open && !open.executable) {
+      if (this.dirty()) {
+        const prefixes = root === 'files' ? [':/file/'] : [':/page/', ':/media/'];
+        let text = this.text.value;
+        for (const prefix of prefixes) text = replaceAddress(text, prefix + from, prefix + to);
+        if (text !== this.text.value) {
+          this.text.value = text;
+          this.changed();
+          toast('Links in the open page were changed too: save it to keep them');
+        }
+      } else {
+        const page = await attempt(() => api.get('/node/page?path=' + encodeURIComponent(open.path)));
+        if (page && !this.dirty()) {
+          open.saved = page.content;
+          this.text.value = page.content;
+          this.renderPreview();
+        }
+      }
+    }
+    this.renderEditor();
+    this.update();
+  },
+
+  async removeItem(root, path, name) {
+    if (!confirm(`Delete ${root}/${path}? Pages that show or link to ${name} won't find it any more.`)) return;
+    const done = await attempt(() => api.post('/node/delete', { root, path }), `Deleted ${root}/${path}`);
+    if (done && root === 'pages' && this.open?.path === path) {
+      this.open = null;
+      this.renderEditor();
+      this.renderPreview();
+    }
+    this.update();
   },
 
   toggleHosting() {
@@ -5438,11 +5708,7 @@ app.views.node = {
     const to = prompt(`Rename ${open.path} to`, open.path);
     if (!to || to === open.path) return;
     const result = await attempt(() => api.post('/node/rename', { from: open.path, to }));
-    if (result) {
-      open.path = result.path;
-      open.url = open.url.replace(/:\/page\/.*$/, ':/page/' + result.path);
-      this.renderEditor();
-    }
+    if (result) this.moved('pages', open.path, result.path);
   },
 
   async remove() {
@@ -5453,6 +5719,7 @@ app.views.node = {
       this.open = null;
       this.renderEditor();
       this.renderPreview();
+      this.update();
     }
   },
 };
@@ -5464,6 +5731,9 @@ app.views.status = {
     // Scrolls on its own when taller than its share, so Settings keeps room.
     this.info = el('div', { class: 'info scroll' });
     this.form = el('div', { class: 'settings' });
+    // The settings' groups, one shown at a time (the others keep what's
+    // typed in them until it's saved).
+    this.sectionTabs = el('div', { class: 'subtabs settings-groups' });
     this.saveButton = el('button', { class: 'primary', text: 'Save', disabled: true, onclick: () => this.save() });
     this.revertButton = el('button', { text: 'Revert', disabled: true, onclick: () => this.loadSettings(true) });
     this.settingsFooter = el('div', { class: 'settings-footer dim' });
@@ -5477,7 +5747,7 @@ app.views.status = {
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
           el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }), moreButton()), this.info),
         el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
-          this.revertButton, this.saveButton), el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
+          this.revertButton, this.saveButton), this.sectionTabs, el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
       el('div', { class: 'column', style: 'width:42%' },
         el('section', { class: 'panel', style: 'max-height:40%' }, el('header', { text: 'Interfaces' }), this.interfaces),
         el('section', { class: 'panel grow' }, el('header', { text: 'Log' }), this.log)));
@@ -5500,12 +5770,46 @@ app.views.status = {
   },
 
   markDirty() {
-    const dirty = Object.keys(this.changes()).length > 0;
+    const changes = this.changes();
+    const dirty = Object.keys(changes).length > 0;
     this.saveButton.disabled = !dirty;
     this.revertButton.disabled = !dirty;
     for (const field of this.fields || []) {
       const row = this.inputs[field.key].closest('.setting');
-      row.classList.toggle('changed', field.key in this.changes());
+      row.classList.toggle('changed', field.key in changes);
+    }
+    this.renderSections(changes);
+  },
+
+  // The groups' tabs (a group with changes not saved is marked), and only
+  // the chosen group's settings. The tabs are made once and changed in
+  // place: leaving a text box marks its change, and a tab redrawn under
+  // the pointer then would lose the click that left it.
+  renderSections(changes = this.changes()) {
+    const sections = this.sections || [];
+    if (!sections.some((s) => s.id === this.section)) this.section = sections[0]?.id;
+    const made = JSON.stringify(sections);
+    if (this.sectionTabs.dataset.made !== made) {
+      this.sectionTabs.dataset.made = made;
+      this.sectionButtons = Object.fromEntries(sections.map((section) => [section.id, el('button', {
+        onclick: () => {
+          this.section = section.id;
+          try { localStorage.setItem('rettui.settingsGroup', section.id); } catch { /* per-browser convenience only */ }
+          this.renderSections();
+          this.form.closest('.scroll').scrollTop = 0;
+        },
+      })]));
+      this.sectionTabs.replaceChildren(...Object.values(this.sectionButtons));
+    }
+    const edited = new Set((this.fields || []).filter((f) => f.key in changes).map((f) => f.section));
+    for (const section of sections) {
+      const button = this.sectionButtons[section.id];
+      button.className = section.id === this.section ? 'active' : '';
+      button.textContent = section.title + (edited.has(section.id) ? ' •' : '');
+      button.title = edited.has(section.id) ? 'Changed, not saved yet' : '';
+    }
+    for (const field of this.fields || []) {
+      this.inputs[field.key].closest('.setting').classList.toggle('hidden', field.section !== this.section);
     }
   },
 
@@ -5519,6 +5823,10 @@ app.views.status = {
     if (!force && snapshot === this.snapshot) return;
     this.snapshot = snapshot;
     this.fields = data.fields;
+    this.sections = data.sections;
+    if (!this.section) {
+      try { this.section = localStorage.getItem('rettui.settingsGroup'); } catch { /* per-browser convenience only */ }
+    }
     this.inputs = {};
     this.form.replaceChildren(...data.fields.map((field) => {
       let input;
@@ -5632,7 +5940,7 @@ app.views.status = {
           `${h.stats.peers} peer${h.stats.peers === 1 ? '' : 's'}`,
         ].filter(Boolean).join(' · ') }) : null)
       : el('span', { class: h.state === 'off' ? 'dim' : '', text: {
-        off: 'no (Host a propagation node, in the settings)', starting: 'starting', failed: `failed: ${h.error}`,
+        off: 'no (Host a propagation node, in Settings › Hosting)', starting: 'starting', failed: `failed: ${h.error}`,
       }[h.state] });
     const label = (text) => el('span', { class: 'label', text });
     // A check for updates asked for here, finished: what it found.
@@ -5684,6 +5992,10 @@ app.views.status = {
         : s.auto_propagation || 'none (pick one in the Network tab)' }),
       label('Last sync'), el('span', { text: sync }),
       label('Hosting messages'), hosting,
+      ...(s.hub.state === 'off' ? [] : [label('Hosting a hub'), s.hub.state === 'running'
+        ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.hub.hash }),
+          el('span', { class: 'dim', text: `  ${s.hub.people} ${s.hub.people === 1 ? 'person' : 'people'} · ${s.hub.rooms} room${s.hub.rooms === 1 ? '' : 's'} (Hub section)` }))
+        : el('span', { text: s.hub.state === 'starting' ? 'starting' : `failed: ${s.hub.error}` })]),
       label('RNS config'), el('span', { class: 'mono', text: s.rns_config || 'rsReticulum default' }),
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Backup'), el('div', {},
@@ -5736,6 +6048,414 @@ app.views.status = {
 // The Reticulum config file, option by option or as text. Changes are saved
 // to the file and apply when Reticulum restarts. Pipe interface commands
 // (programs Reticulum runs) can only be changed from the terminal.
+// ---- Hub: the RRC hub hosted here ------------------------------------------
+//
+// rsRRCD's hub, run by rettui (Host an RRC hub, in the settings): who's on
+// it, its rooms and bans, and a console for hub commands, as typed in a room
+// (/stats, /kline list...). What the hub says to them comes back as replies.
+// A room or a person opens a page of settings for them, which run the same
+// commands (a topic, modes, operators, kicks, bans, invites).
+
+// Room modes rsRRCD has, as a room's page shows them (the key apart).
+const ROOM_MODES = [
+  ['m', 'Moderated', 'Only operators and people given a voice speak'],
+  ['i', 'Invite only', 'Only people invited (below) join'],
+  ['t', 'Topic by operators', 'Only operators set the topic'],
+  ['n', 'Members only', 'No messages from outside the room'],
+  ['p', 'Private', 'Not in the hub\'s list of rooms, and who\'s in it isn\'t said to others'],
+];
+
+app.views.hub = {
+  panes: true,
+  // The list shown: people, rooms or bans.
+  showing: 'people',
+  // A page open from it: { room } or { person } (an identity).
+  open: null,
+  // Replies already seen (new ones are said).
+  replied: null,
+
+  mount(root) {
+    this.card = el('div', { class: 'hub-info hosted-hub' });
+    this.hostButton = el('button', { onclick: () => this.toggle() });
+    this.announceButton = el('button', { text: 'Announce', title: 'Announce the hub now (it does every so often by itself)', onclick: () => this.act('announce') });
+    this.replies = el('div', { class: 'scroll hub-replies', dataset: { stick: 'bottom' } });
+    this.command = el('input', {
+      type: 'text', class: 'grow mono', placeholder: '/stats, /kline list, /who lobby…', spellcheck: false,
+      onkeydown: (e) => {
+        if (e.key === 'Enter') this.run();
+      },
+    });
+    this.tabs = el('div', { class: 'subtabs' });
+    this.body = el('div', { class: 'scroll hub-body' });
+    // Typing in a page isn't undone by an update; it's drawn once done.
+    this.body.addEventListener('focusout', () => setTimeout(() => {
+      if (this.stale && !this.typing()) this.renderBody();
+    }, 300));
+    root.append(
+      el('div', { class: 'column side' },
+        el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Hosting' })), this.card,
+          el('div', { class: 'row card-actions' }, this.hostButton, this.announceButton,
+            el('button', { class: 'phone-only', text: 'People and rooms', onclick: () => setPane(this, 'detail') }))),
+        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Console' })),
+          this.replies,
+          el('div', { class: 'row hub-command' }, this.command, el('button', { text: 'Run', onclick: () => this.run() })))),
+      el('section', { class: 'panel grow pane-main' },
+        el('header', {}, this.tabs, el('span', { class: 'grow' }),
+          el('button', { text: '+ Room', title: 'A registered room: it stays, with its topic and settings, while nobody is in it', onclick: () => this.newRoom() })),
+        this.body));
+  },
+
+  async update() {
+    const hub = this.hub = await api.get('/hub');
+    const running = hub.status === 'running';
+    const off = hub.status === 'off' || hub.status === 'failed';
+    const state = {
+      running: el('span', { class: 'state-ok', text: '● hosting' }),
+      starting: el('span', { class: 'state-warn', text: '◌ starting' }),
+      off: el('span', { class: 'dim', text: '○ off' }),
+      failed: el('span', { class: 'state-bad', text: `✗ ${hub.error}` }),
+    }[hub.status];
+    this.hostButton.textContent = off ? 'Start hosting' : 'Stop hosting';
+    this.hostButton.className = off ? 'primary' : '';
+    this.announceButton.disabled = !running;
+    const label = (text) => el('span', { class: 'label', text });
+    const people = hub.unidentified ? `${hub.people.length} (and ${hub.unidentified} saying who they are)` : String(hub.people.length);
+    this.card.replaceChildren(
+      label('Hub'), state,
+      label('Address'), hub.address
+        ? el('span', { class: 'row' }, el('span', { class: 'mono', text: hub.address }),
+          el('button', { text: 'Copy link', onclick: () => copy(hub.link, 'the hub\'s link') }),
+          el('button', { text: 'QR code', onclick: () => this.showLink() }))
+        : el('span', { class: 'dim', text: 'made when it first starts' }),
+      label('Name'), el('span', { text: hub.name }),
+      label('People'), el('span', { text: people }),
+      label('Rooms'), el('span', { text: `${hub.rooms.length} (${hub.rooms.filter((r) => r.registered).length} registered)` }),
+      label('Messages'), el('span', { text: `${hub.stats.messages} · ${hub.stats.joins} joins` }),
+      label('Traffic'), el('span', { text: `↓ ${humanBytes(hub.stats.bytes_in)} · ↑ ${humanBytes(hub.stats.bytes_out)}` }),
+      label('Rooms by'), el('span', { text: hub.open_rooms ? 'anyone (joining one makes it)' : 'you only' }),
+      label('Folder'), el('span', { class: 'mono dim', text: hub.dir }));
+    // What the hub said: new replies are said too.
+    if (this.replied !== null && hub.replied > this.replied && hub.replies.length) {
+      const newest = hub.replies[hub.replies.length - 1];
+      toast(newest.text.split('\n')[0], newest.error);
+    }
+    this.replied = hub.replied;
+    this.replies.replaceChildren(...(hub.replies.length
+      ? hub.replies.map((reply) => el('pre', { class: 'hub-reply' + (reply.error ? ' state-bad' : ''), text: reply.text }))
+      : [el('div', { class: 'empty', text: 'What the hub says to commands from here. Type one below, as in a room: /stats, /kline list, /who lobby…' })]));
+    this.command.disabled = !running;
+    this.renderTabs();
+    this.renderBody();
+  },
+
+  renderTabs() {
+    const hub = this.hub;
+    const counts = { people: hub.people.length, rooms: hub.rooms.length, bans: hub.bans.length };
+    this.tabs.replaceChildren(...[['people', 'People'], ['rooms', 'Rooms'], ['bans', 'Bans']].map(([id, title]) => el('button', {
+      class: id === this.showing && !this.open ? 'active' : '', text: `${title} ${counts[id]}`,
+      onclick: () => this.show(id),
+    })));
+  },
+
+  // A list, the page open from it closed.
+  show(list) {
+    this.showing = list;
+    this.open = null;
+    this.stale = false;
+    this.renderTabs();
+    this.renderBody();
+    this.body.scrollTop = 0;
+  },
+
+  // A room's or a person's page.
+  openPage(page) {
+    this.open = page;
+    this.stale = false;
+    this.renderTabs();
+    this.renderBody();
+    this.body.scrollTop = 0;
+  },
+
+  // Something in the page is being typed into.
+  typing() {
+    const focused = document.activeElement;
+    return this.body.contains(focused) && focused.matches('input[type=text], textarea');
+  },
+
+  renderBody() {
+    if (!this.hub) return;
+    if (this.typing()) {
+      this.stale = true;
+      return;
+    }
+    this.stale = false;
+    const rows = this.open?.room !== undefined ? this.roomPage(this.open.room)
+      : this.open?.person !== undefined ? this.personPage(this.open.person)
+        : this.listRows();
+    this.body.replaceChildren(...rows);
+  },
+
+  listRows() {
+    const hub = this.hub;
+    const running = hub.status === 'running';
+    const empty = (text) => [el('div', { class: 'empty', text })];
+    const short = (identity) => `<${identity.slice(0, 12)}>`;
+    if (this.showing === 'people') {
+      if (!hub.people.length) {
+        return empty(running ? 'Nobody\'s connected yet. Share the hub\'s link (Copy link, or its QR code).' : 'The hub isn\'t running: Start hosting starts it.');
+      }
+      return hub.people.map((person) => el('div', { class: 'list-item', onclick: () => this.openPage({ person: person.identity }) },
+        el('span', { class: 'main' },
+          el('div', { class: 'name' }, person.nick || '(no nick)', person.operator ? el('span', { class: 'state-warn', text: ' ★', title: 'An operator of the hub' }) : null,
+            person.identity === hub.you ? el('span', { class: 'dim', text: ' (you)' }) : null),
+          el('div', { class: 'sub' }, el('span', { class: 'mono', text: short(person.identity) }),
+            person.rooms.length ? ' · ' + person.rooms.map((r) => '#' + r).join(' ') : '',
+            person.links > 1 ? ` · ${person.links} connections` : '')),
+        el('span', { class: 'dim', text: ago(person.since) + ' ›' })));
+    }
+    if (this.showing === 'rooms') {
+      if (!hub.rooms.length) {
+        return empty(!running ? 'The hub isn\'t running: Start hosting starts it.'
+          : hub.open_rooms ? 'No rooms yet: + Room makes one that stays, or anyone joining a room makes it.' : 'No rooms yet: + Room makes one (only you make rooms here).');
+      }
+      return hub.rooms.map((room) => el('div', { class: 'list-item', onclick: () => this.openPage({ room: room.name }) },
+        el('span', { class: 'main' },
+          el('div', { class: 'name' }, '#' + room.name, room.registered ? el('span', { class: 'state-ok', text: ' registered' }) : null,
+            room.modes !== '(none)' ? el('span', { class: 'dim', text: ' ' + room.modes }) : null),
+          el('div', { class: 'sub', text: [room.topic, `${room.members.length} in it`,
+            room.operators.length ? 'operators: ' + room.operators.map((id) => this.nameOf(id)).join(', ') : null].filter(Boolean).join(' · ') })),
+        el('span', { class: 'dim', text: '›' })));
+    }
+    if (!hub.bans.length) return empty('Nobody\'s banned. A person\'s page bans them from a room or from the whole hub, as does a room\'s.');
+    return hub.bans.map((ban) => el('div', { class: 'list-item' },
+      el('span', { class: 'main' },
+        el('div', { class: 'name' }, ...this.named(ban.identity)),
+        el('div', { class: 'sub' + (ban.room ? '' : ' state-bad'), text: ban.room ? 'from #' + ban.room : 'from the whole hub' })),
+      el('button', { text: 'Lift', title: 'Lift the ban', onclick: () => this.act('ban', { room: ban.room, identity: ban.identity, on: false }) })));
+  },
+
+  // A page's top: back to its list, its title and buttons.
+  pageHead(back, title, ...buttons) {
+    return el('div', { class: 'hub-page-head' },
+      el('button', { text: '← ' + back, onclick: () => this.show(this.showing) }),
+      el('span', { class: 'title grow', text: title }), ...buttons);
+  },
+
+  // A setting: its name, what changes it, and what it does.
+  setting(label, control, help) {
+    return el('div', { class: 'setting' }, el('span', { class: 'label', text: label }),
+      el('div', {}, control, help ? el('div', { class: 'help', text: help }) : null));
+  },
+
+  // A text box and its button (Enter presses it).
+  entry({ value = '', placeholder = '', button, run, mono = false }) {
+    const input = el('input', { type: 'text', value, placeholder, class: mono ? 'mono' : '', spellcheck: false });
+    const press = () => run(input.value.trim(), input);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') press();
+    });
+    return el('div', { class: 'hub-entry' }, input, el('button', { text: button, onclick: press }));
+  },
+
+  // A check box that runs `change` with its new state.
+  check(checked, change, { disabled = false, title = '' } = {}) {
+    return el('input', { type: 'checkbox', checked, disabled, title, onchange: (e) => change(e.target.checked) });
+  },
+
+  roomPage(name) {
+    const hub = this.hub;
+    const room = hub.rooms.find((r) => r.name === name);
+    if (!room) {
+      // Just made or renamed: the hub hasn't said so yet.
+      const coming = this.expecting === name && Date.now() < this.expectUntil;
+      if (coming) setTimeout(() => this.renderBody(), 1000);
+      return [this.pageHead('Rooms', '#' + name),
+        el('div', { class: 'empty', text: coming ? 'One moment…' : hub.status === 'running' ? 'This room isn\'t there (any more): rooms nobody\'s in go, unless they\'re registered.' : 'The hub isn\'t running.' })];
+    }
+    const act = (action, body) => this.act(action, { room: name, ...body });
+    const on = (flag) => room.modes.startsWith('+') && room.modes.includes(flag);
+    const link = hub.link ? `${hub.link}/${name}` : null;
+    const settings = el('div', { class: 'settings' },
+      this.setting('Topic', this.entry({
+        value: room.topic || '', placeholder: 'What the room is for', button: 'Set',
+        run: (text) => text ? act('topic', { text }) : toast('A topic, please (rsRRCD can\'t clear one)', true),
+      })),
+      this.setting('Registered', this.check(room.registered, (checked) => act('register', { on: checked })),
+        'It stays, with its topic and settings, while nobody\'s in it'),
+      ...ROOM_MODES.map(([flag, label, help]) => this.setting(label,
+        this.check(on(flag), (checked) => act('modes', { text: (checked ? '+' : '-') + flag })), `${help} (+${flag})`)),
+      this.setting('Key', el('div', {},
+        this.entry({ value: room.key || '', placeholder: 'No key', button: 'Set', run: (key) => key ? act('key', { text: key, on: true }) : toast('A key, please (or Remove)', true) }),
+        room.key ? el('button', { class: 'hub-remove', text: 'Remove the key', onclick: () => act('key', { on: false }) }) : null),
+      'Only people who give the key (or are invited) join (+k)'));
+    // Who's in it, the founder and operators first.
+    const rank = (id) => (room.founder === id ? 0 : room.operators.includes(id) ? 1 : room.voiced.includes(id) ? 2 : 3);
+    const members = [...room.members].sort((a, b) => rank(a) - rank(b) || this.nameOf(a).localeCompare(this.nameOf(b)));
+    const memberRows = members.length ? members.map((id) => this.memberRow(room, id, { showRoom: false }))
+      : [el('div', { class: 'empty', text: 'Nobody\'s in it now.' })];
+    const invited = room.invited.map((id) => el('div', { class: 'hub-member' },
+      el('span', { class: 'hub-who' }, ...this.named(id)),
+      el('button', { text: 'Remove', onclick: () => act('invite', { identity: id, on: false }) })));
+    const banned = room.banned.map((id) => el('div', { class: 'hub-member' },
+      el('span', { class: 'hub-who' }, ...this.named(id)),
+      el('button', { text: 'Lift', onclick: () => act('ban', { identity: id, on: false }) })));
+    return [
+      this.pageHead('Rooms', '#' + name, link ? el('button', { text: 'Copy link', onclick: () => copy(link, 'the room\'s link') }) : null),
+      settings,
+      el('div', { class: 'hub-heading', text: `In it · ${room.members.length}` }), ...memberRows,
+      el('div', { class: 'hub-heading', text: `Invited · ${room.invited.length}` }), ...invited,
+      this.entry({ placeholder: 'Nick or identity', button: 'Invite', mono: true, run: (who, input) => {
+        if (!who) return toast('Who? A nick or an identity', true);
+        act('invite', { identity: who, on: true });
+        input.value = '';
+      } }),
+      el('div', { class: 'hub-note dim', text: room.key || on('i') ? 'An invite lets them in once, for a while.' : 'Invites matter in invite only or keyed rooms; elsewhere they\'re just told.' }),
+      el('div', { class: 'hub-heading', text: `Banned · ${room.banned.length}` }), ...banned,
+      this.entry({ placeholder: 'Identity (or the nick of someone in it)', button: 'Ban', mono: true, run: (who, input) => {
+        if (!who) return toast('Who? An identity, or the nick of someone in the room', true);
+        act('ban', { identity: who, on: true });
+        input.value = '';
+      } }),
+      el('div', { class: 'hub-heading', text: 'The room' }),
+      el('div', { class: 'hub-member' },
+        el('button', { text: 'Rename…', onclick: () => this.renameRoom(room) }),
+        el('button', { class: 'danger', text: 'Delete the room', onclick: () => this.deleteRoom(room) })),
+      el('div', { class: 'hub-note dim', text: 'Renaming keeps its topic, settings and bans, and registers it. RRC can\'t move people from room to room: those in it are told the new name, and rejoin it there. Deleting takes everyone out, and it\'s gone with its settings and bans.' }),
+    ];
+  },
+
+  // A room a page waits for, until the hub says it's there.
+  expect(name) {
+    this.expecting = name;
+    this.expectUntil = Date.now() + 5000;
+  },
+
+  renameRoom(room) {
+    const answer = prompt(`Rename #${room.name} to`, room.name);
+    const to = answer?.trim().replace(/^#/, '').toLowerCase();
+    if (!to || to === room.name) return;
+    if (/\s/.test(to)) return toast('Room names are one word', true);
+    if (this.hub.rooms.some((r) => r.name === to)) return toast(`There's a room #${to} already`, true);
+    this.act('rename', { room: room.name, text: to });
+    this.expect(to);
+    this.openPage({ room: to });
+  },
+
+  deleteRoom(room) {
+    const people = room.members.length === 1 ? 'The one in it is taken out. ' : room.members.length ? `The ${room.members.length} in it are taken out. ` : '';
+    const again = this.hub.open_rooms ? ' Anyone may make it again by joining it.' : '';
+    if (!confirm(`Delete #${room.name}? ${people}Its topic, settings and bans go too.${again}`)) return;
+    this.act('delete', { room: room.name });
+    this.show('rooms');
+  },
+
+  // Someone in a room: operator and voice to turn on or off, kick and ban.
+  memberRow(room, id, { showRoom }) {
+    const act = (action, body) => this.act(action, { room: room.name, identity: id, ...body });
+    const founder = room.founder === id;
+    const op = founder || room.operators.includes(id);
+    const who = showRoom
+      ? el('span', { class: 'hub-who' }, el('a', { href: '#', text: '#' + room.name, onclick: (e) => {
+        e.preventDefault();
+        this.showing = 'rooms';
+        this.openPage({ room: room.name });
+      } }), founder ? el('span', { class: 'role', text: 'founder' }) : null)
+      : el('span', { class: 'hub-who' }, this.nameOf(id), id === this.hub.you ? el('span', { class: 'dim', text: ' (you)' }) : null,
+        founder ? el('span', { class: 'role', text: 'founder' }) : null);
+    const toggle = (label, checked, change, options) => el('label', { class: 'toggle' }, this.check(checked, change, options), label);
+    return el('div', { class: 'hub-member' }, who,
+      toggle('Operator', op, (checked) => act('op', { on: checked }), founder ? { disabled: true, title: 'A room\'s founder is always one' } : {}),
+      toggle('Voice', room.voiced.includes(id), (checked) => act('voice', { on: checked })),
+      el('button', { text: 'Kick', onclick: () => act('kick') }),
+      el('button', { class: 'danger', text: 'Ban', onclick: () => {
+        if (confirm(`Ban ${this.nameOf(id)} from #${room.name}? They're taken out of it, and can't come back until the ban is lifted.`)) act('ban', { on: true });
+      } }));
+  },
+
+  personPage(identity) {
+    const hub = this.hub;
+    const person = hub.people.find((p) => p.identity === identity);
+    const name = person?.nick || identity.slice(0, 12);
+    if (!person) {
+      return [this.pageHead('People', name), el('div', { class: 'empty', text: 'They aren\'t connected (any more).' })];
+    }
+    const rooms = hub.rooms.filter((r) => r.members.includes(identity));
+    return [
+      this.pageHead('People', name),
+      el('div', { class: 'settings' },
+        this.setting('Identity', el('div', { class: 'row' }, el('span', { class: 'mono', text: identity }),
+          el('button', { text: 'Copy', onclick: () => copy(identity, 'their identity') }))),
+        this.setting('Connected', el('span', { text: `${ago(person.since)} ago${person.links > 1 ? `, ${person.links} times at once` : ''}` })),
+        this.setting('Hub operator', el('span', { text: person.operator ? 'yes (in trusted_identities)' : 'no' }))),
+      el('div', { class: 'hub-heading', text: `Rooms · ${rooms.length}` }),
+      ...(rooms.length ? rooms.map((room) => this.memberRow(room, identity, { showRoom: true }))
+        : [el('div', { class: 'empty', text: 'Not in any room.' })]),
+      el('div', { class: 'hub-heading', text: 'The whole hub' }),
+      el('div', { class: 'hub-member' },
+        el('button', { text: 'Disconnect', title: 'Close their connection (they can come back)', onclick: () => this.act('disconnect', { identity }) }),
+        identity === hub.you ? null : el('button', { class: 'danger', text: 'Ban from the hub', onclick: () => {
+          if (confirm(`Ban ${name} from the whole hub? They're disconnected now, and every time they come back.`)) this.act('ban', { identity, on: true });
+        } })),
+    ];
+  },
+
+  // Someone as shown in a row: their name and the start of their
+  // identity, or just that when no name is known.
+  named(identity) {
+    const name = this.nameOf(identity);
+    const start = identity.slice(0, 12);
+    return name === start ? [el('span', { class: 'mono', text: start })] : [name, el('span', { class: 'dim mono', text: ` <${start}>` })];
+  },
+
+  nameOf(identity) {
+    return this.hub.people.find((p) => p.identity === identity)?.nick
+      || this.hub.bans.find((b) => b.identity === identity)?.name
+      || identity.slice(0, 12);
+  },
+
+  newRoom() {
+    const room = prompt('New registered room (it stays, with its topic and settings, while nobody is in it)');
+    const name = room?.trim().replace(/^#/, '').toLowerCase();
+    if (!name) return;
+    this.act('register', { room: name, on: true });
+    this.showing = 'rooms';
+    this.expect(name);
+    this.openPage({ room: name });
+    setPane(this, 'detail');
+  },
+
+  run() {
+    const text = this.command.value.trim();
+    if (!text || text === '/') return;
+    this.command.value = '';
+    this.act('run', { text });
+  },
+
+  showLink() {
+    const link = this.hub.link;
+    dialog(this.hub.name, (close) => [
+      el('p', { class: 'dim', text: 'Scan or open it in rettui, MeshChatX or any RRC client to join the hub.' }),
+      el('img', { class: 'qr', src: 'api/qr?text=' + encodeURIComponent(link), alt: 'QR code of the hub\'s link' }),
+      el('textarea', { class: 'mono paper-link', readonly: true, rows: 2, onfocus: (e) => e.target.select() }, link),
+      el('div', { class: 'row actions' },
+        el('button', { text: 'Copy link', onclick: () => copy(link, 'the hub\'s link') }),
+        navigator.share ? el('button', { text: 'Share', onclick: () => navigator.share({ text: link }).catch(() => {}) }) : null,
+        el('span', { class: 'grow' }),
+        el('button', { class: 'primary', text: 'Done', onclick: close })),
+    ], { className: 'paper' });
+  },
+
+  toggle() {
+    const on = !this.hub || this.hub.status === 'off' || this.hub.status === 'failed';
+    attempt(() => api.post('/hub/enable', { on }), on ? 'Starting the hub' : 'Stopping the hub').then(() => loadNow());
+  },
+
+  // What the hub says comes back as a reply.
+  act(action, body = {}) {
+    attempt(() => api.post('/hub/' + action, body)).then(() => loadNow());
+  },
+};
+
 app.views.reticulum = {
   panes: true,
   section: 'reticulum',
@@ -6068,7 +6788,7 @@ async function restartReticulum() {
 
 // The keys there are (the ? key shows them), as the terminal UI's popup.
 const KEYS = [
-  ['Anywhere', [['1–7', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
+  ['Anywhere', [['1–8', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
   ['Messages', [['j / k', 'next or previous conversation'], ['i', 'write (the message box)'], ['r', 'reply to their newest message'],
     ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
     ['Ctrl+E', 'emoji, in the message box'],

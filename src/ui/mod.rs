@@ -13,6 +13,7 @@ mod editor;
 mod emoji;
 mod forward;
 mod guide;
+mod hub;
 mod keys;
 mod map;
 mod messages;
@@ -164,6 +165,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Tab::Node => draw_node(frame, app, body),
         Tab::Status => draw_status(frame, app, body),
         Tab::Reticulum => draw_reticulum(frame, app, body),
+        Tab::Hub => hub::draw_hub(frame, app, body),
     }
     draw_footer(frame, app, footer);
     if app.contact_card.is_some() && app.tab == Tab::Messages {
