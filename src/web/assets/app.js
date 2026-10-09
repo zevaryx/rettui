@@ -5756,7 +5756,7 @@ app.views.hub = {
   replied: null,
 
   mount(root) {
-    this.card = el('div', { class: 'hub-info' });
+    this.card = el('div', { class: 'hub-info hosted-hub' });
     this.hostButton = el('button', { onclick: () => this.toggle() });
     this.announceButton = el('button', { text: 'Announce', title: 'Announce the hub now (it does every so often by itself)', onclick: () => this.act('announce') });
     this.replies = el('div', { class: 'scroll hub-replies', dataset: { stick: 'bottom' } });
