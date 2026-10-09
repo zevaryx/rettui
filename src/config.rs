@@ -422,6 +422,145 @@ impl Field {
     }
 }
 
+/// The groups the settings editors show settings in, one at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Profile,
+    Messages,
+    Location,
+    Browsing,
+    Hosting,
+    Display,
+    Notifications,
+    System,
+}
+
+impl Section {
+    pub const ALL: [Section; 8] = [
+        Section::Profile,
+        Section::Messages,
+        Section::Location,
+        Section::Browsing,
+        Section::Hosting,
+        Section::Display,
+        Section::Notifications,
+        Section::System,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::Profile => "Profile",
+            Section::Messages => "Messages",
+            Section::Location => "Location",
+            Section::Browsing => "Browsing",
+            Section::Hosting => "Hosting",
+            Section::Display => "Display",
+            Section::Notifications => "Notifications",
+            Section::System => "System",
+        }
+    }
+
+    /// For a narrow terminal.
+    pub fn short(self) -> &'static str {
+        match self {
+            Section::Profile => "You",
+            Section::Messages => "Msgs",
+            Section::Location => "Map",
+            Section::Browsing => "Browse",
+            Section::Hosting => "Host",
+            Section::Display => "Look",
+            Section::Notifications => "Notify",
+            Section::System => "System",
+        }
+    }
+
+    /// As the web UI names it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Section::Profile => "profile",
+            Section::Messages => "messages",
+            Section::Location => "location",
+            Section::Browsing => "browsing",
+            Section::Hosting => "hosting",
+            Section::Display => "display",
+            Section::Notifications => "notifications",
+            Section::System => "system",
+        }
+    }
+
+    /// Its settings, in the order the editors show them.
+    pub fn fields(self) -> impl Iterator<Item = &'static Field> {
+        FIELDS.iter().filter(move |field| field.section() == self)
+    }
+}
+
+/// Which settings each group has.
+const SECTIONS: &[(Section, &[&str])] = &[
+    (
+        Section::Profile,
+        &[
+            "display_name",
+            "icon",
+            "icon_color",
+            "icon_background",
+            "announce_at_start",
+            "announce_schedule",
+            "announce_random_min_mins",
+            "announce_random_max_mins",
+            "announce_interval_mins",
+        ],
+    ),
+    (
+        Section::Messages,
+        &[
+            "propagation_node",
+            "auto_propagation_node",
+            "sync_interval_mins",
+            "resend_on_announce",
+            "unknown_senders",
+            "answer_commands",
+            "stamp_cost",
+            "max_message_kb",
+            "markdown_messages",
+            "picture_size",
+            "messages_kept",
+            "message_storage_mb",
+        ],
+    ),
+    (Section::Location, &["location", "location_requests", "map_tiles", "map_tiles_file"]),
+    (Section::Browsing, &["home", "cache_hours"]),
+    (
+        Section::Hosting,
+        &[
+            "node_enabled",
+            "node_name",
+            "node_announce_interval_mins",
+            "node_dir",
+            "node_executable_pages",
+            "pn_enabled",
+            "pn_name",
+            "pn_stamp_cost",
+            "pn_storage_mb",
+            "pn_transfer_kb",
+            "hub_enabled",
+            "hub_name",
+            "hub_greeting",
+            "hub_announce_interval_mins",
+            "hub_open_rooms",
+        ],
+    ),
+    (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins"]),
+    (Section::Notifications, &["notify_messages", "notify_rrc", "quiet_hours", "quiet_hours_trusted"]),
+    (Section::System, &["log_level", "update_check", "rns_config"]),
+];
+
+impl Field {
+    /// The group it's shown in.
+    pub fn section(&self) -> Section {
+        SECTIONS.iter().find(|(_, keys)| keys.contains(&self.key)).map_or(Section::System, |(section, _)| *section)
+    }
+}
+
 /// Where rettui lives (opened by clicking the version in either UI).
 pub const PROJECT_URL: &str = "https://github.com/zevaryx/rettui";
 
@@ -1207,6 +1346,22 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_setting_is_in_one_group() {
+        for field in FIELDS {
+            let groups = SECTIONS.iter().filter(|(_, keys)| keys.contains(&field.key)).count();
+            assert_eq!(groups, 1, "{} is in {groups} groups", field.key);
+        }
+        for (section, keys) in SECTIONS {
+            for key in *keys {
+                assert!(FIELDS.iter().any(|f| f.key == *key), "{section:?} names {key}, which isn't a setting");
+            }
+        }
+        // Each group has some, and all of them are shown somewhere.
+        assert!(Section::ALL.iter().all(|s| s.fields().next().is_some()));
+        assert_eq!(Section::ALL.iter().map(|s| s.fields().count()).sum::<usize>(), FIELDS.len());
+    }
 
     #[test]
     fn ignoring_unknown_senders_from_before_requests_is_kept() {

@@ -15,6 +15,7 @@ Changes since v1.6.1: rettui can host an RRC hub, built on [rsRRCD](https://gith
 
 ### Changed
 - Eight tabs: `1`–`8` switch them.
+- Settings are in groups (Profile, Messages, Location, Browsing, Hosting, Display, Notifications, System), one shown at a time, in both UIs: `Tab` or `←` `→` in the terminal, tabs above them in the web UI (a group with changes not saved yet is marked).
 
 ### Docs and development
 - *Hosting a Node* has a section on hosting an RRC hub.

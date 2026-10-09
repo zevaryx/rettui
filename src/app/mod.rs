@@ -283,8 +283,9 @@ pub struct Regions {
     pub page_text: Vec<String>,
     /// The page / source toggle in the page's title bar.
     pub source_button: Rect,
-    /// Status tab: the settings list.
+    /// Status tab: the settings list, and its groups' tabs.
     pub settings: Rect,
+    pub settings_sections: Vec<(Rect, crate::config::Section)>,
     /// Node tab: page list and editor text area.
     pub node_pages: Rect,
     pub node_editor: Rect,
@@ -387,8 +388,9 @@ pub struct App {
     pub settings: Settings,
     /// Settings as saved in `settings.json`, shown by the settings editor.
     pub settings_file: Settings,
-    /// Selected row of the settings editor (Status tab).
+    /// Selected row of the settings editor (Status tab), in the group shown.
     pub settings_list: ListState,
+    pub settings_section: crate::config::Section,
     pub paths: Paths,
     pub store: Store,
     pub(crate) store_dirty: bool,
@@ -578,6 +580,7 @@ impl App {
             settings,
             settings_file,
             settings_list: ListState::default().with_selected(Some(0)),
+            settings_section: crate::config::Section::Profile,
             paths,
             store_dirty: store.rewrite_store,
             peers_dirty: store.rewrite_peers,

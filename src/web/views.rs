@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::app::channels::{Hub, HubStatus, LineKind};
 use crate::app::node::NodeStatus;
 use crate::app::{App, NetState, SyncState, network};
-use crate::config::{Effect, FIELDS, FieldKind, Settings, WebAccess};
+use crate::config::{Effect, FIELDS, FieldKind, Section, Settings, WebAccess};
 use crate::net::PeerKind;
 use crate::rrc;
 use crate::store::{Conversation, Message, MessageState, NotifyLevel};
@@ -727,6 +727,8 @@ pub fn settings(app: &App, saved: &Settings) -> Value {
                 },
                 "next_start": f.effect == Effect::NextStart,
                 "value": saved.field_value(f.key),
+                // The group it's shown in.
+                "section": f.section().id(),
                 // What the web UI may do with it.
                 "web": match f.web_access() {
                     WebAccess::Change => "change",
@@ -738,6 +740,7 @@ pub fn settings(app: &App, saved: &Settings) -> Value {
         .collect();
     json!({
         "path": app.paths.settings.display().to_string(),
+        "sections": Section::ALL.iter().map(|s| json!({ "id": s.id(), "title": s.title() })).collect::<Vec<_>>(),
         "fields": fields,
         // What this session actually uses (may come from --rns-config or
         // the standard locations).
@@ -898,6 +901,21 @@ mod tests {
         let via = peers(&app, None, "", None, heard, Some("RNode LoRa"));
         assert_eq!((names(&via), via["peers"][0]["via"].as_str()), (vec!["Alpha person".to_string()], Some("RNode LoRa")));
         assert_eq!(via["interfaces"], json!(["RNode LoRa"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_say_their_group() {
+        let dir = std::env::temp_dir().join(format!("rettui-views-groups-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        let view = settings(&app, &app.settings);
+        assert_eq!(view["sections"][0], json!({ "id": "profile", "title": "Profile" }));
+        let section = |key: &str| view["fields"].as_array().unwrap().iter().find(|f| f["key"] == key).unwrap()["section"].clone();
+        assert_eq!(
+            (section("display_name"), section("hub_enabled"), section("quiet_hours")),
+            (json!("profile"), json!("hosting"), json!("notifications"))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

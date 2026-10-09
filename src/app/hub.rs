@@ -286,7 +286,7 @@ impl App {
     /// Something for the hub to do, if it's running.
     pub fn hub_act(&mut self, action: HubAction) -> Result<(), String> {
         if !self.hub.running() {
-            return Err("The hub isn't running (turn it on with e, or Host an RRC hub in the settings)".into());
+            return Err("The hub isn't running (turn it on with e, or Host an RRC hub in Settings › Hosting)".into());
         }
         self.send(NetCommand::HubAction(action));
         Ok(())
