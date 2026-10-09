@@ -247,7 +247,7 @@ fn draw_details(frame: &mut Frame, app: &App, area: Rect) {
                     Line::from(vec![label("Voiced"), Span::raw(names(&room.voiced))]),
                     Line::raw(""),
                     Line::styled(
-                        format!("t topic · m modes · r {}", if room.registered { "unregister" } else { "register" }),
+                        format!("t topic · m modes · r {} · R rename · D delete", if room.registered { "unregister" } else { "register" }),
                         Style::default().fg(dim()),
                     ),
                 ],
