@@ -663,7 +663,9 @@ pub fn room(app: &App, hub: &Hub, room: &str, last: Option<usize>) -> Value {
         "total_lines": shown.len(),
         "joined": hub.rooms.contains(room),
         "topic": hub.topics.get(room),
-        "members": members.iter().map(|(name, id)| json!({ "name": name, "src": hex::encode(id), "own": *id == own })).collect::<Vec<_>>(),
+        // Someone known by the start of their identity only (until they
+        // say something) has no user menu.
+        "members": members.iter().map(|(name, id)| json!({ "name": name, "src": hex::encode(id), "own": *id == own, "partial": id.len() < 16 })).collect::<Vec<_>>(),
         "users": users,
         // Who `@` offers (members and whoever has spoken here).
         "mentionable": people.iter().map(|(name, id)| json!({ "name": name, "src": hex::encode(id), "own": *id == own })).collect::<Vec<_>>(),

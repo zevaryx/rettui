@@ -3784,10 +3784,10 @@ app.views.channels = {
       this.membersPanel.classList.remove('hidden');
       $('header', this.membersPanel).textContent = `Members ${view.members.length}`;
       this.members.replaceChildren(...view.members.map((member) => el('div', {
-        class: 'member' + (member.own ? ' own' : ' clickable'),
+        class: 'member' + (member.own ? ' own' : member.partial ? '' : ' clickable'),
         text: member.name,
-        title: member.own ? 'You' : 'Message this user',
-        onclick: member.own ? null : (e) => this.userMenu(e, member.src),
+        title: member.own ? 'You' : member.partial ? 'Only part of their identity is known until they say something here' : 'Message this user',
+        onclick: member.own || member.partial ? null : (e) => this.userMenu(e, member.src),
       })));
     } else {
       this.membersPanel.classList.add('hidden');

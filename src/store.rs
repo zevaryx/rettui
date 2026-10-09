@@ -626,6 +626,9 @@ pub struct HubConfig {
     pub aspect: String,
     pub name: String,
     pub rooms: Vec<String>,
+    /// Keys of keyed rooms joined, to rejoin them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub room_keys: BTreeMap<String, String>,
     /// Nick for this hub; the display name is used when unset.
     pub nick: Option<String>,
     pub auto_connect: bool,

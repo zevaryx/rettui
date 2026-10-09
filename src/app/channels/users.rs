@@ -91,7 +91,12 @@ impl App {
             .into_iter()
             .filter(|h| hub.nicks.get(*h).is_some_and(|n| n.to_lowercase() == who) || (who.len() >= 6 && hex::encode(h).starts_with(&who)))
             .collect();
+        // Someone known by the start of their identity, and now in full,
+        // is one user.
+        let full: Vec<&Vec<u8>> = matches.iter().filter(|h| h.len() == 16).copied().collect();
+        let matches: Vec<&Vec<u8>> = matches.into_iter().filter(|h| h.len() == 16 || !full.iter().any(|f| f.starts_with(h))).collect();
         match matches.as_slice() {
+            [one] if one.len() < 16 => Err("Only part of their identity is known until they say something here"),
             [one] => Ok((*one).clone()),
             [] => Err("No such user here (try /who)"),
             _ => Err("Several users match; use a longer name or hash"),
@@ -171,6 +176,10 @@ impl App {
         if let Some(user) = self.rrc_user(hub, target) {
             self.channels.picker = None;
             self.channels.menu = Some(UserMenu { user, list: ListState::default().with_selected(Some(0)) });
+        } else {
+            // Hubs give the start of an identity in /who.
+            let name = self.channels.hubs[hub].name_of(target);
+            self.warn(format!("Only part of {name}'s identity is known until they say something here"));
         }
     }
 

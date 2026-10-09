@@ -34,6 +34,8 @@ const K_ROOM: u64 = 5;
 const K_BODY: u64 = 6;
 const K_NICK: u64 = 7;
 const K_DST: u64 = 8;
+/// Structured `/who` result (rsRRC extension, asked for with `CAP_USER_LIST`).
+const K_USER_LIST: u64 = 10;
 
 pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
@@ -71,11 +73,24 @@ pub struct Envelope {
     pub nick: Option<String>,
     /// Direct-notice recipient identity (rrcd extension).
     pub dst: Option<Vec<u8>>,
+    /// Members with their full identities, on a `/who` reply (rsRRCD).
+    /// Only read: we never send it.
+    pub user_list: Option<Value>,
 }
 
 impl Envelope {
     pub fn new(t: u64, src: &[u8]) -> Self {
-        Self { t, id: rand::random::<[u8; 8]>().to_vec(), ts: now_ms(), src: src.to_vec(), room: None, body: None, nick: None, dst: None }
+        Self {
+            t,
+            id: rand::random::<[u8; 8]>().to_vec(),
+            ts: now_ms(),
+            src: src.to_vec(),
+            room: None,
+            body: None,
+            nick: None,
+            dst: None,
+            user_list: None,
+        }
     }
 
     pub fn room(mut self, room: &str) -> Self {
@@ -157,6 +172,7 @@ impl Envelope {
             body: get(&map, K_BODY).cloned(),
             nick: get(&map, K_NICK).and_then(text),
             dst: get(&map, K_DST).and_then(bytes),
+            user_list: get(&map, K_USER_LIST).cloned(),
         })
     }
 }

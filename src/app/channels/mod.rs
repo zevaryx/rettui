@@ -72,6 +72,10 @@ pub struct ChatLine {
     /// Our message id until the hub echoes it back.
     #[serde(skip)]
     pub pending: Option<Vec<u8>>,
+    /// The message's id (hex), to know it again: some hubs replay recent
+    /// messages to whoever joins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 impl ChatLine {
@@ -87,6 +91,7 @@ impl ChatLine {
             own: false,
             presence: false,
             pending: None,
+            id: None,
         }
     }
 
@@ -134,6 +139,13 @@ pub enum HubStatus {
     Failed(String),
 }
 
+/// History a hub is replaying into a room (the Go hub does on joining):
+/// its opening notice, shown before the first message we hadn't seen.
+struct Replay {
+    header: String,
+    shown: bool,
+}
+
 pub struct Hub {
     pub hash: Hash,
     pub aspect: String,
@@ -148,10 +160,15 @@ pub struct Hub {
     hub_identity: Option<Vec<u8>>,
     pub hub_name: Option<String>,
     pub motd: Option<String>,
+    /// The greeting so far, while it comes in several notices, and the one
+    /// before it.
+    motd_parts: Option<(String, Option<String>)>,
     pub limits: Limits,
     pub direct_notices: bool,
     /// Joined rooms (rejoined automatically after reconnecting).
     pub rooms: BTreeSet<String>,
+    /// Keys of keyed (`+k`) rooms, to rejoin them.
+    keys: BTreeMap<String, String>,
     /// Message buffers; the empty key is the hub's own buffer.
     pub buffers: BTreeMap<String, Vec<ChatLine>>,
     pub unread: HashMap<String, usize>,
@@ -165,10 +182,22 @@ pub struct Hub {
     silent_joins: HashSet<String>,
     quiet_info: HashSet<String>,
     pending_parts: HashSet<String>,
-    silent_who: HashSet<String>,
+    /// Rooms whose `/who` we asked for quietly, until when to expect (more
+    /// of) the reply.
+    silent_who: HashMap<String, Instant>,
+    /// When each room's last `/who` reply came (a reply's next part comes
+    /// soon after).
+    who_at: HashMap<String, Instant>,
+    /// Rooms with a quiet `/who` not answered yet, since when.
+    who_asked: HashMap<String, Instant>,
     silent_list: u32,
+    /// Until when the rest of a `/list` reply may come, and whether it's
+    /// quiet.
+    list_more: Option<(Instant, bool)>,
+    /// Rooms whose history the hub is replaying.
+    replay: HashMap<String, Replay>,
     sent: VecDeque<Vec<u8>>,
-    /// Room-less notices right after WELCOME are the MOTD.
+    /// Room-less notices right after WELCOME (and each other) are the MOTD.
     motd_until: Option<Instant>,
     reconnect_at: Option<Instant>,
     attempts: u32,
@@ -190,9 +219,11 @@ impl Hub {
             hub_identity: None,
             hub_name: None,
             motd: None,
+            motd_parts: None,
             limits: Limits::default(),
             direct_notices: false,
             rooms: BTreeSet::new(),
+            keys: BTreeMap::new(),
             buffers: BTreeMap::from([(String::new(), Vec::new())]),
             unread: HashMap::new(),
             mentions: HashSet::new(),
@@ -204,8 +235,12 @@ impl Hub {
             silent_joins: HashSet::new(),
             quiet_info: HashSet::new(),
             pending_parts: HashSet::new(),
-            silent_who: HashSet::new(),
+            silent_who: HashMap::new(),
+            who_at: HashMap::new(),
+            who_asked: HashMap::new(),
             silent_list: 0,
+            list_more: None,
+            replay: HashMap::new(),
             sent: VecDeque::new(),
             motd_until: None,
             reconnect_at: None,
@@ -221,6 +256,7 @@ impl Hub {
             aspect: self.aspect.clone(),
             name: self.name.clone(),
             rooms: self.rooms.iter().cloned().collect(),
+            room_keys: self.keys.iter().filter(|(room, _)| self.rooms.contains(*room)).map(|(r, k)| (r.clone(), k.clone())).collect(),
             nick: self.nick.clone(),
             auto_connect: self.auto_connect,
             notify: self.notify,
@@ -294,7 +330,24 @@ impl Hub {
         whispers
     }
 
-    /// A room's members as (name, identity), sorted by name.
+    /// Add a member of `room` by their full identity, in place of the
+    /// start of it (all a hub's `/who` gives for someone with a nick).
+    /// Whether they're new here.
+    fn add_member(&mut self, room: &str, identity: &[u8]) -> bool {
+        let members = self.members.entry(room.to_string()).or_default();
+        let partial: Vec<Vec<u8>> = members.iter().filter(|m| m.len() < identity.len() && identity.starts_with(m)).cloned().collect();
+        for prefix in &partial {
+            members.remove(prefix);
+            if let Some(nick) = self.nicks.get(prefix).cloned() {
+                self.nicks.entry(identity.to_vec()).or_insert(nick);
+            }
+        }
+        members.insert(identity.to_vec()) && partial.is_empty()
+    }
+
+    /// A room's members as (name, identity), sorted by name. Someone may be
+    /// known by the start of their identity only (see
+    /// [`add_member`](Self::add_member)).
     pub fn members_of(&self, room: &str) -> Vec<(String, Vec<u8>)> {
         let mut members: Vec<(String, Vec<u8>)> =
             self.members.get(room).map(|m| m.iter().map(|h| (self.name_of(h), h.clone())).collect()).unwrap_or_default();
@@ -571,6 +624,7 @@ impl Channels {
             hub.notify = config.notify;
             hub.room_notify = config.room_notify.clone();
             hub.rooms = config.rooms.iter().map(|r| rrc::normalize_room(r)).collect();
+            hub.keys = config.room_keys.clone();
             hub.load_history(history_dir);
             channels.hubs.push(hub);
         }
@@ -623,10 +677,17 @@ impl App {
 
     /// Add a line to a buffer, counting it unread unless it is on screen.
     fn record(&mut self, index: usize, room: &str, line: ChatLine) {
+        self.record_line(index, room, line, true);
+    }
+
+    /// [`record`](Self::record), with or without a notification (none for
+    /// history a hub replays).
+    fn record_line(&mut self, index: usize, room: &str, line: ChatLine, notify: bool) {
         let counts = !line.own && matches!(line.kind, LineKind::Msg | LineKind::Action | LineKind::Private);
         let mention = line.mention || line.kind == LineKind::Private;
         let viewing = self.is_viewing(index, room);
-        let notification = if counts && self.settings.notify_rrc { self.rrc_notification(index, room, &line, mention) } else { None };
+        let notification =
+            if notify && counts && self.settings.notify_rrc { self.rrc_notification(index, room, &line, mention) } else { None };
         let hub = self.hub_mut(index);
         hub.push(room, line);
         if counts && !viewing {
@@ -795,6 +856,11 @@ impl App {
         let hub = self.hub_mut(index);
         hub.rooms.insert(room.clone());
         hub.buffers.entry(room.clone()).or_default();
+        // Hubs want a keyed room's key every time: keep it for rejoining.
+        if let Some(key) = key.filter(|k| !k.is_empty()) {
+            hub.keys.insert(room.clone(), key.to_string());
+        }
+        let key = hub.keys.get(&room).cloned();
         if hub.is_connected() {
             hub.pending_joins.insert(room.clone());
             if silent {
@@ -802,8 +868,8 @@ impl App {
                 hub.quiet_info.insert(room.clone());
             }
             let mut env = self.envelope(index, t::JOIN).room(&room);
-            if let Some(key) = key.filter(|k| !k.is_empty()) {
-                env = env.text(key);
+            if let Some(key) = key {
+                env = env.text(&key);
             }
             self.send_env(index, &env);
         } else if !silent {
@@ -825,6 +891,7 @@ impl App {
         let hub = self.hub_mut(index);
         hub.rooms.remove(&room);
         hub.members.remove(&room);
+        hub.keys.remove(&room);
         self.record(index, &room, ChatLine::new(LineKind::System, format!("You left #{room}")));
         self.save_hubs();
     }

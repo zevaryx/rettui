@@ -23,27 +23,8 @@ pub const HELP: &[&str] = &[
     "/ping                 measure round-trip time to the hub",
     "/clear                clear this room's messages",
     "/connect, /disconnect connect or disconnect this hub (also /quit)",
-    "Other commands (/mode, /kick, /ban, /op, /stats, ...) go to the hub.",
-];
-
-/// Commands the hub implements; sent verbatim.
-const HUB_COMMANDS: &[&str] = &[
-    "who",
-    "names",
-    "topic",
-    "mode",
-    "kick",
-    "ban",
-    "invite",
-    "op",
-    "deop",
-    "voice",
-    "devoice",
-    "register",
-    "unregister",
-    "kline",
-    "stats",
-    "reload",
+    "/quote <text>         send text to the hub as typed (/quote /help for the hub's help)",
+    "Other commands (/mode, /kick, /ban, /op, /stats, ...) go to the hub, which says if it doesn't have them.",
 ];
 
 impl App {
@@ -114,6 +95,7 @@ impl App {
         line.nick = env.nick.clone();
         line.own = true;
         line.pending = Some(env.id.clone());
+        line.id = Some(hex::encode(&env.id));
         let hub = self.hub_mut(index);
         hub.sent.push_back(env.id.clone());
         if hub.sent.len() > MAX_PENDING_ECHOES {
@@ -134,10 +116,16 @@ impl App {
         if super::whisper_peer(room).is_some() && matches!(name.as_str(), "me" | "part" | "leave" | "topic" | "who" | "names") {
             return error(self, format!("/{name} is for rooms; this is a whisper conversation (x closes it)"));
         }
-        let needs_connection = matches!(name.as_str(), "me" | "msg" | "ping" | "list") || HUB_COMMANDS.contains(&name.as_str());
-        if needs_connection && !connected {
+        let local = matches!(
+            name.as_str(),
+            "help" | "join" | "j" | "part" | "leave" | "dm" | "lxmf" | "nick" | "clear" | "connect" | "disconnect" | "quit"
+        );
+        if !local && !connected {
             return error(self, format!("/{name}: not connected (use /connect)"));
         }
+        // Hub commands are about the room on screen; a whisper
+        // conversation isn't one.
+        let hub_room = if room.is_empty() || super::whisper_peer(room).is_some() { None } else { Some(room) };
         match name.as_str() {
             "help" => {
                 for line in HELP {
@@ -184,14 +172,16 @@ impl App {
                 let Some(nick) = rrc::normalize_nick(arg, max) else {
                     return error(self, format!("Nicks are 1-{max} bytes on one line"));
                 };
-                self.hub_mut(index).nick = Some(nick.clone());
+                let own = self.identity_hash.to_vec();
+                let hub = self.hub_mut(index);
+                hub.nick = Some(nick.clone());
+                hub.nicks.remove(&own);
                 self.save_hubs();
-                if connected {
-                    // A new HELLO updates the nick; the hub re-welcomes us
-                    // and we rejoin rooms quietly.
-                    self.session(index, SessionCommand::Hello(Some(nick.clone())));
-                }
-                self.record(index, room, ChatLine::new(LineKind::System, format!("Nick set to {nick}")));
+                // Every message carries the nick, and hubs take it from
+                // there (as NomadNet does it). A new HELLO would be a new
+                // session to rrcd and the Go hub, out of every room.
+                let note = if connected { " (the hub takes it with your next message)" } else { "" };
+                self.record(index, room, ChatLine::new(LineKind::System, format!("Nick set to {nick}{note}")));
             }
             "ping" => self.session(index, SessionCommand::Ping),
             "list" => {
@@ -207,15 +197,31 @@ impl App {
             }
             "connect" => self.connect_hub(index),
             "disconnect" | "quit" => self.disconnect_hub(index),
-            _ if HUB_COMMANDS.contains(&name.as_str()) => {
-                let text = if arg.is_empty() { format!("/{name}") } else { format!("/{name} {arg}") };
-                let mut env = self.envelope(index, t::MSG).text(&text);
-                if !room.is_empty() {
+            "quote" | "raw" => {
+                if arg.is_empty() {
+                    return error(self, "Usage: /quote <text>".into());
+                }
+                let mut env = self.envelope(index, t::MSG).text(arg);
+                if let Some(room) = hub_room {
                     env = env.room(room);
                 }
                 self.send_env(index, &env);
             }
-            _ => error(self, format!("Unknown command /{name} (try /help)")),
+            // Hub commands differ from hub to hub (the Go hub adds /history,
+            // /away, /seen, ...): the hub says if it doesn't have one.
+            _ => {
+                if matches!(name.as_str(), "who" | "names") {
+                    // Asked for: the reply shows, even right after joining.
+                    let target = arg.split_whitespace().next().map_or_else(|| room.to_string(), rrc::normalize_room);
+                    self.hub_mut(index).silent_who.remove(&target);
+                }
+                let text = if arg.is_empty() { format!("/{name}") } else { format!("/{name} {arg}") };
+                let mut env = self.envelope(index, t::MSG).text(&text);
+                if let Some(room) = hub_room {
+                    env = env.room(room);
+                }
+                self.send_env(index, &env);
+            }
         }
     }
 

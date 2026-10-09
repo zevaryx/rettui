@@ -23,8 +23,6 @@ const RESOURCE_EXPECTATION: Duration = Duration::from_secs(30);
 #[derive(Debug)]
 pub enum SessionCommand {
     Send(Vec<u8>),
-    /// Re-HELLO (e.g. after a nick change; the hub then re-welcomes).
-    Hello(Option<String>),
     Ping,
     Disconnect,
 }
@@ -158,7 +156,9 @@ async fn session(
         };
 
     let own = identity.hash;
-    let mut nick = config.nick;
+    // A nick change isn't a new HELLO: rrcd and the Go hub take that as a
+    // new session, out of every room. The nick goes with each message.
+    let nick = config.nick;
     emit(RrcEvent::Status("Identified, sending HELLO".into()));
     let _ = handle.send_packet(hello(&own, nick.as_deref())).await;
     let mut hello_attempts = 1;
@@ -183,10 +183,6 @@ async fn session(
                     } else if let Err(e) = handle.send_packet(payload).await {
                         emit(RrcEvent::SendFailed(e.to_string()));
                     }
-                }
-                Some(SessionCommand::Hello(new_nick)) => {
-                    nick = new_nick;
-                    let _ = handle.send_packet(hello(&own, nick.as_deref())).await;
                 }
                 Some(SessionCommand::Ping) => {
                     let body = rand::random::<[u8; 8]>().to_vec();

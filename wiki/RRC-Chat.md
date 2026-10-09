@@ -1,6 +1,9 @@
 RRC is the IRC-like chat protocol that NomadNet 1.4 also speaks, served by
-hubs such as [rrcd](https://github.com/kc1awv/rrcd). It lives in the Channels
-tab.
+hubs such as [rrcd](https://github.com/kc1awv/rrcd) (the reference hub),
+[rrc-hub](https://github.com/thatSFguy/reticulum-relay-chat) (in Go),
+[rsRRCD](https://github.com/reticulum-spb/rsRRCD) and the hub Ratspeak can
+host. rettui works with each of them, as they differ (see
+[Hubs differ](#hubs-differ)). It lives in the Channels tab.
 
 - **Hubs:** add a hub by address (`n`), or open an `rrc://hash/room` link on a
   NomadNet page. Opening a new hub from a link asks first, because connecting
@@ -16,13 +19,25 @@ tab.
   nick, the list adds the start of their identity. `x` (or **Close** in the
   web UI) closes a conversation. Whispers saved in rooms by older versions
   are moved to their conversations.
-- **Commands:** the same set as NomadNet: `/join`, `/part`, `/me`, `/nick`
-  (per hub, defaulting to your display name), `/who`, `/list`, `/topic`,
-  `/ping`, `/clear`, `/connect`, `/disconnect`, and hub moderation commands
-  such as `/mode`, `/kick` and `/op`. `/msg <nick> [text]` (also `/w`)
-  whispers on hubs that support it (with no text, it opens the
-  conversation), and `/dm <nick> [text]` sends an LXMF message instead.
-  `/help` lists them all.
+- **Commands:** the same set as NomadNet: `/join <room> [key]`, `/part`,
+  `/me`, `/nick` (per hub, defaulting to your display name), `/who` (or
+  `/names`), `/list`, `/topic`, `/ping`, `/clear`, `/connect`,
+  `/disconnect`, and hub moderation commands such as `/mode`, `/kick` and
+  `/op`. `/msg <nick> [text]` (also `/w`) whispers on hubs that support it
+  (with no text, it opens the conversation), and `/dm <nick> [text]` sends
+  an LXMF message instead. `/help` lists them all. Commands rettui doesn't
+  have go to the hub as typed, since hubs have their own (rrc-hub's
+  `/history`, `/away` or `/seen`, say), and the hub says if it doesn't
+  have one. `/quote <text>` sends any text to the hub: `/quote /help` for
+  the hub's own help.
+- **Nicks:** a new nick (`/nick`) goes with your next message, as in
+  NomadNet. A hub may give you another than you asked for (rrc-hub keeps
+  nicks unique, so you may be `zev1`): your messages show the one it gave,
+  and mentions of either count.
+- **Keyed rooms:** the key you join a `+k` room with is kept, to rejoin it
+  after reconnecting (until it stops working, or you leave the room).
+- **Kicked or banned:** you're out of the room (it keeps its messages) and
+  rettui doesn't rejoin it.
 - **Messaging a user:** click a name in the chat or the members list (or press
   `m`) for a menu: mention them (adds `@name` to what you're writing), open
   your whisper conversation, send an LXMF message, or copy their LXMF
@@ -61,3 +76,30 @@ tab.
 - **Connections:** hubs reconnect automatically with backoff (toggle with
   `a`) and rejoin your rooms quietly. Quitting leaves hubs properly, so others
   see you go at once.
+
+## Hubs differ
+
+The RRC specification leaves a lot to each hub, and the hubs in use fill it
+in differently. What rettui does about it:
+
+- **Members:** rrcd sends no member lists unless its operator turns
+  `include_joined_member_list` on, and its `/who` gives only the start of
+  the identity of anyone with a nick. Such people are listed by nick until
+  rettui learns their identity (when they say something); until then their
+  name opens no menu. On such a hub rettui asks `/who` quietly when
+  someone joins, to list them. rrc-hub instead sends everyone in the room with every
+  join and leave. rsRRCD adds full identities to `/who` replies. Ratspeak
+  splits a big room's member list over several messages.
+- **`/who` and `/names`:** replies come in one message (rrcd), with
+  `[away]` after people who are away (rrc-hub), or in several messages
+  that each start `members in <room>:` (Ratspeak, for big rooms). rettui
+  takes them all.
+- **`/list`:** Ratspeak ends a list too long for one message with
+  `(+N more)`; a list sent a line per message is put together.
+- **Greeting:** rrcd and rrc-hub send a greeting of several lines as a
+  message per line (and a long one as a file transfer). The hub view shows
+  them together, once.
+- **History:** rrc-hub replays a room's recent messages to whoever joins,
+  between `--- N messages from earlier ---` and `--- end of history ---`.
+  rettui leaves out the messages it already has, shows the rest at the time
+  they were said, and doesn't notify you of them.
