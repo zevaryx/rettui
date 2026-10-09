@@ -14,10 +14,11 @@ use super::editor::draw_text_editor;
 use super::{accent, block, dim, human_bytes, selected_bg};
 use crate::app::App;
 use crate::app::format::{Action, RIBBON};
-use crate::app::node::{NodeStatus, PageView, Preview};
+use crate::app::node::{NodeRow, NodeStatus, PageView, Preview};
 use crate::nomad::host::HostConfig;
 use crate::nomad::micron;
 use crate::nomad::micron::source::tokenize;
+use crate::nomad::pages::Root;
 
 pub(super) fn draw_node(frame: &mut Frame, app: &mut App, area: Rect) {
     // Wide enough for the 32-character node address.
@@ -58,8 +59,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block("Hosting", false)), area);
 }
 
+/// What's on the node: `pages/` and `files/`, each with its folders.
 fn draw_pages(frame: &mut Frame, app: &mut App, area: Rect) {
-    let title = format!("Pages · {}", app.node.pages.len());
+    let title = format!("Pages · {} · Files · {}", app.node.pages.len(), app.node.files.len());
     let list_block = block(&title, !app.node.editing);
     app.regions.node_pages = list_block.inner(area);
     if let Some(error) = &app.node.error {
@@ -69,33 +71,37 @@ fn draw_pages(frame: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     }
-    if app.node.pages.is_empty() {
-        frame.render_widget(
-            Paragraph::new("No pages yet. Press n to create one.")
-                .style(Style::default().fg(dim()))
-                .wrap(Wrap { trim: true })
-                .block(list_block),
-            area,
-        );
-        return;
-    }
     let open = app.node.editor.as_ref().map(|e| (e.path.clone(), e.dirty()));
-    let items: Vec<ListItem> = app
-        .node
-        .pages
+    let rows = app.node_rows();
+    let items: Vec<ListItem> = rows
         .iter()
-        .map(|page| {
+        .map(|row| {
+            let indent = |depth: usize| "  ".repeat(depth);
+            let Some(entry) = app.node_entry(row) else {
+                let NodeRow::Folder { root, path, depth } = row else { return ListItem::new("") };
+                // A root, or a folder in one (by its own name).
+                let name =
+                    if path.is_empty() { format!("{}/", root.id()) } else { format!("{}/", path.rsplit('/').next().unwrap_or(path)) };
+                let style = if path.is_empty() { Style::default().fg(accent()).bold() } else { Style::default().fg(accent()) };
+                return ListItem::new(Line::from(vec![Span::raw(indent(*depth)), Span::styled(name, style)]));
+            };
+            let NodeRow::Item { root, depth, .. } = row else { return ListItem::new("") };
+            let page = *root == Root::Pages;
             let (marker, marker_style) = match &open {
-                Some((path, true)) if *path == page.path => ("● ", Style::default().fg(Color::Yellow)),
-                Some((path, false)) if *path == page.path => ("▸ ", Style::default().fg(accent())),
+                Some((path, true)) if page && *path == entry.path => ("● ", Style::default().fg(Color::Yellow)),
+                Some((path, false)) if page && *path == entry.path => ("▸ ", Style::default().fg(accent())),
                 _ => ("  ", Style::default()),
             };
-            let name_style = if page.text { Style::default() } else { Style::default().fg(dim()) };
-            let mut spans = vec![Span::styled(marker, marker_style), Span::styled(page.path.clone(), name_style)];
-            if page.executable {
+            let name = entry.path.rsplit('/').next().unwrap_or(&entry.path).to_string();
+            let name_style = if page && entry.text { Style::default() } else { Style::default().fg(dim()) };
+            let mut spans =
+                vec![Span::raw(indent(depth.saturating_sub(1))), Span::styled(marker, marker_style), Span::styled(name, name_style)];
+            if entry.executable {
                 spans.push(Span::styled(" script", Style::default().fg(Color::LightMagenta)));
+            } else if page && !entry.text {
+                spans.push(Span::styled(" picture", Style::default().fg(Color::LightBlue)));
             }
-            spans.push(Span::styled(format!("  {}", human_bytes(page.size)), Style::default().fg(dim())));
+            spans.push(Span::styled(format!("  {}", human_bytes(entry.size)), Style::default().fg(dim())));
             ListItem::new(Line::from(spans))
         })
         .collect();

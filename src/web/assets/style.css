@@ -642,6 +642,21 @@ textarea.m-field { resize: vertical; vertical-align: top; }
 .view-preview .preview { border: 0; }
 .banner { padding: 6px 12px; background: var(--warn-bg); color: var(--yellow); font-size: 13px; }
 .script-tag { color: var(--magenta); }
+/* What's on the node: pages/ and files/, with their folders. Something
+   dragged onto a folder moves there. */
+.node-folder { padding-top: 5px; padding-bottom: 5px; cursor: default; }
+.node-folder .name { font-weight: 400; color: var(--accent); font-family: var(--mono); font-size: 13px; }
+.node-root { border-top: 1px solid var(--border); margin-top: 4px; }
+.node-root:first-child { border-top: none; margin-top: 0; }
+.node-root .name { font-weight: 600; }
+.node-folder.drop-target { background: var(--selected); border-left-color: var(--accent); }
+.node-item .item-more { flex: none; padding: 0 8px; opacity: .6; }
+.node-item:hover .item-more, .node-item.selected .item-more { opacity: 1; }
+.picture-tag { color: var(--cyan); }
+.dialog img.node-picture { display: block; max-width: 100%; max-height: 60vh; height: auto; margin: 0 auto 10px; border-radius: 4px; }
+.move-folders { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow: auto; margin: 8px 0; }
+.move-folders button { text-align: left; font-family: var(--mono); font-size: 13px; }
+.move-folders button.active { border-color: var(--accent); }
 .node-card { grid-template-columns: 70px 1fr; }
 .node-card > span { min-width: 0; overflow-wrap: anywhere; }
 .node-card .row { flex-wrap: wrap; }
@@ -947,6 +962,8 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .card-actions { padding: 0 16px 14px; gap: 8px; }
   .palette .swatches { grid-template-columns: repeat(7, 32px); gap: 8px; }
   .palette .swatch { width: 32px; height: 32px; min-height: 0; }
+  .node-item .item-more { opacity: 1; min-width: 40px; }
+  .move-folders button { min-height: 40px; }
 
   /* Status: one column that scrolls as a page. */
   .view[data-view=status] { overflow-y: auto; display: block; }

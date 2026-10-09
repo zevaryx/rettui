@@ -44,6 +44,36 @@ async function request(method, path, body) {
   if (!response.ok) throw new Error(data.error || response.statusText);
   return data;
 }
+// A file sent as it is (not JSON): what rettui answers.
+async function upload(path, file) {
+  const response = await fetch('api' + path, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
+  if (response.status === 401) {
+    location.reload();
+    throw new Error('not logged in');
+  }
+  if (response.status === 413) throw new Error(`${file.name} is too large to send: over 64 MB, or over the limit of a proxy in front of rettui`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+
+// The folder something on the node is in ('' at the top).
+const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+
+// `text` with the address `from` changed to `to` where it is a whole
+// address (not the start of a longer one, like :/page/a in :/page/a.mu).
+function replaceAddress(text, from, to) {
+  let out = '';
+  let at = 0;
+  for (let found = text.indexOf(from); found !== -1; found = text.indexOf(from, found + from.length)) {
+    const next = text[found + from.length];
+    if (next !== undefined && /[A-Za-z0-9._\/-]/.test(next)) continue;
+    out += text.slice(at, found) + to;
+    at = found + from.length;
+  }
+  return out + text.slice(at);
+}
+
 const api = {
   get: (path) => request('GET', path),
   post: (path, body = {}) => request('POST', path, body),
@@ -4955,7 +4985,9 @@ const MICRON_RIBBON = [
   [['h1', 'H1', '1', 'Heading (Alt+1)'], ['h2', 'H2', '2', 'Subheading (Alt+2)'], ['h3', 'H3', '3', 'Third-level heading (Alt+3)']],
   [['divider', 'Divider', 'v', 'Divider line (Alt+V)'], ['literal', 'Literal', 't', 'Literal block, shown as written (Alt+T)'],
     ['comment', 'Comment', 'o', 'Comment lines out, or back in (Alt+O)']],
-  [['link', 'Link', 'k', 'Link (Alt+K, Ctrl+K)'], ['image', 'Image', 'm', 'Image (Alt+M)'], ['field', 'Field', 'd', 'Text field (Alt+D)'],
+  [['link', 'Link', 'k', 'Link (Alt+K, Ctrl+K)'], ['image', 'Image', 'm', 'Image (Alt+M)'],
+    ['upload', 'Upload', 'p', 'Add a picture (shown in the page) or a file (linked to download) to the node; dropping files on the page does too (Alt+P)'],
+    ['field', 'Field', 'd', 'Text field (Alt+D)'],
     ['checkbox', 'Check', 'h', 'Checkbox (Alt+H)'], ['radio', 'Radio', 'a', 'Radio button (Alt+A)']],
 ];
 const MICRON_KEYS = Object.fromEntries(MICRON_RIBBON.flat().map(([id, , key]) => [key, id]));
@@ -5174,6 +5206,16 @@ app.views.node = {
       spellcheck: false,
       placeholder: 'Pick a page on the left, or create one with + New',
       oninput: () => this.changed(),
+      // Files dropped on a page are added to the node and shown or linked
+      // to where they're dropped.
+      ondragover: (e) => {
+        if (this.open && !this.text.readOnly && e.dataTransfer.types.includes('Files')) e.preventDefault();
+      },
+      ondrop: (e) => {
+        if (!this.open || this.text.readOnly || !e.dataTransfer.files.length) return;
+        e.preventDefault();
+        this.uploadFiles([...e.dataTransfer.files]);
+      },
       onkeydown: (e) => {
         // Formatting: Alt and the key underlined in the ribbon (by the key's
         // place, so it works with any layout's Alt characters), and the
@@ -5217,8 +5259,8 @@ app.views.node = {
         el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Hosting' })), this.card,
           el('div', { class: 'row card-actions' }, this.hostButton,
             el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/node/announce'), 'Announcing the node') }))),
-        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Pages' }),
-          el('button', { text: '+ New', onclick: () => this.create() })), this.list)),
+        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Pages and files' }),
+          el('button', { text: '+ New', title: 'A new page', onclick: () => this.create() })), this.list)),
       el('section', { class: 'panel grow pane-main' },
         el('header', {}, this.title, this.buttons),
         this.banner,
@@ -5241,6 +5283,7 @@ app.views.node = {
   format(action, from) {
     if (!this.open || this.text.readOnly) return;
     if (action === 'fg' || action === 'bg') return this.palette(action, from);
+    if (action === 'upload') return this.pickFiles();
     micron.run(this.text, action);
   },
 
@@ -5314,15 +5357,239 @@ app.views.node = {
       this.list.replaceChildren(el('div', { class: 'empty state-bad', text: node.list_error }));
       return;
     }
-    this.list.replaceChildren(...(node.pages.length ? node.pages.map((page) => el('div', {
-      class: 'list-item' + (this.open?.path === page.path ? ' selected' : ''),
-      onclick: () => page.text ? this.load(page.path) : toast(`${page.path} is not a text file`, true),
-    },
-    el('span', { class: 'main' },
-      el('div', { class: 'name' + (page.text ? '' : ' dim'), text: page.path }),
-      el('div', { class: 'sub' }, humanBytes(page.size), page.executable ? el('span', { class: 'script-tag', text: ' script' }) : null)),
-    this.open?.path === page.path && this.dirty() ? el('span', { class: 'state-warn', text: '●', title: 'Unsaved changes' }) : null)) :
-      [el('div', { class: 'empty', text: 'No pages yet. Create one with + New.' })]));
+    // Not under something being dragged: drawn when it's dropped.
+    if (this.dragged) this.treeStale = true;
+    else this.renderTree();
+  },
+
+  // What's on the node: pages/ (pages, and the pictures they show) and
+  // files/ (to download), each with its folders. Something dragged onto a
+  // folder of its root moves there.
+  renderTree() {
+    const node = this.node;
+    const rows = [];
+    const folderRow = (root, path, depth) => {
+      const name = path ? path.split('/').pop() + '/' : root + '/';
+      const row = el('div', { class: 'list-item node-folder' + (path ? '' : ' node-root'), style: `padding-left:${12 + depth * 16}px`, title: path ? `${root}/${path}` : null },
+        el('span', { class: 'main' }, el('div', { class: 'name', text: name })));
+      row.addEventListener('dragover', (e) => {
+        if (this.dragged?.root !== root) return;
+        e.preventDefault();
+        row.classList.add('drop-target');
+      });
+      row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        row.classList.remove('drop-target');
+        const dragged = this.dragged;
+        this.dragged = null;
+        if (dragged?.root === root && folderOf(dragged.path) !== path) this.move(root, dragged.path, path);
+      });
+      return row;
+    };
+    const itemRow = (root, entry, depth) => {
+      const page = root === 'pages' && entry.text;
+      const picture = root === 'pages' && !entry.text;
+      const open = page && this.open?.path === entry.path;
+      const kind = entry.executable ? el('span', { class: 'script-tag', text: ' script' })
+        : picture ? el('span', { class: 'picture-tag', text: ' picture' }) : null;
+      const row = el('div', {
+        class: 'list-item node-item' + (open ? ' selected' : ''), style: `padding-left:${12 + depth * 16}px`, draggable: true, title: `${root}/${entry.path}`,
+        onclick: (e) => {
+          if (e.target.closest('button')) return;
+          if (page) this.load(entry.path);
+          else this.itemMenu(root, entry, e.currentTarget);
+        },
+      },
+      el('span', { class: 'main' },
+        el('div', { class: 'name' + (page ? '' : ' dim'), text: entry.path.split('/').pop() }),
+        el('div', { class: 'sub' }, humanBytes(entry.size), kind)),
+      open && this.dirty() ? el('span', { class: 'state-warn', text: '●', title: 'Unsaved changes' }) : null,
+      el('button', { class: 'item-more', text: '⋯', title: 'Insert, rename, move, delete', 'aria-label': 'More', onclick: (e) => this.itemMenu(root, entry, e.currentTarget) }));
+      row.addEventListener('dragstart', (e) => {
+        this.dragged = { root, path: entry.path };
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', entry.path);
+      });
+      row.addEventListener('dragend', () => {
+        this.dragged = null;
+        if (this.treeStale) {
+          this.treeStale = false;
+          this.renderTree();
+        }
+      });
+      return row;
+    };
+    const tree = (root, entries, folder, depth) => {
+      entries.filter((e) => folderOf(e.path) === folder).forEach((e) => rows.push(itemRow(root, e, depth)));
+      const subfolders = [...new Set(entries.map((e) => {
+        const rest = folder ? (e.path.startsWith(folder + '/') ? e.path.slice(folder.length + 1) : null) : e.path;
+        return rest && rest.includes('/') ? rest.split('/')[0] : null;
+      }).filter(Boolean))].sort();
+      for (const sub of subfolders) {
+        const path = folder ? `${folder}/${sub}` : sub;
+        rows.push(folderRow(root, path, depth));
+        tree(root, entries, path, depth + 1);
+      }
+    };
+    rows.push(folderRow('pages', '', 0));
+    if (node.pages.length) tree('pages', node.pages, '', 1);
+    else rows.push(el('div', { class: 'empty', text: 'No pages yet. Create one with + New.' }));
+    rows.push(folderRow('files', '', 0));
+    if (node.files.length) tree('files', node.files, '', 1);
+    else rows.push(el('div', { class: 'empty', text: 'No files to download yet: Upload, in a page\'s formatting bar, adds them.' }));
+    this.list.replaceChildren(...rows);
+  },
+
+  // Where pages find something: a page, a picture, a file to download.
+  address(root, entry) {
+    if (root === 'files') return ':/file/' + entry.path;
+    return (entry.text ? ':/page/' : ':/media/') + entry.path;
+  },
+
+  // What can be done with something on the node.
+  itemMenu(root, entry, anchor) {
+    const name = entry.path.split('/').pop();
+    const page = root === 'pages' && entry.text;
+    const picture = root === 'pages' && !entry.text;
+    const writable = this.open && !this.open.executable;
+    openSheet(`${root}/${entry.path}`, [
+      page ? { text: 'Open', action: () => this.load(entry.path) } : null,
+      picture ? { text: 'Show', action: () => this.showPicture(entry) } : null,
+      !page && writable ? { text: picture ? 'Show it in the open page' : 'Link to it in the open page', action: () => this.insertAddress(this.address(root, entry), picture) } : null,
+      page && writable && this.open.path !== entry.path ? { text: 'Link to it in the open page', action: () => this.insertAddress(this.address(root, entry), false) } : null,
+      { text: 'Copy its address', action: () => copy(this.address(root, entry), 'its address') },
+      entry.executable ? null : { text: 'Rename…', action: () => this.renameItem(root, entry) },
+      entry.executable ? null : { text: 'Move…', action: () => this.askMove(root, entry.path) },
+      entry.executable ? null : { text: 'Delete', danger: true, action: () => this.removeItem(root, entry.path, name) },
+    ].filter(Boolean), anchor);
+  },
+
+  showPicture(entry) {
+    dialog(entry.path, (close) => [
+      el('img', { class: 'node-picture', src: 'api/node/media?path=' + encodeURIComponent(entry.path), alt: entry.path }),
+      el('div', { class: 'row actions' },
+        el('span', { class: 'dim grow', text: `${humanBytes(entry.size)} · :/media/${entry.path}` }),
+        el('button', { class: 'primary', text: 'Done', onclick: close })),
+    ]);
+  },
+
+  // Markup at the cursor (around the selection, its text) for something on
+  // the node: a picture shown, or a link.
+  insertAddress(address, picture, newline = false) {
+    const t = this.text;
+    const [start, end] = [t.selectionStart, t.selectionEnd];
+    const selected = t.value.slice(start, end);
+    const name = address.split('/').pop();
+    const label = (selected && !selected.includes('\n') ? selected : picture ? name.replace(/\.[^.]*$/, '') : name).replace(/[`\[\]()<>|]/g, '');
+    micron.replace(t, start, end, (newline ? '\n' : '') + (picture ? `\`(${label}\`${address})` : `\`[${label}\`${address}]`));
+    this.changed();
+  },
+
+  pickFiles() {
+    const input = el('input', { type: 'file', multiple: true, class: 'hidden' });
+    input.addEventListener('change', () => {
+      this.uploadFiles([...input.files]);
+      input.remove();
+    });
+    document.body.append(input);
+    input.click();
+  },
+
+  // Files added to the node, each shown or linked to in the open page.
+  async uploadFiles(files) {
+    let placed = 0;
+    for (const file of files) {
+      const added = await attempt(() => upload('/node/upload?name=' + encodeURIComponent(file.name), file));
+      if (!added) continue;
+      // Several: one to a line.
+      if (this.open && !this.open.executable) this.insertAddress(added.address, added.image, placed++ > 0);
+      const where = added.address.replace(/^:/, '');
+      toast(`Added ${where}${added.shrunk ? ', made smaller' : ''}: ${added.image ? 'shown in the page' : 'linked to download'}`);
+    }
+    this.update();
+  },
+
+  async renameItem(root, entry) {
+    const to = prompt(`Rename ${root}/${entry.path} to (links to it follow)`, entry.path);
+    if (!to || to === entry.path) return;
+    const result = await attempt(() => api.post('/node/rename', { root, from: entry.path, to }));
+    if (result) this.moved(root, entry.path, result.path);
+  },
+
+  // Which folder to move something to: one there is, or a new one.
+  askMove(root, path) {
+    const now = folderOf(path);
+    const entries = root === 'pages' ? this.node.pages : this.node.files;
+    const folders = [...new Set(entries.flatMap((e) => {
+      const parts = e.path.split('/').slice(0, -1);
+      return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+    }))].sort();
+    dialog(`Move ${path.split('/').pop()}`, (close) => {
+      const go = (folder) => {
+        close();
+        if (folder !== now) this.move(root, path, folder);
+      };
+      const typed = el('input', { type: 'text', class: 'mono grow', placeholder: 'or a new one: docs/2026', spellcheck: false,
+        onkeydown: (e) => { if (e.key === 'Enter' && typed.value.trim()) go(typed.value.trim().replace(/^\/+|\/+$/g, '')); } });
+      return [
+        el('p', { class: 'dim', text: `To a folder of ${root}/. Links to it in your pages follow.` }),
+        el('div', { class: 'move-folders' }, ['', ...folders].map((folder) => el('button', {
+          class: folder === now ? 'active' : '', disabled: folder === now,
+          text: folder ? `${root}/${folder}/` : `${root}/ (the top)`, onclick: () => go(folder),
+        }))),
+        el('div', { class: 'row' }, typed, el('button', { text: 'Move', onclick: () => typed.value.trim() && go(typed.value.trim().replace(/^\/+|\/+$/g, '')) })),
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: 'Cancel', onclick: close })),
+      ];
+    });
+  },
+
+  async move(root, path, folder) {
+    const result = await attempt(() => api.post('/node/move', { root, path, folder }));
+    if (result) this.moved(root, path, result.path);
+  },
+
+  // After something moved or was renamed: the open page follows it, and its
+  // links to it (rettui changed them in the saved pages).
+  async moved(root, from, to) {
+    toast(`Moved to ${root}/${to}`);
+    const open = this.open;
+    if (open && root === 'pages' && open.path === from) {
+      open.path = to;
+      open.url = open.url.replace(/:\/page\/.*$/, ':/page/' + to);
+    }
+    if (open && !open.executable) {
+      if (this.dirty()) {
+        const prefixes = root === 'files' ? [':/file/'] : [':/page/', ':/media/'];
+        let text = this.text.value;
+        for (const prefix of prefixes) text = replaceAddress(text, prefix + from, prefix + to);
+        if (text !== this.text.value) {
+          this.text.value = text;
+          this.changed();
+          toast('Links in the open page were changed too: save it to keep them');
+        }
+      } else {
+        const page = await attempt(() => api.get('/node/page?path=' + encodeURIComponent(open.path)));
+        if (page && !this.dirty()) {
+          open.saved = page.content;
+          this.text.value = page.content;
+          this.renderPreview();
+        }
+      }
+    }
+    this.renderEditor();
+    this.update();
+  },
+
+  async removeItem(root, path, name) {
+    if (!confirm(`Delete ${root}/${path}? Pages that show or link to ${name} won't find it any more.`)) return;
+    const done = await attempt(() => api.post('/node/delete', { root, path }), `Deleted ${root}/${path}`);
+    if (done && root === 'pages' && this.open?.path === path) {
+      this.open = null;
+      this.renderEditor();
+      this.renderPreview();
+    }
+    this.update();
   },
 
   toggleHosting() {
@@ -5441,11 +5708,7 @@ app.views.node = {
     const to = prompt(`Rename ${open.path} to`, open.path);
     if (!to || to === open.path) return;
     const result = await attempt(() => api.post('/node/rename', { from: open.path, to }));
-    if (result) {
-      open.path = result.path;
-      open.url = open.url.replace(/:\/page\/.*$/, ':/page/' + result.path);
-      this.renderEditor();
-    }
+    if (result) this.moved('pages', open.path, result.path);
   },
 
   async remove() {
@@ -5456,6 +5719,7 @@ app.views.node = {
       this.open = null;
       this.renderEditor();
       this.renderPreview();
+      this.update();
     }
   },
 };

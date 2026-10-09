@@ -22,6 +22,8 @@ pub enum Action {
     Comment,
     Link,
     Image,
+    /// Add a picture or a file to the node, and show it or link to it.
+    Upload,
     Field,
     Checkbox,
     Radio,
@@ -34,7 +36,7 @@ pub const RIBBON: [&[Action]; 6] = [
     &[Action::Left, Action::Center, Action::Right],
     &[Action::Heading(1), Action::Heading(2), Action::Heading(3)],
     &[Action::Divider, Action::Literal, Action::Comment],
-    &[Action::Link, Action::Image, Action::Field, Action::Checkbox, Action::Radio],
+    &[Action::Link, Action::Image, Action::Upload, Action::Field, Action::Checkbox, Action::Radio],
 ];
 
 impl Action {
@@ -56,6 +58,7 @@ impl Action {
             Action::Comment => 'o',
             Action::Link => 'k',
             Action::Image => 'm',
+            Action::Upload => 'p',
             Action::Field => 'd',
             Action::Checkbox => 'h',
             Action::Radio => 'a',
@@ -86,6 +89,7 @@ impl Action {
             Action::Comment => "Comment",
             Action::Link => "Link",
             Action::Image => "Image",
+            Action::Upload => "Upload",
             Action::Field => "Field",
             Action::Checkbox => "Check",
             Action::Radio => "Radio",
@@ -106,6 +110,7 @@ impl Action {
             Action::Literal => "Lit",
             Action::Comment => "Com",
             Action::Image => "Img",
+            Action::Upload => "Up",
             Action::Field => "Fld",
             Action::Checkbox => "Chk",
             Action::Radio => "Rad",
@@ -120,6 +125,7 @@ impl Action {
             Action::Background => "Background colour: 3 or 6 hex digits (224, 003366)",
             Action::Link => "Link to (a page like :/page/about.mu, node:/page/…, lxmf@…, rrc://…)",
             Action::Image => "Image address (like :/media/logo.png)",
+            Action::Upload => "File to add to the node (its path): a picture is shown in the page, any other file linked to download",
             Action::Field => "Field name",
             Action::Checkbox => "Checkbox name",
             Action::Radio => "Radio group name",
@@ -159,6 +165,9 @@ pub fn apply(area: &mut TextArea, action: Action, answer: &str) -> Result<(), St
             let alt = single_line(&area.selected_text()).unwrap_or_else(|| "image".into());
             area.replace_selection(&format!("`({}`{answer})", clean(&alt)));
         }
+        // The app adds the file to the node, then puts in its markup (see
+        // `added`).
+        Action::Upload => return Err("A file is added by the editor".into()),
         Action::Field | Action::Checkbox | Action::Radio => {
             let name = field_name(answer)?;
             let chosen = single_line(&area.selected_text()).map(|s| clean(&s));
@@ -174,6 +183,17 @@ pub fn apply(area: &mut TextArea, action: Action, answer: &str) -> Result<(), St
         }
     }
     Ok(())
+}
+
+/// Markup for a file just added to the node, around the selection (its
+/// text) or at the cursor: a picture shown (`address` like
+/// `:/media/images/logo.jpg`), or a link to download a file (like
+/// `:/file/guide.pdf`). Without a selection, the file's name.
+pub fn added(area: &mut TextArea, address: &str, image: bool) {
+    let name = address.rsplit('/').next().unwrap_or(address);
+    let named = if image { name.rsplit_once('.').map_or(name, |(stem, _)| stem) } else { name };
+    let label = clean(&single_line(&area.selected_text()).unwrap_or_else(|| named.to_string()));
+    area.replace_selection(&if image { format!("`({label}`{address})") } else { format!("`[{label}`{address}]") });
 }
 
 /// The selection when it is on one line and not empty.

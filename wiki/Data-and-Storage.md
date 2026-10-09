@@ -72,7 +72,7 @@ rettui keeps its data in `~/.local/share/rettui/`:
   found, and when
 - `map-tiles/`: pictures for the web UI's [map](Messaging#locations-and-the-map),
   kept a month (200 MB at most); deleting it is harmless
-- `node/`: your node's `pages/` and `files/`
+- `node/`: your node's `pages/` (with pictures added in the editor in `pages/images/`) and `files/`
 - `propagation/`: messages your [propagation node](Hosting-a-Node#propagation-node)
   keeps for others, one file each, encrypted for their recipients
 - `web_token`: the web UI's login secret (delete it to log every browser out)
