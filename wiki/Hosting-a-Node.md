@@ -122,8 +122,12 @@ and the other RRC clients can join it as they join rrcd.
   topic by operators, `+n` members only, `+p` private, `+k key`; `-` takes
   one off), or to register it (`r`). `n` makes a registered room, which
   stays, with its topic and modes, while nobody is in it. In Bans, `x` lifts
-  the ban picked. The web UI's Hub section has the same, from a menu on each
-  row.
+  the ban picked. In the web UI's Hub section, a room opens a page of its
+  settings: its topic, a switch for each mode, its key, who's in it (with
+  operator and voice to turn on or off, kick and ban), who's invited and
+  who's banned. A person opens theirs: the rooms they're in, with the same
+  for each, and disconnecting or banning them from the hub. Bans each have
+  a *Lift* button.
 - **Hub commands:** `:` in the Hub tab (or the web UI's console) runs a
   command as typed in a room, as the hub itself: `/stats`, `/kline list`,
   `/who lobby`, `/reload`... The hub's answers are listed beside it. The

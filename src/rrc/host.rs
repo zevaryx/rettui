@@ -220,6 +220,10 @@ pub struct HubRoom {
     pub operators: Vec<String>,
     pub voiced: Vec<String>,
     pub banned: Vec<String>,
+    /// Its key (`+k`), for those who may join with it.
+    pub key: Option<String>,
+    /// Invited (hex), whose invites haven't run out.
+    pub invited: Vec<String>,
 }
 
 /// Something to do, from the Hub panel.
@@ -844,6 +848,7 @@ impl Core {
             let name = |p: &HubPerson| p.nick.clone().unwrap_or_else(|| p.identity.clone()).to_lowercase();
             name(a).cmp(&name(b)).then_with(|| a.identity.cmp(&b.identity))
         });
+        let now = unix_now();
         let mut rooms: Vec<HubRoom> = state
             .rooms
             .iter()
@@ -866,6 +871,8 @@ impl Core {
                     operators: hexes(room.operators.iter().filter(|id| **id != self.identity)),
                     voiced: hexes(room.voiced.iter()),
                     banned: hexes(room.banned.iter()),
+                    key: room.key.clone(),
+                    invited: hexes(room.invited.iter().filter(|(_, until)| **until > now).map(|(id, _)| id)),
                 }
             })
             .collect();

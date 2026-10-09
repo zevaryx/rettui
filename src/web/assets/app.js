@@ -5748,10 +5748,24 @@ app.views.status = {
 // rsRRCD's hub, run by rettui (Host an RRC hub, in the settings): who's on
 // it, its rooms and bans, and a console for hub commands, as typed in a room
 // (/stats, /kline list...). What the hub says to them comes back as replies.
+// A room or a person opens a page of settings for them, which run the same
+// commands (a topic, modes, operators, kicks, bans, invites).
+
+// Room modes rsRRCD has, as a room's page shows them (the key apart).
+const ROOM_MODES = [
+  ['m', 'Moderated', 'Only operators and people given a voice speak'],
+  ['i', 'Invite only', 'Only people invited (below) join'],
+  ['t', 'Topic by operators', 'Only operators set the topic'],
+  ['n', 'Members only', 'No messages from outside the room'],
+  ['p', 'Private', 'Not in the hub\'s list of rooms, and who\'s in it isn\'t said to others'],
+];
 
 app.views.hub = {
   panes: true,
-  list: 'people',
+  // The list shown: people, rooms or bans.
+  showing: 'people',
+  // A page open from it: { room } or { person } (an identity).
+  open: null,
   // Replies already seen (new ones are said).
   replied: null,
 
@@ -5767,7 +5781,11 @@ app.views.hub = {
       },
     });
     this.tabs = el('div', { class: 'subtabs' });
-    this.list = el('div', { class: 'scroll' });
+    this.body = el('div', { class: 'scroll hub-body' });
+    // Typing in a page isn't undone by an update; it's drawn once done.
+    this.body.addEventListener('focusout', () => setTimeout(() => {
+      if (this.stale && !this.typing()) this.renderBody();
+    }, 300));
     root.append(
       el('div', { class: 'column side' },
         el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Hosting' })), this.card,
@@ -5778,8 +5796,8 @@ app.views.hub = {
           el('div', { class: 'row hub-command' }, this.command, el('button', { text: 'Run', onclick: () => this.run() })))),
       el('section', { class: 'panel grow pane-main' },
         el('header', {}, this.tabs, el('span', { class: 'grow' }),
-          el('button', { text: '+ Room', title: 'A registered room: it stays, with its topic and modes, while nobody is in it', onclick: () => this.newRoom() })),
-        this.list));
+          el('button', { text: '+ Room', title: 'A registered room: it stays, with its topic and settings, while nobody is in it', onclick: () => this.newRoom() })),
+        this.body));
   },
 
   async update() {
@@ -5821,106 +5839,250 @@ app.views.hub = {
       ? hub.replies.map((reply) => el('pre', { class: 'hub-reply' + (reply.error ? ' state-bad' : ''), text: reply.text }))
       : [el('div', { class: 'empty', text: 'What the hub says to commands from here. Type one below, as in a room: /stats, /kline list, /who lobby…' })]));
     this.command.disabled = !running;
-    this.renderList();
+    this.renderTabs();
+    this.renderBody();
   },
 
-  renderList() {
+  renderTabs() {
     const hub = this.hub;
     const counts = { people: hub.people.length, rooms: hub.rooms.length, bans: hub.bans.length };
     this.tabs.replaceChildren(...[['people', 'People'], ['rooms', 'Rooms'], ['bans', 'Bans']].map(([id, title]) => el('button', {
-      class: id === this.list ? 'active' : '', text: `${title} ${counts[id]}`,
-      onclick: () => {
-        this.list = id;
-        this.renderList();
-      },
+      class: id === this.showing && !this.open ? 'active' : '', text: `${title} ${counts[id]}`,
+      onclick: () => this.show(id),
     })));
+  },
+
+  // A list, the page open from it closed.
+  show(list) {
+    this.showing = list;
+    this.open = null;
+    this.stale = false;
+    this.renderTabs();
+    this.renderBody();
+    this.body.scrollTop = 0;
+  },
+
+  // A room's or a person's page.
+  openPage(page) {
+    this.open = page;
+    this.stale = false;
+    this.renderTabs();
+    this.renderBody();
+    this.body.scrollTop = 0;
+  },
+
+  // Something in the page is being typed into.
+  typing() {
+    const focused = document.activeElement;
+    return this.body.contains(focused) && focused.matches('input[type=text], textarea');
+  },
+
+  renderBody() {
+    if (!this.hub) return;
+    if (this.typing()) {
+      this.stale = true;
+      return;
+    }
+    this.stale = false;
+    const rows = this.open?.room !== undefined ? this.roomPage(this.open.room)
+      : this.open?.person !== undefined ? this.personPage(this.open.person)
+        : this.listRows();
+    this.body.replaceChildren(...rows);
+  },
+
+  listRows() {
+    const hub = this.hub;
     const running = hub.status === 'running';
     const empty = (text) => [el('div', { class: 'empty', text })];
     const short = (identity) => `<${identity.slice(0, 12)}>`;
-    let rows;
-    if (this.list === 'people') {
-      rows = hub.people.length ? hub.people.map((person) => el('div', { class: 'list-item', onclick: (e) => this.personMenu(person, e.currentTarget) },
+    if (this.showing === 'people') {
+      if (!hub.people.length) {
+        return empty(running ? 'Nobody\'s connected yet. Share the hub\'s link (Copy link, or its QR code).' : 'The hub isn\'t running: Start hosting starts it.');
+      }
+      return hub.people.map((person) => el('div', { class: 'list-item', onclick: () => this.openPage({ person: person.identity }) },
         el('span', { class: 'main' },
           el('div', { class: 'name' }, person.nick || '(no nick)', person.operator ? el('span', { class: 'state-warn', text: ' ★', title: 'An operator of the hub' }) : null,
             person.identity === hub.you ? el('span', { class: 'dim', text: ' (you)' }) : null),
           el('div', { class: 'sub' }, el('span', { class: 'mono', text: short(person.identity) }),
             person.rooms.length ? ' · ' + person.rooms.map((r) => '#' + r).join(' ') : '',
             person.links > 1 ? ` · ${person.links} connections` : '')),
-        el('span', { class: 'dim', text: ago(person.since) })))
-        : empty(running ? 'Nobody\'s connected yet. Share the hub\'s link (Copy link, or its QR code).' : 'The hub isn\'t running: Start hosting starts it.');
-    } else if (this.list === 'rooms') {
-      rows = hub.rooms.length ? hub.rooms.map((room) => el('div', { class: 'list-item', onclick: (e) => this.roomMenu(room, e.currentTarget) },
+        el('span', { class: 'dim', text: ago(person.since) + ' ›' })));
+    }
+    if (this.showing === 'rooms') {
+      if (!hub.rooms.length) {
+        return empty(!running ? 'The hub isn\'t running: Start hosting starts it.'
+          : hub.open_rooms ? 'No rooms yet: + Room makes one that stays, or anyone joining a room makes it.' : 'No rooms yet: + Room makes one (only you make rooms here).');
+      }
+      return hub.rooms.map((room) => el('div', { class: 'list-item', onclick: () => this.openPage({ room: room.name }) },
         el('span', { class: 'main' },
           el('div', { class: 'name' }, '#' + room.name, room.registered ? el('span', { class: 'state-ok', text: ' registered' }) : null,
             room.modes !== '(none)' ? el('span', { class: 'dim', text: ' ' + room.modes }) : null),
           el('div', { class: 'sub', text: [room.topic, `${room.members.length} in it`,
-            room.operators.length ? 'operators: ' + room.operators.map((id) => this.nameOf(id)).join(', ') : null].filter(Boolean).join(' · ') }))))
-        : empty(!running ? 'The hub isn\'t running: Start hosting starts it.'
-          : hub.open_rooms ? 'No rooms yet: + Room makes one that stays, or anyone joining a room makes it.' : 'No rooms yet: + Room makes one (only you make rooms here).');
-    } else {
-      rows = hub.bans.length ? hub.bans.map((ban) => el('div', { class: 'list-item', onclick: (e) => openSheet(`${ban.name}, banned from ${ban.room ? '#' + ban.room : 'the whole hub'}`, [
-        { text: 'Lift the ban', action: () => this.act('ban', { room: ban.room, identity: ban.identity, on: false }) },
-        { text: 'Copy identity', action: () => copy(ban.identity, 'their identity') },
-      ], e.currentTarget) },
-      el('span', { class: 'main' },
-        el('div', { class: 'name' }, ban.name, el('span', { class: 'dim mono', text: ' ' + short(ban.identity) })),
-        el('div', { class: 'sub' + (ban.room ? '' : ' state-bad'), text: ban.room ? '#' + ban.room : 'the whole hub' }))))
-        : empty('Nobody\'s banned. In People, a person\'s menu bans them from a room, or from the whole hub.');
+            room.operators.length ? 'operators: ' + room.operators.map((id) => this.nameOf(id)).join(', ') : null].filter(Boolean).join(' · ') })),
+        el('span', { class: 'dim', text: '›' })));
     }
-    this.list.replaceChildren(...rows);
+    if (!hub.bans.length) return empty('Nobody\'s banned. A person\'s page bans them from a room or from the whole hub, as does a room\'s.');
+    return hub.bans.map((ban) => el('div', { class: 'list-item' },
+      el('span', { class: 'main' },
+        el('div', { class: 'name' }, ...this.named(ban.identity)),
+        el('div', { class: 'sub' + (ban.room ? '' : ' state-bad'), text: ban.room ? 'from #' + ban.room : 'from the whole hub' })),
+      el('button', { text: 'Lift', title: 'Lift the ban', onclick: () => this.act('ban', { room: ban.room, identity: ban.identity, on: false }) })));
+  },
+
+  // A page's top: back to its list, its title and buttons.
+  pageHead(back, title, ...buttons) {
+    return el('div', { class: 'hub-page-head' },
+      el('button', { text: '← ' + back, onclick: () => this.show(this.showing) }),
+      el('span', { class: 'title grow', text: title }), ...buttons);
+  },
+
+  // A setting: its name, what changes it, and what it does.
+  setting(label, control, help) {
+    return el('div', { class: 'setting' }, el('span', { class: 'label', text: label }),
+      el('div', {}, control, help ? el('div', { class: 'help', text: help }) : null));
+  },
+
+  // A text box and its button (Enter presses it).
+  entry({ value = '', placeholder = '', button, run, mono = false }) {
+    const input = el('input', { type: 'text', value, placeholder, class: mono ? 'mono' : '', spellcheck: false });
+    const press = () => run(input.value.trim(), input);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') press();
+    });
+    return el('div', { class: 'hub-entry' }, input, el('button', { text: button, onclick: press }));
+  },
+
+  // A check box that runs `change` with its new state.
+  check(checked, change, { disabled = false, title = '' } = {}) {
+    return el('input', { type: 'checkbox', checked, disabled, title, onchange: (e) => change(e.target.checked) });
+  },
+
+  roomPage(name) {
+    const hub = this.hub;
+    const room = hub.rooms.find((r) => r.name === name);
+    if (!room) {
+      return [this.pageHead('Rooms', '#' + name),
+        el('div', { class: 'empty', text: hub.status === 'running' ? 'This room isn\'t there (any more): rooms nobody\'s in go, unless they\'re registered.' : 'The hub isn\'t running.' })];
+    }
+    const act = (action, body) => this.act(action, { room: name, ...body });
+    const on = (flag) => room.modes.startsWith('+') && room.modes.includes(flag);
+    const link = hub.link ? `${hub.link}/${name}` : null;
+    const settings = el('div', { class: 'settings' },
+      this.setting('Topic', this.entry({
+        value: room.topic || '', placeholder: 'What the room is for', button: 'Set',
+        run: (text) => text ? act('topic', { text }) : toast('A topic, please (rsRRCD can\'t clear one)', true),
+      })),
+      this.setting('Registered', this.check(room.registered, (checked) => act('register', { on: checked })),
+        'It stays, with its topic and settings, while nobody\'s in it'),
+      ...ROOM_MODES.map(([flag, label, help]) => this.setting(label,
+        this.check(on(flag), (checked) => act('modes', { text: (checked ? '+' : '-') + flag })), `${help} (+${flag})`)),
+      this.setting('Key', el('div', {},
+        this.entry({ value: room.key || '', placeholder: 'No key', button: 'Set', run: (key) => key ? act('key', { text: key, on: true }) : toast('A key, please (or Remove)', true) }),
+        room.key ? el('button', { class: 'hub-remove', text: 'Remove the key', onclick: () => act('key', { on: false }) }) : null),
+      'Only people who give the key (or are invited) join (+k)'));
+    // Who's in it, the founder and operators first.
+    const rank = (id) => (room.founder === id ? 0 : room.operators.includes(id) ? 1 : room.voiced.includes(id) ? 2 : 3);
+    const members = [...room.members].sort((a, b) => rank(a) - rank(b) || this.nameOf(a).localeCompare(this.nameOf(b)));
+    const memberRows = members.length ? members.map((id) => this.memberRow(room, id, { showRoom: false }))
+      : [el('div', { class: 'empty', text: 'Nobody\'s in it now.' })];
+    const invited = room.invited.map((id) => el('div', { class: 'hub-member' },
+      el('span', { class: 'hub-who' }, ...this.named(id)),
+      el('button', { text: 'Remove', onclick: () => act('invite', { identity: id, on: false }) })));
+    const banned = room.banned.map((id) => el('div', { class: 'hub-member' },
+      el('span', { class: 'hub-who' }, ...this.named(id)),
+      el('button', { text: 'Lift', onclick: () => act('ban', { identity: id, on: false }) })));
+    return [
+      this.pageHead('Rooms', '#' + name, link ? el('button', { text: 'Copy link', onclick: () => copy(link, 'the room\'s link') }) : null),
+      settings,
+      el('div', { class: 'hub-heading', text: `In it · ${room.members.length}` }), ...memberRows,
+      el('div', { class: 'hub-heading', text: `Invited · ${room.invited.length}` }), ...invited,
+      this.entry({ placeholder: 'Nick or identity', button: 'Invite', mono: true, run: (who, input) => {
+        if (!who) return toast('Who? A nick or an identity', true);
+        act('invite', { identity: who, on: true });
+        input.value = '';
+      } }),
+      el('div', { class: 'hub-note dim', text: room.key || on('i') ? 'An invite lets them in once, for a while.' : 'Invites matter in invite only or keyed rooms; elsewhere they\'re just told.' }),
+      el('div', { class: 'hub-heading', text: `Banned · ${room.banned.length}` }), ...banned,
+      this.entry({ placeholder: 'Identity (or the nick of someone in it)', button: 'Ban', mono: true, run: (who, input) => {
+        if (!who) return toast('Who? An identity, or the nick of someone in the room', true);
+        act('ban', { identity: who, on: true });
+        input.value = '';
+      } }),
+    ];
+  },
+
+  // Someone in a room: operator and voice to turn on or off, kick and ban.
+  memberRow(room, id, { showRoom }) {
+    const act = (action, body) => this.act(action, { room: room.name, identity: id, ...body });
+    const founder = room.founder === id;
+    const op = founder || room.operators.includes(id);
+    const who = showRoom
+      ? el('span', { class: 'hub-who' }, el('a', { href: '#', text: '#' + room.name, onclick: (e) => {
+        e.preventDefault();
+        this.showing = 'rooms';
+        this.openPage({ room: room.name });
+      } }), founder ? el('span', { class: 'role', text: 'founder' }) : null)
+      : el('span', { class: 'hub-who' }, this.nameOf(id), id === this.hub.you ? el('span', { class: 'dim', text: ' (you)' }) : null,
+        founder ? el('span', { class: 'role', text: 'founder' }) : null);
+    const toggle = (label, checked, change, options) => el('label', { class: 'toggle' }, this.check(checked, change, options), label);
+    return el('div', { class: 'hub-member' }, who,
+      toggle('Operator', op, (checked) => act('op', { on: checked }), founder ? { disabled: true, title: 'A room\'s founder is always one' } : {}),
+      toggle('Voice', room.voiced.includes(id), (checked) => act('voice', { on: checked })),
+      el('button', { text: 'Kick', onclick: () => act('kick') }),
+      el('button', { class: 'danger', text: 'Ban', onclick: () => {
+        if (confirm(`Ban ${this.nameOf(id)} from #${room.name}? They're taken out of it, and can't come back until the ban is lifted.`)) act('ban', { on: true });
+      } }));
+  },
+
+  personPage(identity) {
+    const hub = this.hub;
+    const person = hub.people.find((p) => p.identity === identity);
+    const name = person?.nick || identity.slice(0, 12);
+    if (!person) {
+      return [this.pageHead('People', name), el('div', { class: 'empty', text: 'They aren\'t connected (any more).' })];
+    }
+    const rooms = hub.rooms.filter((r) => r.members.includes(identity));
+    return [
+      this.pageHead('People', name),
+      el('div', { class: 'settings' },
+        this.setting('Identity', el('div', { class: 'row' }, el('span', { class: 'mono', text: identity }),
+          el('button', { text: 'Copy', onclick: () => copy(identity, 'their identity') }))),
+        this.setting('Connected', el('span', { text: `${ago(person.since)} ago${person.links > 1 ? `, ${person.links} times at once` : ''}` })),
+        this.setting('Hub operator', el('span', { text: person.operator ? 'yes (in trusted_identities)' : 'no' }))),
+      el('div', { class: 'hub-heading', text: `Rooms · ${rooms.length}` }),
+      ...(rooms.length ? rooms.map((room) => this.memberRow(room, identity, { showRoom: true }))
+        : [el('div', { class: 'empty', text: 'Not in any room.' })]),
+      el('div', { class: 'hub-heading', text: 'The whole hub' }),
+      el('div', { class: 'hub-member' },
+        el('button', { text: 'Disconnect', title: 'Close their connection (they can come back)', onclick: () => this.act('disconnect', { identity }) }),
+        identity === hub.you ? null : el('button', { class: 'danger', text: 'Ban from the hub', onclick: () => {
+          if (confirm(`Ban ${name} from the whole hub? They're disconnected now, and every time they come back.`)) this.act('ban', { identity, on: true });
+        } })),
+    ];
+  },
+
+  // Someone as shown in a row: their name and the start of their
+  // identity, or just that when no name is known.
+  named(identity) {
+    const name = this.nameOf(identity);
+    const start = identity.slice(0, 12);
+    return name === start ? [el('span', { class: 'mono', text: start })] : [name, el('span', { class: 'dim mono', text: ` <${start}>` })];
   },
 
   nameOf(identity) {
-    return this.hub.people.find((p) => p.identity === identity)?.nick || identity.slice(0, 12);
-  },
-
-  personMenu(person, anchor) {
-    const name = person.nick || person.identity.slice(0, 12);
-    const identity = person.identity;
-    const inRoom = (room, list) => this.hub.rooms.some((r) => r.name === room && r[list].includes(identity));
-    openSheet(name, [
-      { text: 'Kick from a room…', action: () => this.askRoom(person, 'Kick', (room) => this.act('kick', { room, identity })) },
-      { text: 'Ban from a room…', action: () => this.askRoom(person, 'Ban', (room) => this.act('ban', { room, identity, on: true })) },
-      { text: 'Operator of a room (or not)…', action: () => this.askRoom(person, 'Make operator (or not)',
-        (room) => this.act('op', { room, identity, on: !inRoom(room, 'operators') })) },
-      { text: 'Voice in a room (or not)…', action: () => this.askRoom(person, 'Voice (or not)',
-        (room) => this.act('voice', { room, identity, on: !inRoom(room, 'voiced') })) },
-      { text: 'Disconnect', action: () => this.act('disconnect', { identity }) },
-      { text: 'Ban from the whole hub', danger: true, action: () => {
-        if (confirm(`Ban ${name} from the whole hub? They're disconnected now, and every time they come back.`)) this.act('ban', { identity, on: true });
-      } },
-      { text: 'Copy identity', action: () => copy(identity, 'their identity') },
-    ], anchor);
-  },
-
-  roomMenu(room, anchor) {
-    const link = this.hub.link ? `${this.hub.link}/${room.name}` : null;
-    openSheet('#' + room.name, [
-      { text: 'Topic…', action: () => {
-        const topic = prompt(`Topic of #${room.name}`, room.topic || '');
-        if (topic !== null && topic.trim()) this.act('topic', { room: room.name, text: topic });
-      } },
-      { text: 'Modes…', action: () => {
-        const modes = prompt(`Modes for #${room.name} (now ${room.modes}): +m moderated, +i invite only, +t topic by operators, +n members only, +p private, +k key; - takes one off`, '');
-        if (modes !== null && modes.trim()) this.act('modes', { room: room.name, text: modes });
-      } },
-      { text: room.registered ? 'Unregister' : 'Register (it stays while empty)', action: () => this.act('register', { room: room.name, on: !room.registered }) },
-      link ? { text: 'Copy link', action: () => copy(link, 'the room\'s link') } : null,
-    ].filter(Boolean), anchor);
-  },
-
-  // A room for an action on someone: the one they're in, if just one,
-  // filled in.
-  askRoom(person, verb, then) {
-    const name = person.nick || person.identity.slice(0, 12);
-    const rooms = person.rooms.length ? ` (${person.rooms.join(', ')})` : '';
-    const room = prompt(`${verb} ${name} in which room?${rooms}`, person.rooms.length === 1 ? person.rooms[0] : '');
-    if (room !== null && room.trim()) then(room.trim().replace(/^#/, '').toLowerCase());
+    return this.hub.people.find((p) => p.identity === identity)?.nick
+      || this.hub.bans.find((b) => b.identity === identity)?.name
+      || identity.slice(0, 12);
   },
 
   newRoom() {
-    const room = prompt('New registered room (it stays, with its topic and modes, while nobody is in it)');
-    if (room !== null && room.trim()) this.act('register', { room: room.trim(), on: true });
+    const room = prompt('New registered room (it stays, with its topic and settings, while nobody is in it)');
+    const name = room?.trim().replace(/^#/, '').toLowerCase();
+    if (!name) return;
+    this.act('register', { room: name, on: true });
+    this.showing = 'rooms';
+    this.openPage({ room: name });
+    setPane(this, 'detail');
   },
 
   run() {

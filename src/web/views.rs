@@ -922,6 +922,8 @@ mod tests {
             operators: Vec::new(),
             voiced: Vec::new(),
             banned: vec!["c".repeat(32)],
+            key: None,
+            invited: Vec::new(),
         };
         app.on_net(NetEvent::Hub(HubEvent::State(HubSnapshot { rooms: vec![room], ..HubSnapshot::default() })));
         app.on_net(NetEvent::Hub(HubEvent::Reply { text: "no such room".into(), error: true }));
