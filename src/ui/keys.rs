@@ -9,6 +9,7 @@ use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim};
+use crate::app::hub::HubPane;
 use crate::app::node::PageView;
 use crate::app::{App, BrowserFocus, BrowserPane, Tab};
 
@@ -24,7 +25,7 @@ pub struct Keys {
 }
 
 /// Keys that work in every tab, unless typing.
-const EVERYWHERE: KeyList = &[("1–7", "tabs"), ("A", "announce"), ("S", "sync"), ("^L", "redraw"), ("q", "quit"), ("?", "keys")];
+const EVERYWHERE: KeyList = &[("1–8", "tabs"), ("A", "announce"), ("S", "sync"), ("^L", "redraw"), ("q", "quit"), ("?", "keys")];
 /// Keys that work while typing, too.
 const ALWAYS: KeyList = &[("F1", "keys"), ("^L", "redraw"), ("^C", "quit")];
 
@@ -415,6 +416,53 @@ pub fn keys(app: &App) -> Keys {
                 ("↑↓", "select"),
             ],
         ),
+        Tab::Hub if !app.hub.running() => mode("Hub", &[("e", "start"), ("y", "copy link"), ("Tab", "pane"), ("↑↓", "select")]),
+        Tab::Hub if app.hub.pane == HubPane::People => mode(
+            "Hub: people",
+            &[
+                ("K", "kick"),
+                ("b", "ban from room"),
+                ("o", "operator"),
+                ("v", "voice"),
+                ("B", "ban from hub"),
+                ("d", "disconnect"),
+                (":", "command"),
+                ("n", "new room"),
+                ("a", "announce"),
+                ("y", "copy link"),
+                ("e", "stop"),
+                ("Tab", "pane"),
+                ("↑↓", "select"),
+            ],
+        ),
+        Tab::Hub if app.hub.pane == HubPane::Rooms => mode(
+            "Hub: rooms",
+            &[
+                ("t", "topic"),
+                ("m", "modes"),
+                ("r", "register"),
+                ("n", "new room"),
+                (":", "command"),
+                ("a", "announce"),
+                ("y", "copy link"),
+                ("e", "stop"),
+                ("Tab", "pane"),
+                ("↑↓", "select"),
+            ],
+        ),
+        Tab::Hub => mode(
+            "Hub: bans",
+            &[
+                ("x", "lift ban"),
+                (":", "command"),
+                ("n", "new room"),
+                ("a", "announce"),
+                ("y", "copy link"),
+                ("e", "stop"),
+                ("Tab", "pane"),
+                ("↑↓", "select"),
+            ],
+        ),
         Tab::Status => mode(
             "Status",
             &[
@@ -569,7 +617,7 @@ mod tests {
         press(&mut app, KeyCode::Char('?'));
         let shown = screen(&mut app, 100).join("\n");
         assert!(shown.contains("Keys · Network") && shown.contains("D forget path") && shown.contains("In every tab"), "{shown}");
-        assert!(shown.contains("q quit") && shown.contains("1–7 tabs"), "{shown}");
+        assert!(shown.contains("q quit") && shown.contains("1–8 tabs"), "{shown}");
         // Any key closes it, and does nothing else.
         press(&mut app, KeyCode::Char('f'));
         assert!(!app.keys_help);

@@ -25,6 +25,7 @@ pub mod find;
 pub mod format;
 pub mod forward;
 pub mod guide;
+pub mod hub;
 pub mod identity;
 mod input;
 pub mod live;
@@ -101,10 +102,11 @@ pub enum Tab {
     Node,
     Status,
     Reticulum,
+    Hub,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 7] = [Tab::Messages, Tab::Channels, Tab::Network, Tab::Browser, Tab::Node, Tab::Status, Tab::Reticulum];
+    pub const ALL: [Tab; 8] = [Tab::Messages, Tab::Channels, Tab::Network, Tab::Browser, Tab::Node, Tab::Status, Tab::Reticulum, Tab::Hub];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -115,6 +117,7 @@ impl Tab {
             Tab::Node => "Node",
             Tab::Status => "Status",
             Tab::Reticulum => "Reticulum",
+            Tab::Hub => "Hub",
         }
     }
 }
@@ -188,6 +191,8 @@ pub enum PromptKind {
     ConfirmInstallUpdate,
     /// Stop sharing a location live with someone (by address).
     ConfirmStopLive(String),
+    /// The Hub panel's prompts.
+    Hub(hub::HubPrompt),
 }
 
 /// What a QR code over the tab shows.
@@ -306,6 +311,9 @@ pub struct Regions {
     /// The emoji picker (or the `:name` list) and what's in it.
     pub emoji_popup: Rect,
     pub emoji_hits: Vec<(Rect, emoji::EmojiHit)>,
+    /// Hub tab: its panes' tabs, and the list.
+    pub hub_panes: Vec<(Rect, hub::HubPane)>,
+    pub hub_list: Rect,
 }
 
 /// What a click on a history row does.
@@ -394,6 +402,8 @@ pub struct App {
     pub node: node::Node,
     /// The propagation node hosted here.
     pub pn: node::PnHost,
+    /// The RRC hub hosted here.
+    pub hub: hub::HubHost,
     /// The Reticulum config editor.
     pub rns: reticulum::RnsState,
     pub net_state: NetState,
@@ -558,6 +568,7 @@ impl App {
         let pn_hash =
             rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::PROPAGATION_ASPECT, Some(&identity_hash));
         let pn = node::PnHost::new(pn_hash, crate::lxmf::pn::PnConfig::from_settings(&settings, &paths));
+        let hub = hub::HubHost::new(&paths, crate::rrc::host::HubHostConfig::from_settings(&settings, &paths, identity_hash));
         let cache = Cache::new(paths.cache.clone(), std::time::Duration::from_secs(settings.cache_hours * 3600));
         let settings_file = Settings::load(&paths.settings).unwrap_or_else(|_| settings.clone());
         let (decoded_tx, decoded_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -576,6 +587,7 @@ impl App {
             channels,
             node,
             pn,
+            hub,
             rns: reticulum::RnsState::default(),
             net_state: NetState::Starting,
             lxmf_hash: None,
@@ -879,7 +891,9 @@ impl App {
                 self.start_channels();
                 // Hubs that were connected before a restart, auto or not.
                 for hash in std::mem::take(&mut self.rejoin_hubs) {
-                    if let Some(index) = self.channels.hub_index(hash) {
+                    if let Some(index) = self.channels.hub_index(hash)
+                        && !self.own_hub_waiting(hash)
+                    {
                         self.connect_hub(index);
                     }
                 }
@@ -887,6 +901,7 @@ impl App {
             NetEvent::Rrc { hub, event } => self.on_rrc(hub, event),
             NetEvent::Host(event) => self.on_host(event),
             NetEvent::Pn(event) => self.on_pn(event),
+            NetEvent::Hub(event) => self.on_hub(event),
             NetEvent::StartFailed(e) => {
                 self.log(format!("Network failed: {e}"));
                 self.net_state = NetState::Failed(e);
@@ -1106,6 +1121,7 @@ impl App {
                     }
                 }
             }
+            PromptKind::Hub(prompt) => self.hub_prompt(prompt, &text),
             PromptKind::ConfirmInstallUpdate => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
                     match self.install_update() {
@@ -1214,6 +1230,7 @@ impl App {
         // Pings waiting belong to the old stack.
         self.pings.retain(|_, ping| *ping != contacts::PingState::Waiting);
         self.pn.restarting(crate::lxmf::pn::PnConfig::from_settings(&self.settings, &self.paths));
+        self.hub.restarting(crate::rrc::host::HubHostConfig::from_settings(&self.settings, &self.paths, self.identity_hash));
         if self.browser.loading.take().is_some() {
             self.browser.error = Some("Reticulum restarted while loading; load the page again".into());
         }

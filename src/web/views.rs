@@ -42,6 +42,18 @@ pub fn state(app: &App) -> Value {
         NodeStatus::Running => json!({ "state": "running", "hash": hex::encode(app.pn.hash), "stats": app.pn.stats }),
         NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
     };
+    // The RRC hub hosted here (the Hub section has the rest).
+    let hub = match &app.hub.status {
+        NodeStatus::Off => json!({ "state": "off" }),
+        NodeStatus::Starting => json!({ "state": "starting" }),
+        NodeStatus::Running => json!({
+            "state": "running",
+            "hash": app.hub.address.map(|(hash, _)| hex::encode(hash)),
+            "people": app.hub.snapshot.people.len(),
+            "rooms": app.hub.snapshot.rooms.len(),
+        }),
+        NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
+    };
     let message_unread = app.unread_messages();
     let (channel_unread, mention) = app.channels.total_unread();
     let online = app.interfaces.iter().filter(|i| i.online).count();
@@ -95,6 +107,7 @@ pub fn state(app: &App) -> Value {
         "welcome": !app.settings.welcomed,
         // The propagation node hosted here.
         "hosting": hosting,
+        "hub": hub,
         "rns_config": app.settings.rns_config,
         "data_dir": app.paths.store.parent().map(|p| p.display().to_string()),
         "known": app.store.peers.len(),
@@ -758,6 +771,44 @@ pub fn node(app: &App) -> Value {
     })
 }
 
+/// The RRC hub hosted here, for the Hub section: how it's doing, who's on
+/// it, its rooms and bans, and what its commands came to.
+pub fn hub(app: &App) -> Value {
+    use crate::app::node::NodeStatus;
+    let hub = &app.hub;
+    let (status, error) = match &hub.status {
+        NodeStatus::Off => ("off", None),
+        NodeStatus::Starting => ("starting", None),
+        NodeStatus::Running => ("running", None),
+        NodeStatus::Failed(e) => ("failed", Some(e.clone())),
+    };
+    let name = hub
+        .name()
+        .map(str::to_string)
+        .unwrap_or_else(|| app.settings.hub_name.clone().unwrap_or_else(|| app.settings.display_name.clone()));
+    json!({
+        "status": status,
+        "error": error,
+        "address": hub.address.map(|(hash, _)| hex::encode(hash)),
+        "link": hub.link(),
+        "name": name,
+        "greeting": app.settings.hub_greeting,
+        "open_rooms": app.settings.hub_open_rooms,
+        "announce_mins": app.settings.hub_announce_interval_mins,
+        "dir": app.paths.rrc_hub.display().to_string(),
+        "you": hex::encode(app.identity_hash),
+        "people": hub.snapshot.people,
+        "rooms": hub.snapshot.rooms,
+        "bans": hub.bans().iter().map(|ban| json!({
+            "room": ban.room, "identity": ban.identity, "name": hub.name_of(&ban.identity),
+        })).collect::<Vec<_>>(),
+        "unidentified": hub.snapshot.unidentified,
+        "stats": hub.snapshot.stats,
+        "replies": hub.replies.iter().map(|(text, error)| json!({ "text": text, "error": error })).collect::<Vec<_>>(),
+        "replied": hub.replied,
+    })
+}
+
 /// The Reticulum config for the web editor: file state, sections, and the
 /// options of one section (the first when `section` is not found).
 pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
@@ -847,6 +898,42 @@ mod tests {
         let via = peers(&app, None, "", None, heard, Some("RNode LoRa"));
         assert_eq!((names(&via), via["peers"][0]["via"].as_str()), (vec!["Alpha person".to_string()], Some("RNode LoRa")));
         assert_eq!(via["interfaces"], json!(["RNode LoRa"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_hub_section_has_its_people_rooms_bans_and_replies() {
+        use crate::net::NetEvent;
+        use crate::rrc::host::{HubEvent, HubRoom, HubSnapshot};
+        let dir = std::env::temp_dir().join(format!("rettui-views-hub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let settings = crate::config::Settings { hub_enabled: true, ..crate::config::Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, crate::store::Store::default());
+        assert_eq!((hub(&app)["status"].as_str(), hub(&app)["link"].as_str()), (Some("starting"), None));
+        assert_eq!(state(&app)["hub"]["state"], "starting");
+        app.on_net(NetEvent::Hub(HubEvent::Started { hash: [7; 16], public_key: [1; 64] }));
+        let room = HubRoom {
+            name: "lobby".into(),
+            registered: true,
+            modes: "+nrt".into(),
+            topic: None,
+            members: Vec::new(),
+            founder: None,
+            operators: Vec::new(),
+            voiced: Vec::new(),
+            banned: vec!["c".repeat(32)],
+        };
+        app.on_net(NetEvent::Hub(HubEvent::State(HubSnapshot { rooms: vec![room], ..HubSnapshot::default() })));
+        app.on_net(NetEvent::Hub(HubEvent::Reply { text: "no such room".into(), error: true }));
+        let view = hub(&app);
+        assert_eq!(
+            (view["status"].as_str(), view["link"].as_str()),
+            (Some("running"), Some(format!("rrc://{}", hex::encode([7; 16])).as_str()))
+        );
+        assert_eq!(view["rooms"][0]["name"], "lobby");
+        assert_eq!(view["bans"][0], json!({ "room": "lobby", "identity": "c".repeat(32), "name": "cccccccccccc" }));
+        assert_eq!((view["replies"][0]["error"].as_bool(), view["replied"].as_u64()), (Some(true), Some(1)));
+        assert_eq!(state(&app)["hub"]["rooms"], 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -19,6 +19,8 @@ const HELLO_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_RESOURCE_BYTES: usize = 256 * 1024;
 /// How long a RESOURCE_ENVELOPE announcement waits for its Resource.
 const RESOURCE_EXPECTATION: Duration = Duration::from_secs(30);
+/// How long a Link to the hub hosted here may take.
+const LOCAL_LINK_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug)]
 pub enum SessionCommand {
@@ -53,6 +55,9 @@ pub struct SessionConfig {
     pub hub: Hash,
     pub aspect: String,
     pub nick: Option<String>,
+    /// The hub's public key, for the hub hosted here: it's reached at once,
+    /// with no path to find (its own announce never comes back to it).
+    pub key: Option<[u8; 64]>,
 }
 
 /// Running hub sessions, keyed by hub address (owned by the network actor),
@@ -132,28 +137,50 @@ async fn session(
     emit: &(impl Fn(RrcEvent) + Send + Sync),
 ) -> Option<String> {
     let hub = config.hub;
-    emit(RrcEvent::Status("Finding hub".into()));
     let progress = |text: String| emit(RrcEvent::Status(text));
-    if let Err(e) = crate::net::find_path(runtime, hub, &progress).await {
-        return Some(e);
-    }
-    let remote = match lookup(runtime, known, hub).await {
-        Ok(remote) => remote,
-        Err(e) => return Some(e),
+    let remote = match config.key {
+        Some(key) => match Identity::from_public_key(&key) {
+            Ok(identity) => identity,
+            Err(e) => return Some(format!("The hub's key is unusable: {e}")),
+        },
+        None => {
+            emit(RrcEvent::Status("Finding hub".into()));
+            if let Err(e) = crate::net::find_path(runtime, hub, &progress).await {
+                return Some(e);
+            }
+            match lookup(runtime, known, hub).await {
+                Ok(remote) => remote.identity,
+                Err(e) => return Some(e),
+            }
+        }
     };
     // The address must really be this aspect's destination for that identity.
-    if Destination::hash_from_name_and_identity(&config.aspect, Some(&remote.identity.hash)) != hub {
+    if Destination::hash_from_name_and_identity(&config.aspect, Some(&remote.hash)) != hub {
         return Some(format!("hub address does not match aspect {}", config.aspect));
     }
 
     emit(RrcEvent::Status("Connecting".into()));
     // The hub drops everything until the Link identifies us.
     let options = crate::net::link_options("rettui.rrc", true);
-    let LinkSession { handle, mut events, mut resource_offers } =
-        match crate::net::connect(runtime, hub, identity.clone(), options, &progress).await {
-            Ok(session) => session,
-            Err(e) => return Some(format!("Link failed: {e}")),
-        };
+    let connected = match config.key {
+        Some(key) => {
+            let session = rns_runtime::link_session::LinkSessionConfig {
+                destination_hash: hub,
+                remote_public_key: key,
+                hops: 1,
+                establishment_timeout: LOCAL_LINK_TIMEOUT,
+                client_label: options.client_label,
+                identify: true,
+                track_phy_stats: false,
+            };
+            LinkSession::connect(runtime.transport_tx.clone(), identity.clone(), session).await.map_err(|e| e.to_string())
+        }
+        None => crate::net::connect(runtime, hub, identity.clone(), options, &progress).await,
+    };
+    let LinkSession { handle, mut events, mut resource_offers } = match connected {
+        Ok(session) => session,
+        Err(e) => return Some(format!("Link failed: {e}")),
+    };
 
     let own = identity.hash;
     // A nick change isn't a new HELLO: rrcd and the Go hub take that as a

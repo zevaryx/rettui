@@ -511,6 +511,7 @@ const TABS = [
   { id: 'node', icon: '⌂', title: 'Node' },
   { id: 'status', icon: 'ⓘ', title: 'Status' },
   { id: 'reticulum', icon: '⛭', title: 'Reticulum' },
+  { id: 'hub', icon: '⊛', title: 'Hub' },
 ];
 
 const app = {
@@ -1419,10 +1420,12 @@ function listen() {
   // Each change says what it touched: "all", or parts such as
   // "status,peers": the counters and the log ("status"), the hosted node's
   // counters ("node"), peers heard ("peers"), RRC ("channels": the
-  // Channels section, and unread counts in the sidebar).
+  // Channels section, and unread counts in the sidebar), the hub hosted
+  // here ("hub").
   events.onmessage = (e) => {
     const parts = new Set((e.data.split(' ')[1] || 'all').split(','));
-    if (parts.has('all') || (parts.has('node') && app.tab === 'node') || (parts.has('channels') && app.tab === 'channels')) refresh();
+    if (parts.has('all') || (parts.has('node') && app.tab === 'node') || (parts.has('channels') && app.tab === 'channels')
+      || (parts.has('hub') && app.tab === 'hub')) refresh();
     else if (parts.has('peers')) refreshPeers();
     else refreshSidebar();
   };
@@ -5684,6 +5687,10 @@ app.views.status = {
         : s.auto_propagation || 'none (pick one in the Network tab)' }),
       label('Last sync'), el('span', { text: sync }),
       label('Hosting messages'), hosting,
+      ...(s.hub.state === 'off' ? [] : [label('Hosting a hub'), s.hub.state === 'running'
+        ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.hub.hash }),
+          el('span', { class: 'dim', text: `  ${s.hub.people} ${s.hub.people === 1 ? 'person' : 'people'} · ${s.hub.rooms} room${s.hub.rooms === 1 ? '' : 's'} (Hub section)` }))
+        : el('span', { text: s.hub.state === 'starting' ? 'starting' : `failed: ${s.hub.error}` })]),
       label('RNS config'), el('span', { class: 'mono', text: s.rns_config || 'rsReticulum default' }),
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Backup'), el('div', {},
@@ -5736,6 +5743,218 @@ app.views.status = {
 // The Reticulum config file, option by option or as text. Changes are saved
 // to the file and apply when Reticulum restarts. Pipe interface commands
 // (programs Reticulum runs) can only be changed from the terminal.
+// ---- Hub: the RRC hub hosted here ------------------------------------------
+//
+// rsRRCD's hub, run by rettui (Host an RRC hub, in the settings): who's on
+// it, its rooms and bans, and a console for hub commands, as typed in a room
+// (/stats, /kline list...). What the hub says to them comes back as replies.
+
+app.views.hub = {
+  panes: true,
+  list: 'people',
+  // Replies already seen (new ones are said).
+  replied: null,
+
+  mount(root) {
+    this.card = el('div', { class: 'hub-info' });
+    this.hostButton = el('button', { onclick: () => this.toggle() });
+    this.announceButton = el('button', { text: 'Announce', title: 'Announce the hub now (it does every so often by itself)', onclick: () => this.act('announce') });
+    this.replies = el('div', { class: 'scroll hub-replies', dataset: { stick: 'bottom' } });
+    this.command = el('input', {
+      type: 'text', class: 'grow mono', placeholder: '/stats, /kline list, /who lobby…', spellcheck: false,
+      onkeydown: (e) => {
+        if (e.key === 'Enter') this.run();
+      },
+    });
+    this.tabs = el('div', { class: 'subtabs' });
+    this.list = el('div', { class: 'scroll' });
+    root.append(
+      el('div', { class: 'column side' },
+        el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Hosting' })), this.card,
+          el('div', { class: 'row card-actions' }, this.hostButton, this.announceButton,
+            el('button', { class: 'phone-only', text: 'People and rooms', onclick: () => setPane(this, 'detail') }))),
+        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Console' })),
+          this.replies,
+          el('div', { class: 'row hub-command' }, this.command, el('button', { text: 'Run', onclick: () => this.run() })))),
+      el('section', { class: 'panel grow pane-main' },
+        el('header', {}, this.tabs, el('span', { class: 'grow' }),
+          el('button', { text: '+ Room', title: 'A registered room: it stays, with its topic and modes, while nobody is in it', onclick: () => this.newRoom() })),
+        this.list));
+  },
+
+  async update() {
+    const hub = this.hub = await api.get('/hub');
+    const running = hub.status === 'running';
+    const off = hub.status === 'off' || hub.status === 'failed';
+    const state = {
+      running: el('span', { class: 'state-ok', text: '● hosting' }),
+      starting: el('span', { class: 'state-warn', text: '◌ starting' }),
+      off: el('span', { class: 'dim', text: '○ off' }),
+      failed: el('span', { class: 'state-bad', text: `✗ ${hub.error}` }),
+    }[hub.status];
+    this.hostButton.textContent = off ? 'Start hosting' : 'Stop hosting';
+    this.hostButton.className = off ? 'primary' : '';
+    this.announceButton.disabled = !running;
+    const label = (text) => el('span', { class: 'label', text });
+    const people = hub.unidentified ? `${hub.people.length} (and ${hub.unidentified} saying who they are)` : String(hub.people.length);
+    this.card.replaceChildren(
+      label('Hub'), state,
+      label('Address'), hub.address
+        ? el('span', { class: 'row' }, el('span', { class: 'mono', text: hub.address }),
+          el('button', { text: 'Copy link', onclick: () => copy(hub.link, 'the hub\'s link') }),
+          el('button', { text: 'QR code', onclick: () => this.showLink() }))
+        : el('span', { class: 'dim', text: 'made when it first starts' }),
+      label('Name'), el('span', { text: hub.name }),
+      label('People'), el('span', { text: people }),
+      label('Rooms'), el('span', { text: `${hub.rooms.length} (${hub.rooms.filter((r) => r.registered).length} registered)` }),
+      label('Messages'), el('span', { text: `${hub.stats.messages} · ${hub.stats.joins} joins` }),
+      label('Traffic'), el('span', { text: `↓ ${humanBytes(hub.stats.bytes_in)} · ↑ ${humanBytes(hub.stats.bytes_out)}` }),
+      label('Rooms by'), el('span', { text: hub.open_rooms ? 'anyone (joining one makes it)' : 'you only' }),
+      label('Folder'), el('span', { class: 'mono dim', text: hub.dir }));
+    // What the hub said: new replies are said too.
+    if (this.replied !== null && hub.replied > this.replied && hub.replies.length) {
+      const newest = hub.replies[hub.replies.length - 1];
+      toast(newest.text.split('\n')[0], newest.error);
+    }
+    this.replied = hub.replied;
+    this.replies.replaceChildren(...(hub.replies.length
+      ? hub.replies.map((reply) => el('pre', { class: 'hub-reply' + (reply.error ? ' state-bad' : ''), text: reply.text }))
+      : [el('div', { class: 'empty', text: 'What the hub says to commands from here. Type one below, as in a room: /stats, /kline list, /who lobby…' })]));
+    this.command.disabled = !running;
+    this.renderList();
+  },
+
+  renderList() {
+    const hub = this.hub;
+    const counts = { people: hub.people.length, rooms: hub.rooms.length, bans: hub.bans.length };
+    this.tabs.replaceChildren(...[['people', 'People'], ['rooms', 'Rooms'], ['bans', 'Bans']].map(([id, title]) => el('button', {
+      class: id === this.list ? 'active' : '', text: `${title} ${counts[id]}`,
+      onclick: () => {
+        this.list = id;
+        this.renderList();
+      },
+    })));
+    const running = hub.status === 'running';
+    const empty = (text) => [el('div', { class: 'empty', text })];
+    const short = (identity) => `<${identity.slice(0, 12)}>`;
+    let rows;
+    if (this.list === 'people') {
+      rows = hub.people.length ? hub.people.map((person) => el('div', { class: 'list-item', onclick: (e) => this.personMenu(person, e.currentTarget) },
+        el('span', { class: 'main' },
+          el('div', { class: 'name' }, person.nick || '(no nick)', person.operator ? el('span', { class: 'state-warn', text: ' ★', title: 'An operator of the hub' }) : null,
+            person.identity === hub.you ? el('span', { class: 'dim', text: ' (you)' }) : null),
+          el('div', { class: 'sub' }, el('span', { class: 'mono', text: short(person.identity) }),
+            person.rooms.length ? ' · ' + person.rooms.map((r) => '#' + r).join(' ') : '',
+            person.links > 1 ? ` · ${person.links} connections` : '')),
+        el('span', { class: 'dim', text: ago(person.since) })))
+        : empty(running ? 'Nobody\'s connected yet. Share the hub\'s link (Copy link, or its QR code).' : 'The hub isn\'t running: Start hosting starts it.');
+    } else if (this.list === 'rooms') {
+      rows = hub.rooms.length ? hub.rooms.map((room) => el('div', { class: 'list-item', onclick: (e) => this.roomMenu(room, e.currentTarget) },
+        el('span', { class: 'main' },
+          el('div', { class: 'name' }, '#' + room.name, room.registered ? el('span', { class: 'state-ok', text: ' registered' }) : null,
+            room.modes !== '(none)' ? el('span', { class: 'dim', text: ' ' + room.modes }) : null),
+          el('div', { class: 'sub', text: [room.topic, `${room.members.length} in it`,
+            room.operators.length ? 'operators: ' + room.operators.map((id) => this.nameOf(id)).join(', ') : null].filter(Boolean).join(' · ') }))))
+        : empty(!running ? 'The hub isn\'t running: Start hosting starts it.'
+          : hub.open_rooms ? 'No rooms yet: + Room makes one that stays, or anyone joining a room makes it.' : 'No rooms yet: + Room makes one (only you make rooms here).');
+    } else {
+      rows = hub.bans.length ? hub.bans.map((ban) => el('div', { class: 'list-item', onclick: (e) => openSheet(`${ban.name}, banned from ${ban.room ? '#' + ban.room : 'the whole hub'}`, [
+        { text: 'Lift the ban', action: () => this.act('ban', { room: ban.room, identity: ban.identity, on: false }) },
+        { text: 'Copy identity', action: () => copy(ban.identity, 'their identity') },
+      ], e.currentTarget) },
+      el('span', { class: 'main' },
+        el('div', { class: 'name' }, ban.name, el('span', { class: 'dim mono', text: ' ' + short(ban.identity) })),
+        el('div', { class: 'sub' + (ban.room ? '' : ' state-bad'), text: ban.room ? '#' + ban.room : 'the whole hub' }))))
+        : empty('Nobody\'s banned. In People, a person\'s menu bans them from a room, or from the whole hub.');
+    }
+    this.list.replaceChildren(...rows);
+  },
+
+  nameOf(identity) {
+    return this.hub.people.find((p) => p.identity === identity)?.nick || identity.slice(0, 12);
+  },
+
+  personMenu(person, anchor) {
+    const name = person.nick || person.identity.slice(0, 12);
+    const identity = person.identity;
+    const inRoom = (room, list) => this.hub.rooms.some((r) => r.name === room && r[list].includes(identity));
+    openSheet(name, [
+      { text: 'Kick from a room…', action: () => this.askRoom(person, 'Kick', (room) => this.act('kick', { room, identity })) },
+      { text: 'Ban from a room…', action: () => this.askRoom(person, 'Ban', (room) => this.act('ban', { room, identity, on: true })) },
+      { text: 'Operator of a room (or not)…', action: () => this.askRoom(person, 'Make operator (or not)',
+        (room) => this.act('op', { room, identity, on: !inRoom(room, 'operators') })) },
+      { text: 'Voice in a room (or not)…', action: () => this.askRoom(person, 'Voice (or not)',
+        (room) => this.act('voice', { room, identity, on: !inRoom(room, 'voiced') })) },
+      { text: 'Disconnect', action: () => this.act('disconnect', { identity }) },
+      { text: 'Ban from the whole hub', danger: true, action: () => {
+        if (confirm(`Ban ${name} from the whole hub? They're disconnected now, and every time they come back.`)) this.act('ban', { identity, on: true });
+      } },
+      { text: 'Copy identity', action: () => copy(identity, 'their identity') },
+    ], anchor);
+  },
+
+  roomMenu(room, anchor) {
+    const link = this.hub.link ? `${this.hub.link}/${room.name}` : null;
+    openSheet('#' + room.name, [
+      { text: 'Topic…', action: () => {
+        const topic = prompt(`Topic of #${room.name}`, room.topic || '');
+        if (topic !== null && topic.trim()) this.act('topic', { room: room.name, text: topic });
+      } },
+      { text: 'Modes…', action: () => {
+        const modes = prompt(`Modes for #${room.name} (now ${room.modes}): +m moderated, +i invite only, +t topic by operators, +n members only, +p private, +k key; - takes one off`, '');
+        if (modes !== null && modes.trim()) this.act('modes', { room: room.name, text: modes });
+      } },
+      { text: room.registered ? 'Unregister' : 'Register (it stays while empty)', action: () => this.act('register', { room: room.name, on: !room.registered }) },
+      link ? { text: 'Copy link', action: () => copy(link, 'the room\'s link') } : null,
+    ].filter(Boolean), anchor);
+  },
+
+  // A room for an action on someone: the one they're in, if just one,
+  // filled in.
+  askRoom(person, verb, then) {
+    const name = person.nick || person.identity.slice(0, 12);
+    const rooms = person.rooms.length ? ` (${person.rooms.join(', ')})` : '';
+    const room = prompt(`${verb} ${name} in which room?${rooms}`, person.rooms.length === 1 ? person.rooms[0] : '');
+    if (room !== null && room.trim()) then(room.trim().replace(/^#/, '').toLowerCase());
+  },
+
+  newRoom() {
+    const room = prompt('New registered room (it stays, with its topic and modes, while nobody is in it)');
+    if (room !== null && room.trim()) this.act('register', { room: room.trim(), on: true });
+  },
+
+  run() {
+    const text = this.command.value.trim();
+    if (!text || text === '/') return;
+    this.command.value = '';
+    this.act('run', { text });
+  },
+
+  showLink() {
+    const link = this.hub.link;
+    dialog(this.hub.name, (close) => [
+      el('p', { class: 'dim', text: 'Scan or open it in rettui, MeshChatX or any RRC client to join the hub.' }),
+      el('img', { class: 'qr', src: 'api/qr?text=' + encodeURIComponent(link), alt: 'QR code of the hub\'s link' }),
+      el('textarea', { class: 'mono paper-link', readonly: true, rows: 2, onfocus: (e) => e.target.select() }, link),
+      el('div', { class: 'row actions' },
+        el('button', { text: 'Copy link', onclick: () => copy(link, 'the hub\'s link') }),
+        navigator.share ? el('button', { text: 'Share', onclick: () => navigator.share({ text: link }).catch(() => {}) }) : null,
+        el('span', { class: 'grow' }),
+        el('button', { class: 'primary', text: 'Done', onclick: close })),
+    ], { className: 'paper' });
+  },
+
+  toggle() {
+    const on = !this.hub || this.hub.status === 'off' || this.hub.status === 'failed';
+    attempt(() => api.post('/hub/enable', { on }), on ? 'Starting the hub' : 'Stopping the hub').then(() => loadNow());
+  },
+
+  // What the hub says comes back as a reply.
+  act(action, body = {}) {
+    attempt(() => api.post('/hub/' + action, body)).then(() => loadNow());
+  },
+};
+
 app.views.reticulum = {
   panes: true,
   section: 'reticulum',
@@ -6068,7 +6287,7 @@ async function restartReticulum() {
 
 // The keys there are (the ? key shows them), as the terminal UI's popup.
 const KEYS = [
-  ['Anywhere', [['1–7', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
+  ['Anywhere', [['1–8', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
   ['Messages', [['j / k', 'next or previous conversation'], ['i', 'write (the message box)'], ['r', 'reply to their newest message'],
     ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
     ['Ctrl+E', 'emoji, in the message box'],

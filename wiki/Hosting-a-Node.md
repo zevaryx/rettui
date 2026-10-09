@@ -1,6 +1,6 @@
-rettui can host two kinds of node with your identity: a NomadNet node
-(pages and files), and an LXMF propagation node (messages kept for people
-who are offline).
+rettui can host three kinds of node: a NomadNet node (pages and files) and
+an LXMF propagation node (messages kept for people who are offline), with
+your identity, and an RRC hub (chat rooms), with one of its own.
 
 ## NomadNet node
 
@@ -85,3 +85,55 @@ peer protocol).
   their recipients collect them, and other nodes only get them by peering
   with it. Tested against Python LXMF 1.2: its clients send through and
   collect from rettui's node, and its propagation nodes peer with it.
+
+## RRC hub
+
+An RRC hub is what people chat on in [RRC](RRC-Chat): rooms, their topics
+and modes, operators, bans. rettui runs [rsRRCD](https://github.com/reticulum-spb/rsRRCD)'s
+hub on its own Reticulum instance, so NomadNet, MeshChatX, Ratspeak, rettui
+and the other RRC clients can join it as they join rrcd.
+
+- **Switching it on:** press `e` in the Hub tab, use **Start hosting** in the
+  web UI's Hub section, or set "Host an RRC hub" in the settings. It
+  announces itself (`rrc.hub`) a few seconds after it starts, with its name,
+  then every `hub_announce_interval_mins` (360 by default; 0 announces only
+  when it starts), or when you press `a`. Its name is `hub_name`, or your
+  display name; `hub_greeting` is sent to everyone who connects (`\n`
+  starts a new line). Changing these applies to the hub as it runs: nobody
+  is disconnected.
+- **Its own identity:** the hub has an identity of its own, made the first
+  time it starts (`rrc-hub-identity` in the data directory), so its address
+  stays the same and people who join learn the hub's address, not your LXMF
+  one. You're an operator of it (as is the hub itself), wherever you are.
+- **You on it:** the hub is added to your hubs in Channels once it's up, and
+  rettui joins it straight away (a client can't find a path to a destination
+  it hosts, so yours connects with the hub's key). Stopping the hub leaves it.
+- **Who makes rooms:** as on most hubs, anyone may make a room by joining one
+  that isn't there, and is its founder (an operator of it). With "Anyone makes
+  rooms" off, only you can: others join the rooms there are.
+- **The Hub tab:** who's connected (their nick, identity, rooms and when they
+  came), the rooms (registered or not, modes, topic, who's in them, their
+  operators) and the bans, of the whole hub and of each room. Pick someone
+  to kick them from a room (`K`), ban them from one (`b`), make them an
+  operator of one (`o`) or voiced in one (`v`), each again to undo,
+  disconnect them (`d`), or ban them from the whole hub (`B`, a *kline*:
+  they're disconnected, and every time they come back). Pick a room to set
+  its topic (`t`) or modes (`m`: `+m` moderated, `+i` invite only, `+t`
+  topic by operators, `+n` members only, `+p` private, `+k key`; `-` takes
+  one off), or to register it (`r`). `n` makes a registered room, which
+  stays, with its topic and modes, while nobody is in it. In Bans, `x` lifts
+  the ban picked. The web UI's Hub section has the same, from a menu on each
+  row.
+- **Hub commands:** `:` in the Hub tab (or the web UI's console) runs a
+  command as typed in a room, as the hub itself: `/stats`, `/kline list`,
+  `/who lobby`, `/reload`... The hub's answers are listed beside it. The
+  room commands (`/topic`, `/mode`, `/op`, `/kick`, `/ban`...) work in any
+  room from here, though rsRRCD only lets a room's operators run them.
+- **Its files:** rsRRCD's own `config.yaml` and `rooms.yaml` (the registered
+  rooms) in `rrc-hub/` in the data directory, so its `/reload` and `/kline`
+  work as they do in rsRRCD. rettui writes the settings above into
+  `config.yaml` (and lists you and the hub as `trusted_identities`); the rest
+  (limits such as `max_rooms_per_session` or `rate_limit_msgs_per_minute`,
+  operators of your choosing, the hub's bans) is yours to change there,
+  then `/reload`. [Backups](Data-and-Storage#backups) keep the folder, and
+  the hub's identity with yours.

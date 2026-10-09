@@ -18,6 +18,10 @@ rns-transport = { path = "deps/rsReticulum/crates/rns-transport" }
 rns-wire = { path = "deps/rsReticulum/crates/rns-wire" }
 lxmf-core = { path = "deps/rsLXMF/crates/lxmf-core" }
 nomad-core = { path = "deps/rsNomad/crates/nomad-core" }
+# Hosting an RRC hub: rsRRCD's hub logic (it expects rsReticulum and rsRRC
+# as its siblings), and the YAML its configuration file is written in.
+rsrrcd = { path = "deps/rsRRCD", default-features = false }
+serde-saphyr = "1.1"
 
 # TUI
 ratatui = "0.30"
