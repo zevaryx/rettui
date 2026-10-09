@@ -58,6 +58,7 @@ impl App {
         let mut intervals = false;
         let mut node = false;
         let mut pn = false;
+        let mut hub = false;
         let mut archive = false;
         for field in &changed {
             match field.key {
@@ -157,6 +158,14 @@ impl App {
                     self.settings.pn_transfer_kb = after.pn_transfer_kb;
                     pn = true;
                 }
+                "hub_enabled" | "hub_name" | "hub_greeting" | "hub_announce_interval_mins" | "hub_open_rooms" => {
+                    self.settings.hub_enabled = after.hub_enabled;
+                    self.settings.hub_name = after.hub_name.clone();
+                    self.settings.hub_greeting = after.hub_greeting.clone();
+                    self.settings.hub_announce_interval_mins = after.hub_announce_interval_mins;
+                    self.settings.hub_open_rooms = after.hub_open_rooms;
+                    hub = true;
+                }
                 // Anything else that applies now, with nothing more to do
                 // than take the new value (Location, Map tiles, ...).
                 key if field.effect == Effect::Now => {
@@ -180,6 +189,10 @@ impl App {
         // interval (it's only restarted if what it runs with changed).
         if pn || after.pn_enabled {
             self.apply_pn_settings();
+        }
+        // The hub hosted here is named after you too, unless it has a name.
+        if hub || (renamed && after.hub_enabled) {
+            self.apply_hub_settings();
         }
         if archive {
             self.archive_overflow_now();
@@ -364,6 +377,8 @@ mod tests {
                     "node_name" => "Hilltop".into(),
                     "node_dir" => node_dir.clone(),
                     "pn_name" => "Hilltop messages".into(),
+                    "hub_name" => "Hilltop chat".into(),
+                    "hub_greeting" => "Welcome\\nand hello".into(),
                     "quiet_hours" => "22:00-07:00".into(),
                     other => panic!("give {other} a value to change it to here"),
                 },

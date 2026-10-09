@@ -1,5 +1,5 @@
-`rettui` starts the terminal UI: seven tabs (Messages, Channels, Network,
-Browser, Node, Status, Reticulum) with keyboard and mouse control. Terminals
+`rettui` starts the terminal UI: eight tabs (Messages, Channels, Network,
+Browser, Node, Status, Reticulum, Hub) with keyboard and mouse control. Terminals
 narrower than 110 columns get a sidebar of icons and narrower side lists, so
 80×24 works well.
 
@@ -19,7 +19,7 @@ lists them. Any key, or a click, closes the list.
 
 | Tab | Keys |
 | --- | ---- |
-| All tabs | `1`–`7` switch tab, `A` announce, `S` sync with the propagation node, `?` list the keys of what's on screen (`F1` while typing), `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
+| All tabs | `1`–`8` switch tab, `A` announce, `S` sync with the propagation node, `?` list the keys of what's on screen (`F1` while typing), `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
 | Messages | `↑↓` pick a conversation, `Enter` write, `/` [search messages](Messaging#searching) (`Tab` this conversation or all, `Enter` open the one picked), `r` [reply](Messaging#replies) to their newest message, `m` pick a message, `c` [contact card](Messaging#contacts), `X` delete the conversation, `n` new conversation by address, `y` copy the peer's address, `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `p` read a [paper message](Messaging#paper-messages), `P` show the newest paper message written, `N` turn the conversation's notifications off or on, `H` read its [archived messages](Data-and-Storage#message-history), `L` [share a location](Messaging#locations-and-the-map) (`live 1h` shares it live; `L` again stops that), `M` [the map](Messaging#locations-and-the-map) of locations shared, `*` pin it to the top (or unpin it), `R` mark every conversation read, `E` [export](Messaging#message-actions) the conversation as text, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
 | A picked message (`m`) | `↑↓` pick another, `r` / `Enter` reply, `e` [react](Messaging#reactions-locations-commands-and-voice-messages), `y` copy its text, `f` [forward](Messaging#message-actions) it, `o` open its file or location, `t` [send it again](Messaging#message-actions) if it failed, `x` delete it, `Esc` done |
 | The map (`M`) | `↑↓` pick a place, `+`/`-` or the wheel zoom in on it and out, `0` all of them, `Enter` open the conversation, `o` open the place on OpenStreetMap, `Esc` close |
@@ -39,6 +39,7 @@ lists them. Any key, or a click, closes the list.
 | Status | `↑↓` select a setting, `Enter` edit it (or toggle), `e` edit display name, `y` copy your LXMF address, `c` show it as a QR code, `g` the getting-started guide, `b` back up your identity, `B` [back up everything](Data-and-Storage#backups), `i` use another identity (from the next start), `x` hide the first steps, `u` [check for a newer release](Installing#updating) now, `U` install one found, `Ctrl-R` restart Reticulum |
 | Reticulum | `Tab` sections / options, `↑↓` select, `Enter` edit (toggles flip, choices open a list), `d` back to the default, `a` add an interface, `Space` enable or disable it, `r` rename, `x` delete, `t` edit the file as text, `R` reload the file, `Ctrl-R` restart Reticulum |
 | Reticulum as text | `Ctrl-S` save (refused while the file can't load), `Esc` close, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-V` paste |
+| Hub | [The RRC hub hosted here](Hosting-a-Node#rrc-hub): `e` start or stop hosting, `y` copy its `rrc://` link, `Tab` / `←→` People, Rooms, Bans, `↑↓` select, `a` announce, `:` run a hub command (`/stats`, `/kline list`...), `n` new registered room; People: `K` kick from a room, `b` ban from a room, `o` make operator of a room (or not), `v` voice (or not), `B` ban from the whole hub, `d` disconnect; Rooms: `t` topic, `m` modes, `r` register or unregister; Bans: `x` lift the ban |
 
 A file asked for in a prompt (an attachment, a picture of a paper
 message, an identity file, where to save a backup) can be dragged onto the

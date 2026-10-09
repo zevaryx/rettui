@@ -440,6 +440,10 @@ header .avatar.icon { font-size: 17px; }
 .chat-line .mention { background: var(--yellow-bg); color: #111; }
 .hub-info { display: grid; grid-template-columns: 90px 1fr; gap: 2px 12px; padding: 12px; }
 .hub-info .label { color: var(--dim); }
+/* The Hub section's console: what the hub said, and a command to run. */
+.hub-replies { min-height: 120px; }
+.hub-reply { margin: 0; padding: 4px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 13px; }
+.hub-command { padding: 8px 12px; border-top: 1px solid var(--line); }
 .motd { white-space: pre-wrap; color: var(--cyan); padding: 0 12px 12px; font-family: var(--mono); font-size: 13px; }
 .public-rooms { padding: 0 12px 12px; }
 .public-room { display: flex; gap: 10px; align-items: baseline; padding: 2px 0; }

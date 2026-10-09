@@ -28,6 +28,7 @@ use crate::lxmf::pn::{HostedPn, LocalNode, PnConfig, PnStats};
 use crate::lxmf::{self, InboundMessage, LXMF_ASPECT, PROPAGATION_ASPECT};
 use crate::nomad::host::{self, HostConfig};
 use crate::nomad::{self, FetchedContent, LinkCache};
+use crate::rrc::host::{HostedHub, HubAction, HubEvent, HubHostConfig};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
 pub use remote::{
@@ -162,10 +163,12 @@ pub enum NetCommand {
         identify: bool,
     },
     /// Connect to an RRC hub (no-op if a session is already running).
+    /// `key`: the hub's public key, for the hub hosted here.
     RrcConnect {
         hub: Hash,
         aspect: String,
         nick: Option<String>,
+        key: Option<[u8; 64]>,
     },
     /// Pass a command to a running hub session.
     Rrc {
@@ -180,6 +183,11 @@ pub enum NetCommand {
     /// Start (or restart, when it changed) the hosted propagation node, or
     /// stop it with `None`.
     Propagation(Option<PnConfig>),
+    /// Start (or restart, when it changed) the hosted RRC hub, or stop it
+    /// with `None`.
+    Hub(Option<HubHostConfig>),
+    /// Something for the hosted hub to do (from the Hub panel).
+    HubAction(HubAction),
     /// Close hub links and stop Reticulum; [`NetEvent::Stopped`] follows.
     Shutdown(Stop),
 }
@@ -349,6 +357,7 @@ pub enum NetEvent {
     },
     Host(HostEvent),
     Pn(PnEvent),
+    Hub(HubEvent),
     /// The actor has shut down (after [`NetCommand::Shutdown`]).
     Stopped,
 }
@@ -386,6 +395,8 @@ pub struct NetOptions {
     pub host: Option<HostConfig>,
     /// Propagation node to host from the start, if any.
     pub propagation: Option<PnConfig>,
+    /// RRC hub to host from the start, if any.
+    pub hub: Option<HubHostConfig>,
     /// The stamp cost asked of senders, and the largest message taken.
     pub stamp_cost: Option<u8>,
     pub max_message_bytes: u64,
@@ -622,6 +633,38 @@ async fn run(
     };
     if pn_config.is_some() {
         launch_pn(pn_config.clone());
+    }
+    // The hub hosted here, started and stopped as the propagation node is.
+    let hub_slot: Arc<Mutex<Option<HostedHub>>> = Arc::default();
+    let (hub_tx, mut hub_rx) = mpsc::unbounded_channel::<(u64, Result<Option<(Hash, [u8; 64])>, String>)>();
+    let hub_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let mut hub_config = options.hub.clone();
+    let launch_hub = |config: Option<HubHostConfig>| {
+        let generation = hub_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let (runtime, slot, current, tx, ev) = (runtime.clone(), hub_slot.clone(), hub_generation.clone(), hub_tx.clone(), ev.clone());
+        tokio::spawn(async move {
+            let mut slot = slot.lock().await;
+            if let Some(old) = slot.take() {
+                old.stop().await;
+            }
+            if current.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return;
+            }
+            let result = match config {
+                None => Ok(None),
+                Some(config) => HostedHub::start(&runtime, &config, ev).await.map(|hub| {
+                    let started = (hub.hash, hub.public_key);
+                    *slot = Some(hub);
+                    Some(started)
+                }),
+            };
+            let _ = tx.send((generation, result));
+        });
+    };
+    // It started (with the config last asked for) and runs.
+    let mut hub_live = false;
+    if hub_config.is_some() {
+        launch_hub(hub_config.clone());
     }
     let mut rrc_sessions = rrc_session::Sessions::default();
     let mut stop = Stop::Quit;
@@ -893,8 +936,8 @@ async fn run(
                             let _ = ev.send(NetEvent::Delivery { id, result });
                         });
                     }
-                    NetCommand::RrcConnect { hub, aspect, nick } => {
-                        let config = rrc_session::SessionConfig { hub, aspect, nick };
+                    NetCommand::RrcConnect { hub, aspect, nick, key } => {
+                        let config = rrc_session::SessionConfig { hub, aspect, nick, key };
                         rrc_sessions.connect(&runtime, &known, &identity, config, &ev);
                     }
                     NetCommand::Rrc { hub, command } => rrc_sessions.command(hub, command, &ev),
@@ -933,6 +976,31 @@ async fn run(
                             launch_pn(config);
                         }
                     }
+                    NetCommand::Hub(config) => {
+                        if config != hub_config {
+                            // Its name, greeting, announces, who makes rooms:
+                            // changed as it runs, so nobody's disconnected.
+                            let slot = hub_slot.try_lock().ok();
+                            match (&config, &hub_config, slot.as_ref().and_then(|slot| slot.as_ref())) {
+                                (Some(new), Some(old), Some(hub)) if hub_live && new.same_hub(old) => {
+                                    hub.act(HubAction::Configure(new.clone()));
+                                }
+                                _ => {
+                                    hub_live = false;
+                                    launch_hub(config.clone());
+                                }
+                            }
+                            drop(slot);
+                            hub_config = config;
+                        }
+                    }
+                    NetCommand::HubAction(action) => match hub_slot.try_lock().ok().as_ref().and_then(|slot| slot.as_ref()) {
+                        Some(hub) => hub.act(action),
+                        None => {
+                            let text = "The hub isn't running".to_string();
+                            let _ = ev.send(NetEvent::Hub(HubEvent::Reply { text, error: true }));
+                        }
+                    },
                     NetCommand::Fetch { id, node, path, fields, identify } => {
                         let (runtime, links, ev) = (runtime.clone(), links.clone(), ev.clone());
                         let identity = identify.then(|| identity.clone());
@@ -1034,6 +1102,18 @@ async fn run(
             }
             // Sent to us through the propagation node hosted here.
             Some(data) = pn_deliver.recv() => lxmf::spawn_inbound(&runtime, &known, &policy, data, lxmf::Heard::Unknown, &ev),
+            Some((generation, result)) = hub_rx.recv() => {
+                if generation != hub_generation.load(std::sync::atomic::Ordering::SeqCst) {
+                    continue;
+                }
+                hub_live = matches!(result, Ok(Some(_)));
+                let event = match result {
+                    Ok(Some((hash, public_key))) => HubEvent::Started { hash, public_key },
+                    Ok(None) => HubEvent::Stopped,
+                    Err(e) => HubEvent::Failed(e),
+                };
+                let _ = ev.send(NetEvent::Hub(event));
+            }
             Some((generation, result)) = pn_rx.recv() => {
                 if generation != pn_generation.load(std::sync::atomic::Ordering::SeqCst) {
                     continue;
@@ -1063,9 +1143,13 @@ async fn run(
             lxmf::Policy::save_in_background(&policy).await;
         })
     };
-    // Hubs first, so they see us leave at once. The rest is tidying up: it
-    // can wait on open links (e.g. a peer's LXMF link), so it is bounded.
+    // Hubs first, so they see us leave at once (and those on the hub here,
+    // that it went). The rest is tidying up: it can wait on open links (e.g.
+    // a peer's LXMF link), so it is bounded.
     rrc_sessions.close_all().await;
+    if let Some(hub) = hub_slot.lock().await.take() {
+        hub.stop().await;
+    }
     drop(hosted);
     let quick = Duration::from_millis(500);
     let _ = tokio::time::timeout(quick, async {

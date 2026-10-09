@@ -42,6 +42,29 @@ fn hosting(app: &App) -> Vec<Span<'static>> {
     }
 }
 
+/// The RRC hub hosted here, while it's on (the Hub tab has the rest).
+fn hosting_hub(app: &App) -> Option<Vec<Span<'static>>> {
+    let hub = &app.hub;
+    Some(match &hub.status {
+        NodeStatus::Off => return None,
+        NodeStatus::Starting => vec![Span::styled("◌ starting", Style::default().fg(Color::Yellow))],
+        NodeStatus::Failed(e) => vec![Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red))],
+        NodeStatus::Running => {
+            let mut spans = vec![Span::styled("● ", Style::default().fg(Color::Green))];
+            if let Some((hash, _)) = hub.address {
+                spans.push(Span::styled(hex::encode(hash), Style::default().fg(accent())));
+            }
+            let (people, rooms) = (hub.snapshot.people.len(), hub.snapshot.rooms.len());
+            spans.push(Span::raw(format!(
+                "  {people} {} · {rooms} room{} (Hub tab)",
+                if people == 1 { "person" } else { "people" },
+                if rooms == 1 { "" } else { "s" }
+            )));
+            spans
+        }
+    })
+}
+
 /// `settings.json`, one row per setting, with help for the selected one.
 fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
     let path = app.paths.settings.display().to_string();
@@ -85,7 +108,9 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let steps = app.first_steps();
     // The settings list scrolls, so it may give way on short terminals.
     let [info, settings, rest] = Layout::vertical([
-        Constraint::Length(12 + u16::from(!steps.is_empty()) + u16::from(app.update_available().is_some())),
+        Constraint::Length(
+            12 + u16::from(!steps.is_empty()) + u16::from(app.update_available().is_some()) + u16::from(app.hub.status != NodeStatus::Off),
+        ),
         Constraint::Max(settings_height),
         Constraint::Min(5),
     ])
@@ -133,6 +158,9 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![label("Known"), Span::raw(format!("{} destinations", app.store.peers.len()))]),
     ];
     let mut lines = lines;
+    if let Some(spans) = hosting_hub(app) {
+        lines.insert(7, Line::from([vec![label("Hosting a hub")], spans].concat()));
+    }
     // A newer release: under the version.
     if let Some(release) = app.update_available() {
         let mut spans = vec![label("Update")];

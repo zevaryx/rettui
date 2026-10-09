@@ -3,7 +3,8 @@ hubs such as [rrcd](https://github.com/kc1awv/rrcd) (the reference hub),
 [rrc-hub](https://github.com/thatSFguy/reticulum-relay-chat) (in Go),
 [rsRRCD](https://github.com/reticulum-spb/rsRRCD) and the hub Ratspeak can
 host. rettui works with each of them, as they differ (see
-[Hubs differ](#hubs-differ)). It lives in the Channels tab.
+[Hubs differ](#hubs-differ)). It lives in the Channels tab. rettui can also
+[host a hub](Hosting-a-Node#rrc-hub) of its own.
 
 - **Hubs:** add a hub by address (`n`), or open an `rrc://hash/room` link on a
   NomadNet page. Opening a new hub from a link asks first, because connecting

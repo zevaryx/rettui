@@ -82,9 +82,21 @@ pub fn heard(hash: Hash, name_hash_heard: [u8; 10], app_data: Option<&[u8]>, hop
         Kind::Propagation => lxmf_core::handlers::parse_pn_announce_data(data)
             .and_then(|pn| pn.metadata.get(&lxmf_core::constants::PN_META_NAME).cloned())
             .and_then(|name| crate::names::clean(&String::from_utf8_lossy(&name))),
-        Kind::Rrc | Kind::Phone | Kind::Other => any_name(data),
+        Kind::Rrc => hub_name(data).or_else(|| any_name(data)),
+        Kind::Phone | Kind::Other => any_name(data),
     });
     Heard { hash, kind, aspect, name, hops }
+}
+
+/// An RRC hub's name, as rrcd, rsRRCD, the Go hub and rettui announce it:
+/// a CBOR map with the `hub`'s name (and `proto`, `v`).
+fn hub_name(data: &[u8]) -> Option<String> {
+    let ciborium::Value::Map(entries) = ciborium::from_reader::<ciborium::Value, _>(data).ok()? else { return None };
+    let name = entries.iter().find(|(key, _)| key.as_text() == Some("hub"))?.1.as_text()?;
+    if name.chars().count() > 64 {
+        return None;
+    }
+    crate::names::clean(name)
 }
 
 /// A name in app data whose format isn't known: text, or the first text
@@ -125,6 +137,10 @@ mod tests {
         assert_eq!((node.kind, node.name.as_deref()), (Kind::Nomad, Some("Node 🌲")));
         let hub = heard([3; 16], name_hash("rrc.hub"), Some(b"Town square"), 0);
         assert_eq!((hub.kind, hub.name.as_deref()), (Kind::Rrc, Some("Town square")));
+        // As hubs announce themselves: a CBOR map.
+        let data = crate::rrc::host::announce_data("Hilltop hub");
+        let hub = heard([3; 16], name_hash("rrc.hub"), Some(&data), 0);
+        assert_eq!(hub.name.as_deref(), Some("Hilltop hub"));
         // Something rettui doesn't know: no aspect; a name only if it reads
         // as one.
         let other = heard([4; 16], name_hash("example.thing"), Some(&[0x81, 0xa4, b'n', b'a', b'm', b'e', 0xa3, b'B', b'o', b'b']), 3);

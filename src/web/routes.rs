@@ -146,6 +146,8 @@ pub fn router(state: WebState) -> Router {
         .route("/node/preview", post(node_preview))
         .route("/node/media", get(node_media))
         .route("/node/announce", post(node_announce))
+        .route("/hub", get(hosted_hub))
+        .route("/hub/{action}", post(hosted_hub_action))
         .route("/reticulum", get(reticulum))
         .route("/reticulum/options", post(reticulum_options))
         .route("/reticulum/interfaces", post(reticulum_interfaces))
@@ -1986,6 +1988,62 @@ async fn node_media(State(state): State<WebState>, Query(query): Query<PathQuery
 
 async fn node_announce(State(state): State<WebState>) -> ApiResult {
     state.write(|o| o.app.send(NetCommand::HostAnnounce)).await?;
+    ok()
+}
+
+// ---- the RRC hub hosted here ----------------------------------------------
+
+async fn hosted_hub(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::hub(&o.app)).await?))
+}
+
+#[derive(Deserialize, Default)]
+struct HostedHubBody {
+    /// The room an action is about (none: the whole hub, for `ban`).
+    #[serde(default)]
+    room: Option<String>,
+    /// Whom it's about (hex).
+    #[serde(default)]
+    identity: String,
+    /// A command, a topic, modes.
+    #[serde(default)]
+    text: String,
+    /// On or off: hosting, a ban, operator, voice, registered.
+    #[serde(default)]
+    on: Option<bool>,
+}
+
+/// What the Hub section does: hub commands, as its panel in the terminal
+/// runs them. The hub says how each went (a reply, in `GET /hub`).
+async fn hosted_hub_action(
+    State(state): State<WebState>,
+    Path(action): Path<String>,
+    body: Option<axum::Json<HostedHubBody>>,
+) -> ApiResult {
+    let body = body.map(|b| b.0).unwrap_or_default();
+    state
+        .write(move |o| -> Result<(), ApiError> {
+            let app = &mut o.app;
+            let on = body.on.unwrap_or(true);
+            let room = body.room.as_deref().unwrap_or_default();
+            let identity = body.identity.trim();
+            let result = match action.as_str() {
+                "enable" => app.update_settings_from_web(&[("hub_enabled", if on { "true" } else { "false" })]).map(|_| ()),
+                "announce" => app.hub_announce(),
+                "run" => app.hub_run(&body.text),
+                "kick" => app.hub_kick(room, identity),
+                "ban" => app.hub_ban(body.room.as_deref(), identity, on),
+                "op" => app.hub_op(room, identity, on),
+                "voice" => app.hub_voice(room, identity, on),
+                "topic" => app.hub_topic(room, &body.text),
+                "modes" => app.hub_modes(room, &body.text),
+                "register" => app.hub_register(room, on),
+                "disconnect" => app.hub_disconnect(identity),
+                _ => return Err(bad(format!("unknown hub action {action}"))),
+            };
+            result.map_err(bad)
+        })
+        .await??;
     ok()
 }
 

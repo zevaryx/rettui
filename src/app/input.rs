@@ -193,7 +193,7 @@ impl App {
                 self.keys_help = true;
                 return;
             }
-            KeyCode::Char(c @ '1'..='7') => {
+            KeyCode::Char(c @ '1'..='8') => {
                 self.switch_tab(Tab::ALL[c as usize - '1' as usize]);
                 return;
             }
@@ -216,6 +216,7 @@ impl App {
             Tab::Node => self.node_key(key),
             Tab::Status => self.status_key(key),
             Tab::Reticulum => self.rns_key(key),
+            Tab::Hub => self.hub_key(key),
         }
     }
 
@@ -437,6 +438,7 @@ impl App {
             Tab::Status if self.regions.settings.contains(at) => self.move_setting(delta.signum()),
             Tab::Status => {}
             Tab::Reticulum => self.scroll_rns(at, delta),
+            Tab::Hub => self.scroll_hub(delta.signum()),
         }
     }
 
@@ -458,6 +460,7 @@ impl App {
             Tab::Status => self.click_status(at, double),
             Tab::Reticulum if self.rns.picker.is_some() => self.click_rns_picker(at),
             Tab::Reticulum => self.click_rns(at, double),
+            Tab::Hub => self.click_hub(at),
         }
     }
 }
