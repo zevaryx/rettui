@@ -62,6 +62,13 @@ fn date_in(t: &DateTime<Local>, style: u8) -> String {
     t.format(format).to_string()
 }
 
+/// A time with its day before it: "Oct 07 14:05" (the year too, for
+/// another year's), with seconds if asked.
+pub fn dated(t: &DateTime<Local>, seconds: bool) -> String {
+    let day = if t.year() == Local::now().year() { day(t) } else { date(t) };
+    format!("{day} {}", time(t, seconds))
+}
+
 fn local(timestamp: f64) -> Option<DateTime<Local>> {
     Local.timestamp_opt(timestamp as i64, 0).single()
 }
@@ -114,5 +121,16 @@ mod tests {
         assert_eq!(styles(1), ("07 Oct".into(), "07 Oct 2025".into()));
         assert_eq!(styles(2), ("10-07".into(), "2025-10-07".into()));
         assert_eq!(DATE_STYLES.iter().position(|s| *s == "year-month-day"), Some(2));
+    }
+
+    #[test]
+    fn times_with_their_day() {
+        // Another year's has its year; this year's doesn't.
+        let then = Local.with_ymd_and_hms(2001, 2, 3, 4, 5, 6).unwrap();
+        let stamp = dated(&then, true);
+        assert!(stamp.contains("2001") && stamp.ends_with(&time(&then, true)), "{stamp}");
+        let now = Local::now();
+        let stamp = dated(&now, false);
+        assert_eq!(stamp, format!("{} {}", day(&now), time(&now, false)));
     }
 }

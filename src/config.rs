@@ -63,6 +63,8 @@ pub struct Settings {
     pub wrap_lines: bool,
     /// Show people joining and leaving RRC rooms in the chat.
     pub show_joins: bool,
+    /// The date with each chat line's time (RRC rooms).
+    pub chat_dates: bool,
     /// Notifications for new LXMF messages (each conversation can be muted).
     pub notify_messages: bool,
     /// Notifications from RRC (each hub and room has its own level).
@@ -176,6 +178,7 @@ impl Default for Settings {
             node_dir: None,
             node_executable_pages: false,
             show_joins: true,
+            chat_dates: true,
             wrap_lines: false,
             notify_messages: true,
             notify_rrc: true,
@@ -549,7 +552,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "hub_open_rooms",
         ],
     ),
-    (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins"]),
+    (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins", "chat_dates"]),
     (Section::Notifications, &["notify_messages", "notify_rrc", "quiet_hours", "quiet_hours_trusted"]),
     (Section::System, &["log_level", "update_check", "rns_config"]),
 ];
@@ -889,6 +892,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "chat_dates",
+        label: "Dates on chat lines",
+        help: "Show the date with the time of each line in RRC rooms and whispers (as the Dates setting writes it), not only the time. D toggles it in the terminal UI's Channels tab",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "notify_messages",
         label: "Notify on messages",
         help: "Notifications for new LXMF messages you aren't looking at (each conversation can be muted)",
@@ -1043,6 +1053,7 @@ impl Settings {
             "node_executable_pages" => self.node_executable_pages.to_string(),
             "wrap_lines" => self.wrap_lines.to_string(),
             "show_joins" => self.show_joins.to_string(),
+            "chat_dates" => self.chat_dates.to_string(),
             "notify_messages" => self.notify_messages.to_string(),
             "notify_rrc" => self.notify_rrc.to_string(),
             "quiet_hours" => self.quiet_hours.clone().unwrap_or_default(),
@@ -1115,6 +1126,7 @@ impl Settings {
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
+            "chat_dates" => self.chat_dates = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,
             "quiet_hours" => {

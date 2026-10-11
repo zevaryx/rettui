@@ -191,6 +191,7 @@ impl App {
             KeyCode::Char('c') => self.toggle_selected_connection(),
             KeyCode::Char('a') => self.toggle_auto_connect(),
             KeyCode::Char('J') => self.toggle_show_joins(),
+            KeyCode::Char('D') => self.toggle_chat_dates(),
             KeyCode::Char('N') => self.cycle_notify_level(),
             KeyCode::Char('x') | KeyCode::Delete => self.remove_selected_channel(),
             KeyCode::Char('y') => {
@@ -212,6 +213,16 @@ impl App {
         let show = !self.settings.show_joins;
         match self.update_settings(&[("show_joins", if show { "true" } else { "false" })]) {
             Ok(_) => self.notify(if show { "Showing people joining and leaving" } else { "Hiding people joining and leaving" }),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    /// `D`: the date with each chat line's time, or the time alone. It's a
+    /// setting ("Dates on chat lines").
+    pub fn toggle_chat_dates(&mut self) {
+        let show = !self.settings.chat_dates;
+        match self.update_settings(&[("chat_dates", if show { "true" } else { "false" })]) {
+            Ok(_) => self.notify(if show { "Showing dates on chat lines" } else { "Showing times alone on chat lines" }),
             Err(e) => self.fail(e),
         }
     }

@@ -85,6 +85,7 @@ pub fn keys(app: &App) -> Keys {
                 ("c", "connect"),
                 ("a", "auto"),
                 ("J", "joins"),
+                ("D", "dates"),
                 ("N", "notify"),
                 ("x", "remove"),
                 ("y", "copy link"),
