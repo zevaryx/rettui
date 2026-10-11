@@ -37,6 +37,9 @@ use crate::net::{Hash, NetEvent};
 
 /// The rooms file, beside rsRRCD's `config.yaml` in the hub's folder.
 const ROOMS_FILE: &str = "rooms.yaml";
+/// The operators rettui added to `config.yaml` (the hub's identity and
+/// yours), beside it: taken out again when either changes.
+const OPERATORS_FILE: &str = "rettui-operators.json";
 /// The console's session: no Link has this id.
 const CONSOLE: [u8; 16] = [0xff; 16];
 /// Most Links at once; more are closed as they come.
@@ -149,15 +152,23 @@ fn write_config(config: &HubHostConfig, hub: Hash) -> Result<HubConfig, String> 
     section.insert("identity_path".into(), identity.into());
     section.insert("room_registry_path".into(), ROOMS_FILE.into());
     section.insert("announce_period_s".into(), config.announce_interval.map_or(0.0, |d| d.as_secs_f64()).into());
-    // Operators: kept as written, with the hub (the console) and you.
+    // Operators: kept as written, with the hub (the console) and you. Those
+    // rettui added before and that aren't either any more (an identity you
+    // left for another, the hub's before it had a new one) are taken out:
+    // they'd still be operators, unseen.
+    let operators_file = config.dir.join(OPERATORS_FILE);
+    let added_before: Vec<String> =
+        std::fs::read_to_string(&operators_file).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    let operators = [hex::encode(hub), hex::encode(config.operator)];
     let mut trusted: Vec<String> = section
         .get("trusted_identities")
         .and_then(serde_json::Value::as_array)
         .map(|list| list.iter().filter_map(|v| v.as_str().map(str::to_lowercase)).collect())
         .unwrap_or_default();
-    for operator in [hex::encode(hub), hex::encode(config.operator)] {
-        if !trusted.contains(&operator) {
-            trusted.push(operator);
+    trusted.retain(|id| operators.contains(id) || !added_before.contains(id));
+    for operator in &operators {
+        if !trusted.contains(operator) {
+            trusted.push(operator.clone());
         }
     }
     section.insert("trusted_identities".into(), trusted.into());
@@ -168,6 +179,9 @@ fn write_config(config: &HubHostConfig, hub: Hash) -> Result<HubConfig, String> 
     }
     let yaml = serde_saphyr::to_string(&value).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
     crate::config::write_atomic(&path, yaml.as_bytes()).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
+    let added = serde_json::to_string(&operators).expect("a list of strings");
+    crate::config::write_atomic(&operators_file, added.as_bytes())
+        .map_err(|e| format!("Couldn't write {}: {e}", operators_file.display()))?;
     HubConfig::load(&path).map_err(|e| format!("{e:#}"))
 }
 
@@ -1150,6 +1164,13 @@ mod tests {
         assert_eq!((hub.hub_name.as_str(), hub.greeting, hub.announce_period_s), ("Hilltop", None, 0.0));
         assert_eq!((hub.max_rooms_per_session, hub.include_joined_member_list), (3, false));
         assert_eq!(hub.trusted_identities, [HUB, YOU, AMY]);
+        // Another identity of yours (an imported one): the old one is no
+        // longer an operator, and the one added by hand still is.
+        let hub = write_config(&HubHostConfig { operator: BOB, ..config.clone() }, HUB).unwrap();
+        assert_eq!(hub.trusted_identities, [HUB, AMY, BOB]);
+        // The hub's identity made again: the same.
+        let hub = write_config(&HubHostConfig { operator: BOB, ..config.clone() }, [8; 16]).unwrap();
+        assert_eq!(hub.trusted_identities, [AMY, BOB, [8; 16]]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -418,18 +418,26 @@ impl App {
     }
 
     /// One more notice of a greeting sent in several. Its lines are shown
-    /// unless they are the greeting we had.
+    /// unless they are the greeting we had. When it turns out to be another
+    /// one, the lines held back as the old greeting's start are shown with
+    /// the first that differs, so the new one shows whole.
     fn add_motd(&mut self, index: usize, part: String) {
         let hub = self.hub_mut(index);
-        let (text, before) = match hub.motd_parts.take() {
-            Some((so_far, before)) => (format!("{so_far}\n{part}"), before),
-            None => (part.clone(), hub.motd.clone()),
+        let (text, before, shown) = match hub.motd_parts.take() {
+            Some((so_far, before, shown)) => (format!("{so_far}\n{part}"), before, shown),
+            None => (part.clone(), hub.motd.clone(), false),
         };
         let known = before.as_deref().is_some_and(|old| old == text || old.starts_with(&format!("{text}\n")));
-        hub.motd_parts = Some((text.clone(), before));
+        // Shown so far: nothing, while it's the greeting we had.
+        let show = match (known, shown) {
+            (true, _) => None,
+            (false, true) => Some(part),
+            (false, false) => Some(text.clone()),
+        };
+        hub.motd_parts = Some((text.clone(), before, shown || !known));
         hub.motd = Some(text);
-        if !known {
-            self.record(index, "", ChatLine::new(LineKind::Notice, part));
+        if let Some(show) = show {
+            self.record(index, "", ChatLine::new(LineKind::Notice, show));
         }
     }
 
@@ -831,6 +839,20 @@ mod tests {
         hubs.notice(None, "Be nice");
         assert_eq!(hubs.lines("").iter().filter(|l| *l == "Be nice").count(), 1);
         assert_eq!(hubs.hub().motd.as_deref(), Some("Welcome to the hilltop hub\nBe nice"));
+
+        // A new greeting starting as the old one did: shown whole.
+        hubs.app.on_rrc(HUB, RrcEvent::Disconnected(None));
+        hubs.welcome();
+        hubs.notice(None, "Welcome to the hilltop hub");
+        hubs.notice(None, "Net tonight at 8");
+        hubs.notice(None, "Be nice");
+        let lines = hubs.lines("");
+        assert_eq!(
+            lines[lines.len() - 2..],
+            ["Welcome to the hilltop hub\nNet tonight at 8".to_string(), "Be nice".to_string()],
+            "{lines:?}"
+        );
+        assert_eq!(hubs.hub().motd.as_deref(), Some("Welcome to the hilltop hub\nNet tonight at 8\nBe nice"));
     }
 
     #[test]
