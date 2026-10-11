@@ -23,10 +23,8 @@ use crate::rrc::{self, Envelope, Limits, t};
 use crate::store::{HubConfig, NotifyLevel};
 use crate::term::input::TextInput;
 
-/// Messages kept per room or whisper conversation (NomadNet keeps 500
-/// lines), and kept across restarts.
-const MAX_MESSAGES: usize = 500;
-/// Other lines kept with them (people joining and leaving, the hub's
+/// Other lines kept with the messages of a room or whisper conversation
+/// (as many as "Chat messages kept" says) (people joining and leaving, the hub's
 /// notices and errors), for this run only: counted on their own, so a busy
 /// room's comings and goings never push its messages out.
 const MAX_OTHER_LINES: usize = 200;
@@ -400,23 +398,25 @@ impl Hub {
         people
     }
 
-    /// Add a line, the oldest of its sort going past their limit
-    /// ([`MAX_MESSAGES`], [`MAX_OTHER_LINES`]).
-    fn push(&mut self, room: &str, line: ChatLine) {
+    /// Add a line, the oldest of its sort going past their limit (`keep`
+    /// messages, [`MAX_OTHER_LINES`] others).
+    fn push(&mut self, room: &str, line: ChatLine, keep: usize) {
         let buffer = self.buffers.entry(room.to_string()).or_default();
         let message = line.is_message();
         buffer.push(line);
-        let limit = if message { MAX_MESSAGES } else { MAX_OTHER_LINES };
-        let alike = buffer.iter().filter(|l| l.is_message() == message).count();
-        if alike > limit {
-            let mut over = alike - limit;
-            buffer.retain(|l| {
-                let drop = over > 0 && l.is_message() == message;
-                over -= usize::from(drop);
-                !drop
-            });
-        }
+        let limit = if message { keep } else { MAX_OTHER_LINES };
+        drop_oldest(buffer, message, limit);
         self.history_dirty = true;
+    }
+
+    /// At most `keep` messages in each room and whisper conversation (after
+    /// "Chat messages kept" went down).
+    pub(crate) fn keep_messages(&mut self, keep: usize) {
+        for buffer in self.buffers.values_mut() {
+            if drop_oldest(buffer, true, keep) {
+                self.history_dirty = true;
+            }
+        }
     }
 
     fn history_path(&self, dir: &Path) -> PathBuf {
@@ -509,6 +509,22 @@ impl Hub {
         self.buffers.retain(|key, lines| !lines.is_empty() || key.is_empty() || joined.contains(key));
         self.history_dirty = true;
     }
+}
+
+/// The oldest lines of a sort (messages, or the others) past `limit`
+/// gone. Whether any were.
+fn drop_oldest(buffer: &mut Vec<ChatLine>, messages: bool, limit: usize) -> bool {
+    let alike = buffer.iter().filter(|l| l.is_message() == messages).count();
+    let mut over = alike.saturating_sub(limit);
+    if over == 0 {
+        return false;
+    }
+    buffer.retain(|l| {
+        let drop = over > 0 && l.is_message() == messages;
+        over -= usize::from(drop);
+        !drop
+    });
+    true
 }
 
 /// What the Channels list has selected.
@@ -712,8 +728,9 @@ impl App {
         let viewing = self.is_viewing(index, room);
         let notification =
             if notify && counts && self.settings.notify_rrc { self.rrc_notification(index, room, &line, mention) } else { None };
+        let keep = self.settings.rrc_messages_kept as usize;
         let hub = self.hub_mut(index);
-        hub.push(room, line);
+        hub.push(room, line, keep);
         if counts && !viewing {
             *hub.unread.entry(room.to_string()).or_default() += 1;
             if mention {
@@ -1045,10 +1062,11 @@ mod tests {
     fn comings_and_goings_never_push_messages_out() {
         let mut hub = Hub::new([1; 16], rrc::DEFAULT_ASPECT.into(), "Hub".into());
         // A busy room: a join and a leave for every message.
+        const MAX_MESSAGES: usize = 500;
         for i in 0..MAX_MESSAGES + 50 {
-            hub.push("lobby", ChatLine::presence(format!("amy joined {i}")));
-            hub.push("lobby", ChatLine::new(LineKind::Msg, format!("message {i}")));
-            hub.push("lobby", ChatLine::presence(format!("amy left {i}")));
+            hub.push("lobby", ChatLine::presence(format!("amy joined {i}")), MAX_MESSAGES);
+            hub.push("lobby", ChatLine::new(LineKind::Msg, format!("message {i}")), MAX_MESSAGES);
+            hub.push("lobby", ChatLine::presence(format!("amy left {i}")), MAX_MESSAGES);
         }
         let lines = &hub.buffers["lobby"];
         let messages: Vec<&str> = lines.iter().filter(|l| l.is_message()).map(|l| l.text.as_str()).collect();
@@ -1058,6 +1076,13 @@ mod tests {
         assert_eq!(lines.last().unwrap().text, "amy left 549");
         // All of them are kept across restarts.
         assert_eq!(hub.history_snapshot()["lobby"].len(), MAX_MESSAGES);
+        // Fewer kept from now on: the oldest go, the other lines stay.
+        hub.keep_messages(100);
+        let lines = &hub.buffers["lobby"];
+        assert_eq!(lines.iter().filter(|l| l.is_message()).count(), 100);
+        assert_eq!(lines.iter().find(|l| l.is_message()).unwrap().text, "message 450");
+        assert_eq!(lines.iter().filter(|l| !l.is_message()).count(), MAX_OTHER_LINES);
+        assert!(hub.history_dirty);
     }
 
     #[test]

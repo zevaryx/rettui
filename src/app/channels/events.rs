@@ -821,6 +821,25 @@ mod tests {
     }
 
     #[test]
+    fn how_many_messages_are_kept_is_a_setting() {
+        let mut hubs = Hubs::connected("kept");
+        hubs.join("lobby", &[OWN, AMY]);
+        for i in 0..60 {
+            hubs.said("lobby", AMY, "amy", &format!("message {i}"));
+        }
+        let messages = |hubs: &Hubs| hubs.hub().buffers["lobby"].iter().filter(|l| l.is_message()).count();
+        assert_eq!(messages(&hubs), 60);
+        // Fewer: the oldest go at once.
+        hubs.app.update_settings(&[("rrc_messages_kept", "50")]).unwrap();
+        assert_eq!(messages(&hubs), 50);
+        assert_eq!(hubs.hub().buffers["lobby"].iter().find(|l| l.is_message()).unwrap().text, "message 10");
+        hubs.said("lobby", AMY, "amy", "one more");
+        assert_eq!(messages(&hubs), 50);
+        assert!(hubs.app.update_settings(&[("rrc_messages_kept", "10")]).is_err(), "50 at least");
+        assert_eq!(hubs.app.settings.rrc_messages_kept, 50);
+    }
+
+    #[test]
     fn chat_lines_show_their_date_unless_turned_off() {
         let mut hubs = Hubs::connected("dates");
         hubs.join("lobby", &[OWN, AMY]);

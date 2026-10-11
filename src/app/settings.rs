@@ -94,6 +94,13 @@ impl App {
                     intervals = true;
                 }
                 "home" => self.settings.home = after.home.clone(),
+                "rrc_messages_kept" => {
+                    self.settings.rrc_messages_kept = after.rrc_messages_kept;
+                    let keep = after.rrc_messages_kept as usize;
+                    for hub in &mut self.channels.hubs {
+                        hub.keep_messages(keep);
+                    }
+                }
                 "messages_kept" | "message_storage_mb" => {
                     self.settings.messages_kept = after.messages_kept;
                     self.settings.message_storage_mb = after.message_storage_mb;

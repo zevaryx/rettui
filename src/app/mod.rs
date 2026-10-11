@@ -565,7 +565,11 @@ impl App {
         graphics: Option<Graphics>,
         identity_hash: Hash,
     ) -> Self {
-        let channels = crate::app::channels::Channels::load(&store.rrc_hubs, &paths.rrc_history);
+        let mut channels = crate::app::channels::Channels::load(&store.rrc_hubs, &paths.rrc_history);
+        // As many as are kept now (fewer, if that went down since).
+        for hub in &mut channels.hubs {
+            hub.keep_messages(settings.rrc_messages_kept as usize);
+        }
         // The node uses this client's identity, so its address is known now.
         let node_hash =
             rns_identity::destination::Destination::hash_from_name_and_identity(nomad_core::NOMAD_NODE_ASPECT, Some(&identity_hash));
