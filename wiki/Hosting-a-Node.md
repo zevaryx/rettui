@@ -53,8 +53,9 @@ or the folder set in `node_dir`.
   it. In the web UI, each has a `⋯` menu (open, show a picture, put it in the
   open page, copy its address, rename, move, delete), and on a computer
   anything can be dragged onto a folder of its root. Links to what's moved
-  or renamed (`:/page/`, `:/media/` and `:/file/` addresses) are changed in
-  every page, except the one open with changes not saved (the TUI says so;
+  or renamed (`:/page/`, `:/media/` and `:/file/` addresses, and those
+  naming your node's address; not links to another node's page of the same
+  name) are changed in every page, except the one open with changes not saved (the TUI says so;
   the web UI changes them in the editor, for you to save). Scripts are never
   changed or moved this way, and the web UI can't rename or move them.
 - **Selecting text in the editors:** Shift with the arrows, Home/End or
