@@ -132,6 +132,8 @@ and the other RRC clients can join it as they join rrcd.
   time it starts (`rrc-hub-identity` in the data directory), so its address
   stays the same and people who join learn the hub's address, not your LXMF
   one. You're an operator of it (as is the hub itself), wherever you are.
+  If you use another identity (or the hub gets a new one), the old one is
+  no longer an operator; operators added to its `config.yaml` by hand stay.
 - **You on it:** the hub is added to your hubs in Channels once it's up, and
   rettui joins it straight away (a client can't find a path to a destination
   it hosts, so yours connects with the hub's key). Stopping the hub leaves it.

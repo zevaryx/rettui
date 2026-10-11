@@ -160,9 +160,10 @@ pub struct Hub {
     hub_identity: Option<Vec<u8>>,
     pub hub_name: Option<String>,
     pub motd: Option<String>,
-    /// The greeting so far, while it comes in several notices, and the one
-    /// before it.
-    motd_parts: Option<(String, Option<String>)>,
+    /// The greeting so far, while it comes in several notices, the one
+    /// before it, and whether any of it has been shown (none is while it's
+    /// the greeting we had).
+    motd_parts: Option<(String, Option<String>, bool)>,
     pub limits: Limits,
     pub direct_notices: bool,
     /// The hub hosted here: its public key, to reach it directly.
