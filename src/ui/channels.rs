@@ -64,11 +64,14 @@ fn chat_lines(
     width: usize,
     own: (&str, &[u8]),
     people: &[(String, Vec<u8>)],
-    whisper: bool,
+    (whisper, dates): (bool, bool),
 ) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
     let (own_nick, own_id) = own;
-    let time =
-        Local.timestamp_millis_opt(line.ts as i64).single().map(|t| format!("{} ", crate::clock::time(&t, true))).unwrap_or_default();
+    let time = Local
+        .timestamp_millis_opt(line.ts as i64)
+        .single()
+        .map(|t| format!("{} ", if dates { crate::clock::dated(&t, true) } else { crate::clock::time(&t, true) }))
+        .unwrap_or_default();
     let name = line
         .nick
         .clone()
@@ -354,6 +357,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     // Only the rows that can be on screen: wrap messages from the newest back
     // until the view (and however far it is scrolled up) is full.
     let show_joins = app.settings.show_joins;
+    let dates = app.settings.chat_dates;
     let buffer = hub.buffers.get(&room).map(Vec::as_slice).unwrap_or_default();
     // A line a search found: scrolled to once (to about the middle), and
     // marked while its room is open.
@@ -363,7 +367,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             .iter()
             .skip(at + 1)
             .filter(|l| l.shown(show_joins))
-            .map(|l| chat_lines(l, hub, width, (&own_nick, &app.identity_hash), &people, whisper.is_some()).0.len())
+            .map(|l| chat_lines(l, hub, width, (&own_nick, &app.identity_hash), &people, (whisper.is_some(), dates)).0.len())
             .sum();
         app.channels.scroll = after.saturating_sub(height / 2);
     }
@@ -375,7 +379,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             whole = false;
             break;
         }
-        let (mut rendered, name_cols) = chat_lines(line, hub, width, (&own_nick, &app.identity_hash), &people, whisper.is_some());
+        let (mut rendered, name_cols) = chat_lines(line, hub, width, (&own_nick, &app.identity_hash), &people, (whisper.is_some(), dates));
         if found == Some(at) {
             rendered = rendered.into_iter().map(|row| row.patch_style(Style::default().bg(selected_bg()))).collect();
         }

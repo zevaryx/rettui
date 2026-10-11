@@ -696,6 +696,8 @@ pub fn room(app: &App, hub: &Hub, room: &str, last: Option<usize>) -> Value {
         "hub_notify": hub.notify.unwrap_or(NotifyLevel::Mentions).key(),
         // People joining and leaving are left out when this is off.
         "show_joins": app.settings.show_joins,
+        // Each line's date with its time.
+        "chat_dates": app.settings.chat_dates,
         "lines": lines,
     })
 }

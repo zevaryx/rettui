@@ -3940,7 +3940,9 @@ app.views.channels = {
     return el('div', { class: 'chat' }, lines.map((line) => {
       const name = line.nick || '';
       const color = line.own ? 'var(--accent)' : nickColor(line.src);
-      const time = clockTime(new Date(line.ts), true);
+      const date = new Date(line.ts);
+      const time = this.view?.chat_dates === false ? clockTime(date, true)
+        : clockDay(date, date.getFullYear() !== new Date().getFullYear()) + ' ' + clockTime(date, true);
       // Other people's names open the user menu.
       const user = !line.own && line.src && this.view?.users[line.src] && ['msg', 'action', 'private'].includes(line.kind);
       // In a whisper conversation, whispers read like ordinary chat.

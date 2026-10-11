@@ -23,8 +23,13 @@ use crate::rrc::{self, Envelope, Limits, t};
 use crate::store::{HubConfig, NotifyLevel};
 use crate::term::input::TextInput;
 
-/// Lines kept per room (NomadNet keeps 500).
-const MAX_LINES: usize = 500;
+/// Messages kept per room or whisper conversation (NomadNet keeps 500
+/// lines), and kept across restarts.
+const MAX_MESSAGES: usize = 500;
+/// Other lines kept with them (people joining and leaving, the hub's
+/// notices and errors), for this run only: counted on their own, so a busy
+/// room's comings and goings never push its messages out.
+const MAX_OTHER_LINES: usize = 200;
 
 /// The buffer of a whisper conversation (private notices) with a user:
 /// `@` and their identity in hex. Rooms can't take this form.
@@ -98,6 +103,12 @@ impl ChatLine {
     /// Someone else joining or leaving: `name joined` / `name left`.
     pub fn presence(text: String) -> Self {
         Self { presence: true, ..Self::new(LineKind::System, text) }
+    }
+
+    /// Something said (a message, an action or a whisper), as kept across
+    /// restarts; not a join, a notice or an error.
+    pub fn is_message(&self) -> bool {
+        matches!(self.kind, LineKind::Msg | LineKind::Action | LineKind::Private)
     }
 
     /// Whether to show it, given the "Show joins and leaves" setting.
@@ -389,11 +400,21 @@ impl Hub {
         people
     }
 
+    /// Add a line, the oldest of its sort going past their limit
+    /// ([`MAX_MESSAGES`], [`MAX_OTHER_LINES`]).
     fn push(&mut self, room: &str, line: ChatLine) {
         let buffer = self.buffers.entry(room.to_string()).or_default();
+        let message = line.is_message();
         buffer.push(line);
-        if buffer.len() > MAX_LINES {
-            buffer.drain(..buffer.len() - MAX_LINES);
+        let limit = if message { MAX_MESSAGES } else { MAX_OTHER_LINES };
+        let alike = buffer.iter().filter(|l| l.is_message() == message).count();
+        if alike > limit {
+            let mut over = alike - limit;
+            buffer.retain(|l| {
+                let drop = over > 0 && l.is_message() == message;
+                over -= usize::from(drop);
+                !drop
+            });
         }
         self.history_dirty = true;
     }
@@ -415,8 +436,7 @@ impl Hub {
             .iter()
             .filter(|(room, _)| !room.is_empty())
             .map(|(room, lines)| {
-                let lines =
-                    lines.iter().filter(|l| matches!(l.kind, LineKind::Msg | LineKind::Action | LineKind::Private)).cloned().collect();
+                let lines = lines.iter().filter(|l| l.is_message()).cloned().collect();
                 (room.clone(), lines)
             })
             .collect()
@@ -1019,6 +1039,25 @@ mod tests {
         assert_eq!(mentions, [(3, 9, bot.to_vec()), (14, 18, gone.to_vec())]);
         // A mention of us (highlighted another way) isn't coloured as well.
         assert_eq!(line.user_mentions(&people, &[(3, 9)]).len(), 1);
+    }
+
+    #[test]
+    fn comings_and_goings_never_push_messages_out() {
+        let mut hub = Hub::new([1; 16], rrc::DEFAULT_ASPECT.into(), "Hub".into());
+        // A busy room: a join and a leave for every message.
+        for i in 0..MAX_MESSAGES + 50 {
+            hub.push("lobby", ChatLine::presence(format!("amy joined {i}")));
+            hub.push("lobby", ChatLine::new(LineKind::Msg, format!("message {i}")));
+            hub.push("lobby", ChatLine::presence(format!("amy left {i}")));
+        }
+        let lines = &hub.buffers["lobby"];
+        let messages: Vec<&str> = lines.iter().filter(|l| l.is_message()).map(|l| l.text.as_str()).collect();
+        assert_eq!(messages.len(), MAX_MESSAGES);
+        assert_eq!((messages[0], *messages.last().unwrap()), ("message 50", "message 549"));
+        assert_eq!(lines.iter().filter(|l| !l.is_message()).count(), MAX_OTHER_LINES);
+        assert_eq!(lines.last().unwrap().text, "amy left 549");
+        // All of them are kept across restarts.
+        assert_eq!(hub.history_snapshot()["lobby"].len(), MAX_MESSAGES);
     }
 
     #[test]

@@ -821,6 +821,34 @@ mod tests {
     }
 
     #[test]
+    fn chat_lines_show_their_date_unless_turned_off() {
+        let mut hubs = Hubs::connected("dates");
+        hubs.join("lobby", &[OWN, AMY]);
+        let said = hubs.said("lobby", AMY, "amy", "hello there");
+        let app = &mut hubs.app;
+        app.tab = crate::app::Tab::Channels;
+        app.channels.selected = Some(super::super::Target { hub: HUB, room: Some("lobby".into()) });
+        app.channels.typing = false;
+        let when = chrono::TimeZone::timestamp_millis_opt(&chrono::Local, said.ts as i64).single().unwrap();
+        let line = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+            terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..30)
+                .map(|y| (0..140).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .find(|row| row.contains("hello there"))
+                .unwrap_or_default()
+        };
+        let dated = format!("{} <amy> hello there", crate::clock::dated(&when, true));
+        assert!(app.settings.chat_dates && line(app).contains(&dated), "{}", line(app));
+        // D: the time alone.
+        app.on_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char('D'), crossterm::event::KeyModifiers::SHIFT));
+        assert!(!app.settings.chat_dates);
+        assert!(line(app).contains(&format!("{} <amy> hello there", crate::clock::time(&when, true))), "{}", line(app));
+        assert!(!line(app).contains(&crate::clock::day(&when)), "{}", line(app));
+    }
+
+    #[test]
     fn a_greeting_in_several_notices() {
         let mut hubs = Hubs::connected("motd");
         hubs.notice(None, "Welcome to the hilltop hub");

@@ -12,6 +12,7 @@ Changes since v1.6.1: rettui can host an RRC hub, built on [rsRRCD](https://gith
 - "Anyone makes rooms": off, only you make rooms on your hub, and others join the ones there are.
 - The Status tab says how the hub is doing, and backups keep its settings, its rooms and (with your identity) its identity.
 - The Network tab's announces name RRC hubs that announce their name as rrcd and rsRRCD do.
+- RRC chat lines show their date with their time ("Dates on chat lines", on by default; `D` in Channels toggles it).
 - **Upload in the page editor** (`Alt+P`, in both UIs; in the web UI also by dropping files on the page): a picture is added to the node's `pages/images/`, made smaller for the mesh and without its metadata, and shown in the page; any other file goes to `files/`, linked to download. Nothing already there is replaced.
 - **Folders on your node:** the Node tab lists `pages/` and `files/` as trees of their folders. Move anything to another folder of its root (`m`, or *Move…* and dragging in the web UI), and rename or delete pictures and files as well as pages. Links to what's moved or renamed change in every page.
 
@@ -20,6 +21,7 @@ Changes since v1.6.1: rettui can host an RRC hub, built on [rsRRCD](https://gith
 - Settings are in groups (Profile, Messages, Location, Browsing, Hosting, Display, Notifications, System), one shown at a time, in both UIs: `Tab` or `←` `→` in the terminal, tabs above them in the web UI (a group with changes not saved yet is marked).
 
 ### Fixed
+- RRC rooms kept 500 lines in all, and people joining and leaving (shown or not) counted: in a busy room, messages went after not many. Now each room and whisper conversation keeps its newest 500 messages, with joins, leaves and notices kept apart.
 - A hub's greeting that changed but starts as the old one did is shown whole when you reconnect, not without its first lines.
 
 ### Docs and development
