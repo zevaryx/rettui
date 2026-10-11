@@ -728,6 +728,32 @@ mod tests {
     }
 
     #[test]
+    fn your_hub_connected_by_hand_is_rejoined_after_a_reticulum_restart() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-rejoin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let settings = Settings { hub_enabled: true, ..Settings::default() };
+        let (mut app, mut rx) = crate::app::test_app_with_net(&dir, settings, Store::default());
+        app.on_net(NetEvent::Hub(HubEvent::Started { hash: [7; 16], public_key: [1; 64] }));
+        let index = app.channels.hub_index([7; 16]).unwrap();
+        // Not connected on its own: you connected it.
+        app.channels.hubs[index].auto_connect = false;
+        app.channels.hubs[index].status = HubStatus::Connected;
+        commands(&mut rx);
+        // Reticulum restarts: the hub starts again with it.
+        app.rejoin_hubs = app.channels_before_restart();
+        app.hub.restarting(HubHostConfig::from_settings(&app.settings, &app.paths, app.identity_hash));
+        assert!(app.own_hub_waiting([7; 16]));
+        app.on_net(NetEvent::Hub(HubEvent::Started { hash: [7; 16], public_key: [1; 64] }));
+        assert!(commands(&mut rx).iter().any(|c| matches!(c, NetCommand::RrcConnect { hub: [7, ..], .. })), "rejoined");
+        assert!(app.rejoin_hubs.is_empty());
+        // Once only: after that, as you set it.
+        app.channels.hubs[index].status = HubStatus::Disconnected;
+        app.on_net(NetEvent::Hub(HubEvent::Started { hash: [7; 16], public_key: [1; 64] }));
+        assert!(!commands(&mut rx).iter().any(|c| matches!(c, NetCommand::RrcConnect { .. })));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn rooms_are_named_as_the_hub_has_them() {
         let dir = std::env::temp_dir().join(format!("rettui-hub-rooms-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

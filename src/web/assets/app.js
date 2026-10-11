@@ -72,16 +72,41 @@ const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf(
 function replaceAddress(text, from, to, node = '') {
   let out = '';
   let at = 0;
+  for (const found of addressMatches(text, from, node)) {
+    out += text.slice(at, found) + to;
+    at = found + from.length;
+  }
+  return out + text.slice(at);
+}
+
+// Where those addresses are in `text`, in order.
+function addressMatches(text, from, node = '') {
+  const matches = [];
   for (let found = text.indexOf(from); found !== -1; found = text.indexOf(from, found + from.length)) {
     const next = text[found + from.length];
     if (next !== undefined && /[A-Za-z0-9._\/-]/.test(next)) continue;
     const before = text.slice(0, found);
     const named = node && before.toLowerCase().endsWith(node.toLowerCase()) && before.slice(0, -node.length).endsWith('`');
-    if (!before.endsWith('`') && !named) continue;
-    out += text.slice(at, found) + to;
-    at = found + from.length;
+    if (before.endsWith('`') || named) matches.push(found);
   }
-  return out + text.slice(at);
+  return matches;
+}
+
+// Where a place in `text` (the cursor) is once its links to `from` (under
+// each prefix) lead to `to`: moved along with the text before it, and to
+// the end of an address it was inside.
+function relinkedOffset(text, offset, prefixes, from, to, node = '') {
+  for (const prefix of prefixes) {
+    const [old, now] = [prefix + from, prefix + to];
+    let moved = offset;
+    for (const start of addressMatches(text, old, node)) {
+      if (start >= offset) break;
+      moved = start + old.length <= offset ? moved + now.length - old.length : moved - (offset - start) + now.length;
+    }
+    offset = moved;
+    text = replaceAddress(text, old, now, node);
+  }
+  return offset;
 }
 
 const api = {
@@ -5569,20 +5594,29 @@ app.views.node = {
       open.url = open.url.replace(/:\/page\/.*$/, ':/page/' + to);
     }
     if (open && !open.executable) {
+      const prefixes = root === 'files' ? [':/file/'] : [':/page/', ':/media/'];
+      const node = this.node?.address;
+      // The new text, with the cursor and scroll where they were in it.
+      const show = (text) => {
+        const t = this.text;
+        const [before, start, end, scroll] = [t.value, t.selectionStart, t.selectionEnd, t.scrollTop];
+        t.value = text;
+        t.setSelectionRange(relinkedOffset(before, start, prefixes, from, to, node), relinkedOffset(before, end, prefixes, from, to, node));
+        t.scrollTop = scroll;
+      };
       if (this.dirty()) {
-        const prefixes = root === 'files' ? [':/file/'] : [':/page/', ':/media/'];
         let text = this.text.value;
-        for (const prefix of prefixes) text = replaceAddress(text, prefix + from, prefix + to, this.node?.address);
+        for (const prefix of prefixes) text = replaceAddress(text, prefix + from, prefix + to, node);
         if (text !== this.text.value) {
-          this.text.value = text;
+          show(text);
           this.changed();
           toast('Links in the open page were changed too: save it to keep them');
         }
       } else {
         const page = await attempt(() => api.get('/node/page?path=' + encodeURIComponent(open.path)));
-        if (page && !this.dirty()) {
+        if (page && !this.dirty() && page.content !== this.text.value) {
           open.saved = page.content;
-          this.text.value = page.content;
+          show(page.content);
           this.renderPreview();
         }
       }
