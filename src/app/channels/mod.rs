@@ -794,9 +794,12 @@ impl App {
                 self.channels.hubs.len() - 1
             }
         };
+        // Connected before a Reticulum restart (auto or not): again now.
+        let rejoin = self.rejoin_hubs.contains(&hash);
+        self.rejoin_hubs.retain(|h| *h != hash);
         let hub = self.hub_mut(index);
         hub.local_key = Some(key);
-        if hub.auto_connect && !hub.manual && !matches!(hub.status, HubStatus::Connected | HubStatus::Connecting(_)) {
+        if (rejoin || hub.auto_connect && !hub.manual) && !matches!(hub.status, HubStatus::Connected | HubStatus::Connecting(_)) {
             hub.reconnect_at = None;
             hub.status = HubStatus::Disconnected;
             self.connect_hub(index);
@@ -816,6 +819,9 @@ impl App {
     }
 
     fn disconnect_hub(&mut self, index: usize) {
+        // Not rejoined later either (see connect_own_hub).
+        let hash = self.channels.hubs[index].hash;
+        self.rejoin_hubs.retain(|h| *h != hash);
         let hub = self.hub_mut(index);
         hub.manual = true;
         hub.reconnect_at = None;

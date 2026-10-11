@@ -535,8 +535,9 @@ pub struct App {
     pub announced: bool,
     /// What interface discovery does was said, since Reticulum started.
     discovery_noted: bool,
-    /// Hubs to reconnect once Reticulum is back after a restart.
-    rejoin_hubs: Vec<Hash>,
+    /// Hubs to reconnect once Reticulum is back after a restart (and the
+    /// one hosted here, once it's back too).
+    pub(crate) rejoin_hubs: Vec<Hash>,
     /// Notifications waiting to be shown (see [`App::take_notifications`]).
     notifications: Vec<notify::Notification>,
     /// What was read since last asked, by notification tag (the web UI
@@ -894,12 +895,14 @@ impl App {
                 }
                 self.reapply_blocks();
                 self.start_channels();
-                // Hubs that were connected before a restart, auto or not.
+                // Hubs that were connected before a restart, auto or not;
+                // the one hosted here once it's up again (connect_own_hub
+                // takes it from the list then).
                 for hash in std::mem::take(&mut self.rejoin_hubs) {
-                    if let Some(index) = self.channels.hub_index(hash)
-                        && !self.own_hub_waiting(hash)
-                    {
-                        self.connect_hub(index);
+                    match self.channels.hub_index(hash) {
+                        Some(_) if self.own_hub_waiting(hash) => self.rejoin_hubs.push(hash),
+                        Some(index) => self.connect_hub(index),
+                        None => {}
                     }
                 }
             }
