@@ -862,6 +862,12 @@ impl App {
             .map(|(i, _)| i)
             .collect();
         for index in due {
+            // The hub hosted here, since stopped: connect_own_hub connects
+            // once it's back.
+            if self.own_hub_waiting(self.channels.hubs[index].hash) {
+                self.hub_mut(index).reconnect_at = None;
+                continue;
+            }
             self.hub_mut(index).reconnect_at = None;
             self.hub_mut(index).status = HubStatus::Disconnected;
             self.connect_hub(index);

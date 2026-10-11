@@ -84,6 +84,9 @@ impl App {
                 self.record(index, &room, ChatLine::new(LineKind::Error, format!("Not sent: {e}")));
             }
             RrcEvent::Disconnected(reason) => {
+                // The hub hosted here, stopped: tried again once it's back
+                // (see connect_own_hub), not before.
+                let waiting = self.own_hub_waiting(hash);
                 let hub = self.hub_mut(index);
                 hub.members.clear();
                 hub.pending_joins.clear();
@@ -97,7 +100,7 @@ impl App {
                 hub.replay.clear();
                 hub.motd_until = None;
                 let was_connected = hub.is_connected();
-                let retry = !hub.manual && hub.auto_connect;
+                let retry = !hub.manual && hub.auto_connect && !waiting;
                 hub.status = match &reason {
                     Some(e) if !was_connected => HubStatus::Failed(e.clone()),
                     _ => HubStatus::Disconnected,

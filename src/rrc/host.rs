@@ -820,9 +820,22 @@ impl Core {
         (HubEvent::Reply { text, error: false }, actions)
     }
 
-    /// A room's name as rettui names rooms (`#` is decoration), and then as
-    /// rsRRCD does.
+    /// A room there is, by its name: as rsRRCD has it (clients that send
+    /// `#lobby` make a room called that), or as rettui names rooms (`#` is
+    /// decoration) when there's no room called it. A room that isn't there
+    /// yet gets rettui's name for it (see [`Core::new_room_name`]).
     fn room_name(&self, room: &str) -> Result<String, String> {
+        let state = &self.router.state;
+        let exact = state.normalize_room(room, &self.router.config).map_err(|e| e.to_string())?;
+        if state.rooms.contains_key(&exact) {
+            return Ok(exact);
+        }
+        self.new_room_name(room)
+    }
+
+    /// A name for a room to be: as rettui names rooms (`#` is decoration),
+    /// and then as rsRRCD does.
+    fn new_room_name(&self, room: &str) -> Result<String, String> {
         self.router.state.normalize_room(&super::normalize_room(room), &self.router.config).map_err(|e| e.to_string())
     }
 
@@ -865,7 +878,7 @@ impl Core {
     /// name and taken out of the old one.
     fn rename_room(&mut self, from: &str, to: &str) -> (HubEvent, Vec<Action>) {
         let fail = |text: String| (HubEvent::Reply { text, error: true }, Vec::new());
-        let (from, to) = match (self.room_name(from), self.room_name(to)) {
+        let (from, to) = match (self.room_name(from), self.new_room_name(to)) {
             (Ok(from), Ok(to)) => (from, to),
             (Err(e), _) | (_, Err(e)) => return fail(e),
         };
@@ -1137,6 +1150,28 @@ mod tests {
         assert_eq!((hub.hub_name.as_str(), hub.greeting, hub.announce_period_s), ("Hilltop", None, 0.0));
         assert_eq!((hub.max_rooms_per_session, hub.include_joined_member_list), (3, false));
         assert_eq!(hub.trusted_identities, [HUB, YOU, AMY]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rooms_named_with_a_hash_are_found_by_the_panel() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-hashed-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        // Some clients join "#mesh"; rsRRCD keeps the "#".
+        join(&mut core, 1, AMY, "#Mesh");
+        assert!(core.router.state.rooms.contains_key("#mesh"));
+        let (reply, _) = core.register("#mesh", true);
+        assert!(matches!(&reply, HubEvent::Reply { error: false, .. }), "{reply:?}");
+        assert!(core.router.state.rooms["#mesh"].registered && !core.router.state.rooms.contains_key("mesh"));
+        let (reply, actions) = core.rename_room("#mesh", "#radio");
+        assert!(matches!(&reply, HubEvent::Reply { error: false, .. }), "{reply:?}");
+        assert!(core.router.state.rooms.contains_key("radio") && !core.router.state.rooms.contains_key("#mesh"));
+        assert!(sent(&actions).iter().any(|(link, kind, ..)| (*link, *kind) == (1, t::ERROR)), "Amy is taken out");
+        // A room without one is found as before, with or without the "#".
+        let (reply, _) = core.delete_room("#radio");
+        assert!(matches!(&reply, HubEvent::Reply { error: false, .. }), "{reply:?}");
+        assert!(core.router.state.rooms.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

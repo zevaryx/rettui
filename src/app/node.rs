@@ -428,7 +428,19 @@ impl App {
     /// terminal UI with changes not saved (it's said). Its new path.
     pub fn node_rename_in(&mut self, root: Root, from: &str, to: &str, scripts: bool) -> Result<String, String> {
         let to = match root {
-            Root::Pages => pages::normalize_name(to)?,
+            Root::Pages => {
+                // A picture (or other file there) stays one when its new
+                // name is typed without its extension, rather than becoming
+                // a page.
+                let typed = to.trim();
+                let name = typed.rsplit('/').next().unwrap_or(typed);
+                let extension =
+                    from.rsplit_once('.').map(|(_, ext)| ext).filter(|ext| !ext.contains('/') && !ext.eq_ignore_ascii_case("mu"));
+                match extension {
+                    Some(ext) if !name.contains('.') && !name.is_empty() => pages::normalize_name(&format!("{typed}.{ext}"))?,
+                    _ => pages::normalize_name(typed)?,
+                }
+            }
             Root::Files => {
                 let to = to.trim().trim_matches('/').to_string();
                 nomad_core::validate_content_relative_path(&to).map_err(|e| format!("Not a name for the node: {e}"))?;
@@ -448,7 +460,12 @@ impl App {
             editor.path = to.clone();
         }
         let unsaved = open.as_ref().filter(|(_, dirty)| *dirty).map(|(path, _)| if path == from { to.clone() } else { path.clone() });
-        let relinked = store.relink(root, from, &to, unsaved.as_deref())?;
+        let node = hex::encode(self.node.hash);
+        // Moved, whatever comes of its links.
+        let relinked = store.relink(root, from, &to, unsaved.as_deref(), Some(&node)).unwrap_or_else(|e| {
+            self.warn(format!("Moved {from}, but links to it weren't all updated: {e}"));
+            Vec::new()
+        });
         // The open page, its links changed on disk: shown as saved.
         if let Some(editor) = self.node.editor.as_mut().filter(|e| !e.dirty() && relinked.contains(&e.path))
             && let Ok(text) = store.read(&editor.path)
@@ -999,6 +1016,16 @@ mod tests {
         assert!(page_text(&app).contains(":/file/docs/notes.txt"));
         assert!(std::fs::read_to_string(node.join("pages/index.mu")).unwrap().contains(":/file/docs/notes.txt"));
         assert!(app.node_rows().iter().all(|row| !matches!(row, NodeRow::Folder { path, .. } if path == "docs")));
+
+        // A picture renamed without its extension stays a picture.
+        let added = app.node_add_file("logo.png", &photo(40, 40)).unwrap();
+        let path = added.address.trim_start_matches(":/media/").to_string();
+        let ext = path.rsplit_once('.').unwrap().1.to_string();
+        assert_eq!(app.node_rename_in(Root::Pages, &path, "art/badge", true).unwrap(), format!("art/badge.{ext}"));
+        // Only files move in files/, not folders of them.
+        app.node_move(Root::Files, "notes.txt", "keep", true).unwrap();
+        assert!(app.node_rename_in(Root::Files, "keep", "elsewhere", true).is_err());
+        assert!(node.join("files/keep/notes.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
