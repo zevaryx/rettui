@@ -65,6 +65,8 @@ pub struct Settings {
     pub show_joins: bool,
     /// The date with each chat line's time (RRC rooms).
     pub chat_dates: bool,
+    /// Messages each RRC room and whisper conversation keeps.
+    pub rrc_messages_kept: u64,
     /// Notifications for new LXMF messages (each conversation can be muted).
     pub notify_messages: bool,
     /// Notifications from RRC (each hub and room has its own level).
@@ -179,6 +181,7 @@ impl Default for Settings {
             node_executable_pages: false,
             show_joins: true,
             chat_dates: true,
+            rrc_messages_kept: 500,
             wrap_lines: false,
             notify_messages: true,
             notify_rrc: true,
@@ -528,6 +531,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "picture_size",
             "messages_kept",
             "message_storage_mb",
+            "rrc_messages_kept",
         ],
     ),
     (Section::Location, &["location", "location_requests", "map_tiles", "map_tiles_file"]),
@@ -727,6 +731,13 @@ pub const FIELDS: &[Field] = &[
         key: "messages_kept",
         label: "Messages kept",
         help: "Newest messages each conversation keeps and shows; older ones move to the archive (archive/ in the data directory). 0 keeps all",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "rrc_messages_kept",
+        label: "Chat messages kept",
+        help: "Newest messages each RRC room and whisper conversation keeps (also across restarts), 50 to 100000. People joining and leaving and the hub's notices don't count. Fewer: the oldest go at once",
         kind: FieldKind::Number,
         effect: Effect::Now,
     },
@@ -974,6 +985,9 @@ const MAX_STAMP_COST: u64 = 254;
 const MAX_MESSAGE_KB: u64 = 1_000_000;
 /// Most messages a conversation may be set to keep.
 const MAX_MESSAGES_KEPT: u64 = 1_000_000;
+/// Chat messages kept per room: each room's history file is written whole.
+const MIN_RRC_MESSAGES_KEPT: u64 = 50;
+const MAX_RRC_MESSAGES_KEPT: u64 = 100_000;
 /// Largest storage limit, in megabytes (a petabyte, so bytes can't overflow).
 const MAX_STORAGE_MB: u64 = 1_000_000_000;
 
@@ -1044,6 +1058,7 @@ impl Settings {
             "sync_interval_mins" => self.sync_interval_mins.to_string(),
             "auto_propagation_node" => self.auto_propagation_node.to_string(),
             "messages_kept" => self.messages_kept.to_string(),
+            "rrc_messages_kept" => self.rrc_messages_kept.to_string(),
             "message_storage_mb" => self.message_storage_mb.to_string(),
             "cache_hours" => self.cache_hours.to_string(),
             "node_enabled" => self.node_enabled.to_string(),
@@ -1252,6 +1267,13 @@ impl Settings {
             "announce_random_max_mins" => self.announce_random_max_mins = between(value, ANNOUNCE_MINS).map_err(fail)?,
             "sync_interval_mins" => self.sync_interval_mins = number(value, MAX_MINUTES).map_err(fail)?,
             "messages_kept" => self.messages_kept = number(value, MAX_MESSAGES_KEPT).map_err(fail)?,
+            "rrc_messages_kept" => {
+                let n = number(value, MAX_RRC_MESSAGES_KEPT).map_err(fail)?;
+                if n < MIN_RRC_MESSAGES_KEPT {
+                    return Err(fail(format!("at least {MIN_RRC_MESSAGES_KEPT}")));
+                }
+                self.rrc_messages_kept = n;
+            }
             "message_storage_mb" => self.message_storage_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
             "cache_hours" => self.cache_hours = number(value, MAX_HOURS).map_err(fail)?,
             "propagation_node" => {
