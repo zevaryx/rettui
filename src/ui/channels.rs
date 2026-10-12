@@ -56,6 +56,10 @@ fn marked(piece: &str, offset: usize, marks: &[(usize, usize, Style)], style: St
     spans
 }
 
+/// A chat line's rows, the columns of its sender's name, and its links on
+/// each row (see [`chat_lines`]).
+type ChatRows = (Vec<Line<'static>>, Option<(usize, usize)>, Vec<Vec<RowLink>>);
+
 /// One chat line, wrapped to `width` with continuation lines indented.
 /// Returns the rows, the columns of the sender's name on the first row
 /// (for clicking it), and the links written in it on each row.
@@ -66,7 +70,7 @@ fn chat_lines(
     own: (&str, &[u8]),
     people: &[(String, Vec<u8>)],
     (whisper, dates): (bool, bool),
-) -> (Vec<Line<'static>>, Option<(usize, usize)>, Vec<Vec<RowLink>>) {
+) -> ChatRows {
     let (own_nick, own_id) = own;
     let time = Local
         .timestamp_millis_opt(line.ts as i64)
