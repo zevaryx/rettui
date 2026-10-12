@@ -341,6 +341,38 @@ impl App {
         self.load(location, false, false);
     }
 
+    /// A link written in a message (see [`crate::links`]): a page or file
+    /// opens in the Browser, an address its conversation, a hub in
+    /// Channels (asking first, for a hub not added yet).
+    pub fn open_address(&mut self, url: &str) {
+        let url = url.trim();
+        // Schemes in any case, as they're found.
+        let scheme = url.find("://").or_else(|| url.find('@')).filter(|&i| url[..i].chars().all(|c| c.is_ascii_alphabetic()));
+        let url = match scheme {
+            Some(i) => format!("{}{}", url[..i].to_ascii_lowercase(), &url[i..]),
+            None => url.to_string(),
+        };
+        if url.starts_with("rrc://") || url.starts_with("rrc@") {
+            return self.open_rrc_link(&url);
+        }
+        if url.starts_with("lxma://") {
+            return match self.add_contact(&url) {
+                Ok(key) => self.open_conversation(key),
+                Err(e) => self.warn(e),
+            };
+        }
+        if let Some(hash) = url.strip_prefix("lxmf@").or_else(|| url.strip_prefix("lxmf://")) {
+            return match parse_hash(hash) {
+                Some(hash) => self.open_conversation(hex::encode(hash)),
+                None => self.warn(format!("Bad LXMF address: {url}")),
+            };
+        }
+        match self.resolve(&url) {
+            Some(location) => self.navigate(location),
+            None => self.warn(format!("Cannot open {url}")),
+        }
+    }
+
     pub fn navigate(&mut self, location: Location) {
         self.load(location, true, false);
     }

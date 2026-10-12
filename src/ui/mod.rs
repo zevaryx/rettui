@@ -15,6 +15,7 @@ mod forward;
 mod guide;
 mod hub;
 mod keys;
+mod linked;
 mod map;
 mod messages;
 mod network;

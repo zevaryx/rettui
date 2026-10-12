@@ -821,6 +821,35 @@ mod tests {
     }
 
     #[test]
+    fn hubs_and_pages_said_in_a_room_are_links() {
+        let mut hubs = Hubs::connected("links");
+        hubs.join("lobby", &[OWN, AMY]);
+        let other_hub = format!("rrc://{}/radio", "12".repeat(16));
+        hubs.said("lobby", AMY, "amy", &format!("come to {other_hub} later"));
+        let app = &mut hubs.app;
+        app.tab = crate::app::Tab::Channels;
+        app.channels.selected = Some(super::super::Target { hub: HUB, room: Some("lobby".into()) });
+        app.channels.typing = false;
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        // Too long for the narrow view (beside the members): one link on
+        // two rows, each part opening it.
+        let links = app.regions.channel_links.clone();
+        assert!(links.len() == 2 && links.iter().all(|(_, url)| *url == other_hub), "{links:?}");
+        assert_eq!(links.iter().map(|(rect, _)| rect.width as usize).sum::<usize>(), other_hub.len());
+        let (rect, _) = links[1];
+        // A hub not added yet: asked first (it learns your identity).
+        let click = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        app.on_mouse(click);
+        assert!(matches!(app.prompt.as_ref().map(|p| &p.kind), Some(crate::app::PromptKind::ConfirmHub { .. })));
+    }
+
+    #[test]
     fn how_many_messages_are_kept_is_a_setting() {
         let mut hubs = Hubs::connected("kept");
         hubs.join("lobby", &[OWN, AMY]);

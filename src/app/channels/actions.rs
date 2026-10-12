@@ -291,6 +291,10 @@ impl App {
             }
             return;
         }
+        let link = self.regions.channel_links.iter().find(|(rect, _)| rect.contains(at)).map(|(_, url)| url.clone());
+        if let Some(url) = link {
+            return self.open_address(&url);
+        }
         let user = self.regions.channel_users.iter().find(|(rect, _)| rect.contains(at)).map(|(_, id)| id.clone());
         if let Some(identity) = user {
             return self.open_user_menu(&identity);

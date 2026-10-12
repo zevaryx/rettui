@@ -307,6 +307,8 @@ pub struct Regions {
     pub channel_rooms: Vec<(Rect, String)>,
     /// Clickable users: names in the history and the members list.
     pub channel_users: Vec<(Rect, Vec<u8>)>,
+    /// Links written in the history (see [`crate::links`]).
+    pub channel_links: Vec<(Rect, String)>,
     /// The user menu or member picker's list.
     pub channel_popup: Rect,
     /// Names in the list `@` opens while typing.
@@ -330,6 +332,9 @@ pub enum HistoryHit {
     Original(usize),
     /// Open a link (a location, on a map).
     Link(String),
+    /// Open a page, a conversation or a hub written in a message (see
+    /// [`crate::links`]).
+    Address(String),
     /// Do something with a message (its index): the picked message's
     /// buttons.
     Action(usize, MessageAction),

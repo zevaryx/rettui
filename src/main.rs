@@ -6,6 +6,7 @@ mod config;
 mod emoji;
 mod https;
 mod icons;
+mod links;
 mod logging;
 mod lxmf;
 mod markdown;

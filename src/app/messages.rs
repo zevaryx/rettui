@@ -1353,6 +1353,7 @@ impl App {
                 Some(HistoryHit::Pick(index)) => self.pick_index(index),
                 Some(HistoryHit::Original(index)) => self.scroll_to = Some(index),
                 Some(HistoryHit::Link(url)) => self.open_url(&url),
+                Some(HistoryHit::Address(url)) => self.open_address(&url),
                 Some(HistoryHit::Action(index, action)) => self.message_action(index, action),
                 None => {}
             }

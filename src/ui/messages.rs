@@ -251,8 +251,11 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     lines.extend(layout.lines.into_iter().map(|line| (line, None)));
                 }
                 None => {
-                    for line in wrap(&message.content, inner_width) {
-                        lines.push((Line::raw(line), None));
+                    // Links written in it: on every row they're on.
+                    for (line, hits) in super::linked::plain_rows(&message.content, inner_width, Style::default()) {
+                        let row = lines.len();
+                        buttons.extend(hits.into_iter().map(|(from, to, url)| (row, from, to - from, HistoryHit::Address(url))));
+                        lines.push((line, None));
                     }
                 }
             }
@@ -355,10 +358,28 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let top = max_scroll - app.message_scroll;
     let (visible, rows): (Vec<Line>, Vec<Option<HistoryHit>>) = lines.into_iter().skip(top).take(height).unzip();
+    // Pages, addresses and hubs written in formatted messages, quotes and
+    // the rest: links, found in the row (plain messages have theirs).
+    let linked: std::collections::HashSet<usize> =
+        buttons.iter().filter(|(.., hit)| matches!(hit, HistoryHit::Address(_))).map(|(row, ..)| *row).collect();
+    let mut link_buttons: Vec<HistoryButton> = Vec::new();
+    let visible: Vec<Line> = visible
+        .into_iter()
+        .enumerate()
+        .map(|(row, line)| {
+            if linked.contains(&(top + row)) {
+                return line;
+            }
+            let (line, hits) = super::linked::linkify(line);
+            link_buttons.extend(hits.into_iter().map(|(from, to, url)| (top + row, from, to - from, HistoryHit::Address(url))));
+            line
+        })
+        .collect();
     app.regions.history = history_inner;
     app.regions.history_rows = rows;
     app.regions.history_buttons = buttons
         .into_iter()
+        .chain(link_buttons)
         .filter(|(row, ..)| (top..top + height).contains(row))
         .map(|(row, x, width, hit)| {
             let rect = Rect::new(history_inner.x + x as u16, history_inner.y + (row - top) as u16, width as u16, 1);
@@ -488,6 +509,54 @@ mod tests {
         terminal.draw(|frame| super::super::draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn pages_and_addresses_in_messages_are_links() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        use crate::app::{HistoryHit, Tab};
+        use crate::store::{Conversation, Message, MessageState};
+        let dir = std::env::temp_dir().join(format!("rettui-links-ui-{}", std::process::id()));
+        let (node, other) = ("cd".repeat(16), "ef".repeat(16));
+        let page = format!("{node}:/page/index.mu");
+        let message = Message {
+            id: "m1".into(),
+            incoming: true,
+            content: format!("See {page}, or write to lxmf@{other}."),
+            state: MessageState::Received { verified: true },
+            ..Message::default()
+        };
+        let mut store = Store::default();
+        store.conversations.insert("ab".repeat(16), Conversation { messages: vec![message], ..Default::default() });
+        let mut app = test_app(&dir, Settings::default(), store);
+        app.open_newest_conversation();
+        draw(&mut app, 120, 30);
+        let link = |app: &App, url: &str| {
+            let hit = HistoryHit::Address(url.to_string());
+            app.regions.history_buttons.iter().find(|(_, h)| *h == hit).map(|(rect, _)| *rect).unwrap()
+        };
+        let click = |app: &mut App, rect: ratatui::layout::Rect| {
+            let event = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x + 2,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            };
+            app.on_mouse(event);
+        };
+        // The page opens in the Browser.
+        let rect = link(&app, &page);
+        assert_eq!(rect.width as usize, page.len());
+        click(&mut app, rect);
+        assert_eq!(app.tab, Tab::Browser);
+        // The address, its conversation.
+        app.tab = Tab::Messages;
+        draw(&mut app, 120, 30);
+        let rect = link(&app, &format!("lxmf@{other}"));
+        click(&mut app, rect);
+        assert_eq!((app.tab, app.active_conversation.as_deref()), (Tab::Messages, Some(other.as_str())));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+use super::linked::RowLink;
 use super::{accent, block, dim, picked_style, selected_bg, wrap};
 use crate::app::App;
 use crate::app::channels::users::UserAction;
@@ -56,8 +57,8 @@ fn marked(piece: &str, offset: usize, marks: &[(usize, usize, Style)], style: St
 }
 
 /// One chat line, wrapped to `width` with continuation lines indented.
-/// Returns the rows and the columns of the sender's name on the first row
-/// (for clicking it).
+/// Returns the rows, the columns of the sender's name on the first row
+/// (for clicking it), and the links written in it on each row.
 fn chat_lines(
     line: &ChatLine,
     hub: &crate::app::channels::Hub,
@@ -65,7 +66,7 @@ fn chat_lines(
     own: (&str, &[u8]),
     people: &[(String, Vec<u8>)],
     (whisper, dates): (bool, bool),
-) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
+) -> (Vec<Line<'static>>, Option<(usize, usize)>, Vec<Vec<RowLink>>) {
     let (own_nick, own_id) = own;
     let time = Local
         .timestamp_millis_opt(line.ts as i64)
@@ -108,6 +109,12 @@ fn chat_lines(
         let color = if id == own_id { accent() } else { nick_color(Some(&hex::encode(id))) };
         marks.push((start, end, text_style.fg(color).bold()));
     }
+    // Pages, addresses and hubs written in it: links (not over a mention).
+    let found: Vec<crate::links::Found> = crate::links::find(&line.text)
+        .into_iter()
+        .filter(|f| !marks.iter().any(|&(start, end, _)| start < f.end && f.start < end))
+        .collect();
+    marks.extend(found.iter().map(|f| (f.start, f.end, super::linked::link_style(text_style))));
     marks.sort_by_key(|&(start, ..)| start);
     let prefix_width = prefix.iter().map(Span::width).sum::<usize>();
     let lead = time.width() + prefix_width;
@@ -121,6 +128,7 @@ fn chat_lines(
     let body_width = width.saturating_sub(lead).max(8);
     let rest_width = width.saturating_sub(indent).max(8);
     let mut out = Vec::new();
+    let mut links: Vec<Vec<RowLink>> = Vec::new();
     let mut first = true;
     let mut paragraph_start = 0;
     for raw in line.text.split('\n') {
@@ -138,6 +146,7 @@ fn chat_lines(
         for piece in pieces {
             let at = paragraph[cursor..].find(piece.as_str()).map_or(cursor, |i| cursor + i);
             cursor = at + piece.len();
+            links.push(super::linked::row_links(&found, paragraph_start + at, &piece, if first { lead } else { indent }));
             let mut spans = if first {
                 let mut head = vec![Span::styled(time.clone(), Style::default().fg(dim()))];
                 head.extend(prefix.iter().cloned());
@@ -156,7 +165,7 @@ fn chat_lines(
     {
         last.spans.push(Span::styled(" …", Style::default().fg(dim())));
     }
-    (out, name_cols)
+    (out, name_cols, links)
 }
 
 pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -372,24 +381,26 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         app.channels.scroll = after.saturating_sub(height / 2);
     }
     let needed = app.channels.scroll + height;
-    let mut tail: Vec<(Line, Link)> = Vec::new();
+    let mut tail: Vec<(Line, Link, Vec<RowLink>)> = Vec::new();
     let mut whole = true;
     for (at, line) in buffer.iter().enumerate().rev().filter(|(_, l)| l.shown(show_joins)) {
         if tail.len() >= needed {
             whole = false;
             break;
         }
-        let (mut rendered, name_cols) = chat_lines(line, hub, width, (&own_nick, &app.identity_hash), &people, (whisper.is_some(), dates));
+        let (mut rendered, name_cols, mut row_links) =
+            chat_lines(line, hub, width, (&own_nick, &app.identity_hash), &people, (whisper.is_some(), dates));
         if found == Some(at) {
             rendered = rendered.into_iter().map(|row| row.patch_style(Style::default().bg(selected_bg()))).collect();
         }
         let user = line.src.as_deref().and_then(|s| hex::decode(s).ok());
-        for (i, row) in rendered.into_iter().enumerate().rev() {
+        row_links.resize(rendered.len(), Vec::new());
+        for (i, (row, hits)) in rendered.into_iter().zip(row_links).enumerate().rev() {
             let link = match (i, name_cols, &user) {
                 (0, Some((from, to)), Some(id)) => Link::User(id.clone(), from, to),
                 _ => Link::None,
             };
-            tail.push((row, link));
+            tail.push((row, link, hits));
         }
     }
     tail.reverse();
@@ -398,14 +409,23 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     if !whole {
         lines.clear();
     }
+    let mut lines: Vec<(Line, Link, Vec<RowLink>)> = lines.into_iter().map(|(line, link)| (line, link, Vec::new())).collect();
     lines.extend(tail);
     let max_scroll = lines.len().saturating_sub(height);
     app.channels.scroll = app.channels.scroll.min(max_scroll);
     let top = max_scroll - app.channels.scroll;
     let mut visible = Vec::new();
     app.regions.channel_users.clear();
-    for (row, (line, link)) in lines.into_iter().skip(top).take(height).enumerate() {
+    app.regions.channel_links.clear();
+    for (row, (line, link, hits)) in lines.into_iter().skip(top).take(height).enumerate() {
         let y = inner.y + row as u16;
+        // Pages, addresses and hubs written in the chat: links (found in
+        // the row itself, for the hub's own info).
+        let (line, hits) = if hits.is_empty() { super::linked::linkify(line) } else { (line, hits) };
+        for (from, to, url) in hits {
+            let rect = Rect::new(inner.x + from as u16, y, (to - from) as u16, 1).intersection(inner);
+            app.regions.channel_links.push((rect, url));
+        }
         match link {
             Link::Room(name) => app.regions.channel_rooms.push((Rect::new(inner.x, y, inner.width, 1), name)),
             Link::User(id, from, to) => {
