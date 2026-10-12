@@ -588,6 +588,10 @@ mark { background: var(--yellow-bg); color: #111; border-radius: 2px; }
 .m-table th { font-weight: 700; }
 textarea.m-field { resize: vertical; vertical-align: top; }
 .m-link:hover { filter: brightness(1.25); }
+/* Pages, addresses and hubs written in chat: links, which long ones may
+   break anywhere to fit. */
+a.chat-link { color: var(--cyan); text-decoration: underline; overflow-wrap: anywhere; word-break: break-all; }
+a.chat-link:hover { filter: brightness(1.25); }
 .m-divider { white-space: nowrap; overflow: hidden; }
 .m-image img { max-width: 100%; border-radius: 4px; }
 .m-field { background: var(--field-bg); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-family: var(--mono); font-size: 13px; max-width: 100%; }

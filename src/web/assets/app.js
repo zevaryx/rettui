@@ -1590,9 +1590,115 @@ function browse(url) {
   app.views.browser.go(url);
 }
 
+// Pages, addresses and hubs written in chat, as rettui's src/links.rs
+// finds them (the same rules: keep the two alike): NomadNet pages and files
+// (<node>:/page/…, also after nomadnetwork://), LXMF addresses (lxmf@,
+// lxmf://, lxma:// with a key) and RRC hubs (rrc://hub/room, rrc@hub). A
+// bare hash isn't linked; punctuation after a link isn't part of it.
+// [start, end, url] for each, in order.
+const LINK_HASH = /[0-9a-fA-F]{32}(?![0-9A-Za-z])/y;
+const LINK_TRAILING = /[.,;:!?)\]}>'"*_`]+$/;
+function findLinks(text) {
+  const has = (at, prefix) => text.slice(at, at + prefix.length).toLowerCase() === prefix;
+  const hashEnd = (at) => {
+    LINK_HASH.lastIndex = at;
+    return LINK_HASH.test(text) ? at + 32 : -1;
+  };
+  // A run up to whitespace, less the punctuation after it (never before min).
+  const runEnd = (at, min) => {
+    const space = text.slice(at).search(/\s/);
+    const end = space < 0 ? text.length : at + space;
+    return min + text.slice(min, end).replace(LINK_TRAILING, '').length;
+  };
+  const linkAt = (at) => {
+    for (const prefix of ['rrc://', 'rrc@']) {
+      if (!has(at, prefix)) continue;
+      const end = hashEnd(at + prefix.length);
+      if (end < 0) return null;
+      const stop = text[end] === ':' || text[end] === '/' ? runEnd(end, end) : end;
+      return [stop, text.slice(at, stop)];
+    }
+    if (has(at, 'lxma://')) {
+      const end = hashEnd(at + 7);
+      if (end < 0 || (text[end] !== ':' && text[end] !== '/')) return null;
+      const key = text.slice(end + 1, end + 129);
+      if (!/^[0-9a-fA-F]{128}$/.test(key) || /[0-9A-Za-z]/.test(text[end + 129] || '')) return null;
+      return [end + 129, text.slice(at, end + 129)];
+    }
+    for (const prefix of ['lxmf://', 'lxmf@']) {
+      if (!has(at, prefix)) continue;
+      const end = hashEnd(at + prefix.length);
+      return end < 0 ? null : [end, text.slice(at, end)];
+    }
+    const node = has(at, 'nomadnetwork://') ? at + 15 : at;
+    const end = hashEnd(node);
+    if (end < 0) return null;
+    const route = ['page/', 'file/'].find((r) => text.startsWith(':/' + r, end));
+    if (!route) return null;
+    const path = end + 2 + route.length;
+    const stop = runEnd(path, path);
+    return stop > path ? [stop, text.slice(node, stop)] : null;
+  };
+  const found = [];
+  let at = 0;
+  while (at < text.length) {
+    if (at === 0 || !/[A-Za-z0-9_]/.test(text[at - 1])) {
+      const link = linkAt(at);
+      if (link) {
+        found.push([at, link[0], link[1]]);
+        at = link[0];
+        continue;
+      }
+    }
+    at += 1;
+  }
+  return found;
+}
+
+// Open a link written in chat: a page or file in the Browser, an address's
+// conversation, a hub in Channels (asking first for one not added yet).
+function openLink(url) {
+  url = url.replace(/^[a-z]+(?=:\/\/|@)/i, (scheme) => scheme.toLowerCase());
+  if (url.startsWith('lxma://') || url.startsWith('lxmf@') || url.startsWith('lxmf://')) return openConversation(url);
+  if (url.startsWith('rrc://') || url.startsWith('rrc@')) return openHubLink(url);
+  browse(url);
+}
+
+function linkNode(text, url) {
+  return el('a', { class: 'chat-link', href: '#', text, title: url, onclick: (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openLink(url);
+  } });
+}
+
+// Plain text with the links in it (see findLinks).
+function linked(text) {
+  const out = [];
+  let at = 0;
+  for (const [start, end, url] of findLinks(text)) {
+    if (start > at) out.push(text.slice(at, start));
+    out.push(linkNode(text.slice(start, end), url));
+    at = end;
+  }
+  if (at < text.length) out.push(text.slice(at));
+  return out;
+}
+
+// The links in an element's text (not in what's a link already).
+function linkTextIn(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) {
+    if (!walker.currentNode.parentElement.closest('a, .m-link') && findLinks(walker.currentNode.data).length) nodes.push(walker.currentNode);
+  }
+  for (const node of nodes) node.replaceWith(...linked(node.data));
+}
+
 // A formatted message's text: HTML the server made from its Markdown or
 // Micron (all of the sender's text escaped). Micron links open in the
-// Browser (or a conversation, for lxmf@ links).
+// Browser (or a conversation, for lxmf@ links), and so do pages, addresses
+// and hubs written in it.
 function formattedContent(html) {
   const node = el('div', { class: 'content formatted', onclick: (e) => {
     const link = e.target.closest('.m-link');
@@ -1601,6 +1707,7 @@ function formattedContent(html) {
     browse(link.dataset.url);
   } });
   node.innerHTML = html;
+  linkTextIn(node);
   return node;
 }
 
@@ -3234,7 +3341,7 @@ app.views.messages = {
         actions ? el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) }) : null),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
-      m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content', text: m.content }) : null,
+      m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content' }, ...linked(m.content)) : null,
       m.location ? el('div', { class: 'location' }, '📍 ',
         el('a', { href: m.location.map, target: '_blank', rel: 'noopener noreferrer', text: m.location.label, title: 'Show it on OpenStreetMap' }),
         el('button', { class: 'inline', text: 'Map', title: 'Show it on the map, with everyone else\'s', onclick: () => mapDialog({ at: m.location, name: m.incoming ? conversation.name : 'You', key: m.incoming ? conversation.key : null }) })) : null,
@@ -3476,7 +3583,7 @@ app.views.messages = {
         el('span', { class: 'dim', text: '  ' + timeLabel(Date.now() / 1000) }),
         el('span', { class: 'dim', text: ' sending…' })),
       reply ? el('div', { class: 'reply-quote' }, el('span', { class: 'quote-author', text: `${reply.author}: ` }), reply.text) : null,
-      content ? el('div', { class: 'content', text: content }) : null,
+      content ? el('div', { class: 'content' }, ...linked(content)) : null,
       pending.map((f) => el('div', { class: 'attachment dim', text: `📎 ${f.name}` })),
       voice ? el('div', { class: 'attachment dim', text: `🎤 Voice message, ${Math.round(voice.seconds)} s` }) : null));
     const files = [];
@@ -4064,19 +4171,23 @@ app.views.channels = {
   // Text with the mentions of us highlighted, and `@name` mentions of
   // others in their colour (both as UTF-16 ranges from the server).
   marked(text, highlights, mentions = []) {
-    const ranges = [
+    const marks = [
       ...highlights.map(([start, end]) => [start, end, { class: 'mention' }]),
       ...mentions.map(([start, end, src]) => [start, end, {
         class: 'user-mention',
         style: `color:${src === this.view?.own_src ? 'var(--accent)' : nickColor(src)}`,
       }]),
-    ].sort((a, b) => a[0] - b[0]);
+    ];
+    // Pages, addresses and hubs written in it: links (not over a mention).
+    const links = findLinks(text).filter(([start, end]) => !marks.some(([s, e]) => s < end && start < e))
+      .map(([start, end, url]) => [start, end, { url }]);
+    const ranges = [...marks, ...links].sort((a, b) => a[0] - b[0]);
     const out = [];
     let at = 0;
     for (const [start, end, attrs] of ranges) {
       if (start < at || end <= start) continue;
       if (start > at) out.push(text.slice(at, start));
-      out.push(el('span', { ...attrs, text: text.slice(start, end) }));
+      out.push(attrs.url ? linkNode(text.slice(start, end), attrs.url) : el('span', { ...attrs, text: text.slice(start, end) }));
       at = end;
     }
     if (at < text.length) out.push(text.slice(at));

@@ -244,7 +244,13 @@ pub fn parse_contact(text: &str) -> Result<(Hash, Option<[u8; 64]>), String> {
             .map(|(address, key)| (address, Some(key)))
             .ok_or_else(|| "Not a valid lxma:// link (its key doesn't match its address)".to_string());
     }
-    crate::net::parse_hash(text)
+    // As links write it: lxmf@<address>, lxmf://<address>.
+    let text = text.trim();
+    let bare = ["lxmf@", "lxmf://"]
+        .iter()
+        .find_map(|prefix| text.get(..prefix.len()).filter(|p| p.eq_ignore_ascii_case(prefix)).map(|p| &text[p.len()..]))
+        .unwrap_or(text);
+    crate::net::parse_hash(bare)
         .map(|address| (address, None))
         .ok_or_else(|| "An LXMF address is 32 hex characters (or an lxma:// link)".to_string())
 }
@@ -306,6 +312,9 @@ mod tests {
         assert_eq!(parse_identity_link(&theirs), None);
         assert!(parse_contact(&theirs).is_err());
         assert_eq!(parse_contact(&format!("<{}>", hex::encode(address))), Ok((address, None)));
+        // As links write addresses (a page's, a message's).
+        assert_eq!(parse_contact(&format!("lxmf@{}", hex::encode(address))), Ok((address, None)));
+        assert_eq!(parse_contact(&format!("LXMF://{}", hex::encode(address))), Ok((address, None)));
         assert!(parse_contact("hello").is_err());
     }
 
