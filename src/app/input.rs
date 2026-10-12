@@ -3,9 +3,9 @@
 use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Position;
+use ratatui::layout::{Position, Rect};
 
-use super::{App, BrowserFocus, PromptKind, Tab};
+use super::{App, BrowserFocus, ChatSelection, PromptKind, Tab};
 use crate::net::NetCommand;
 use crate::nomad::micron;
 use crate::term::selection::Selection;
@@ -386,12 +386,23 @@ impl App {
                     None => {}
                 }
             }
+            // In a chat history, dragging selects text, copied on release.
+            MouseEventKind::Drag(MouseButton::Left) if self.chat_selection.is_some_and(|s| s.dragging) => self.drag_chat(at),
+            MouseEventKind::Up(MouseButton::Left) if self.chat_selection.is_some_and(|s| s.dragging) => self.end_chat_selection(),
             // In the page editor, dragging selects text.
             MouseEventKind::Drag(MouseButton::Left) if self.tab == Tab::Node && self.node.dragging => self.drag_node(at),
             MouseEventKind::Up(MouseButton::Left) if self.node.dragging => self.node.dragging = false,
             MouseEventKind::Down(MouseButton::Left) => {
                 let double = self.last_click.is_some_and(|(when, pos)| pos.y == at.y && when.elapsed() < DOUBLE_CLICK);
                 self.last_click = Some((Instant::now(), at));
+                // A press in a chat history may start a selection (and is a
+                // click all the same: a link, a name, a message).
+                self.chat_selection = self.chat_history().filter(|area| area.contains(at)).map(|area| ChatSelection {
+                    tab: self.tab,
+                    area,
+                    selection: Selection::at((at.y - area.y) as usize, (at.x - area.x) as usize),
+                    dragging: true,
+                });
                 self.click(at, double);
             }
             MouseEventKind::Down(MouseButton::Right) if self.tab == Tab::Browser => self.back(),
@@ -399,7 +410,48 @@ impl App {
         }
     }
 
+    /// The chat history on screen, if this tab has one.
+    fn chat_history(&self) -> Option<Rect> {
+        match self.tab {
+            Tab::Messages => Some(self.regions.history),
+            Tab::Channels if self.channels.menu.is_none() && self.channels.picker.is_none() => Some(self.regions.channel_history),
+            _ => None,
+        }
+        .filter(|area| !area.is_empty())
+    }
+
+    /// Selecting in a chat history: to where the pointer is (held inside it).
+    fn drag_chat(&mut self, at: Position) {
+        let Some(chat) = &mut self.chat_selection else { return };
+        let area = chat.area;
+        let x = at.x.clamp(area.x, area.right() - 1) - area.x;
+        let y = at.y.clamp(area.y, area.bottom() - 1) - area.y;
+        chat.selection.head = (y as usize, x as usize);
+    }
+
+    /// The button's up: what's selected is copied (a click selects
+    /// nothing).
+    fn end_chat_selection(&mut self) {
+        let Some(chat) = &mut self.chat_selection else { return };
+        chat.dragging = false;
+        let chat = *chat;
+        if chat.selection.is_empty() || chat.tab != self.tab {
+            self.chat_selection = None;
+            return;
+        }
+        let text = chat.selection.extract(&self.regions.chat_text);
+        if text.trim().is_empty() {
+            self.chat_selection = None;
+            return;
+        }
+        self.copy(&text, "the selected text");
+    }
+
     fn scroll(&mut self, at: Position, delta: isize) {
+        // What's selected moves with the history: let go of it.
+        if matches!(self.tab, Tab::Messages | Tab::Channels) {
+            self.chat_selection = None;
+        }
         let apply = |value: usize| value.saturating_add_signed(delta);
         match self.tab {
             Tab::Messages if self.regions.conversations.contains(at) => {

@@ -12,6 +12,9 @@ pub struct Clipboard {
     /// Kept alive for the whole session: on X11 and Wayland the copying
     /// process serves the clipboard contents.
     system: Option<arboard::Clipboard>,
+    /// What was copied last, for tests to see.
+    #[cfg(test)]
+    pub last: Option<String>,
 }
 
 impl Clipboard {
@@ -23,12 +26,20 @@ impl Clipboard {
         } else {
             arboard::Clipboard::new().inspect_err(|e| tracing::info!("no system clipboard ({e}); using OSC 52")).ok()
         };
-        Self { system }
+        Self {
+            system,
+            #[cfg(test)]
+            last: None,
+        }
     }
 
     /// Copy text. Always also sent as OSC 52, so it lands in the local
     /// clipboard even when rettui runs over SSH.
     pub fn copy(&mut self, text: &str) {
+        #[cfg(test)]
+        {
+            self.last = Some(text.to_string());
+        }
         if let Some(system) = &mut self.system
             && let Err(e) = system.set_text(text.to_string())
         {

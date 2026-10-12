@@ -309,6 +309,9 @@ pub struct Regions {
     pub channel_users: Vec<(Rect, Vec<u8>)>,
     /// Links written in the history (see [`crate::links`]).
     pub channel_links: Vec<(Rect, String)>,
+    /// The chat history on screen (Messages or Channels), a string per row
+    /// as drawn: what selecting copies.
+    pub chat_text: Vec<String>,
     /// The user menu or member picker's list.
     pub channel_popup: Rect,
     /// Names in the list `@` opens while typing.
@@ -319,6 +322,18 @@ pub struct Regions {
     /// Hub tab: its panes' tabs, and the list.
     pub hub_panes: Vec<(Rect, hub::HubPane)>,
     pub hub_list: Rect,
+}
+
+/// Text being selected (or selected) in a chat history with the mouse: in
+/// cells of the history as it's drawn, as a terminal selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChatSelection {
+    pub tab: Tab,
+    /// The history's area, which the rows and columns are in.
+    pub area: Rect,
+    pub selection: crate::term::selection::Selection,
+    /// The button is still down.
+    pub dragging: bool,
 }
 
 /// What a click on a history row does.
@@ -519,12 +534,14 @@ pub struct App {
     pub regions: Regions,
     /// Kitty graphics support, if the terminal has it.
     pub graphics: Option<Graphics>,
-    clipboard: Clipboard,
+    pub(crate) clipboard: Clipboard,
     /// Short confirmation shown in the footer (e.g. "Copied address").
     pub notice: Option<Notice>,
     cache: Cache,
     /// Time and cell of the previous left click, for double-click detection.
     last_click: Option<(Instant, Position)>,
+    /// Text selected with the mouse in a chat history (Messages, Channels).
+    pub chat_selection: Option<ChatSelection>,
     next_request: u64,
     /// A Reticulum restart the event loop should carry out.
     restart_pending: bool,
@@ -666,6 +683,7 @@ impl App {
             notice: None,
             cache,
             last_click: None,
+            chat_selection: None,
             next_request: 1,
             restart_pending: false,
             connect_watch: None,

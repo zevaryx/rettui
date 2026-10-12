@@ -387,6 +387,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     frame.render_widget(Paragraph::new(visible).block(history_block), history_area);
+    super::linked::selectable(frame, app, history_inner);
     draw_placements(&placements, top, history_inner, frame.buffer_mut(), |path| app.picture_ref(path));
 
     let mode = match app.delivery_mode {
@@ -545,6 +546,17 @@ mod tests {
             };
             app.on_mouse(event);
         };
+        // Text dragged over is copied (from a press beside the link).
+        let row = app.regions.chat_text.iter().position(|r| r.starts_with("See ")).unwrap() as u16;
+        let (x, y) = (app.regions.history.x, app.regions.history.y + row);
+        for (kind, x) in [
+            (MouseEventKind::Down(MouseButton::Left), x),
+            (MouseEventKind::Drag(MouseButton::Left), x + 2),
+            (MouseEventKind::Up(MouseButton::Left), x + 2),
+        ] {
+            app.on_mouse(MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE });
+        }
+        assert_eq!(app.clipboard.last.as_deref(), Some("See"));
         // The page opens in the Browser.
         let rect = link(&app, &page);
         assert_eq!(rect.width as usize, page.len());

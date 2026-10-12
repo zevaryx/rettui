@@ -1,6 +1,9 @@
 //! Links in chat (see [`crate::links`]): drawn as links, and where they are
-//! on their row so a click opens them.
+//! on their row so a click opens them. And selecting chat text with the
+//! mouse: what's drawn, recorded to copy, and the selection shown.
 
+use ratatui::Frame;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
@@ -92,6 +95,39 @@ pub fn linkify(line: Line<'static>) -> (Line<'static>, Vec<RowLink>) {
         at = end;
     }
     (Line { spans: out, style, alignment }, hits)
+}
+
+/// A chat history just drawn in `area`: its rows' text as on screen (what
+/// selecting copies), and the text selected in it shown reversed.
+pub fn selectable(frame: &mut Frame, app: &mut crate::app::App, area: Rect) {
+    let buf = frame.buffer_mut();
+    app.regions.chat_text = (area.y..area.bottom())
+        .map(|y| {
+            let mut row = String::new();
+            let mut skip = 0;
+            for x in area.x..area.right() {
+                // The cells a wide character covers after its own.
+                if skip > 0 {
+                    skip -= 1;
+                    continue;
+                }
+                let symbol = buf[(x, y)].symbol();
+                skip = symbol.width().saturating_sub(1);
+                row.push_str(symbol);
+            }
+            row
+        })
+        .collect();
+    let Some(chat) = app.chat_selection.filter(|c| c.tab == app.tab && c.area == area && !c.selection.is_empty()) else {
+        return;
+    };
+    for y in 0..area.height {
+        for x in 0..area.width {
+            if chat.selection.contains(y as usize, x as usize) {
+                buf[(area.x + x, area.y + y)].set_style(Style::default().add_modifier(Modifier::REVERSED));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

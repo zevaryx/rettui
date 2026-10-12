@@ -442,6 +442,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     app.regions.channel_history = inner;
     frame.render_widget(Paragraph::new(visible).block(history_block), history_area);
+    super::linked::selectable(frame, app, inner);
 
     // Input.
     let hub = &app.channels.hubs[index];

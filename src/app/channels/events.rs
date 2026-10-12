@@ -850,6 +850,45 @@ mod tests {
     }
 
     #[test]
+    fn chat_text_is_selected_and_copied_with_the_mouse() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut hubs = Hubs::connected("select");
+        hubs.join("lobby", &[OWN, AMY]);
+        hubs.said("lobby", AMY, "amy", "the repeater is up");
+        hubs.said("lobby", AMY, "amy", "on the hill");
+        let app = &mut hubs.app;
+        app.tab = crate::app::Tab::Channels;
+        app.channels.selected = Some(super::super::Target { hub: HUB, room: Some("lobby".into()) });
+        app.channels.typing = false;
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        let area = app.regions.channel_history;
+        let at = |app: &App, text: &str| {
+            let row = app.regions.chat_text.iter().position(|r| r.contains(text)).unwrap();
+            let col = app.regions.chat_text[row].find(text).unwrap();
+            (area.x + col as u16, area.y + row as u16)
+        };
+        let mouse = |app: &mut App, kind, (x, y): (u16, u16)| {
+            app.on_mouse(MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE });
+        };
+        // From "repeater" to the end of "hill", across two lines.
+        let (from, (hill_x, hill_y)) = (at(app, "repeater"), at(app, "hill"));
+        mouse(app, MouseEventKind::Down(MouseButton::Left), from);
+        mouse(app, MouseEventKind::Drag(MouseButton::Left), (hill_x + 3, hill_y));
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        let shown = terminal.backend().buffer()[(from.0, from.1)].modifier;
+        assert!(shown.contains(ratatui::style::Modifier::REVERSED), "the selection shows");
+        mouse(app, MouseEventKind::Up(MouseButton::Left), (hill_x + 3, hill_y));
+        let copied = app.clipboard.last.clone().unwrap();
+        assert!(copied.starts_with("repeater is up\n") && copied.ends_with("<amy> on the hill"), "{copied:?}");
+        // A click alone copies nothing, and lets go of the selection.
+        app.clipboard.last = None;
+        mouse(app, MouseEventKind::Down(MouseButton::Left), from);
+        mouse(app, MouseEventKind::Up(MouseButton::Left), from);
+        assert!(app.clipboard.last.is_none() && app.chat_selection.is_none());
+    }
+
+    #[test]
     fn how_many_messages_are_kept_is_a_setting() {
         let mut hubs = Hubs::connected("kept");
         hubs.join("lobby", &[OWN, AMY]);
