@@ -6115,7 +6115,8 @@ app.views.status = {
     this.info.replaceChildren(
       label('Display name'), el('span', { style: 'font-weight:600', text: s.display_name }),
       label('LXMF address'), el('div', { class: 'row' }, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.lxmf_address || '(starting)' }),
-        s.lxmf_address ? el('button', { text: 'Copy', onclick: () => copy(s.lxmf_address, 'your LXMF address') }) : null,
+        s.lxmf_address ? el('button', { text: 'Copy', title: 'Your address with your key (lxma://), so whoever you give it to can write to you at once',
+          onclick: () => copy(s.identity_link || s.lxmf_address, s.identity_link ? 'your LXMF address, with your key' : 'your LXMF address') }) : null,
         s.identity_link ? el('button', { text: 'QR code', title: 'Your address as a QR code, to be added as a contact', onclick: () => showAddress(s.identity_link) }) : null),
       label('Version'), el('div', { class: 'row' },
         el('span', {}, el('strong', { text: s.version.current }), el('span', { class: 'dim', text: ` (${s.version.build})` })),

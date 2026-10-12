@@ -425,6 +425,10 @@ mod tests {
         let view = app.paper_view.as_ref().unwrap();
         assert_eq!((view.kind, view.link.as_str()), (crate::app::QrKind::Address, app.identity_link().unwrap().as_str()));
         assert!(view.link.starts_with(&format!("lxma://{}:", hex::encode([5; 16]))));
+        // `y` copies the same link.
+        app.paper_view = None;
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.clipboard.last, app.identity_link());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

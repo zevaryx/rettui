@@ -271,8 +271,10 @@ impl App {
                 self.open_prompt(PromptKind::DisplayName, "Display name", &name);
             }
             KeyCode::Char('y') => {
-                let address = self.lxmf_hash.map(hex::encode).unwrap_or_default();
-                self.copy(&address, "your LXMF address");
+                // With your key (`lxma://`), so whoever you give it to can
+                // write before hearing your announce.
+                let link = self.identity_link().unwrap_or_default();
+                self.copy(&link, "your LXMF address, with your key");
             }
             KeyCode::Char('c') => self.show_address_qr(),
             KeyCode::Char('g') => self.open_guide(),

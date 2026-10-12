@@ -235,8 +235,9 @@ everywhere else), and notes for you alone.
 - **Sharing your address:** `c` in the Status tab (TUI), or **QR code** next
   to your address (web UI), shows it as a QR code: an `lxma://` link with
   your address and public key, the way Columba shares contacts. Someone who
-  scans it can write to you before hearing your announce. `rettui address
-  --link` prints the link.
+  scans it can write to you before hearing your announce. **Copy** next to
+  your address in the web UI's Status, or `y` in the TUI's, copies the
+  same link; `rettui address --link` prints it.
 - **Icons:** Sideband, Columba and MeshChat let people pick an icon (a
   [Material Design Icon](https://pictogrammers.com/library/mdi/) in a colour
   on a colour), which comes with their messages. rettui keeps the newest
