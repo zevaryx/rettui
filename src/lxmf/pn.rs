@@ -499,15 +499,21 @@ mod tests {
     /// A message to `to` (encrypted for `recipient`), packed for a
     /// propagation node with a stamp of `cost`, as a client sends it.
     fn transfer(to: Hash, recipient: &Identity, cost: u8) -> Vec<u8> {
+        stamped(to, recipient, cost).0
+    }
+
+    /// [`transfer`], and what its stamp is worth (at least `cost`; a stamp
+    /// of no work is worth whatever its hash happens to be).
+    fn stamped(to: Hash, recipient: &Identity, cost: u8) -> (Vec<u8>, u32) {
         let mut message = LxMessage::new(to, [3; 16], "", "kept for you", DeliveryMethod::Propagated);
         message.sign(&Identity::new().get_signing_key().unwrap()).unwrap();
-        message
+        let (packed, _, value) = message
             .pack_propagated_encrypted_with_stamp(
                 |plain| recipient.encrypt(plain, None).map_err(|e| MessageError::PackFailed(e.to_string())),
                 cost,
             )
-            .unwrap()
-            .0
+            .unwrap();
+        (packed, value)
     }
 
     #[test]
@@ -534,8 +540,12 @@ mod tests {
         let full = delivered.try_recv().unwrap();
         assert_eq!(&full[..16], &us);
         assert_eq!(LxMessage::unpack(&full).unwrap().content, "kept for you");
-        // Too little work: turned away. Several at once: only from a peer.
-        assert!(local.submit(&transfer(bob_hash, &bob, 0)).is_err());
+        // Too little work: turned away. (A stamp of no work has enough by
+        // chance about one time in a thousand: one that hasn't.) Several at
+        // once: only from a peer.
+        let min = u32::from(local.ingest.min_stamp);
+        let (short, _) = std::iter::repeat_with(|| stamped(bob_hash, &bob, 0)).find(|(_, value)| *value < min).unwrap();
+        assert!(local.submit(&short).is_err());
         let stats = &local.ingest.counters;
         assert_eq!((stats.received.load(Ordering::Relaxed), stats.delivered_here.load(Ordering::Relaxed)), (1, 1));
         assert!(stats.rejected.load(Ordering::Relaxed) >= 1);
