@@ -285,10 +285,12 @@ pub fn bit_rate(bits: u64) -> String {
 #[derive(Debug)]
 pub enum NetEvent {
     /// Reticulum is up: this client's LXMF address, and its identity's
-    /// public key.
+    /// public key. And the public keys heard from others, to give theirs
+    /// with their address (`lxma://`).
     Started {
         lxmf_hash: Hash,
         public_key: [u8; 64],
+        known: remote::Known,
     },
     StartFailed(String),
     Announce {
@@ -570,7 +572,7 @@ async fn run(
         }
     };
     let lxmf_hash = delivery.handle.destination_hash();
-    let _ = ev.send(NetEvent::Started { lxmf_hash, public_key: identity.get_public_key() });
+    let _ = ev.send(NetEvent::Started { lxmf_hash, public_key: identity.get_public_key(), known: known.clone() });
 
     let mut lxmf_announces = subscribe(&runtime, LXMF_ASPECT).await?;
     let mut nomad_announces = subscribe(&runtime, NOMAD_NODE_ASPECT).await?;

@@ -254,6 +254,12 @@ everywhere else), and notes for you alone.
   like a [paper message](#paper-messages) (a picture of it, or the camera in
   the web UI). rettui checks the key belongs to the address, keeps it, and
   opens the conversation.
+- **Passing someone's address on:** *Copy address* (`y` on the contact
+  card or in the conversation, the button above it in the web UI, and
+  *Copy LXMF address* on an RRC user) copies an `lxma://` link with their
+  public key once rettui has heard their announce, so whoever you give it
+  to can write to them straight away. Before that it copies the address
+  alone, and says so.
 
 ## Blocking and spam
 

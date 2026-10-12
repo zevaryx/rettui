@@ -269,7 +269,7 @@ impl App {
                 }
                 self.open_conversation(hex::encode(user.lxmf));
             }
-            UserAction::CopyLxmf => self.copy(&hex::encode(user.lxmf), &format!("{}'s LXMF address", user.name)),
+            UserAction::CopyLxmf => self.copy_address(&hex::encode(user.lxmf), &format!("{}'s", user.name)),
             UserAction::CopyIdentity => self.copy(&hex::encode(&user.identity), &format!("{}'s identity hash", user.name)),
         }
     }

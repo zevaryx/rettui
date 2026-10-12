@@ -434,6 +434,8 @@ pub struct App {
     pub lxmf_hash: Option<Hash>,
     /// This client's identity's public key (known once Reticulum is up).
     pub public_key: Option<[u8; 64]>,
+    /// The public keys heard from others (the network actor's).
+    known: Option<crate::net::remote::Known>,
     pub interfaces: Vec<crate::net::InterfaceInfo>,
     /// Bytes in and out over all interfaces, and their rates.
     pub traffic: traffic::Traffic,
@@ -624,6 +626,7 @@ impl App {
             net_state: NetState::Starting,
             lxmf_hash: None,
             public_key: None,
+            known: None,
             interfaces: Vec::new(),
             traffic: traffic::Traffic::default(),
             log: VecDeque::new(),
@@ -908,10 +911,11 @@ impl App {
 
     pub fn on_net(&mut self, event: NetEvent) {
         match event {
-            NetEvent::Started { lxmf_hash, public_key } => {
+            NetEvent::Started { lxmf_hash, public_key, known } => {
                 self.net_state = NetState::Online;
                 self.lxmf_hash = Some(lxmf_hash);
                 self.public_key = Some(public_key);
+                self.known = Some(known);
                 self.log(format!("Reticulum ready; LXMF address {}", hex::encode(lxmf_hash)));
                 // Said once its interfaces are known (see note_discovery).
                 self.discovery_noted = false;

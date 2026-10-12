@@ -1328,7 +1328,7 @@ impl App {
             KeyCode::Char('n') => self.open_prompt(PromptKind::NewConversation, "LXMF address", ""),
             KeyCode::Char('y') => {
                 let address = self.active_conversation.clone().unwrap_or_default();
-                self.copy(&address, "LXMF address");
+                self.copy_address(&address, "their");
             }
             _ => {}
         }

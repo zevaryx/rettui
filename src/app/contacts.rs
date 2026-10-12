@@ -130,6 +130,30 @@ impl App {
         Some(crate::lxmf::identity_link(self.lxmf_hash?, self.public_key.as_ref()?))
     }
 
+    /// Someone's address to give out: with their public key (`lxma://`)
+    /// once heard, so whoever adds them can write before hearing them too;
+    /// else the address alone.
+    pub fn address_link(&self, key: &str) -> String {
+        let link = parse_hash(key).and_then(|address| {
+            let public_key = self.known.as_ref()?.lock().ok()?.public_key_of(address)?;
+            let link = crate::lxmf::identity_link(address, &public_key);
+            // Only the key that is the address's own.
+            crate::lxmf::parse_identity_link(&link).is_some().then_some(link)
+        });
+        link.unwrap_or_else(|| key.to_string())
+    }
+
+    /// Copy someone's address (see [`App::address_link`]), `whose`.
+    pub(super) fn copy_address(&mut self, key: &str, whose: &str) {
+        let link = self.address_link(key);
+        let what = if link.starts_with("lxma://") {
+            format!("{whose} LXMF address, with their key")
+        } else {
+            format!("{whose} LXMF address (their key isn't known yet)")
+        };
+        self.copy(&link, &what);
+    }
+
     /// Show your address as a QR code (`c` in the Status tab).
     pub(super) fn show_address_qr(&mut self) {
         match self.identity_link() {
@@ -302,7 +326,7 @@ impl App {
                 let title = format!("Notes about {}", self.store.display_name(&key));
                 self.open_prompt(PromptKind::ContactNotes(key), &title, &notes);
             }
-            CardAction::Copy => self.copy(&key, "LXMF address"),
+            CardAction::Copy => self.copy_address(&key, "their"),
             CardAction::Ping => {
                 if let Err(e) = self.ping(&key) {
                     self.warn(e);
@@ -392,11 +416,47 @@ mod tests {
         press(&mut app, KeyCode::Char('c'));
         assert!(app.paper_view.is_none(), "not before Reticulum is up");
         let ours = rns_runtime::prelude::Identity::new();
-        app.on_net(crate::net::NetEvent::Started { lxmf_hash: [5; 16], public_key: ours.get_public_key() });
+        app.on_net(crate::net::NetEvent::Started {
+            lxmf_hash: [5; 16],
+            public_key: ours.get_public_key(),
+            known: crate::net::remote::KnownIdentities::none(),
+        });
         press(&mut app, KeyCode::Char('c'));
         let view = app.paper_view.as_ref().unwrap();
         assert_eq!((view.kind, view.link.as_str()), (crate::app::QrKind::Address, app.identity_link().unwrap().as_str()));
         assert!(view.link.starts_with(&format!("lxma://{}:", hex::encode([5; 16]))));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn copy_address_gives_their_key_once_heard() {
+        let dir = std::env::temp_dir().join(format!("rettui-contact-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let them = rns_runtime::prelude::Identity::new();
+        let address = rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&them.hash));
+        let key = hex::encode(address);
+        let mut store = Store::default();
+        store.conversations.insert(key.clone(), Conversation::default());
+        let mut app = crate::app::test_app(&dir, Settings::default(), store);
+        let known = crate::net::remote::KnownIdentities::none();
+        let ours = rns_runtime::prelude::Identity::new();
+        app.on_net(crate::net::NetEvent::Started { lxmf_hash: [5; 16], public_key: ours.get_public_key(), known: known.clone() });
+        app.open_conversation(key.clone());
+        app.composing = false;
+        let press = |app: &mut App, code| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        // Not heard yet: the address alone.
+        press(&mut app, KeyCode::Char('c'));
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.clipboard.last.as_deref(), Some(key.as_str()));
+        // Heard: with their key, as a link that adds them.
+        known.lock().unwrap().remember(address, &them.get_public_key(), None);
+        press(&mut app, KeyCode::Char('y'));
+        let link = crate::lxmf::identity_link(address, &them.get_public_key());
+        assert_eq!(app.clipboard.last.as_deref(), Some(link.as_str()));
+        assert_eq!(crate::lxmf::parse_contact(&link), Ok((address, Some(them.get_public_key()))));
+        // Another's key for the address isn't given as theirs.
+        known.lock().unwrap().remember(address, &rns_runtime::prelude::Identity::new().get_public_key(), None);
+        assert_eq!(app.address_link(&key), key);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

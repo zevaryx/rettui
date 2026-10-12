@@ -52,6 +52,12 @@ pub struct KnownIdentities {
 
 pub type Known = Arc<std::sync::Mutex<KnownIdentities>>;
 
+impl std::fmt::Debug for KnownIdentities {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "KnownIdentities({} known)", self.entries.len())
+    }
+}
+
 impl KnownIdentities {
     pub fn load(path: &Path) -> Known {
         let entries = std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
@@ -81,12 +87,23 @@ impl KnownIdentities {
         }
     }
 
+    /// None known yet (a test's).
+    #[cfg(test)]
+    pub fn none() -> Known {
+        Known::default()
+    }
+
+    /// The public key heard for a destination, if any.
+    pub fn public_key_of(&self, destination: Hash) -> Option<[u8; 64]> {
+        hex::decode(&self.entries.get(&hex::encode(destination))?.key).ok()?.try_into().ok()
+    }
+
     /// The announce data kept for a destination, if any.
     pub fn app_data_of(&self, destination: Hash) -> Option<Vec<u8>> {
         self.entries.get(&hex::encode(destination))?.app_data.as_deref().and_then(|d| hex::decode(d).ok())
     }
 
-    pub(super) fn remember(&mut self, destination: Hash, key: &[u8; 64], app_data: Option<&[u8]>) {
+    pub(crate) fn remember(&mut self, destination: Hash, key: &[u8; 64], app_data: Option<&[u8]>) {
         let slot = self.entries.entry(hex::encode(destination)).or_default();
         let key = hex::encode(key);
         // Announces without app data (such as the automatic path responses

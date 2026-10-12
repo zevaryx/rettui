@@ -328,6 +328,8 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
     let messages: Vec<Value> = newest(all, last).iter().map(|m| message(m, conversation)).collect();
     json!({
         "key": key,
+        // Their address to give out, with their key once heard.
+        "link": app.address_link(key),
         "total": all.len(),
         "name": app.store.display_name(key),
         "unread": app.store.conversations.get(key).map_or(0, |c| c.unread),
@@ -667,7 +669,8 @@ pub fn room(app: &App, hub: &Hub, room: &str, last: Option<usize>) -> Value {
                 || app.store.conversations.contains_key(&lxmf);
             // Their nick now, else the one on their latest line here.
             let name = hub.nicks.get(&id).or_else(|| seen.get(key.as_str()).copied()).cloned().unwrap_or_else(|| hub.name_of(&id));
-            Some((key, json!({ "name": name, "lxmf": lxmf, "lxmf_known": known })))
+            let link = app.address_link(&lxmf);
+            Some((key, json!({ "name": name, "lxmf": lxmf, "lxmf_link": link, "lxmf_known": known })))
         })
         .collect();
     json!({

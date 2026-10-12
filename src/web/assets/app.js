@@ -133,6 +133,12 @@ async function attempt(action, done) {
   }
 }
 
+// Someone's address: an lxma:// link once their key is heard (see
+// App::address_link), else the address alone.
+function copyAddress(link, whose) {
+  return copy(link, link.startsWith('lxma://') ? `${whose} LXMF address, with their key` : `${whose} LXMF address (their key isn't known yet)`);
+}
+
 async function copy(text, what) {
   if (!text) return toast(`Nothing to copy (${what} is empty)`, true);
   try {
@@ -3079,7 +3085,8 @@ app.views.messages = {
         } })) : null,
       bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
       el('button', { text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
-      el('button', { text: 'Copy address', onclick: () => copy(key, 'LXMF address') })].filter(Boolean));
+      el('button', { text: 'Copy address', title: conversation.link?.startsWith('lxma://') ? 'Their address with their key (lxma://), so whoever adds them can write at once' : 'Their address (their key isn\'t known yet)',
+        onclick: () => copyAddress(conversation.link || key, 'their') })].filter(Boolean));
     // The newest messages only, unless asked for all: those not loaded, and
     // any loaded but not shown.
     const from = this.showAll === key ? 0 : Math.max(0, conversation.messages.length - this.LIMIT);
@@ -4217,7 +4224,7 @@ app.views.channels = {
         this.input.focus();
       }, !this.view.whisper),
       item('LXMF message', user.lxmf_known ? user.lxmf : 'no announce seen yet', () => openConversation(user.lxmf)),
-      item('Copy LXMF address', null, () => copy(user.lxmf, `${user.name}'s LXMF address`)),
+      item('Copy LXMF address', null, () => copyAddress(user.lxmf_link || user.lxmf, `${user.name}'s`)),
       item('Copy identity hash', null, () => copy(src, `${user.name}'s identity hash`)));
     document.body.append(menu);
     const rect = event.currentTarget.getBoundingClientRect();
