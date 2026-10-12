@@ -66,6 +66,9 @@ host. rettui works with each of them, as they differ (see
   goes down the oldest go at once. People joining and leaving, the hub's
   notices and errors are kept apart (the newest 200, until rettui stops),
   so a busy room's comings and goings never push messages out.
+- **Links:** NomadNet pages, LXMF addresses and RRC hubs written in a
+  room are links, as in messages (see [Links in messages](Messaging#links-in-messages)).
+  In the terminal UI, drag across the chat to select text and copy it.
 - **Emoji:** `Ctrl-E` (or the 🙂 button) and `:name` work in the channel
   input as they do for messages (see [Emoji](Messaging#emoji)).
 - **Mentions and unread:** `@yournick` mentions are highlighted (just the

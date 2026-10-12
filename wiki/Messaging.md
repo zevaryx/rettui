@@ -150,6 +150,28 @@ it's with, when, and the part that matched.
   it's further back. `Esc` (or emptying the box) shows the conversations
   again.
 
+## Links in messages
+
+NomadNet pages and files, LXMF addresses and RRC hubs written in a message
+are links, in both UIs and in RRC rooms too:
+
+- **Pages and files:** `<node>:/page/index.mu` or `<node>:/file/name`
+  (also after `nomadnetwork://`) open in the Browser.
+- **Addresses:** `lxmf@<address>` or `lxmf://<address>` open the
+  conversation with them; an `lxma://` link (an address with its public
+  key, as rettui and Columba share contacts) adds them too, so you can write
+  before they announce.
+- **Hubs:** `rrc://<hub>`, `rrc://<hub>/room` or `rrc@<hub>` open the hub
+  in Channels (and join the room); a hub you haven't added asks first, as
+  connecting tells it who you are.
+
+A bare hash isn't a link (it could be any destination), and punctuation
+after a link (a full stop, a closing bracket) isn't part of it.
+
+**Copying text:** in the terminal UI, drag across a conversation (or a room)
+to select text; it's copied when you let go. `y` on a picked message copies
+all of it. In the web UI, select text as on any page.
+
 ## Message actions
 
 - **Retry:** a message of yours that failed can be sent again, as the same

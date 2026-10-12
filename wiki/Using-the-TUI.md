@@ -60,6 +60,11 @@ a little longer.
   a reply's quote to see what it answers, and a location to see it on a map.
 - In Channels, click a hub or room to open it, the input box to write, a
   public room in a hub's view to join it, and a name to message that user.
+- In a conversation or a room, click a [link written in it](Messaging#links-in-messages)
+  (a NomadNet page, an LXMF address, an RRC hub) to open it, and drag across
+  the chat to select text: it's copied when you release the button (rettui
+  takes the mouse, so your terminal's own selection doesn't work there;
+  most terminals still select as usual with `Shift` held).
 - In the Network tab, click a row to select it and double-click to open it.
   Click the search bar to start searching.
 - In the browser, click a saved page or node on the left to open it beside

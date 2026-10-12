@@ -2,6 +2,17 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
+## v1.7.1
+
+Changes since v1.7.0: links in chat, and copying chat text in the terminal UI.
+
+### Added
+- **Links in chat**, in both UIs, in LXMF conversations (plain, Markdown and Micron messages) and RRC rooms: NomadNet pages and files (`<node>:/page/…`, also after `nomadnetwork://`) open in the Browser, LXMF addresses (`lxmf@`, `lxmf://`, and `lxma://` links with a key) their conversation, and RRC hubs (`rrc://hub/room`, `rrc@hub`) in Channels, asking first for a hub not added yet. In the terminal UI, a link too long for the view, broken over rows, is still one link.
+- **Copying chat text in the terminal UI:** drag across a conversation or a room to select text; it's copied when you let go.
+
+### Fixed
+- `lxmf@` and `lxmf://` links (on a NomadNet page) didn't open a conversation from the web UI.
+
 ## v1.7.0
 
 Changes since v1.6.1: rettui can host an RRC hub, built on [rsRRCD](https://github.com/reticulum-spb/rsRRCD)'s. Checked with RRC clients on Python Reticulum joining it over TCP, and with rettui's own. Pictures and files can be added to your NomadNet node from its page editor, and moved between folders. RRC chat lines show their date, and rooms keep as many messages as you choose, however busy they are.
