@@ -37,6 +37,9 @@ use crate::net::{Hash, NetEvent};
 
 /// The rooms file, beside rsRRCD's `config.yaml` in the hub's folder.
 const ROOMS_FILE: &str = "rooms.yaml";
+/// The operators rettui added to `config.yaml` (the hub's identity and
+/// yours), beside it: taken out again when either changes.
+const OPERATORS_FILE: &str = "rettui-operators.json";
 /// The console's session: no Link has this id.
 const CONSOLE: [u8; 16] = [0xff; 16];
 /// Most Links at once; more are closed as they come.
@@ -149,15 +152,23 @@ fn write_config(config: &HubHostConfig, hub: Hash) -> Result<HubConfig, String> 
     section.insert("identity_path".into(), identity.into());
     section.insert("room_registry_path".into(), ROOMS_FILE.into());
     section.insert("announce_period_s".into(), config.announce_interval.map_or(0.0, |d| d.as_secs_f64()).into());
-    // Operators: kept as written, with the hub (the console) and you.
+    // Operators: kept as written, with the hub (the console) and you. Those
+    // rettui added before and that aren't either any more (an identity you
+    // left for another, the hub's before it had a new one) are taken out:
+    // they'd still be operators, unseen.
+    let operators_file = config.dir.join(OPERATORS_FILE);
+    let added_before: Vec<String> =
+        std::fs::read_to_string(&operators_file).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    let operators = [hex::encode(hub), hex::encode(config.operator)];
     let mut trusted: Vec<String> = section
         .get("trusted_identities")
         .and_then(serde_json::Value::as_array)
         .map(|list| list.iter().filter_map(|v| v.as_str().map(str::to_lowercase)).collect())
         .unwrap_or_default();
-    for operator in [hex::encode(hub), hex::encode(config.operator)] {
-        if !trusted.contains(&operator) {
-            trusted.push(operator);
+    trusted.retain(|id| operators.contains(id) || !added_before.contains(id));
+    for operator in &operators {
+        if !trusted.contains(operator) {
+            trusted.push(operator.clone());
         }
     }
     section.insert("trusted_identities".into(), trusted.into());
@@ -168,6 +179,9 @@ fn write_config(config: &HubHostConfig, hub: Hash) -> Result<HubConfig, String> 
     }
     let yaml = serde_saphyr::to_string(&value).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
     crate::config::write_atomic(&path, yaml.as_bytes()).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
+    let added = serde_json::to_string(&operators).expect("a list of strings");
+    crate::config::write_atomic(&operators_file, added.as_bytes())
+        .map_err(|e| format!("Couldn't write {}: {e}", operators_file.display()))?;
     HubConfig::load(&path).map_err(|e| format!("{e:#}"))
 }
 
@@ -820,9 +834,22 @@ impl Core {
         (HubEvent::Reply { text, error: false }, actions)
     }
 
-    /// A room's name as rettui names rooms (`#` is decoration), and then as
-    /// rsRRCD does.
+    /// A room there is, by its name: as rsRRCD has it (clients that send
+    /// `#lobby` make a room called that), or as rettui names rooms (`#` is
+    /// decoration) when there's no room called it. A room that isn't there
+    /// yet gets rettui's name for it (see [`Core::new_room_name`]).
     fn room_name(&self, room: &str) -> Result<String, String> {
+        let state = &self.router.state;
+        let exact = state.normalize_room(room, &self.router.config).map_err(|e| e.to_string())?;
+        if state.rooms.contains_key(&exact) {
+            return Ok(exact);
+        }
+        self.new_room_name(room)
+    }
+
+    /// A name for a room to be: as rettui names rooms (`#` is decoration),
+    /// and then as rsRRCD does.
+    fn new_room_name(&self, room: &str) -> Result<String, String> {
         self.router.state.normalize_room(&super::normalize_room(room), &self.router.config).map_err(|e| e.to_string())
     }
 
@@ -865,7 +892,7 @@ impl Core {
     /// name and taken out of the old one.
     fn rename_room(&mut self, from: &str, to: &str) -> (HubEvent, Vec<Action>) {
         let fail = |text: String| (HubEvent::Reply { text, error: true }, Vec::new());
-        let (from, to) = match (self.room_name(from), self.room_name(to)) {
+        let (from, to) = match (self.room_name(from), self.new_room_name(to)) {
             (Ok(from), Ok(to)) => (from, to),
             (Err(e), _) | (_, Err(e)) => return fail(e),
         };
@@ -1137,6 +1164,35 @@ mod tests {
         assert_eq!((hub.hub_name.as_str(), hub.greeting, hub.announce_period_s), ("Hilltop", None, 0.0));
         assert_eq!((hub.max_rooms_per_session, hub.include_joined_member_list), (3, false));
         assert_eq!(hub.trusted_identities, [HUB, YOU, AMY]);
+        // Another identity of yours (an imported one): the old one is no
+        // longer an operator, and the one added by hand still is.
+        let hub = write_config(&HubHostConfig { operator: BOB, ..config.clone() }, HUB).unwrap();
+        assert_eq!(hub.trusted_identities, [HUB, AMY, BOB]);
+        // The hub's identity made again: the same.
+        let hub = write_config(&HubHostConfig { operator: BOB, ..config.clone() }, [8; 16]).unwrap();
+        assert_eq!(hub.trusted_identities, [AMY, BOB, [8; 16]]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rooms_named_with_a_hash_are_found_by_the_panel() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-hashed-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        // Some clients join "#mesh"; rsRRCD keeps the "#".
+        join(&mut core, 1, AMY, "#Mesh");
+        assert!(core.router.state.rooms.contains_key("#mesh"));
+        let (reply, _) = core.register("#mesh", true);
+        assert!(matches!(&reply, HubEvent::Reply { error: false, .. }), "{reply:?}");
+        assert!(core.router.state.rooms["#mesh"].registered && !core.router.state.rooms.contains_key("mesh"));
+        let (reply, actions) = core.rename_room("#mesh", "#radio");
+        assert!(matches!(&reply, HubEvent::Reply { error: false, .. }), "{reply:?}");
+        assert!(core.router.state.rooms.contains_key("radio") && !core.router.state.rooms.contains_key("#mesh"));
+        assert!(sent(&actions).iter().any(|(link, kind, ..)| (*link, *kind) == (1, t::ERROR)), "Amy is taken out");
+        // A room without one is found as before, with or without the "#".
+        let (reply, _) = core.delete_room("#radio");
+        assert!(matches!(&reply, HubEvent::Reply { error: false, .. }), "{reply:?}");
+        assert!(core.router.state.rooms.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

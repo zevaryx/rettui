@@ -84,6 +84,9 @@ impl App {
                 self.record(index, &room, ChatLine::new(LineKind::Error, format!("Not sent: {e}")));
             }
             RrcEvent::Disconnected(reason) => {
+                // The hub hosted here, stopped: tried again once it's back
+                // (see connect_own_hub), not before.
+                let waiting = self.own_hub_waiting(hash);
                 let hub = self.hub_mut(index);
                 hub.members.clear();
                 hub.pending_joins.clear();
@@ -97,7 +100,7 @@ impl App {
                 hub.replay.clear();
                 hub.motd_until = None;
                 let was_connected = hub.is_connected();
-                let retry = !hub.manual && hub.auto_connect;
+                let retry = !hub.manual && hub.auto_connect && !waiting;
                 hub.status = match &reason {
                     Some(e) if !was_connected => HubStatus::Failed(e.clone()),
                     _ => HubStatus::Disconnected,
@@ -415,18 +418,26 @@ impl App {
     }
 
     /// One more notice of a greeting sent in several. Its lines are shown
-    /// unless they are the greeting we had.
+    /// unless they are the greeting we had. When it turns out to be another
+    /// one, the lines held back as the old greeting's start are shown with
+    /// the first that differs, so the new one shows whole.
     fn add_motd(&mut self, index: usize, part: String) {
         let hub = self.hub_mut(index);
-        let (text, before) = match hub.motd_parts.take() {
-            Some((so_far, before)) => (format!("{so_far}\n{part}"), before),
-            None => (part.clone(), hub.motd.clone()),
+        let (text, before, shown) = match hub.motd_parts.take() {
+            Some((so_far, before, shown)) => (format!("{so_far}\n{part}"), before, shown),
+            None => (part.clone(), hub.motd.clone(), false),
         };
         let known = before.as_deref().is_some_and(|old| old == text || old.starts_with(&format!("{text}\n")));
-        hub.motd_parts = Some((text.clone(), before));
+        // Shown so far: nothing, while it's the greeting we had.
+        let show = match (known, shown) {
+            (true, _) => None,
+            (false, true) => Some(part),
+            (false, false) => Some(text.clone()),
+        };
+        hub.motd_parts = Some((text.clone(), before, shown || !known));
         hub.motd = Some(text);
-        if !known {
-            self.record(index, "", ChatLine::new(LineKind::Notice, part));
+        if let Some(show) = show {
+            self.record(index, "", ChatLine::new(LineKind::Notice, show));
         }
     }
 
@@ -810,6 +821,53 @@ mod tests {
     }
 
     #[test]
+    fn how_many_messages_are_kept_is_a_setting() {
+        let mut hubs = Hubs::connected("kept");
+        hubs.join("lobby", &[OWN, AMY]);
+        for i in 0..60 {
+            hubs.said("lobby", AMY, "amy", &format!("message {i}"));
+        }
+        let messages = |hubs: &Hubs| hubs.hub().buffers["lobby"].iter().filter(|l| l.is_message()).count();
+        assert_eq!(messages(&hubs), 60);
+        // Fewer: the oldest go at once.
+        hubs.app.update_settings(&[("rrc_messages_kept", "50")]).unwrap();
+        assert_eq!(messages(&hubs), 50);
+        assert_eq!(hubs.hub().buffers["lobby"].iter().find(|l| l.is_message()).unwrap().text, "message 10");
+        hubs.said("lobby", AMY, "amy", "one more");
+        assert_eq!(messages(&hubs), 50);
+        assert!(hubs.app.update_settings(&[("rrc_messages_kept", "10")]).is_err(), "50 at least");
+        assert_eq!(hubs.app.settings.rrc_messages_kept, 50);
+    }
+
+    #[test]
+    fn chat_lines_show_their_date_unless_turned_off() {
+        let mut hubs = Hubs::connected("dates");
+        hubs.join("lobby", &[OWN, AMY]);
+        let said = hubs.said("lobby", AMY, "amy", "hello there");
+        let app = &mut hubs.app;
+        app.tab = crate::app::Tab::Channels;
+        app.channels.selected = Some(super::super::Target { hub: HUB, room: Some("lobby".into()) });
+        app.channels.typing = false;
+        let when = chrono::TimeZone::timestamp_millis_opt(&chrono::Local, said.ts as i64).single().unwrap();
+        let line = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+            terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..30)
+                .map(|y| (0..140).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .find(|row| row.contains("hello there"))
+                .unwrap_or_default()
+        };
+        let dated = format!("{} <amy> hello there", crate::clock::dated(&when, true));
+        assert!(app.settings.chat_dates && line(app).contains(&dated), "{}", line(app));
+        // D: the time alone.
+        app.on_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char('D'), crossterm::event::KeyModifiers::SHIFT));
+        assert!(!app.settings.chat_dates);
+        assert!(line(app).contains(&format!("{} <amy> hello there", crate::clock::time(&when, true))), "{}", line(app));
+        assert!(!line(app).contains(&crate::clock::day(&when)), "{}", line(app));
+    }
+
+    #[test]
     fn a_greeting_in_several_notices() {
         let mut hubs = Hubs::connected("motd");
         hubs.notice(None, "Welcome to the hilltop hub");
@@ -828,6 +886,20 @@ mod tests {
         hubs.notice(None, "Be nice");
         assert_eq!(hubs.lines("").iter().filter(|l| *l == "Be nice").count(), 1);
         assert_eq!(hubs.hub().motd.as_deref(), Some("Welcome to the hilltop hub\nBe nice"));
+
+        // A new greeting starting as the old one did: shown whole.
+        hubs.app.on_rrc(HUB, RrcEvent::Disconnected(None));
+        hubs.welcome();
+        hubs.notice(None, "Welcome to the hilltop hub");
+        hubs.notice(None, "Net tonight at 8");
+        hubs.notice(None, "Be nice");
+        let lines = hubs.lines("");
+        assert_eq!(
+            lines[lines.len() - 2..],
+            ["Welcome to the hilltop hub\nNet tonight at 8".to_string(), "Be nice".to_string()],
+            "{lines:?}"
+        );
+        assert_eq!(hubs.hub().motd.as_deref(), Some("Welcome to the hilltop hub\nNet tonight at 8\nBe nice"));
     }
 
     #[test]

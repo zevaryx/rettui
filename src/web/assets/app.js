@@ -57,21 +57,56 @@ async function upload(path, file) {
   return data;
 }
 
+// A hub room's name as shown: #lobby (a room some client named "#lobby"
+// isn't "##lobby").
+const roomLabel = (name) => (name.startsWith('#') ? name : '#' + name);
+
 // The folder something on the node is in ('' at the top).
 const folderOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
 
-// `text` with the address `from` changed to `to` where it is a whole
-// address (not the start of a longer one, like :/page/a in :/page/a.mu).
-function replaceAddress(text, from, to) {
+// `text` with the address `from` (:/page/a.mu) on this node changed to
+// `to`: a link's or picture's own (right after its `), or one naming the
+// node (`<node>:/page/a.mu), not another node's page of the same name; and
+// only where it's a whole address (not the start of a longer one, like
+// :/page/a in :/page/a.mu). As rettui changes the saved pages.
+function replaceAddress(text, from, to, node = '') {
   let out = '';
   let at = 0;
-  for (let found = text.indexOf(from); found !== -1; found = text.indexOf(from, found + from.length)) {
-    const next = text[found + from.length];
-    if (next !== undefined && /[A-Za-z0-9._\/-]/.test(next)) continue;
+  for (const found of addressMatches(text, from, node)) {
     out += text.slice(at, found) + to;
     at = found + from.length;
   }
   return out + text.slice(at);
+}
+
+// Where those addresses are in `text`, in order.
+function addressMatches(text, from, node = '') {
+  const matches = [];
+  for (let found = text.indexOf(from); found !== -1; found = text.indexOf(from, found + from.length)) {
+    const next = text[found + from.length];
+    if (next !== undefined && /[A-Za-z0-9._\/-]/.test(next)) continue;
+    const before = text.slice(0, found);
+    const named = node && before.toLowerCase().endsWith(node.toLowerCase()) && before.slice(0, -node.length).endsWith('`');
+    if (before.endsWith('`') || named) matches.push(found);
+  }
+  return matches;
+}
+
+// Where a place in `text` (the cursor) is once its links to `from` (under
+// each prefix) lead to `to`: moved along with the text before it, and to
+// the end of an address it was inside.
+function relinkedOffset(text, offset, prefixes, from, to, node = '') {
+  for (const prefix of prefixes) {
+    const [old, now] = [prefix + from, prefix + to];
+    let moved = offset;
+    for (const start of addressMatches(text, old, node)) {
+      if (start >= offset) break;
+      moved = start + old.length <= offset ? moved + now.length - old.length : moved - (offset - start) + now.length;
+    }
+    offset = moved;
+    text = replaceAddress(text, old, now, node);
+  }
+  return offset;
 }
 
 const api = {
@@ -3905,7 +3940,9 @@ app.views.channels = {
     return el('div', { class: 'chat' }, lines.map((line) => {
       const name = line.nick || '';
       const color = line.own ? 'var(--accent)' : nickColor(line.src);
-      const time = clockTime(new Date(line.ts), true);
+      const date = new Date(line.ts);
+      const time = this.view?.chat_dates === false ? clockTime(date, true)
+        : clockDay(date, date.getFullYear() !== new Date().getFullYear()) + ' ' + clockTime(date, true);
       // Other people's names open the user menu.
       const user = !line.own && line.src && this.view?.users[line.src] && ['msg', 'action', 'private'].includes(line.kind);
       // In a whisper conversation, whispers read like ordinary chat.
@@ -5559,20 +5596,29 @@ app.views.node = {
       open.url = open.url.replace(/:\/page\/.*$/, ':/page/' + to);
     }
     if (open && !open.executable) {
+      const prefixes = root === 'files' ? [':/file/'] : [':/page/', ':/media/'];
+      const node = this.node?.address;
+      // The new text, with the cursor and scroll where they were in it.
+      const show = (text) => {
+        const t = this.text;
+        const [before, start, end, scroll] = [t.value, t.selectionStart, t.selectionEnd, t.scrollTop];
+        t.value = text;
+        t.setSelectionRange(relinkedOffset(before, start, prefixes, from, to, node), relinkedOffset(before, end, prefixes, from, to, node));
+        t.scrollTop = scroll;
+      };
       if (this.dirty()) {
-        const prefixes = root === 'files' ? [':/file/'] : [':/page/', ':/media/'];
         let text = this.text.value;
-        for (const prefix of prefixes) text = replaceAddress(text, prefix + from, prefix + to);
+        for (const prefix of prefixes) text = replaceAddress(text, prefix + from, prefix + to, node);
         if (text !== this.text.value) {
-          this.text.value = text;
+          show(text);
           this.changed();
           toast('Links in the open page were changed too: save it to keep them');
         }
       } else {
         const page = await attempt(() => api.get('/node/page?path=' + encodeURIComponent(open.path)));
-        if (page && !this.dirty()) {
+        if (page && !this.dirty() && page.content !== this.text.value) {
           open.saved = page.content;
-          this.text.value = page.content;
+          show(page.content);
           this.renderPreview();
         }
       }
@@ -6209,7 +6255,7 @@ app.views.hub = {
           el('div', { class: 'name' }, person.nick || '(no nick)', person.operator ? el('span', { class: 'state-warn', text: ' ★', title: 'An operator of the hub' }) : null,
             person.identity === hub.you ? el('span', { class: 'dim', text: ' (you)' }) : null),
           el('div', { class: 'sub' }, el('span', { class: 'mono', text: short(person.identity) }),
-            person.rooms.length ? ' · ' + person.rooms.map((r) => '#' + r).join(' ') : '',
+            person.rooms.length ? ' · ' + person.rooms.map(roomLabel).join(' ') : '',
             person.links > 1 ? ` · ${person.links} connections` : '')),
         el('span', { class: 'dim', text: ago(person.since) + ' ›' })));
     }
@@ -6220,7 +6266,7 @@ app.views.hub = {
       }
       return hub.rooms.map((room) => el('div', { class: 'list-item', onclick: () => this.openPage({ room: room.name }) },
         el('span', { class: 'main' },
-          el('div', { class: 'name' }, '#' + room.name, room.registered ? el('span', { class: 'state-ok', text: ' registered' }) : null,
+          el('div', { class: 'name' }, roomLabel(room.name), room.registered ? el('span', { class: 'state-ok', text: ' registered' }) : null,
             room.modes !== '(none)' ? el('span', { class: 'dim', text: ' ' + room.modes }) : null),
           el('div', { class: 'sub', text: [room.topic, `${room.members.length} in it`,
             room.operators.length ? 'operators: ' + room.operators.map((id) => this.nameOf(id)).join(', ') : null].filter(Boolean).join(' · ') })),
@@ -6269,12 +6315,12 @@ app.views.hub = {
       // Just made or renamed: the hub hasn't said so yet.
       const coming = this.expecting === name && Date.now() < this.expectUntil;
       if (coming) setTimeout(() => this.renderBody(), 1000);
-      return [this.pageHead('Rooms', '#' + name),
+      return [this.pageHead('Rooms', roomLabel(name)),
         el('div', { class: 'empty', text: coming ? 'One moment…' : hub.status === 'running' ? 'This room isn\'t there (any more): rooms nobody\'s in go, unless they\'re registered.' : 'The hub isn\'t running.' })];
     }
     const act = (action, body) => this.act(action, { room: name, ...body });
     const on = (flag) => room.modes.startsWith('+') && room.modes.includes(flag);
-    const link = hub.link ? `${hub.link}/${name}` : null;
+    const link = hub.link ? `${hub.link}/${name.replace(/^#+/, '')}` : null;
     const settings = el('div', { class: 'settings' },
       this.setting('Topic', this.entry({
         value: room.topic || '', placeholder: 'What the room is for', button: 'Set',
@@ -6300,7 +6346,7 @@ app.views.hub = {
       el('span', { class: 'hub-who' }, ...this.named(id)),
       el('button', { text: 'Lift', onclick: () => act('ban', { identity: id, on: false }) })));
     return [
-      this.pageHead('Rooms', '#' + name, link ? el('button', { text: 'Copy link', onclick: () => copy(link, 'the room\'s link') }) : null),
+      this.pageHead('Rooms', roomLabel(name), link ? el('button', { text: 'Copy link', onclick: () => copy(link, 'the room\'s link') }) : null),
       settings,
       el('div', { class: 'hub-heading', text: `In it · ${room.members.length}` }), ...memberRows,
       el('div', { class: 'hub-heading', text: `Invited · ${room.invited.length}` }), ...invited,
@@ -6355,7 +6401,7 @@ app.views.hub = {
     const founder = room.founder === id;
     const op = founder || room.operators.includes(id);
     const who = showRoom
-      ? el('span', { class: 'hub-who' }, el('a', { href: '#', text: '#' + room.name, onclick: (e) => {
+      ? el('span', { class: 'hub-who' }, el('a', { href: '#', text: roomLabel(room.name), onclick: (e) => {
         e.preventDefault();
         this.showing = 'rooms';
         this.openPage({ room: room.name });

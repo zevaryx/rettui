@@ -63,6 +63,10 @@ pub struct Settings {
     pub wrap_lines: bool,
     /// Show people joining and leaving RRC rooms in the chat.
     pub show_joins: bool,
+    /// The date with each chat line's time (RRC rooms).
+    pub chat_dates: bool,
+    /// Messages each RRC room and whisper conversation keeps.
+    pub rrc_messages_kept: u64,
     /// Notifications for new LXMF messages (each conversation can be muted).
     pub notify_messages: bool,
     /// Notifications from RRC (each hub and room has its own level).
@@ -176,6 +180,8 @@ impl Default for Settings {
             node_dir: None,
             node_executable_pages: false,
             show_joins: true,
+            chat_dates: true,
+            rrc_messages_kept: 500,
             wrap_lines: false,
             notify_messages: true,
             notify_rrc: true,
@@ -525,6 +531,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "picture_size",
             "messages_kept",
             "message_storage_mb",
+            "rrc_messages_kept",
         ],
     ),
     (Section::Location, &["location", "location_requests", "map_tiles", "map_tiles_file"]),
@@ -549,7 +556,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "hub_open_rooms",
         ],
     ),
-    (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins"]),
+    (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins", "chat_dates"]),
     (Section::Notifications, &["notify_messages", "notify_rrc", "quiet_hours", "quiet_hours_trusted"]),
     (Section::System, &["log_level", "update_check", "rns_config"]),
 ];
@@ -728,6 +735,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "rrc_messages_kept",
+        label: "Chat messages kept",
+        help: "Newest messages each RRC room and whisper conversation keeps (also across restarts), 50 to 100000. People joining and leaving and the hub's notices don't count. Fewer: the oldest go at once",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
         key: "message_storage_mb",
         label: "Message storage (MB)",
         help: "Most disk messages may use (the store and the archive together); the oldest archived months are deleted to stay within it. Attachments aren't counted. 0 is no limit",
@@ -889,6 +903,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "chat_dates",
+        label: "Dates on chat lines",
+        help: "Show the date with the time of each line in RRC rooms and whispers (as the Dates setting writes it), not only the time. D toggles it in the terminal UI's Channels tab",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "notify_messages",
         label: "Notify on messages",
         help: "Notifications for new LXMF messages you aren't looking at (each conversation can be muted)",
@@ -964,6 +985,9 @@ const MAX_STAMP_COST: u64 = 254;
 const MAX_MESSAGE_KB: u64 = 1_000_000;
 /// Most messages a conversation may be set to keep.
 const MAX_MESSAGES_KEPT: u64 = 1_000_000;
+/// Chat messages kept per room: each room's history file is written whole.
+const MIN_RRC_MESSAGES_KEPT: u64 = 50;
+const MAX_RRC_MESSAGES_KEPT: u64 = 100_000;
 /// Largest storage limit, in megabytes (a petabyte, so bytes can't overflow).
 const MAX_STORAGE_MB: u64 = 1_000_000_000;
 
@@ -1034,6 +1058,7 @@ impl Settings {
             "sync_interval_mins" => self.sync_interval_mins.to_string(),
             "auto_propagation_node" => self.auto_propagation_node.to_string(),
             "messages_kept" => self.messages_kept.to_string(),
+            "rrc_messages_kept" => self.rrc_messages_kept.to_string(),
             "message_storage_mb" => self.message_storage_mb.to_string(),
             "cache_hours" => self.cache_hours.to_string(),
             "node_enabled" => self.node_enabled.to_string(),
@@ -1043,6 +1068,7 @@ impl Settings {
             "node_executable_pages" => self.node_executable_pages.to_string(),
             "wrap_lines" => self.wrap_lines.to_string(),
             "show_joins" => self.show_joins.to_string(),
+            "chat_dates" => self.chat_dates.to_string(),
             "notify_messages" => self.notify_messages.to_string(),
             "notify_rrc" => self.notify_rrc.to_string(),
             "quiet_hours" => self.quiet_hours.clone().unwrap_or_default(),
@@ -1115,6 +1141,7 @@ impl Settings {
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
+            "chat_dates" => self.chat_dates = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,
             "quiet_hours" => {
@@ -1240,6 +1267,13 @@ impl Settings {
             "announce_random_max_mins" => self.announce_random_max_mins = between(value, ANNOUNCE_MINS).map_err(fail)?,
             "sync_interval_mins" => self.sync_interval_mins = number(value, MAX_MINUTES).map_err(fail)?,
             "messages_kept" => self.messages_kept = number(value, MAX_MESSAGES_KEPT).map_err(fail)?,
+            "rrc_messages_kept" => {
+                let n = number(value, MAX_RRC_MESSAGES_KEPT).map_err(fail)?;
+                if n < MIN_RRC_MESSAGES_KEPT {
+                    return Err(fail(format!("at least {MIN_RRC_MESSAGES_KEPT}")));
+                }
+                self.rrc_messages_kept = n;
+            }
             "message_storage_mb" => self.message_storage_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
             "cache_hours" => self.cache_hours = number(value, MAX_HOURS).map_err(fail)?,
             "propagation_node" => {

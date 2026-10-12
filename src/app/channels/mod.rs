@@ -23,8 +23,11 @@ use crate::rrc::{self, Envelope, Limits, t};
 use crate::store::{HubConfig, NotifyLevel};
 use crate::term::input::TextInput;
 
-/// Lines kept per room (NomadNet keeps 500).
-const MAX_LINES: usize = 500;
+/// Other lines kept with the messages of a room or whisper conversation
+/// (as many as "Chat messages kept" says) (people joining and leaving, the hub's
+/// notices and errors), for this run only: counted on their own, so a busy
+/// room's comings and goings never push its messages out.
+const MAX_OTHER_LINES: usize = 200;
 
 /// The buffer of a whisper conversation (private notices) with a user:
 /// `@` and their identity in hex. Rooms can't take this form.
@@ -100,6 +103,12 @@ impl ChatLine {
         Self { presence: true, ..Self::new(LineKind::System, text) }
     }
 
+    /// Something said (a message, an action or a whisper), as kept across
+    /// restarts; not a join, a notice or an error.
+    pub fn is_message(&self) -> bool {
+        matches!(self.kind, LineKind::Msg | LineKind::Action | LineKind::Private)
+    }
+
     /// Whether to show it, given the "Show joins and leaves" setting.
     pub fn shown(&self, show_joins: bool) -> bool {
         show_joins || !self.presence
@@ -160,9 +169,10 @@ pub struct Hub {
     hub_identity: Option<Vec<u8>>,
     pub hub_name: Option<String>,
     pub motd: Option<String>,
-    /// The greeting so far, while it comes in several notices, and the one
-    /// before it.
-    motd_parts: Option<(String, Option<String>)>,
+    /// The greeting so far, while it comes in several notices, the one
+    /// before it, and whether any of it has been shown (none is while it's
+    /// the greeting we had).
+    motd_parts: Option<(String, Option<String>, bool)>,
     pub limits: Limits,
     pub direct_notices: bool,
     /// The hub hosted here: its public key, to reach it directly.
@@ -388,13 +398,25 @@ impl Hub {
         people
     }
 
-    fn push(&mut self, room: &str, line: ChatLine) {
+    /// Add a line, the oldest of its sort going past their limit (`keep`
+    /// messages, [`MAX_OTHER_LINES`] others).
+    fn push(&mut self, room: &str, line: ChatLine, keep: usize) {
         let buffer = self.buffers.entry(room.to_string()).or_default();
+        let message = line.is_message();
         buffer.push(line);
-        if buffer.len() > MAX_LINES {
-            buffer.drain(..buffer.len() - MAX_LINES);
-        }
+        let limit = if message { keep } else { MAX_OTHER_LINES };
+        drop_oldest(buffer, message, limit);
         self.history_dirty = true;
+    }
+
+    /// At most `keep` messages in each room and whisper conversation (after
+    /// "Chat messages kept" went down).
+    pub(crate) fn keep_messages(&mut self, keep: usize) {
+        for buffer in self.buffers.values_mut() {
+            if drop_oldest(buffer, true, keep) {
+                self.history_dirty = true;
+            }
+        }
     }
 
     fn history_path(&self, dir: &Path) -> PathBuf {
@@ -414,8 +436,7 @@ impl Hub {
             .iter()
             .filter(|(room, _)| !room.is_empty())
             .map(|(room, lines)| {
-                let lines =
-                    lines.iter().filter(|l| matches!(l.kind, LineKind::Msg | LineKind::Action | LineKind::Private)).cloned().collect();
+                let lines = lines.iter().filter(|l| l.is_message()).cloned().collect();
                 (room.clone(), lines)
             })
             .collect()
@@ -488,6 +509,22 @@ impl Hub {
         self.buffers.retain(|key, lines| !lines.is_empty() || key.is_empty() || joined.contains(key));
         self.history_dirty = true;
     }
+}
+
+/// The oldest lines of a sort (messages, or the others) past `limit`
+/// gone. Whether any were.
+fn drop_oldest(buffer: &mut Vec<ChatLine>, messages: bool, limit: usize) -> bool {
+    let alike = buffer.iter().filter(|l| l.is_message() == messages).count();
+    let mut over = alike.saturating_sub(limit);
+    if over == 0 {
+        return false;
+    }
+    buffer.retain(|l| {
+        let drop = over > 0 && l.is_message() == messages;
+        over -= usize::from(drop);
+        !drop
+    });
+    true
 }
 
 /// What the Channels list has selected.
@@ -691,8 +728,9 @@ impl App {
         let viewing = self.is_viewing(index, room);
         let notification =
             if notify && counts && self.settings.notify_rrc { self.rrc_notification(index, room, &line, mention) } else { None };
+        let keep = self.settings.rrc_messages_kept as usize;
         let hub = self.hub_mut(index);
-        hub.push(room, line);
+        hub.push(room, line, keep);
         if counts && !viewing {
             *hub.unread.entry(room.to_string()).or_default() += 1;
             if mention {
@@ -793,9 +831,12 @@ impl App {
                 self.channels.hubs.len() - 1
             }
         };
+        // Connected before a Reticulum restart (auto or not): again now.
+        let rejoin = self.rejoin_hubs.contains(&hash);
+        self.rejoin_hubs.retain(|h| *h != hash);
         let hub = self.hub_mut(index);
         hub.local_key = Some(key);
-        if hub.auto_connect && !hub.manual && !matches!(hub.status, HubStatus::Connected | HubStatus::Connecting(_)) {
+        if (rejoin || hub.auto_connect && !hub.manual) && !matches!(hub.status, HubStatus::Connected | HubStatus::Connecting(_)) {
             hub.reconnect_at = None;
             hub.status = HubStatus::Disconnected;
             self.connect_hub(index);
@@ -815,6 +856,9 @@ impl App {
     }
 
     fn disconnect_hub(&mut self, index: usize) {
+        // Not rejoined later either (see connect_own_hub).
+        let hash = self.channels.hubs[index].hash;
+        self.rejoin_hubs.retain(|h| *h != hash);
         let hub = self.hub_mut(index);
         hub.manual = true;
         hub.reconnect_at = None;
@@ -862,6 +906,12 @@ impl App {
             .map(|(i, _)| i)
             .collect();
         for index in due {
+            // The hub hosted here, since stopped: connect_own_hub connects
+            // once it's back.
+            if self.own_hub_waiting(self.channels.hubs[index].hash) {
+                self.hub_mut(index).reconnect_at = None;
+                continue;
+            }
             self.hub_mut(index).reconnect_at = None;
             self.hub_mut(index).status = HubStatus::Disconnected;
             self.connect_hub(index);
@@ -1006,6 +1056,33 @@ mod tests {
         assert_eq!(mentions, [(3, 9, bot.to_vec()), (14, 18, gone.to_vec())]);
         // A mention of us (highlighted another way) isn't coloured as well.
         assert_eq!(line.user_mentions(&people, &[(3, 9)]).len(), 1);
+    }
+
+    #[test]
+    fn comings_and_goings_never_push_messages_out() {
+        let mut hub = Hub::new([1; 16], rrc::DEFAULT_ASPECT.into(), "Hub".into());
+        // A busy room: a join and a leave for every message.
+        const MAX_MESSAGES: usize = 500;
+        for i in 0..MAX_MESSAGES + 50 {
+            hub.push("lobby", ChatLine::presence(format!("amy joined {i}")), MAX_MESSAGES);
+            hub.push("lobby", ChatLine::new(LineKind::Msg, format!("message {i}")), MAX_MESSAGES);
+            hub.push("lobby", ChatLine::presence(format!("amy left {i}")), MAX_MESSAGES);
+        }
+        let lines = &hub.buffers["lobby"];
+        let messages: Vec<&str> = lines.iter().filter(|l| l.is_message()).map(|l| l.text.as_str()).collect();
+        assert_eq!(messages.len(), MAX_MESSAGES);
+        assert_eq!((messages[0], *messages.last().unwrap()), ("message 50", "message 549"));
+        assert_eq!(lines.iter().filter(|l| !l.is_message()).count(), MAX_OTHER_LINES);
+        assert_eq!(lines.last().unwrap().text, "amy left 549");
+        // All of them are kept across restarts.
+        assert_eq!(hub.history_snapshot()["lobby"].len(), MAX_MESSAGES);
+        // Fewer kept from now on: the oldest go, the other lines stay.
+        hub.keep_messages(100);
+        let lines = &hub.buffers["lobby"];
+        assert_eq!(lines.iter().filter(|l| l.is_message()).count(), 100);
+        assert_eq!(lines.iter().find(|l| l.is_message()).unwrap().text, "message 450");
+        assert_eq!(lines.iter().filter(|l| !l.is_message()).count(), MAX_OTHER_LINES);
+        assert!(hub.history_dirty);
     }
 
     #[test]

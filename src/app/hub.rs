@@ -184,6 +184,23 @@ impl HubHost {
         bans.into_iter().nth(i)
     }
 
+    /// The room a name typed or picked means: one the hub has by that name
+    /// (rsRRCD keeps a `#`, so a client that joins `#lobby` makes a room
+    /// called that), else as rettui names rooms (`#` is decoration).
+    pub fn room_named(&self, room: &str) -> Result<String, &'static str> {
+        let room = one_word(room)?.to_lowercase();
+        let has = |name: &str| self.snapshot.rooms.iter().any(|r| r.name == name);
+        if has(&room) {
+            return Ok(room);
+        }
+        let bare = room.trim_start_matches('#');
+        if bare.is_empty() {
+            return Err("Which room?");
+        }
+        let hashed = format!("#{bare}");
+        Ok(if !has(bare) && has(&hashed) { hashed } else { bare.to_string() })
+    }
+
     /// Keep the selections in their lists as they change.
     fn clamp(&mut self) {
         let lens = [self.snapshot.people.len(), self.snapshot.rooms.len(), self.bans().len()];
@@ -197,12 +214,18 @@ impl HubHost {
 
 /// A room name for a command: one word (rsRRCD reads up to a space).
 fn one_word(room: &str) -> Result<&str, &'static str> {
-    let room = room.trim().trim_start_matches('#');
+    let room = room.trim();
     match room.split_whitespace().count() {
         0 => Err("Which room?"),
         1 => Ok(room),
         _ => Err("Room names are one word"),
     }
+}
+
+/// A room's name as shown: `#lobby` (a room some client named `#lobby`
+/// isn't `##lobby`).
+pub fn room_label(name: &str) -> String {
+    if name.starts_with('#') { name.to_string() } else { format!("#{name}") }
 }
 
 /// Whom an action is about: their identity, or a nick the hub knows (one
@@ -303,7 +326,7 @@ impl App {
     }
 
     pub fn hub_kick(&mut self, room: &str, identity: &str) -> Result<(), String> {
-        let (room, identity) = (one_word(room)?, target(identity)?);
+        let (room, identity) = (self.hub.room_named(room)?, target(identity)?);
         self.hub_run(&format!("/kick {room} {identity}"))
     }
 
@@ -313,7 +336,7 @@ impl App {
         let identity = target(identity)?;
         match room {
             Some(room) => {
-                let room = one_word(room)?;
+                let room = self.hub.room_named(room)?;
                 self.hub_run(&format!("/ban {room} {how} {identity}"))
             }
             None => self.hub_run(&format!("/kline {how} {identity}")),
@@ -321,25 +344,25 @@ impl App {
     }
 
     pub fn hub_op(&mut self, room: &str, identity: &str, on: bool) -> Result<(), String> {
-        let (room, identity) = (one_word(room)?, target(identity)?);
+        let (room, identity) = (self.hub.room_named(room)?, target(identity)?);
         self.hub_run(&format!("/{} {room} {identity}", if on { "op" } else { "deop" }))
     }
 
     pub fn hub_voice(&mut self, room: &str, identity: &str, on: bool) -> Result<(), String> {
-        let (room, identity) = (one_word(room)?, target(identity)?);
+        let (room, identity) = (self.hub.room_named(room)?, target(identity)?);
         self.hub_run(&format!("/{} {room} {identity}", if on { "voice" } else { "devoice" }))
     }
 
     /// Invite someone to a room (or take the invite back): what an invite
     /// only (`+i`) or keyed (`+k`) room lets in.
     pub fn hub_invite(&mut self, room: &str, who: &str, on: bool) -> Result<(), String> {
-        let (room, who) = (one_word(room)?, target(who)?);
+        let (room, who) = (self.hub.room_named(room)?, target(who)?);
         self.hub_run(&format!("/invite {room} {} {who}", if on { "add" } else { "del" }))
     }
 
     /// Set a room's key (`+k`), or take it off (`None`).
     pub fn hub_room_key(&mut self, room: &str, key: Option<&str>) -> Result<(), String> {
-        let room = one_word(room)?;
+        let room = self.hub.room_named(room)?;
         match key.map(str::trim) {
             Some("") => Err("A key, please (or take it off)".into()),
             Some(key) => self.hub_run(&format!("/mode {room} +k {key}")),
@@ -348,7 +371,7 @@ impl App {
     }
 
     pub fn hub_topic(&mut self, room: &str, topic: &str) -> Result<(), String> {
-        let room = one_word(room)?;
+        let room = self.hub.room_named(room)?;
         if topic.trim().is_empty() {
             return Err("A topic, please (rsRRCD can't clear one)".into());
         }
@@ -358,7 +381,7 @@ impl App {
     /// Room modes, as `/mode` takes them: `+m`, `-i`, `+k key`... several
     /// at once, separated by spaces (a key follows its `+k`).
     pub fn hub_modes(&mut self, room: &str, modes: &str) -> Result<(), String> {
-        let room = one_word(room)?.to_string();
+        let room = self.hub.room_named(room)?;
         let words: Vec<&str> = modes.split_whitespace().collect();
         if words.is_empty() {
             return Err("Modes, such as +m or -i (+k key sets a key)".into());
@@ -384,19 +407,19 @@ impl App {
     /// Close a room: everyone in it is taken out, and it goes with its
     /// settings and bans.
     pub fn hub_delete_room(&mut self, room: &str) -> Result<(), String> {
-        let room = one_word(room)?.to_string();
+        let room = self.hub.room_named(room)?;
         self.hub_act(HubAction::Delete(room))
     }
 
     /// Move a room to another name, with its settings and bans (those in it
     /// are told the new name, and taken out of the old one).
     pub fn hub_rename_room(&mut self, from: &str, to: &str) -> Result<(), String> {
-        let (from, to) = (one_word(from)?.to_string(), one_word(to)?.to_string());
+        let (from, to) = (self.hub.room_named(from)?, one_word(to)?.trim_start_matches('#').to_string());
         self.hub_act(HubAction::Rename { from, to })
     }
 
     pub fn hub_register(&mut self, room: &str, on: bool) -> Result<(), String> {
-        let room = one_word(room)?.to_string();
+        let room = self.hub.room_named(room)?;
         self.hub_act(HubAction::Register { room, on })
     }
 
@@ -436,12 +459,12 @@ impl App {
             HubPrompt::Ban(identity) => self.hub_ban(Some(text), &identity, true),
             HubPrompt::Op(identity) => {
                 // Make them an operator, or no longer one if they are.
-                let room = text.trim().trim_start_matches('#').to_lowercase();
+                let room = self.hub.room_named(text).unwrap_or_default();
                 let is_op = self.hub.snapshot.rooms.iter().any(|r| r.name == room && r.operators.contains(&identity));
                 self.hub_op(&room, &identity, !is_op)
             }
             HubPrompt::Voice(identity) => {
-                let room = text.trim().trim_start_matches('#').to_lowercase();
+                let room = self.hub.room_named(text).unwrap_or_default();
                 let voiced = self.hub.snapshot.rooms.iter().any(|r| r.name == room && r.voiced.contains(&identity));
                 self.hub_voice(&room, &identity, !voiced)
             }
@@ -527,13 +550,14 @@ impl App {
                 let Some(room) = self.hub.room().cloned() else { return };
                 match code {
                     KeyCode::Char('t') => {
-                        let title = format!("Topic of #{}", room.name);
+                        let title = format!("Topic of {}", room_label(&room.name));
                         self.open_prompt(PromptKind::Hub(HubPrompt::Topic(room.name)), &title, room.topic.as_deref().unwrap_or(""));
                     }
                     KeyCode::Char('m') => {
                         let title = format!(
-                            "Modes for #{} (now {}): +m moderated, +i invite only, +t topic by operators, +n members only, +p private, +k key",
-                            room.name, room.modes
+                            "Modes for {} (now {}): +m moderated, +i invite only, +t topic by operators, +n members only, +p private, +k key",
+                            room_label(&room.name),
+                            room.modes
                         );
                         self.open_prompt(PromptKind::Hub(HubPrompt::Modes(room.name)), &title, "");
                     }
@@ -542,7 +566,7 @@ impl App {
                         self.hub_result(result);
                     }
                     KeyCode::Char('R') => {
-                        let title = format!("Rename #{} to (those in it are told, and rejoin it there)", room.name);
+                        let title = format!("Rename {} to (those in it are told, and rejoin it there)", room_label(&room.name));
                         self.open_prompt(PromptKind::Hub(HubPrompt::Rename(room.name.clone())), &title, &room.name);
                     }
                     KeyCode::Char('D') => {
@@ -551,7 +575,7 @@ impl App {
                             1 => ", taking out the one in it".into(),
                             n => format!(", taking out the {n} in it"),
                         };
-                        let title = format!("Delete #{}{people}? Type y", room.name);
+                        let title = format!("Delete {}{people}? Type y", room_label(&room.name));
                         self.open_prompt(PromptKind::Hub(HubPrompt::ConfirmDelete(room.name)), &title, "");
                     }
                     _ => {}
@@ -696,6 +720,56 @@ mod tests {
         assert!(app.own_hub_waiting([7; 16]));
         app.start_channels();
         assert!(!commands(&mut rx).iter().any(|c| matches!(c, NetCommand::RrcConnect { .. })));
+        // Its session ends: not tried again while the hub is off.
+        app.on_rrc([7; 16], crate::rrc::session::RrcEvent::Disconnected(Some("Link closed".into())));
+        let said = app.channels.hubs[index].buffers[""].last().map(|line| line.text.clone());
+        assert_eq!(said.as_deref(), Some("Disconnected: Link closed"), "no retrying");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn your_hub_connected_by_hand_is_rejoined_after_a_reticulum_restart() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-rejoin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let settings = Settings { hub_enabled: true, ..Settings::default() };
+        let (mut app, mut rx) = crate::app::test_app_with_net(&dir, settings, Store::default());
+        app.on_net(NetEvent::Hub(HubEvent::Started { hash: [7; 16], public_key: [1; 64] }));
+        let index = app.channels.hub_index([7; 16]).unwrap();
+        // Not connected on its own: you connected it.
+        app.channels.hubs[index].auto_connect = false;
+        app.channels.hubs[index].status = HubStatus::Connected;
+        commands(&mut rx);
+        // Reticulum restarts: the hub starts again with it.
+        app.rejoin_hubs = app.channels_before_restart();
+        app.hub.restarting(HubHostConfig::from_settings(&app.settings, &app.paths, app.identity_hash));
+        assert!(app.own_hub_waiting([7; 16]));
+        app.on_net(NetEvent::Hub(HubEvent::Started { hash: [7; 16], public_key: [1; 64] }));
+        assert!(commands(&mut rx).iter().any(|c| matches!(c, NetCommand::RrcConnect { hub: [7, ..], .. })), "rejoined");
+        assert!(app.rejoin_hubs.is_empty());
+        // Once only: after that, as you set it.
+        app.channels.hubs[index].status = HubStatus::Disconnected;
+        app.on_net(NetEvent::Hub(HubEvent::Started { hash: [7; 16], public_key: [1; 64] }));
+        assert!(!commands(&mut rx).iter().any(|c| matches!(c, NetCommand::RrcConnect { .. })));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rooms_are_named_as_the_hub_has_them() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-rooms-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, _rx) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let mut snapshot = snapshot();
+        let mut hashed = snapshot.rooms[0].clone();
+        hashed.name = "#mesh".into();
+        snapshot.rooms.push(hashed);
+        app.hub.snapshot = snapshot;
+        // As it is, with or without the "#" rettui takes for decoration.
+        assert_eq!(app.hub.room_named("#mesh"), Ok("#mesh".into()));
+        assert_eq!(app.hub.room_named("Mesh"), Ok("#mesh".into()));
+        assert_eq!(app.hub.room_named("#lobby"), Ok("lobby".into()));
+        assert_eq!(app.hub.room_named(" new "), Ok("new".into()));
+        assert!(app.hub.room_named("two words").is_err() && app.hub.room_named("#").is_err());
+        assert_eq!((room_label("lobby"), room_label("#mesh")), ("#lobby".to_string(), "#mesh".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

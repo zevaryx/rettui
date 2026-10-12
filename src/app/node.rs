@@ -164,6 +164,26 @@ fn tree(root: Root, entries: &[PageInfo], folder: &str, depth: usize, rows: &mut
     }
 }
 
+/// The byte offset in `text` of a (line, char column) place.
+fn byte_offset(text: &str, row: usize, col: usize) -> usize {
+    let mut offset = 0;
+    for (i, line) in text.split('\n').enumerate() {
+        if i == row {
+            return offset + line.char_indices().nth(col).map_or(line.len(), |(at, _)| at);
+        }
+        offset += line.len() + 1;
+    }
+    text.len()
+}
+
+/// The (line, char column) of a byte offset in `text`.
+fn row_col(text: &str, offset: usize) -> (usize, usize) {
+    let before = &text[..text.floor_char_boundary(offset.min(text.len()))];
+    let row = before.matches('\n').count();
+    let line = before.rsplit('\n').next().unwrap_or(before);
+    (row, line.chars().count())
+}
+
 /// Something added to the node from an editor.
 #[derive(Debug, Clone)]
 pub struct Added {
@@ -428,7 +448,19 @@ impl App {
     /// terminal UI with changes not saved (it's said). Its new path.
     pub fn node_rename_in(&mut self, root: Root, from: &str, to: &str, scripts: bool) -> Result<String, String> {
         let to = match root {
-            Root::Pages => pages::normalize_name(to)?,
+            Root::Pages => {
+                // A picture (or other file there) stays one when its new
+                // name is typed without its extension, rather than becoming
+                // a page.
+                let typed = to.trim();
+                let name = typed.rsplit('/').next().unwrap_or(typed);
+                let extension =
+                    from.rsplit_once('.').map(|(_, ext)| ext).filter(|ext| !ext.contains('/') && !ext.eq_ignore_ascii_case("mu"));
+                match extension {
+                    Some(ext) if !name.contains('.') && !name.is_empty() => pages::normalize_name(&format!("{typed}.{ext}"))?,
+                    _ => pages::normalize_name(typed)?,
+                }
+            }
             Root::Files => {
                 let to = to.trim().trim_matches('/').to_string();
                 nomad_core::validate_content_relative_path(&to).map_err(|e| format!("Not a name for the node: {e}"))?;
@@ -448,14 +480,23 @@ impl App {
             editor.path = to.clone();
         }
         let unsaved = open.as_ref().filter(|(_, dirty)| *dirty).map(|(path, _)| if path == from { to.clone() } else { path.clone() });
-        let relinked = store.relink(root, from, &to, unsaved.as_deref())?;
-        // The open page, its links changed on disk: shown as saved.
+        let node = hex::encode(self.node.hash);
+        // Moved, whatever comes of its links.
+        let relinked = store.relink(root, from, &to, unsaved.as_deref(), Some(&node)).unwrap_or_else(|e| {
+            self.warn(format!("Moved {from}, but links to it weren't all updated: {e}"));
+            Vec::new()
+        });
+        // The open page, its links changed on disk: shown as saved, the
+        // cursor where it was in the text (not inside a changed link).
         if let Some(editor) = self.node.editor.as_mut().filter(|e| !e.dirty() && relinked.contains(&e.path))
             && let Ok(text) = store.read(&editor.path)
         {
-            let cursor = editor.area.cursor();
+            let (row, col) = editor.area.cursor();
+            let offset = byte_offset(&editor.saved, row, col);
+            let offset = pages::relinked_offset(&editor.saved, offset, root, from, &to, Some(&node));
+            let (row, col) = row_col(&text, offset);
             editor.area = TextArea::new(&text);
-            editor.area.set_cursor(cursor.0, cursor.1);
+            editor.area.set_cursor(row, col);
             editor.saved = text;
         }
         self.send(NetCommand::HostReload);
@@ -980,8 +1021,12 @@ mod tests {
         assert!(!node.join("files/notes.txt").exists());
         let index = std::fs::read_to_string(node.join("pages/index.mu")).unwrap();
         assert!(index.contains("`[notes.txt`:/file/docs/notes.txt]"), "{index}");
-        // The page open (saved) shows its links as changed.
+        // The page open (saved) shows its links as changed, the cursor
+        // after the link it was after (not inside it).
         assert_eq!(page_text(&app), index);
+        let link = "`[notes.txt`:/file/docs/notes.txt]";
+        let (row, col) = app.node.editor.as_ref().unwrap().area.cursor();
+        assert_eq!(&index.lines().nth(row).unwrap()[..col], link);
         assert_eq!(app.selected_item(), Some((Root::Files, "docs/notes.txt".into(), false)));
         assert!(app.node_rows().contains(&NodeRow::Folder { root: Root::Files, path: "docs".into(), depth: 1 }));
         let shown = screen(&mut app);
@@ -999,6 +1044,16 @@ mod tests {
         assert!(page_text(&app).contains(":/file/docs/notes.txt"));
         assert!(std::fs::read_to_string(node.join("pages/index.mu")).unwrap().contains(":/file/docs/notes.txt"));
         assert!(app.node_rows().iter().all(|row| !matches!(row, NodeRow::Folder { path, .. } if path == "docs")));
+
+        // A picture renamed without its extension stays a picture.
+        let added = app.node_add_file("logo.png", &photo(40, 40)).unwrap();
+        let path = added.address.trim_start_matches(":/media/").to_string();
+        let ext = path.rsplit_once('.').unwrap().1.to_string();
+        assert_eq!(app.node_rename_in(Root::Pages, &path, "art/badge", true).unwrap(), format!("art/badge.{ext}"));
+        // Only files move in files/, not folders of them.
+        app.node_move(Root::Files, "notes.txt", "keep", true).unwrap();
+        assert!(app.node_rename_in(Root::Files, "keep", "elsewhere", true).is_err());
+        assert!(node.join("files/keep/notes.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

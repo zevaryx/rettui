@@ -126,23 +126,82 @@ pub fn folders(entries: &[PageInfo]) -> Vec<String> {
     folders
 }
 
-/// `text` with every address `from` made `to`: where `from` is followed by
-/// something that can't go on in a path (so `:/page/a.mu` isn't taken for
-/// the start of `:/page/a.mu2`). How many were.
-fn replace_address(text: &str, from: &str, to: &str) -> (String, usize) {
-    let mut out = String::with_capacity(text.len());
-    let mut count = 0;
-    let mut rest = text;
-    while let Some(at) = rest.find(from) {
-        let after = &rest[at + from.len()..];
+/// Where, in `text`, the address `from` (`:/page/a.mu`) is one on this
+/// node: a link's or picture's own (right after its `` ` ``), or one naming
+/// the node (`` `<node>:/page/a.mu ``), but not another node's page of the
+/// same name. Only where `from` ends there (so `:/page/a.mu` isn't taken
+/// for the start of `:/page/a.mu2`). Byte offsets, in order.
+fn address_matches(text: &str, from: &str, node: Option<&str>) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(start) = text[at..].find(from).map(|i| at + i) {
+        let after = &text[start + from.len()..];
         let ends = after.chars().next().is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '/')));
-        out.push_str(&rest[..at]);
-        out.push_str(if ends { to } else { from });
-        count += usize::from(ends);
-        rest = after;
+        let before = &text[..start];
+        let here = before.ends_with('`')
+            || node.is_some_and(|node| {
+                before.len() > node.len()
+                    && before.is_char_boundary(before.len() - node.len())
+                    && before[before.len() - node.len()..].eq_ignore_ascii_case(node)
+                    && before[..before.len() - node.len()].ends_with('`')
+            });
+        if ends && here {
+            found.push(start);
+        }
+        at = start + from.len();
     }
-    out.push_str(rest);
-    (out, count)
+    found
+}
+
+/// `text` with every address `from` on this node made `to` (see
+/// [`address_matches`]). How many were.
+fn replace_address(text: &str, from: &str, to: &str, node: Option<&str>) -> (String, usize) {
+    let found = address_matches(text, from, node);
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for &start in &found {
+        out.push_str(&text[at..start]);
+        out.push_str(to);
+        at = start + from.len();
+    }
+    out.push_str(&text[at..]);
+    (out, found.len())
+}
+
+/// The addresses links to something in `root` use.
+fn routes(root: Root) -> &'static [&'static str] {
+    match root {
+        Root::Pages => &[":/page/", ":/media/"],
+        Root::Files => &[":/file/"],
+    }
+}
+
+/// Where a place in `text` (a byte offset, such as the cursor) is once
+/// links to `from` became links to `to`, as [`Pages::relink`] changes them:
+/// moved along with the text before it, and to the end of an address it
+/// was inside.
+pub fn relinked_offset(text: &str, offset: usize, root: Root, from: &str, to: &str, node: Option<&str>) -> usize {
+    let mut text = text.to_string();
+    let mut offset = offset.min(text.len());
+    for route in routes(root) {
+        let (from, to) = (format!("{route}{from}"), format!("{route}{to}"));
+        let mut moved = offset;
+        for start in address_matches(&text, &from, node) {
+            if start >= offset {
+                break;
+            }
+            let end = start + from.len();
+            if end <= offset {
+                moved = moved + to.len() - from.len();
+            } else {
+                // Inside it: after the new one.
+                moved = moved - (offset - start) + to.len();
+            }
+        }
+        offset = moved;
+        text = replace_address(&text, &from, &to, node).0;
+    }
+    offset
 }
 
 /// Pictures a page can show (NomadNet's `/media`, which reads them from
@@ -369,6 +428,9 @@ impl Pages {
         }
         nomad_core::validate_content_relative_path(to).map_err(|e| format!("Not a name for the node: {e}"))?;
         let source = self.resolve_in(root, from)?;
+        if !source.is_file() {
+            return Err(format!("{from} isn't a file on the node"));
+        }
         let target = self.resolve_in(root, to)?;
         if target.exists() {
             return Err(format!("{to} already exists"));
@@ -405,19 +467,17 @@ impl Pages {
     }
 
     /// After `from` became `to` (in `root`): links to it in the pages made to
-    /// lead to `to`. Scripts aren't changed, nor pages in `skip` (one open
-    /// with changes not saved). The pages changed.
-    pub fn relink(&self, root: Root, from: &str, to: &str, skip: Option<&str>) -> Result<Vec<String>, String> {
-        let routes: &[&str] = match root {
-            Root::Pages => &[":/page/", ":/media/"],
-            Root::Files => &[":/file/"],
-        };
+    /// lead to `to` (those naming this node by its address, `node`, too).
+    /// Scripts aren't changed, nor pages in `skip` (one open with changes
+    /// not saved). The pages changed.
+    pub fn relink(&self, root: Root, from: &str, to: &str, skip: Option<&str>, node: Option<&str>) -> Result<Vec<String>, String> {
+        let routes = routes(root);
         let mut changed = Vec::new();
         for page in self.list()?.into_iter().filter(|p| p.text && !p.executable && Some(p.path.as_str()) != skip) {
             let Ok(text) = self.read(&page.path) else { continue };
             let mut updated = text.clone();
             for route in routes {
-                updated = replace_address(&updated, &format!("{route}{from}"), &format!("{route}{to}")).0;
+                updated = replace_address(&updated, &format!("{route}{from}"), &format!("{route}{to}"), node).0;
             }
             if updated != text {
                 self.save(&page.path, &updated, false)?;
@@ -492,6 +552,31 @@ mod tests {
     }
 
     #[test]
+    fn only_links_to_this_node_follow_a_move() {
+        let own = "ab".repeat(16);
+        let other = "cd".repeat(16);
+        let text =
+            format!("`[here`:/page/a.mu] `[mine`{own}:/page/a.mu] `[theirs`{other}:/page/a.mu] `(pic`w=40`:/page/a.mu) said :/page/a.mu");
+        let (moved, count) = replace_address(&text, ":/page/a.mu", ":/page/b/a.mu", Some(&own));
+        assert_eq!(count, 3);
+        assert_eq!(
+            moved,
+            format!(
+                "`[here`:/page/b/a.mu] `[mine`{own}:/page/b/a.mu] `[theirs`{other}:/page/a.mu] `(pic`w=40`:/page/b/a.mu) said :/page/a.mu"
+            )
+        );
+        // A place in the text moves with it, and from inside a changed
+        // address to its end.
+        let at = |needle: &str| text.find(needle).unwrap();
+        let moves = |offset| relinked_offset(&text, offset, Root::Pages, "a.mu", "b/a.mu", Some(&own));
+        assert_eq!(moves(at("`[mine")), moved.find("`[mine").unwrap());
+        assert_eq!(moves(at("a.mu]") + 2), moved.find("b/a.mu]").unwrap() + "b/a.mu".len());
+        assert_eq!(moves(text.len()), moved.len());
+        // Without the node's address, only the links without one.
+        assert_eq!(replace_address(&text, ":/page/a.mu", ":/page/b.mu", None).1, 2);
+    }
+
+    #[test]
     fn moving_keeps_links_working_and_leaves_no_empty_folders() {
         let (pages, dir) = temp_node("move");
         pages
@@ -506,14 +591,14 @@ mod tests {
         pages.add_file("guide.pdf", b"pdf").unwrap();
         // A page into a folder: the links to it (not to about.mu2) follow.
         pages.rename_in(Root::Pages, "about.mu", "info/about.mu", false).unwrap();
-        assert_eq!(pages.relink(Root::Pages, "about.mu", "info/about.mu", None).unwrap(), ["index.mu"]);
+        assert_eq!(pages.relink(Root::Pages, "about.mu", "info/about.mu", None, None).unwrap(), ["index.mu"]);
         // A picture to another folder: the old one goes, being empty.
         pages.rename_in(Root::Pages, "images/logo.png", "art/logo.png", false).unwrap();
-        pages.relink(Root::Pages, "images/logo.png", "art/logo.png", None).unwrap();
+        pages.relink(Root::Pages, "images/logo.png", "art/logo.png", None, None).unwrap();
         assert!(!pages.pages_dir().join("images").exists());
         // A file into a folder of files/.
         pages.rename_in(Root::Files, "guide.pdf", "docs/guide.pdf", false).unwrap();
-        pages.relink(Root::Files, "guide.pdf", "docs/guide.pdf", None).unwrap();
+        pages.relink(Root::Files, "guide.pdf", "docs/guide.pdf", None, None).unwrap();
         assert_eq!(
             pages.read("index.mu").unwrap(),
             "`[About`:/page/info/about.mu] `[About 2`:/page/about.mu2] `(logo`:/media/art/logo.png) `[Get`:/file/docs/guide.pdf]"
@@ -526,7 +611,7 @@ mod tests {
         pages.add_file("other.pdf", b"x").unwrap();
         assert!(pages.rename_in(Root::Files, "other.pdf", "docs/guide.pdf", false).is_err());
         pages.rename_in(Root::Pages, "index.mu", "home.mu", false).unwrap();
-        assert!(pages.relink(Root::Pages, "index.mu", "home.mu", Some("info/about.mu")).unwrap().is_empty());
+        assert!(pages.relink(Root::Pages, "index.mu", "home.mu", Some("info/about.mu"), None).unwrap().is_empty());
         // Deleting the last thing in a folder takes the folder too.
         pages.delete_in(Root::Files, "docs/guide.pdf").unwrap();
         assert!(!pages.files_dir().join("docs").exists());

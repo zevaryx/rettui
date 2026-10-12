@@ -53,8 +53,9 @@ or the folder set in `node_dir`.
   it. In the web UI, each has a `⋯` menu (open, show a picture, put it in the
   open page, copy its address, rename, move, delete), and on a computer
   anything can be dragged onto a folder of its root. Links to what's moved
-  or renamed (`:/page/`, `:/media/` and `:/file/` addresses) are changed in
-  every page, except the one open with changes not saved (the TUI says so;
+  or renamed (`:/page/`, `:/media/` and `:/file/` addresses, and those
+  naming your node's address; not links to another node's page of the same
+  name) are changed in every page, except the one open with changes not saved (the TUI says so;
   the web UI changes them in the editor, for you to save). Scripts are never
   changed or moved this way, and the web UI can't rename or move them.
 - **Selecting text in the editors:** Shift with the arrows, Home/End or
@@ -131,6 +132,8 @@ and the other RRC clients can join it as they join rrcd.
   time it starts (`rrc-hub-identity` in the data directory), so its address
   stays the same and people who join learn the hub's address, not your LXMF
   one. You're an operator of it (as is the hub itself), wherever you are.
+  If you use another identity (or the hub gets a new one), the old one is
+  no longer an operator; operators added to its `config.yaml` by hand stay.
 - **You on it:** the hub is added to your hubs in Channels once it's up, and
   rettui joins it straight away (a client can't find a path to a destination
   it hosts, so yours connects with the hub's key). Stopping the hub leaves it.

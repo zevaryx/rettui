@@ -147,7 +147,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 .rooms
                 .iter()
                 .map(|room| {
-                    let mut spans = vec![Span::styled(format!("#{}", room.name), Style::default().bold())];
+                    let mut spans = vec![Span::styled(crate::app::hub::room_label(&room.name), Style::default().bold())];
                     if room.registered {
                         spans.push(Span::styled(" registered", Style::default().fg(Color::Green)));
                     }
@@ -228,7 +228,7 @@ fn draw_details(frame: &mut Frame, app: &App, area: Rect) {
         },
         HubPane::Rooms => match hub.room() {
             Some(room) => (
-                format!("#{}", room.name),
+                crate::app::hub::room_label(&room.name),
                 vec![
                     Line::from(vec![label("Topic"), Span::raw(room.topic.clone().unwrap_or_else(|| "–".into()))]),
                     Line::from(vec![

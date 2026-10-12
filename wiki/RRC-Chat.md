@@ -56,6 +56,16 @@ host. rettui works with each of them, as they differ (see
   shows them. It's one setting for every room ("Show joins and leaves"
   under Status), and hiding them loses nothing: they come back when turned
   on again.
+- **Times and dates:** each line shows the date it was said with its time
+  (as the *Dates* and *Clock* settings write them; the year too, for
+  another year's). `D` (TUI), or "Dates on chat lines" under Status, shows
+  the time alone instead.
+- **How much is kept:** the newest 500 messages of each room and whisper
+  conversation, also across restarts: "Chat messages kept" (Status ›
+  Messages, `rrc_messages_kept`, 50 to 100000) says how many, and when it
+  goes down the oldest go at once. People joining and leaving, the hub's
+  notices and errors are kept apart (the newest 200, until rettui stops),
+  so a busy room's comings and goings never push messages out.
 - **Emoji:** `Ctrl-E` (or the 🙂 button) and `:name` work in the channel
   input as they do for messages (see [Emoji](Messaging#emoji)).
 - **Mentions and unread:** `@yournick` mentions are highlighted (just the
