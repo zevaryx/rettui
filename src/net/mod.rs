@@ -7,6 +7,7 @@
 //! [`crate::nomad`] and [`crate::rrc`].
 
 pub mod autopn;
+pub mod discovered;
 pub mod heard;
 pub mod iface_log;
 mod reannounce;
@@ -149,6 +150,9 @@ pub enum NetCommand {
         announce: AnnounceSchedule,
         sync: Option<Duration>,
     },
+    /// How many entry points interface discovery finds to connect to (see
+    /// [`discovered`]).
+    SetDiscoveredEntryPoints(u32),
     Sync,
     /// Send a message (its propagation node is the one set here).
     SendMessage {
@@ -406,6 +410,9 @@ pub struct NetOptions {
     pub tickets: PathBuf,
     /// Where the LXMF address's ratchets are kept.
     pub ratchets: PathBuf,
+    /// Entry points interface discovery finds to connect to (see
+    /// [`discovered`]).
+    pub discovered_entry_points: u32,
 }
 
 /// When the LXMF address is announced on its own (besides at start, when
@@ -718,6 +725,10 @@ async fn run(
     // The path table, every so many stats ticks (it can be long).
     let mut routes_due = 0u32;
     let mut reannounce = reannounce::Reannounce::default();
+    let log = |line: String| {
+        let _ = ev.send(NetEvent::Log(line));
+    };
+    let mut discovered = discovered::start(&runtime, options.rns_config.as_deref(), options.discovered_entry_points, &log);
 
     loop {
         tokio::select! {
@@ -785,6 +796,9 @@ async fn run(
                 }
                 if let Ok(stats) = runtime.interface_stats().await {
                     iface_log::set_names(stats.interfaces.iter().map(|i| (i.id, i.name.clone())));
+                    if let Some(manager) = discovered.as_mut().filter(|_| !startup_pending) {
+                        discovered::tick(&runtime, manager, &stats.interfaces, &log).await;
+                    }
                     // One coming online calls for an announce through it, if
                     // announcing isn't off (the one at start covers those up
                     // by then).
@@ -903,6 +917,11 @@ async fn run(
                         auto_next = soon(auto_started);
                     }
                     NetCommand::RecheckPropagation => auto_next = auto_next.min(soon(auto_started)),
+                    NetCommand::SetDiscoveredEntryPoints(count) => match discovered.as_mut() {
+                        Some(manager) => manager.set_target(count as usize),
+                        None if count > 0 => log("Discovered entry points takes effect once the Reticulum config finds entry points and leaves connecting to rettui (discover_interfaces on, autoconnect_discovered_interfaces 0), from the next start".into()),
+                        None => {}
+                    },
                     NetCommand::SetIntervals { announce, sync } => {
                         if announce != announce_schedule {
                             announce_schedule = announce;

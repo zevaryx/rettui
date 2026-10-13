@@ -31,25 +31,35 @@ of the Reticulum instance it uses. Where files are kept is in
     rettui doesn't know are listed and kept as written.
   - **Interfaces:** add (pick a name and a type), rename, enable or disable,
     and delete them.
-  - **Interface discovery:** with *Discover interfaces* and *Auto-connect*
-    in `[reticulum]`, rettui finds entry points that others announce as
-    discoverable and connects to up to that many. It hears of them through
-    the connections you already have, so it needs one to start. rettui's
-    own Reticulum does this; a shared instance run by another program does
-    its own. Known limits, in rsReticulum for now: announces whose location
-    is left unset (Python's default) are skipped, so only entry points that
-    publish a location are found; publishing your own interfaces
-    (*Discoverable*) doesn't work yet, since those announces aren't sent;
-    and an interface marked *Bootstrap only* is dropped as soon as
-    Reticulum starts connecting to that many discovered entry points,
-    before any of them is up, and isn't brought back if they never come up
-    (on later starts, the entry points it found before drop it straight
-    away). The getting-started guide doesn't mark the entry points it adds
-    that way. With discovery on, the log says so each time rettui's
-    Reticulum starts, and warns about any interface marked *Bootstrap
-    only* (so does the Reticulum tab). Earlier versions of rettui couldn't
-    run discovery, so a config that turned it on before now connects to
-    the entry points it finds.
+  - **Interface discovery:** with *Discover interfaces* in `[reticulum]`,
+    Reticulum finds entry points that others announce as discoverable. It
+    hears of them through the connections you already have, so it needs
+    one to start. Something then has to connect to them:
+    - **rettui** (what the getting-started guide sets up): *Discovered
+      entry points* in rettui's settings (System) says how many, with
+      *Auto-connect* (`autoconnect_discovered_interfaces`) left at 0.
+      rettui connects to the best ones found (run by transport nodes, heard
+      in the last 3 days), drops one that isn't up within 12 seconds and
+      tries another (one dropped is tried again after 5 minutes), and
+      handles interfaces marked *Bootstrap only* as Python Reticulum does:
+      they're disconnected once that many found entry points are up, and
+      connected again as soon as none is. A TCP client interface can be
+      brought back; another kind marked *Bootstrap only* stays connected.
+    - **Reticulum**, with *Auto-connect* set to how many. rsReticulum
+      drops interfaces marked *Bootstrap only* as soon as it starts
+      connecting to that many, before any of them is up, never brings
+      them back, and keeps one that never comes up instead of trying
+      another; after a restart, the ones it found before drop them
+      straight away. So a config that does it this way is warned of any
+      interface marked *Bootstrap only*, and the guide doesn't mark the
+      entry points it adds that way. Earlier versions of the guide set
+      discovery up like this; it still works, and the guide leaves it.
+
+    rettui's own Reticulum does this; a shared instance run by another
+    program does its own. With discovery on, the log says so each time
+    rettui's Reticulum starts, and says as it connects to an entry point
+    found, drops one, or disconnects or reconnects the *Bootstrap only*
+    ones. Your own interfaces marked *Discoverable* are announced too.
   - **As text:** edit the whole file, with a live check of whether Reticulum
     can load it.
   - **Safe edits:** changes are made in place, so comments and layout stay.

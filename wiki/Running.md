@@ -45,11 +45,15 @@ the web UI's Status page, opens it again):
   interfaces of its own (an entry point, a radio) isn't given any unless
   you tick them; one it already has (by address) shows as in your config
   already. Each operator sees your IP address, and anyone watching
-  your connection can tell you use Reticulum. They stay connected
-  alongside the entry points discovery finds.
+  your connection can tell you use Reticulum. With discovery ticked too,
+  they're added as *Bootstrap only*: used until two of the entry points
+  discovery finds are up, then disconnected (so the public ones aren't
+  carrying you for good), and connected again as soon as none of those
+  is. Without discovery they stay connected.
 - **Also find entry points near you over time:** turns on
-  interface discovery, as Reticulum's manual recommends, connecting to up to
-  two entry points others announce (see
+  interface discovery, as Reticulum's manual recommends, and sets
+  *Discovered entry points* to 2: rettui connects to two entry points
+  others announce, and swaps one that stays down for another (see
   [Settings and Reticulum Config](Settings-and-Reticulum-Config)). You'll
   connect to hosts you didn't choose. Discovery hears of entry points
   through a connection you already have, so it needs one to start. Like

@@ -32,6 +32,8 @@ fn options(settings: &Settings, paths: &Paths, identity: Identity, announce: boo
         max_message_bytes: settings.max_message_kb * 1000,
         tickets: paths.tickets.clone(),
         ratchets: paths.ratchets.clone(),
+        // A command runs briefly: no connecting to entry points found.
+        discovered_entry_points: 0,
     }
 }
 

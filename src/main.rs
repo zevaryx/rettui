@@ -297,6 +297,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         max_message_bytes: settings.max_message_kb * 1000,
         tickets: paths.tickets.clone(),
         ratchets: paths.ratchets.clone(),
+        discovered_entry_points: settings.discovered_entry_points,
     }
 }
 

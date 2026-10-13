@@ -125,6 +125,11 @@ pub struct Settings {
     /// `crate::update`). Off unless turned on (the getting-started guide
     /// recommends it).
     pub update_check: bool,
+    /// How many entry points interface discovery finds rettui connects to
+    /// itself, Bootstrap only interfaces going once that many are up and
+    /// coming back when none is (see `crate::net::discovered`). 0: none,
+    /// or as the Reticulum config's own auto-connect does.
+    pub discovered_entry_points: u32,
     /// How times and dates read: one of [`crate::clock::CLOCKS`], and of
     /// [`crate::clock::DATE_STYLES`].
     pub clock: String,
@@ -204,6 +209,7 @@ impl Default for Settings {
             picture_size: "medium".into(),
             log_level: "warn".into(),
             update_check: false,
+            discovered_entry_points: 0,
             clock: "24-hour".into(),
             tui_theme: "dark".into(),
             date_style: "month-day".into(),
@@ -558,7 +564,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
     ),
     (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins", "chat_dates"]),
     (Section::Notifications, &["notify_messages", "notify_rrc", "quiet_hours", "quiet_hours_trusted"]),
-    (Section::System, &["log_level", "update_check", "rns_config"]),
+    (Section::System, &["log_level", "update_check", "discovered_entry_points", "rns_config"]),
 ];
 
 impl Field {
@@ -952,6 +958,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "discovered_entry_points",
+        label: "Discovered entry points",
+        help: "How many entry points found by interface discovery rettui connects to (2 is what Reticulum's manual suggests; 0, the default: none). Interfaces marked Bootstrap only are disconnected once that many are up, and connect again when none is; one that stays down is swapped for another. Needs discovery on in the Reticulum config, with its own auto-connect (autoconnect_discovered_interfaces) at 0: rsReticulum's drops Bootstrap only interfaces before the others are up, and never brings them back. The getting-started guide sets this up",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
         key: "rns_config",
         label: "Reticulum config",
         help: "Reticulum config directory; empty uses the standard one (and joins a running rnsd)",
@@ -960,6 +973,8 @@ pub const FIELDS: &[Field] = &[
     },
 ];
 
+/// Most entry points found by discovery connected to at once.
+const MAX_DISCOVERED_ENTRY_POINTS: u64 = 16;
 /// Longest display name accepted.
 const MAX_DISPLAY_NAME: usize = 128;
 /// Upper bounds for numbers (a year), so durations cannot overflow.
@@ -1086,6 +1101,7 @@ impl Settings {
             "picture_size" => self.picture_size.clone(),
             "log_level" => self.log_level.clone(),
             "update_check" => self.update_check.to_string(),
+            "discovered_entry_points" => self.discovered_entry_points.to_string(),
             "clock" => self.clock.clone(),
             "tui_theme" => self.tui_theme.clone(),
             "date_style" => self.date_style.clone(),
@@ -1267,6 +1283,7 @@ impl Settings {
             "announce_random_max_mins" => self.announce_random_max_mins = between(value, ANNOUNCE_MINS).map_err(fail)?,
             "sync_interval_mins" => self.sync_interval_mins = number(value, MAX_MINUTES).map_err(fail)?,
             "messages_kept" => self.messages_kept = number(value, MAX_MESSAGES_KEPT).map_err(fail)?,
+            "discovered_entry_points" => self.discovered_entry_points = number(value, MAX_DISCOVERED_ENTRY_POINTS).map_err(fail)? as u32,
             "rrc_messages_kept" => {
                 let n = number(value, MAX_RRC_MESSAGES_KEPT).map_err(fail)?;
                 if n < MIN_RRC_MESSAGES_KEPT {

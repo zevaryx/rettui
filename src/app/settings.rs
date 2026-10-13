@@ -94,6 +94,10 @@ impl App {
                     intervals = true;
                 }
                 "home" => self.settings.home = after.home.clone(),
+                "discovered_entry_points" => {
+                    self.settings.discovered_entry_points = after.discovered_entry_points;
+                    self.send(NetCommand::SetDiscoveredEntryPoints(after.discovered_entry_points));
+                }
                 "rrc_messages_kept" => {
                     self.settings.rrc_messages_kept = after.rrc_messages_kept;
                     let keep = after.rrc_messages_kept as usize;

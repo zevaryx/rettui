@@ -119,7 +119,9 @@ pub fn bootstrap_warnings(config: &Config) -> Vec<String> {
         .map(|(name, _)| {
             format!(
                 "{name}: Bootstrap only: dropped as soon as Reticulum starts connecting to {connects} discovered entry point{}, \
-                 before any is up, and not brought back if they never come up (rsReticulum, for now)",
+                 before any is up, and not brought back if they never come up (rsReticulum, for now). Set \
+                 autoconnect_discovered_interfaces to 0 and Discovered entry points (in rettui's settings) to {connects} \
+                 for rettui to do it as Python Reticulum does",
                 if connects == 1 { "" } else { "s" }
             )
         })
@@ -458,25 +460,36 @@ pub fn has_own_interfaces(text: &str) -> bool {
 }
 
 /// Whether interface discovery (finding entry points others announce) is
-/// on, and connects to any.
+/// on, and connects to any itself.
 pub fn discovery_on(text: &str) -> bool {
+    discovery_finds(text) && discovery_connects(text) > 0
+}
+
+/// Whether interface discovery is on (it may leave connecting to rettui:
+/// see [`crate::net::discovered`]).
+pub fn discovery_finds(text: &str) -> bool {
+    Doc::new(text).raw_value(&["reticulum"], "discover_interfaces").is_some_and(|v| crate::app::reticulum::rns_truthy(&v))
+}
+
+/// How many found entry points Reticulum connects to itself, as written.
+pub fn discovery_connects(text: &str) -> u32 {
     let doc = Doc::new(text);
     let on = |key: &str| doc.raw_value(&["reticulum"], key);
-    let finds = on("discover_interfaces").is_some_and(|v| crate::app::reticulum::rns_truthy(&v));
-    let connects = on("autoconnect_discovered_interfaces")
+    on("autoconnect_discovered_interfaces")
         .or_else(|| on("discover_interfaces_autoconnect"))
         .and_then(|v| v.trim().parse::<u32>().ok())
-        .is_some_and(|n| n > 0);
-    finds && connects
+        .unwrap_or(0)
 }
 
 /// Add a TCP client interface to an entry point (named `name`, or with a
 /// number after it if that's taken). The new text, and the name used.
 ///
-/// Not `bootstrap_only`, whatever discovery does: rsReticulum drops those
-/// as soon as it starts connecting to as many discovered interfaces as
-/// it's set to, before any of them is up, and never brings them back.
-pub fn add_entry_point(text: &str, name: &str, host: &str, port: u16) -> Result<(String, String), String> {
+/// `bootstrap`: Bootstrap only, for when rettui connects to the entry
+/// points discovery finds (see [`crate::net::discovered`]). Not when
+/// Reticulum does: rsReticulum drops those as soon as it starts connecting
+/// to as many discovered interfaces as it's set to, before any of them is
+/// up, and never brings them back.
+pub fn add_entry_point(text: &str, name: &str, host: &str, port: u16, bootstrap: bool) -> Result<(String, String), String> {
     let mut doc = Doc::new(text);
     let taken = doc.subsections("interfaces");
     let name = std::iter::once(name.to_string())
@@ -484,22 +497,21 @@ pub fn add_entry_point(text: &str, name: &str, host: &str, port: u16) -> Result<
         .find(|candidate| !taken.contains(candidate))
         .expect("some name is free");
     let port = port.to_string();
-    let keys = [("type", "TCPClientInterface"), ("enabled", "Yes"), ("target_host", host), ("target_port", port.as_str())];
+    let mut keys = vec![("type", "TCPClientInterface"), ("enabled", "Yes"), ("target_host", host), ("target_port", port.as_str())];
+    if bootstrap {
+        keys.push(("bootstrap_only", "Yes"));
+    }
     doc.add_subsection("interfaces", &name, &keys)?;
     Ok((doc.text(), name))
 }
 
 /// Turn interface discovery on, connecting to up to `connect` of the
-/// entry points found (unless it already connects to some).
+/// entry points found itself (unless it already connects to some); with 0,
+/// it only finds them, for rettui to connect to.
 pub fn enable_discovery(text: &str, connect: u32) -> String {
     let mut doc = Doc::new(text);
     doc.set(&["reticulum"], "discover_interfaces", &[], Some("Yes"));
-    let current = doc
-        .present_key(&["reticulum"], &["autoconnect_discovered_interfaces", "discover_interfaces_autoconnect"])
-        .and_then(|key| doc.raw_value(&["reticulum"], &key))
-        .and_then(|v| v.trim().parse::<u32>().ok())
-        .unwrap_or(0);
-    if current == 0 {
+    if connect > 0 && discovery_connects(text) == 0 {
         doc.set(&["reticulum"], "autoconnect_discovered_interfaces", &["discover_interfaces_autoconnect"], Some(&connect.to_string()));
     }
     doc.text()
@@ -512,7 +524,7 @@ mod tests {
         let base = rns_runtime::config::Config::default_config();
         assert!(!super::has_interface_to(base, "rmap.world") && !super::discovery_on(base));
         assert!(!super::has_own_interfaces(base), "only the Auto interface");
-        let (added, name) = super::add_entry_point(base, "RMAP World", "rmap.world", 4242).unwrap();
+        let (added, name) = super::add_entry_point(base, "RMAP World", "rmap.world", 4242, false).unwrap();
         assert_eq!(name, "RMAP World");
         let (config, check) = super::check(&added);
         assert!(check.error.is_none(), "{:?}", check.error);
@@ -526,7 +538,7 @@ mod tests {
         let off = super::set_options(&added, &super::Section::Interface("RMAP World".into()), &[("enabled", "No")]).unwrap();
         assert!(!super::has_interface_to(&off, "rmap.world") && !super::has_own_interfaces(&off), "{off}");
         // A second one gets a name of its own; the default interface stays.
-        let (twice, name) = super::add_entry_point(&added, "RMAP World", "rmap.world", 4242).unwrap();
+        let (twice, name) = super::add_entry_point(&added, "RMAP World", "rmap.world", 4242, false).unwrap();
         assert!(twice.contains("[[RMAP World 2]]") && twice.contains("[[Default Interface]]"));
         assert_eq!(name, "RMAP World 2");
         // Bootstrap only, with discovery connecting by itself: warned of.
@@ -554,6 +566,16 @@ mod tests {
             2,
         );
         assert!(set.contains("autoconnect_discovered_interfaces = 5"));
+        // For rettui to connect to the ones found: Bootstrap only entry
+        // points, and discovery that only finds (and isn't warned of).
+        let (bootstrapped, _) = super::add_entry_point(base, "RMAP World", "rmap.world", 4242, true).unwrap();
+        let finding = super::enable_discovery(&bootstrapped, 0);
+        assert!(super::discovery_finds(&finding) && !super::discovery_on(&finding) && super::discovery_connects(&finding) == 0);
+        let (config, check) = super::check(&finding);
+        assert!(check.error.is_none() && check.warnings.is_empty(), "{:?}", check.warnings);
+        let config = config.unwrap();
+        assert_eq!(config.subsection("interfaces", "RMAP World").unwrap().get_bool("bootstrap_only"), Some(true));
+        assert!(!config.section("reticulum").unwrap().has("autoconnect_discovered_interfaces"));
     }
 
     use super::*;

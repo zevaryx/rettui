@@ -98,7 +98,7 @@ pub fn down_help(why: &str) -> String {
 }
 /// The config is Python Reticulum's.
 pub const SHARED_NOTE: &str = "This Reticulum config is shared with NomadNet, Sideband and rnsd too.";
-pub const DISCOVER_HELP: &str = "Connects to up to 2 entry points others announce, as Reticulum's manual recommends; you'll connect to hosts you didn't choose. It hears of them through a connection you have, so it needs one to start.";
+pub const DISCOVER_HELP: &str = "Connects to up to 2 entry points others announce, as Reticulum's manual recommends; you'll connect to hosts you didn't choose. It hears of them through a connection you have, so it needs one to start: the entry points ticked here are used until 2 found are up, and again if none is.";
 pub const AUTO_PROPAGATION_HELP: &str = "A propagation node keeps messages for you while you're offline, for you to collect. Ticked, rettui picks one: the nearest that answers fastest.";
 
 /// Shown under picking a propagation node automatically while it's ticked
@@ -250,7 +250,7 @@ impl App {
             has_entry_point: ENTRY_POINTS.iter().map(|entry| rns::has_interface_to(&config, entry.host)).collect(),
             has_own_interfaces: rns::has_own_interfaces(&config),
             shared_config: self.rns_path().parent().is_some_and(crate::config::is_shared_rns_dir),
-            has_discovery: rns::discovery_on(&config),
+            has_discovery: rns::discovery_on(&config) || (rns::discovery_finds(&config) && self.settings.discovered_entry_points > 0),
             external: self.uses_external_shared_instance(),
             auto_propagation: self.settings.auto_propagation_node,
             reach: self.entry_reach.get(ENTRY_POINTS.len()),
@@ -309,27 +309,42 @@ impl App {
             let add: Vec<&EntryPoint> =
                 ENTRY_POINTS.iter().enumerate().filter(|&(i, _)| chosen(i) && !view.has_entry_point[i]).map(|(_, entry)| entry).collect();
             let discover = choices.discover && !view.has_discovery;
+            // rettui connects to the entry points found (and the ones
+            // added are Bootstrap only), unless Reticulum's config does it
+            // itself: see crate::net::discovered.
+            let ours = (discover || view.has_discovery) && rns::discovery_connects(&self.guide_config()) == 0;
             if !add.is_empty() || discover {
                 let mut added = Vec::new();
                 let warnings = self.rns_edit(restricted, |text| {
                     let mut text = text.to_string();
                     for entry in &add {
-                        let (with, name) = rns::add_entry_point(&text, entry.name, entry.host, entry.port)?;
+                        let (with, name) = rns::add_entry_point(&text, entry.name, entry.host, entry.port, ours)?;
                         added.push((name, **entry));
                         text = with;
                     }
-                    Ok(if discover { rns::enable_discovery(&text, DISCOVERED) } else { text })
+                    Ok(if discover { rns::enable_discovery(&text, 0) } else { text })
                 })?;
                 done.extend(warnings);
                 for (_, entry) in &added {
                     done.push(format!("Added {} ({}:{}) to your Reticulum config", entry.name, entry.host, entry.port));
                 }
-                if !added.is_empty() {
+                let any_added = !added.is_empty();
+                if any_added {
                     // Said as each connects, or if one doesn't.
                     self.connect_watch = Some((added.into_iter().map(|(name, _)| name).collect(), Instant::now()));
                 }
                 if discover {
                     done.push("Turned on interface discovery".into());
+                    if self.settings.discovered_entry_points == 0 {
+                        let count = DISCOVERED.to_string();
+                        done.extend(self.update_settings(&[("discovered_entry_points", count.as_str())])?);
+                    }
+                }
+                if ours && any_added {
+                    done.push(format!(
+                        "The entry points added are used until {} found by discovery are up, and again if none is",
+                        self.settings.discovered_entry_points
+                    ));
                 }
                 done.push("Restarting Reticulum to connect".into());
                 self.request_rns_restart();
@@ -610,8 +625,12 @@ mod tests {
         assert!(config.contains("target_host = rmap.world") && config.contains("target_host = rns.ratspeak.org"), "{config}");
         assert!(config.contains("[[Ratspeak & Colorado Mesh]]"), "{config}");
         assert!(!config.contains(ENTRY_POINTS[borders].host) && !config.contains(ENTRY_POINTS[simply].host), "{config}");
-        assert!(!config.contains("bootstrap_only"), "{config}");
-        assert!(rns::discovery_on(&config));
+        // Discovery finds entry points and rettui connects to 2 of them;
+        // the ones added are Bootstrap only, used until those are up.
+        assert_eq!(config.matches("bootstrap_only = Yes").count(), 2, "{config}");
+        assert!(rns::discovery_finds(&config) && rns::discovery_connects(&config) == 0, "{config}");
+        assert_eq!(app.settings.discovered_entry_points, 2);
+        assert!(done.iter().any(|d| d.contains("used until 2 found by discovery are up")), "{done:?}");
         assert!(app.take_rns_restart());
         // Once Reticulum is back, it says as each connects; and, for one
         // that doesn't, why.
@@ -667,6 +686,30 @@ mod tests {
         let defaults = app.guide_defaults();
         assert!(defaults.connect.iter().all(|on| !on) && !defaults.discover, "{defaults:?}");
         assert!(!view.shared_config, "a config of rettui's own");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn where_reticulum_connects_to_the_ones_found_itself_it_still_does() {
+        let dir = std::env::temp_dir().join(format!("rettui-guide-auto-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rns_dir = dir.join("rns");
+        std::fs::create_dir_all(&rns_dir).unwrap();
+        // As the guide set it up before rettui connected to them itself.
+        let config = "[reticulum]\n  discover_interfaces = Yes\n  autoconnect_discovered_interfaces = 2\n\n[interfaces]\n  [[Default Interface]]\n    type = AutoInterface\n    enabled = Yes\n";
+        std::fs::write(rns_dir.join("config"), config).unwrap();
+        let settings = Settings { rns_config: Some(rns_dir.display().to_string()), ..Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, Store::default());
+        assert!(app.guide_view().has_discovery);
+        let mut connect = vec![false; ENTRY_POINTS.len()];
+        connect[1] = true;
+        app.entry_reach.set(vec![Reach::Up(Duration::from_millis(50)); ENTRY_POINTS.len()]);
+        let choices = GuideChoices { name: String::new(), connect, discover: true, auto_propagation: false, update_check: false };
+        app.apply_guide(&choices, false).unwrap();
+        let written = std::fs::read_to_string(rns_dir.join("config")).unwrap();
+        assert!(written.contains("target_host = rmap.world") && !written.contains("bootstrap_only"), "{written}");
+        assert!(written.contains("autoconnect_discovered_interfaces = 2"));
+        assert_eq!(app.settings.discovered_entry_points, 0, "left to Reticulum");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

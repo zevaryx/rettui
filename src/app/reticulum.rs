@@ -127,10 +127,17 @@ impl App {
         let Ok((text, _)) = rns::load(&self.rns_path()) else { return };
         let Some(config) = rns::check(&text).0 else { return };
         let connects = rns::discovery_autoconnect(&config);
+        let ours = self.settings.discovered_entry_points;
+        let finds = config.section("reticulum").and_then(|r| r.get_bool("discover_interfaces")) == Some(true);
         if connects > 0 {
             self.log(format!(
                 "Interface discovery is on (in the Reticulum config): connecting to up to {connects} entry point{} others announce",
                 if connects == 1 { "" } else { "s" }
+            ));
+        } else if finds && ours > 0 {
+            self.log(format!(
+                "Interface discovery is on: rettui connects to up to {ours} entry point{} others announce (Discovered entry points)",
+                if ours == 1 { "" } else { "s" }
             ));
         }
         for warning in rns::bootstrap_warnings(&config) {

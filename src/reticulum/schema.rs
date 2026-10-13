@@ -315,7 +315,7 @@ pub const INTERFACE_ADVANCED: &[Group] = &[
                 "Bootstrap only",
                 Bool,
                 "No",
-                "Use this interface only until discovered interfaces connect (rsReticulum drops it as soon as it starts connecting to them)",
+                "Use this interface only until discovered interfaces connect. With Discovered entry points set in rettui (and autoconnect_discovered_interfaces at 0), rettui drops it once that many are up and brings it back when none is; with autoconnect_discovered_interfaces instead, rsReticulum drops it as soon as it starts connecting to them, and never brings it back",
             ),
         ],
     },
