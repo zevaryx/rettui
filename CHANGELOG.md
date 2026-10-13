@@ -4,12 +4,15 @@ What changed in each release of rettui. Releases before v1.6.0 are described on 
 
 ## v1.7.1
 
-Changes since v1.7.0: links in chat, copying chat text in the terminal UI, and addresses copied with their key.
+Changes since v1.7.0: links in chat, copying chat text in the terminal UI, addresses copied with their key, and rsReticulum 1.3.0 as released.
 
 ### Added
 - **Links in chat**, in both UIs, in LXMF conversations (plain, Markdown and Micron messages) and RRC rooms: NomadNet pages and files (`<node>:/page/…`, also after `nomadnetwork://`) open in the Browser, LXMF addresses (`lxmf@`, `lxmf://`, and `lxma://` links with a key) their conversation, and RRC hubs (`rrc://hub/room`, `rrc@hub`) in Channels, asking first for a hub not added yet. In the terminal UI, a link too long for the view, broken over rows, is still one link.
 - **Copying chat text in the terminal UI:** drag across a conversation or a room to select text; it's copied when you let go.
 - **Copy address gives their key:** copying someone's address (the contact card, the conversation, an RRC user's menu, in both UIs) copies an `lxma://<address>:<public key>` link once their announce has been heard, so whoever you pass it to can add them and write straight away. Before that, the address alone, as before. Copying your own address in Status gives your `lxma://` link too.
+
+### Changed
+- Updated to the [rsReticulum 1.3.0](https://github.com/ratspeak/rsReticulum/releases/tag/v1.3.0) release (rettui had a pre-release). Among its fixes: a peer could crash a Link by reporting an impossible round-trip time; interface discovery publishes and keeps announcements more reliably; Bluetooth and Windows socket fixes. rsReticulum still follows the `rettui` branch of zevaryx/rsReticulum, now 1.3.0 with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in, until that pull request is merged upstream. Building rettui needs Rust 1.89 or newer.
 
 ### Fixed
 - `lxmf@` and `lxmf://` links (on a NomadNet page) didn't open a conversation from the web UI.

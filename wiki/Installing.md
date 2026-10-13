@@ -38,6 +38,8 @@ Installed by a package manager, rettui leaves [updating](#updating) to it.
 
 ## Building from source
 
+It needs Rust 1.89 or newer (`rustup update stable`).
+
 ```sh
 git clone --recursive <this repo>   # or: git submodule update --init
 cargo build --release
@@ -49,7 +51,7 @@ revisions that build together:
 
 | Submodule | Revision | Why |
 | --- | --- | --- |
-| rsReticulum | `6825661` | 1.3.0 (upstream `main`) with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in: `RequestOutcome::ReplyFile`, file metadata and the requester's identity, which node hosting needs. It's the `rettui` branch of [zevaryx/rsReticulum](https://github.com/zevaryx/rsReticulum/tree/rettui) until that pull request is merged upstream. |
+| rsReticulum | `6fb0dee` | The [1.3.0 release](https://github.com/ratspeak/rsReticulum/releases/tag/v1.3.0) with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in: `RequestOutcome::ReplyFile`, file metadata and the requester's identity, which node hosting needs. It's the `rettui` branch of [zevaryx/rsReticulum](https://github.com/zevaryx/rsReticulum/tree/rettui) until that pull request is merged upstream. |
 | rsLXMF | `4a0abec` | `main` (it needs rsReticulum 1.3) |
 | rsNomad | `05ad8ec` | `main` (its tests pass against rsReticulum 1.3 too) |
 
