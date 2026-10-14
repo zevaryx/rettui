@@ -26,6 +26,11 @@ services:
       # Anyone who can reach this port still needs the login link. Use
       # "127.0.0.1:8740:8740" to only allow connections from this machine.
       - "8740:8740"
+      # A transport node others connect to: needs, in
+      # ./data/reticulum/config, `enable_transport = Yes` under [reticulum]
+      # and a TCPServerInterface with listen_ip = 0.0.0.0 and
+      # listen_port = 4242. Nothing listens here until then.
+      - "4242:4242"
     # Reticulum's default AutoInterface finds peers on the local network by
     # multicast, which does not leave Docker's default network. Either add
     # an interface to ./data/reticulum/config (for example a TCPClientInterface

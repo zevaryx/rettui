@@ -30,4 +30,22 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
 - **Access:** port 8740 is published on every interface of the host, and the
   login link is still required. Change it to `"127.0.0.1:8740:8740"` to allow
   only this machine. `PORT` changes the port inside the container.
+- **Transport node:** port 4242 (Reticulum's usual port) is exposed and
+  published too, for others to connect to rettui as an entry point.
+  Nothing listens on it until the Reticulum config has, under
+  `[reticulum]`, `enable_transport = Yes`, and an interface listening on
+  `0.0.0.0` port 4242:
+
+  ```
+  [[Public entry point]]
+    type = TCPServerInterface
+    enabled = Yes
+    listen_ip = 0.0.0.0
+    listen_port = 4242
+  ```
+
+  The Reticulum section of the web UI can add it; restart Reticulum
+  after. To announce it for interface discovery, add
+  `discoverable = Yes` and `reachable_on` (the host's public address or
+  name). Remove the `"4242:4242"` line from `ports:` if you don't run one.
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.

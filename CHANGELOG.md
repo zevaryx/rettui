@@ -14,6 +14,7 @@ Changes since v1.7.0: links in chat, copying chat text in the terminal UI, addre
 
 ### Changed
 - **First setup:** with discovery ticked, the getting-started guide adds the entry points as *Bootstrap only* and sets *Discovered entry points* to 2, so the public entry points are used until two found ones are up, not for good. Configs it set up before (with Reticulum's own auto-connect) are left as they are.
+- **Docker:** the image exposes port 4242 too, and `compose.yaml` publishes it, for running a transport node others connect to; the [Docker page](https://github.com/zevaryx/rettui/wiki/Docker) shows the interface to add.
 - Updated to the [rsReticulum 1.3.0](https://github.com/ratspeak/rsReticulum/releases/tag/v1.3.0) release (rettui had a pre-release). Among its fixes: a peer could crash a Link by reporting an impossible round-trip time; interface discovery publishes and keeps announcements more reliably; Bluetooth and Windows socket fixes. Entry points that publish no location are found now, and your own interfaces marked *Discoverable* are announced. rsReticulum still follows the `rettui` branch of zevaryx/rsReticulum, now 1.3.0 with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in, until that pull request is merged upstream. Building rettui needs Rust 1.89 or newer.
 
 ### Fixed

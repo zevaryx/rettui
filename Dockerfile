@@ -34,7 +34,10 @@ ENV HOME=/data
 # by replacing itself (see src/update/install.rs).
 ENV RETTUI_CONTAINER=1
 VOLUME /data
-EXPOSE 8740
+# 8740: the web UI. 4242: Reticulum's usual port, for running a transport
+# node others connect to (a TCPServerInterface on 0.0.0.0:4242 in
+# /data/reticulum/config, with enable_transport).
+EXPOSE 8740 4242
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 FROM runtime AS prebuilt
