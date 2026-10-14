@@ -4,7 +4,7 @@ What changed in each release of rettui. Releases before v1.6.0 are described on 
 
 ## v1.7.2
 
-Changes since v1.7.1: entry points found by interface discovery are connected to by rettui, with *Bootstrap only* interfaces handled as Python Reticulum does, and the Docker image is ready to run a transport node.
+Changes since v1.7.1: entry points found by interface discovery are connected to by rettui, with *Bootstrap only* interfaces handled as Python Reticulum does, and the Docker image is ready to run a transport node. There are also some dependency bumps to mitigate security advisories
 
 ### Added
 - **Discovered entry points** (a setting, in System): rettui connects to that many entry points interface discovery finds, as Python Reticulum does. One that isn't up within 12 seconds is dropped and another tried (it's tried again after 5 minutes); interfaces marked *Bootstrap only* are disconnected once that many are up, and connected again as soon as none is. rsReticulum's own auto-connect (`autoconnect_discovered_interfaces`) drops them before the others are up, never brings them back, keeps one that never comes up, and after a restart drops them at once; it's still used where the config sets it, with the warning as before.
@@ -12,6 +12,7 @@ Changes since v1.7.1: entry points found by interface discovery are connected to
 ### Changed
 - **First setup:** with discovery ticked, the getting-started guide adds the entry points as *Bootstrap only* and sets *Discovered entry points* to 2, so the public entry points are used until two found ones are up, not for good. Configs it set up before (with Reticulum's own auto-connect) are left as they are.
 - **Docker:** the image exposes port 4242 too, and `compose.yaml` publishes it, for running a transport node others connect to; the [Docker page](https://github.com/zevaryx/rettui/wiki/Docker) shows the interface to add.
+- **`rustls`:** Bumped to the latest 0.23 release to mitigate multiple security advisories
 
 ### Docs and development
 - Interface discovery: since rsReticulum 1.3.0 (in v1.7.1), entry points that publish no location are found, and your own interfaces marked *Discoverable* are announced; the wiki no longer lists those as limits.
