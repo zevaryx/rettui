@@ -2,20 +2,31 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
+## v1.7.2
+
+Changes since v1.7.1: entry points found by interface discovery are connected to by rettui, with *Bootstrap only* interfaces handled as Python Reticulum does, and the Docker image is ready to run a transport node.
+
+### Added
+- **Discovered entry points** (a setting, in System): rettui connects to that many entry points interface discovery finds, as Python Reticulum does. One that isn't up within 12 seconds is dropped and another tried (it's tried again after 5 minutes); interfaces marked *Bootstrap only* are disconnected once that many are up, and connected again as soon as none is. rsReticulum's own auto-connect (`autoconnect_discovered_interfaces`) drops them before the others are up, never brings them back, keeps one that never comes up, and after a restart drops them at once; it's still used where the config sets it, with the warning as before.
+
+### Changed
+- **First setup:** with discovery ticked, the getting-started guide adds the entry points as *Bootstrap only* and sets *Discovered entry points* to 2, so the public entry points are used until two found ones are up, not for good. Configs it set up before (with Reticulum's own auto-connect) are left as they are.
+- **Docker:** the image exposes port 4242 too, and `compose.yaml` publishes it, for running a transport node others connect to; the [Docker page](https://github.com/zevaryx/rettui/wiki/Docker) shows the interface to add.
+
+### Docs and development
+- Interface discovery: since rsReticulum 1.3.0 (in v1.7.1), entry points that publish no location are found, and your own interfaces marked *Discoverable* are announced; the wiki no longer lists those as limits.
+
 ## v1.7.1
 
-Changes since v1.7.0: links in chat, copying chat text in the terminal UI, addresses copied with their key, bootstrap entry points that work as in Python Reticulum, and rsReticulum 1.3.0 as released.
+Changes since v1.7.0: links in chat, copying chat text in the terminal UI, addresses copied with their key, and rsReticulum 1.3.0 as released.
 
 ### Added
 - **Links in chat**, in both UIs, in LXMF conversations (plain, Markdown and Micron messages) and RRC rooms: NomadNet pages and files (`<node>:/page/…`, also after `nomadnetwork://`) open in the Browser, LXMF addresses (`lxmf@`, `lxmf://`, and `lxma://` links with a key) their conversation, and RRC hubs (`rrc://hub/room`, `rrc@hub`) in Channels, asking first for a hub not added yet. In the terminal UI, a link too long for the view, broken over rows, is still one link.
 - **Copying chat text in the terminal UI:** drag across a conversation or a room to select text; it's copied when you let go.
 - **Copy address gives their key:** copying someone's address (the contact card, the conversation, an RRC user's menu, in both UIs) copies an `lxma://<address>:<public key>` link once their announce has been heard, so whoever you pass it to can add them and write straight away. Before that, the address alone, as before. Copying your own address in Status gives your `lxma://` link too.
-- **Discovered entry points** (a setting, in System): rettui connects to that many entry points interface discovery finds, as Python Reticulum does. One that isn't up within 12 seconds is dropped and another tried; interfaces marked *Bootstrap only* are disconnected once that many are up, and connected again as soon as none is. rsReticulum's own auto-connect (`autoconnect_discovered_interfaces`) drops them before the others are up, never brings them back, keeps one that never comes up, and after a restart drops them at once; it's still used where the config sets it, with the warning as before.
 
 ### Changed
-- **First setup:** with discovery ticked, the getting-started guide adds the entry points as *Bootstrap only* and sets *Discovered entry points* to 2, so the public entry points are used until two found ones are up, not for good. Configs it set up before (with Reticulum's own auto-connect) are left as they are.
-- **Docker:** the image exposes port 4242 too, and `compose.yaml` publishes it, for running a transport node others connect to; the [Docker page](https://github.com/zevaryx/rettui/wiki/Docker) shows the interface to add.
-- Updated to the [rsReticulum 1.3.0](https://github.com/ratspeak/rsReticulum/releases/tag/v1.3.0) release (rettui had a pre-release). Among its fixes: a peer could crash a Link by reporting an impossible round-trip time; interface discovery publishes and keeps announcements more reliably; Bluetooth and Windows socket fixes. Entry points that publish no location are found now, and your own interfaces marked *Discoverable* are announced. rsReticulum still follows the `rettui` branch of zevaryx/rsReticulum, now 1.3.0 with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in, until that pull request is merged upstream. Building rettui needs Rust 1.89 or newer.
+- Updated to the [rsReticulum 1.3.0](https://github.com/ratspeak/rsReticulum/releases/tag/v1.3.0) release (rettui had a pre-release). Among its fixes: a peer could crash a Link by reporting an impossible round-trip time; interface discovery publishes and keeps announcements more reliably; Bluetooth and Windows socket fixes. rsReticulum still follows the `rettui` branch of zevaryx/rsReticulum, now 1.3.0 with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in, until that pull request is merged upstream. Building rettui needs Rust 1.89 or newer.
 
 ### Fixed
 - `lxmf@` and `lxmf://` links (on a NomadNet page) didn't open a conversation from the web UI.
