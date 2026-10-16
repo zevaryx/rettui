@@ -118,6 +118,11 @@ html, body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.45 var(--sans);
+  /* Fira Code's ligatures off: `...` and `::` are written as typed, and a
+     run of them (`.....`) can't lose all but its last two to a browser
+     shaping them differently. Inherited by everything, form fields too. */
+  font-variant-ligatures: none;
+  font-feature-settings: "calt" 0, "liga" 0;
 }
 
 body { display: flex; overflow: hidden; }

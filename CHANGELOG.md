@@ -2,6 +2,11 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
+## Unreleased
+
+### Fixed
+- **Web UI:** a run of dots or colons (`.....`, `:::::`) no longer shows as only its last two in some browsers. The bundled Fira Code font joins `..`, `...`, `::` and the like into ligatures, which some browsers drew wrongly; ligatures are now off everywhere in the web UI, so what's typed is shown as typed (`one...two` no longer gets gaps around its dots either).
+
 ## v1.7.2
 
 Changes since v1.7.1: entry points found by interface discovery are connected to by rettui, with *Bootstrap only* interfaces handled as Python Reticulum does, and the Docker image is ready to run a transport node. There are also some dependency bumps to mitigate security advisories
