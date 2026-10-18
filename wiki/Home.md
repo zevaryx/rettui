@@ -24,7 +24,7 @@ it can edit your Reticulum configuration. It is built on:
 
 ## Four ways to use it
 
-- **Terminal UI (TUI):** eight tabs (Messages, Channels, Network, Browser,
+- **Terminal UI (TUI):** nine tabs (Messages, Games, Channels, Network, Browser,
   Node, Status, Reticulum, Hub) with keyboard and mouse control. Terminals
   narrower than 110 columns get a sidebar of icons and narrower side lists, so
   80×24 works well (see [Using the TUI](Using-the-TUI)).

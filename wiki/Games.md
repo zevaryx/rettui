@@ -9,15 +9,23 @@ Reticulum Gaming Protocol from Ratspeak, so you can play against anyone whose
 client speaks it, not only rettui. Clients that don't see each move as a
 message like `[LRGP Chess] e2e4`.
 
+## The Games tab
+
+Games have a tab of their own, second in the sidebar, between Messages and
+Channels (`2`). It lists your games with everyone, newest first: who with
+(their face, or their icon), the game, and where it stands ("Your move",
+"Their move", "They challenged you", "You won by checkmate", …), with a `●`
+on those waiting on you. The tab's badge counts those. Beside the list is the
+selected game's board, with what you can do now, redrawn as their moves
+arrive.
+
 ## Starting a game
 
-In the **terminal UI**, open the conversation and press `g`: the menu lists
-your games with them, newest first (a `●` marks those waiting on you), then a
-new game of each kind. `Enter` opens a game or challenges them to a new one.
-
-In the **web UI**, the conversation's **🎲 Games** button (or `g`) does the
-same. When a game waits on you, the button says how many, and so does the
-conversation's title in the terminal.
+**`n`** in the Games tab (**+ New game** in the web UI) asks who with (from
+your conversations), then which game. From a conversation, **`g`** (the
+**🎲 Games** button in the web UI) goes to your newest game with them in the
+Games tab, or starts a new one with them if there's none; the conversation's
+title (the button, in the web UI) says when a game waits on you.
 
 Your challenge goes as a message. They accept or decline it; whoever
 challenged moves first (in Chess the colours are drawn when the challenge is
@@ -25,9 +33,10 @@ accepted, and White moves first).
 
 ## Playing
 
-A game opens over the conversation with its board, where it stands ("Your
-move", "Their move", "They offered a draw", "You won by checkmate", …) and
-what you can do now. It's redrawn as their moves arrive.
+In the terminal, `↑↓` pick a game in the list and `Enter` (or a click on the
+board) puts you on its board; `Esc` goes back to the list. On the board, the
+keys below play; in the list, `c` opens the conversation and `x` forgets the
+game. In the web UI, pick a game and click on its board.
 
 | | Terminal UI | Web UI |
 | --- | --- | --- |
@@ -39,14 +48,15 @@ what you can do now. It's redrawn as their moves arrive.
 | Answer a draw offered | `y` / `n` | buttons |
 | Resign | `R` (asks first) | button (asks first) |
 | Forget a game | `x` (asks first) | **Forget** |
-| Close | `Esc` | `Esc` or × |
+| Back to the list | `Esc` | ← (on a phone) |
 
 Black sees the chess board turned round, and in the terminal the cursor
 starts on your e-pawn. Moves that aren't allowed (out of turn, a full column,
 an illegal chess move) are refused before anything is sent.
 
 In the history, each move shows as what it did (`🎲 Chess · e2e4`); clicking
-it opens the game, and so does `g` on a [picked message](Messaging#message-actions).
+it shows the game in the Games tab, and so does `g` on a
+[picked message](Messaging#message-actions).
 
 ## How it works
 

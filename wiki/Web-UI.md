@@ -1,5 +1,5 @@
 `rettui --web` runs the same client in a browser instead of the terminal. All
-eight sections work as they do in the TUI and update live as messages and
+nine sections work as they do in the TUI and update live as messages and
 announces arrive. It prints a link to open:
 
 ```text
@@ -115,14 +115,14 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 - **Theme:** dark (rettui's own), light, or as the device is set (and
   following it when it changes): *Theme* in the Status page. Each browser
   keeps its own. Times and dates follow the *Clock* and *Dates* settings.
-- **Keys:** `?` lists them all. `1`–`8` switch sections, `/` searches the
+- **Keys:** `?` lists them all. `1`–`9` switch sections, `/` searches the
   Network list (in Messages, [the messages](Messaging#searching); in
   Channels, [what was said](RRC-Chat); in the Browser, its nodes and saved
   pages), `a` in Network shows [announces as they're heard](Network), and
   `Esc` leaves a text box. In
   Messages, `j`/`k` move to the next or previous conversation, `i` puts you
   in the message box, `r` replies to their newest message, `n` starts a new
-  conversation, `*` pins one, `g` opens your [games](Games) with them, `L` shares a location and `M` opens
+  conversation, `*` pins one, `g` goes to your [games](Games) with them (`n` in Games starts one), `L` shares a location and `M` opens
   [the map](Messaging#locations-and-the-map). In the Browser, `f` finds in the page, `b`
   goes back and `g` to an address. In the message box and the channel
   input, `Ctrl-E` opens the [emoji](Messaging#emoji) picker (not on a Mac
