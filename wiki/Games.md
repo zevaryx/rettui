@@ -1,8 +1,8 @@
 rettui plays two-player games with your contacts over LXMF: **Tic-Tac-Toe**,
-**Four in a Row** and **Chess**. Each move is a message in your conversation
-with them, so a game goes wherever messages go (direct, or through a
-propagation node to someone who's offline) and takes as long as you both
-like.
+**Four in a Row** and **Chess**. Each move goes as a message to them, so a
+game goes wherever messages go (direct, or through a propagation node to
+someone who's offline) and takes as long as you both like. The moves aren't
+in your conversation with them: the Games tab shows the games.
 
 The games are [LRGP](https://github.com/ratspeak/lrgp-rs), the Lightweight
 Reticulum Gaming Protocol from Ratspeak, so you can play against anyone whose
@@ -17,7 +17,16 @@ Channels (`2`). It lists your games with everyone, newest first: who with
 "Their move", "They challenged you", "You won by checkmate", …), with a `●`
 on those waiting on you. The tab's badge counts those. Beside the list is the
 selected game's board, with what you can do now, redrawn as their moves
-arrive.
+arrive, and how your last move went while it's being sent (or if it
+failed).
+
+Above the list, **All**, **Active**, **Pending** and **Completed** filter it
+(`f` goes through them): games under way, challenges not yet answered (yours
+or theirs), and games that are over (won, lost, drawn, declined or expired).
+
+A move that arrives notifies you as a message does (unless the conversation's
+notifications are off, or it's on screen); opening the notification shows the
+game.
 
 ## Starting a game
 
@@ -35,8 +44,8 @@ accepted, and White moves first).
 
 In the terminal, `↑↓` pick a game in the list and `Enter` (or a click on the
 board) puts you on its board; `Esc` goes back to the list. On the board, the
-keys below play; in the list, `c` opens the conversation and `x` forgets the
-game. In the web UI, pick a game and click on its board.
+keys below play; in the list, `f` filters it, `c` opens the conversation and
+`x` forgets the game. In the web UI, pick a game and click on its board.
 
 | | Terminal UI | Web UI |
 | --- | --- | --- |
@@ -47,16 +56,13 @@ game. In the web UI, pick a game and click on its board.
 | Offer a draw | `D` | button |
 | Answer a draw offered | `y` / `n` | buttons |
 | Resign | `R` (asks first) | button (asks first) |
+| Send a move that failed again | `r` | **↻ Send again** |
 | Forget a game | `x` (asks first) | **Forget** |
 | Back to the list | `Esc` | ← (on a phone) |
 
 Black sees the chess board turned round, and in the terminal the cursor
 starts on your e-pawn. Moves that aren't allowed (out of turn, a full column,
 an illegal chess move) are refused before anything is sent.
-
-In the history, each move shows as what it did (`🎲 Chess · e2e4`); clicking
-it shows the game in the Games tab, and so does `g` on a
-[picked message](Messaging#message-actions).
 
 ## How it works
 
@@ -68,7 +74,8 @@ name them, so whose turn it is matches on both sides.
 
 - **Only checked moves are played.** A game's move is played only when its
   signature was checked against the sender's key. One that couldn't be
-  checked (their key isn't known yet) shows with a note and isn't played. A
+  checked (their key isn't known yet) shows in the conversation, as a
+  message with a note, and isn't played. A
   move in a game from someone who isn't the other player, a copy of one
   already played, and one read from a paper message aren't played either.
 - **Both sides check the rules.** If they send a move rettui's copy of the
@@ -76,15 +83,16 @@ name them, so whose turn it is matches on both sides.
   two can't drift apart unnoticed.
 - **Sending:** your moves go as your messages to them do (by the
   conversation's [delivery mode](Messaging)), never on paper. One that
-  fails is sent again exactly as it was, by **↻ Retry** (`t` on a picked
-  message) or, with *Resend when they announce* on, when they next
-  announce. Other clients may send theirs
+  fails is sent again exactly as it was, by `r` on the board (**↻ Send
+  again** in the web UI) or, with *Resend when they announce* on, when they
+  next announce. Other clients may send theirs
   opportunistically (in one packet, without a Link), which rettui receives
   as any message.
 - **Expiry:** a challenge not answered in a day, and a game with no move for
   a week, expire on each side by its own clock; nothing is sent.
 - **Limits:** someone can have at most 16 unanswered challenges waiting on
-  you, and everyone together 128; more show as messages but aren't played.
+  you, and everyone together 128; more show in the conversation as messages
+  but aren't played.
 
 Blocked senders' moves are dropped with their messages, and the *Unknown
 senders* setting applies to games as to messages.
@@ -93,5 +101,8 @@ senders* setting applies to games as to messages.
 
 In `games.json` in the [data folder](Data-and-Storage), with every game this
 data folder has played (for each identity it has had), and in
-[backups](Data-and-Storage#backups). **Forget** removes a game from it; a
-game not over isn't ended for the other player, who isn't told.
+[backups](Data-and-Storage#backups). The moves themselves are kept with the
+conversation (only those being sent or that failed, and the newest each way).
+**Forget** removes a game and its moves; a game not over isn't ended for the
+other player, who isn't told. Game moves an earlier version kept in the
+conversation's history move out of it when rettui starts.
