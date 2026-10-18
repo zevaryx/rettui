@@ -81,7 +81,8 @@ impl App {
             self.contact_card_key(key);
             return;
         }
-        if (self.game_view.is_some() || self.game_menu.is_some()) && self.tab == Tab::Messages {
+        // On a game's board, or starting one: keys (digits too) go there.
+        if self.tab == Tab::Games && (self.game_playing || self.game_menu.is_some()) {
             self.games_key(key);
             return;
         }
@@ -197,7 +198,7 @@ impl App {
                 self.keys_help = true;
                 return;
             }
-            KeyCode::Char(c @ '1'..='8') => {
+            KeyCode::Char(c @ '1'..='9') => {
                 self.switch_tab(Tab::ALL[c as usize - '1' as usize]);
                 return;
             }
@@ -214,6 +215,7 @@ impl App {
 
         match self.tab {
             Tab::Messages => self.messages_key(key),
+            Tab::Games => self.games_key(key),
             Tab::Channels => self.channels_key(key),
             Tab::Network => self.network_key(key),
             Tab::Browser => self.browser_key(key),
@@ -237,18 +239,14 @@ impl App {
             }
             return;
         }
-        // A game, or the games menu: a click plays, or picks, or closes.
-        if (self.game_view.is_some() || self.game_menu.is_some()) && self.tab == Tab::Messages && self.prompt.is_none() {
+        // The new-game picker: a click picks, or (outside it) closes it.
+        if self.game_menu.is_some() && self.tab == Tab::Games && self.prompt.is_none() {
             if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
                 let at = Position::new(mouse.column, mouse.row);
-                if self.game_view.is_some() {
-                    self.click_game(at);
-                } else {
-                    let list = self.regions.game_menu;
-                    let row = list.contains(at).then(|| (at.y - list.y) as usize);
-                    if row.is_some() || !self.regions.game_menu_box.contains(at) {
-                        self.click_game_menu(row);
-                    }
+                let list = self.regions.game_menu;
+                let row = list.contains(at).then(|| (at.y - list.y) as usize);
+                if row.is_some() || !self.regions.game_menu_box.contains(at) {
+                    self.click_game_menu(row);
                 }
             }
             return;
@@ -483,6 +481,10 @@ impl App {
             }
             // Message history is anchored at the bottom: wheel up goes back.
             Tab::Messages => self.message_scroll = self.message_scroll.saturating_add_signed(-delta),
+            Tab::Games => {
+                self.sync_game_selection();
+                self.select_game(self.game_selected.saturating_add_signed(delta.signum()));
+            }
             Tab::Channels if self.regions.channel_list.contains(at) => {
                 self.move_channel_selection(delta.signum());
             }
@@ -525,6 +527,7 @@ impl App {
         }
         match self.tab {
             Tab::Messages => self.click_messages(at),
+            Tab::Games => self.click_games(at),
             Tab::Channels => self.click_channels(at),
             Tab::Network => self.click_network(at, double),
             Tab::Browser => self.click_browser(at),

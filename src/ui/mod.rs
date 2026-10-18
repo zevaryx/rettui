@@ -162,6 +162,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_sidebar(frame, app, sidebar);
     match app.tab {
         Tab::Messages => draw_messages(frame, app, body),
+        Tab::Games => games::draw_games(frame, app, body),
         Tab::Channels => draw_channels(frame, app, body),
         Tab::Network => draw_network(frame, app, body),
         Tab::Browser => draw_browser(frame, app, body),
@@ -195,12 +196,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.map.is_some() && app.tab == Tab::Messages {
         map::draw_map(frame, app);
     }
-    if app.tab == Tab::Messages {
-        if app.game_view.is_some() {
-            games::draw_game(frame, app);
-        } else if app.game_menu.is_some() {
-            games::draw_game_menu(frame, app);
-        }
+    if app.tab == Tab::Games && app.game_menu.is_some() {
+        games::draw_game_menu(frame, app);
     }
     if app.prompt.is_some() {
         draw_prompt(frame, app);

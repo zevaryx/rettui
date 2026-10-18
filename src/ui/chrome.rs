@@ -51,6 +51,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     let spacing = if inner.height >= 2 + Tab::ALL.len() as u16 * 2 + 3 { 2 } else { 1 };
 
     let unread = app.unread_messages();
+    let games_waiting = app.games.waiting(None);
     let (channel_unread, mentioned) = app.channels.total_unread();
     app.regions.tabs.clear();
     for (i, tab) in Tab::ALL.iter().enumerate() {
@@ -64,6 +65,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         // columns wide, which shifts the rest of the row.
         let icon = match tab {
             Tab::Messages => "✎",
+            Tab::Games => "⚄",
             Tab::Channels => "#",
             Tab::Network => "◎",
             Tab::Browser => "◈",
@@ -80,6 +82,7 @@ pub(super) fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         ];
         let badge = match tab {
             Tab::Messages if unread > 0 => Some(format!(" {unread} ")),
+            Tab::Games if games_waiting > 0 => Some(format!(" {games_waiting} ")),
             Tab::Channels if channel_unread > 0 => Some(format!(" {channel_unread} ")),
             _ => None,
         };

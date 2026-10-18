@@ -1,16 +1,18 @@
-//! Games over the conversation: the games menu (`g`), and a game's board
-//! with where it stands and what can be done (see `crate::app::games`).
+//! The Games tab: your games with everyone, newest first, and the
+//! selected one's board, with where it stands and what can be done; and
+//! starting a new one (`n`, or `g` in a conversation). See
+//! `crate::app::games`.
 
 use ratatui::Frame;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, selected_bg};
 use crate::app::App;
-use crate::app::games::{BoardRegion, MenuItem};
+use crate::app::games::{BoardRegion, GameMenu, MenuItem};
 use crate::games::{Board, GameView};
 
 /// The other player's pieces (yours are in the accent colour).
@@ -34,14 +36,117 @@ fn padded(mut spans: Vec<Span<'static>>, width: usize, style: Style) -> Line<'st
     Line::from(spans)
 }
 
+/// The Games tab.
+pub(super) fn draw_games(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.sync_game_selection();
+    let [list_area, board_area] =
+        Layout::horizontal([Constraint::Length(super::side_width(area.width, 34)), Constraint::Min(20)]).areas(area);
+    draw_list(frame, app, list_area);
+    draw_board_pane(frame, app, board_area);
+}
+
+/// Your games: their picture (icon or face), the game and who with, and
+/// where it stands; two rows each.
+fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    let games = app.game_list();
+    let outer = block("Games", !app.game_playing);
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
+    app.regions.games_list = inner;
+    if games.is_empty() {
+        let hint = "No games yet.\n\nPress n to challenge someone to Tic-Tac-Toe, Four in a Row or Chess (or g in a conversation). \
+                    Each move goes as a message, so they can answer whenever they're next online.";
+        frame.render_widget(Paragraph::new(hint).wrap(Wrap { trim: true }).style(Style::default().fg(dim())), inner);
+        return;
+    }
+    let rows = (inner.height as usize / 2).max(1);
+    let selected = app.game_selected.min(games.len() - 1);
+    let first = app.regions.games_first.min(selected).max((selected + 1).saturating_sub(rows));
+    app.regions.games_first = first;
+    let pictures = inner.width >= 24;
+    let width = inner.width as usize;
+    for (i, game) in games.iter().enumerate().skip(first).take(rows) {
+        let y = inner.y + ((i - first) * 2) as u16;
+        let base = if i == selected { Style::default().bg(selected_bg()) } else { Style::default() };
+        let gap = if pictures { "     " } else { " " };
+        let name = app.store.display_name(&game.peer);
+        let mark = if game.yours { Span::styled("●", base.fg(accent())) } else { Span::styled(" ", base) };
+        let top = padded(
+            vec![Span::styled(gap, base), Span::styled(game.name.clone(), base.bold()), Span::styled(format!(" · {name} "), base), mark],
+            width,
+            base,
+        );
+        let summary = if game.yours { base.fg(accent()) } else { base.fg(dim()) };
+        let bottom = padded(vec![Span::styled(gap, base), Span::styled(game.summary.clone(), summary)], width, base);
+        let buffer = frame.buffer_mut();
+        buffer.set_line(inner.x, y, &top, inner.width);
+        if y + 1 < inner.bottom() {
+            buffer.set_line(inner.x, y + 1, &bottom, inner.width);
+        }
+        if pictures {
+            let letter = name.chars().next().and_then(|c| c.to_uppercase().next()).unwrap_or('?');
+            let icon = app.store.contacts.get(&game.peer).and_then(|c| c.icon.as_ref());
+            for (dy, line) in super::face::small(&game.peer, icon, letter).into_iter().enumerate() {
+                if y + (dy as u16) < inner.bottom() {
+                    buffer.set_line(inner.x, y + dy as u16, &Line::from(line), 4);
+                }
+            }
+        }
+    }
+}
+
+/// The selected game: where it stands, its board, and what can be done.
+fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.regions.game_board = BoardRegion::default();
+    let game = app.game_view.clone().and_then(|screen| app.games.view(&screen.app, &screen.session).map(|game| (screen, game)));
+    let Some((screen, game)) = game else {
+        frame.render_widget(block("", false), area);
+        return;
+    };
+    let name = app.store.display_name(&game.peer);
+    let title = format!("{} with {name}", game.name);
+    let keys =
+        if app.game_playing { hints(&game) } else { "Enter (or a click) to play · n new game · c conversation · x forget".to_string() };
+    let outer = block(&title, app.game_playing).title_bottom(Line::styled(format!(" {keys} "), Style::default().fg(dim())));
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
+
+    let (board_w, board_h) = match &game.board {
+        Board::TicTacToe { .. } => (17, 5),
+        Board::FourInARow { .. } => (30, 7),
+        Board::Chess { .. } => (28, 9),
+    };
+    // The board in the middle, where it stands above it, what you are below.
+    let column = centered(inner, inner.width, board_h + 4);
+    let status = if game.yours { Style::default().fg(accent()).bold() } else { Style::default().bold() };
+    frame.render_widget(Paragraph::new(Span::styled(game.summary.clone(), status)).centered(), Rect { height: 1, ..column });
+    let board_area =
+        Rect { x: column.x + column.width.saturating_sub(board_w) / 2, y: column.y + 2, width: board_w.min(column.width), height: board_h };
+    // The cursor only shows while you're on the board.
+    let cursor = if app.game_playing { screen.cursor } else { usize::MAX };
+    let region = match &game.board {
+        Board::TicTacToe { cells, mine } => draw_tic_tac_toe(frame, board_area, cells, *mine, cursor),
+        Board::FourInARow { cells, mine, last } => {
+            draw_four_in_a_row(frame, board_area, cells, *mine, *last, cursor, game.yours && app.game_playing)
+        }
+        Board::Chess { fen, white, last, .. } => draw_chess(frame, board_area, fen, *white, last.as_deref(), cursor, screen.from),
+    };
+    app.regions.game_board = BoardRegion { area: inner, ..region };
+    let below = Rect { y: board_area.y + board_area.height + 1, height: 1, ..column };
+    frame.render_widget(Paragraph::new(Span::styled(footnote(&game), Style::default().fg(dim()))).centered(), below);
+}
+
+/// Starting a new game: who with (your conversations), then which game.
 pub(super) fn draw_game_menu(frame: &mut Frame, app: &mut App) {
     let Some(menu) = app.game_menu.clone() else { return };
     let items = app.game_menu_items();
     let area = frame.area();
-    let rect = centered(area, 60, items.len() as u16 + 4);
-    let name = app.store.display_name(&menu.peer);
-    let title = format!("Games with {name}");
-    let outer = block(&title, true).title_bottom(Line::styled(" Enter open · ↑↓ choose · Esc close ", Style::default().fg(dim())));
+    let rect = centered(area, 60, (items.len() as u16).clamp(1, area.height.saturating_sub(8)) + 4);
+    let title = match &menu {
+        GameMenu { peer: Some(peer), .. } => format!("New game with {}", app.store.display_name(peer)),
+        GameMenu { peer: None, .. } => "New game: who with?".to_string(),
+    };
+    let outer = block(&title, true).title_bottom(Line::styled(" Enter pick · ↑↓ choose · Esc cancel ", Style::default().fg(dim())));
     let inner = outer.inner(rect);
     frame.render_widget(Clear, rect);
     frame.render_widget(outer, rect);
@@ -49,66 +154,34 @@ pub(super) fn draw_game_menu(frame: &mut Frame, app: &mut App) {
     let list = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner };
     app.regions.game_menu = list;
     let width = list.width as usize;
+    let first = menu.selected.saturating_sub((list.height as usize).saturating_sub(1));
     let lines: Vec<Line> = items
         .iter()
         .enumerate()
+        .skip(first)
+        .take(list.height as usize)
         .map(|(i, item)| {
             let base = if i == menu.selected { Style::default().bg(selected_bg()) } else { Style::default() };
             let spans = match item {
-                MenuItem::Game(game) => {
-                    let mark = if game.yours { Span::styled("● ", base.fg(accent())) } else { Span::styled("  ", base) };
-                    let summary = if game.yours { base.fg(accent()) } else { base.fg(dim()) };
-                    vec![mark, Span::styled(game.name.clone(), base.bold()), Span::styled(format!("  {}", game.summary), summary)]
+                MenuItem::Contact(key) => {
+                    vec![Span::styled(app.store.display_name(key), base.bold()), Span::styled(format!("  {}", &key[..12]), base.fg(dim()))]
                 }
-                MenuItem::New(app) => {
-                    vec![Span::styled("+ ", base.fg(dim())), Span::styled(format!("New game of {}", crate::games::game_name(app)), base)]
-                }
+                MenuItem::New(app) => vec![Span::styled(crate::games::game_name(app).to_string(), base.bold())],
             };
             padded(spans, width, base)
         })
         .collect();
-    let hint = if items.iter().any(|i| matches!(i, MenuItem::Game(_))) { "Your games, newest first" } else { "No games with them yet" };
+    app.regions.game_menu = Rect { height: lines.len() as u16, ..list };
+    let hint = match (&menu.peer, items.is_empty()) {
+        (None, true) => "No conversations yet: start one in Messages (n) first",
+        (None, false) => "Your conversations",
+        (Some(_), _) => "Your challenge goes as a message; they accept or decline",
+    };
     frame.render_widget(Paragraph::new(Span::styled(hint, Style::default().fg(dim()))), Rect { height: 1, ..inner });
     frame.render_widget(Paragraph::new(lines), list);
 }
 
-pub(super) fn draw_game(frame: &mut Frame, app: &mut App) {
-    app.place_game_cursor();
-    let Some(screen) = app.game_view.clone() else { return };
-    let Some(game) = app.games.view(&screen.app, &screen.session) else { return };
-    let (board_w, board_h) = match &game.board {
-        Board::TicTacToe { .. } => (17, 5),
-        Board::FourInARow { .. } => (30, 7),
-        Board::Chess { .. } => (28, 9),
-    };
-    let area = frame.area();
-    let hints = format!(" {} ", hints(&game));
-    let footnote = footnote(&game);
-    // Wide enough for the keys and the line below the board, if it can be.
-    let width = (board_w + 4).max(48).max(hints.width() as u16 + 4).max(footnote.width() as u16 + 4);
-    let rect = centered(area, width, board_h + 7);
-    let name = app.store.display_name(&game.peer);
-    let title = format!("{} with {name}", game.name);
-    let outer = block(&title, true).title_bottom(Line::styled(hints, Style::default().fg(dim())));
-    let inner = outer.inner(rect);
-    frame.render_widget(Clear, rect);
-    frame.render_widget(outer, rect);
-
-    let status = if game.yours { Style::default().fg(accent()).bold() } else { Style::default().bold() };
-    frame.render_widget(Paragraph::new(Span::styled(game.summary.clone(), status)).centered(), Rect { height: 1, ..inner });
-    let board_area = Rect { x: inner.x + inner.width.saturating_sub(board_w) / 2, y: inner.y + 2, width: board_w, height: board_h };
-    let region = match &game.board {
-        Board::TicTacToe { cells, mine } => draw_tic_tac_toe(frame, board_area, cells, *mine, screen.cursor),
-        Board::FourInARow { cells, mine, last } => draw_four_in_a_row(frame, board_area, cells, *mine, *last, screen.cursor, game.yours),
-        Board::Chess { fen, white, last, .. } => draw_chess(frame, board_area, fen, *white, last.as_deref(), screen.cursor, screen.from),
-    };
-    app.regions.game_board = BoardRegion { area: rect, ..region };
-    // Below: what you are, and for chess the moves so far.
-    let below = Rect { y: board_area.y + board_area.height + 1, height: 1, ..inner };
-    frame.render_widget(Paragraph::new(Span::styled(footnote, Style::default().fg(dim()))).centered(), below);
-}
-
-/// The keys that do something now.
+/// The keys that do something now, on the board.
 fn hints(game: &GameView) -> String {
     let mut keys: Vec<&str> = Vec::new();
     let can = |command: &str| game.actions.iter().any(|a| a == command);
@@ -130,7 +203,7 @@ fn hints(game: &GameView) -> String {
     if !matches!(game.status.as_str(), "pending" | "active") {
         keys.push("x forget");
     }
-    keys.push("Esc close");
+    keys.push("Esc list");
     keys.join(" · ")
 }
 
@@ -312,7 +385,9 @@ mod tests {
     }
 
     #[test]
-    fn menu_then_a_board_drawn_and_played_by_key_and_click() {
+    fn the_games_tab_from_a_conversation_to_a_board() {
+        use crate::app::Tab;
+        use crossterm::event::KeyCode;
         let dir = std::env::temp_dir().join(format!("rettui-ui-games-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (mut app, _net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
@@ -322,32 +397,43 @@ mod tests {
         app.active_conversation = Some(peer.clone());
         let mut terminal = Terminal::new(TestBackend::new(110, 34)).unwrap();
         let key = |app: &mut crate::app::App, code| app.on_key(crossterm::event::KeyEvent::from(code));
+        let draw = |terminal: &mut Terminal<TestBackend>, app: &mut crate::app::App| {
+            terminal.draw(|f| super::super::draw(f, app)).unwrap();
+            screen(terminal)
+        };
 
-        key(&mut app, crossterm::event::KeyCode::Char('g'));
-        terminal.draw(|f| super::super::draw(f, &mut app)).unwrap();
-        let shown = screen(&terminal);
-        assert!(shown.contains("No games with them yet") && shown.contains("New game of Four in a Row"), "{shown}");
-        // The second new game: Four in a Row.
-        key(&mut app, crossterm::event::KeyCode::Down);
-        key(&mut app, crossterm::event::KeyCode::Enter);
+        // g in a conversation with no game yet: the Games tab, and a new
+        // game with them to pick.
+        key(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.tab, Tab::Games);
+        let shown = draw(&mut terminal, &mut app);
+        assert!(shown.contains("New game with") && shown.contains("Four in a Row") && shown.contains("⚄  Games"), "{shown}");
+        // The second: Four in a Row.
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Enter);
         assert!(app.game_menu.is_none());
-        terminal.draw(|f| super::super::draw(f, &mut app)).unwrap();
-        let shown = screen(&terminal);
+        let shown = draw(&mut terminal, &mut app);
         assert!(shown.contains("Four in a Row with") && shown.contains("Waiting for them to accept"), "{shown}");
+        assert!(shown.contains("Four in a Row ·"), "listed: {shown}");
         // The challenge is in the conversation, as a game's move.
         let opening = app.store.conversations[&peer].messages.last().unwrap().opening();
         assert_eq!(opening, "🎲 Four in a Row · Sent a challenge!");
-        // Not playable yet: a click on the board does nothing but say so.
-        let board = app.regions.game_board;
-        app.on_mouse(crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            column: board.origin.x + 1,
-            row: board.origin.y + 3,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-        });
-        assert!(app.game_view.is_some());
-        key(&mut app, crossterm::event::KeyCode::Esc);
-        assert!(app.game_view.is_none());
+        // Onto the board and back to the list.
+        key(&mut app, KeyCode::Enter);
+        assert!(app.game_playing);
+        key(&mut app, KeyCode::Esc);
+        assert!(!app.game_playing && app.game_view.is_some());
+        // n: who with, from your conversations.
+        key(&mut app, KeyCode::Char('n'));
+        let shown = draw(&mut terminal, &mut app);
+        assert!(shown.contains("New game: who with?"), "{shown}");
+        key(&mut app, KeyCode::Esc);
+        assert!(app.game_menu.is_none());
+        // Numbers switch tabs from the list: Games is 2.
+        key(&mut app, KeyCode::Char('1'));
+        assert_eq!(app.tab, Tab::Messages);
+        key(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.tab, Tab::Games);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

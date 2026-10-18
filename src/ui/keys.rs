@@ -25,7 +25,7 @@ pub struct Keys {
 }
 
 /// Keys that work in every tab, unless typing.
-const EVERYWHERE: KeyList = &[("1–8", "tabs"), ("A", "announce"), ("S", "sync"), ("^L", "redraw"), ("q", "quit"), ("?", "keys")];
+const EVERYWHERE: KeyList = &[("1–9", "tabs"), ("A", "announce"), ("S", "sync"), ("^L", "redraw"), ("q", "quit"), ("?", "keys")];
 /// Keys that work while typing, too.
 const ALWAYS: KeyList = &[("F1", "keys"), ("^L", "redraw"), ("^C", "quit")];
 
@@ -106,8 +106,9 @@ pub fn keys(app: &App) -> Keys {
         Tab::Messages if app.archive_reader.is_some() => {
             mode("Archive", &[("↑↓", "scroll"), ("PgUp/Dn", "page"), ("Home/End", "oldest/newest"), ("Esc", "close")])
         }
-        Tab::Messages if app.game_view.is_some() => typing(
-            "Game",
+        Tab::Games if app.game_menu.is_some() => typing("New game", &[("Enter", "pick"), ("↑↓", "choose"), ("Esc", "cancel")]),
+        Tab::Games if app.game_playing => typing(
+            "On the board",
             &[
                 ("Enter", "play"),
                 ("arrows", "choose"),
@@ -118,10 +119,13 @@ pub fn keys(app: &App) -> Keys {
                 ("t", "type a chess move"),
                 ("R", "resign"),
                 ("x", "forget"),
-                ("Esc", "close"),
+                ("Esc", "back to the list"),
             ],
         ),
-        Tab::Messages if app.game_menu.is_some() => typing("Games", &[("Enter", "open/start"), ("↑↓", "choose"), ("Esc", "close")]),
+        Tab::Games => mode(
+            "Games",
+            &[("Enter", "play"), ("↑↓", "select"), ("n", "new game"), ("c", "conversation"), ("x", "forget"), ("Home/End", "first/last")],
+        ),
         Tab::Messages if app.composing && app.reply.is_some() => typing(
             "Replying",
             &[("Enter", "send"), ("↑↓", "other"), ("Esc", "no reply"), ("^E", "emoji"), ("^O", "attach"), ("^V", "paste")],
@@ -177,7 +181,7 @@ pub fn keys(app: &App) -> Keys {
                 ("r", "reply"),
                 ("m", "pick"),
                 ("c", "contact"),
-                ("g", "games"),
+                ("g", "games with them"),
                 ("n", "new"),
                 ("y", "copy"),
                 ("a", "attach"),
@@ -641,7 +645,7 @@ mod tests {
         press(&mut app, KeyCode::Char('?'));
         let shown = screen(&mut app, 100).join("\n");
         assert!(shown.contains("Keys · Network") && shown.contains("D forget path") && shown.contains("In every tab"), "{shown}");
-        assert!(shown.contains("q quit") && shown.contains("1–8 tabs"), "{shown}");
+        assert!(shown.contains("q quit") && shown.contains("1–9 tabs"), "{shown}");
         // Any key closes it, and does nothing else.
         press(&mut app, KeyCode::Char('f'));
         assert!(!app.keys_help);

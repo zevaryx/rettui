@@ -13,18 +13,20 @@ use crate::lxmf::{self, DeliveryMode};
 use crate::net::NetCommand;
 use crate::store::{Message, MessageState};
 
-/// The games menu (`g` in a conversation): your games with them, then a
-/// new one of each.
+/// Starting a new game (`n` in the Games tab, or `g` in a conversation with
+/// no game yet): who with, then which game.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameMenu {
-    pub peer: String,
+    /// Who with, once picked.
+    pub peer: Option<String>,
     pub selected: usize,
 }
 
-/// A row of the games menu.
+/// A row of the new-game picker.
 #[derive(Debug, Clone)]
 pub enum MenuItem {
-    Game(Box<GameView>),
+    /// Someone to play (a conversation's address).
+    Contact(String),
     New(&'static str),
 }
 
@@ -70,8 +72,8 @@ impl BoardRegion {
     }
 }
 
-/// The game open over the conversation in the terminal UI: which, and the
-/// square or column picked (a chess move's first square once chosen).
+/// The game selected in the Games tab (terminal UI): which, and the square
+/// or column picked (a chess move's first square once chosen).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameScreen {
     pub app: String,
@@ -157,6 +159,7 @@ impl App {
         self.games_dirty = true;
         if self.game_view.as_ref().is_some_and(|g| g.app == app && g.session == session) {
             self.game_view = None;
+            self.game_playing = false;
         }
         Ok(())
     }
@@ -193,26 +196,90 @@ impl App {
         Ok(())
     }
 
-    /// The games menu's rows.
+    /// The new-game picker's rows: whoever you have a conversation with,
+    /// then (once one is picked) a game of each kind.
     pub fn game_menu_items(&self) -> Vec<MenuItem> {
-        let Some(menu) = &self.game_menu else { return Vec::new() };
-        let games = self.games.list(Some(&menu.peer)).into_iter().map(|g| MenuItem::Game(Box::new(g)));
-        games.chain(GAMES.iter().map(|app| MenuItem::New(app))).collect()
-    }
-
-    /// Open the games menu for the open conversation.
-    pub(super) fn open_game_menu(&mut self) {
-        if let Some(peer) = self.active_conversation.clone() {
-            self.game_menu = Some(GameMenu { peer, selected: 0 });
+        match &self.game_menu {
+            None => Vec::new(),
+            Some(GameMenu { peer: None, .. }) => self.conversation_order().into_iter().map(MenuItem::Contact).collect(),
+            Some(GameMenu { peer: Some(_), .. }) => GAMES.iter().map(|app| MenuItem::New(app)).collect(),
         }
     }
 
-    /// Keys while a game, or the games menu, is open.
+    /// Start a new game: with `peer`, or with whoever's picked first.
+    pub(super) fn open_game_menu(&mut self, peer: Option<String>) {
+        self.game_menu = Some(GameMenu { peer, selected: 0 });
+    }
+
+    /// Your games, newest first (the Games tab's list).
+    pub fn game_list(&self) -> Vec<GameView> {
+        self.games.list(None)
+    }
+
+    /// Keep the Games tab's selection on the same game as the list changes
+    /// (a move puts its game first), or on a game at all.
+    pub fn sync_game_selection(&mut self) {
+        let list = self.game_list();
+        let at = self.game_view.as_ref().and_then(|s| list.iter().position(|g| g.app == s.app && g.session == s.session));
+        match at {
+            Some(at) => self.game_selected = at,
+            None => match list.get(self.game_selected.min(list.len().saturating_sub(1))) {
+                Some(game) => {
+                    self.game_selected = self.game_selected.min(list.len() - 1);
+                    let (app, session) = (game.app.clone(), game.session.clone());
+                    self.open_game(&app, &session);
+                }
+                None => {
+                    self.game_view = None;
+                    self.game_playing = false;
+                }
+            },
+        }
+        self.place_game_cursor();
+    }
+
+    /// Select the game at `index` in the list.
+    pub(super) fn select_game(&mut self, index: usize) {
+        let list = self.game_list();
+        let Some(game) = list.get(index.min(list.len().saturating_sub(1))) else { return };
+        self.game_selected = index.min(list.len() - 1);
+        let same = self.game_view.as_ref().is_some_and(|s| s.app == game.app && s.session == game.session);
+        if !same {
+            let (app, session) = (game.app.clone(), game.session.clone());
+            self.open_game(&app, &session);
+        }
+    }
+
+    /// Keys in the Games tab: the list, the board once you're on it, or the
+    /// new-game picker.
     pub(super) fn games_key(&mut self, key: KeyEvent) {
-        if self.game_view.is_some() {
-            self.game_view_key(key);
-        } else if self.game_menu.is_some() {
-            self.game_menu_key(key);
+        self.sync_game_selection();
+        if self.game_menu.is_some() {
+            return self.game_menu_key(key);
+        }
+        if self.game_playing && self.game_view.is_some() {
+            return self.game_view_key(key);
+        }
+        let count = self.game_list().len();
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') if count > 0 => self.select_game(self.game_selected + 1),
+            KeyCode::Up | KeyCode::Char('k') if count > 0 => self.select_game(self.game_selected.saturating_sub(1)),
+            KeyCode::Home => self.select_game(0),
+            KeyCode::End => self.select_game(count.saturating_sub(1)),
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if self.game_view.is_some() => self.game_playing = true,
+            KeyCode::Char('n') => self.open_game_menu(None),
+            KeyCode::Char('c') => {
+                if let Some(peer) = self.game_view.as_ref().and_then(|s| self.games.view(&s.app, &s.session)).map(|g| g.peer) {
+                    self.open_conversation(peer);
+                    self.switch_tab(super::Tab::Messages);
+                }
+            }
+            KeyCode::Char('x') => {
+                if let Some(game) = self.game_view.as_ref().and_then(|s| self.games.view(&s.app, &s.session)) {
+                    self.ask_forget_game(&game);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -223,33 +290,31 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => menu.selected = (menu.selected + 1).min(count.saturating_sub(1)),
             KeyCode::Up | KeyCode::Char('k') => menu.selected = menu.selected.saturating_sub(1),
             KeyCode::Enter => self.pick_menu_item(),
-            KeyCode::Esc | KeyCode::Char('g') | KeyCode::Char('q') => self.game_menu = None,
+            KeyCode::Esc | KeyCode::Char('q') => self.game_menu = None,
             _ => {}
         }
     }
 
-    /// Open the menu's selected game, or start the new one picked.
+    /// Pick the picker's selected row: someone to play, or the game to
+    /// challenge them to (then shown, selected, in the Games tab).
     fn pick_menu_item(&mut self) {
         let Some(menu) = self.game_menu.clone() else { return };
-        match self.game_menu_items().into_iter().nth(menu.selected) {
-            Some(MenuItem::Game(game)) => {
-                self.game_menu = None;
-                self.open_game(&game.app, &game.session);
-            }
-            Some(MenuItem::New(app)) => match self.start_game(&menu.peer, app) {
+        match (self.game_menu_items().into_iter().nth(menu.selected), menu.peer) {
+            (Some(MenuItem::Contact(peer)), _) => self.game_menu = Some(GameMenu { peer: Some(peer), selected: 0 }),
+            (Some(MenuItem::New(app)), Some(peer)) => match self.start_game(&peer, app) {
                 Ok(session) => {
                     self.game_menu = None;
-                    let name = self.store.display_name(&menu.peer);
+                    let name = self.store.display_name(&peer);
                     self.notify(format!("Challenged {name} to {}", crate::games::game_name(app)));
-                    self.open_game(app, &session);
+                    self.show_game(app, &session);
                 }
                 Err(e) => self.warn(e),
             },
-            None => {}
+            _ => {}
         }
     }
 
-    /// A click on the games menu (its row, from the top of the list).
+    /// A click on the new-game picker (its row, from the top of the list).
     pub(super) fn click_game_menu(&mut self, row: Option<usize>) {
         let count = self.game_menu_items().len();
         match (row, self.game_menu.as_mut()) {
@@ -259,6 +324,26 @@ impl App {
             }
             _ => self.game_menu = None,
         }
+    }
+
+    /// A click in the Games tab: on the list, select that game; on the
+    /// board, play there.
+    pub(super) fn click_games(&mut self, at: Position) {
+        self.sync_game_selection();
+        let list = self.regions.games_list;
+        if list.contains(at) {
+            self.game_playing = false;
+            self.select_game(self.regions.games_first + (at.y - list.y) as usize / 2);
+        } else if self.regions.game_board.area.contains(at) && self.game_view.is_some() {
+            self.game_playing = true;
+            self.click_game(at);
+        }
+    }
+
+    fn ask_forget_game(&mut self, game: &GameView) {
+        let prompt = GamePrompt::ConfirmForget { app: game.app.clone(), session: game.session.clone() };
+        let unfinished = if matches!(game.status.as_str(), "pending" | "active") { " It isn't over: they won't be told." } else { "" };
+        self.open_prompt(PromptKind::Game(prompt), &format!("Forget this game of {}?{unfinished} Type y", game.name), "");
     }
 
     fn game_view_key(&mut self, key: KeyEvent) {
@@ -271,8 +356,9 @@ impl App {
         let (app, session) = (screen.app.as_str(), screen.session.as_str());
         let can = |command: &str| game.actions.iter().any(|a| a == command);
         let result = match key.code {
+            // Back to the list.
             KeyCode::Esc | KeyCode::Char('q') => {
-                self.game_view = None;
+                self.game_playing = false;
                 Ok(())
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Char('h' | 'l' | 'k' | 'j') => {
@@ -301,10 +387,7 @@ impl App {
                 Ok(())
             }
             KeyCode::Char('x') => {
-                let prompt = GamePrompt::ConfirmForget { app: app.into(), session: session.into() };
-                let unfinished =
-                    if matches!(game.status.as_str(), "pending" | "active") { " It isn't over: they won't be told." } else { "" };
-                self.open_prompt(PromptKind::Game(prompt), &format!("Forget this game of {}?{unfinished} Type y", game.name), "");
+                self.ask_forget_game(&game);
                 Ok(())
             }
             _ => Ok(()),
@@ -369,14 +452,10 @@ impl App {
         }
     }
 
-    /// A click while a game is open: on a square or column, play it (as
-    /// Enter does there); outside the box, close it.
-    pub(super) fn click_game(&mut self, at: Position) {
+    /// A click on the board: on a square or column, play it (as Enter does
+    /// there).
+    fn click_game(&mut self, at: Position) {
         let board = self.regions.game_board;
-        if !board.area.contains(at) {
-            self.game_view = None;
-            return;
-        }
         let (Some(shown), Some(screen)) = (board.square(at), self.game_view.clone()) else { return };
         let Some(game) = self.games.view(&screen.app, &screen.session) else { return };
         // Black's chess board is shown turned round.
@@ -406,25 +485,44 @@ impl App {
         }
     }
 
-    /// Open the game a move in the history is of (a click on it).
-    pub(super) fn open_game_of(&mut self, app: &str, session: &str) {
+    /// Show a game in the Games tab, selected (a click on one of its moves
+    /// in the history, or one just started).
+    pub(super) fn show_game(&mut self, app: &str, session: &str) {
         if self.games.view(app, session).is_none() {
             return self.warn("That game isn't kept any more");
         }
         self.picked = None;
         self.open_game(app, session);
+        self.sync_game_selection();
+        self.game_playing = false;
+        self.switch_tab(super::Tab::Games);
+    }
+
+    /// `g` in a conversation: your newest game with them in the Games tab,
+    /// or a new one with them if there's none.
+    pub(super) fn games_with(&mut self, peer: &str) {
+        match self.games.list(Some(peer)).first() {
+            Some(game) => {
+                let (app, session) = (game.app.clone(), game.session.clone());
+                self.show_game(&app, &session);
+            }
+            None => {
+                self.switch_tab(super::Tab::Games);
+                self.open_game_menu(Some(peer.to_string()));
+            }
+        }
     }
 
     /// Open the game the picked message (at `index`) is a move of.
     pub(super) fn open_picked_game(&mut self, index: usize) {
         let conversation = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key));
         match conversation.and_then(|c| c.messages.get(index)).and_then(|m| m.game.clone()) {
-            Some(game) => self.open_game_of(&game.app, &game.session),
+            Some(game) => self.show_game(&game.app, &game.session),
             None => self.warn("That message isn't a game's"),
         }
     }
 
-    /// Open a game over the conversation (terminal UI), its cursor on the
+    /// Make a game the one on the board (terminal UI), its cursor on the
     /// middle of the board.
     pub fn open_game(&mut self, app: &str, session: &str) {
         let cursor = match app {

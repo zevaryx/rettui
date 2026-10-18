@@ -97,6 +97,7 @@ pub(crate) const SCROLL_TOP: usize = usize::MAX / 4;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Messages,
+    Games,
     Channels,
     Network,
     Browser,
@@ -107,11 +108,13 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 8] = [Tab::Messages, Tab::Channels, Tab::Network, Tab::Browser, Tab::Node, Tab::Status, Tab::Reticulum, Tab::Hub];
+    pub const ALL: [Tab; 9] =
+        [Tab::Messages, Tab::Games, Tab::Channels, Tab::Network, Tab::Browser, Tab::Node, Tab::Status, Tab::Reticulum, Tab::Hub];
 
     pub fn title(self) -> &'static str {
         match self {
             Tab::Messages => "Messages",
+            Tab::Games => "Games",
             Tab::Channels => "Channels",
             Tab::Network => "Network",
             Tab::Browser => "Browser",
@@ -264,7 +267,10 @@ pub struct Regions {
     pub map_first: usize,
     /// The forward list's box and its rows (`f` on a picked message).
     pub forward_box: Rect,
-    /// The open game's board, and the games menu's list (and its box).
+    /// The Games tab: its list (and the first game shown), the selected
+    /// game's board, and the new-game picker's list (and its box).
+    pub games_list: Rect,
+    pub games_first: usize,
     pub game_board: games::BoardRegion,
     pub game_menu: Rect,
     pub game_menu_box: Rect,
@@ -586,9 +592,12 @@ pub struct App {
     /// Games played with contacts (LRGP).
     pub games: crate::games::Games,
     pub(crate) games_dirty: bool,
-    /// The game open over the conversation (terminal UI).
+    /// The game selected in the Games tab (terminal UI), where it is in
+    /// the list, and whether you're on its board (playing) or the list.
     pub game_view: Option<games::GameScreen>,
-    /// The games menu (terminal UI).
+    pub game_selected: usize,
+    pub game_playing: bool,
+    /// Starting a new game (terminal UI).
     pub game_menu: Option<games::GameMenu>,
 }
 
@@ -723,6 +732,8 @@ impl App {
             // Saved once at the start: games expire as they're read.
             games_dirty: true,
             game_view: None,
+            game_selected: 0,
+            game_playing: false,
             game_menu: None,
         };
         for note in std::mem::take(&mut app.store.migration_notes).into_iter().chain(game_problems) {
