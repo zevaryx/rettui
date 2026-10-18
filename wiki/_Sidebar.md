@@ -9,6 +9,7 @@
 
 **What it does**
 - [Messaging](Messaging)
+- [Games](Games)
 - [RRC Chat](RRC-Chat)
 - [Notifications](Notifications)
 - [NomadNet Browsing](NomadNet-Browsing)

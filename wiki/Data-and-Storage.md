@@ -48,6 +48,8 @@ rettui keeps its data in `~/.local/share/rettui/`:
   seconds and when rettui exits.
 - `tickets.json`: [stamp tickets](Messaging#blocking-and-spam) you gave
   trusted contacts and ones they gave you. Only you can read it.
+- `games.json`: your [games](Games) with contacts, as LRGP keeps them (the
+  board, whose turn it is, the moves). Saved as moves are made.
 - `rrc-hub/` and `rrc-hub-identity`: the [RRC hub hosted
   here](Hosting-a-Node#rrc-hub), once it has started: rsRRCD's
   `config.yaml`, its registered rooms (`rooms.yaml`), and the hub's own
@@ -90,7 +92,7 @@ rettui keeps its data in `~/.local/share/rettui/`:
 A backup is one `.tar.gz` file holding what's yours to keep:
 `settings.json`, the store (conversations, contacts, saved pages, RRC
 hubs), `peers.json.gz`, the `archive/` of older messages,
-`known_identities.json`, `tickets.json`, RRC history (`rrc/`), your node's
+`known_identities.json`, `tickets.json`, your [games](Games) (`games.json`), RRC history (`rrc/`), your node's
 pages and files (`node/`), your hub's settings and rooms (`rrc-hub/`) and,
 unless left out, the `identity` (and the hub's, `rrc-hub-identity`). Caches,
 the log, ratchets, the propagation node's messages and the web UI's login,

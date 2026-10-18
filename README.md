@@ -28,6 +28,9 @@ configuration. It is built on:
 
 - **Messaging (LXMF):** conversations with any LXMF client, direct or through
   a propagation node, with attachments, stamps and ratchets.
+- **Games:** Tic-Tac-Toe, Four in a Row and Chess with your contacts, a
+  move a message, over [LRGP](https://github.com/ratspeak/lrgp-rs) as other
+  LRGP clients play them.
 - **Chat (RRC):** hubs, rooms and whispers over Reticulum Relay Chat, the
   IRC-like protocol NomadNet 1.4 also speaks.
 - **NomadNet:** browse pages (Micron, forms, images, a page cache), and host
@@ -82,7 +85,8 @@ Everything else is on the documentation site,
 - **Getting started:** [Installing](https://github.com/zevaryx/rettui/wiki/Installing) ·
   [Running](https://github.com/zevaryx/rettui/wiki/Running) · [Using the TUI](https://github.com/zevaryx/rettui/wiki/Using-the-TUI) ·
   [Web UI](https://github.com/zevaryx/rettui/wiki/Web-UI) · [Docker](https://github.com/zevaryx/rettui/wiki/Docker)
-- **What it does:** [Messaging](https://github.com/zevaryx/rettui/wiki/Messaging) · [RRC Chat](https://github.com/zevaryx/rettui/wiki/RRC-Chat) ·
+- **What it does:** [Messaging](https://github.com/zevaryx/rettui/wiki/Messaging) · [Games](https://github.com/zevaryx/rettui/wiki/Games) ·
+  [RRC Chat](https://github.com/zevaryx/rettui/wiki/RRC-Chat) ·
   [Notifications](https://github.com/zevaryx/rettui/wiki/Notifications) ·
   [NomadNet Browsing](https://github.com/zevaryx/rettui/wiki/NomadNet-Browsing) ·
   [Hosting a Node](https://github.com/zevaryx/rettui/wiki/Hosting-a-Node) · [Network](https://github.com/zevaryx/rettui/wiki/Network)
