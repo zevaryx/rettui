@@ -411,6 +411,48 @@ header .avatar.icon { font-size: 17px; }
 .unknown-mark { color: var(--yellow); font-weight: 700; }
 .blocked-mark { color: var(--red); }
 .dialog .trust { align-items: center; gap: 6px; font-size: 13px; }
+
+/* Games (LRGP): the list of games with someone, and a game's board. */
+.dialog.games-dialog { width: min(480px, 100%); }
+.games-list { display: flex; flex-direction: column; gap: 6px; }
+.game-row { display: flex; gap: 10px; align-items: baseline; text-align: left; }
+.game-row .game-name { font-weight: 600; }
+.game-row .game-summary { color: var(--dim); }
+.game-row.yours { border-color: var(--accent); }
+.game-row.yours .game-summary { color: var(--accent); }
+.game-new { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.games-button.waiting { border-color: var(--accent); color: var(--accent); }
+.game-move .game-link { font-size: inherit; padding: 2px 8px; max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.dialog.game-dialog { width: min(460px, 100%); }
+.game { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.game > .game-summary { font-weight: 600; }
+.game > .game-summary.yours { color: var(--accent); }
+.game-note { font-size: 12.5px; text-align: center; }
+.game-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.board button { padding: 0; border-radius: 0; }
+.board button:disabled { opacity: 1; cursor: default; }
+.board .mine { color: var(--accent); }
+.board .theirs { color: var(--yellow); }
+.board.ttt { display: grid; grid-template-columns: repeat(3, 72px); grid-template-rows: repeat(3, 72px); gap: 4px; }
+.board.ttt .cell { font-size: 34px; font-weight: 700; border-radius: 6px; }
+.board.ttt .cell:not(:disabled):hover { border-color: var(--accent); }
+.board.four { display: flex; gap: 2px; padding: 6px; border-radius: 8px; background: var(--raised); }
+.board.four .column { display: flex; flex-direction: column; gap: 4px; padding: 3px; background: none; border: 1px solid transparent; border-radius: 6px; }
+.board.four.playing .column:hover { border-color: var(--accent); }
+.board.four .disc { width: min(9vw, 38px); height: min(9vw, 38px); border-radius: 50%; background: var(--bg); border: 1px solid var(--border); }
+.board.four .disc.mine { background: var(--accent); border-color: var(--accent); }
+.board.four .disc.theirs { background: var(--yellow); border-color: var(--yellow); }
+.board.four .disc.last { outline: 2px solid var(--text); outline-offset: 1px; }
+.board.chess { display: grid; grid-template-columns: repeat(8, min(10.5vw, 46px)); grid-template-rows: repeat(8, min(10.5vw, 46px)); border: 1px solid var(--border); }
+.board.chess .square { border: 0; font-size: min(7.5vw, 32px); line-height: 1; display: flex; align-items: center; justify-content: center; }
+.board.chess .square.light { background: #b58863; }
+.board.chess .square.dark { background: #7a553a; }
+.board.chess .square.last { background: #9a9a4a; }
+.board.chess .square.from { background: #5a8a3a; }
+.board.chess .square.target { box-shadow: inset 0 0 0 3px var(--accent); }
+.board.chess .square:not(:disabled):hover { filter: brightness(1.12); }
+.board.chess .piece.white { color: #fff; text-shadow: 0 0 2px #000, 0 0 1px #000; }
+.board.chess .piece.black { color: #101010; text-shadow: 0 0 1px #fff8; }
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .reaction { border-radius: 12px; padding: 0 8px; font-size: 12.5px; background: var(--raised); cursor: default; }
 .reaction.failed { border-color: var(--red); cursor: pointer; }

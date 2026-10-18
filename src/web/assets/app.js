@@ -1165,6 +1165,8 @@ function loadNow() {
     // own update finished first (with the one before).
     refreshStatus().then(() => app.tab === 'status' && app.views.status.update({ settings: false })),
     Promise.resolve().then(() => app.views[app.tab]?.update()).catch((e) => console.warn(e)),
+    // A game open: its board, as moves arrive.
+    Promise.resolve().then(() => openGame?.draw()).catch((e) => console.warn(e)),
   ]).finally(() => {
     refreshing = null;
     if (refreshAgain) {
@@ -1995,6 +1997,160 @@ function dialog(title, body, { className = '', onclose } = {}) {
   document.addEventListener('keydown', onKey);
   document.body.append(overlay);
   return close;
+}
+
+// ---- Games (LRGP) -------------------------------------------------------------
+
+// Games played over LXMF with a contact (see rettui's src/games.rs): each
+// move is a message in your conversation. The game open in a dialog, which
+// is redrawn as moves arrive.
+let openGame = null;
+
+const GAME_NAMES = { ttt: 'Tic-Tac-Toe', four_in_a_row: 'Four in a Row', chess: 'Chess' };
+const CHESS_GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+
+// Your games with someone, and a new game of each.
+async function gamesDialog(key, name) {
+  const games = await attempt(() => api.get(`/games?peer=${key}`));
+  if (!games) return;
+  dialog(`Games with ${name}`, (close) => el('div', { class: 'games-list' },
+    games.length ? games.map((g) => el('button', { class: 'game-row' + (g.yours ? ' yours' : ''), onclick: () => {
+      close();
+      gameDialog(g.app, g.session, name);
+    } }, el('span', { class: 'game-name', text: g.name }), el('span', { class: 'game-summary', text: g.summary })))
+      : el('p', { class: 'dim', text: 'No games with them yet. Each move goes as a message, so they can answer whenever they\'re next online.' }),
+    el('div', { class: 'game-new' }, el('span', { class: 'dim', text: 'New game: ' }),
+      Object.entries(GAME_NAMES).map(([app, title]) => el('button', { text: title, onclick: async () => {
+        const started = await attempt(() => api.post('/games', { peer: key, app }), `Challenged ${name} to ${title}`);
+        if (!started) return;
+        close();
+        loadNow();
+        gameDialog(app, started.session, name);
+      } })))), { className: 'games-dialog' });
+}
+
+// One game: its board, where it stands, and what can be done.
+async function gameDialog(app, session, name) {
+  const body = el('div', { class: 'game' });
+  // A chess piece picked, to move.
+  let from = null;
+  const act = async (command, picked) => {
+    const done = await attempt(() => api.post(`/games/${app}/${session}`, picked === undefined ? { command } : { command, picked: String(picked) }));
+    if (done) {
+      from = null;
+      loadNow();
+    }
+    await draw();
+  };
+  const draw = async () => {
+    const game = await api.get(`/games/${app}/${session}`).catch(() => null);
+    if (!game) {
+      body.replaceChildren(el('p', { class: 'dim', text: 'That game isn\'t kept any more.' }));
+      return;
+    }
+    const playing = game.yours && game.status === 'active' && game.draw_offer !== true;
+    const can = (command) => game.actions.includes(command);
+    const button = (text, command, confirmText) => el('button', { text, onclick: () => (!confirmText || confirm(confirmText)) && act(command) });
+    const actions = [
+      can('accept') ? el('button', { class: 'primary', text: 'Accept', onclick: () => act('accept') }) : null,
+      can('decline') ? button('Decline', 'decline') : null,
+      can('draw_accept') ? el('button', { class: 'primary', text: 'Accept the draw', onclick: () => act('draw_accept') }) : null,
+      can('draw_decline') ? button('Refuse the draw', 'draw_decline') : null,
+      can('draw_offer') ? button('Offer a draw', 'draw_offer') : null,
+      can('resign') ? button('Resign', 'resign', `Resign this game of ${game.name}?`) : null,
+      el('button', { class: 'danger', text: 'Forget', title: 'Remove it from your games (they aren\'t told)', onclick: async () => {
+        const over = !['pending', 'active'].includes(game.status);
+        if (!confirm(over ? `Forget this game of ${game.name}?` : `Forget this game of ${game.name}? It isn't over: ${name} won't be told.`)) return;
+        if (await attempt(() => api.delete(`/games/${app}/${session}`), 'Forgotten')) {
+          openGame?.close();
+          loadNow();
+        }
+      } }),
+    ].filter(Boolean);
+    body.replaceChildren(
+      el('div', { class: 'game-summary' + (game.yours ? ' yours' : ''), text: game.summary }),
+      board(game, playing),
+      el('div', { class: 'dim game-note', text: note(game) }),
+      el('div', { class: 'game-actions' }, actions));
+  };
+  const note = (game) => {
+    const b = game.board;
+    if (b.kind === 'tic_tac_toe') return `You're ${b.mine}`;
+    if (b.kind === 'four_in_a_row') return 'Yours are in your colour, theirs in yellow';
+    const moves = [];
+    for (let i = 0; i < b.moves.length; i += 2) moves.push(`${i / 2 + 1}. ${b.moves.slice(i, i + 2).join(' ')}`);
+    return `You're ${b.white ? 'White' : 'Black'}${moves.length ? ' · ' + moves.slice(-6).join('  ') : ''}`;
+  };
+  const board = (game, playing) => {
+    const b = game.board;
+    if (b.kind === 'tic_tac_toe') {
+      return el('div', { class: 'board ttt' }, b.cells.map((c, i) => el('button', {
+        class: 'cell' + (c === ' ' ? '' : c === b.mine ? ' mine' : ' theirs'),
+        text: c === ' ' ? '' : c,
+        disabled: !playing || c !== ' ',
+        'aria-label': c === ' ' ? `Cell ${i + 1}` : `Cell ${i + 1}: ${c}`,
+        onclick: () => act('move', i),
+      })));
+    }
+    if (b.kind === 'four_in_a_row') {
+      // A click anywhere in a column drops a piece into it.
+      return el('div', { class: 'board four' + (playing ? ' playing' : '') }, [0, 1, 2, 3, 4, 5, 6].map((col) => el('button', {
+        class: 'column', disabled: !playing, 'aria-label': `Column ${col + 1}`, onclick: () => act('move', col),
+      }, [0, 1, 2, 3, 4, 5].map((row) => {
+        const i = row * 7 + col;
+        const c = b.cells[i];
+        return el('span', { class: 'disc' + (c === ' ' ? '' : c === b.mine ? ' mine' : ' theirs') + (b.last === i ? ' last' : '') });
+      }))));
+    }
+    // Chess: Black sees the board turned round. A piece of yours, then a
+    // square it can go to; a pawn reaching the far rank asks what it becomes.
+    const squares = chessSquares(b.fen);
+    const squareName = (i) => 'abcdefgh'[i % 8] + (8 - Math.floor(i / 8));
+    const last = b.last ? [b.last.slice(0, 2), b.last.slice(2, 4)] : [];
+    const targets = from === null ? [] : b.legal.filter((m) => m.startsWith(squareName(from))).map((m) => m.slice(2, 4));
+    const order = [...Array(64).keys()];
+    if (!b.white) order.reverse();
+    return el('div', { class: 'board chess' }, order.map((i) => {
+      const piece = squares[i];
+      const own = piece !== ' ' && (piece === piece.toUpperCase()) === b.white;
+      const light = (Math.floor(i / 8) + i % 8) % 2 === 0;
+      return el('button', {
+        class: 'square ' + (light ? 'light' : 'dark') + (last.includes(squareName(i)) ? ' last' : '') + (from === i ? ' from' : '') + (targets.includes(squareName(i)) ? ' target' : ''),
+        'aria-label': squareName(i) + (piece === ' ' ? '' : ` ${piece}`),
+        disabled: !playing,
+        onclick: async () => {
+          if (own) {
+            from = from === i ? null : i;
+            return draw();
+          }
+          if (from === null || !targets.includes(squareName(i))) return;
+          const moves = b.legal.filter((m) => m.startsWith(squareName(from) + squareName(i)));
+          let move = moves[0];
+          if (moves.length > 1) {
+            const choice = prompt('Promote to: q (queen), r (rook), b (bishop) or n (knight)', 'q');
+            move = moves.find((m) => m.endsWith((choice || '').trim().toLowerCase()[0] || 'q'));
+            if (!move) return;
+          }
+          act('move', move);
+        },
+      }, piece === ' ' ? '' : el('span', { class: 'piece ' + (piece === piece.toUpperCase() ? 'white' : 'black'), text: CHESS_GLYPHS[piece.toLowerCase()] }));
+    }));
+  };
+  const close = dialog(`${GAME_NAMES[app] || app} with ${name}`, () => body, { className: 'game-dialog', onclose: () => { openGame = null; } });
+  openGame = { app, session, close, draw };
+  await draw();
+}
+
+// A FEN position's 64 squares, a8 first: a piece's letter, or a space.
+function chessSquares(fen) {
+  const squares = [];
+  for (const c of (fen || '').split(' ')[0]) {
+    if (c === '/') continue;
+    if (c >= '1' && c <= '8') squares.push(...' '.repeat(Number(c)));
+    else squares.push(c);
+  }
+  while (squares.length < 64) squares.push(' ');
+  return squares;
 }
 
 // A destination's path, as rnpath shows it: found (asked for if none is
@@ -3084,6 +3240,10 @@ app.views.messages = {
           if (await attempt(() => api.post(`/conversations/${key}/live/stop`), 'Stopped sharing your location live')) loadNow();
         } })) : null,
       bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
+      el('button', { class: 'games-button' + (conversation.games_waiting ? ' waiting' : ''),
+        text: conversation.games_waiting ? `🎲 Games · ${conversation.games_waiting}` : '🎲 Games',
+        title: conversation.games_waiting ? `Games with them: ${conversation.games_waiting} waiting on you  ( g )` : 'Games with them: Tic-Tac-Toe, Four in a Row, Chess  ( g )',
+        onclick: () => gamesDialog(key, conversation.name) }),
       el('button', { text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
       el('button', { text: 'Copy address', title: conversation.link?.startsWith('lxma://') ? 'Their address with their key (lxma://), so whoever adds them can write at once' : 'Their address (their key isn\'t known yet)',
         onclick: () => copyAddress(conversation.link || key, 'their') })].filter(Boolean));
@@ -3203,6 +3363,10 @@ app.views.messages = {
     }
     if (e.key === 'M') {
       mapDialog({ key: this.selected });
+      return true;
+    }
+    if (e.key === 'g' && this.selected) {
+      this.header.querySelector('.games-button')?.click();
       return true;
     }
     return false;
@@ -3348,7 +3512,9 @@ app.views.messages = {
         actions ? el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) }) : null),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
-      m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content' }, ...linked(m.content)) : null,
+      m.game ? el('div', { class: 'content game-move' }, el('button', { class: 'inline game-link', text: `🎲 ${m.game.label}`, title: 'Open the game',
+        onclick: () => gameDialog(m.game.app, m.game.session, conversation.name) }))
+        : m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content' }, ...linked(m.content)) : null,
       m.location ? el('div', { class: 'location' }, '📍 ',
         el('a', { href: m.location.map, target: '_blank', rel: 'noopener noreferrer', text: m.location.label, title: 'Show it on OpenStreetMap' }),
         el('button', { class: 'inline', text: 'Map', title: 'Show it on the map, with everyone else\'s', onclick: () => mapDialog({ at: m.location, name: m.incoming ? conversation.name : 'You', key: m.incoming ? conversation.key : null }) })) : null,
@@ -3508,6 +3674,7 @@ app.views.messages = {
   opening(m) {
     const first = (text) => (text || '').split('\n').map((l) => l.trim()).find(Boolean);
     const file = m.attachments[0] && (m.attachments[0].voice ? '🎤 Voice message' : `📎 ${m.attachments[0].name}`);
+    if (m.game) return `🎲 ${m.game.label}`;
     return first(m.content) || first(m.title) || file || (m.location ? '📍 Location' : '') || m.notes?.[0] || '';
   },
 
@@ -6955,7 +7122,7 @@ async function restartReticulum() {
 const KEYS = [
   ['Anywhere', [['1–8', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
   ['Messages', [['j / k', 'next or previous conversation'], ['i', 'write (the message box)'], ['r', 'reply to their newest message'],
-    ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
+    ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['g', 'games with them'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
     ['Ctrl+E', 'emoji, in the message box'],
     ['Enter / Shift+Enter', 'send, or a new line, in the message box']]],
   ['Channels', [['/', 'search what was said in every room']]],

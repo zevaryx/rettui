@@ -222,7 +222,7 @@ pub fn conversations(app: &App) -> Value {
         .map(|key| {
             let conversation = &app.store.conversations[&key];
             let last = conversation.messages.last().map(|m| {
-                let text = if m.content.trim().is_empty() { m.opening() } else { m.text() };
+                let text = if m.game.is_some() || m.content.trim().is_empty() { m.opening() } else { m.text() };
                 json!({ "text": text, "timestamp": m.timestamp, "incoming": m.incoming })
             });
             json!({
@@ -292,6 +292,10 @@ fn message(m: &Message, conversation: &Conversation) -> Value {
             "label": l.label(), "map": l.map_url(),
         })),
         "notes": m.notes,
+        // A game's move: which game, and what it did.
+        "game": m.game.as_ref().map(|g| json!({
+            "app": g.app, "session": g.session, "command": g.command, "label": g.label(&m.content),
+        })),
         // How it was heard, over a radio that says.
         "signal": m.signal.map(|s| json!({ "short": s.short(), "label": s.label() })),
         // A paper message written: its lxm:// link.
@@ -335,6 +339,8 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
         "unread": app.store.conversations.get(key).map_or(0, |c| c.unread),
         "muted": app.store.conversations.get(key).is_some_and(|c| c.muted),
         "pinned": app.store.conversations.get(key).is_some_and(|c| c.pinned),
+        // Games with them waiting on you.
+        "games_waiting": app.games.waiting(Some(key)),
         "icon": icon(app.store.contacts.get(key).and_then(|c| c.icon.as_ref())),
         // Older messages moved to the archive (not in `total`).
         "archived": app.store.conversations.get(key).map_or(0, |c| c.archived),

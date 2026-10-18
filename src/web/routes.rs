@@ -113,6 +113,8 @@ pub fn router(state: WebState) -> Router {
         .route("/probe/{key}", get(probe_state).post(probe))
         .route("/conversations/{key}/delivery", post(set_delivery))
         .route("/conversations/{key}/trust", post(set_trust))
+        .route("/games", get(games).post(start_game))
+        .route("/games/{app}/{session}", get(game).post(game_action).delete(forget_game))
         .route("/conversations/{key}/attachments/{id}/{index}", get(attachment))
         .route("/paper/read", post(read_paper))
         .route("/paper/scan", post(scan_paper))
@@ -1152,6 +1154,60 @@ async fn set_delivery(State(state): State<WebState>, Path(key): Path<String>, ax
     let key = address(&key)?;
     let mode = DeliveryMode::parse(&body.mode).ok_or_else(|| bad(format!("unknown delivery mode {}", body.mode)))?;
     state.write(move |o| o.app.set_delivery(&key, mode)).await?.map_err(bad)?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct GamesQuery {
+    /// Only the games with this address (hex).
+    #[serde(default)]
+    peer: Option<String>,
+}
+
+/// Your games (with someone, or with anyone), newest first.
+async fn games(State(state): State<WebState>, Query(query): Query<GamesQuery>) -> ApiResult {
+    let peer = query.peer.as_deref().map(address).transpose()?;
+    let games = state.read(move |o| o.app.games.list(peer.as_deref())).await?;
+    Ok(axum::Json(json!(games)))
+}
+
+async fn game(State(state): State<WebState>, Path((app, session)): Path<(String, String)>) -> ApiResult {
+    let view = state.read(move |o| o.app.games.view(&app, &session)).await?;
+    Ok(axum::Json(json!(view.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "There's no such game".into()))?)))
+}
+
+#[derive(Deserialize)]
+struct StartGame {
+    peer: String,
+    app: String,
+}
+
+/// Challenge someone: the new game's session.
+async fn start_game(State(state): State<WebState>, axum::Json(body): axum::Json<StartGame>) -> ApiResult {
+    let peer = address(&body.peer)?;
+    let session = state.write(move |o| o.app.start_game(&peer, &body.app)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "session": session })))
+}
+
+#[derive(Deserialize)]
+struct GameAction {
+    command: String,
+    /// A move: a cell, a column, a chess move (`e2e4`).
+    #[serde(default)]
+    picked: Option<String>,
+}
+
+async fn game_action(
+    State(state): State<WebState>,
+    Path((app, session)): Path<(String, String)>,
+    axum::Json(body): axum::Json<GameAction>,
+) -> ApiResult {
+    state.write(move |o| o.app.game_action(&app, &session, &body.command, body.picked.as_deref())).await?.map_err(bad)?;
+    ok()
+}
+
+async fn forget_game(State(state): State<WebState>, Path((app, session)): Path<(String, String)>) -> ApiResult {
+    state.write(move |o| o.app.forget_game(&app, &session)).await?.map_err(bad)?;
     ok()
 }
 
