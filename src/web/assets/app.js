@@ -1367,6 +1367,10 @@ const notifications = {
       const selected = app.views.channels.selected;
       return showing('channels') && selected?.hub === target.hub && selected.room === target.room;
     }
+    if (target.kind === 'game') {
+      const selected = app.views.games.selected;
+      return showing('games') && selected?.app === target.app && selected.session === target.session;
+    }
     return false;
   },
 
@@ -1477,6 +1481,8 @@ function openTarget(target) {
   } else if (target?.kind === 'room') {
     switchTab('channels');
     app.views.channels.select(target.hub, target.room);
+  } else if (target?.kind === 'game') {
+    showGame(target.app, target.session);
   } else {
     switchTab('messages');
   }
@@ -2007,16 +2013,19 @@ function dialog(title, body, { className = '', onclose } = {}) {
 // ---- Games (LRGP) -------------------------------------------------------------
 
 // Games played over LXMF with a contact (see rettui's src/games.rs): each
-// move is a message in your conversation. They have a tab of their own
-// (app.views.games); conversations lead there.
+// move goes as a message, kept apart from the conversation's (it isn't in
+// its history). They have a tab of their own (app.views.games);
+// conversations lead there.
 
 const GAME_NAMES = { ttt: 'Tic-Tac-Toe', four_in_a_row: 'Four in a Row', chess: 'Chess' };
 const CHESS_GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
 
-// Show a game in the Games tab, selected (a move in a conversation).
+// Show a game in the Games tab, selected (one just started, or a
+// notification about it), whatever the list is filtered by.
 function showGame(gameApp, session) {
   const view = app.views.games;
   view.selected = { app: gameApp, session };
+  view.setFilter('all', false);
   switchTab('games');
   setPane(view, 'detail');
 }
@@ -2081,6 +2090,7 @@ function gameBoard(app, session, onForget) {
       can('draw_decline') ? button('Refuse the draw', 'draw_decline') : null,
       can('draw_offer') ? button('Offer a draw', 'draw_offer') : null,
       can('resign') ? button('Resign', 'resign', `Resign this game of ${game.name}?`) : null,
+      game.unsent ? button('↻ Send again', 'resend') : null,
       el('button', { class: 'danger', text: 'Forget', title: 'Remove it from your games (they aren\'t told)', onclick: async () => {
         const over = !['pending', 'active'].includes(game.status);
         if (!confirm(over ? `Forget this game of ${game.name}?` : `Forget this game of ${game.name}? It isn't over: ${game.peer_name || 'they'} won't be told.`)) return;
@@ -2094,6 +2104,8 @@ function gameBoard(app, session, onForget) {
       el('div', { class: 'game-summary' + (game.yours ? ' yours' : ''), text: game.summary }),
       board(game, playing),
       el('div', { class: 'dim game-note', text: note(game) }),
+      // How your last move went, and what came with theirs.
+      ...(game.notes || []).map((text) => el('div', { class: 'game-note warn', text })),
       el('div', { class: 'game-actions' }, actions));
   };
   const note = (game) => {
@@ -3531,9 +3543,7 @@ app.views.messages = {
         actions ? el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) }) : null),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
-      m.game ? el('div', { class: 'content game-move' }, el('button', { class: 'inline game-link', text: `🎲 ${m.game.label}`, title: 'Open the game',
-        onclick: () => showGame(m.game.app, m.game.session) }))
-        : m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content' }, ...linked(m.content)) : null,
+      m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content' }, ...linked(m.content)) : null,
       m.location ? el('div', { class: 'location' }, '📍 ',
         el('a', { href: m.location.map, target: '_blank', rel: 'noopener noreferrer', text: m.location.label, title: 'Show it on OpenStreetMap' }),
         el('button', { class: 'inline', text: 'Map', title: 'Show it on the map, with everyone else\'s', onclick: () => mapDialog({ at: m.location, name: m.incoming ? conversation.name : 'You', key: m.incoming ? conversation.key : null }) })) : null,
@@ -3693,7 +3703,6 @@ app.views.messages = {
   opening(m) {
     const first = (text) => (text || '').split('\n').map((l) => l.trim()).find(Boolean);
     const file = m.attachments[0] && (m.attachments[0].voice ? '🎤 Voice message' : `📎 ${m.attachments[0].name}`);
-    if (m.game) return `🎲 ${m.game.label}`;
     return first(m.content) || first(m.title) || file || (m.location ? '📍 Location' : '') || m.notes?.[0] || '';
   },
 
@@ -3809,27 +3818,55 @@ app.views.messages = {
 
 // ---- Games ------------------------------------------------------------------
 
+// Which games the list shows, by whether they're still going: the
+// statuses (lrgp's) each lets through.
+const GAME_FILTERS = [
+  { id: 'all', title: 'All', shows: () => true },
+  { id: 'active', title: 'Active', shows: (status) => status === 'active' },
+  { id: 'pending', title: 'Pending', shows: (status) => status === 'pending' },
+  { id: 'completed', title: 'Completed', shows: (status) => status !== 'active' && status !== 'pending' },
+];
+
 // Your games with everyone, newest first, and the selected one's board.
 app.views.games = {
   panes: true,
   // The game shown: { app, session }.
   selected: null,
+  filter: (() => {
+    try { return localStorage.getItem('rettui.gameFilter') || 'all'; } catch { return 'all'; }
+  })(),
 
   mount(root) {
     this.list = el('div', { class: 'scroll' });
     this.header = el('header');
     this.body = el('div', { class: 'scroll game-pane' });
+    this.filters = el('div', { class: 'subtabs game-filters' }, GAME_FILTERS.map((f) => el('button', {
+      text: f.title, dataset: { filter: f.id }, title: `Show ${f.id === 'all' ? 'all games' : `${f.id} games`}  ( f )`,
+      onclick: () => this.setFilter(f.id),
+    })));
+    this.setFilter(this.filter, false);
     root.append(
       el('section', { class: 'panel side' },
         el('header', {}, el('span', { class: 'title grow', text: 'Games' }),
-          el('button', { text: '+ New game', title: 'Challenge someone  ( n )', onclick: () => newGameDialog() })),
+          el('button', { text: '+ New game', title: 'Challenge someone  ( n )', onclick: () => newGameDialog() }),
+          this.filters),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.body));
     this.board = null;
   },
 
+  // List the games `id` lets through (and keep that for next time).
+  setFilter(id, refresh = true) {
+    if (!GAME_FILTERS.some((f) => f.id === id)) id = 'all';
+    this.filter = id;
+    try { localStorage.setItem('rettui.gameFilter', id); } catch { /* this page only */ }
+    for (const button of this.filters?.children || []) button.classList.toggle('active', button.dataset.filter === id);
+    if (refresh) this.update();
+  },
+
   async update() {
-    const games = await api.get('/games');
+    const filter = GAME_FILTERS.find((f) => f.id === this.filter) || GAME_FILTERS[0];
+    const games = (await api.get('/games')).filter((g) => filter.shows(g.status));
     const same = (g) => this.selected && g.app === this.selected.app && g.session === this.selected.session;
     if (!games.some(same)) this.selected = games[0] ? { app: games[0].app, session: games[0].session } : null;
     if (changed(this, 'list', [games, this.selected])) {
@@ -3847,6 +3884,7 @@ app.views.games = {
         el('div', { class: 'name' }, g.name, el('span', { class: 'dim', text: ` · ${g.peer_name}` })),
         el('div', { class: 'sub' + (g.yours ? ' yours' : ''), text: g.summary })),
       g.yours ? el('div', {}, el('span', { class: 'badge', text: '●', title: 'Waiting on you' })) : null))
+        : filter.id !== 'all' ? [el('div', { class: 'empty dim', text: `No ${filter.id} games.` })]
         : [el('div', { class: 'empty dim', text: 'No games yet. + New game challenges someone to Tic-Tac-Toe, Four in a Row or Chess (or the 🎲 Games button in a conversation). Each move goes as a message, so they can answer whenever they\'re next online.' })]));
     }
     const game = games.find(same);
@@ -3874,6 +3912,11 @@ app.views.games = {
   key(e) {
     if (e.key === 'n') {
       newGameDialog();
+      return true;
+    }
+    if (e.key === 'f') {
+      const at = GAME_FILTERS.findIndex((f) => f.id === this.filter);
+      this.setFilter(GAME_FILTERS[(at + 1) % GAME_FILTERS.length].id);
       return true;
     }
     if (e.key === 'j' || e.key === 'k') {
@@ -7224,7 +7267,7 @@ const KEYS = [
     ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['g', 'games with them (the Games tab)'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
     ['Ctrl+E', 'emoji, in the message box'],
     ['Enter / Shift+Enter', 'send, or a new line, in the message box']]],
-  ['Games', [['j / k', 'next or previous game'], ['n', 'new game']]],
+  ['Games', [['j / k', 'next or previous game'], ['n', 'new game'], ['f', 'filter: all, active, pending, completed']]],
   ['Channels', [['/', 'search what was said in every room']]],
   ['Network', [['/', 'search by name or address'], ['a', 'announces as they\'re heard, or the list']]],
   ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],

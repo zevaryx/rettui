@@ -271,6 +271,8 @@ pub struct Regions {
     /// game's board, and the new-game picker's list (and its box).
     pub games_list: Rect,
     pub games_first: usize,
+    /// The filters above the list (All, Active…).
+    pub games_filters: Vec<(Rect, games::GameFilter)>,
     pub game_board: games::BoardRegion,
     pub game_menu: Rect,
     pub game_menu_box: Rect,
@@ -366,8 +368,6 @@ pub enum HistoryHit {
     /// Do something with a message (its index): the picked message's
     /// buttons.
     Action(usize, MessageAction),
-    /// Open a game (app, session): a move of it.
-    Game(String, String),
 }
 
 /// What can be done with a picked message.
@@ -597,6 +597,8 @@ pub struct App {
     pub game_view: Option<games::GameScreen>,
     pub game_selected: usize,
     pub game_playing: bool,
+    /// Which games the list shows (terminal UI).
+    pub game_filter: games::GameFilter,
     /// Starting a new game (terminal UI).
     pub game_menu: Option<games::GameMenu>,
 }
@@ -734,6 +736,7 @@ impl App {
             game_view: None,
             game_selected: 0,
             game_playing: false,
+            game_filter: games::GameFilter::All,
             game_menu: None,
         };
         for note in std::mem::take(&mut app.store.migration_notes).into_iter().chain(game_problems) {

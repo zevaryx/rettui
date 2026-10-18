@@ -223,7 +223,7 @@ pub fn conversations(app: &App) -> Value {
         .map(|key| {
             let conversation = &app.store.conversations[&key];
             let last = conversation.messages.last().map(|m| {
-                let text = if m.game.is_some() || m.content.trim().is_empty() { m.opening() } else { m.text() };
+                let text = if m.content.trim().is_empty() { m.opening() } else { m.text() };
                 json!({ "text": text, "timestamp": m.timestamp, "incoming": m.incoming })
             });
             json!({
@@ -293,10 +293,6 @@ fn message(m: &Message, conversation: &Conversation) -> Value {
             "label": l.label(), "map": l.map_url(),
         })),
         "notes": m.notes,
-        // A game's move: which game, and what it did.
-        "game": m.game.as_ref().map(|g| json!({
-            "app": g.app, "session": g.session, "command": g.command, "label": g.label(&m.content),
-        })),
         // How it was heard, over a radio that says.
         "signal": m.signal.map(|s| json!({ "short": s.short(), "label": s.label() })),
         // A paper message written: its lxm:// link.

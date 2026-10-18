@@ -23,7 +23,7 @@ self.addEventListener('notificationclick', (event) => {
     // No page open: start one there. What to open goes in its address too,
     // since the browser may not hand back the window it opened (an
     // installed app's, say) to be told.
-    const tab = target?.kind === 'room' ? 'channels' : 'messages';
+    const tab = { room: 'channels', game: 'games' }[target?.kind] || 'messages';
     const open = target ? '?open=' + encodeURIComponent(JSON.stringify(target)) : '';
     // Where rettui is: the worker's scope, behind a proxy at a sub-path too.
     const opened = await self.clients.openWindow(new URL(open + '#' + tab, self.registration.scope).href);

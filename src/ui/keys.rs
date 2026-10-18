@@ -124,7 +124,15 @@ pub fn keys(app: &App) -> Keys {
         ),
         Tab::Games => mode(
             "Games",
-            &[("Enter", "play"), ("↑↓", "select"), ("n", "new game"), ("c", "conversation"), ("x", "forget"), ("Home/End", "first/last")],
+            &[
+                ("Enter", "play"),
+                ("↑↓", "select"),
+                ("n", "new game"),
+                ("f", "filter"),
+                ("c", "conversation"),
+                ("x", "forget"),
+                ("Home/End", "first/last"),
+            ],
         ),
         Tab::Messages if app.composing && app.reply.is_some() => typing(
             "Replying",
@@ -167,7 +175,6 @@ pub fn keys(app: &App) -> Keys {
                 ("f", "forward"),
                 ("o", "open"),
                 ("t", "retry"),
-                ("g", "its game"),
                 ("x", "delete"),
                 ("↑↓", "other"),
                 ("Esc", "done"),

@@ -1,12 +1,14 @@
 //! Games with contacts (see `crate::games`): what arrives is played, and
-//! each of your moves goes as a message in your conversation with them,
-//! so it's sent, resent and shown as messages are.
+//! each of your moves goes as a message to them, so it's sent and resent
+//! as messages are. Moves are kept apart from the conversation's messages
+//! (`Conversation::game_moves`): the Games tab shows them.
 
 use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
 
+use super::notify::{Notification, Target};
 use super::{App, PromptKind};
 use crate::games::{Board, GAMES, GameRef, GameView, Prepared, Received};
 use crate::lxmf::{self, DeliveryMode};
@@ -20,6 +22,46 @@ pub struct GameMenu {
     /// Who with, once picked.
     pub peer: Option<String>,
     pub selected: usize,
+}
+
+/// Which games the Games tab lists: all of them, or by whether they're
+/// still going (active), waiting to be accepted (pending), or over
+/// (completed, declined or expired).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GameFilter {
+    #[default]
+    All,
+    Active,
+    Pending,
+    Completed,
+}
+
+impl GameFilter {
+    pub const ALL: [GameFilter; 4] = [GameFilter::All, GameFilter::Active, GameFilter::Pending, GameFilter::Completed];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            GameFilter::All => "All",
+            GameFilter::Active => "Active",
+            GameFilter::Pending => "Pending",
+            GameFilter::Completed => "Completed",
+        }
+    }
+
+    /// Whether a game with this status (lrgp's) is listed.
+    pub fn shows(self, status: &str) -> bool {
+        match self {
+            GameFilter::All => true,
+            GameFilter::Active => status == "active",
+            GameFilter::Pending => status == "pending",
+            GameFilter::Completed => !matches!(status, "active" | "pending"),
+        }
+    }
+
+    fn next(self) -> Self {
+        let at = Self::ALL.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ALL[(at + 1) % Self::ALL.len()]
+    }
 }
 
 /// A row of the new-game picker.
@@ -140,6 +182,9 @@ impl App {
     /// answer one, or `move` (with what was picked: a cell, a column, a
     /// chess move).
     pub fn game_action(&mut self, app: &str, session: &str, command: &str, picked: Option<&str>) -> Result<(), String> {
+        if command == "resend" {
+            return self.resend_moves(app, session);
+        }
         let peer = self.games.view(app, session).map(|g| g.peer).ok_or("There's no such game")?;
         let payload = match (command, picked) {
             ("move", Some(picked)) => crate::games::move_payload(app, picked)?,
@@ -151,10 +196,95 @@ impl App {
         self.send_game(&peer, prepared)
     }
 
-    /// Forget a game.
+    /// A move received (`stored`, of `game`), played: kept, and they're
+    /// told of it as of a message, unless it's on screen.
+    pub(super) fn keep_received_move(&mut self, key: &str, stored: Message, game: &GameRef) {
+        let label = stored.opening();
+        let conversation = self.store.conversations.entry(key.to_string()).or_default();
+        let muted = conversation.muted;
+        conversation.game_moves.push(stored);
+        conversation.game_moves.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
+        conversation.keep_moves();
+        self.store_dirty = true;
+        let name = self.store.display_name(key);
+        self.log(format!("{name}: {label}"));
+        if self.is_request(key) || !self.settings.notify_messages || muted {
+            return;
+        }
+        let on_screen = self.tab == super::Tab::Games
+            && self.game_menu.is_none()
+            && self.game_view.as_ref().is_some_and(|s| s.app == game.app && s.session == game.session);
+        let target = Target::Game { key: key.to_string(), app: game.app.clone(), session: game.session.clone() };
+        self.push_notification(on_screen, Notification { title: name, body: label, target });
+    }
+
+    /// How your last move of a game went, if it isn't there yet, and what
+    /// came with their last (a move refused, an error): the Games tab's
+    /// note on a game.
+    pub fn game_notes(&self, game: &GameView) -> Vec<String> {
+        let Some(conversation) = self.store.conversations.get(&game.peer) else { return Vec::new() };
+        let mut notes = Vec::new();
+        if let Some(sent) = conversation.last_move(&game.session, false) {
+            match &sent.state {
+                MessageState::Sending => notes.push("Your last move is being sent…".to_string()),
+                MessageState::Failed(why) => {
+                    let again = if self.settings.resend_on_announce { "it goes again when they announce, or" } else { "it can be" };
+                    notes.push(format!("Your last move wasn't sent ({why}): {again} sent again now"));
+                }
+                _ => {}
+            }
+        }
+        if let Some(received) = conversation.last_move(&game.session, true) {
+            notes.extend(received.notes.iter().cloned());
+        }
+        notes
+    }
+
+    /// Moves of a game that failed to send, oldest first.
+    fn unsent_moves(&self, game: &GameView) -> Vec<String> {
+        let Some(conversation) = self.store.conversations.get(&game.peer) else { return Vec::new() };
+        conversation
+            .game_moves
+            .iter()
+            .filter(|m| !m.incoming && matches!(m.state, MessageState::Failed(_)))
+            .filter(|m| m.game.as_ref().is_some_and(|g| g.session == game.session))
+            .map(|m| m.id.clone())
+            .collect()
+    }
+
+    /// Whether a move of yours in this game failed to send (and can be
+    /// sent again).
+    pub fn game_unsent(&self, game: &GameView) -> bool {
+        !self.unsent_moves(game).is_empty()
+    }
+
+    /// Send a game's moves that failed again, the same moves (`r`, or
+    /// **Send again** in the web UI).
+    fn resend_moves(&mut self, app: &str, session: &str) -> Result<(), String> {
+        let game = self.games.view(app, session).ok_or("There's no such game")?;
+        let unsent = self.unsent_moves(&game);
+        if unsent.is_empty() {
+            return Err("Nothing of this game is waiting to be sent".into());
+        }
+        let mut mode = self.delivery_for(&game.peer);
+        if mode == DeliveryMode::Paper || (mode == DeliveryMode::Propagated && self.propagation_node().is_none()) {
+            mode = DeliveryMode::Auto;
+        }
+        for id in unsent {
+            self.retry_message(&game.peer, &id, mode)?;
+        }
+        Ok(())
+    }
+
+    /// Forget a game (and its moves).
     pub fn forget_game(&mut self, app: &str, session: &str) -> Result<(), String> {
+        let peer = self.games.view(app, session).map(|g| g.peer);
         if !self.games.remove(app, session)? {
             return Err("There's no such game".into());
+        }
+        if let Some(conversation) = peer.and_then(|peer| self.store.conversations.get_mut(&peer)) {
+            conversation.game_moves.retain(|m| m.game.as_ref().is_none_or(|g| g.session != session));
+            self.store_dirty = true;
         }
         self.games_dirty = true;
         if self.game_view.as_ref().is_some_and(|g| g.app == app && g.session == session) {
@@ -164,8 +294,9 @@ impl App {
         Ok(())
     }
 
-    /// Send a game's action to `key`, as a message in your conversation:
-    /// its text says what it is for clients without games. Never on paper
+    /// Send a game's action to `key`, as a message (kept with the
+    /// conversation's moves): its text says what it is for clients without
+    /// games. Never on paper
     /// (the move would be lost to the game); by how messages to them go
     /// otherwise.
     fn send_game(&mut self, key: &str, prepared: Prepared) -> Result<(), String> {
@@ -178,7 +309,8 @@ impl App {
         let id = self.store.next_local_id;
         self.store.next_local_id += 1;
         let timestamp = super::now();
-        self.store.conversations.entry(key.to_string()).or_default().messages.push(Message {
+        let conversation = self.store.conversations.entry(key.to_string()).or_default();
+        conversation.game_moves.push(Message {
             id: format!("local-{id}"),
             content: prepared.text.clone(),
             timestamp,
@@ -186,8 +318,8 @@ impl App {
             game: Some(prepared.game),
             ..Message::default()
         });
+        conversation.keep_moves();
         self.store_dirty = true;
-        self.keep_conversation_selection();
         self.update_policy(false);
         let appearance = self.own_appearance();
         let message =
@@ -211,9 +343,19 @@ impl App {
         self.game_menu = Some(GameMenu { peer, selected: 0 });
     }
 
-    /// Your games, newest first (the Games tab's list).
+    /// Your games, newest first, that the filter lets through (the Games
+    /// tab's list).
     pub fn game_list(&self) -> Vec<GameView> {
-        self.games.list(None)
+        self.games.list(None).into_iter().filter(|g| self.game_filter.shows(&g.status)).collect()
+    }
+
+    /// List the games `filter` lets through, the first selected.
+    pub(super) fn filter_games(&mut self, filter: GameFilter) {
+        if self.game_filter != filter {
+            (self.game_filter, self.game_view, self.game_selected, self.game_playing) = (filter, None, 0, false);
+            self.regions.games_first = 0;
+        }
+        self.sync_game_selection();
     }
 
     /// Keep the Games tab's selection on the same game as the list changes
@@ -268,6 +410,7 @@ impl App {
             KeyCode::End => self.select_game(count.saturating_sub(1)),
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if self.game_view.is_some() => self.game_playing = true,
             KeyCode::Char('n') => self.open_game_menu(None),
+            KeyCode::Char('f') => self.filter_games(self.game_filter.next()),
             KeyCode::Char('c') => {
                 if let Some(peer) = self.game_view.as_ref().and_then(|s| self.games.view(&s.app, &s.session)).map(|g| g.peer) {
                     self.open_conversation(peer);
@@ -331,7 +474,9 @@ impl App {
     pub(super) fn click_games(&mut self, at: Position) {
         self.sync_game_selection();
         let list = self.regions.games_list;
-        if list.contains(at) {
+        if let Some(&(_, filter)) = self.regions.games_filters.iter().find(|(rect, _)| rect.contains(at)) {
+            self.filter_games(filter);
+        } else if list.contains(at) {
             self.game_playing = false;
             self.select_game(self.regions.games_first + (at.y - list.y) as usize / 2);
         } else if self.regions.game_board.area.contains(at) && self.game_view.is_some() {
@@ -386,6 +531,7 @@ impl App {
                 self.open_prompt(PromptKind::Game(prompt), "Your move, by its squares (e2e4; e7e8n promotes to a knight)", "");
                 Ok(())
             }
+            KeyCode::Char('r') if self.game_unsent(&game) => self.game_action(app, session, "resend", None),
             KeyCode::Char('x') => {
                 self.ask_forget_game(&game);
                 Ok(())
@@ -485,13 +631,18 @@ impl App {
         }
     }
 
-    /// Show a game in the Games tab, selected (a click on one of its moves
-    /// in the history, or one just started).
+    /// Show a game in the Games tab, selected (a notification about it, or
+    /// one just started).
     pub(super) fn show_game(&mut self, app: &str, session: &str) {
-        if self.games.view(app, session).is_none() {
+        let Some(game) = self.games.view(app, session) else {
             return self.warn("That game isn't kept any more");
-        }
+        };
+        self.read(Target::Game { key: game.peer, app: app.to_string(), session: session.to_string() });
         self.picked = None;
+        // Shown in the list, whatever it's filtered by.
+        if !self.game_filter.shows(&game.status) {
+            self.game_filter = GameFilter::All;
+        }
         self.open_game(app, session);
         self.sync_game_selection();
         self.game_playing = false;
@@ -510,15 +661,6 @@ impl App {
                 self.switch_tab(super::Tab::Games);
                 self.open_game_menu(Some(peer.to_string()));
             }
-        }
-    }
-
-    /// Open the game the picked message (at `index`) is a move of.
-    pub(super) fn open_picked_game(&mut self, index: usize) {
-        let conversation = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key));
-        match conversation.and_then(|c| c.messages.get(index)).and_then(|m| m.game.clone()) {
-            Some(game) => self.show_game(&game.app, &game.session),
-            None => self.warn("That message isn't a game's"),
         }
     }
 
@@ -594,8 +736,9 @@ mod tests {
         }
     }
 
+    /// The last game move kept with `key`.
     fn last(player: &Player, key: [u8; 16]) -> Message {
-        player.app.store.conversations[&hex::encode(key)].messages.last().unwrap().clone()
+        player.app.store.conversations[&hex::encode(key)].game_moves.last().unwrap().clone()
     }
 
     #[test]
@@ -626,10 +769,18 @@ mod tests {
         let got = last(&ben, AMY);
         assert_eq!((got.game.unwrap().command.as_str(), got.notes.len()), ("challenge", 0));
         assert_eq!(ben.app.games.waiting(Some(&hex::encode(AMY))), 1);
-        // The same move again, in another message: not shown twice.
-        let count = ben.app.store.conversations[&hex::encode(AMY)].messages.len();
-        ben.app.on_message(lxmf::InboundMessage { id: Some([0x77; 32]), ..challenge });
-        assert_eq!(ben.app.store.conversations[&hex::encode(AMY)].messages.len(), count);
+        // Not in the conversation: nothing unread there, and a
+        // notification that opens the game.
+        let conversation = &ben.app.store.conversations[&hex::encode(AMY)];
+        assert_eq!((conversation.messages.len(), conversation.unread, conversation.game_moves.len()), (0, 0, 1));
+        let notified = ben.app.take_notifications();
+        assert!(
+            matches!(&notified[..], [n] if n.target == Target::Game { key: hex::encode(AMY), app: "four_in_a_row".into(), session: session.clone() })
+        );
+        // The same move again, in another message: not kept twice.
+        ben.app.on_message(lxmf::InboundMessage { id: Some([0x77; 32]), ..challenge.clone() });
+        ben.app.on_message(challenge);
+        assert_eq!(ben.app.store.conversations[&hex::encode(AMY)].game_moves.len(), 1);
 
         ben.app.game_action("four_in_a_row", &session, "accept", None).unwrap();
         amy.app.on_message(arrives(&mut ben, BEN));
@@ -637,6 +788,12 @@ mod tests {
         ben.app.on_message(arrives(&mut amy, AMY));
         let view = ben.app.games.view("four_in_a_row", &session).unwrap();
         assert_eq!((view.summary.as_str(), view.board.rows()[5].as_str()), ("Your move", "   A   "));
+        // Only the newest move each way is kept, once it's gone.
+        let mut moves = amy.app.store.conversations[&hex::encode(BEN)].clone();
+        moves.game_moves.iter_mut().for_each(|m| m.state = MessageState::Delivered);
+        moves.keep_moves();
+        let kept: Vec<_> = moves.game_moves.iter().map(|m| (m.incoming, m.game.as_ref().unwrap().command.clone())).collect();
+        assert_eq!(kept, [(true, "accept".to_string()), (false, "move".to_string())]);
         // Out of turn: refused here, nothing sent.
         assert_eq!(amy.app.game_action("four_in_a_row", &session, "move", Some("4")).unwrap_err(), "Not your turn");
         assert!(amy.net.try_recv().is_err());
@@ -659,15 +816,22 @@ mod tests {
         let challenge = arrives(&mut amy, AMY);
         let envelope = last(&amy, BEN).game.unwrap().envelope;
         ben.app.on_message(lxmf::InboundMessage { verified: false, ..challenge });
-        let got = last(&ben, AMY);
+        // Not played, so not a game's move: in the conversation, saying so.
+        let got = ben.app.store.conversations[&hex::encode(AMY)].messages.last().unwrap().clone();
         assert!(got.game.is_none() && got.notes[0].contains("couldn't be checked"), "{:?}", got.notes);
         assert_eq!(ben.app.games.list(None).len(), 0);
 
         // It failed: sent again, the very same move.
         let id = last(&amy, BEN).id;
-        amy.app.store.conversations.get_mut(&hex::encode(BEN)).unwrap().messages.last_mut().unwrap().state =
+        amy.app.store.conversations.get_mut(&hex::encode(BEN)).unwrap().game_moves.last_mut().unwrap().state =
             MessageState::Failed("no path".into());
-        amy.app.retry_message(&hex::encode(BEN), &id, DeliveryMode::Auto).unwrap();
+        let game = amy.app.games.list(None).remove(0);
+        assert_eq!(
+            amy.app.game_notes(&game),
+            ["Your last move wasn't sent (no path): it goes again when they announce, or sent again now"]
+        );
+        assert!(amy.app.game_unsent(&game));
+        amy.app.game_action("ttt", &game.session, "resend", None).unwrap();
         let again = loop {
             match amy.net.try_recv().unwrap() {
                 NetCommand::SendMessage { message, .. } => break message,
@@ -675,9 +839,13 @@ mod tests {
             }
         };
         assert_eq!(again.game.map(hex::encode), envelope);
-        amy.app.store.conversations.get_mut(&hex::encode(BEN)).unwrap().messages.last_mut().unwrap().state =
+        amy.app.store.conversations.get_mut(&hex::encode(BEN)).unwrap().game_moves.last_mut().unwrap().state =
             MessageState::Failed("no path".into());
         assert_eq!(amy.app.retry_message(&hex::encode(BEN), &id, DeliveryMode::Paper).unwrap_err(), "A game's move can't go on paper");
+        // Forgotten: its moves with it.
+        let session = game.session.clone();
+        amy.app.forget_game("ttt", &session).unwrap();
+        assert!(amy.app.store.conversations[&hex::encode(BEN)].game_moves.is_empty());
         for p in [amy, ben] {
             std::fs::remove_dir_all(p.dir).unwrap();
         }

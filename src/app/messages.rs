@@ -54,7 +54,7 @@ impl App {
     pub(crate) fn on_message(&mut self, message: crate::lxmf::InboundMessage) {
         let key = hex::encode(message.source);
         let id = message.id.map(hex::encode).unwrap_or_else(|| format!("in-{}", message.timestamp));
-        if self.store.conversations.get(&key).is_some_and(|c| c.messages.iter().any(|m| m.id == id)) {
+        if self.store.conversations.get(&key).is_some_and(|c| c.has(&id)) {
             // A duplicate (e.g. direct and propagated copies).
             if message.paper {
                 self.notify(format!("You have this message from {} already", self.store.display_name(&key)));
@@ -166,13 +166,15 @@ impl App {
             game,
             ..Message::default()
         };
+        // A game's move: kept apart, and shown in the Games tab.
+        if let Some(game) = stored.game.clone() {
+            return self.keep_received_move(&key, stored, &game);
+        }
         // On screen, in a window that has the focus: what arrives while the
         // user is away counts as unread.
         let is_active = paper || (self.focused && self.tab == Tab::Messages && self.active_conversation.as_deref() == Some(key.as_str()));
         // What the notification says: the text, else what came with it.
-        let preview = if stored.game.is_some() {
-            stored.opening()
-        } else if !message.content.trim().is_empty() {
+        let preview = if !message.content.trim().is_empty() {
             notify::body(&stored.text())
         } else if !message.title.trim().is_empty() {
             notify::body(&message.title)
@@ -853,6 +855,7 @@ impl App {
         let failed: Vec<String> = conversation
             .messages
             .iter()
+            .chain(&conversation.game_moves)
             .filter(|m| !m.incoming && m.attachments.is_empty() && m.id.starts_with("local-"))
             .filter(|m| matches!(&m.state, MessageState::Failed(why) if !why.starts_with(PAPER_FAILED)))
             .filter(|m| self.auto_resent.get(&m.id).is_none_or(|at| now.duration_since(*at) >= RESEND_GAP))
@@ -880,12 +883,8 @@ impl App {
             return Err("Select a propagation node first (Network tab, p)".into());
         }
         let number: u64 = id.strip_prefix("local-").and_then(|n| n.parse().ok()).ok_or("Only your own messages can be sent again")?;
-        let message = self
-            .store
-            .conversations
-            .get_mut(key)
-            .and_then(|c| c.messages.iter_mut().find(|m| m.id == id))
-            .ok_or("That message isn't in this conversation")?;
+        let message =
+            self.store.conversations.get_mut(key).and_then(|c| c.find_mut(id)).ok_or("That message isn't in this conversation")?;
         if !matches!(message.state, MessageState::Failed(_)) {
             return Err("Only a message that failed can be sent again".into());
         }
@@ -1013,7 +1012,6 @@ impl App {
             KeyCode::Char('f') => self.message_action(index, MessageAction::Forward),
             KeyCode::Char('o') => self.open_picked(index),
             KeyCode::Char('t') => self.message_action(index, MessageAction::Retry),
-            KeyCode::Char('g') => self.open_picked_game(index),
             KeyCode::Char('x') | KeyCode::Delete => self.message_action(index, MessageAction::Delete),
             KeyCode::Esc => self.picked = None,
             _ => return false,
@@ -1390,7 +1388,6 @@ impl App {
                 Some(HistoryHit::Link(url)) => self.open_url(&url),
                 Some(HistoryHit::Address(url)) => self.open_address(&url),
                 Some(HistoryHit::Action(index, action)) => self.message_action(index, action),
-                Some(HistoryHit::Game(app, session)) => self.show_game(&app, &session),
                 None => {}
             }
         }

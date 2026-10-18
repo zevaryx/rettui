@@ -231,6 +231,55 @@ pub struct Quoted {
 }
 
 impl Conversation {
+    /// A message of this conversation, or a game's move, by its id.
+    pub fn find_mut(&mut self, id: &str) -> Option<&mut Message> {
+        self.messages.iter_mut().chain(self.game_moves.iter_mut()).find(|m| m.id == id)
+    }
+
+    /// Whether a message (or a game's move) with this id is here.
+    pub fn has(&self, id: &str) -> bool {
+        self.messages.iter().chain(&self.game_moves).any(|m| m.id == id)
+    }
+
+    /// Move games' moves kept with the messages (by an earlier version) to
+    /// their own list, and count only the unread that are messages.
+    pub fn separate_moves(&mut self) {
+        if !self.messages.iter().any(|m| m.game.is_some()) {
+            return;
+        }
+        let from = self.messages.len().saturating_sub(self.unread);
+        self.unread -= self.messages[from..].iter().filter(|m| m.game.is_some()).count();
+        let (moves, messages) = std::mem::take(&mut self.messages).into_iter().partition(|m| m.game.is_some());
+        self.messages = messages;
+        self.game_moves.extend::<Vec<Message>>(moves);
+        self.game_moves.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
+        self.keep_moves();
+    }
+
+    /// Keep, of each game, only the moves still being sent or that failed
+    /// (to be sent again), and the newest each way (what the Games tab says
+    /// of how the last one went).
+    pub fn keep_moves(&mut self) {
+        let mut newest: HashMap<(String, bool), usize> = HashMap::new();
+        for (index, m) in self.game_moves.iter().enumerate() {
+            if let Some(game) = &m.game {
+                newest.insert((game.session.clone(), m.incoming), index);
+            }
+        }
+        let newest: BTreeSet<usize> = newest.into_values().collect();
+        let mut index = 0;
+        self.game_moves.retain(|m| {
+            let keep = matches!(m.state, MessageState::Sending | MessageState::Failed(_)) || newest.contains(&index);
+            index += 1;
+            keep
+        });
+    }
+
+    /// The newest move of a game, sent (`incoming` false) or received.
+    pub fn last_move(&self, session: &str, incoming: bool) -> Option<&Message> {
+        self.game_moves.iter().rev().find(|m| m.incoming == incoming && m.game.as_ref().is_some_and(|g| g.session == session))
+    }
+
     /// Add a reaction to the message with LXMF hash `to`, or keep it until
     /// that message arrives. False if it's here already (the same one
     /// twice, or the same emoji from the same side).
@@ -306,6 +355,11 @@ pub struct Conversation {
     /// Reactions to messages that aren't here (yet).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stray_reactions: Vec<StrayReaction>,
+    /// Games' moves, sent and received: kept apart from the messages (the
+    /// Games tab shows the games), so they're sent and resent as messages
+    /// are without being in the history. See [`Conversation::keep_moves`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub game_moves: Vec<Message>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -714,7 +768,8 @@ impl Store {
         }
         // Anything still "sending" was interrupted by the last shutdown.
         for conversation in store.conversations.values_mut() {
-            for message in &mut conversation.messages {
+            conversation.separate_moves();
+            for message in conversation.messages.iter_mut().chain(conversation.game_moves.iter_mut()) {
                 if message.state == MessageState::Sending {
                     message.state = MessageState::Failed("interrupted".into());
                 }
@@ -853,7 +908,7 @@ impl Store {
     }
 
     pub fn find_message_mut(&mut self, id: &str) -> Option<&mut Message> {
-        self.conversations.values_mut().flat_map(|c| c.messages.iter_mut()).find(|m| m.id == id)
+        self.conversations.values_mut().find_map(|c| c.find_mut(id))
     }
 
     /// A reaction of yours, by its `local-N` id (on a message, or waiting
@@ -1135,6 +1190,40 @@ mod tests {
         assert!(mine.exists(), "a file of yours stays");
         assert!(remove_from_archive(&dir.join("none"), &gone, &[]).unwrap().is_empty());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn games_moves_kept_with_the_messages_move_out() {
+        let game =
+            |session: &str| crate::games::GameRef { app: "ttt".into(), session: session.into(), command: "move".into(), envelope: None };
+        let message = |id: &str, at: f64, game: Option<crate::games::GameRef>| Message {
+            id: id.into(),
+            incoming: true,
+            timestamp: at,
+            state: MessageState::Received { verified: true },
+            game,
+            ..Message::default()
+        };
+        let mut conversation = Conversation {
+            messages: vec![
+                message("a", 1.0, None),
+                message("b", 2.0, Some(game("s1"))),
+                message("c", 3.0, None),
+                message("d", 4.0, Some(game("s1"))),
+                message("e", 5.0, Some(game("s2"))),
+            ],
+            // c, d and e: c alone is a message.
+            unread: 3,
+            ..Conversation::default()
+        };
+        conversation.separate_moves();
+        let ids = |messages: &[Message]| messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&conversation.messages), ["a", "c"]);
+        assert_eq!(conversation.unread, 1);
+        // Of each game, the newest received (and nothing failed to send).
+        assert_eq!(ids(&conversation.game_moves), ["d", "e"]);
+        assert!(conversation.has("d") && conversation.find_mut("e").is_some());
+        assert_eq!(conversation.last_move("s1", true).map(|m| m.id.as_str()), Some("d"));
     }
 
     #[test]

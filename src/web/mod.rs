@@ -92,6 +92,7 @@ impl Owner {
             Target::Room { hub, room } => net::parse_hash(hub)
                 .and_then(|hash| self.app.channels.hub_index(hash))
                 .is_some_and(|index| self.app.channels.hubs[index].unread.get(room).is_some_and(|n| *n > 0)),
+            Target::Game { app, session, .. } => self.app.games.view(app, session).is_some_and(|g| g.yours),
             // It sums up a sync: what it was about shows as unread anyway.
             Target::Summary => false,
         };

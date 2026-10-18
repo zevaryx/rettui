@@ -12,7 +12,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, selected_bg};
 use crate::app::App;
-use crate::app::games::{BoardRegion, GameMenu, MenuItem};
+use crate::app::games::{BoardRegion, GameFilter, GameMenu, MenuItem};
 use crate::games::{Board, GameView};
 
 /// The other player's pieces (yours are in the accent colour).
@@ -52,7 +52,27 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let outer = block("Games", !app.game_playing);
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
+    // The filters, a line above the list.
+    app.regions.games_filters.clear();
+    let mut x = inner.x;
+    let mut filters = Vec::new();
+    for filter in GameFilter::ALL {
+        let label = format!(" {} ", filter.label());
+        let width = (label.width() as u16).min(inner.right().saturating_sub(x));
+        app.regions.games_filters.push((Rect { x, y: inner.y, width, height: 1 }, filter));
+        x += width;
+        let style =
+            if filter == app.game_filter { Style::default().fg(Color::Black).bg(accent()).bold() } else { Style::default().fg(dim()) };
+        filters.push(Span::styled(label, style));
+    }
+    frame.render_widget(Paragraph::new(Line::from(filters)), Rect { height: 1, ..inner });
+    let inner = Rect { y: inner.y + 2, height: inner.height.saturating_sub(2), ..inner };
     app.regions.games_list = inner;
+    if games.is_empty() && app.game_filter != GameFilter::All {
+        let hint = format!("No {} games.\n\nPress f for the others, or n for a new game.", app.game_filter.label().to_lowercase());
+        frame.render_widget(Paragraph::new(hint).wrap(Wrap { trim: true }).style(Style::default().fg(dim())), inner);
+        return;
+    }
     if games.is_empty() {
         let hint = "No games yet.\n\nPress n to challenge someone to Tic-Tac-Toe, Four in a Row or Chess (or g in a conversation). \
                     Each move goes as a message, so they can answer whenever they're next online.";
@@ -105,8 +125,11 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let name = app.store.display_name(&game.peer);
     let title = format!("{} with {name}", game.name);
-    let keys =
-        if app.game_playing { hints(&game) } else { "Enter (or a click) to play · n new game · c conversation · x forget".to_string() };
+    let keys = if app.game_playing {
+        hints(&game, app.game_unsent(&game))
+    } else {
+        "Enter (or a click) to play · n new game · f filter · c conversation · x forget".to_string()
+    };
     let outer = block(&title, app.game_playing).title_bottom(Line::styled(format!(" {keys} "), Style::default().fg(dim())));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
@@ -116,8 +139,11 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         Board::FourInARow { .. } => (30, 7),
         Board::Chess { .. } => (28, 9),
     };
-    // The board in the middle, where it stands above it, what you are below.
-    let column = centered(inner, inner.width, board_h + 4);
+    // The board in the middle, where it stands above it, what you are
+    // below, and how your last move went (and what came with theirs).
+    let notes = app.game_notes(&game);
+    let notes_h = if notes.is_empty() { 0 } else { notes.len() as u16 + 1 };
+    let column = centered(inner, inner.width, board_h + 4 + notes_h);
     let status = if game.yours { Style::default().fg(accent()).bold() } else { Style::default().bold() };
     frame.render_widget(Paragraph::new(Span::styled(game.summary.clone(), status)).centered(), Rect { height: 1, ..column });
     let board_area =
@@ -134,6 +160,11 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.game_board = BoardRegion { area: inner, ..region };
     let below = Rect { y: board_area.y + board_area.height + 1, height: 1, ..column };
     frame.render_widget(Paragraph::new(Span::styled(footnote(&game), Style::default().fg(dim()))).centered(), below);
+    if !notes.is_empty() {
+        let area = Rect { y: below.y + 2, height: inner.bottom().saturating_sub(below.y + 2), ..column };
+        let lines: Vec<Line> = notes.into_iter().map(|note| Line::styled(note, Style::default().fg(THEIRS))).collect();
+        frame.render_widget(Paragraph::new(lines).centered().wrap(Wrap { trim: true }), area);
+    }
 }
 
 /// Starting a new game: who with (your conversations), then which game.
@@ -182,8 +213,11 @@ pub(super) fn draw_game_menu(frame: &mut Frame, app: &mut App) {
 }
 
 /// The keys that do something now, on the board.
-fn hints(game: &GameView) -> String {
+fn hints(game: &GameView, unsent: bool) -> String {
     let mut keys: Vec<&str> = Vec::new();
+    if unsent {
+        keys.push("r send again");
+    }
     let can = |command: &str| game.actions.iter().any(|a| a == command);
     if can("accept") {
         keys.extend(["a accept", "d decline"]);
@@ -415,9 +449,22 @@ mod tests {
         let shown = draw(&mut terminal, &mut app);
         assert!(shown.contains("Four in a Row with") && shown.contains("Waiting for them to accept"), "{shown}");
         assert!(shown.contains("Four in a Row ·"), "listed: {shown}");
-        // The challenge is in the conversation, as a game's move.
-        let opening = app.store.conversations[&peer].messages.last().unwrap().opening();
-        assert_eq!(opening, "🎲 Four in a Row · Sent a challenge!");
+        // The challenge went as a message, kept with the games' moves, not
+        // in the conversation; being sent, it says so.
+        let conversation = &app.store.conversations[&peer];
+        assert!(conversation.messages.is_empty());
+        assert_eq!(conversation.game_moves.last().unwrap().opening(), "🎲 Four in a Row · Sent a challenge!");
+        assert!(shown.contains("Your last move is being sent"), "{shown}");
+        // Filtered: it's pending, not active.
+        key(&mut app, KeyCode::Char('f'));
+        let shown = draw(&mut terminal, &mut app);
+        assert!(shown.contains("No active games") && app.game_view.is_none(), "{shown}");
+        key(&mut app, KeyCode::Char('f'));
+        let shown = draw(&mut terminal, &mut app);
+        assert!(shown.contains("Four in a Row ·") && app.game_view.is_some(), "pending: {shown}");
+        key(&mut app, KeyCode::Char('f'));
+        key(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.game_filter, crate::app::games::GameFilter::All);
         // Onto the board and back to the list.
         key(&mut app, KeyCode::Enter);
         assert!(app.game_playing);

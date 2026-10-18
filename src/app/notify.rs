@@ -22,6 +22,8 @@ pub enum Target {
     Conversation { key: String },
     /// An RRC room or whisper conversation (the hub's hash, the room's key).
     Room { hub: String, room: String },
+    /// A game (with `key`, the peer's hash): a move of it.
+    Game { key: String, app: String, session: String },
     /// Several at once (a sync bringing in a backlog).
     Summary,
 }
@@ -32,6 +34,7 @@ impl Target {
         match self {
             Target::Conversation { key } => format!("lxmf:{key}"),
             Target::Room { hub, room } => format!("rrc:{hub}:{room}"),
+            Target::Game { app, session, .. } => format!("game:{app}:{session}"),
             Target::Summary => "summary".to_string(),
         }
     }
@@ -94,6 +97,7 @@ impl App {
                 self.channels.selected = Some(super::channels::Target { hub, room: (!room.is_empty()).then_some(room) });
                 self.mark_channel_read();
             }
+            Target::Game { app, session, .. } => self.show_game(&app, &session),
             Target::Summary => self.tab = super::Tab::Messages,
         }
     }
@@ -120,7 +124,7 @@ impl App {
             return false;
         }
         let trusted = match target {
-            Target::Conversation { key } => self.store.contact(key).trust == crate::store::Trust::Trusted,
+            Target::Conversation { key } | Target::Game { key, .. } => self.store.contact(key).trust == crate::store::Trust::Trusted,
             _ => false,
         };
         !(trusted && self.settings.quiet_hours_trusted)

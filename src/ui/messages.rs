@@ -268,17 +268,7 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         if !message.title.is_empty() {
             lines.push((Line::styled(message.title.clone(), Style::default().bold()), None));
         }
-        if let Some(game) = &message.game {
-            // A game's move: what it did, and a click opens the game.
-            lines.push((
-                Line::from(vec![
-                    Span::raw("🎲 "),
-                    Span::styled(game.label(&message.content), Style::default().add_modifier(Modifier::UNDERLINED)),
-                    Span::styled("  open ↗", Style::default().fg(dim())),
-                ]),
-                Some(HistoryHit::Game(game.app.clone(), game.session.clone())),
-            ));
-        } else if !message.content.is_empty() {
+        if !message.content.is_empty() {
             match message.format {
                 Some(TextFormat::Markdown) => {
                     lines.extend(markdown::lines(&message.content, inner_width).into_iter().map(|line| (line, None)));

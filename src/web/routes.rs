@@ -1205,6 +1205,9 @@ async fn game(State(state): State<WebState>, Path((app, session)): Path<(String,
             o.app.games.view(&app, &session).map(|game| {
                 let mut value = json!(game);
                 value["peer_name"] = json!(o.app.store.display_name(&game.peer));
+                // How your last move went, and what came with theirs.
+                value["notes"] = json!(o.app.game_notes(&game));
+                value["unsent"] = json!(o.app.game_unsent(&game));
                 value
             })
         })
