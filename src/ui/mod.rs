@@ -11,6 +11,7 @@ mod chrome;
 mod contact;
 mod editor;
 mod emoji;
+mod face;
 mod forward;
 mod games;
 mod guide;

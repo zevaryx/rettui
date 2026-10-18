@@ -170,6 +170,7 @@ pub fn router(state: WebState) -> Router {
         .route("/manifest.webmanifest", get(manifest))
         .route("/fonts/{name}", get(font))
         .route("/brand/{name}", get(brand))
+        .route("/face/{address}", get(face))
         .route("/rettui-ca.crt", get(certificate_authority))
         .nest("/api", api)
         .layer(middleware::from_fn_with_state(state.clone(), auth))
@@ -467,6 +468,18 @@ async fn brand(Path(name): Path<String>) -> Response {
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")], body).into_response()
+}
+
+/// Someone's face (LXMFace's picture of an LXMF address), for those without
+/// an icon of their own: `/face/<address>.svg`. An address always gives the
+/// same face, so browsers may keep it.
+async fn face(Path(address): Path<String>) -> Response {
+    let address = address.strip_suffix(".svg").unwrap_or(&address).to_ascii_lowercase();
+    if address.len() != 32 || !address.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let svg = crate::icons::face::svg(&address, 64);
+    ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "private, max-age=31536000, immutable")], svg).into_response()
 }
 
 // ---- state and live updates ----------------------------------------------

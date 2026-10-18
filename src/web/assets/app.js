@@ -424,7 +424,10 @@ function stickToBottom(node, update) {
 // Someone's icon, as Sideband and MeshChat show one: a Material Design Icon
 // in a colour on a colour, or with no icon (or one rettui doesn't know),
 // the first letter of their name.
-function avatar(icon, name) {
+function avatar(icon, name, address) {
+  // An icon of their own (from Sideband, MeshChat…) first, else their face:
+  // LXMFace's picture of their address, the same in every app that has it.
+  if (!icon && address) return el('img', { class: 'avatar face', src: `face/${address}.svg`, alt: '', loading: 'lazy' });
   const letter = ([...(name || '').trim()][0] || '?').toUpperCase();
   return el('span', {
     class: 'avatar' + (icon?.glyph ? ' icon' : ''),
@@ -631,7 +634,8 @@ function renderSidebar() {
   document.title = count ? `(${count}) rettui` : 'rettui';
   renderAppbar();
   if (app.status) {
-    $('#who-name').replaceChildren(...[app.status.icon ? avatar(app.status.icon, app.status.display_name) : null, app.status.display_name].filter(Boolean));
+    const own = app.status.icon || app.status.lxmf_address;
+    $('#who-name').replaceChildren(...[own ? avatar(app.status.icon, app.status.display_name, app.status.lxmf_address) : null, app.status.display_name].filter(Boolean));
     const total = app.status.interfaces.length;
     const net = app.status.net.state === 'online'
       ? `● ${app.status.interfaces_online}/${total} interfaces`
@@ -1781,7 +1785,7 @@ function slippyMap(data, places, onPick) {
   for (const p of places) {
     p.circle = el('div', { class: 'map-circle', hidden: true });
     p.marker = el('button', { type: 'button', class: 'map-marker' + (p.key ? '' : ' station'), title: p.label, onclick: () => onPick(p) },
-      p.icon ? avatar(p.icon, p.name) : el('span', { class: 'map-pin' }),
+      p.icon || p.key ? avatar(p.icon, p.name, p.key) : el('span', { class: 'map-pin' }),
       el('span', { class: 'map-label', text: p.name }));
     marks.append(p.circle, p.marker);
   }
@@ -1950,7 +1954,7 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
     for (const p of places) {
       const about = [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away].filter(Boolean).join(' · ');
       const row = el('div', { class: 'list-item', onclick: () => pick(p) },
-        p.icon ? avatar(p.icon, p.name) : null,
+        p.icon || p.key ? avatar(p.icon, p.name, p.key) : null,
         el('div', { class: 'main' },
           el('div', { class: 'name', text: p.name }),
           el('div', { class: 'sub', text: about || p.label }),
@@ -3089,8 +3093,6 @@ app.views.messages = {
     draftSwitch(this, this.selected);
     this.names = new Map(conversations.map((c) => [c.key, c.name]));
     this.warmRecent(conversations);
-    // Icons beside every name once someone has one (letters for the rest).
-    const icons = conversations.some((c) => c.icon);
     // Everything read at once, when anything is unread.
     this.readAll.classList.toggle('hidden', !conversations.some((c) => c.unread));
     // Message requests come last, under a heading of their own.
@@ -3105,7 +3107,7 @@ app.views.messages = {
       onpointerdown: () => this.load(c.key).catch(() => {}),
       onclick: () => this.select(c.key),
     },
-    icons ? avatar(c.icon, c.name) : null,
+    avatar(c.icon, c.name, c.key),
     el('div', { class: 'main' },
       el('div', { class: 'name' }, c.name, c.muted ? mutedMark() : null,
         c.pinned ? el('span', { class: 'pin-mark', text: ' 📌', title: 'Pinned to the top' }) : null,
@@ -3228,7 +3230,7 @@ app.views.messages = {
     this.modeKept = kept;
     if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key, archive: this.archive?.key === key && this.archive.messages.length })) return;
     this.header.replaceChildren(...[
-      conversation.icon ? avatar(conversation.icon, conversation.name) : null,
+      avatar(conversation.icon, conversation.name, key),
       el('span', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: key }),
       el('button', { class: 'pin-button' + (conversation.pinned ? ' on' : ''), text: '📌',

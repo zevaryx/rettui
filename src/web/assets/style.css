@@ -288,6 +288,8 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--raised); bord
   font-weight: 600; font-size: 15px; line-height: 1;
 }
 .avatar.icon { font-weight: 400; font-size: 19px; }
+/* Their face (LXMFace), for those without an icon: its own colours. */
+.avatar.face { background: none; object-fit: cover; }
 header .avatar { width: 26px; height: 26px; font-size: 13px; }
 header .avatar.icon { font-size: 17px; }
 #who-name { display: flex; align-items: center; gap: 6px; }

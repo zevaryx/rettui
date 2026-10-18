@@ -75,6 +75,13 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
         let mut line = field("Icon", "");
         line.spans.push(Span::styled(format!(" {} ", icon.icon), colours));
         lines.push(line);
+    } else {
+        // No icon of their own: their face (LXMFace's, of their address).
+        for (i, row) in super::face::full(&key).into_iter().enumerate() {
+            let mut line = field(if i == 0 { "Face" } else { "" }, "");
+            line.spans.extend(row);
+            lines.push(line);
+        }
     }
     if let Some(mode) = contact.delivery {
         lines.push(field("Delivery", format!("{} (d changes it in the conversation)", mode.label())));

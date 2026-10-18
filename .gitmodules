@@ -18,3 +18,6 @@
 	path = deps/lrgp-rs
 	url = https://github.com/zevaryx/lrgp-rs
 	branch = rettui
+[submodule "deps/LXMFace"]
+	path = deps/LXMFace
+	url = https://github.com/ratspeak/LXMFace

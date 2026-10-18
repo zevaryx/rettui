@@ -3,6 +3,8 @@
 //! field). Each name's character is where Nerd Font has the icon, so the
 //! web UI shows it with the font it bundles (see `README.md`).
 
+pub mod face;
+
 use std::collections::HashMap;
 use std::sync::LazyLock;
 

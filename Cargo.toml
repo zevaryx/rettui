@@ -25,6 +25,8 @@ serde-saphyr = "1.1"
 # Games over LXMF (LRGP): Tic-Tac-Toe, Four in a Row and Chess, their rules
 # and sessions. On a branch of ours with rusqlite at rettui's version.
 lrgp = { path = "deps/lrgp-rs" }
+# Pictures for LXMF addresses (identicons), as Ratspeak draws them.
+lxmface = { path = "deps/LXMFace" }
 
 # TUI
 ratatui = "0.30"

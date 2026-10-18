@@ -242,14 +242,24 @@ everywhere else), and notes for you alone.
   [Material Design Icon](https://pictogrammers.com/library/mdi/) in a colour
   on a colour), which comes with their messages. rettui keeps the newest
   one each person sent. The web UI shows it beside their name in the
-  conversation list and above the conversation; once anyone has one, the
-  rest get their first letter. The TUI's contact card names it, in its
-  colours.
+  conversation list, above the conversation and on the map. The TUI shows
+  its colours beside their name in the conversation list (with their
+  name's first letter, as a terminal may not have the icon itself), and
+  its contact card names it, in its colours.
   - **Your own:** *Icon* in the settings (Status), with *Icon colour* and
     *Icon background*. Type part of a name in the web UI and pick from the
     icons that match; in the TUI, type the name. Once set, it goes with
     every message you send (not paper ones), as Sideband sends its own, and
     shows beside your name in the web UI. Empty, the default, sends none.
+- **Faces:** everyone without an icon of their own gets a face instead:
+  [LXMFace](https://github.com/ratspeak/LXMFace)'s picture of their LXMF
+  address, an 8×8 pattern in three colours, as Ratspeak shows them. An
+  address always gives the same face, in every app that draws LXMFace, so
+  you can tell people apart at a glance even before they've named
+  themselves. An icon someone set in Sideband, Columba or MeshChat always
+  comes first. The web UI shows faces where icons go (and your own beside
+  your name, unless you've set an icon); the TUI draws them in half blocks:
+  small beside each conversation, full size on the contact card.
 - **Adding someone from theirs:** paste their `lxma://` link where you'd type
   an address (`n` in the TUI, **+ New** in the web UI), or read its QR code
   like a [paper message](#paper-messages) (a picture of it, or the camera in

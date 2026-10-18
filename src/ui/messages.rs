@@ -100,11 +100,18 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             .block(list_block);
         frame.render_widget(hint, list_area);
     } else {
+        // Each one's picture beside it, where there's room: their icon's
+        // colours, else their face. Room is left for it, and it's drawn
+        // over the list (so the selected row's highlight leaves its
+        // colours alone).
+        let inner = list_block.inner(list_area);
+        let pictures = inner.width >= 22;
+        let gap = if pictures { "     " } else { "" };
         let items: Vec<ListItem> = order
             .iter()
             .map(|key| {
                 let conversation = &app.store.conversations[key];
-                let mut spans = vec![Span::raw(app.store.display_name(key))];
+                let mut spans = vec![Span::raw(format!("{gap}{}", app.store.display_name(key)))];
                 if conversation.unread > 0 {
                     spans.push(Span::styled(
                         format!(" {}", conversation.unread),
@@ -123,11 +130,26 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(Span::styled(" ?", Style::default().fg(Color::Yellow)));
                 }
                 let preview = conversation.messages.last().map(Message::opening).unwrap_or_default();
-                ListItem::new(vec![Line::from(spans), Line::styled(format!("  {preview}"), Style::default().fg(dim()))])
+                let preview = if pictures { format!("{gap}{preview}") } else { format!("  {preview}") };
+                ListItem::new(vec![Line::from(spans), Line::styled(preview, Style::default().fg(dim()))])
             })
             .collect();
         let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold()).highlight_symbol("▌");
         frame.render_stateful_widget(list, list_area, &mut app.conversations);
+        if pictures {
+            // After the highlight's column, two rows each.
+            let first = app.conversations.offset();
+            let x = inner.x + if app.conversations.selected().is_some() { 1 } else { 0 };
+            for (row, key) in order.iter().enumerate().skip(first).take(inner.height as usize / 2) {
+                let y = inner.y + ((row - first) * 2) as u16;
+                let name = app.store.display_name(key);
+                let letter = name.chars().next().and_then(|c| c.to_uppercase().next()).unwrap_or('?');
+                let icon = app.store.contacts.get(key).and_then(|c| c.icon.as_ref());
+                for (dy, line) in super::face::small(key, icon, letter).into_iter().enumerate() {
+                    frame.buffer_mut().set_line(x, y + dy as u16, &Line::from(line), 4);
+                }
+            }
+        }
     }
 
     let [history_area, compose_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);
