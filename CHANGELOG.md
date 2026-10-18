@@ -2,7 +2,9 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
-## Unreleased
+## v1.8.0
+
+Changes since v1.7.2: games with your contacts (Tic-Tac-Toe, Four in a Row and Chess, over LRGP), faces for everyone without an icon (LXMFace), and runs of dots and colons shown as typed in the web UI.
 
 ### Added
 - **Games:** Tic-Tac-Toe, Four in a Row and Chess with your contacts, over [LRGP](https://github.com/ratspeak/lrgp-rs) (Ratspeak's Lightweight Reticulum Gaming Protocol), so you can play against other LRGP clients too. Each move is a message in your conversation, sent as messages to them are (direct, or through the propagation node) and resent as they are when it fails. `g` in a conversation (the **🎲 Games** button in the web UI) lists your games with them and starts a new one; a game opens over the conversation with its board, played by keys or clicks, with accepting, declining, draws and resigning. The conversation says when a game waits on you. Only moves whose signature was checked are played, and both sides check the rules. Games are kept in `games.json` and in backups. See [Games](https://github.com/zevaryx/rettui/wiki/Games).
@@ -10,6 +12,10 @@ What changed in each release of rettui. Releases before v1.6.0 are described on 
 
 ### Fixed
 - **Web UI:** a run of dots or colons (`.....`, `:::::`) no longer shows as only its last two in some browsers. The bundled Fira Code font joins `..`, `...`, `::` and the like into ligatures, which some browsers drew wrongly; ligatures are now off everywhere in the web UI, so what's typed is shown as typed (`one...two` no longer gets gaps around its dots either).
+
+### Docs and development
+- A *Games* page in the wiki, and faces in *Messaging*.
+- lrgp-rs and LXMFace are submodules in `deps/`. lrgp-rs comes from a fork (`zevaryx/lrgp-rs`, branch `rettui`) whose one change is rusqlite at rettui's version, since only one crate in a build may link SQLite.
 
 ## v1.7.2
 
