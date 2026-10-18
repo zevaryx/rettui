@@ -144,8 +144,8 @@ pub enum Board {
 }
 
 impl Board {
-    /// The squares as rows of characters (top first), with the board's
-    /// width: for a quick look and for tests.
+    /// The squares as rows of characters (top first).
+    #[cfg(test)]
     pub fn rows(&self) -> Vec<String> {
         let chunk = |cells: &[char], width: usize| cells.chunks(width).map(|row| row.iter().collect()).collect();
         match self {

@@ -106,6 +106,22 @@ pub fn keys(app: &App) -> Keys {
         Tab::Messages if app.archive_reader.is_some() => {
             mode("Archive", &[("↑↓", "scroll"), ("PgUp/Dn", "page"), ("Home/End", "oldest/newest"), ("Esc", "close")])
         }
+        Tab::Messages if app.game_view.is_some() => typing(
+            "Game",
+            &[
+                ("Enter", "play"),
+                ("arrows", "choose"),
+                ("1–9", "cell/column"),
+                ("a/d", "accept/decline"),
+                ("D", "offer draw"),
+                ("y/n", "answer a draw"),
+                ("t", "type a chess move"),
+                ("R", "resign"),
+                ("x", "forget"),
+                ("Esc", "close"),
+            ],
+        ),
+        Tab::Messages if app.game_menu.is_some() => typing("Games", &[("Enter", "open/start"), ("↑↓", "choose"), ("Esc", "close")]),
         Tab::Messages if app.composing && app.reply.is_some() => typing(
             "Replying",
             &[("Enter", "send"), ("↑↓", "other"), ("Esc", "no reply"), ("^E", "emoji"), ("^O", "attach"), ("^V", "paste")],
@@ -147,6 +163,7 @@ pub fn keys(app: &App) -> Keys {
                 ("f", "forward"),
                 ("o", "open"),
                 ("t", "retry"),
+                ("g", "its game"),
                 ("x", "delete"),
                 ("↑↓", "other"),
                 ("Esc", "done"),
@@ -160,6 +177,7 @@ pub fn keys(app: &App) -> Keys {
                 ("r", "reply"),
                 ("m", "pick"),
                 ("c", "contact"),
+                ("g", "games"),
                 ("n", "new"),
                 ("y", "copy"),
                 ("a", "attach"),

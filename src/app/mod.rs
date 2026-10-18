@@ -24,7 +24,7 @@ pub(crate) mod files;
 pub mod find;
 pub mod format;
 pub mod forward;
-mod games;
+pub mod games;
 pub mod guide;
 pub mod hub;
 pub mod identity;
@@ -196,6 +196,8 @@ pub enum PromptKind {
     ConfirmStopLive(String),
     /// The Hub panel's prompts.
     Hub(hub::HubPrompt),
+    /// A game's: a chess move typed, resigning, forgetting one.
+    Game(games::GamePrompt),
 }
 
 /// What a QR code over the tab shows.
@@ -262,6 +264,10 @@ pub struct Regions {
     pub map_first: usize,
     /// The forward list's box and its rows (`f` on a picked message).
     pub forward_box: Rect,
+    /// The open game's board, and the games menu's list (and its box).
+    pub game_board: games::BoardRegion,
+    pub game_menu: Rect,
+    pub game_menu_box: Rect,
     pub forward_list: Rect,
     pub forward_first: usize,
     pub browser_list: Rect,
@@ -354,6 +360,8 @@ pub enum HistoryHit {
     /// Do something with a message (its index): the picked message's
     /// buttons.
     Action(usize, MessageAction),
+    /// Open a game (app, session): a move of it.
+    Game(String, String),
 }
 
 /// What can be done with a picked message.
@@ -580,6 +588,8 @@ pub struct App {
     pub(crate) games_dirty: bool,
     /// The game open over the conversation (terminal UI).
     pub game_view: Option<games::GameScreen>,
+    /// The games menu (terminal UI).
+    pub game_menu: Option<games::GameMenu>,
 }
 
 pub(crate) fn now() -> f64 {
@@ -713,6 +723,7 @@ impl App {
             // Saved once at the start: games expire as they're read.
             games_dirty: true,
             game_view: None,
+            game_menu: None,
         };
         for note in std::mem::take(&mut app.store.migration_notes).into_iter().chain(game_problems) {
             app.log(note);
@@ -1173,6 +1184,7 @@ impl App {
                 }
             }
             PromptKind::ShareLocation(key) => self.submit_share_location(key, &text),
+            PromptKind::Game(prompt) => self.submit_game_prompt(prompt, &text),
             PromptKind::ConfirmStopLive(key) => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
                     match self.stop_live(&key) {

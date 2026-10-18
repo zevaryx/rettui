@@ -81,6 +81,10 @@ impl App {
             self.contact_card_key(key);
             return;
         }
+        if (self.game_view.is_some() || self.game_menu.is_some()) && self.tab == Tab::Messages {
+            self.games_key(key);
+            return;
+        }
         if self.tab == Tab::Channels {
             self.channels.sync_draft();
         }
@@ -230,6 +234,22 @@ impl App {
         if self.paper_view.is_some() {
             if let MouseEventKind::Down(_) = mouse.kind {
                 self.paper_view = None;
+            }
+            return;
+        }
+        // A game, or the games menu: a click plays, or picks, or closes.
+        if (self.game_view.is_some() || self.game_menu.is_some()) && self.tab == Tab::Messages && self.prompt.is_none() {
+            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                let at = Position::new(mouse.column, mouse.row);
+                if self.game_view.is_some() {
+                    self.click_game(at);
+                } else {
+                    let list = self.regions.game_menu;
+                    let row = list.contains(at).then(|| (at.y - list.y) as usize);
+                    if row.is_some() || !self.regions.game_menu_box.contains(at) {
+                        self.click_game_menu(row);
+                    }
+                }
             }
             return;
         }

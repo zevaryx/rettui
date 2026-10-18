@@ -139,10 +139,16 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
     let name = app.store.display_name(&key);
-    let title = match app.live_share(&key) {
+    let mut title = match app.live_share(&key) {
         Some(share) => format!("{name}  {key}  {}", crate::app::live::label(share)),
         None => format!("{name}  {key}"),
     };
+    // Games of yours with them waiting on you: g opens them.
+    match app.games.waiting(Some(&key)) {
+        0 => {}
+        1 => title.push_str("  🎲 a game waits on you (g)"),
+        n => title.push_str(&format!("  🎲 {n} games wait on you (g)")),
+    }
     let mut history_block = block(&title, false).padding(ratatui::widgets::Padding::horizontal(1));
     if !app.is_known(&key) {
         history_block = history_block
@@ -240,7 +246,17 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         if !message.title.is_empty() {
             lines.push((Line::styled(message.title.clone(), Style::default().bold()), None));
         }
-        if !message.content.is_empty() {
+        if let Some(game) = &message.game {
+            // A game's move: what it did, and a click opens the game.
+            lines.push((
+                Line::from(vec![
+                    Span::raw("🎲 "),
+                    Span::styled(game.label(&message.content), Style::default().add_modifier(Modifier::UNDERLINED)),
+                    Span::styled("  open ↗", Style::default().fg(dim())),
+                ]),
+                Some(HistoryHit::Game(game.app.clone(), game.session.clone())),
+            ));
+        } else if !message.content.is_empty() {
             match message.format {
                 Some(TextFormat::Markdown) => {
                     lines.extend(markdown::lines(&message.content, inner_width).into_iter().map(|line| (line, None)));

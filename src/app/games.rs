@@ -4,11 +4,71 @@
 
 use std::collections::HashMap;
 
-use super::App;
-use crate::games::{GameRef, Prepared, Received};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::{Position, Rect};
+
+use super::{App, PromptKind};
+use crate::games::{Board, GAMES, GameRef, GameView, Prepared, Received};
 use crate::lxmf::{self, DeliveryMode};
 use crate::net::NetCommand;
 use crate::store::{Message, MessageState};
+
+/// The games menu (`g` in a conversation): your games with them, then a
+/// new one of each.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameMenu {
+    pub peer: String,
+    pub selected: usize,
+}
+
+/// A row of the games menu.
+#[derive(Debug, Clone)]
+pub enum MenuItem {
+    Game(Box<GameView>),
+    New(&'static str),
+}
+
+/// What a game's prompts ask.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GamePrompt {
+    /// A chess move, typed (`e7e8n` to promote to a knight).
+    Move {
+        app: String,
+        session: String,
+    },
+    ConfirmResign {
+        app: String,
+        session: String,
+    },
+    ConfirmForget {
+        app: String,
+        session: String,
+    },
+}
+
+/// Where the open game's board is on screen, for clicks: its squares' top
+/// left, their size, and how many there are across and down.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BoardRegion {
+    pub origin: Position,
+    pub cell: (u16, u16),
+    pub across: u16,
+    pub down: u16,
+    /// The whole box.
+    pub area: Rect,
+}
+
+impl BoardRegion {
+    /// The square at `at` (as shown, row by row from the top left).
+    pub fn square(&self, at: Position) -> Option<usize> {
+        let (w, h) = self.cell;
+        if w == 0 || h == 0 || at.x < self.origin.x || at.y < self.origin.y {
+            return None;
+        }
+        let (col, row) = ((at.x - self.origin.x) / w, (at.y - self.origin.y) / h);
+        (col < self.across && row < self.down).then_some((row * self.across + col) as usize)
+    }
+}
 
 /// The game open over the conversation in the terminal UI: which, and the
 /// square or column picked (a chess move's first square once chosen).
@@ -18,6 +78,9 @@ pub struct GameScreen {
     pub session: String,
     pub cursor: usize,
     pub from: Option<usize>,
+    /// The cursor's been put on your side of a chess board (which side
+    /// that is isn't known until the challenge is accepted).
+    pub placed: bool,
 }
 
 /// What became of a game message received.
@@ -130,19 +193,259 @@ impl App {
         Ok(())
     }
 
+    /// The games menu's rows.
+    pub fn game_menu_items(&self) -> Vec<MenuItem> {
+        let Some(menu) = &self.game_menu else { return Vec::new() };
+        let games = self.games.list(Some(&menu.peer)).into_iter().map(|g| MenuItem::Game(Box::new(g)));
+        games.chain(GAMES.iter().map(|app| MenuItem::New(app))).collect()
+    }
+
+    /// Open the games menu for the open conversation.
+    pub(super) fn open_game_menu(&mut self) {
+        if let Some(peer) = self.active_conversation.clone() {
+            self.game_menu = Some(GameMenu { peer, selected: 0 });
+        }
+    }
+
+    /// Keys while a game, or the games menu, is open.
+    pub(super) fn games_key(&mut self, key: KeyEvent) {
+        if self.game_view.is_some() {
+            self.game_view_key(key);
+        } else if self.game_menu.is_some() {
+            self.game_menu_key(key);
+        }
+    }
+
+    fn game_menu_key(&mut self, key: KeyEvent) {
+        let count = self.game_menu_items().len();
+        let Some(menu) = self.game_menu.as_mut() else { return };
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => menu.selected = (menu.selected + 1).min(count.saturating_sub(1)),
+            KeyCode::Up | KeyCode::Char('k') => menu.selected = menu.selected.saturating_sub(1),
+            KeyCode::Enter => self.pick_menu_item(),
+            KeyCode::Esc | KeyCode::Char('g') | KeyCode::Char('q') => self.game_menu = None,
+            _ => {}
+        }
+    }
+
+    /// Open the menu's selected game, or start the new one picked.
+    fn pick_menu_item(&mut self) {
+        let Some(menu) = self.game_menu.clone() else { return };
+        match self.game_menu_items().into_iter().nth(menu.selected) {
+            Some(MenuItem::Game(game)) => {
+                self.game_menu = None;
+                self.open_game(&game.app, &game.session);
+            }
+            Some(MenuItem::New(app)) => match self.start_game(&menu.peer, app) {
+                Ok(session) => {
+                    self.game_menu = None;
+                    let name = self.store.display_name(&menu.peer);
+                    self.notify(format!("Challenged {name} to {}", crate::games::game_name(app)));
+                    self.open_game(app, &session);
+                }
+                Err(e) => self.warn(e),
+            },
+            None => {}
+        }
+    }
+
+    /// A click on the games menu (its row, from the top of the list).
+    pub(super) fn click_game_menu(&mut self, row: Option<usize>) {
+        let count = self.game_menu_items().len();
+        match (row, self.game_menu.as_mut()) {
+            (Some(row), Some(menu)) if row < count => {
+                menu.selected = row;
+                self.pick_menu_item();
+            }
+            _ => self.game_menu = None,
+        }
+    }
+
+    fn game_view_key(&mut self, key: KeyEvent) {
+        self.place_game_cursor();
+        let Some(screen) = self.game_view.clone() else { return };
+        let Some(game) = self.games.view(&screen.app, &screen.session) else {
+            self.game_view = None;
+            return;
+        };
+        let (app, session) = (screen.app.as_str(), screen.session.as_str());
+        let can = |command: &str| game.actions.iter().any(|a| a == command);
+        let result = match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.game_view = None;
+                Ok(())
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Char('h' | 'l' | 'k' | 'j') => {
+                self.move_game_cursor(&game, key.code);
+                Ok(())
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => self.play_at_cursor(&game),
+            // A cell or column by number, as on a keypad (1 the first).
+            KeyCode::Char(c @ '1'..='9') if game.app != "chess" => {
+                let picked = c as usize - '1' as usize;
+                self.game_action(app, session, "move", Some(&picked.to_string()))
+            }
+            KeyCode::Char('a') if can("accept") => self.game_action(app, session, "accept", None),
+            KeyCode::Char('d') if can("decline") => self.game_action(app, session, "decline", None),
+            KeyCode::Char('D') if can("draw_offer") => self.game_action(app, session, "draw_offer", None),
+            KeyCode::Char('D' | 'y') if can("draw_accept") => self.game_action(app, session, "draw_accept", None),
+            KeyCode::Char('n') if can("draw_decline") => self.game_action(app, session, "draw_decline", None),
+            KeyCode::Char('R') if can("resign") => {
+                let prompt = GamePrompt::ConfirmResign { app: app.into(), session: session.into() };
+                self.open_prompt(PromptKind::Game(prompt), &format!("Resign this game of {}? Type y", game.name), "");
+                Ok(())
+            }
+            KeyCode::Char('t') if game.app == "chess" && game.yours && game.status == "active" => {
+                let prompt = GamePrompt::Move { app: app.into(), session: session.into() };
+                self.open_prompt(PromptKind::Game(prompt), "Your move, by its squares (e2e4; e7e8n promotes to a knight)", "");
+                Ok(())
+            }
+            KeyCode::Char('x') => {
+                let prompt = GamePrompt::ConfirmForget { app: app.into(), session: session.into() };
+                let unfinished =
+                    if matches!(game.status.as_str(), "pending" | "active") { " It isn't over: they won't be told." } else { "" };
+                self.open_prompt(PromptKind::Game(prompt), &format!("Forget this game of {}?{unfinished} Type y", game.name), "");
+                Ok(())
+            }
+            _ => Ok(()),
+        };
+        if let Err(e) = result {
+            self.warn(e);
+        }
+    }
+
+    /// Move the cursor on the board, as it's shown (Black sees the chess
+    /// board turned round).
+    fn move_game_cursor(&mut self, game: &GameView, code: KeyCode) {
+        let Some(screen) = self.game_view.as_mut() else { return };
+        let (dx, dy): (i32, i32) = match code {
+            KeyCode::Left | KeyCode::Char('h') => (-1, 0),
+            KeyCode::Right | KeyCode::Char('l') => (1, 0),
+            KeyCode::Up | KeyCode::Char('k') => (0, -1),
+            _ => (0, 1),
+        };
+        let (width, height, turned): (usize, usize, bool) = match &game.board {
+            Board::TicTacToe { .. } => (3, 3, false),
+            Board::FourInARow { .. } => (7, 1, false),
+            Board::Chess { white, .. } => (8, 8, !white),
+        };
+        let (dx, dy) = if turned { (-dx, -dy) } else { (dx, dy) };
+        let (x, y) = ((screen.cursor % width) as i32 + dx, (screen.cursor / width) as i32 + dy);
+        if (0..width as i32).contains(&x) && (0..height as i32).contains(&y) {
+            screen.cursor = y as usize * width + x as usize;
+        }
+    }
+
+    /// Play the square or column under the cursor: for chess, the first
+    /// square picks a piece of yours, the second moves it there.
+    fn play_at_cursor(&mut self, game: &GameView) -> Result<(), String> {
+        let Some(screen) = self.game_view.clone() else { return Ok(()) };
+        let Board::Chess { fen, white, legal, .. } = &game.board else {
+            return self.game_action(&screen.app, &screen.session, "move", Some(&screen.cursor.to_string()));
+        };
+        let squares = crate::games::chess_squares(fen);
+        let own = |i: usize| squares.get(i).is_some_and(|p| p.is_ascii_alphabetic() && p.is_ascii_uppercase() == *white);
+        match screen.from {
+            Some(from) if from == screen.cursor => self.set_chess_from(None),
+            _ if own(screen.cursor) => {
+                if !legal.iter().any(|m| m.starts_with(&crate::games::square_name(screen.cursor))) {
+                    return Err(if game.yours { "That piece can't move" } else { "It isn't your move" }.into());
+                }
+                self.set_chess_from(Some(screen.cursor));
+            }
+            Some(from) => {
+                let uci = crate::games::chess_move(legal, from, screen.cursor).ok_or("That isn't a legal move")?;
+                self.game_action(&screen.app, &screen.session, "move", Some(&uci))?;
+                self.set_chess_from(None);
+            }
+            None => return Err("Pick one of your pieces first".into()),
+        }
+        Ok(())
+    }
+
+    fn set_chess_from(&mut self, from: Option<usize>) {
+        if let Some(screen) = self.game_view.as_mut() {
+            screen.from = from;
+        }
+    }
+
+    /// A click while a game is open: on a square or column, play it (as
+    /// Enter does there); outside the box, close it.
+    pub(super) fn click_game(&mut self, at: Position) {
+        let board = self.regions.game_board;
+        if !board.area.contains(at) {
+            self.game_view = None;
+            return;
+        }
+        let (Some(shown), Some(screen)) = (board.square(at), self.game_view.clone()) else { return };
+        let Some(game) = self.games.view(&screen.app, &screen.session) else { return };
+        // Black's chess board is shown turned round.
+        let index = match &game.board {
+            Board::Chess { white: false, .. } => 63 - shown,
+            _ => shown,
+        };
+        if let Some(screen) = self.game_view.as_mut() {
+            screen.cursor = index;
+        }
+        if let Err(e) = self.play_at_cursor(&game) {
+            self.warn(e);
+        }
+    }
+
+    /// A game's prompt answered.
+    pub(super) fn submit_game_prompt(&mut self, prompt: GamePrompt, text: &str) {
+        let yes = text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes");
+        let result = match prompt {
+            GamePrompt::Move { app, session } if !text.is_empty() => self.game_action(&app, &session, "move", Some(text)),
+            GamePrompt::ConfirmResign { app, session } if yes => self.game_action(&app, &session, "resign", None),
+            GamePrompt::ConfirmForget { app, session } if yes => self.forget_game(&app, &session),
+            _ => Ok(()),
+        };
+        if let Err(e) = result {
+            self.warn(e);
+        }
+    }
+
+    /// Open the game a move in the history is of (a click on it).
+    pub(super) fn open_game_of(&mut self, app: &str, session: &str) {
+        if self.games.view(app, session).is_none() {
+            return self.warn("That game isn't kept any more");
+        }
+        self.picked = None;
+        self.open_game(app, session);
+    }
+
+    /// Open the game the picked message (at `index`) is a move of.
+    pub(super) fn open_picked_game(&mut self, index: usize) {
+        let conversation = self.active_conversation.as_deref().and_then(|key| self.store.conversations.get(key));
+        match conversation.and_then(|c| c.messages.get(index)).and_then(|m| m.game.clone()) {
+            Some(game) => self.open_game_of(&game.app, &game.session),
+            None => self.warn("That message isn't a game's"),
+        }
+    }
+
     /// Open a game over the conversation (terminal UI), its cursor on the
     /// middle of the board.
     pub fn open_game(&mut self, app: &str, session: &str) {
         let cursor = match app {
             "ttt" => 4,
             "four_in_a_row" => 3,
-            // e2 for White, e7 for Black, the usual first pawns.
-            _ => match self.games.view(app, session).map(|g| g.board) {
-                Some(crate::games::Board::Chess { white: false, .. }) => 12,
-                _ => 52,
-            },
+            _ => 52,
         };
-        self.game_view = Some(GameScreen { app: app.to_string(), session: session.to_string(), cursor, from: None });
+        self.game_view =
+            Some(GameScreen { app: app.to_string(), session: session.to_string(), cursor, from: None, placed: app != "chess" });
+        self.place_game_cursor();
+    }
+
+    /// Once a chess game has begun, put the cursor on your first pawn to
+    /// move: e2 for White, e7 for Black.
+    pub fn place_game_cursor(&mut self) {
+        let Some(screen) = self.game_view.as_ref().filter(|s| !s.placed) else { return };
+        let Some(game) = self.games.view(&screen.app, &screen.session).filter(|g| g.status == "active") else { return };
+        let Board::Chess { white, .. } = game.board else { return };
+        if let Some(screen) = self.game_view.as_mut() {
+            (screen.cursor, screen.placed) = (if white { 52 } else { 12 }, true);
+        }
     }
 }
 
@@ -195,6 +498,20 @@ mod tests {
 
     fn last(player: &Player, key: [u8; 16]) -> Message {
         player.app.store.conversations[&hex::encode(key)].messages.last().unwrap().clone()
+    }
+
+    #[test]
+    fn clicks_land_on_squares() {
+        let board = BoardRegion { origin: Position::new(10, 5), cell: (3, 1), across: 8, down: 8, area: Rect::new(0, 0, 50, 20) };
+        assert_eq!(board.square(Position::new(10, 5)), Some(0));
+        assert_eq!(board.square(Position::new(12, 5)), Some(0));
+        assert_eq!(board.square(Position::new(13, 6)), Some(9));
+        assert_eq!(board.square(Position::new(33, 12)), Some(63));
+        assert_eq!(board.square(Position::new(34, 12)), None);
+        assert_eq!(board.square(Position::new(9, 5)), None);
+        // Four in a Row: anywhere in a column.
+        let columns = BoardRegion { cell: (4, 7), across: 7, down: 1, ..board };
+        assert_eq!(columns.square(Position::new(22, 11)), Some(3));
     }
 
     #[test]

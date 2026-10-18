@@ -12,6 +12,7 @@ mod contact;
 mod editor;
 mod emoji;
 mod forward;
+mod games;
 mod guide;
 mod hub;
 mod keys;
@@ -192,6 +193,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if app.map.is_some() && app.tab == Tab::Messages {
         map::draw_map(frame, app);
+    }
+    if app.tab == Tab::Messages {
+        if app.game_view.is_some() {
+            games::draw_game(frame, app);
+        } else if app.game_menu.is_some() {
+            games::draw_game_menu(frame, app);
+        }
     }
     if app.prompt.is_some() {
         draw_prompt(frame, app);

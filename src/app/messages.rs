@@ -1013,6 +1013,7 @@ impl App {
             KeyCode::Char('f') => self.message_action(index, MessageAction::Forward),
             KeyCode::Char('o') => self.open_picked(index),
             KeyCode::Char('t') => self.message_action(index, MessageAction::Retry),
+            KeyCode::Char('g') => self.open_picked_game(index),
             KeyCode::Char('x') | KeyCode::Delete => self.message_action(index, MessageAction::Delete),
             KeyCode::Esc => self.picked = None,
             _ => return false,
@@ -1350,6 +1351,7 @@ impl App {
             }
             KeyCode::Char('P') => self.show_newest_paper(),
             KeyCode::Char('N') => self.toggle_active_muted(),
+            KeyCode::Char('g') if self.active_conversation.is_some() => self.open_game_menu(),
             KeyCode::PageUp => self.message_scroll = self.message_scroll.saturating_add(self.history_page()),
             KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(self.history_page()),
             KeyCode::Home => self.message_scroll = super::SCROLL_TOP,
@@ -1384,6 +1386,7 @@ impl App {
                 Some(HistoryHit::Link(url)) => self.open_url(&url),
                 Some(HistoryHit::Address(url)) => self.open_address(&url),
                 Some(HistoryHit::Action(index, action)) => self.message_action(index, action),
+                Some(HistoryHit::Game(app, session)) => self.open_game_of(&app, &session),
                 None => {}
             }
         }
