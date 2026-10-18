@@ -14,3 +14,7 @@
 [submodule "deps/rsRRC"]
 	path = deps/rsRRC
 	url = https://github.com/reticulum-spb/rsRRC
+[submodule "deps/lrgp-rs"]
+	path = deps/lrgp-rs
+	url = https://github.com/zevaryx/lrgp-rs
+	branch = rettui

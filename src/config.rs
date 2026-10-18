@@ -267,6 +267,8 @@ pub struct Paths {
     pub map_tiles: PathBuf,
     /// What the last update check found (see `crate::update`).
     pub update_check: PathBuf,
+    /// Games played over LXMF (see `crate::games`).
+    pub games: PathBuf,
 }
 
 impl Paths {
@@ -301,6 +303,7 @@ impl Paths {
             rrc_hub_identity: base.join("rrc-hub-identity"),
             map_tiles: base.join("map-tiles"),
             update_check: base.join("update-check.json"),
+            games: base.join("games.json"),
             base,
         })
     }

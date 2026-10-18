@@ -24,6 +24,7 @@ pub(crate) mod files;
 pub mod find;
 pub mod format;
 pub mod forward;
+mod games;
 pub mod guide;
 pub mod hub;
 pub mod identity;
@@ -574,6 +575,11 @@ pub struct App {
     /// Whether the window has the focus (as far as the terminal says; the
     /// web UI's browsers each know their own).
     pub focused: bool,
+    /// Games played with contacts (LRGP).
+    pub games: crate::games::Games,
+    pub(crate) games_dirty: bool,
+    /// The game open over the conversation (terminal UI).
+    pub game_view: Option<games::GameScreen>,
 }
 
 pub(crate) fn now() -> f64 {
@@ -606,6 +612,9 @@ impl App {
         let settings_file = Settings::load(&paths.settings).unwrap_or_else(|_| settings.clone());
         let (decoded_tx, decoded_rx) = tokio::sync::mpsc::unbounded_channel();
         let updates = updates::Updates::load(&paths.update_check);
+        // Games are between LXMF addresses, which this identity's is.
+        let (mut games, game_problems) = crate::games::Games::load(&paths.games);
+        games.set_me(&rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&identity_hash)));
         let mut app = Self {
             tab: Tab::Messages,
             settings,
@@ -700,8 +709,12 @@ impl App {
             paper_view: None,
             paper_read: None,
             focused: true,
+            games,
+            // Saved once at the start: games expire as they're read.
+            games_dirty: true,
+            game_view: None,
         };
-        for note in std::mem::take(&mut app.store.migration_notes) {
+        for note in std::mem::take(&mut app.store.migration_notes).into_iter().chain(game_problems) {
             app.log(note);
         }
         // Stores of earlier versions (or a lower "Messages kept") may hold
@@ -745,6 +758,13 @@ impl App {
     /// (only the snapshot is taken here, a millisecond or two).
     pub fn save_if_dirty(&mut self) {
         self.save_rrc_history();
+        if self.games_dirty {
+            match self.games.encode() {
+                Ok(bytes) => self.saver.write(self.paths.games.clone(), "games", move || Ok(bytes)),
+                Err(e) => self.log(format!("Couldn't save the games: {e}")),
+            }
+            self.games_dirty = false;
+        }
         // Peers first: a store of an earlier version still holds them until
         // it's written again.
         if self.peers_dirty {
@@ -914,6 +934,7 @@ impl App {
             NetEvent::Started { lxmf_hash, public_key, known } => {
                 self.net_state = NetState::Online;
                 self.lxmf_hash = Some(lxmf_hash);
+                self.games.set_me(&lxmf_hash);
                 self.public_key = Some(public_key);
                 self.known = Some(known);
                 self.log(format!("Reticulum ready; LXMF address {}", hex::encode(lxmf_hash)));

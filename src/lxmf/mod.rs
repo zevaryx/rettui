@@ -150,6 +150,8 @@ pub struct Outgoing {
     pub location: Option<Location>,
     /// A live location share stopped (as Columba says it).
     pub cease: bool,
+    /// A game's move (LRGP): its envelope, msgpack (see `crate::games`).
+    pub game: Option<Vec<u8>>,
 }
 
 impl Outgoing {
@@ -172,6 +174,7 @@ impl Outgoing {
             audio: None,
             location: None,
             cease: false,
+            game: None,
         }
     }
 }

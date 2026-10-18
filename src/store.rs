@@ -150,6 +150,9 @@ pub struct Message {
     /// came in one packet straight from the sender over a radio that says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<crate::net::remote::Signal>,
+    /// A game's move (LRGP), and which game.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<crate::games::GameRef>,
 }
 
 impl Message {
@@ -172,6 +175,9 @@ impl Message {
     /// what it brought (a voice message, a file, a location, a note).
     pub fn opening(&self) -> String {
         let first = |text: &str| text.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string);
+        if let Some(game) = &self.game {
+            return format!("🎲 {}", game.label(&self.content));
+        }
         first(&self.text())
             .or_else(|| first(&self.title))
             .or_else(|| {

@@ -23,8 +23,18 @@ const ROOT: &str = "rettui-backup";
 /// What the backup says of itself.
 const MANIFEST: &str = "rettui-backup.json";
 /// Kept from the data directory: files, and folders with all they hold.
-const KEPT: &[&str] =
-    &["settings.json", "store.json.gz", "peers.json.gz", "known_identities.json", "tickets.json", "archive", "rrc", "node", "rrc-hub"];
+const KEPT: &[&str] = &[
+    "settings.json",
+    "store.json.gz",
+    "peers.json.gz",
+    "known_identities.json",
+    "tickets.json",
+    "games.json",
+    "archive",
+    "rrc",
+    "node",
+    "rrc-hub",
+];
 /// The identity: the private key behind your addresses.
 const IDENTITY: &str = "identity";
 /// The hosted RRC hub's identity, behind its address: kept with yours.

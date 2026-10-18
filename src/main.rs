@@ -4,6 +4,7 @@ mod cli;
 mod clock;
 mod config;
 mod emoji;
+mod games;
 mod https;
 mod icons;
 mod links;

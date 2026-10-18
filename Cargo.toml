@@ -22,6 +22,9 @@ nomad-core = { path = "deps/rsNomad/crates/nomad-core" }
 # as its siblings), and the YAML its configuration file is written in.
 rsrrcd = { path = "deps/rsRRCD", default-features = false }
 serde-saphyr = "1.1"
+# Games over LXMF (LRGP): Tic-Tac-Toe, Four in a Row and Chess, their rules
+# and sessions. On a branch of ours with rusqlite at rettui's version.
+lrgp = { path = "deps/lrgp-rs" }
 
 # TUI
 ratatui = "0.30"

@@ -116,6 +116,18 @@ impl App {
             }
         }
 
+        // A game's move: played, and shown as one.
+        let mut game = None;
+        if let Some(fields) = &extras.game {
+            match self.receive_game(&key, &message, fields) {
+                super::games::Play::Drop => return,
+                super::games::Play::Show(played, note) => {
+                    game = played;
+                    notes.extend(note);
+                }
+            }
+        }
+
         // Files, and a voice message, are saved as they arrive.
         let mut attachments = Vec::new();
         let audio = extras.audio.as_ref().map(|a| {
@@ -151,13 +163,16 @@ impl App {
             notes,
             format: extras.format.filter(|_| !message.content.trim().is_empty()),
             signal: message.signal,
+            game,
             ..Message::default()
         };
         // On screen, in a window that has the focus: what arrives while the
         // user is away counts as unread.
         let is_active = paper || (self.focused && self.tab == Tab::Messages && self.active_conversation.as_deref() == Some(key.as_str()));
         // What the notification says: the text, else what came with it.
-        let preview = if !message.content.trim().is_empty() {
+        let preview = if stored.game.is_some() {
+            stored.opening()
+        } else if !message.content.trim().is_empty() {
             notify::body(&stored.text())
         } else if !message.title.trim().is_empty() {
             notify::body(&message.title)
@@ -319,7 +334,7 @@ impl App {
     }
 
     /// Keep the list selection on the active conversation after reordering.
-    fn keep_conversation_selection(&mut self) {
+    pub(super) fn keep_conversation_selection(&mut self) {
         let order = self.conversation_order();
         if let Some(active) = &self.active_conversation {
             self.conversations.select(order.iter().position(|k| k == active));
@@ -883,6 +898,13 @@ impl App {
         if mode == DeliveryMode::Paper && (!files.is_empty() || audio.is_some() || message.location.is_some()) {
             return Err("A paper message carries text only".into());
         }
+        // A game's move goes again as it was (the same move, the same nonce).
+        let game = match message.game.as_ref().map(|g| g.envelope.as_deref().and_then(|e| hex::decode(e).ok())) {
+            None => None,
+            Some(None) => return Err("That game move can't be sent again".into()),
+            Some(Some(_)) if mode == DeliveryMode::Paper => return Err("A game's move can't go on paper".into()),
+            Some(envelope) => envelope,
+        };
         message.state = MessageState::Sending;
         let (content, timestamp, format, location) = (message.content.clone(), message.timestamp, message.format, message.location);
         let reply = message.reply.clone().and_then(|reply| {
@@ -895,8 +917,15 @@ impl App {
         } else {
             let appearance = self.own_appearance();
             let audio = audio.map(|frames| (lxmf::voice::SEND_MODE, frames));
-            let message =
-                lxmf::Outgoing { reply, format, appearance, audio, location, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            let message = lxmf::Outgoing {
+                reply,
+                format,
+                appearance,
+                audio,
+                location,
+                game,
+                ..lxmf::Outgoing::text(to, content, files, mode, timestamp)
+            };
             self.send(NetCommand::SendMessage { id: number, message: Box::new(message) });
         }
         Ok(())

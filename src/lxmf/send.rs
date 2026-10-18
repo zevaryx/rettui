@@ -70,6 +70,13 @@ pub(super) async fn build_message(
     if let Some(location) = &outgoing.location {
         message.set_field(FIELD_TELEMETRY, super::fields::telemetry_field(location, outgoing.timestamp as i64));
     }
+    // A game's move: the protocol's name and the envelope, both native
+    // msgpack (as bytes they wouldn't be LRGP).
+    if let Some(envelope) = &outgoing.game {
+        for (id, value) in crate::games::fields(envelope) {
+            message.set_msgpack_field(id, value).map_err(|e| e.to_string())?;
+        }
+    }
     if let Some(appearance) = &outgoing.appearance {
         message.set_msgpack_field(FIELD_ICON_APPEARANCE, super::fields::appearance_field(appearance)).map_err(|e| e.to_string())?;
     }

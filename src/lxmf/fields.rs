@@ -22,13 +22,18 @@
 //!   a Material Design Icon's name and two colours of three bytes (red,
 //!   green, blue), as Sideband and MeshChat send them. rettui sends its own
 //!   if one's set.
+//! - Games (LRGP, see `crate::games`): `FIELD_CUSTOM_TYPE` (0xFB), the
+//!   string `lrgp.v1`, and `FIELD_CUSTOM_META` (0xFD), the move: both
+//!   native msgpack values, not bytes.
 
 use lxmf_core::constants::{
-    FIELD_AUDIO, FIELD_COMMANDS, FIELD_CUSTOM_META, FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_IMAGE, FIELD_REACTION,
-    FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TELEMETRY, FIELD_TELEMETRY_STREAM, FIELD_TICKET, REACTION_CONTENT,
-    REACTION_TO,
+    FIELD_AUDIO, FIELD_COMMANDS, FIELD_CUSTOM_META, FIELD_CUSTOM_TYPE, FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_IMAGE,
+    FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TELEMETRY, FIELD_TELEMETRY_STREAM, FIELD_TICKET,
+    REACTION_CONTENT, REACTION_TO,
 };
 use lxmf_core::message_api::LxMessage;
+use std::collections::HashMap;
+
 use rmpv::Value;
 use serde::{Deserialize, Serialize};
 
@@ -482,7 +487,7 @@ pub fn audio_of(message: &LxMessage) -> Option<Audio> {
 /// Fields rettui reads, or knows to leave alone (an icon's appearance, a
 /// stamp ticket): anything else is mentioned when a message has nothing
 /// else to show.
-const KNOWN_FIELDS: [u8; 15] = [
+const KNOWN_FIELDS: [u8; 16] = [
     FIELD_TELEMETRY,
     FIELD_TELEMETRY_STREAM,
     FIELD_ICON_APPEARANCE,
@@ -496,10 +501,27 @@ const KNOWN_FIELDS: [u8; 15] = [
     FIELD_REPLY_QUOTE,
     FIELD_REACTION,
     FIELD_CUSTOM_META,
+    FIELD_CUSTOM_TYPE,
     FIELD_COLUMBA_EXTENSIONS,
     // Command results (Sideband's answers to commands rettui never sends).
     lxmf_core::constants::FIELD_RESULTS,
 ];
+
+/// A game message's two fields (see `crate::games`), if it is one: the
+/// protocol's name as a msgpack string, and a msgpack map. The same sent
+/// as bytes isn't LRGP (lrgp-py ignores it too).
+pub fn game_of(message: &LxMessage) -> Option<HashMap<u8, Vec<u8>>> {
+    let native = |id| message.msgpack_field_ids.contains(&id);
+    if !native(FIELD_CUSTOM_TYPE) || !native(FIELD_CUSTOM_META) {
+        return None;
+    }
+    let name = value(message, FIELD_CUSTOM_TYPE)?;
+    if name.as_str() != Some(lrgp::constants::PROTOCOL_TYPE) {
+        return None;
+    }
+    let fields = [FIELD_CUSTOM_TYPE, FIELD_CUSTOM_META].map(|id| message.get_field(id).map(|raw| (id, raw.clone())));
+    fields.into_iter().collect()
+}
 
 /// What a message carries besides its text and files.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -514,6 +536,8 @@ pub struct Extras {
     pub appearance: Option<Appearance>,
     /// How its text is written (the renderer field), if not plain.
     pub format: Option<crate::markdown::TextFormat>,
+    /// A game's move (LRGP): its two fields, as sent.
+    pub game: Option<HashMap<u8, Vec<u8>>>,
     /// Fields rettui doesn't know.
     pub unknown: Vec<u8>,
 }
@@ -531,6 +555,7 @@ impl Extras {
                 .and_then(|v| v.as_u64())
                 .and_then(|r| u8::try_from(r).ok())
                 .and_then(crate::markdown::TextFormat::from_renderer),
+            game: game_of(message),
             unknown: message.fields.keys().copied().filter(|id| !KNOWN_FIELDS.contains(id)).collect(),
         }
     }
@@ -582,6 +607,30 @@ mod tests {
         let key = rns_runtime::prelude::Identity::new().get_signing_key().unwrap();
         signed.sign(&key).unwrap();
         LxMessage::unpack(&signed.pack().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn game_moves_as_lrgp_sends_them_and_not_as_bytes() {
+        let envelope = lrgp::envelope::pack_envelope("ttt", 1, "challenge", "0011223344556677", None, None).unwrap();
+        let packed = lrgp::envelope::pack_to_bytes(&envelope).unwrap();
+        let mut sent = message();
+        for (id, value) in crate::games::fields(&packed) {
+            sent.set_msgpack_field(id, value).unwrap();
+        }
+        let got = received(&sent);
+        let fields = game_of(&got).unwrap();
+        assert_eq!(lrgp::transport::extract_envelope(&fields).unwrap(), Some(envelope));
+        let extras = Extras::of(&got);
+        assert!(extras.game.is_some() && extras.unknown.is_empty() && !extras.ceased);
+        // On the wire: 0xFB as the string "lrgp.v1", not bytes.
+        let wire = sent.pack_payload().unwrap();
+        let marker = b"\xcc\xfb\xa7lrgp.v1";
+        assert!(wire.windows(marker.len()).any(|w| w == marker));
+        // The same as bytes (msgpack `bin`) isn't a game's.
+        let mut wrapped = message();
+        wrapped.set_field(FIELD_CUSTOM_TYPE, b"lrgp.v1".to_vec());
+        wrapped.set_field(FIELD_CUSTOM_META, packed);
+        assert_eq!(game_of(&received(&wrapped)), None);
     }
 
     #[test]
