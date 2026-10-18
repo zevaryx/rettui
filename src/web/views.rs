@@ -133,7 +133,8 @@ pub fn state(app: &App) -> Value {
             "tx_rate": app.traffic.rates.map(|r| r.1),
         },
         "log": app.log.iter().collect::<Vec<_>>(),
-        "unread": { "messages": message_unread, "channels": channel_unread, "mention": mention },
+        // Games waiting on you count beside Games.
+        "unread": { "messages": message_unread, "channels": channel_unread, "mention": mention, "games": app.games.waiting(None) },
     })
 }
 

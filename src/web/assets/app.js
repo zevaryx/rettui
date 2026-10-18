@@ -579,6 +579,7 @@ theme.query.addEventListener('change', () => theme.chosen() === 'auto' && theme.
 
 const TABS = [
   { id: 'messages', icon: '✉', title: 'Messages' },
+  { id: 'games', icon: '⚄', title: 'Games' },
   { id: 'channels', icon: '#', title: 'Channels' },
   { id: 'network', icon: '◎', title: 'Network' },
   { id: 'browser', icon: '◈', title: 'Browser' },
@@ -599,10 +600,12 @@ function renderSidebar() {
   const tabs = $('#tabs');
   // Only when something on them changed: a tab redrawn under a finger
   // loses its tap.
-  const drawn = JSON.stringify([app.tab, unread.messages, unread.channels, unread.mention]);
+  const drawn = JSON.stringify([app.tab, unread.messages, unread.channels, unread.mention, unread.games]);
   if (tabs.dataset.drawn !== drawn) tabs.replaceChildren(...TABS.map((tab) => {
     let badge = null;
     if (tab.id === 'messages' && unread.messages) badge = el('span', { class: 'badge', text: unread.messages });
+    // Games waiting on you.
+    if (tab.id === 'games' && unread.games) badge = el('span', { class: 'badge', text: unread.games });
     if (tab.id === 'channels' && unread.channels) {
       badge = el('span', { class: 'badge' + (unread.mention ? ' mention' : ''), text: unread.channels });
     }
@@ -1169,8 +1172,6 @@ function loadNow() {
     // own update finished first (with the one before).
     refreshStatus().then(() => app.tab === 'status' && app.views.status.update({ settings: false })),
     Promise.resolve().then(() => app.views[app.tab]?.update()).catch((e) => console.warn(e)),
-    // A game open: its board, as moves arrive.
-    Promise.resolve().then(() => openGame?.draw()).catch((e) => console.warn(e)),
   ]).finally(() => {
     refreshing = null;
     if (refreshAgain) {
@@ -2006,35 +2007,53 @@ function dialog(title, body, { className = '', onclose } = {}) {
 // ---- Games (LRGP) -------------------------------------------------------------
 
 // Games played over LXMF with a contact (see rettui's src/games.rs): each
-// move is a message in your conversation. The game open in a dialog, which
-// is redrawn as moves arrive.
-let openGame = null;
+// move is a message in your conversation. They have a tab of their own
+// (app.views.games); conversations lead there.
 
 const GAME_NAMES = { ttt: 'Tic-Tac-Toe', four_in_a_row: 'Four in a Row', chess: 'Chess' };
 const CHESS_GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
 
-// Your games with someone, and a new game of each.
-async function gamesDialog(key, name) {
-  const games = await attempt(() => api.get(`/games?peer=${key}`));
-  if (!games) return;
-  dialog(`Games with ${name}`, (close) => el('div', { class: 'games-list' },
-    games.length ? games.map((g) => el('button', { class: 'game-row' + (g.yours ? ' yours' : ''), onclick: () => {
-      close();
-      gameDialog(g.app, g.session, name);
-    } }, el('span', { class: 'game-name', text: g.name }), el('span', { class: 'game-summary', text: g.summary })))
-      : el('p', { class: 'dim', text: 'No games with them yet. Each move goes as a message, so they can answer whenever they\'re next online.' }),
-    el('div', { class: 'game-new' }, el('span', { class: 'dim', text: 'New game: ' }),
-      Object.entries(GAME_NAMES).map(([app, title]) => el('button', { text: title, onclick: async () => {
-        const started = await attempt(() => api.post('/games', { peer: key, app }), `Challenged ${name} to ${title}`);
-        if (!started) return;
-        close();
-        loadNow();
-        gameDialog(app, started.session, name);
-      } })))), { className: 'games-dialog' });
+// Show a game in the Games tab, selected (a move in a conversation).
+function showGame(gameApp, session) {
+  const view = app.views.games;
+  view.selected = { app: gameApp, session };
+  switchTab('games');
+  setPane(view, 'detail');
 }
 
-// One game: its board, where it stands, and what can be done.
-async function gameDialog(app, session, name) {
+// Games with someone (a conversation's Games button, g): your newest with
+// them, or a new one with them if there's none.
+async function showGames(key) {
+  const games = await attempt(() => api.get(`/games?peer=${key}`));
+  if (!games) return;
+  if (games.length) return showGame(games[0].app, games[0].session);
+  switchTab('games');
+  newGameDialog(key);
+}
+
+// Start a new game: who with (from your conversations, or `peer`), and
+// which game.
+async function newGameDialog(peer) {
+  const conversations = await attempt(() => api.get('/conversations'));
+  if (!conversations) return;
+  const who = el('select', {}, conversations.map((c) => el('option', { value: c.key, text: c.name, selected: c.key === peer })));
+  dialog('New game', (close) => el('div', { class: 'games-list' },
+    conversations.length ? [
+      el('label', { class: 'field' }, el('span', { text: 'With' }), who),
+      el('p', { class: 'dim', text: 'Your challenge goes as a message; they accept or decline whenever they\'re next online.' }),
+      el('div', { class: 'game-new' }, Object.entries(GAME_NAMES).map(([gameApp, title]) => el('button', { text: title, onclick: async () => {
+        const name = who.selectedOptions[0]?.textContent || '';
+        const started = await attempt(() => api.post('/games', { peer: who.value, app: gameApp }), `Challenged ${name} to ${title}`);
+        if (!started) return;
+        close();
+        showGame(gameApp, started.session);
+      } }))),
+    ] : el('p', { class: 'dim', text: 'No conversations yet: start one in Messages first.' })), { className: 'games-dialog' });
+}
+
+// One game: its board, where it stands, and what can be done. Its node,
+// and draw() to fetch and draw it again (as moves arrive).
+function gameBoard(app, session, onForget) {
   const body = el('div', { class: 'game' });
   // A chess piece picked, to move.
   let from = null;
@@ -2064,9 +2083,9 @@ async function gameDialog(app, session, name) {
       can('resign') ? button('Resign', 'resign', `Resign this game of ${game.name}?`) : null,
       el('button', { class: 'danger', text: 'Forget', title: 'Remove it from your games (they aren\'t told)', onclick: async () => {
         const over = !['pending', 'active'].includes(game.status);
-        if (!confirm(over ? `Forget this game of ${game.name}?` : `Forget this game of ${game.name}? It isn't over: ${name} won't be told.`)) return;
+        if (!confirm(over ? `Forget this game of ${game.name}?` : `Forget this game of ${game.name}? It isn't over: ${game.peer_name || 'they'} won't be told.`)) return;
         if (await attempt(() => api.delete(`/games/${app}/${session}`), 'Forgotten')) {
-          openGame?.close();
+          onForget?.();
           loadNow();
         }
       } }),
@@ -2140,9 +2159,7 @@ async function gameDialog(app, session, name) {
       }, piece === ' ' ? '' : el('span', { class: 'piece ' + (piece === piece.toUpperCase() ? 'white' : 'black'), text: CHESS_GLYPHS[piece.toLowerCase()] }));
     }));
   };
-  const close = dialog(`${GAME_NAMES[app] || app} with ${name}`, () => body, { className: 'game-dialog', onclose: () => { openGame = null; } });
-  openGame = { app, session, close, draw };
-  await draw();
+  return { node: body, draw };
 }
 
 // A FEN position's 64 squares, a8 first: a piece's letter, or a space.
@@ -3245,7 +3262,7 @@ app.views.messages = {
       el('button', { class: 'games-button' + (conversation.games_waiting ? ' waiting' : ''),
         text: conversation.games_waiting ? `🎲 Games · ${conversation.games_waiting}` : '🎲 Games',
         title: conversation.games_waiting ? `Games with them: ${conversation.games_waiting} waiting on you  ( g )` : 'Games with them: Tic-Tac-Toe, Four in a Row, Chess  ( g )',
-        onclick: () => gamesDialog(key, conversation.name) }),
+        onclick: () => showGames(key) }),
       el('button', { text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
       el('button', { text: 'Copy address', title: conversation.link?.startsWith('lxma://') ? 'Their address with their key (lxma://), so whoever adds them can write at once' : 'Their address (their key isn\'t known yet)',
         onclick: () => copyAddress(conversation.link || key, 'their') })].filter(Boolean));
@@ -3515,7 +3532,7 @@ app.views.messages = {
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
       m.game ? el('div', { class: 'content game-move' }, el('button', { class: 'inline game-link', text: `🎲 ${m.game.label}`, title: 'Open the game',
-        onclick: () => gameDialog(m.game.app, m.game.session, conversation.name) }))
+        onclick: () => showGame(m.game.app, m.game.session) }))
         : m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content' }, ...linked(m.content)) : null,
       m.location ? el('div', { class: 'location' }, '📍 ',
         el('a', { href: m.location.map, target: '_blank', rel: 'noopener noreferrer', text: m.location.label, title: 'Show it on OpenStreetMap' }),
@@ -3787,6 +3804,86 @@ app.views.messages = {
     }
     this.history.scrollTop = this.history.scrollHeight;
     this.history.pinned = true;
+  },
+};
+
+// ---- Games ------------------------------------------------------------------
+
+// Your games with everyone, newest first, and the selected one's board.
+app.views.games = {
+  panes: true,
+  // The game shown: { app, session }.
+  selected: null,
+
+  mount(root) {
+    this.list = el('div', { class: 'scroll' });
+    this.header = el('header');
+    this.body = el('div', { class: 'scroll game-pane' });
+    root.append(
+      el('section', { class: 'panel side' },
+        el('header', {}, el('span', { class: 'title grow', text: 'Games' }),
+          el('button', { text: '+ New game', title: 'Challenge someone  ( n )', onclick: () => newGameDialog() })),
+        this.list),
+      el('section', { class: 'panel grow pane-main' }, this.header, this.body));
+    this.board = null;
+  },
+
+  async update() {
+    const games = await api.get('/games');
+    const same = (g) => this.selected && g.app === this.selected.app && g.session === this.selected.session;
+    if (!games.some(same)) this.selected = games[0] ? { app: games[0].app, session: games[0].session } : null;
+    if (changed(this, 'list', [games, this.selected])) {
+      this.list.replaceChildren(...(games.length ? games.map((g) => el('div', {
+        class: 'list-item' + (same(g) ? ' selected' : ''),
+        dataset: { game: `${g.app}/${g.session}` },
+        onclick: () => {
+          this.selected = { app: g.app, session: g.session };
+          setPane(this, 'detail');
+          this.update();
+        },
+      },
+      avatar(g.icon, g.peer_name, g.peer),
+      el('div', { class: 'main' },
+        el('div', { class: 'name' }, g.name, el('span', { class: 'dim', text: ` · ${g.peer_name}` })),
+        el('div', { class: 'sub' + (g.yours ? ' yours' : ''), text: g.summary })),
+      g.yours ? el('div', {}, el('span', { class: 'badge', text: '●', title: 'Waiting on you' })) : null))
+        : [el('div', { class: 'empty dim', text: 'No games yet. + New game challenges someone to Tic-Tac-Toe, Four in a Row or Chess (or the 🎲 Games button in a conversation). Each move goes as a message, so they can answer whenever they\'re next online.' })]));
+    }
+    const game = games.find(same);
+    if (!game) {
+      this.board = null;
+      this.header.replaceChildren(el('span', { class: 'title grow', text: 'Games' }));
+      this.body.replaceChildren(el('p', { class: 'dim empty', text: 'Pick a game, or start one.' }));
+      return;
+    }
+    const key = `${game.app}/${game.session}`;
+    if (this.board?.key !== key) {
+      const board = gameBoard(game.app, game.session, () => { this.selected = null; });
+      this.board = { key, ...board };
+      this.header.replaceChildren(
+        avatar(game.icon, game.peer_name, game.peer),
+        el('span', { class: 'title grow', text: `${game.name} with ${game.peer_name}` }),
+        el('button', { text: 'Conversation', title: 'Your conversation with them', onclick: () => openConversation(game.peer) }));
+      this.body.replaceChildren(board.node);
+    }
+    await this.board.draw();
+  },
+
+  // A key pressed with nothing typed into: true if it was one of the
+  // Games keys (see KEYS).
+  key(e) {
+    if (e.key === 'n') {
+      newGameDialog();
+      return true;
+    }
+    if (e.key === 'j' || e.key === 'k') {
+      const items = [...this.list.querySelectorAll('.list-item[data-game]')];
+      const at = items.findIndex((n) => n.classList.contains('selected'));
+      const next = items[Math.max(0, Math.min(items.length - 1, at + (e.key === 'j' ? 1 : -1)))];
+      next?.click();
+      return true;
+    }
+    return false;
   },
 };
 
@@ -7122,11 +7219,12 @@ async function restartReticulum() {
 
 // The keys there are (the ? key shows them), as the terminal UI's popup.
 const KEYS = [
-  ['Anywhere', [['1–8', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
+  ['Anywhere', [['1–9', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
   ['Messages', [['j / k', 'next or previous conversation'], ['i', 'write (the message box)'], ['r', 'reply to their newest message'],
-    ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['g', 'games with them'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
+    ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['g', 'games with them (the Games tab)'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
     ['Ctrl+E', 'emoji, in the message box'],
     ['Enter / Shift+Enter', 'send, or a new line, in the message box']]],
+  ['Games', [['j / k', 'next or previous game'], ['n', 'new game']]],
   ['Channels', [['/', 'search what was said in every room']]],
   ['Network', [['/', 'search by name or address'], ['a', 'announces as they\'re heard, or the list']]],
   ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],
@@ -7150,6 +7248,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key >= '1' && e.key <= String(TABS.length)) switchTab(TABS[Number(e.key) - 1].id);
   else if (e.key === '?') keysDialog();
   else if (app.tab === 'messages' && app.views.messages.key(e)) e.preventDefault();
+  else if (app.tab === 'games' && app.views.games.key(e)) e.preventDefault();
   else if (e.key === 'f' && app.tab === 'browser' && app.views.browser.page) {
     e.preventDefault();
     setPane(app.views.browser, 'detail');

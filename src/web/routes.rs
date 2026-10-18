@@ -1177,16 +1177,39 @@ struct GamesQuery {
     peer: Option<String>,
 }
 
-/// Your games (with someone, or with anyone), newest first.
+/// Your games (with someone, or with anyone), newest first, each with who
+/// it's with: their name, and their icon if they have one.
 async fn games(State(state): State<WebState>, Query(query): Query<GamesQuery>) -> ApiResult {
     let peer = query.peer.as_deref().map(address).transpose()?;
-    let games = state.read(move |o| o.app.games.list(peer.as_deref())).await?;
+    let games = state
+        .read(move |o| {
+            o.app
+                .games
+                .list(peer.as_deref())
+                .into_iter()
+                .map(|game| {
+                    let mut value = json!(game);
+                    value["peer_name"] = json!(o.app.store.display_name(&game.peer));
+                    value["icon"] = views::icon(o.app.store.contacts.get(&game.peer).and_then(|c| c.icon.as_ref()));
+                    value
+                })
+                .collect::<Vec<_>>()
+        })
+        .await?;
     Ok(axum::Json(json!(games)))
 }
 
 async fn game(State(state): State<WebState>, Path((app, session)): Path<(String, String)>) -> ApiResult {
-    let view = state.read(move |o| o.app.games.view(&app, &session)).await?;
-    Ok(axum::Json(json!(view.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "There's no such game".into()))?)))
+    let view = state
+        .read(move |o| {
+            o.app.games.view(&app, &session).map(|game| {
+                let mut value = json!(game);
+                value["peer_name"] = json!(o.app.store.display_name(&game.peer));
+                value
+            })
+        })
+        .await?;
+    Ok(axum::Json(view.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "There's no such game".into()))?))
 }
 
 #[derive(Deserialize)]

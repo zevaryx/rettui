@@ -424,6 +424,9 @@ header .avatar.icon { font-size: 17px; }
 .game-row.yours .game-summary { color: var(--accent); }
 .game-new { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
 .games-button.waiting { border-color: var(--accent); color: var(--accent); }
+.game-pane { display: flex; justify-content: center; padding: 16px; }
+.view[data-view=games] .list-item .sub.yours { color: var(--accent); }
+.view[data-view=games] .empty { padding: 12px; }
 .game-move .game-link { font-size: inherit; padding: 2px 8px; max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .dialog.game-dialog { width: min(460px, 100%); }
 .game { display: flex; flex-direction: column; align-items: center; gap: 10px; }
