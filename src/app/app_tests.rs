@@ -195,3 +195,240 @@ fn every_channel_command_said_well_and_badly() {
     tui.app.confirm_split([9; 16], "lobby", &["none".into()]);
     assert!(errors(&tui, "lobby") >= 3, "{}", errors(&tui, "lobby"));
 }
+
+#[test]
+fn markdown_as_html_with_every_kind_of_markup() {
+    let html = crate::markdown::html(
+        "# One\n## Two\n### Three\n\n> quoted\n\n```\ncode\n```\n\n    indented\n\n1. first\n2. second\n\n- a\n- b\n\n\
+         *em* **strong** ~~gone~~ `inline`  \nbreak\n\n---\n\n[safe](https://example.org) [unsafe](javascript:alert(1)) ![pic](https://e.org/p.png) <b>raw</b>",
+    );
+    for part in [
+        "md-h1",
+        "md-h2",
+        "md-h3",
+        "<blockquote>",
+        "<pre><code>",
+        "<ol start=\"1\">",
+        "<ul>",
+        "<li>",
+        "<em>",
+        "<strong>",
+        "<del>",
+        "<code>",
+        "<br>",
+        "<hr>",
+        "href=\"https://example.org\"",
+        "md-link",
+        "&lt;b&gt;",
+    ] {
+        assert!(html.contains(part), "{part}: {html}");
+    }
+}
+
+#[test]
+fn forwarding_and_exporting_a_conversation() {
+    use crate::store::{Message, MessageState};
+    let mut tui = Tui::new("forwarding");
+    with_bob(&mut tui);
+    let carol = "cd".repeat(16);
+    tui.app.add_contact(&carol).unwrap();
+    // What can't be forwarded.
+    assert!(tui.app.forward_message(BOB, "nope", &carol).unwrap_err().contains("isn't here"));
+    let empty = Message { id: "local-9".into(), state: MessageState::Delivered, timestamp: 1.0, ..Message::default() };
+    tui.app.store.conversations.get_mut(BOB).unwrap().messages.push(empty);
+    assert!(tui.app.forward_message(BOB, "local-9", &carol).unwrap_err().contains("nothing in that message"));
+    // A picture's file gone: said.
+    let gone = tui.dir.join("gone.png");
+    let mut with_file = tui.app.store.conversations[BOB].messages[1].clone();
+    with_file.id = "e".repeat(64);
+    with_file.attachments[0].path = gone;
+    tui.app.store.conversations.get_mut(BOB).unwrap().messages.push(with_file);
+    assert!(tui.app.forward_message(BOB, &"e".repeat(64), &carol).unwrap_err().contains("Couldn't copy"));
+
+    // The picker: typed into, pasted into, moved through, picked.
+    tui.tab(Tab::Messages);
+    tui.app.open_newest_conversation();
+    tui.app.forward = None;
+    tui.key(KeyCode::Char('m')).key(KeyCode::Up).key(KeyCode::Up).key(KeyCode::Up).key(KeyCode::Up).key(KeyCode::Char('f'));
+    if tui.app.forward.is_some() {
+        tui.keys("cd").key(KeyCode::Down).key(KeyCode::Up).ctrl('v');
+        tui.app.on_paste("cdcd\nline");
+        tui.app.forward.as_mut().unwrap().input = crate::term::input::TextInput::with_text(&format!("lxmf@{}", "ef".repeat(16)));
+        assert_eq!(tui.app.forward_targets()[0], "ef".repeat(16));
+        tui.key(KeyCode::Enter);
+        tui.key(KeyCode::Esc);
+    }
+    // Exported with every state and what came with each.
+    let mut odd = tui.app.store.conversations[BOB].messages[0].clone();
+    odd.id = "f".repeat(64);
+    odd.title = "A title".into();
+    odd.state = MessageState::Received { verified: false };
+    odd.notes = vec!["a note".into()];
+    odd.reactions = vec![crate::store::Reaction {
+        emoji: "👍".into(),
+        incoming: false,
+        timestamp: 2.0,
+        id: "local-3".into(),
+        state: MessageState::Delivered,
+    }];
+    let sending = Message { id: "local-8".into(), content: "on its way".into(), timestamp: 3.0, ..Message::default() };
+    let conversation = tui.app.store.conversations.get_mut(BOB).unwrap();
+    conversation.messages.push(odd);
+    conversation.messages.push(sending);
+    let path = tui.app.export_conversation(BOB).unwrap();
+    let text = std::fs::read_to_string(path).unwrap();
+    for part in
+        ["A title", "(unverified)", "(not sent yet)", "(not sent: no path)", "[a note]", "[file: cat.png]", "[location:", "👍 (You)"]
+    {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+}
+
+#[test]
+fn sharing_locations_live_and_the_map_by_keys() {
+    use crate::app::PromptKind;
+    use crate::app::live::Source;
+    use crate::lxmf::{DeliveryMode, Location};
+    let mut tui = Tui::new("live");
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    tui.app.open_newest_conversation();
+    // A location typed, and each way that isn't one.
+    let ask = |tui: &mut Tui, text: &str| tui.ask(PromptKind::ShareLocation(BOB.into()), text).said();
+    assert!(ask(&mut tui, "nowhere").contains("A location is latitude"));
+    assert!(ask(&mut tui, "live soon").contains("How long to share live"));
+    assert!(ask(&mut tui, "live 1h").contains("Set this station's Location"));
+    tui.ask(PromptKind::ShareLocation(BOB.into()), "");
+    tui.app.delivery_mode = DeliveryMode::Paper;
+    assert!(ask(&mut tui, "51.5, -0.1").contains("paper message carries text only"));
+    tui.app.delivery_mode = DeliveryMode::Auto;
+    ask(&mut tui, "51.5, -0.1");
+    assert!(tui.app.store.conversations[BOB].messages.last().unwrap().location.is_some());
+    // This station's, live: for a while, then until stopped.
+    tui.app.settings.location = Some("51.5, -0.1".into());
+    ask(&mut tui, "live 15m");
+    assert!(tui.app.live_share(BOB).unwrap().until.is_some());
+    assert!(tui.app.start_live(BOB, 100_000, Source::Station).unwrap_err().contains("a week"));
+    ask(&mut tui, "live on");
+    let share = tui.app.live_share(BOB).unwrap();
+    assert_eq!(crate::app::live::label(share), "📍 live");
+    assert_eq!(crate::app::live::describe(BOB, share)["source"], "station");
+    tui.settle().key(KeyCode::Char('L'));
+    assert!(matches!(tui.app.prompt.as_ref().map(|p| &p.kind), Some(PromptKind::ConfirmStopLive(_))));
+    tui.answer("y");
+    assert!(tui.app.stop_live(BOB).unwrap_err().contains("aren't sharing"));
+    // A device's, as it moves; a share that's ended stops by itself.
+    tui.app.start_live(BOB, 0, Source::Device).unwrap();
+    tui.app.device_position(Location::parse("51.6, -0.2").unwrap());
+    tui.app.live.shares.get_mut(BOB).unwrap().until = Some(1.0);
+    tui.app.on_tick();
+    assert!(tui.app.live_share(BOB).is_none());
+    // Propagated with no node: said.
+    tui.app.store.contacts.entry(BOB.into()).or_default().delivery = Some(DeliveryMode::Propagated);
+    tui.app.start_live(BOB, 0, Source::Station).unwrap();
+    tui.app.stop_live(BOB).unwrap();
+    assert!(tui.said().contains("no propagation node"), "{}", tui.said());
+    tui.app.store.contacts.entry(BOB.into()).or_default().delivery = None;
+
+    // The map, by its keys.
+    tui.settle().key(KeyCode::Char('M'));
+    for key in ['j', 'k', '+', '+', '=', '-', '-', '0', 'a', 'o'] {
+        tui.key(KeyCode::Char(key));
+    }
+    tui.key(KeyCode::Home).key(KeyCode::End).key(KeyCode::Down).key(KeyCode::Up).key(KeyCode::Enter);
+    tui.settle().key(KeyCode::Char('M')).key(KeyCode::Char('q'));
+    let mut empty = Tui::new("no-map");
+    empty.tab(Tab::Messages).key(KeyCode::Char('M'));
+    assert!(empty.app.map.is_none());
+}
+
+#[test]
+fn every_setting_changed_here_and_from_the_web() {
+    let mut tui = Tui::new("every-setting");
+    with_bob(&mut tui);
+    tui.app.channels.hubs.push(crate::app::channels::Hub::new([1; 16], "rrc".into(), "Hub".into()));
+    // Each changed (a switch the other way, a number one more), from the
+    // terminal UI, then back from the web UI where it may be.
+    for field in crate::config::FIELDS {
+        let before = tui.app.settings.field_value(field.key);
+        let changed = match before.as_str() {
+            "true" => "false".to_string(),
+            "false" => "true".to_string(),
+            number if number.parse::<u64>().is_ok() => (number.parse::<u64>().unwrap() + 1).to_string(),
+            _ => continue,
+        };
+        let _ = tui.app.update_settings(&[(field.key, &changed)]);
+        let _ = tui.app.update_settings_from_web(&[(field.key, &before)]);
+        let _ = tui.app.update_settings_from_web(&[(field.key, &changed)]);
+    }
+    // Text ones: an icon, a home page, a time and date style.
+    for (key, value) in [
+        ("icon", "account"),
+        ("icon_color", "#ff0000"),
+        ("home", &format!("{}:/page/index.mu", "cd".repeat(16))),
+        ("answer_commands", "contacts"),
+        ("unknown_senders", "requests"),
+    ] {
+        let _ = tui.app.update_settings(&[(key, value)]);
+    }
+    assert!(tui.app.update_settings(&[("no_such_setting", "1")]).is_err());
+    tui.app.update_setting("display_name", "Renamed");
+    tui.app.update_setting("stamp_cost", "not a number");
+    assert_eq!(tui.app.settings.display_name, "Renamed");
+}
+
+#[test]
+fn a_contact_card_every_button_and_ping_answers() {
+    use crate::app::contacts::{CardAction, PingState, ping_label, trust_label};
+    use crate::net::NetEvent;
+    use crate::net::remote::Ping;
+    use crate::store::Trust;
+    let mut tui = Tui::new("card");
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    for action in [
+        CardAction::Rename,
+        CardAction::Notes,
+        CardAction::Copy,
+        CardAction::Ping,
+        CardAction::Ping,
+        CardAction::Trust,
+        CardAction::Untrust,
+        CardAction::LeaveAsIs,
+        CardAction::Block,
+        CardAction::Unblock,
+        CardAction::DeleteConversation,
+        CardAction::Close,
+    ] {
+        assert!(!action.label().0.is_empty());
+        tui.app.contact_card = Some(BOB.into());
+        tui.app.prompt = None;
+        tui.app.card_action(action);
+    }
+    tui.app.block_contact(BOB).unwrap();
+    tui.app.contact_card = Some(BOB.into());
+    tui.app.card_action(CardAction::Unblock);
+    tui.app.contact_card = Some(BOB.into());
+    tui.app.card_action(CardAction::Unblock);
+    assert!(tui.app.unblock_contact(BOB).unwrap_err().contains("aren't blocked"));
+    assert!(tui.app.set_contact_notes(BOB, &"x".repeat(crate::store::MAX_NOTES + 1)).is_err());
+    tui.app.lxmf_hash = Some([0x11; 16]);
+    assert!(tui.app.add_contact(&"11".repeat(16)).unwrap_err().contains("own address"));
+    // Every trust, and the buttons each has.
+    for trust in [Trust::Trusted, Trust::Blocked, Trust::Untrusted, Trust::Unknown] {
+        assert!(!trust_label(trust, false).is_empty() && !trust_label(trust, true).is_empty());
+        tui.app.store.update_contact(BOB, |c| c.trust = trust);
+        assert!(tui.app.card_actions(BOB).contains(&CardAction::Close));
+    }
+    tui.app.set_trust(BOB, Trust::Blocked).unwrap();
+    tui.app.set_trust(BOB, Trust::Trusted).unwrap();
+    // Pings answered, near and far, and not.
+    let hash = [0xab; 16];
+    for (hops, result) in [(Some(1), true), (Some(3), true), (None, true), (None, false)] {
+        let result =
+            if result { Ok(Ping { rtt: std::time::Duration::from_millis(50), hops, signal: None }) } else { Err("no answer".into()) };
+        tui.app.on_net(NetEvent::Pinged { to: hash, result });
+    }
+    assert_eq!(ping_label(&PingState::Waiting), "waiting for an answer…");
+    tui.app.reapply_blocks();
+}
