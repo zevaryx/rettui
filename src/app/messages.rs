@@ -332,8 +332,10 @@ impl App {
             self.delivery_mode = self.delivery_for(&key);
         }
         self.tab = Tab::Messages;
-        self.active_conversation = Some(key);
-        self.keep_conversation_selection();
+        // Selected, then made the active one by the sync, so what was being
+        // written stays with the conversation it was written in.
+        let order = self.conversation_order();
+        self.conversations.select(order.iter().position(|k| *k == key));
         self.sync_active_conversation();
         self.composing = true;
     }
