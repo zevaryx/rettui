@@ -396,3 +396,203 @@ async fn the_command_line_against_a_running_rettui() {
     assert!(empty.settings.is_file());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+impl Peer {
+    /// A key, as the terminal UI takes it, then the screen drawn.
+    fn key(&mut self, code: crossterm::event::KeyCode) {
+        self.app.on_key(crossterm::event::KeyEvent::from(code));
+        self.draw();
+    }
+
+    /// Typed, then Enter.
+    fn line(&mut self, text: &str) {
+        for c in text.chars() {
+            self.app.on_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Char(c)));
+        }
+        self.key(crossterm::event::KeyCode::Enter);
+    }
+
+    fn draw(&mut self) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, &mut self.app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..36).map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    /// Lines of a hub's room (by the hub's address), as text.
+    fn heard(&self, hub: crate::net::Hash, room: &str) -> String {
+        let Some(index) = self.app.channels.hub_index(hub) else { return String::new() };
+        self.app.channels.hubs[index]
+            .buffers
+            .get(room)
+            .map(|lines| lines.iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn talking_in_a_hub_at_the_keyboard() {
+    use crossterm::event::KeyCode;
+    let (mut amy, mut ben) = pair("chat", |s| {
+        s.hub_enabled = true;
+        s.hub_name = Some("Amy's hub".into());
+    })
+    .await;
+    until(&mut amy, &mut ben, "Amy's hub running", |a, _| a.app.hub.status == crate::app::node::NodeStatus::Running).await;
+    let (hub, _) = amy.app.hub.address.unwrap();
+    let amy_hub = loop {
+        if let Some(index) = amy.app.channels.hub_index(hub) {
+            break index;
+        }
+        amy.pump();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    until(&mut amy, &mut ben, "Amy connected to her hub", |a, _| {
+        matches!(a.app.channels.hubs[amy_hub].status, crate::app::channels::HubStatus::Connected)
+    })
+    .await;
+    amy.app.join_room(amy_hub, "lobby");
+
+    // Ben adds the hub by the Channels tab's n, with a room in the link.
+    ben.key(KeyCode::Char('3'));
+    ben.key(KeyCode::Char('n'));
+    ben.line(&format!("rrc://{}/lobby", hex::encode(hub)));
+    until(&mut amy, &mut ben, "Ben joining the lobby", |a, _| a.heard(hub, "lobby").contains("chat-ben joined")).await;
+    ben.app.channels.selected = Some(crate::app::channels::Target { hub, room: Some("lobby".into()) });
+    ben.draw();
+
+    // Writing: plain, an action, mentions completed with Tab.
+    ben.key(KeyCode::Enter);
+    assert!(ben.app.channels.typing);
+    ben.line("hello everyone");
+    ben.line("/me waves");
+    for c in "@chat-a".chars() {
+        ben.app.on_key(crossterm::event::KeyEvent::from(KeyCode::Char(c)));
+    }
+    ben.key(KeyCode::Tab);
+    ben.line("are you there?");
+    until(&mut amy, &mut ben, "Amy hearing Ben", |a, _| {
+        let heard = a.heard(hub, "lobby");
+        heard.contains("hello everyone") && heard.contains("waves") && heard.contains("are you there?")
+    })
+    .await;
+    // Commands: help, who's here, rooms, a ping, another room, a nick,
+    // a whisper, an LXMF message, cleared.
+    for command in ["/help", "/who", "/list", "/ping", "/join garden", "/part garden", "/nick benny", "/raw nonsense"] {
+        ben.line(command);
+    }
+    let amy_nick = amy.app.channels.hubs[amy_hub].nick.clone().unwrap_or_else(|| "chat-amy".into());
+    ben.line(&format!("/msg {amy_nick} just for you"));
+    until(&mut amy, &mut ben, "Amy getting Ben's whisper", |a, _| {
+        a.app.channels.hubs[amy_hub]
+            .buffers
+            .iter()
+            .any(|(room, lines)| room.starts_with('@') && lines.iter().any(|l| l.text.contains("just for you")))
+    })
+    .await;
+    ben.line(&format!("/dm {amy_nick} over LXMF"));
+    let to_ben = ben.address();
+    until(&mut amy, &mut ben, "Amy getting Ben's LXMF message", |a, _| {
+        a.app.store.conversations.get(&to_ben).is_some_and(|c| c.messages.iter().any(|m| m.content == "over LXMF"))
+    })
+    .await;
+    ben.line("/clear");
+    ben.key(KeyCode::Esc);
+
+    // The members: picked, and what can be done with one.
+    ben.key(KeyCode::Char('m'));
+    if ben.app.channels.picker.is_some() {
+        ben.key(KeyCode::Down);
+        ben.key(KeyCode::Up);
+        ben.key(KeyCode::Enter);
+    }
+    if ben.app.channels.menu.is_some() {
+        for _ in 0..4 {
+            ben.key(KeyCode::Down);
+        }
+        ben.key(KeyCode::Up);
+        ben.key(KeyCode::Esc);
+    }
+    for action in crate::app::channels::users::UserAction::ALL {
+        let amy_identity = amy.app.identity_hash.to_vec();
+        ben.app.open_user_menu(&amy_identity);
+        let Some(menu) = ben.app.channels.menu.as_mut() else { break };
+        let index = crate::app::channels::users::UserAction::ALL.iter().position(|a| *a == action).unwrap();
+        menu.list.select(Some(index));
+        ben.key(KeyCode::Enter);
+        if ben.app.channels.typing {
+            ben.key(KeyCode::Esc);
+        }
+        if ben.app.prompt.is_some() {
+            ben.key(KeyCode::Esc);
+        }
+    }
+    // The tab's other keys: joins and dates shown or not, notifications,
+    // scrolling, searching, connecting.
+    ben.app.channels.selected = Some(crate::app::channels::Target { hub, room: Some("lobby".into()) });
+    for code in [
+        KeyCode::Char('J'),
+        KeyCode::Char('J'),
+        KeyCode::Char('D'),
+        KeyCode::Char('D'),
+        KeyCode::Char('N'),
+        KeyCode::PageUp,
+        KeyCode::PageDown,
+        KeyCode::Home,
+        KeyCode::End,
+        KeyCode::Char('y'),
+        KeyCode::Down,
+        KeyCode::Up,
+    ] {
+        ben.key(code);
+    }
+    ben.key(KeyCode::Char('/'));
+    ben.line("hello");
+    ben.key(KeyCode::Esc);
+    ben.key(KeyCode::Char('a'));
+    ben.key(KeyCode::Char('a'));
+
+    // Amy, the hub's operator: her panel's actions on Ben.
+    let ben_identity = hex::encode(ben.app.identity_hash);
+    let actions: Vec<Box<dyn Fn(&mut App) -> Result<(), String>>> = vec![
+        Box::new(|app| app.hub_topic("lobby", "Welcome all")),
+        Box::new(|app| app.hub_modes("lobby", "+m")),
+        Box::new(|app| app.hub_modes("lobby", "-m")),
+        Box::new(|app| app.hub_register("lobby", true)),
+        Box::new(|app| app.hub_run("/stats")),
+    ];
+    for action in &actions {
+        action(&mut amy.app).unwrap();
+    }
+    let who = ben_identity.clone();
+    amy.app.hub_voice("lobby", &who, true).unwrap();
+    amy.app.hub_op("lobby", &who, true).unwrap();
+    amy.app.hub_op("lobby", &who, false).unwrap();
+    until(&mut amy, &mut ben, "Ben seeing the topic", |_, b| b.heard(hub, "lobby").contains("Welcome all")).await;
+    amy.key(KeyCode::Char('9'));
+    for code in [KeyCode::Tab, KeyCode::Down, KeyCode::Up, KeyCode::Tab, KeyCode::Down, KeyCode::BackTab, KeyCode::Char('y')] {
+        amy.key(code);
+    }
+    amy.app.hub_kick("lobby", &who).unwrap();
+    amy.app.hub_ban(Some("lobby"), &who, true).unwrap();
+    amy.app.hub_ban(Some("lobby"), &who, false).unwrap();
+    amy.app.hub_invite("lobby", &who, true).unwrap();
+    amy.app.hub_room_key("lobby", Some("secret")).unwrap();
+    amy.app.hub_room_key("lobby", None).unwrap();
+    amy.app.hub_rename_room("lobby", "hall").unwrap();
+    amy.app.hub_delete_room("hall").unwrap();
+    amy.app.hub_disconnect(&who).unwrap();
+    until(&mut amy, &mut ben, "Ben disconnected by the hub", |_, b| {
+        let index = b.app.channels.hub_index(hub).unwrap();
+        !matches!(b.app.channels.hubs[index].status, crate::app::channels::HubStatus::Connected)
+    })
+    .await;
+    // Ben's /disconnect and /connect.
+    let index = ben.app.channels.hub_index(hub).unwrap();
+    ben.app.channel_submit(index, "lobby", "/connect");
+    ben.app.channel_submit(index, "lobby", "/disconnect");
+    amy.pump();
+    ben.pump();
+}

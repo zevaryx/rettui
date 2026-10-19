@@ -25,6 +25,8 @@ mod node;
 mod reticulum;
 mod search;
 mod status;
+#[cfg(test)]
+pub(crate) mod tui_tests;
 
 use chrono::Local;
 use ratatui::Frame;
