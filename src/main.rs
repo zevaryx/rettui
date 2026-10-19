@@ -8,6 +8,8 @@ mod games;
 mod https;
 mod icons;
 mod links;
+#[cfg(test)]
+mod live_tests;
 mod logging;
 mod lxmf;
 mod markdown;
