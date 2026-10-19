@@ -4,12 +4,14 @@ What changed in each release of rettui. Releases before v1.6.0 are described on 
 
 ## v1.8.1
 
-Changes since v1.8.0: reactions from Mesh-Client no longer show as a message as well.
+Changes since v1.8.0: reactions from Mesh-Client no longer show as a message as well, a LICENSE file, and code coverage measured in CI.
 
 ### Fixed
 - **Reactions from Mesh-Client:** a reaction from [Mesh-Client](https://github.com/Colorado-Mesh/mesh-client) no longer shows as a message as well as on the message it's for. Mesh-Client puts the emoji in the message's text too (for clients without reactions); a reaction whose text is just its emoji is now only the reaction. ([#31](https://github.com/zevaryx/rettui/issues/31))
 
 ### Docs and development
+- **License file:** the repository now has a `LICENSE` file with the full text of the AGPL-3.0-or-later, the license rettui (and rsReticulum, rsLXMF and rsNomad, which it links) was already under.
+- **Badges** in the README: CI, coverage, release, latest version, Docker image and license.
 - **Code coverage:** a *Coverage* workflow measures the tests with `cargo-llvm-cov` on pull requests and pushes to `dev` and `main`, and fails when fewer than 85% of lines run. New tests drive the web API, the terminal UI by key and mouse, and two rettui instances talking over a loopback Reticulum network; coverage went from 71% to 86% of lines.
 
 ## v1.8.0

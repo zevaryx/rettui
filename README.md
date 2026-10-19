@@ -1,5 +1,12 @@
 # rettui
 
+[![CI](https://github.com/zevaryx/rettui/actions/workflows/ci.yml/badge.svg)](https://github.com/zevaryx/rettui/actions/workflows/ci.yml)
+[![Coverage](https://github.com/zevaryx/rettui/actions/workflows/coverage.yml/badge.svg?branch=dev)](https://github.com/zevaryx/rettui/actions/workflows/coverage.yml)
+[![Release](https://github.com/zevaryx/rettui/actions/workflows/release.yml/badge.svg)](https://github.com/zevaryx/rettui/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/zevaryx/rettui)](https://github.com/zevaryx/rettui/releases/latest)
+[![Docker image](https://img.shields.io/badge/docker-ghcr.io%2Fzevaryx%2Frettui-blue?logo=docker)](https://github.com/zevaryx/rettui/pkgs/container/rettui)
+[![License: AGPL-3.0-or-later](https://img.shields.io/github/license/zevaryx/rettui)](LICENSE)
+
 A [Reticulum](https://reticulum.network/) client written in Rust, for the terminal
 and the browser. It does LXMF messaging, RRC (Reticulum Relay Chat), NomadNet
 browsing, and hosting your own NomadNet node, and it can edit your Reticulum
