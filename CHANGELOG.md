@@ -2,7 +2,7 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
-## v1.8.1
+## v1.9.0
 
 Changes since v1.8.0: Checkers, claiming a draw in Chess and Checkers, reactions from Mesh-Client no longer show as a message as well, two small fixes found while writing tests, a LICENSE file, and code coverage measured in CI.
 
