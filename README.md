@@ -1,7 +1,7 @@
 # rettui
 
 [![CI](https://github.com/zevaryx/rettui/actions/workflows/ci.yml/badge.svg)](https://github.com/zevaryx/rettui/actions/workflows/ci.yml)
-[![Coverage](https://github.com/zevaryx/rettui/actions/workflows/coverage.yml/badge.svg?branch=dev)](https://github.com/zevaryx/rettui/actions/workflows/coverage.yml)
+[![Coverage](https://codecov.io/gh/zevaryx/rettui/branch/dev/graph/badge.svg)](https://app.codecov.io/gh/zevaryx/rettui)
 [![Release](https://github.com/zevaryx/rettui/actions/workflows/release.yml/badge.svg)](https://github.com/zevaryx/rettui/actions/workflows/release.yml)
 [![Latest release](https://img.shields.io/github/v/release/zevaryx/rettui)](https://github.com/zevaryx/rettui/releases/latest)
 [![Docker image](https://img.shields.io/badge/docker-ghcr.io%2Fzevaryx%2Frettui-blue?logo=docker)](https://github.com/zevaryx/rettui/pkgs/container/rettui)

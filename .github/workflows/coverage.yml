@@ -2,8 +2,8 @@ name: Coverage
 
 # How much of rettui the tests run (cargo-llvm-cov), on every pull request
 # and on pushes to dev and main. Fewer than 85% of lines run fails it. The
-# report is in the run's summary, and as lcov.info (for an editor or a
-# coverage service) in its artifacts.
+# report is in the run's summary, as lcov.info (for an editor) in its
+# artifacts, and on Codecov (https://app.codecov.io/gh/zevaryx/rettui).
 #
 # Not counted: what only a real desktop, terminal or install can show
 # (desktop notifications, terminal image protocols, replacing the running
@@ -67,6 +67,16 @@ jobs:
         with:
           name: coverage
           path: lcov.info
+
+      # Pushes need the repository's CODECOV_TOKEN secret; pull requests from
+      # forks upload without one. Codecov being down doesn't fail the run: the
+      # 85% below is the check that counts.
+      - uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: false
 
       - name: At least 85% of lines
         run: cargo llvm-cov report --ignore-filename-regex "$NOT_COUNTED" --summary-only --fail-under-lines 85 > /dev/null

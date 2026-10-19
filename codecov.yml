@@ -1,0 +1,17 @@
+# Codecov's checks on pull requests. The Coverage workflow's own 85% is the
+# gate; these only flag a drop.
+coverage:
+  status:
+    # The whole: fails when a change lowers it by more than 1%.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    # The lines a change adds: shown, never fails.
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "condensed_header, diff, files"
+  require_changes: true
