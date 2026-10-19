@@ -820,6 +820,27 @@ pub(crate) mod testing {
             self.answer(request).await
         }
 
+        /// The live-update stream's events as they come (`last` the
+        /// browser's last event id), each as its text.
+        pub async fn events(&self, path: &str, last: Option<&str>) -> impl futures_util::Stream<Item = String> + use<> {
+            use futures_util::StreamExt;
+            let mut request = Request::builder().uri(path).header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+            if let Some(last) = last {
+                request = request.header("last-event-id", last);
+            }
+            let response = self.router.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+            response.into_body().into_data_stream().filter_map(|chunk| async move {
+                let text = String::from_utf8_lossy(&chunk.ok()?).into_owned();
+                // Keep-alive comments aren't events.
+                (!text.starts_with(':')).then_some(text)
+            })
+        }
+
+        /// What the web UI shares between requests.
+        pub fn state(&self) -> &WebState {
+            &self.state
+        }
+
         /// What the app has told the network since last asked.
         pub fn sent(&self) -> Vec<NetCommand> {
             std::mem::take(&mut *self.sent.lock().unwrap())

@@ -965,4 +965,192 @@ mod tests {
         assert_eq!(state(&app)["hub"]["rooms"], 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A test app in a folder of its own.
+    fn app_in(name: &str, settings: Settings, store: crate::store::Store) -> (App, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("rettui-views-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        (crate::app::test_app(&dir, settings, store), dir)
+    }
+
+    #[test]
+    fn every_kind_of_message_in_a_conversation() {
+        let bob = "ab".repeat(16);
+        let file = std::env::temp_dir().join(format!("rettui-views-voice-{}.ogg", std::process::id()));
+        std::fs::write(&file, b"OggS").unwrap();
+        let message = |id: &str, state: Value, extra: Value| {
+            let mut m = json!({ "id": id, "incoming": true, "title": "", "content": "Hi", "timestamp": 1.8e9, "state": state });
+            m.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            m
+        };
+        let store: crate::store::Store = serde_json::from_value(json!({
+            "conversations": { bob.clone(): { "unread": 1, "messages": [
+                message(&"aa".repeat(32), json!({ "Received": { "verified": true } }), json!({
+                    "format": "markdown", "content": "**bold**",
+                    "attachments": [{ "name": "voice.ogg", "path": file, "size": 4, "image": false, "voice": "Opus" }],
+                    "reactions": [{ "emoji": "👍", "incoming": false, "timestamp": 1.8e9, "id": "local-9", "state": "Sending" }],
+                    "location": { "latitude": 51.5, "longitude": -0.1, "accuracy": 10.0 },
+                    "signal": { "rssi": -90.0, "snr": 5.5, "q": null },
+                })),
+                message("local-1", json!("Delivered"), json!({ "incoming": false, "format": "micron", "content": "`!Bold`!",
+                    "reply": { "hash": "aa".repeat(32), "quote": "Hi" } })),
+                message("local-2", json!("Propagated"), json!({ "incoming": false })),
+                message("local-3", json!({ "Failed": "no path" }), json!({ "incoming": false, "reply": { "hash": "ff" } })),
+                message("local-4", json!("Sending"), json!({ "incoming": false, "paper": "lxm://x" })),
+            ] } },
+            "contacts": { bob.clone(): { "icon": { "icon": "account", "foreground": [255, 0, 0], "background": [0, 0, 0] }, "icon_at": 1.0 } },
+            "next_local_id": 10,
+        }))
+        .unwrap();
+        let (mut app, dir) = app_in("messages", Settings::default(), store);
+        let view = conversation(&app, &bob, None);
+        let messages = view["messages"].as_array().unwrap();
+        let kinds: Vec<_> = messages.iter().map(|m| m["state"]["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["received", "delivered", "propagated", "failed", "sending"]);
+        assert!(messages[0]["html"].as_str().unwrap().contains("<strong>bold</strong>"), "{}", messages[0]["html"]);
+        assert_eq!(
+            (messages[0]["attachments"][0]["playable"].as_bool(), messages[0]["attachments"][0]["exists"].as_bool()),
+            (Some(true), Some(true))
+        );
+        assert_eq!(messages[0]["reactions"][0]["state"]["kind"], "sending");
+        assert!(messages[0]["location"]["map"].is_string() && messages[0]["signal"]["short"].is_string());
+        assert!(messages[1]["html"].as_str().unwrap().contains("Bold"));
+        assert_eq!(messages[1]["reply"]["id"], "aa".repeat(32));
+        assert_eq!(messages[3]["reply"]["id"], Value::Null);
+        assert_eq!(messages[4]["paper"], "lxm://x");
+        assert_eq!(conversation(&app, &bob, Some(2))["messages"].as_array().unwrap().len(), 2);
+        assert!(conversations(&app).to_string().contains("account"));
+
+        // On the map: theirs, by where they are, with whose tiles.
+        let places = |app: &App| locations(app);
+        assert_eq!(places(&app)["places"][0]["key"], bob.as_str());
+        app.settings.map_tiles = Some("https://tile.openstreetmap.org/{z}/{x}/{y}.png".into());
+        assert!(places(&app)["credit"].as_str().unwrap().contains("OpenStreetMap"));
+        app.settings.map_tiles = Some("https://tiles.example.org/{z}/{x}/{y}.png".into());
+        assert_eq!(places(&app)["credit"], "Tiles: tiles.example.org");
+        app.settings.map_tiles_file = Some(dir.join("missing.mbtiles").display().to_string());
+        assert_eq!(places(&app)["credit"], "Tiles: missing.mbtiles · Tiles: tiles.example.org");
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_state_as_it_goes() {
+        use crate::app::node::NodeStatus;
+        use crate::app::{NetState, SyncState};
+        let (mut app, dir) = app_in("state", Settings::default(), crate::store::Store::default());
+        app.net_state = NetState::Failed("no config".into());
+        app.sync = SyncState::Running(std::time::Instant::now());
+        app.pn.status = NodeStatus::Running;
+        app.hub.status = NodeStatus::Failed("taken".into());
+        let view = state(&app);
+        assert_eq!((view["net"]["state"].as_str(), view["sync"]["state"].as_str()), (Some("failed"), Some("running")));
+        assert_eq!((view["hosting"]["state"].as_str(), view["hub"]["state"].as_str()), (Some("running"), Some("failed")));
+        app.sync = SyncState::Done(chrono::Local::now(), Ok(3));
+        app.pn.status = NodeStatus::Failed("full".into());
+        app.hub.status = NodeStatus::Off;
+        let view = state(&app);
+        assert_eq!((view["sync"]["count"].as_u64(), view["hub"]["state"].as_str()), (Some(3), Some("off")));
+        app.sync = SyncState::Done(chrono::Local::now(), Err("no node".into()));
+        assert_eq!(state(&app)["sync"]["error"], "no node");
+
+        // The node, and the hub hosted here, each way.
+        for (status, said) in [
+            (NodeStatus::Off, "off"),
+            (NodeStatus::Starting, "starting"),
+            (NodeStatus::Running, "running"),
+            (NodeStatus::Failed("x".into()), "failed"),
+        ] {
+            app.node.status = status.clone();
+            app.hub.status = status;
+            assert_eq!((node(&app)["status"].as_str(), hub(&app)["status"].as_str()), (Some(said), Some(said)));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hubs_rooms_whispers_and_their_lines() {
+        use crate::app::channels::{Hub, HubStatus};
+        let (mut app, dir) = app_in("channels", Settings::default(), crate::store::Store::default());
+        let carol = vec![0xcc; 16];
+        let mut hub = Hub::new([1; 16], "rrc.other".into(), "Hilltop".into());
+        hub.status = HubStatus::Connecting("linking".into());
+        hub.available = Some(vec![("lobby".into(), Some("Hello".into())), ("dev".into(), None)]);
+        hub.rooms.insert("lobby".into());
+        hub.nicks.insert(carol.clone(), "carol".into());
+        hub.members.insert("lobby".into(), [carol.clone(), vec![0xdd; 4]].into_iter().collect());
+        let lines: Vec<crate::app::channels::ChatLine> = serde_json::from_value(json!([
+            { "kind": "Msg", "src": "cc".repeat(16), "nick": "carol", "text": "hi Bin, 🆎 here", "ts": 1 },
+            { "kind": "Action", "src": "cc".repeat(16), "text": "waves", "ts": 2 },
+            { "kind": "Notice", "text": "notice", "ts": 3 },
+            { "kind": "Private", "src": "ee".repeat(16), "text": "psst", "ts": 4 },
+            { "kind": "Error", "text": "oops", "ts": 5 },
+            { "kind": "System", "text": "joined", "ts": 6 },
+            { "kind": "Msg", "text": "mine", "ts": 7, "own": true },
+        ]))
+        .unwrap();
+        hub.buffers.insert("lobby".into(), lines);
+        hub.buffers.insert(format!("@{}", "cc".repeat(16)), Vec::new());
+        app.channels.hubs.push(hub);
+        app.settings.display_name = "Bin".into();
+        app.store.peers.insert(
+            hex::encode(crate::app::channels::users::lxmf_address(&carol).unwrap()),
+            crate::store::Peer { kind: crate::net::PeerKind::Lxmf, name: None, hops: 1, last_seen: 1 },
+        );
+
+        let view = channels(&app);
+        assert_eq!(view[0]["status"]["kind"], "connecting");
+        assert_eq!(view[0]["link"], format!("rrc://{}:rrc.other", "01".repeat(16)));
+        assert_eq!(view[0]["available"][0]["joined"], true);
+        assert_eq!(view[0]["whispers"][0]["key"], format!("@{}", "cc".repeat(16)));
+        for (status, kind) in
+            [(HubStatus::Failed("x".into()), "failed"), (HubStatus::Disconnected, "disconnected"), (HubStatus::Connected, "connected")]
+        {
+            app.channels.hubs[0].status = status;
+            assert_eq!(channels(&app)[0]["status"]["kind"], kind);
+        }
+
+        let hub = &app.channels.hubs[0];
+        let lobby = room(&app, hub, "lobby", None);
+        let kinds: Vec<_> = lobby["lines"].as_array().unwrap().iter().map(|l| l["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["msg", "action", "notice", "private", "error", "system", "msg"]);
+        assert_eq!(lobby["lines"][6]["nick"], "Bin");
+        assert_eq!(lobby["users"]["cc".repeat(16)]["lxmf_known"], true);
+        assert!(lobby["members"].as_array().unwrap().iter().any(|m| m["partial"] == true));
+        let whisper = room(&app, hub, &format!("@{}", "cc".repeat(16)), Some(5));
+        assert_eq!(whisper["whisper_with"]["name"], "carol");
+
+        // Searching what was said.
+        let found = channel_search(&app, "psst", None);
+        assert_eq!(found["hits"][0]["room"], "lobby");
+        let mine = channel_search(&app, "mine", Some(([1; 16], "lobby")));
+        assert_eq!(mine["hits"][0]["nick"], "You");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn announces_heard_and_blocked_peers() {
+        use crate::net::heard::{Heard, Kind};
+        let (mut app, dir) = app_in("announces", Settings::default(), crate::store::Store::default());
+        for (i, kind) in [Kind::Lxmf, Kind::Nomad, Kind::Rrc, Kind::Phone, Kind::Other].into_iter().enumerate() {
+            app.on_net(crate::net::NetEvent::Heard(Heard {
+                hash: [i as u8; 16],
+                kind,
+                aspect: None,
+                name: Some(format!("n{i}")),
+                hops: 1,
+            }));
+        }
+        let all = announces(&app, None, crate::app::announces::HeardFilter::All, "", None);
+        assert_eq!(all["announces"].as_array().unwrap().len(), 5);
+        assert_eq!(all["last"].as_u64(), all["announces"][4]["seq"].as_u64());
+        let after = announces(&app, all["announces"][2]["seq"].as_u64(), crate::app::announces::HeardFilter::All, "n4", None);
+        assert_eq!(after["announces"].as_array().unwrap().len(), 1);
+
+        let bob = "ab".repeat(16);
+        app.store.contacts.entry(bob.clone()).or_default().trust = crate::store::Trust::Blocked;
+        let blocked = peers(&app, Some("blocked"), "", None, network::NetSort::Heard, None);
+        assert_eq!(blocked["peers"][0]["hash"], bob.as_str());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

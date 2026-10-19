@@ -601,3 +601,277 @@ async fn notifications_a_browser_missed_while_away() {
     web.post(&format!("/api/conversations/{BOB}/read"), json!({})).await;
     assert!(web.with_owner(|owner| owner.missed(0)).await.is_empty());
 }
+
+#[tokio::test]
+async fn live_updates_notifications_and_signing_out() {
+    use futures_util::StreamExt;
+
+    use super::{Notice, Scope};
+    use crate::app::notify::{Notification, Target};
+    let web = TestWeb::start("events");
+    web.with(|app| {
+        app.set_focus(false);
+        app.on_message(from_bob(1, "Are you there?"));
+    })
+    .await;
+    // A browser back after a while: what it missed first (by the header,
+    // or by ?since=), then what happens.
+    let mut events = Box::pin(web.events("/api/events", Some("0")).await);
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), events.next()).await.unwrap().unwrap();
+    assert!(first.contains("event: notify") && first.contains("Are you there?") && first.contains("\"replay\":true"), "{first}");
+    let state = web.state();
+    let _ = state.changes.send((7, Scope::ALL));
+    let notification = Notification { title: "Bob".into(), body: "Again".into(), target: Target::Conversation { key: BOB.into() } };
+    // One it already had (by its id), then a new one, then one read.
+    let _ = state.notices.send(Notice::Show(1, notification.clone()));
+    let _ = state.notices.send(Notice::Show(99, notification));
+    let _ = state.notices.send(Notice::Read(format!("conversation:{BOB}")));
+    let mut said = String::new();
+    while !said.contains("event: read") {
+        said += &tokio::time::timeout(std::time::Duration::from_secs(5), events.next()).await.unwrap().unwrap();
+    }
+    assert!(said.contains("data: 7 all") && said.contains("\"body\":\"Again\""), "{said}");
+    assert_eq!(said.matches("event: notify").count(), 1, "{said}");
+
+    // Too many changes at once: one event says to refetch it all.
+    for version in 0..100 {
+        let _ = state.changes.send((version, Scope::STATUS));
+    }
+    let mut said = String::new();
+    while !said.contains("data: 0 all") {
+        said += &tokio::time::timeout(std::time::Duration::from_secs(5), events.next()).await.unwrap().unwrap();
+    }
+
+    // Signing every browser out ends the stream.
+    let fresh = Box::pin(web.events("/api/events?since=0", None).await);
+    let _ = state.signed_out.send(1);
+    let rest: Vec<String> = tokio::time::timeout(std::time::Duration::from_secs(5), fresh.collect()).await.unwrap();
+    assert!(rest.iter().any(|e| e.contains("Are you there?")), "{rest:?}");
+}
+
+#[tokio::test]
+async fn background_notifications_for_browsers() {
+    use base64::Engine;
+    let web = TestWeb::start("push");
+    let key = web.get("/api/push").await.json();
+    assert!(key["key"].as_str().is_some_and(|k| k.len() > 40), "{key}");
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let browser = p256::SecretKey::random(&mut rand::rngs::OsRng).public_key().to_sec1_bytes();
+    let endpoint = "https://fcm.googleapis.com/fcm/send/test";
+    let subscription = json!({ "endpoint": endpoint, "keys": { "p256dh": b64(&browser), "auth": b64(&[7; 16]) } });
+    assert_eq!(web.post("/api/push/subscribe", subscription.clone()).await.status, StatusCode::OK);
+    // Showing the web UI: nothing is pushed to it (nor sent anywhere here).
+    assert_eq!(web.post("/api/push/showing", json!({ "endpoint": endpoint, "showing": true })).await.status, StatusCode::OK);
+    web.state().push.notify(&crate::app::notify::Notification {
+        title: "Bob".into(),
+        body: "Hi".into(),
+        target: crate::app::notify::Target::Conversation { key: BOB.into() },
+    });
+    assert!(web.state().push.reports().is_empty());
+    assert_eq!(web.post("/api/push/showing", json!({ "endpoint": endpoint })).await.status, StatusCode::OK);
+    assert_eq!(web.post("/api/push/unsubscribe", json!({ "endpoint": endpoint })).await.status, StatusCode::OK);
+
+    // What isn't a subscription rettui can push to.
+    let refused =
+        |endpoint: &str, p256dh: String, auth: String| json!({ "endpoint": endpoint, "keys": { "p256dh": p256dh, "auth": auth } });
+    for (body, why) in [
+        (refused("https://push.example.com/x", b64(&browser), b64(&[7; 16])), "push service"),
+        (refused(endpoint, "!!".into(), b64(&[7; 16])), "base64url"),
+        (refused(endpoint, b64(&[1; 65]), b64(&[7; 16])), "P-256"),
+        (refused(endpoint, b64(&browser), "!!".into()), "base64url"),
+        (refused(endpoint, b64(&browser), b64(&[7; 3])), "16 bytes"),
+    ] {
+        let answer = web.post("/api/push/subscribe", body).await;
+        assert!(answer.error().contains(why), "{why}: {}", answer.error());
+    }
+}
+
+#[tokio::test]
+async fn map_tiles_from_a_file_and_the_web() {
+    let web = TestWeb::start("tiles");
+    // None set: none.
+    assert_eq!(web.get("/api/map/tiles/1/0/0").await.status, StatusCode::NOT_FOUND);
+    let file = std::env::temp_dir().join(format!("rettui-api-tiles-{}.mbtiles", std::process::id()));
+    super::mbtiles::sample(&file, "png");
+    let path = file.display().to_string();
+    web.with(move |app| app.settings.map_tiles_file = Some(path)).await;
+    let tile = web.get("/api/map/tiles/1/0/0").await;
+    assert_eq!((tile.status, tile.headers[header::CONTENT_TYPE].to_str().unwrap()), (StatusCode::OK, "image/png"));
+    // One it hasn't, and the web unreachable: not found, or not fetched.
+    assert_eq!(web.get("/api/map/tiles/1/1/1").await.status, StatusCode::NOT_FOUND);
+    web.with(|app| app.settings.map_tiles = Some("http://127.0.0.1:1/{z}/{x}/{y}.png".into())).await;
+    assert_eq!(web.get("/api/map/tiles/1/1/1").await.status, StatusCode::BAD_GATEWAY);
+    web.with(|app| app.settings.map_tiles_file = None).await;
+    assert_eq!(web.get("/api/map/tiles/1/1/1").await.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(web.get("/api/map/tiles/1/9/9").await.status, StatusCode::NOT_FOUND);
+    super::mbtiles::forget();
+    let _ = std::fs::remove_file(&file);
+}
+
+#[tokio::test]
+async fn waiting_for_a_path_a_probe_and_a_ping() {
+    use crate::app::contacts::PingState;
+    use crate::app::paths::{PathLookup, ProbeState};
+    use crate::net::remote::{PathInfo, Ping, Probe};
+    let web = std::sync::Arc::new(TestWeb::start("waiting"));
+    // Each asked, then answered while the browser waits.
+    let answer = |web: &std::sync::Arc<TestWeb>, path: String| {
+        let web = web.clone();
+        tokio::spawn(async move { web.post(&path, json!({})).await })
+    };
+    let asked = answer(&web, format!("/api/path/{BOB}"));
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    web.with(|app| {
+        let info = PathInfo { hops: 2, via: Some([1; 16]), interface: "TCP".into(), expires: 2_000_000_000 };
+        app.path_lookups.insert(BOB.into(), PathLookup::Done(Ok(info)));
+    })
+    .await;
+    let path = asked.await.unwrap().json();
+    assert_eq!((path["state"].as_str(), path["hops"].as_u64()), (Some("found"), Some(2)));
+    web.with(|app| app.path_lookups.insert(BOB.into(), PathLookup::Done(Err("no path".into())))).await;
+    assert_eq!(web.get(&format!("/api/path/{BOB}")).await.json()["state"], "failed");
+    web.with(|app| app.path_lookups.insert(BOB.into(), PathLookup::Waiting(None))).await;
+    assert_eq!(web.get(&format!("/api/path/{BOB}")).await.json()["state"], "waiting");
+
+    let asked = answer(&web, format!("/api/probe/{BOB}"));
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(web.get(&format!("/api/probe/{BOB}")).await.json()["state"], "waiting");
+    web.with(|app| {
+        let probe = Probe { rtt: std::time::Duration::from_millis(120), hops: Some(1), kind: Some("lxmf"), by_link: false };
+        app.probes.insert(BOB.into(), ProbeState::Done(Ok(probe)));
+    })
+    .await;
+    let probe = asked.await.unwrap().json();
+    assert_eq!((probe["state"].as_str(), probe["ms"].as_u64()), (Some("found"), Some(120)));
+    web.with(|app| app.probes.insert(BOB.into(), ProbeState::Done(Err("no answer".into())))).await;
+    assert_eq!(web.get(&format!("/api/probe/{BOB}")).await.json()["state"], "failed");
+
+    let asked = answer(&web, format!("/api/conversations/{BOB}/ping"));
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    web.with(|app| {
+        let ping = Ping { rtt: std::time::Duration::from_millis(80), hops: Some(1), signal: None };
+        app.pings.insert(BOB.into(), PingState::Done { at: 0, result: Ok(ping) });
+    })
+    .await;
+    let ping = asked.await.unwrap().json();
+    assert_eq!((ping["ok"].as_bool(), ping["ms"].as_u64()), (Some(true), Some(80)));
+}
+
+/// A picture of `text`'s QR code, as a PNG.
+fn qr_png(text: &str) -> Vec<u8> {
+    let qr = crate::lxmf::paper::Qr::new(text).unwrap();
+    let scale = 6;
+    let size = (qr.size() * scale) as u32;
+    let picture = image::GrayImage::from_fn(size, size, |x, y| {
+        image::Luma([if qr.is_dark(x as usize / scale, y as usize / scale) { 0 } else { 255 }])
+    });
+    let mut png = Vec::new();
+    picture.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+#[tokio::test]
+async fn sending_every_way_and_reading_paper() {
+    use base64::Engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let web = TestWeb::start("sending");
+    let to_bob = format!("/api/conversations/{BOB}/send");
+    let send = |body: serde_json::Value| web.post(&to_bob, body);
+
+    // A location, a voice message, files (a picture made smaller), each
+    // said wrong.
+    let at = send(json!({ "location": { "latitude": 51.5, "longitude": -0.1, "accuracy": 5.0, "altitude": 30.0 } })).await;
+    assert_eq!(at.status, StatusCode::OK, "{}", at.text());
+    assert!(send(json!({ "location": { "latitude": 91.0, "longitude": 0.0 } })).await.error().contains("latitude"));
+    assert!(send(json!({ "voice": "!!" })).await.error().contains("base64"));
+    assert!(send(json!({ "voice": b64(b"x"), "files": [{ "name": "a.txt", "data": b64(b"a") }] })).await.error().contains("on its own"));
+    let _ = send(json!({ "voice": b64(&[0u8; 64]) })).await;
+    assert!(send(json!({ "files": [{ "name": "a.txt", "data": "!!" }] })).await.error().contains("not valid base64"));
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(64, 48, image::Rgb([200, 10, 10]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let sent = send(json!({ "content": "A picture", "files": [{ "name": "red.png", "data": b64(&png) }] })).await;
+    assert_eq!(sent.status, StatusCode::OK, "{}", sent.text());
+    let failed = send(json!({ "content": "x", "mode": "paper", "files": [{ "name": "a.txt", "data": b64(b"a") }] })).await;
+    assert_eq!(failed.status, StatusCode::BAD_REQUEST);
+
+    // Its attachments as files: a voice message plays in the page.
+    let ogg = web.state().paths.uploads.join("voice.ogg");
+    std::fs::create_dir_all(ogg.parent().unwrap()).unwrap();
+    std::fs::write(&ogg, b"OggS....").unwrap();
+    let wav = web.state().paths.uploads.join("voice.wav");
+    std::fs::write(&wav, b"RIFF....WAVEfmt ").unwrap();
+    let message: crate::store::Message = serde_json::from_value(json!({
+        "id": "cd".repeat(32), "incoming": true, "title": "", "content": "", "timestamp": 1.8e9,
+        "state": { "Received": { "verified": true } },
+        "attachments": [
+            { "name": "voice.ogg", "path": ogg, "size": 8, "image": false, "voice": "Opus" },
+            { "name": "voice.wav", "path": wav, "size": 16, "image": false, "voice": "Codec2 1200" },
+        ],
+    }))
+    .unwrap();
+    let archived = message.clone();
+    web.with(move |app| app.store.conversations.entry(BOB.into()).or_default().messages.push(message)).await;
+    let file = |index: usize| format!("/api/conversations/{BOB}/attachments/{}/{index}", "cd".repeat(32));
+    assert_eq!(web.get(&file(0)).await.headers[header::CONTENT_TYPE], "audio/ogg");
+    assert_eq!(web.get(&file(1)).await.headers[header::CONTENT_TYPE], "audio/wav");
+    assert_eq!(web.get(&file(2)).await.status, StatusCode::NOT_FOUND);
+    // And an archived message's.
+    let mut archived = archived;
+    archived.id = "ef".repeat(32);
+    let dir = web.state().paths.archive.clone();
+    std::fs::create_dir_all(&dir).unwrap();
+    let lines = crate::store::encode_archive(&[crate::store::Archived { conversation: BOB.into(), message: archived }]).unwrap();
+    std::fs::write(crate::store::archive_month(&dir, 1.8e9), lines).unwrap();
+    let old = web.get(&format!("/api/conversations/{BOB}/attachments/{}/0", "ef".repeat(32))).await;
+    assert_eq!(old.status, StatusCode::OK);
+
+    // Paper: a contact's QR code adds them; a message's needs Reticulum
+    // up, then is read (or said not to be one).
+    let them = rns_identity::identity::Identity::new();
+    let their_address = rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&them.hash));
+    let contact = crate::lxmf::identity_link(their_address, &them.get_public_key());
+    let scanned = web.post("/api/paper/scan", json!({ "image": b64(&qr_png(&contact)) })).await.json();
+    assert!(scanned.get("error").is_none(), "{scanned}");
+    assert_eq!((scanned["contact"].as_bool(), scanned["key"].as_str()), (Some(true), Some(hex::encode(their_address).as_str())));
+    assert!(web.post("/api/paper/scan", json!({ "image": "!!" })).await.error().contains("base64"));
+    assert!(web.post("/api/paper/scan", json!({ "image": b64(b"not a picture") })).await.error().contains("Not a picture"));
+    assert!(web.post("/api/paper/scan", json!({ "image": b64(&png) })).await.error().contains("No QR code"));
+    assert!(web.post("/api/paper/scan", json!({ "image": b64(&qr_png("https://example.org")) })).await.error().contains("isn't a paper"));
+    assert!(web.post("/api/paper/read", json!({ "link": "lxm://nonsense" })).await.error().contains("starting"));
+    web.with(|app| app.lxmf_hash = Some([0x34; 16])).await;
+    assert_eq!(web.post("/api/paper/read", json!({ "link": "lxm://nonsense" })).await.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn the_guide_pages_partials_and_previews() {
+    let web = TestWeb::start("guide-pages");
+    let guide = web.get("/api/guide").await.json();
+    let offered = guide["entry_points"].as_array().map_or(0, Vec::len);
+    let done = web.post("/api/guide", json!({ "name": "Guided", "connect": vec![false; offered], "update_check": false })).await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.text());
+    assert_eq!(web.get("/api/state").await.json()["display_name"], "Guided");
+
+    // A page's links: to people, hubs and other pages; a partial; the
+    // editor's preview with this node's pictures.
+    web.serve(
+        "/page/links.mu",
+        "`[Mail`lxmf@abababababababababababababababab] `[Chat`rrc://abababababababababababababababab/lobby] `[Other`cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/page/x.mu]",
+    );
+    let page = web.get("/api/page?url=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/page/links.mu").await.json();
+    let html = page["html"].as_str().unwrap();
+    assert!(html.contains("lxmf@abab") && html.contains("rrc://abab"), "{html}");
+    web.serve("/page/part.mu", "`[img`:/media/a b.png] part");
+    let partial = web.post("/api/partial", json!({ "url": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/page/part.mu", "fields": {} })).await.json();
+    assert!(partial["html"].as_str().unwrap().contains("part"), "{partial}");
+    let node = web.with(|app| hex::encode(app.node.hash)).await;
+    let preview = web
+        .post(
+            "/api/node/preview",
+            json!({ "content": format!("`[a`{node}:/media/own.png] `[b`cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/media/x.png]") }),
+        )
+        .await
+        .json();
+    assert!(preview["html"].is_string(), "{preview}");
+}
