@@ -9,6 +9,9 @@ Changes since v1.8.0: reactions from Mesh-Client no longer show as a message as 
 ### Fixed
 - **Reactions from Mesh-Client:** a reaction from [Mesh-Client](https://github.com/Colorado-Mesh/mesh-client) no longer shows as a message as well as on the message it's for. Mesh-Client puts the emoji in the message's text too (for clients without reactions); a reaction whose text is just its emoji is now only the reaction. ([#31](https://github.com/zevaryx/rettui/issues/31))
 
+### Docs and development
+- **Code coverage:** a *Coverage* workflow measures the tests with `cargo-llvm-cov` on pull requests and pushes to `dev` and `main`, and fails when fewer than 85% of lines run. New tests drive the web API, the terminal UI by key and mouse, and two rettui instances talking over a loopback Reticulum network; coverage went from 71% to 86% of lines.
+
 ## v1.8.0
 
 Changes since v1.7.2: games with your contacts on a tab of their own (Tic-Tac-Toe, Four in a Row and Chess, over LRGP), faces for everyone without an icon (LXMFace), lists you can resize, runs of dots and colons shown as typed in the web UI, and dependencies updated for security advisories (zip 9, zbus 6).

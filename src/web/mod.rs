@@ -757,6 +757,9 @@ pub(crate) mod testing {
             let status = response.status();
             let headers = response.headers().clone();
             let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec();
+            // A job answers before the thread records what it sent; one more
+            // job, run after, waits for that.
+            self.state.write(|_| ()).await.unwrap();
             Answer { status, headers, body }
         }
 

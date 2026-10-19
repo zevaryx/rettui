@@ -1,0 +1,67 @@
+name: Coverage
+
+# How much of rettui the tests run (cargo-llvm-cov), on every pull request
+# and on pushes to dev and main. Fewer than 85% of lines run fails it. The
+# report is in the run's summary, and as lcov.info (for an editor or a
+# coverage service) in its artifacts.
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push replaces its unfinished run.
+concurrency:
+  group: coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      # The tests once, measured; the reports come from that run.
+      - name: Test, measured
+        run: cargo llvm-cov --locked --no-report
+
+      - name: Report
+        run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
+          cargo llvm-cov report --summary-only | tee summary.txt
+          {
+            echo '### Coverage'
+            echo
+            awk '$1 == "TOTAL" { print "**Lines " $10 "** · regions " $4 " · functions " $7 }' summary.txt
+            echo
+            echo '<details><summary>By file</summary>'
+            echo
+            echo '```'
+            cat summary.txt
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: lcov.info
+
+      - name: At least 85% of lines
+        run: cargo llvm-cov report --summary-only --fail-under-lines 85 > /dev/null
