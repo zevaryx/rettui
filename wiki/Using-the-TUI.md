@@ -19,7 +19,7 @@ lists them. Any key, or a click, closes the list.
 
 | Tab | Keys |
 | --- | ---- |
-| All tabs | `1`–`9` switch tab, `A` announce, `S` sync with the propagation node, `?` list the keys of what's on screen (`F1` while typing), `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
+| All tabs | `1`–`9` switch tab, `<` / `>` the tab's [list](#resizing-the-lists) narrower or wider (`=` back to its usual width), `A` announce, `S` sync with the propagation node, `?` list the keys of what's on screen (`F1` while typing), `Ctrl-L` redraw the screen, `q` / `Ctrl-C` quit |
 | Messages | `↑↓` pick a conversation, `Enter` write, `/` [search messages](Messaging#searching) (`Tab` this conversation or all, `Enter` open the one picked), `r` [reply](Messaging#replies) to their newest message, `m` pick a message, `c` [contact card](Messaging#contacts), `X` delete the conversation, `n` new conversation by address, `y` copy the peer's address (an `lxma://` link with their key once heard), `a` attach a file, `o` open the newest attachment, `d` cycle delivery mode, `p` read a [paper message](Messaging#paper-messages), `P` show the newest paper message written, `N` turn the conversation's notifications off or on, `H` read its [archived messages](Data-and-Storage#message-history), `L` [share a location](Messaging#locations-and-the-map) (`live 1h` shares it live; `L` again stops that), `M` [the map](Messaging#locations-and-the-map) of locations shared, `g` your [games](Games) with them (in the Games tab), `*` pin it to the top (or unpin it), `R` mark every conversation read, `E` [export](Messaging#message-actions) the conversation as text, `PgUp/PgDn` scroll a page, `Home`/`End` the oldest or newest |
 | A picked message (`m`) | `↑↓` pick another, `r` / `Enter` reply, `e` [react](Messaging#reactions-locations-commands-and-voice-messages), `y` copy its text, `f` [forward](Messaging#message-actions) it, `o` open its file or location, `t` [send it again](Messaging#message-actions) if it failed, `x` delete it, `Esc` done |
 | Games | `↑↓` pick a game, `Enter` (or a click on the board) go onto its board, `n` [new game](Games#starting-a-game) (who with, then which), `f` [filter](Games#the-games-tab) the list (all, active, pending, completed), `c` open the conversation, `x` forget the game, `Home`/`End` the first or last |
@@ -42,6 +42,16 @@ lists them. Any key, or a click, closes the list.
 | Reticulum | `Tab` sections / options, `↑↓` select, `Enter` edit (toggles flip, choices open a list), `d` back to the default, `a` add an interface, `Space` enable or disable it, `r` rename, `x` delete, `t` edit the file as text, `R` reload the file, `Ctrl-R` restart Reticulum |
 | Reticulum as text | `Ctrl-S` save (refused while the file can't load), `Esc` close, `Ctrl-Z` / `Ctrl-Y` undo and redo, `Ctrl-V` paste |
 | Hub | [The RRC hub hosted here](Hosting-a-Node#rrc-hub): `e` start or stop hosting, `y` copy its `rrc://` link, `Tab` / `←→` People, Rooms, Bans, `↑↓` select, `a` announce, `:` run a hub command (`/stats`, `/kline list`...), `n` new registered room; People: `K` kick from a room, `b` ban from a room, `o` make operator of a room (or not), `v` voice (or not), `B` ban from the whole hub, `d` disconnect; Rooms: `t` topic, `m` modes, `r` register or unregister, `R` rename, `D` delete; Bans: `x` lift the ban |
+
+## Resizing the lists
+
+Each tab with a list beside its main pane (Messages, Games, Channels,
+Browser, Node, Reticulum, Hub) lets you choose how wide the list is: drag
+the border between the two with the mouse, or press `<` and `>` (two
+columns at a time). `=`, or a double click on the border, puts it back to
+its usual width. Each tab keeps its own width, saved in `settings.json`
+(`pane_widths`), and the pane beside the list always keeps at least 20
+columns.
 
 A file asked for in a prompt (an attachment, a picture of a paper
 message, an identity file, where to save a backup) can be dragged onto the

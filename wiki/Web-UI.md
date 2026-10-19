@@ -115,7 +115,14 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 - **Theme:** dark (rettui's own), light, or as the device is set (and
   following it when it changes): *Theme* in the Status page. Each browser
   keeps its own. Times and dates follow the *Clock* and *Dates* settings.
-- **Keys:** `?` lists them all. `1`–`9` switch sections, `/` searches the
+- **Resizing the lists:** drag the edge of a section's list (a line shows
+  where, when pointed at) to make it wider or narrower, or press `<` and
+  `>`; `=`, or a double click on the edge, puts it back. With the edge
+  focused (Tab), the arrow keys move it. Each section keeps its own width,
+  in this browser, and the pane beside it always keeps room (500px). Not on
+  a phone, which shows one pane at a time.
+- **Keys:** `?` lists them all. `1`–`9` switch sections, `<`/`>` resize the
+  section's list, `/` searches the
   Network list (in Messages, [the messages](Messaging#searching); in
   Channels, [what was said](RRC-Chat); in the Browser, its nodes and saved
   pages), `a` in Network shows [announces as they're heard](Network), and
