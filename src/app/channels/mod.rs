@@ -1112,4 +1112,85 @@ mod tests {
         assert_eq!(texts("parted"), Some(vec!["hi stranger".into()]));
         assert!(hub.history_dirty);
     }
+
+    #[test]
+    fn saved_hubs_and_their_history_with_old_whispers_moved_out() {
+        let dir = std::env::temp_dir().join(format!("rettui-channels-load-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let carol = "cc".repeat(16);
+        let config: crate::store::HubConfig = serde_json::from_value(serde_json::json!({
+            "hash": "01".repeat(16), "aspect": "rrc.other", "name": "Hilltop", "rooms": ["Lobby"], "nick": "me",
+            "auto_connect": true, "room_keys": { "lobby": "k" },
+        }))
+        .unwrap();
+        let bad: crate::store::HubConfig =
+            serde_json::from_value(serde_json::json!({ "hash": "nope", "aspect": "rrc", "name": "x", "rooms": [], "auto_connect": false }))
+                .unwrap();
+        let history = serde_json::json!({
+            "lobby": [
+                { "kind": "Msg", "src": carol, "nick": "carol", "text": "hi", "ts": 1 },
+                { "kind": "Private", "src": carol, "nick": "carol", "text": "psst", "ts": 2 },
+                { "kind": "Private", "nick": "carol", "text": "back at you", "ts": 3, "own": true },
+                { "kind": "Private", "nick": "stranger", "text": "to someone unknown", "ts": 4, "own": true },
+            ],
+        });
+        let name = Hub::new([1; 16], "rrc.other".into(), String::new()).history_path(&dir);
+        std::fs::write(&name, history.to_string()).unwrap();
+        let mut channels = Channels::load(&[bad, config], &dir);
+        assert_eq!(channels.hubs.len(), 1);
+        let hub = &channels.hubs[0];
+        let whisper = format!("@{carol}");
+        assert_eq!(hub.buffers[&whisper].len(), 2, "{:?}", hub.buffers.keys());
+        assert_eq!(hub.buffers["lobby"].len(), 2);
+        assert_eq!(channels.selected.as_ref().map(|t| t.room.clone()), Some(Some("lobby".into())));
+        // Names: from a line once they've gone, and told apart when two
+        // whisperers share one.
+        let carol_id = hex::decode(&carol).unwrap();
+        assert_eq!(hub.display_name(&carol_id), "carol");
+        assert_eq!(hub.whisper_name(&whisper), "carol");
+        assert_eq!(hub.whisper_name("lobby"), "lobby");
+        let hub = &mut channels.hubs[0];
+        let other = format!("@{}", "dd".repeat(16));
+        hub.buffers.insert(
+            other.clone(),
+            serde_json::from_value(serde_json::json!([{ "kind": "Private", "nick": "carol", "text": "me too", "ts": 5 }])).unwrap(),
+        );
+        let names: Vec<String> = hub.whispers().into_iter().map(|(_, name)| name).collect();
+        assert!(names.iter().all(|n| n.starts_with("carol (")), "{names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn notifications_as_each_level_and_place_has_them() {
+        let dir = std::env::temp_dir().join(format!("rettui-channels-notify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        let mut hub = Hub::new([1; 16], rrc::DEFAULT_ASPECT.into(), "Hilltop".into());
+        hub.notify = Some(NotifyLevel::All);
+        app.channels.hubs.push(hub);
+        let line = |kind: LineKind, nick: Option<&str>| {
+            let mut line = ChatLine::new(kind, "hello");
+            line.nick = nick.map(str::to_string);
+            line.src = Some("cc".repeat(16));
+            line
+        };
+        let titles: Vec<String> = [
+            ("lobby", line(LineKind::Msg, Some("carol"))),
+            ("lobby", line(LineKind::Action, None)),
+            ("", line(LineKind::Notice, Some("carol"))),
+            (format!("@{}", "cc".repeat(16)).as_str(), line(LineKind::Private, Some("carol"))),
+        ]
+        .iter()
+        .map(|(room, line)| app.rrc_notification(0, room, line, false).unwrap().title)
+        .collect();
+        assert_eq!(titles, ["carol in #lobby", "#lobby", "carol on Hilltop", "carol (whisper)"]);
+        app.channels.hubs[0].notify = Some(NotifyLevel::Off);
+        assert!(app.rrc_notification(0, "lobby", &line(LineKind::Msg, None), true).is_none());
+        // A reconnect due: tried again.
+        app.channels.hubs[0].reconnect_at = Some(Instant::now());
+        app.channels_tick();
+        assert!(app.channels.hubs[0].reconnect_at.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
