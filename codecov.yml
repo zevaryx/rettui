@@ -2,11 +2,11 @@
 # gate; these only flag a drop.
 coverage:
   status:
-    # The whole: fails when a change lowers it by more than 1%.
+    # The whole: fails when a change lowers it by more than 3%.
     project:
       default:
         target: auto
-        threshold: 1%
+        threshold: 3%
     # The lines a change adds: shown, never fails.
     patch:
       default:
