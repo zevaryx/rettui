@@ -1404,4 +1404,35 @@ mod tests {
         assert!(html.contains("<textarea class=\"m-field\" name=\"notes\" cols=\"40\" rows=\"3\""), "{html}");
         assert!(html.contains("type=\"password\" name=\"secret\""));
     }
+
+    #[test]
+    fn page_colours_fold_marks_tables_and_forms_sent() {
+        let source = "#!fg=ddd\n#!bg=g10\n#!fold [-] [+]\n`+>Open\nin it\n`tr12\n| a \\| b | `[x`:/p`f|g] |\n`t\n`tq\n| odd |\n`t\n\
+                      `Fabcd`Bg50colours`f`b\n`(only a picture`:/media/p.png)\n`[`:/page/bare.mu]\n`[:/page/also.mu]\n\
+                      `<?|tick|a|*`A> `<?|tick|b|*`B> `<^|one|x`X> `<^|one|y|*`Y> `<name`Ann>\n`{:/page/p.mu`0`pid=7|name}\n>>\n> \n";
+        let mut page = parse(source);
+        assert_eq!(page.fold_mark(true), "[-]");
+        assert_eq!(page.fold_mark(false), "[+]");
+        assert!(page.base_style.fg.is_some() && page.base_style.bg.is_some());
+        // Every field sent, or the ones named.
+        let all = page.request_fields(&["*".to_string()]);
+        assert_eq!(all.get("field_tick").map(String::as_str), Some("a,b"));
+        assert_eq!(all.get("field_one").map(String::as_str), Some("y"));
+        assert_eq!(page.request_fields(&["name".to_string()]).len(), 1);
+        // Choosing the other radio button, and ticking a box off.
+        let radio = page.fields.iter().position(|f| f.name == "one" && f.value == "x").unwrap();
+        page.activate_choice(radio);
+        let tick = page.fields.iter().position(|f| f.name == "tick").unwrap();
+        page.activate_choice(tick);
+        let name = page.fields.iter().position(|f| f.name == "name").unwrap();
+        page.activate_choice(name);
+        assert_eq!(page.request_fields(&["*".to_string()]).get("field_one").map(String::as_str), Some("x"));
+        // Read again with what was chosen kept, and the fold as it was.
+        page.folds[0].open = false;
+        let mut again = parse(source);
+        again.keep_state(&page);
+        assert!(!again.folds[0].open);
+        let shown = again.layout(60, None, &HashMap::new(), None);
+        assert!(!shown.lines.is_empty());
+    }
 }

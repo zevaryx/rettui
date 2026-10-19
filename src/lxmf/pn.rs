@@ -556,4 +556,30 @@ mod tests {
         assert!(local.ingest.take(&two, false).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn what_isnt_a_transfer_and_messages_for_us_that_dont_open() {
+        let dir = std::env::temp_dir().join(format!("rettui-pn-odd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (ingest, mut delivered, _) = ingest(&dir, 13);
+        // Not msgpack, not a list, a list without messages.
+        assert!(ingest.take(&[0xc1], false).is_err());
+        assert!(ingest.take(&encode(&Value::from(1)), false).is_err());
+        assert!(ingest.take(&encode(&Value::Array(vec![Value::Nil, Value::from(2)])), false).is_err());
+        // Several at once from a peer: each taken.
+        let bob = Identity::new();
+        let bob_hash = Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&bob.hash));
+        let parts = |transfer: Vec<u8>| match rmpv::decode::read_value(&mut transfer.as_slice()).unwrap() {
+            Value::Array(parts) => parts,
+            _ => panic!(),
+        };
+        let (first, second) = (parts(transfer(bob_hash, &bob, 13)), parts(transfer(bob_hash, &bob, 13)));
+        let both = encode(&Value::Array(vec![first[0].clone(), Value::Array(vec![first[1][0].clone(), second[1][0].clone()])]));
+        assert_eq!(ingest.take(&both, true), Ok(2));
+        // For us, but encrypted for someone else: not delivered.
+        let wrong = transfer(ingest.lxmf_hash, &Identity::new(), 13);
+        let _ = ingest.take(&wrong, false);
+        assert!(delivered.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
