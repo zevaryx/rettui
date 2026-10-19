@@ -4,6 +4,10 @@ name: Coverage
 # and on pushes to dev and main. Fewer than 85% of lines run fails it. The
 # report is in the run's summary, and as lcov.info (for an editor or a
 # coverage service) in its artifacts.
+#
+# Not counted: what only a real desktop, terminal or install can show
+# (desktop notifications, terminal image protocols, replacing the running
+# program).
 on:
   pull_request:
   push:
@@ -20,6 +24,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  NOT_COUNTED: 'src[/\\](term[/\\](desktop|images)|update[/\\]install)\.rs$'
 
 jobs:
   coverage:
@@ -43,8 +48,8 @@ jobs:
 
       - name: Report
         run: |
-          cargo llvm-cov report --lcov --output-path lcov.info
-          cargo llvm-cov report --summary-only | tee summary.txt
+          cargo llvm-cov report --ignore-filename-regex "$NOT_COUNTED" --lcov --output-path lcov.info
+          cargo llvm-cov report --ignore-filename-regex "$NOT_COUNTED" --summary-only | tee summary.txt
           {
             echo '### Coverage'
             echo
@@ -64,4 +69,4 @@ jobs:
           path: lcov.info
 
       - name: At least 85% of lines
-        run: cargo llvm-cov report --summary-only --fail-under-lines 85 > /dev/null
+        run: cargo llvm-cov report --ignore-filename-regex "$NOT_COUNTED" --summary-only --fail-under-lines 85 > /dev/null

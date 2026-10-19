@@ -413,25 +413,30 @@ impl WebState {
     }
 }
 
-/// Ctrl-C, or SIGTERM (what `docker stop` and systemd send).
-async fn shutdown_signal() {
+/// Ctrl-C, or SIGTERM (what `docker stop` and systemd send): listened for
+/// from now (not from when it's first awaited), so a stop right after
+/// starting is still a clean one.
+fn shutdown_signal() -> impl std::future::Future<Output = ()> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = terminate.recv() => {}
+        let signals = signal(SignalKind::interrupt()).and_then(|interrupt| Ok((interrupt, signal(SignalKind::terminate())?)));
+        async move {
+            match signals {
+                Ok((mut interrupt, mut terminate)) => {
+                    tokio::select! {
+                        _ = interrupt.recv() => {}
+                        _ = terminate.recv() => {}
+                    }
                 }
-            }
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
+                Err(_) => {
+                    let _ = tokio::signal::ctrl_c().await;
+                }
             }
         }
     }
     #[cfg(not(unix))]
-    {
+    async {
         let _ = tokio::signal::ctrl_c().await;
     }
 }
@@ -498,6 +503,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     // browser catching up after a restart isn't confused.
     let mut next_notice = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
 
+    let shutdown = shutdown_signal();
     let scheme = if served.is_some() { "https" } else { "http" };
     let shown = if address.ip().is_unspecified() { format!("127.0.0.1:{}", address.port()) } else { address.to_string() };
     let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
@@ -552,7 +558,6 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     };
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let mut save = tokio::time::interval(Duration::from_secs(10));
-    let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     let mut decoded = owner.app.take_decoded();
     let result = loop {
