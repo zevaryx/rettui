@@ -4,7 +4,7 @@ What changed in each release of rettui. Releases before v1.6.0 are described on 
 
 ## v1.8.0
 
-Changes since v1.7.2: games with your contacts on a tab of their own (Tic-Tac-Toe, Four in a Row and Chess, over LRGP), faces for everyone without an icon (LXMFace), lists you can resize, and runs of dots and colons shown as typed in the web UI.
+Changes since v1.7.2: games with your contacts on a tab of their own (Tic-Tac-Toe, Four in a Row and Chess, over LRGP), faces for everyone without an icon (LXMFace), lists you can resize, runs of dots and colons shown as typed in the web UI, and dependencies updated for security advisories (zip 9, zbus 6).
 
 ### Added
 - **Games:** Tic-Tac-Toe, Four in a Row and Chess with your contacts, over [LRGP](https://github.com/ratspeak/lrgp-rs) (Ratspeak's Lightweight Reticulum Gaming Protocol), so you can play against other LRGP clients too. Each move goes as a message, sent as messages to them are (direct, or through the propagation node) and resent as they are when it fails. They have a tab of their own, **Games**, between Messages and Channels (`2`; the tabs after it move up one): your games with everyone, newest first, beside the selected one's board, played by keys or clicks, with accepting, declining, draws and resigning; its badge counts the games waiting on you. `n` there (**+ New game** in the web UI) starts one, and `g` in a conversation (the **🎲 Games** button) goes to your games with them. A game's moves aren't in the conversation: the Games tab shows the games, filtered by **All**, **Active**, **Pending** or **Completed** (`f`), says how your last move went while it's being sent, and sends one that failed again (`r`, **↻ Send again**); a move that arrives notifies you as a message does, and opening it shows the game. Only moves whose signature was checked are played, and both sides check the rules. Games are kept in `games.json` and in backups. See [Games](https://github.com/zevaryx/rettui/wiki/Games).
@@ -14,6 +14,11 @@ Changes since v1.7.2: games with your contacts on a tab of their own (Tic-Tac-To
 
 ### Fixed
 - **Web UI:** a run of dots or colons (`.....`, `:::::`) no longer shows as only its last two in some browsers. The bundled Fira Code font joins `..`, `...`, `::` and the like into ligatures, which some browsers drew wrongly; ligatures are now off everywhere in the web UI, so what's typed is shown as typed (`one...two` no longer gets gaps around its dots either).
+
+### Security
+- **zip 9:** the `zip` crate before 9.0 could keep SUID/SGID bits, and follow or create symbolic links pointing outside the folder, when it extracted an archive ([RUSTSEC-2026-0367](https://rustsec.org/advisories/RUSTSEC-2026-0367), [-0368](https://rustsec.org/advisories/RUSTSEC-2026-0368), [-0369](https://rustsec.org/advisories/RUSTSEC-2026-0369)). rettui never extracted archives that way (updating on Windows reads only `rettui.exe` out of the release, by name, into memory), but it now uses zip 9 all the same.
+- **zbus 6:** desktop notifications on Linux and the BSDs now use zbus 6, which took in `zvariant`, `zvariant_derive` and `zbus_names`, no longer maintained apart from it ([RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370), [-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371), [-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372)). notify-rust, which still needs zbus 5, is now only built for Windows and macOS, where it doesn't use D-Bus (rettui speaks D-Bus itself on Linux). That leaves 24 fewer crates in the build.
+- A yanked `yoke-derive` (0.8.3) is updated to 0.8.4.
 
 ### Docs and development
 - A *Games* page in the wiki, and faces in *Messaging*.
