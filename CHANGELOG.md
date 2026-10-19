@@ -13,6 +13,7 @@ Changes since v1.7.2: games with your contacts on a tab of their own (Tic-Tac-To
 - **Resizing the lists:** the list beside each tab's main pane (Messages, Games, Channels, Browser, Node, Reticulum, Hub) can be made wider or narrower: drag its edge, or press `<` and `>` (`=`, or a double click on the edge, puts it back). Each tab keeps its own width: the terminal UI in `settings.json` (`pane_widths`), the web UI in each browser. The pane beside it always keeps room, and phones (one pane at a time) are as they were. See [Using the TUI](https://github.com/zevaryx/rettui/wiki/Using-the-TUI#resizing-the-lists) and [Web UI](https://github.com/zevaryx/rettui/wiki/Web-UI).
 
 ### Fixed
+- **Reactions from Mesh-Client:** a reaction from [Mesh-Client](https://github.com/Colorado-Mesh/mesh-client) no longer shows as a message as well as on the message it's for. Mesh-Client puts the emoji in the message's text too (for clients without reactions); a reaction whose text is just its emoji is now only the reaction. ([#31](https://github.com/zevaryx/rettui/issues/31))
 - **Web UI:** a run of dots or colons (`.....`, `:::::`) no longer shows as only its last two in some browsers. The bundled Fira Code font joins `..`, `...`, `::` and the like into ligatures, which some browsers drew wrongly; ligatures are now off everywhere in the web UI, so what's typed is shown as typed (`one...two` no longer gets gaps around its dots either).
 
 ### Security

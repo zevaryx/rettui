@@ -79,8 +79,11 @@ impl App {
             self.keep_appearance(&key, appearance, message.timestamp);
         }
         let location = extras.telemetry.as_ref().and_then(|t| t.location);
-        // Nothing to show but what the fields say.
-        let bare = message.content.trim().is_empty()
+        // Nothing to show but what the fields say. A reaction's text may be
+        // its emoji again, for clients without reactions (Mesh-Client sends
+        // it so): that's the reaction, not a message as well.
+        let echoes_reaction = extras.reaction.as_ref().is_some_and(|r| message.content.trim() == r.emoji.trim());
+        let bare = (message.content.trim().is_empty() || echoes_reaction)
             && message.title.trim().is_empty()
             && message.attachments.is_empty()
             && extras.audio.is_none()
@@ -1738,6 +1741,19 @@ mod tests {
         assert_eq!(app.store.conversations[&key()].messages[1].reactions.len(), 1);
         assert_eq!(mine(&app).state, MessageState::Sending);
         assert_eq!(app.store.recent_emoji[0], "🎉");
+        // As Mesh-Client sends one: its emoji as the text too, for clients
+        // without reactions. Still only a reaction; other text with one is
+        // a message as well.
+        let count = app.store.conversations[&key()].messages.len();
+        let echoed = |n: u8, text: &str| {
+            from_them(n, text, Extras { reaction: Some(Wire { to: [3; 32], emoji: "🐉".into() }), ..Extras::default() })
+        };
+        app.on_message(echoed(4, " 🐉 "));
+        let conversation = &app.store.conversations[&key()];
+        assert_eq!(conversation.messages.len(), count, "the emoji again isn't a message");
+        assert!(conversation.messages[1].reactions.iter().any(|r| r.emoji == "🐉" && r.incoming));
+        app.on_message(echoed(5, "Nice one 🐉"));
+        assert_eq!(app.store.conversations[&key()].messages.len(), count + 1);
         // Nothing to react to before it's sent.
         let local = format!("local-{}", app.send_message(key(), "x".into(), Vec::new(), DeliveryMode::Auto, None).unwrap());
         assert!(app.send_reaction(&key(), &local, "👍").unwrap_err().contains("hasn't been sent"));
