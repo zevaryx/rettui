@@ -708,11 +708,11 @@ fn the_network_and_status_tabs() {
 }
 
 /// Carol's identity, on the Hilltop hub.
-const CAROL: [u8; 16] = [0xcc; 16];
+pub(crate) const CAROL: [u8; 16] = [0xcc; 16];
 
 /// A hub, connected, with a room, a whisper conversation, people, and the
 /// rooms it lists.
-fn with_hilltop(tui: &mut Tui) -> crate::net::Hash {
+pub(crate) fn with_hilltop(tui: &mut Tui) -> crate::net::Hash {
     use crate::app::channels::{ChatLine, Hub, HubStatus, Target};
     let hash = [1; 16];
     let mut hub = Hub::new(hash, "rrc.hilltop".into(), "Hilltop".into());

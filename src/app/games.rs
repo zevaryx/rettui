@@ -850,4 +850,124 @@ mod tests {
             std::fs::remove_dir_all(p.dir).unwrap();
         }
     }
+
+    fn press(player: &mut Player, code: KeyCode) {
+        player.app.on_key(KeyEvent::new(code, crossterm::event::KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn chess_at_the_keyboard_from_the_picker_to_resigning() {
+        let (mut amy, mut ben) = (player("chess-amy", AMY), player("chess-ben", BEN));
+        amy.app.add_contact(&hex::encode(BEN)).unwrap();
+        amy.app.tab = super::super::Tab::Games;
+        // The picker: someone, then the game (moving about it first).
+        press(&mut amy, KeyCode::Char('n'));
+        for code in [KeyCode::Char('j'), KeyCode::Char('k'), KeyCode::Down, KeyCode::Up, KeyCode::Char('z')] {
+            press(&mut amy, code);
+        }
+        press(&mut amy, KeyCode::Enter);
+        let chess = amy.app.game_menu_items().iter().position(|item| matches!(item, MenuItem::New("chess"))).unwrap();
+        amy.app.click_game_menu(Some(chess));
+        assert!(amy.app.game_menu.is_none(), "{:?}", amy.app.log);
+        let session = amy.app.game_view.as_ref().unwrap().session.clone();
+        press(&mut amy, KeyCode::Char('n'));
+        press(&mut amy, KeyCode::Esc);
+        amy.app.click_game_menu(None);
+
+        // Ben's side: accepted by its key.
+        ben.app.on_message(arrives(&mut amy, AMY));
+        ben.app.show_game("chess", &session);
+        ben.app.tab = super::super::Tab::Games;
+        press(&mut ben, KeyCode::Enter);
+        press(&mut ben, KeyCode::Char('a'));
+        amy.app.on_message(arrives(&mut ben, BEN));
+
+        // Whoever is white moves e2e4 by the cursor: a piece that can't
+        // move, an empty square, then the pawn and where it goes.
+        amy.app.show_game("chess", &session);
+        amy.app.tab = super::super::Tab::Games;
+        press(&mut amy, KeyCode::Enter);
+        let amy_white = matches!(amy.app.games.view("chess", &session).unwrap().board, Board::Chess { white: true, .. });
+        let ((white, white_key), (black, black_key)) =
+            if amy_white { ((&mut amy, AMY), (&mut ben, BEN)) } else { ((&mut ben, BEN), (&mut amy, AMY)) };
+        let at = |player: &mut Player, cursor: usize| {
+            player.app.game_view.as_mut().unwrap().cursor = cursor;
+            press(player, KeyCode::Enter);
+        };
+        at(white, 60);
+        at(white, 30);
+        at(white, 52);
+        at(white, 52);
+        for code in [
+            KeyCode::Up,
+            KeyCode::Up,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Char('k'),
+            KeyCode::Char('j'),
+            KeyCode::Char('h'),
+            KeyCode::Char('l'),
+        ] {
+            press(white, code);
+        }
+        at(white, 36);
+        at(white, 52);
+        at(white, 20);
+        at(white, 36);
+        black.app.on_message(arrives(white, white_key));
+
+        // Black answers by typing the move, then offers a draw, which white
+        // turns down; white resigns.
+        press(black, KeyCode::Char('t'));
+        for c in "e7e5".chars() {
+            press(black, KeyCode::Char(c));
+        }
+        press(black, KeyCode::Enter);
+        white.app.on_message(arrives(black, black_key));
+        press(black, KeyCode::Char('D'));
+        white.app.on_message(arrives(black, black_key));
+        press(white, KeyCode::Char('n'));
+        black.app.on_message(arrives(white, white_key));
+        press(white, KeyCode::Char('R'));
+        press(white, KeyCode::Char('y'));
+        press(white, KeyCode::Enter);
+        black.app.on_message(arrives(white, white_key));
+        assert_ne!(black.app.games.view("chess", &session).unwrap().status, "active", "{:?}", white.app.log);
+
+        // Off the board, forgotten (asked first).
+        press(&mut amy, KeyCode::Char('q'));
+        press(&mut amy, KeyCode::Char('c'));
+        amy.app.tab = super::super::Tab::Games;
+        press(&mut amy, KeyCode::Enter);
+        press(&mut amy, KeyCode::Char('x'));
+        press(&mut amy, KeyCode::Char('y'));
+        press(&mut amy, KeyCode::Enter);
+        assert!(amy.app.games.view("chess", &session).is_none());
+        amy.app.show_game("chess", &session);
+        for p in [amy, ben] {
+            let _ = std::fs::remove_dir_all(p.dir);
+        }
+    }
+
+    #[test]
+    fn moves_read_from_paper_or_unchecked_or_not_for_a_game() {
+        let (mut amy, mut ben) = (player("paper-amy", AMY), player("paper-ben", BEN));
+        amy.app.start_game(&hex::encode(BEN), "ttt").unwrap();
+        let challenge = arrives(&mut amy, AMY);
+        ben.app.on_message(lxmf::InboundMessage { paper: true, ..challenge.clone() });
+        ben.app.on_message(lxmf::InboundMessage { id: Some([0x55; 32]), verified: false, ..challenge.clone() });
+        let mut broken = challenge;
+        broken.id = Some([0x56; 32]);
+        if let Some(fields) = broken.extras.game.as_mut() {
+            fields.values_mut().for_each(|v| v.truncate(1));
+        }
+        ben.app.on_message(broken);
+        let conversation = &ben.app.store.conversations[&hex::encode(AMY)];
+        let notes: Vec<String> = conversation.messages.iter().chain(&conversation.game_moves).flat_map(|m| m.notes.clone()).collect();
+        assert!(notes.iter().any(|n| n.contains("read from paper")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("couldn't be checked")), "{notes:?}");
+        for p in [amy, ben] {
+            let _ = std::fs::remove_dir_all(p.dir);
+        }
+    }
 }

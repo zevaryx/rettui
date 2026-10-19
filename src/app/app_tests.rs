@@ -117,3 +117,81 @@ fn picked_messages_retries_paper_and_location_requests() {
     assert!(ask(&mut tui, 53).contains("Answered with this station's location"));
     assert!(ask(&mut tui, 54).contains("less than a minute ago"));
 }
+
+#[test]
+fn every_channel_command_said_well_and_badly() {
+    use crate::app::channels::HubStatus;
+    use crate::ui::tui_tests::{CAROL, with_hilltop};
+    let mut tui = Tui::new("commands");
+    let hub = with_hilltop(&mut tui);
+    let index = tui.app.channels.hub_index(hub).unwrap();
+    let whisper = format!("@{}", hex::encode(CAROL));
+    let say = |tui: &mut Tui, room: &str, text: &str| {
+        tui.app.channel_submit(index, room, text);
+    };
+    let errors = |tui: &Tui, room: &str| {
+        tui.app.channels.hubs[index]
+            .buffers
+            .get(room)
+            .map_or(0, |lines| lines.iter().filter(|l| l.kind == crate::app::channels::LineKind::Error).count())
+    };
+
+    for text in [
+        "/help",
+        "/join",
+        "/join #garden secret",
+        "/me",
+        "/me waves",
+        "/nick",
+        "/nick bad\nnick",
+        "/nick Tui2",
+        "/nick",
+        "/ping",
+        "/list",
+        "/quote",
+        "/quote /stats",
+        "/who",
+        "/names lobby",
+        "/topic Hills",
+        "/msg",
+        "/msg nobody hi",
+        "/msg carol",
+        "/msg carol hello",
+        "/dm",
+        "/dm nobody",
+        "/dm carol",
+        "/dm carol over LXMF",
+        "/clear",
+    ] {
+        tui.app.tab = Tab::Channels;
+        say(&mut tui, "lobby", text);
+    }
+    let long = "x".repeat(tui.app.channels.hubs[index].limits.max_msg_bytes + 10);
+    assert!(tui.app.channel_submit(index, "lobby", &long).is_some());
+    assert!(tui.app.channel_submit(index, &whisper, &long).is_some());
+    say(&mut tui, "lobby", &format!("/me {long}"));
+    // In a whisper conversation, room commands make no sense.
+    say(&mut tui, &whisper, "/me hi");
+    say(&mut tui, &whisper, "/quote hi");
+    say(&mut tui, &whisper, "a whisper");
+    assert!(errors(&tui, &whisper) >= 1);
+    // The hub's own buffer: not a room to talk in.
+    say(&mut tui, "", "hello");
+    say(&mut tui, "", "/part");
+    assert!(errors(&tui, "") >= 2);
+    // Private notices where the hub doesn't pass them.
+    tui.app.channels.hubs[index].direct_notices = false;
+    say(&mut tui, "lobby", "/msg carol hi");
+    // Disconnected: talking connects; hub commands wait.
+    tui.app.channels.hubs[index].status = HubStatus::Disconnected;
+    say(&mut tui, "lobby", "/stats");
+    say(&mut tui, "lobby", "anyone?");
+    say(&mut tui, "lobby", "/disconnect");
+    say(&mut tui, "lobby", "/connect");
+    say(&mut tui, "lobby", "/part");
+    tui.app.channels.hubs[index].status = HubStatus::Connected;
+    tui.app.confirm_split(hub, "lobby", &["one".into(), "two".into()]);
+    tui.app.confirm_split(hub, &whisper, &["one".into()]);
+    tui.app.confirm_split([9; 16], "lobby", &["none".into()]);
+    assert!(errors(&tui, "lobby") >= 3, "{}", errors(&tui, "lobby"));
+}

@@ -265,6 +265,18 @@ async fn amys_node_propagation_node_and_hub() {
         a.app.store.conversations.get(&to_ben).is_some_and(|c| c.messages.iter().any(|m| m.content == "Left at your node"))
     })
     .await;
+    // The other way: Amy leaves one there for Ben, who fetches it over a
+    // Link to her node.
+    amy.app.send_message(to_ben.clone(), "One for you".into(), Vec::new(), DeliveryMode::Propagated, None).unwrap();
+    until(&mut amy, &mut ben, "Amy's message on her node", |a, _| {
+        a.app.store.conversations[&to_ben].messages.iter().any(|m| m.content == "One for you" && m.state == MessageState::Propagated)
+    })
+    .await;
+    ben.app.send(net::NetCommand::Sync);
+    until(&mut amy, &mut ben, "Ben collecting it", |_, b| {
+        b.app.store.conversations.get(&to_amy).is_some_and(|c| c.messages.iter().any(|m| m.content == "One for you"))
+    })
+    .await;
 
     // Amy's hub: Ben joins a room and says something; Amy, in the same
     // room, hears it.
