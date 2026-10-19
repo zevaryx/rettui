@@ -682,6 +682,7 @@ function switchTab(id, options = {}) {
   }
   const fresh = mountView(id, options);
   if (!view.root.isConnected) $('#main').append(view.root);
+  view.fitSide?.();
   view.root.querySelectorAll('textarea.page-editor').forEach(applyWrap);
   restoreScroll(view.root);
   if (!fresh) view.shown?.(options);
@@ -695,8 +696,97 @@ function mountView(id, options = {}) {
   view.root = el('div', { class: 'view' + (view.panes ? ' panes' : ''), dataset: { view: id, pane: view.pane || 'list' } });
   view.mount(view.root, options);
   view.root.querySelectorAll('[data-stick="bottom"]').forEach(followBottom);
+  resizableSide(id, view);
   return true;
 }
+
+// ---- resizing a section's list ----------------------------------------------
+//
+// A section's list (.side) is as wide as dragged by the handle on its edge,
+// or set with < and > (= and a double click put it back): each section its
+// own width, kept in this browser. Not on a phone, which shows one pane at
+// a time.
+
+const PANE_WIDTHS = 'rettui.paneWidths';
+const SIDE_MIN = 180;
+// Room the pane beside it keeps (a conversation's message box needs it).
+const MAIN_MIN = 500;
+const SIDE_STEP = 16;
+const paneWidths = (() => {
+  try { return JSON.parse(localStorage.getItem(PANE_WIDTHS) || '{}') || {}; } catch { return {}; }
+})();
+
+function resizableSide(id, view) {
+  const side = view.root.querySelector(':scope > .side');
+  // The pane beside it, which gives it room (and keeps some).
+  const pane = view.root.querySelector(':scope > .grow');
+  if (!side || !pane) return;
+  // The widest it may be as things are: what it has and what the pane
+  // beside it can spare.
+  const widest = () => Math.max(SIDE_MIN, side.getBoundingClientRect().width + pane.getBoundingClientRect().width - MAIN_MIN);
+  const apply = () => {
+    if (!paneWidths[id]) return side.style.removeProperty('--side-w');
+    // Off the page (another section shown): fitted when it's shown.
+    if (!side.isConnected || !side.getBoundingClientRect().width) return;
+    side.style.setProperty('--side-w', `${Math.min(paneWidths[id], widest())}px`);
+  };
+  // Its width, or (null) its usual one; saved unless `keep` is false (while
+  // dragging).
+  const set = (width, keep = true) => {
+    if (width == null) delete paneWidths[id];
+    else paneWidths[id] = Math.round(Math.max(SIDE_MIN, Math.min(widest(), width)));
+    apply();
+    handle.setAttribute('aria-valuenow', String(Math.round(side.getBoundingClientRect().width)));
+    if (keep) {
+      try { localStorage.setItem(PANE_WIDTHS, JSON.stringify(paneWidths)); } catch { /* this page only */ }
+    }
+  };
+  const handle = el('div', {
+    class: 'resizer', role: 'separator', tabindex: '0', 'aria-orientation': 'vertical', 'aria-label': 'Resize the list',
+    'aria-valuemin': String(SIDE_MIN), title: 'Drag to resize the list; a double click puts it back  ( < > = )',
+    ondblclick: () => set(null),
+    onkeydown: (e) => {
+      const now = side.getBoundingClientRect().width;
+      if (e.key === 'ArrowLeft') set(now - SIDE_STEP);
+      else if (e.key === 'ArrowRight') set(now + SIDE_STEP);
+      else if (e.key === 'Home' || e.key === 'Enter') set(null);
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    onpointerdown: (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add('dragging');
+      document.body.classList.add('resizing');
+      const [from, start] = [e.clientX, side.getBoundingClientRect().width];
+      const move = (m) => set(start + m.clientX - from, false);
+      const done = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.classList.remove('dragging');
+        document.body.classList.remove('resizing');
+        set(paneWidths[id] ?? null);
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', done, { once: true });
+      handle.addEventListener('pointercancel', done, { once: true });
+    },
+  });
+  side.after(handle);
+  view.fitSide = apply;
+  view.resizeSide = (key) => {
+    const now = side.getBoundingClientRect().width;
+    if (!now) return false;
+    if (key === '<') set(now - SIDE_STEP);
+    else if (key === '>') set(now + SIDE_STEP);
+    else set(null);
+    return true;
+  };
+}
+
+// A narrower window: no list wider than leaves the pane beside it room.
+window.addEventListener('resize', () => app.views[app.tab]?.fitSide?.());
 
 // ---- phones -----------------------------------------------------------------
 //
@@ -7262,7 +7352,8 @@ async function restartReticulum() {
 
 // The keys there are (the ? key shows them), as the terminal UI's popup.
 const KEYS = [
-  ['Anywhere', [['1–9', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open']]],
+  ['Anywhere', [['1–9', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open'],
+    ['< / >', 'the section\'s list narrower or wider (or drag its edge)'], ['=', 'the list back to its usual width']]],
   ['Messages', [['j / k', 'next or previous conversation'], ['i', 'write (the message box)'], ['r', 'reply to their newest message'],
     ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['g', 'games with them (the Games tab)'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
     ['Ctrl+E', 'emoji, in the message box'],
@@ -7290,6 +7381,7 @@ document.addEventListener('keydown', (e) => {
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key >= '1' && e.key <= String(TABS.length)) switchTab(TABS[Number(e.key) - 1].id);
   else if (e.key === '?') keysDialog();
+  else if (['<', '>', '='].includes(e.key) && app.views[app.tab]?.resizeSide?.(e.key)) e.preventDefault();
   else if (app.tab === 'messages' && app.views.messages.key(e)) e.preventDefault();
   else if (app.tab === 'games' && app.views.games.key(e)) e.preventDefault();
   else if (e.key === 'f' && app.tab === 'browser' && app.views.browser.page) {

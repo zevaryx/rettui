@@ -235,7 +235,13 @@ a { color: var(--accent); }
 .panel > header .row { flex-wrap: wrap; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; }
 .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 10px; }
-.side { width: 290px; flex: none; }
+.side { width: var(--side-w, 290px); flex: none; }
+/* The handle on a list's edge, in the gap beside it: a line while it's
+   pointed at, dragged or focused. */
+.resizer { flex: none; width: 10px; margin: 0 -10px; position: relative; z-index: 2; cursor: col-resize; touch-action: none; outline: none; }
+.resizer::after { content: ''; position: absolute; top: 12px; bottom: 12px; left: 4px; width: 2px; border-radius: 1px; background: transparent; transition: background .15s; }
+.resizer:hover::after, .resizer.dragging::after, .resizer:focus-visible::after { background: var(--accent); }
+body.resizing { cursor: col-resize; user-select: none; }
 .empty { color: var(--dim); padding: 18px; }
 
 .list-item {
@@ -437,7 +443,7 @@ header .avatar.icon { font-size: 17px; }
 .panel > header .subtabs.game-filters button:first-child { flex-shrink: 0; }
 @media (max-width: 900px) {
   /* Room for the four, beside a board that needs less than a page. */
-  .view[data-view=games] .side { width: 250px; }
+  .view[data-view=games] .side { width: var(--side-w, 250px); }
   .game-filters { gap: 3px; }
   .panel > header .subtabs.game-filters button { padding: 2px 3px; font-size: 11px; }
 }
@@ -797,7 +803,7 @@ a.chat-link:hover { filter: brightness(1.25); }
   #sidebar { width: 58px; }
   .tab .label, .brand, .who { display: none; }
   .mark { display: block; }
-  .side { width: 220px; }
+  .side { width: var(--side-w, 220px); }
   .members { display: none; }
 }
 .list-item .online { color: var(--green); }
@@ -919,6 +925,7 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .view > * { flex: 1 1 auto; min-height: 0; width: auto !important; }
   .column { gap: 0; }
   .side, .members { width: auto; }
+  .resizer { display: none; }
 
   /* One pane at a time: the list, what was picked from it, or a room's
      members. */
