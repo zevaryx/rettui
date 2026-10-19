@@ -706,3 +706,342 @@ fn the_network_and_status_tabs() {
     }
     tui.ctrl('l');
 }
+
+/// Carol's identity, on the Hilltop hub.
+const CAROL: [u8; 16] = [0xcc; 16];
+
+/// A hub, connected, with a room, a whisper conversation, people, and the
+/// rooms it lists.
+fn with_hilltop(tui: &mut Tui) -> crate::net::Hash {
+    use crate::app::channels::{ChatLine, Hub, HubStatus, Target};
+    let hash = [1; 16];
+    let mut hub = Hub::new(hash, "rrc.hilltop".into(), "Hilltop".into());
+    hub.status = HubStatus::Connected;
+    hub.direct_notices = true;
+    hub.motd = Some("Welcome to the hill".into());
+    hub.available = Some(vec![("lobby".into(), Some("Hello".into())), ("dev".into(), None)]);
+    hub.rooms.insert("lobby".into());
+    hub.nicks.insert(CAROL.to_vec(), "carol".into());
+    hub.topics.insert("lobby".into(), "All things hill".into());
+    hub.members.insert("lobby".into(), [CAROL.to_vec(), vec![0xdd; 4]].into_iter().collect());
+    let carol = hex::encode(CAROL);
+    let lines: Vec<ChatLine> = serde_json::from_value(serde_json::json!([
+        { "kind": "Msg", "src": carol, "nick": "carol", "text": "hi Tui, see rrc://0202020202020202020202020202020202/dev", "ts": 1_800_000_000_000u64, "mention": true },
+        { "kind": "Action", "src": carol, "nick": "carol", "text": "waves", "ts": 1_800_000_001_000u64 },
+        { "kind": "Notice", "text": "a notice", "ts": 1_800_000_002_000u64 },
+        { "kind": "Error", "text": "an error", "ts": 1_800_000_003_000u64 },
+        { "kind": "System", "text": "carol joined", "ts": 1_800_000_004_000u64 },
+        { "kind": "Msg", "text": "mine", "ts": 1_800_000_005_000u64, "own": true },
+    ]))
+    .unwrap();
+    hub.buffers.insert("lobby".into(), lines);
+    let whisper: Vec<ChatLine> = serde_json::from_value(serde_json::json!([
+        { "kind": "Private", "src": carol, "nick": "carol", "text": "psst", "ts": 1_800_000_006_000u64 },
+    ]))
+    .unwrap();
+    hub.buffers.insert(format!("@{carol}"), whisper);
+    hub.unread.insert("lobby".into(), 2);
+    tui.app.channels.hubs.push(hub);
+    tui.app.settings.display_name = "Tui".into();
+    tui.app.channels.selected = Some(Target { hub: hash, room: Some("lobby".into()) });
+    tui.tab(Tab::Channels);
+    hash
+}
+
+#[test]
+fn channels_at_the_keyboard_and_with_the_mouse() {
+    let mut tui = Tui::new("channels");
+    tui.tab(Tab::Channels);
+    // No hub yet: n asks for one; nonsense is said to be.
+    tui.key(KeyCode::Char('n')).answer("not a hub");
+    tui.key(KeyCode::Char('m')).key(KeyCode::Char('x')).key(KeyCode::Char('y'));
+    let hub = with_hilltop(&mut tui);
+    let screen = tui.draw();
+    assert!(screen.contains("Hilltop") && screen.contains("lobby") && screen.contains("waves"), "{screen}");
+
+    // Moving through the list: the hub, its room, the whisper.
+    tui.key(KeyCode::Char('k')).key(KeyCode::Up).key(KeyCode::Char('j')).key(KeyCode::Down).key(KeyCode::Down);
+    tui.key(KeyCode::Char('k'));
+    // Each setting, twice (on and off).
+    for key in ['J', 'J', 'D', 'D', 'a', 'a'] {
+        tui.key(KeyCode::Char(key));
+    }
+    // Notification levels for the room, the hub and the whisper.
+    for _ in 0..4 {
+        tui.key(KeyCode::Char('N'));
+    }
+    assert!(tui.said().contains("Notifications in #lobby"), "{}", tui.said());
+    tui.key(KeyCode::Up);
+    for _ in 0..3 {
+        tui.key(KeyCode::Char('N'));
+    }
+    tui.key(KeyCode::Down).key(KeyCode::Down);
+    for _ in 0..3 {
+        tui.key(KeyCode::Char('N'));
+    }
+    tui.key(KeyCode::Up);
+    // Its link, and scrolling the history.
+    tui.key(KeyCode::Char('y'));
+    assert_eq!(tui.app.clipboard.last.as_deref(), Some(format!("rrc://{}:rrc.hilltop/lobby", hex::encode(hub)).as_str()));
+    tui.key(KeyCode::PageUp).key(KeyCode::PageDown).key(KeyCode::Home).key(KeyCode::End);
+
+    // Members: m picks one, and their menu does what it says.
+    tui.key(KeyCode::Char('m')).key(KeyCode::Char('j')).key(KeyCode::Char('k')).key(KeyCode::Down).key(KeyCode::Up);
+    tui.key(KeyCode::Enter);
+    assert!(tui.app.channels.menu.is_some());
+    tui.key(KeyCode::Char('j')).key(KeyCode::Char('k')).key(KeyCode::Down).key(KeyCode::Up);
+    tui.key(KeyCode::Char('@'));
+    assert!(tui.app.channels.input.text().contains("@carol"), "{}", tui.app.channels.input.text());
+    tui.key(KeyCode::Esc);
+    tui.key(KeyCode::Char('m')).key(KeyCode::Enter).key(KeyCode::Char('w'));
+    assert_eq!(tui.app.channels.active().map(|(_, room)| room), Some(format!("@{}", hex::encode(CAROL))));
+    tui.key(KeyCode::Esc).key(KeyCode::Up);
+    tui.key(KeyCode::Char('m')).key(KeyCode::Enter).key(KeyCode::Esc);
+    tui.key(KeyCode::Char('m')).key(KeyCode::Esc);
+    tui.key(KeyCode::Char('m')).key(KeyCode::Enter).key(KeyCode::Down).key(KeyCode::Down).key(KeyCode::Down).key(KeyCode::Enter);
+    tui.key(KeyCode::Char('m'))
+        .key(KeyCode::Enter)
+        .key(KeyCode::Down)
+        .key(KeyCode::Down)
+        .key(KeyCode::Down)
+        .key(KeyCode::Down)
+        .key(KeyCode::Enter);
+    tui.tab(Tab::Channels);
+    tui.app.channels.selected = Some(crate::app::channels::Target { hub, room: Some("lobby".into()) });
+    tui.key(KeyCode::Char('m')).key(KeyCode::Enter).key(KeyCode::Char('l'));
+    assert_eq!(tui.app.tab, Tab::Messages);
+    tui.tab(Tab::Channels);
+
+    // Typing: a message, a command, Esc.
+    tui.key(KeyCode::Enter).keys("hello hill").key(KeyCode::Enter);
+    tui.keys("/topic").key(KeyCode::Enter).keys("/help").key(KeyCode::Enter);
+    tui.key(KeyCode::PageUp).key(KeyCode::PageDown).key(KeyCode::Esc);
+
+    // With the mouse: the list, the input, a listed room, a person.
+    tui.draw();
+    let list = tui.app.regions.channel_list;
+    tui.click(list.x + 2, list.y).click(list.x + 2, list.y + 1);
+    let input = tui.app.regions.channel_input;
+    tui.click_in(input).key(KeyCode::Esc);
+    tui.key(KeyCode::Up).draw();
+    if let Some((area, _)) = tui.app.regions.channel_rooms.iter().find(|(_, room)| room == "dev").cloned() {
+        tui.click_in(area);
+    }
+    tui.app.channels.selected = Some(crate::app::channels::Target { hub, room: Some("lobby".into()) });
+    tui.draw();
+    for (area, _) in tui.app.regions.channel_users.clone() {
+        tui.click_in(area);
+    }
+    if tui.app.channels.menu.is_some() {
+        let popup = tui.app.regions.channel_popup;
+        tui.click(popup.x + 1, popup.y + 3);
+        tui.click(0, 0);
+    }
+    tui.key(KeyCode::Char('m')).draw();
+    let popup = tui.app.regions.channel_popup;
+    tui.click(popup.x + 1, popup.y);
+    tui.click(0, HEIGHT - 1);
+    if let Some((area, _)) = tui.app.regions.channel_links.first().cloned() {
+        tui.click_in(area);
+        tui.key(KeyCode::Esc);
+    }
+
+    // Leaving: x forgets the room; on the hub it asks first.
+    tui.settle().tab(Tab::Channels);
+    tui.app.channels.selected = Some(crate::app::channels::Target { hub, room: Some("lobby".into()) });
+    tui.key(KeyCode::Char('x'));
+    assert!(!tui.app.channels.hubs[0].buffers.contains_key("lobby"));
+    tui.key(KeyCode::Char('c')).key(KeyCode::Char('c'));
+    tui.key(KeyCode::Char('x')).answer("y");
+    assert!(tui.app.channels.hubs.is_empty());
+}
+
+impl Tui {
+    /// A prompt of this kind, answered.
+    fn ask(&mut self, kind: crate::app::PromptKind, text: &str) -> &mut Self {
+        self.app.prompt = Some(crate::app::Prompt { kind, title: "Asked".into(), input: crate::term::input::TextInput::with_text(text) });
+        self.draw();
+        self.key(KeyCode::Enter)
+    }
+}
+
+#[test]
+fn prompts_answered_and_pastes_wherever_they_go() {
+    use crate::app::PromptKind;
+    let mut tui = Tui::new("prompts");
+    with_bob(&mut tui);
+    let bob = "ab".repeat(16);
+    let picture = tui.dir.join("not-a-qr.png");
+    image::RgbImage::from_pixel(8, 8, image::Rgb([1, 2, 3])).save(&picture).unwrap();
+
+    // Each kind, answered as asked (or not).
+    tui.ask(PromptKind::NewConversation, "nonsense").ask(PromptKind::NewConversation, &bob);
+    tui.ask(PromptKind::GoTo, "nonsense").ask(PromptKind::GoTo, &format!("{}:/page/index.mu", "cd".repeat(16)));
+    tui.ask(PromptKind::FindPath, "nonsense").ask(PromptKind::FindPath, &bob);
+    tui.ask(PromptKind::ReadPaper, "").ask(PromptKind::ReadPaper, "lxm://nonsense");
+    tui.ask(PromptKind::ReadPaper, picture.to_str().unwrap()).ask(PromptKind::ReadPaper, "/no/such/file.png");
+    tui.ask(PromptKind::ReadPaper, "lxma://nonsense");
+    tui.ask(PromptKind::ContactName(bob.clone()), "Robert").ask(PromptKind::ContactNotes(bob.clone()), "met ↵ at the park");
+    assert_eq!(tui.app.store.contacts[&bob].notes, "met\nat the park");
+    tui.ask(PromptKind::ContactName("nope".into()), "x").ask(PromptKind::ContactNotes("nope".into()), "x");
+    tui.ask(PromptKind::GuideName, "x");
+    tui.ask(PromptKind::ConfirmDeleteMessage { key: bob.clone(), id: "nope".into() }, "y");
+    tui.ask(PromptKind::ConfirmDeleteMessage { key: bob.clone(), id: "a".repeat(64) }, "yes");
+    tui.ask(PromptKind::ConfirmBlock("nope".into()), "y");
+    tui.ask(PromptKind::ConfirmStopLive(bob.clone()), "y");
+    tui.ask(PromptKind::ConfirmInstallUpdate, "y");
+    tui.ask(PromptKind::Attach, "").ask(PromptKind::Attach, picture.to_str().unwrap());
+    tui.ask(PromptKind::DisplayName, "").ask(PromptKind::DisplayName, "Tui");
+    tui.ask(PromptKind::AddHub, "").ask(PromptKind::AddHub, "nonsense");
+    tui.ask(PromptKind::ConfirmHub { hash: [3; 16], aspect: "rrc".into(), room: Some("lobby".into()) }, "y");
+    tui.ask(PromptKind::ConfirmSplit { hub: [3; 16], room: "lobby".into(), parts: vec!["a".into(), "b".into()] }, "y");
+    tui.ask(PromptKind::ConfirmRemoveHub([3; 16]), "y");
+    tui.ask(PromptKind::ConfirmDiscardPage("index.mu".into()), "y");
+    tui.ask(PromptKind::ConfirmRestartRns, "y");
+    assert!(tui.app.take_rns_restart());
+    tui.ask(PromptKind::NewPage, "").ask(PromptKind::NewPage, "about");
+    tui.ask(PromptKind::ConfirmBlock(bob.clone()), "y");
+    assert_eq!(tui.app.store.contacts[&bob].trust, crate::store::Trust::Blocked);
+    tui.ask(PromptKind::ConfirmDeleteConversation(bob.clone()), "y");
+    assert!(!tui.app.store.conversations.contains_key(&bob));
+
+    // Pastes go where the typing is.
+    tui.settle();
+    tui.app.on_paste("nowhere");
+    assert!(tui.said().contains("Nothing to paste into"), "{}", tui.said());
+    tui.tab(Tab::Messages);
+    tui.app.on_paste("lxm://nonsense");
+    tui.app.composing = true;
+    tui.app.on_paste("composed");
+    tui.settle().tab(Tab::Channels);
+    tui.app.channels.typing = true;
+    tui.app.on_paste("chat");
+    tui.app.channels.typing = false;
+    tui.app.channel_search = None;
+    tui.key(KeyCode::Char('/'));
+    tui.app.on_paste("searched");
+    tui.key(KeyCode::Esc);
+    tui.tab(Tab::Network).key(KeyCode::Char('/'));
+    tui.app.on_paste("peer");
+    tui.key(KeyCode::Esc);
+    tui.tab(Tab::Browser);
+    tui.app.browser.search.typing = true;
+    tui.app.on_paste("library");
+    tui.app.browser.search.typing = false;
+    tui.tab(Tab::Messages).key(KeyCode::Char('/'));
+    tui.app.on_paste("lunch");
+    tui.settle();
+    tui.app.open_emoji_picker();
+    tui.app.on_paste("smile");
+    tui.settle();
+    tui.app.on_paste("x");
+
+    // A restart: what was in flight is said to have stopped.
+    tui.app.settings.node_enabled = true;
+    tui.app.request_rns_restart();
+    tui.app.request_rns_restart();
+    assert!(tui.app.take_rns_restart() && !tui.app.take_rns_restart());
+    tui.app.on_net(crate::net::NetEvent::StartFailed("no config".into()));
+    assert!(tui.draw().contains("no config") || matches!(tui.app.net_state, crate::app::NetState::Failed(_)));
+    tui.ctrl('l');
+    assert!(tui.app.take_full_redraw() && !tui.app.take_full_redraw());
+}
+
+#[test]
+fn overlays_keys_and_the_wheel_everywhere() {
+    let mut tui = Tui::new("overlays");
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    let middle = (WIDTH / 2, HEIGHT / 2);
+
+    // A QR code on screen: y copies its link, s saves it, a key or click
+    // closes it.
+    tui.app.paper_view = Some(crate::app::PaperView::new("lxm://abc".into()));
+    tui.draw();
+    tui.key(KeyCode::Char('y'));
+    assert_eq!(tui.app.clipboard.last.as_deref(), Some("lxm://abc"));
+    tui.key(KeyCode::Char('s')).key(KeyCode::Char('z'));
+    assert!(tui.app.paper_view.is_none());
+    tui.app.paper_view = Some(crate::app::PaperView::address("lxma://abc".into()));
+    tui.key(KeyCode::Char('y')).click(middle.0, middle.1);
+    assert!(tui.app.paper_view.is_none());
+
+    // Writing: every key the composer has.
+    tui.key(KeyCode::Enter).keys("hello");
+    tui.ctrl('v').ctrl('p').ctrl('x').ctrl('o').key(KeyCode::Esc);
+    tui.key(KeyCode::Enter).ctrl('r').key(KeyCode::Up).key(KeyCode::Down).key(KeyCode::Esc);
+    tui.key(KeyCode::PageUp).key(KeyCode::PageDown).ctrl('e').ctrl('v').key(KeyCode::Esc).key(KeyCode::Esc);
+    tui.settle();
+    tui.app.prompt = Some(crate::app::Prompt {
+        kind: crate::app::PromptKind::GoTo,
+        title: "Go".into(),
+        input: crate::term::input::TextInput::default(),
+    });
+    tui.ctrl('v').click(middle.0, middle.1).key(KeyCode::Esc);
+
+    // The searches, forwarding, the map and the archive, by mouse.
+    tui.settle().key(KeyCode::Char('/')).keys("Lunch").draw();
+    let hits = tui.app.regions.message_search;
+    tui.click(hits.x + 1, hits.y);
+    tui.settle().key(KeyCode::Char('/')).keys("Lunch").draw();
+    let search_box = tui.app.regions.message_search_box;
+    tui.click(search_box.x + 1, search_box.y).click(0, HEIGHT - 1);
+    assert!(tui.app.message_search.is_none());
+    tui.settle().key(KeyCode::Char('M')).scroll(middle.0, middle.1, false).scroll(middle.0, middle.1, true);
+    let places = tui.app.regions.map_list;
+    tui.click(places.x + 1, places.y).click(0, 0);
+    tui.settle().key(KeyCode::Char('H')).scroll(middle.0, middle.1, false).scroll(middle.0, middle.1, true).click(0, 0);
+    tui.settle();
+    tui.app.forward = None;
+    tui.key(KeyCode::Char('m')).key(KeyCode::Char('f')).draw();
+    if tui.app.forward.is_some() {
+        let forward_box = tui.app.regions.forward_box;
+        tui.click(forward_box.x + 1, forward_box.y);
+        let list = tui.app.regions.forward_list;
+        tui.click(list.x + 1, list.y);
+    }
+    tui.settle();
+    tui.app.forward = None;
+    tui.app.picked = None;
+    tui.key(KeyCode::Char('m')).key(KeyCode::Char('f')).click(0, 0).settle();
+
+    // The emoji picker under the wheel and a click.
+    tui.key(KeyCode::Enter).ctrl('e').draw();
+    let popup = tui.app.regions.emoji_popup;
+    tui.scroll(popup.x + 1, popup.y + 1, true).scroll(popup.x + 1, popup.y + 1, false);
+    if let Some((rect, _)) = tui.app.regions.emoji_hits.first().cloned() {
+        tui.click_in(rect);
+    }
+    tui.ctrl('e').click(0, 0).settle();
+
+    // The wheel in each tab, over its list and elsewhere.
+    for tab in Tab::ALL {
+        tui.settle().tab(tab);
+        for (x, y) in [(2, 5), middle] {
+            tui.scroll(x, y, true).scroll(x, y, false);
+        }
+    }
+    tui.tab(Tab::Network).key(KeyCode::Char('a'));
+    tui.scroll(middle.0, middle.1, true).scroll(middle.0, middle.1, false).key(KeyCode::Esc);
+    tui.tab(Tab::Network).key(KeyCode::Char('/')).ctrl('v').key(KeyCode::Esc);
+    tui.tab(Tab::Browser);
+    tui.app.browser.search.typing = true;
+    tui.ctrl('v');
+    tui.app.browser.search.typing = false;
+    tui.mouse(MouseEventKind::Down(MouseButton::Right), middle.0, middle.1);
+
+    // Keys that work anywhere.
+    tui.tab(Tab::Status);
+    tui.key(KeyCode::Char('?')).key(KeyCode::Char('x'));
+    tui.key(KeyCode::F(1)).click(0, 0);
+    tui.key(KeyCode::Char('A')).key(KeyCode::Char('S')).key(KeyCode::Char('<')).key(KeyCode::Char('>'));
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::Sync)));
+    tui.draw();
+    let version = tui.app.regions.version;
+    tui.click_in(version);
+    tui.key(KeyCode::Char('q'));
+    assert!(tui.app.should_quit);
+    tui.app.should_quit = false;
+    tui.ctrl('c');
+    assert!(tui.app.should_quit);
+}
