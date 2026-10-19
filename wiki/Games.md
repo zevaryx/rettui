@@ -1,5 +1,5 @@
 rettui plays two-player games with your contacts over LXMF: **Tic-Tac-Toe**,
-**Four in a Row** and **Chess**. Each move goes as a message to them, so a
+**Four in a Row**, **Checkers** and **Chess**. Each move goes as a message to them, so a
 game goes wherever messages go (direct, or through a propagation node to
 someone who's offline) and takes as long as you both like. The moves aren't
 in your conversation with them: the Games tab shows the games.
@@ -37,8 +37,8 @@ Games tab, or starts a new one with them if there's none; the conversation's
 title (the button, in the web UI) says when a game waits on you.
 
 Your challenge goes as a message. They accept or decline it; whoever
-challenged moves first (in Chess the colours are drawn when the challenge is
-accepted, and White moves first).
+challenged moves first (in Chess and Checkers the colours are drawn when the
+challenge is accepted; White moves first in Chess, Black in Checkers).
 
 ## Playing
 
@@ -52,9 +52,11 @@ keys below play; in the list, `f` filters it, `c` opens the conversation and
 | Tic-Tac-Toe | arrows and `Enter`, or `1`–`9` (left to right, top to bottom), or click a cell | click a cell |
 | Four in a Row | `←→` and `Enter`, or `1`–`7`, or click a column | click a column |
 | Chess | arrows and `Enter` on one of your pieces, then on where it goes; or a click on each; `t` to type a move by its squares (`e2e4`, `e7e8n` to promote to a knight) | click a piece (the squares it can go to are marked), then where it goes; a pawn reaching the far rank asks what it becomes |
+| Checkers | arrows and `Enter` on one of your pieces, then on each square it lands on; or a click on each; `t` to type a move by its squares (`a3 b4`, `a5 c3 e1` for a double jump) | click a piece, then each square it lands on (the next ones are marked) |
 | Accept / decline a challenge | `a` / `d` | buttons |
 | Offer a draw | `D` | button |
 | Answer a draw offered | `y` / `n` | buttons |
+| Claim a draw (Chess, Checkers) | `C` | **Claim a draw** |
 | Resign | `R` (asks first) | button (asks first) |
 | Send a move that failed again | `r` | **↻ Send again** |
 | Forget a game | `x` (asks first) | **Forget** |
@@ -63,6 +65,21 @@ keys below play; in the list, `f` filters it, `c` opens the conversation and
 Black sees the chess board turned round, and in the terminal the cursor
 starts on your e-pawn. Moves that aren't allowed (out of turn, a full column,
 an illegal chess move) are refused before anything is sent.
+
+Checkers is American checkers (English draughts) on the dark squares: Black
+starts at the top and moves first, so Black sees the board turned round,
+your pieces at the bottom either way. Men move one square diagonally
+forward, kings (ringed) either way; a man reaching the far row is crowned,
+which ends its move. Jumps must be taken (the board says "you must jump"),
+and once you start one you finish it: with several jumps you pick each
+landing square in turn, and where only one way goes on the rest is made for
+you. Whoever has no piece, or no move, left loses.
+
+Draws in Chess and Checkers come by agreement, or by claim: when the same
+position has come up three times, or (Chess) fifty moves have gone without a
+capture or a pawn move, or (Checkers) forty moves without a capture or a man
+moving, **Claim a draw** (`C`) ends the game at once. The other side checks
+the claim; one that doesn't hold up is only an offer.
 
 ## How it works
 

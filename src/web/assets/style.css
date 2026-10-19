@@ -484,6 +484,11 @@ header .avatar.icon { font-size: 17px; }
 .board.chess .piece { font-variant-emoji: text; }
 .board.chess .piece.white { color: #fff; text-shadow: 0 0 2px #000, 0 0 1px #000; }
 .board.chess .piece.black { color: #101010; text-shadow: 0 0 1px #fff8; }
+.board.checkers .disc { width: 72%; height: 72%; border-radius: 50%; }
+.board.checkers .disc.white { background: #f2ece0; box-shadow: 0 0 0 1px #0006, inset 0 -3px 0 #0002; }
+.board.checkers .disc.black { background: #1c1c1c; box-shadow: 0 0 0 1px #fff4, inset 0 -3px 0 #fff1; }
+/* A king: ringed in gold. */
+.board.checkers .disc.king { outline: 3px solid #d4af37; outline-offset: -9px; }
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .reaction { border-radius: 12px; padding: 0 8px; font-size: 12.5px; background: var(--raised); cursor: default; }
 .reaction.failed { border-color: var(--red); cursor: pointer; }

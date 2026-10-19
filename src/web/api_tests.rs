@@ -321,6 +321,41 @@ async fn games_over_the_api() {
 }
 
 #[tokio::test]
+async fn a_checkers_board_over_the_api() {
+    use crate::games::{Games, fields};
+    let web = TestWeb::start("checkers");
+    web.post("/api/conversations", json!({ "address": BOB })).await;
+    web.with(|app| app.games.set_me(&[0xa1; 16])).await;
+    let session = web.post("/api/games", json!({ "peer": BOB, "app": "checkers" })).await.json()["session"].as_str().unwrap().to_string();
+    // Bob accepts, as his rettui would.
+    let mut bob = Games::default();
+    bob.set_me(&hex::decode(BOB).unwrap().try_into().unwrap());
+    let wire = |prepared: &crate::games::Prepared| -> std::collections::HashMap<u8, Vec<u8>> {
+        fields(&hex::decode(prepared.game.envelope.as_ref().unwrap()).unwrap()).into_iter().collect()
+    };
+    let challenge = web.with(move |app| app.games.challenge("checkers", BOB)).await.unwrap();
+    // (A second challenge: Bob answers that one, so the first stays pending.)
+    let other = challenge.game.session.clone();
+    bob.receive(&hex::encode([0xa1; 16]), &wire(&challenge));
+    let accept = bob.act("checkers", &other, "accept", Default::default()).unwrap();
+    web.with(move |app| app.games.receive(BOB, &wire(&accept))).await;
+    let game = web.get(&format!("/api/games/checkers/{other}")).await.json();
+    assert_eq!((game["status"].as_str(), game["board"]["kind"].as_str()), (Some("active"), Some("checkers")));
+    assert_eq!(game["board"]["cells"].as_array().unwrap().len(), 64);
+    let black = game["board"]["black"].as_bool().unwrap();
+    assert_eq!(game["board"]["legal"].as_array().unwrap().len(), if black { 7 } else { 0 });
+    // No draw to claim yet.
+    assert_eq!(web.post(&format!("/api/games/checkers/{other}"), json!({ "command": "draw_claim" })).await.status, StatusCode::BAD_REQUEST);
+    if black {
+        let moved = web.post(&format!("/api/games/checkers/{other}"), json!({ "command": "move", "picked": "d6 c5" })).await;
+        assert_eq!(moved.status, StatusCode::OK, "{}", moved.text());
+        let game = web.get(&format!("/api/games/checkers/{other}")).await.json();
+        assert_eq!(game["board"]["last"], "d6 c5");
+    }
+    assert_eq!(web.get(&format!("/api/games/checkers/{session}")).await.json()["status"], "pending");
+}
+
+#[tokio::test]
 async fn the_network_paths_and_announces() {
     let web = TestWeb::start("network");
     web.with(|app| {

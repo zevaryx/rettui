@@ -2107,7 +2107,7 @@ function dialog(title, body, { className = '', onclose } = {}) {
 // its history). They have a tab of their own (app.views.games);
 // conversations lead there.
 
-const GAME_NAMES = { ttt: 'Tic-Tac-Toe', four_in_a_row: 'Four in a Row', chess: 'Chess' };
+const GAME_NAMES = { ttt: 'Tic-Tac-Toe', four_in_a_row: 'Four in a Row', checkers: 'Checkers', chess: 'Chess' };
 // The pawn (U+265F) is an emoji too: asked for as text (U+FE0E), so it's
 // drawn in its side's colour, not an emoji font's.
 const CHESS_GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟\uFE0E' };
@@ -2156,12 +2156,15 @@ async function newGameDialog(peer) {
 // and draw() to fetch and draw it again (as moves arrive).
 function gameBoard(app, session, onForget) {
   const body = el('div', { class: 'game' });
-  // A chess piece picked, to move.
+  // A chess piece picked, to move; a checkers move's squares so far (the
+  // piece, then where it lands).
   let from = null;
+  let path = [];
   const act = async (command, picked) => {
     const done = await attempt(() => api.post(`/games/${app}/${session}`, picked === undefined ? { command } : { command, picked: String(picked) }));
     if (done) {
       from = null;
+      path = [];
       loadNow();
     }
     await draw();
@@ -2181,6 +2184,7 @@ function gameBoard(app, session, onForget) {
       can('draw_accept') ? el('button', { class: 'primary', text: 'Accept the draw', onclick: () => act('draw_accept') }) : null,
       can('draw_decline') ? button('Refuse the draw', 'draw_decline') : null,
       can('draw_offer') ? button('Offer a draw', 'draw_offer') : null,
+      can('draw_claim') ? button('Claim a draw', 'draw_claim', `Claim a draw (${game.board.kind === 'chess' ? 'threefold repetition or fifty moves' : 'threefold repetition or forty moves'})? The game ends at once.`) : null,
       can('resign') ? button('Resign', 'resign', `Resign this game of ${game.name}?`) : null,
       game.unsent ? button('↻ Send again', 'resend') : null,
       el('button', { class: 'danger', text: 'Forget', title: 'Remove it from your games (they aren\'t told)', onclick: async () => {
@@ -2204,6 +2208,12 @@ function gameBoard(app, session, onForget) {
     const b = game.board;
     if (b.kind === 'tic_tac_toe') return `You're ${b.mine}`;
     if (b.kind === 'four_in_a_row') return 'Yours are in your colour, theirs in yellow';
+    if (b.kind === 'checkers') {
+      const said = [b.black ? 'You\'re Black (dark pieces)' : 'You\'re White (light pieces)'];
+      if (b.must_capture && b.legal.length) said.push('you must jump');
+      if (b.last) said.push(`last ${b.last}`);
+      return said.join(' · ');
+    }
     const moves = [];
     for (let i = 0; i < b.moves.length; i += 2) moves.push(`${i / 2 + 1}. ${b.moves.slice(i, i + 2).join(' ')}`);
     return `You're ${b.white ? 'White' : 'Black'}${moves.length ? ' · ' + moves.slice(-6).join('  ') : ''}`;
@@ -2229,6 +2239,7 @@ function gameBoard(app, session, onForget) {
         return el('span', { class: 'disc' + (c === ' ' ? '' : c === b.mine ? ' mine' : ' theirs') + (b.last === i ? ' last' : '') });
       }))));
     }
+    if (b.kind === 'checkers') return checkersBoard(b, playing);
     // Chess: Black sees the board turned round. A piece of yours, then a
     // square it can go to; a pawn reaching the far rank asks what it becomes.
     const squares = chessSquares(b.fen);
@@ -2261,6 +2272,44 @@ function gameBoard(app, session, onForget) {
           act('move', move);
         },
       }, piece === ' ' ? '' : el('span', { class: 'piece ' + (piece === piece.toUpperCase() ? 'white' : 'black'), text: CHESS_GLYPHS[piece.toLowerCase()] }));
+    }));
+  };
+  // Checkers: Black starts at the top, so White sees the board turned
+  // round. A piece of yours, then each square it lands on, until the
+  // move's whole (one way on from there, and it's made).
+  const checkersBoard = (b, playing) => {
+    const squareName = (i) => 'abcdefgh'[i % 8] + (8 - Math.floor(i / 8));
+    const named = path.map(squareName).join(' ');
+    const going = path.length ? b.legal.filter((m) => m === named || m.startsWith(named + ' ')) : [];
+    const targets = going.map((m) => m.split(' ')[path.length]).filter(Boolean);
+    const last = b.last ? b.last.split(' ') : [];
+    const mine = b.black ? 'b' : 'w';
+    const order = [...Array(64).keys()];
+    if (b.black) order.reverse();
+    return el('div', { class: 'board chess checkers' }, order.map((i) => {
+      const piece = b.cells[i];
+      const own = piece.toLowerCase() === mine;
+      const light = (Math.floor(i / 8) + i % 8) % 2 === 0;
+      return el('button', {
+        class: 'square ' + (light ? 'light' : 'dark') + (last.includes(squareName(i)) ? ' last' : '') + (path.includes(i) ? ' from' : '') + (targets.includes(squareName(i)) ? ' target' : ''),
+        'aria-label': squareName(i) + (piece === ' ' ? '' : ` ${{ b: 'black man', w: 'white man', B: 'black king', W: 'white king' }[piece]}`),
+        disabled: !playing || light,
+        onclick: () => {
+          if (own && (path.length <= 1 || path[0] === i)) {
+            if (path.length === 1 && path[0] === i) path = [];
+            else if (b.legal.some((m) => m.startsWith(squareName(i) + ' '))) path = [i];
+            else return toast(b.must_capture ? 'You must jump, with a piece that can' : 'That piece can\'t move');
+            return draw();
+          }
+          if (!path.length || !targets.includes(squareName(i))) return;
+          const next = [...path, i];
+          const nextNamed = next.map(squareName).join(' ');
+          const moves = b.legal.filter((m) => m === nextNamed || m.startsWith(nextNamed + ' '));
+          if (moves.length === 1) return act('move', moves[0]);
+          path = next;
+          draw();
+        },
+      }, piece === ' ' ? '' : el('span', { class: 'disc ' + (piece.toLowerCase() === 'w' ? 'white' : 'black') + (piece === piece.toUpperCase() ? ' king' : '') }));
     }));
   };
   return { node: body, draw };

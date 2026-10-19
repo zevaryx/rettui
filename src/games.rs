@@ -1,6 +1,6 @@
 //! Games over LXMF: LRGP (the Lightweight Reticulum Gaming Protocol), as
-//! Ratspeak's lrgp-rs and lrgp-py play it. Tic-Tac-Toe, Four in a Row and
-//! Chess, two players, each move one LXMF message.
+//! Ratspeak's lrgp-rs and lrgp-py play it. Tic-Tac-Toe, Four in a Row,
+//! Checkers and Chess, two players, each move one LXMF message.
 //!
 //! A game message is an ordinary LXMF message whose text says what it is
 //! for clients without games (`[LRGP Chess] e2e4`), with two fields:
@@ -35,14 +35,19 @@ use rmpv::Value;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
+/// Not LRGP's: claiming a draw in chess or checkers (threefold
+/// repetition, fifty or forty moves), sent as a draw offer that says why.
+pub const DRAW_CLAIM: &str = "draw_claim";
+
 /// The games there are, in the order they're offered.
-pub const GAMES: [&str; 3] = ["ttt", "four_in_a_row", "chess"];
+pub const GAMES: [&str; 4] = ["ttt", "four_in_a_row", "checkers", "chess"];
 
 /// A game's name, as shown.
 pub fn game_name(app: &str) -> &str {
     match app {
         "ttt" => "Tic-Tac-Toe",
         "four_in_a_row" => "Four in a Row",
+        "checkers" => "Checkers",
         "chess" => "Chess",
         other => other,
     }
@@ -141,6 +146,11 @@ pub enum Board {
     /// (UCI, as `e2e4`), the last move, and whether the side to move is in
     /// check.
     Chess { fen: String, white: bool, legal: Vec<String>, last: Option<String>, check: bool, moves: Vec<String> },
+    /// 64 squares, a8 first: `b`/`w` men, `B`/`W` kings, or ` `. Whether
+    /// you're Black (who moves first, from the top), the moves you can make
+    /// (square paths, as `a3 b4` or `a5 c3 e1`), the last move, and
+    /// whether a capture must be made.
+    Checkers { cells: Vec<char>, black: bool, legal: Vec<String>, last: Option<String>, must_capture: bool },
 }
 
 impl Board {
@@ -152,6 +162,7 @@ impl Board {
             Board::TicTacToe { cells, .. } => chunk(cells, 3),
             Board::FourInARow { cells, .. } => chunk(cells, 7),
             Board::Chess { fen, .. } => chess_squares(fen).chunks(8).map(|row| row.iter().collect()).collect(),
+            Board::Checkers { cells, .. } => chunk(cells, 8),
         }
     }
 }
@@ -279,11 +290,19 @@ impl Games {
     }
 
     /// Do `command` in a game of ours. A move is given as the game takes
-    /// it: a cell (`{"i": 4}`), a column (`{"c": 3}`), or a chess move
-    /// (`{"m": "e2e4"}`).
+    /// it: a cell (`{"i": 4}`), a column (`{"c": 3}`), or a chess or
+    /// checkers move (`{"m": "e2e4"}`, `{"m": "a5 c3 e1"}`).
     pub fn act(&self, app: &str, session: &str, command: &str, payload: HashMap<String, Value>) -> Result<Prepared, String> {
-        let peer = self.session(app, session).map(|s| s.contact_hash).ok_or("There's no such game")?;
-        self.prepare(app, command, session, &payload, Some(&peer))
+        let session_record = self.session(app, session).ok_or("There's no such game")?;
+        if command == DRAW_CLAIM {
+            let reason = session_record.metadata.get("draw_offer_reason").and_then(Json::as_str).unwrap_or_default();
+            if reason.is_empty() {
+                return Err("There's no draw to claim".into());
+            }
+            let claim = HashMap::from([("r".to_string(), Value::from(reason))]);
+            return self.prepare(app, CMD_DRAW_OFFER, session, &claim, Some(&session_record.contact_hash));
+        }
+        self.prepare(app, command, session, &payload, Some(&session_record.contact_hash))
     }
 
     fn prepare(
@@ -391,9 +410,12 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
             "draw" => format!("Draw{}", draw_reason(meta)),
             "resign" if winner == me => "They resigned: you won".to_string(),
             "resign" => "You resigned".to_string(),
+            // Checkers says a resignation is a win, for the other side.
+            "win" if field("terminal_reason") == "rsn" && winner == me => "They resigned: you won".to_string(),
+            "win" if field("terminal_reason") == "rsn" => "You resigned".to_string(),
             _ if winner.is_empty() => "Draw".to_string(),
-            _ if winner == me => format!("You won{}", win_reason(meta)),
-            _ => format!("They won{}", win_reason(meta)),
+            _ if winner == me => format!("You won{}", win_reason(meta, "they")),
+            _ => format!("They won{}", win_reason(meta, "you")),
         },
         STATUS_ACTIVE => match draw_offer {
             Some(true) => "They offered a draw".to_string(),
@@ -410,6 +432,10 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
                 Some(true) => actions.extend([CMD_DRAW_ACCEPT, CMD_DRAW_DECLINE]),
                 Some(false) => {}
                 None => actions.push(CMD_DRAW_OFFER),
+            }
+            // A draw that can be claimed ends the game at once.
+            if draw_offer.is_none() && !field("draw_offer_reason").is_empty() {
+                actions.push(DRAW_CLAIM);
             }
             actions.push(CMD_RESIGN);
         }
@@ -446,6 +472,18 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
                 .map(|moves| moves.iter().filter_map(Json::as_str).map(str::to_string).collect())
                 .unwrap_or_default(),
         },
+        "checkers" => Board::Checkers {
+            cells: cells(field("board"), 64),
+            black: field("my_color") == "b",
+            legal: (status == STATUS_ACTIVE && turn == me && draw_offer != Some(true))
+                .then(|| meta.get("legal_moves"))
+                .flatten()
+                .and_then(Json::as_array)
+                .map(|moves| moves.iter().filter_map(Json::as_str).map(str::to_string).collect())
+                .unwrap_or_default(),
+            last: Some(field("last_move")).filter(|m| !m.is_empty()),
+            must_capture: meta.get("must_capture").and_then(Json::as_bool).unwrap_or(false),
+        },
         _ => return None,
     };
     Some(GameView {
@@ -464,11 +502,14 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
     })
 }
 
-/// How a chess game was won, after "You won".
-fn win_reason(meta: &serde_json::Map<String, Json>) -> &'static str {
+/// How a chess or checkers game was won, after "You won": `loser` is who
+/// lost (`they` or `you`).
+fn win_reason(meta: &serde_json::Map<String, Json>, loser: &str) -> String {
     match meta.get("terminal_reason").and_then(Json::as_str) {
-        Some("cm") => " by checkmate",
-        _ => "",
+        Some("cm") => " by checkmate".into(),
+        Some("np") => format!(": {loser} have no pieces left"),
+        Some("nm") => format!(": {loser} can't move"),
+        _ => String::new(),
     }
 }
 
@@ -479,6 +520,7 @@ fn draw_reason(meta: &serde_json::Map<String, Json>) -> &'static str {
         Some("ins") => ": not enough pieces to mate",
         Some("3fr") => ": threefold repetition",
         Some("50m") => ": fifty-move rule",
+        Some("40m") => ": forty-move rule",
         Some("agr") => " by agreement",
         _ => "",
     }
@@ -490,7 +532,9 @@ fn check_note(meta: &serde_json::Map<String, Json>) -> &'static str {
 
 /// A move as the game takes it, from what a player picked: a cell (0–8)
 /// for Tic-Tac-Toe, a column (0–6) for Four in a Row, a chess move (UCI;
-/// a pawn reaching the far rank is made a queen unless it says otherwise).
+/// a pawn reaching the far rank is made a queen unless it says otherwise),
+/// or a checkers move (its squares, `a3 b4` or `a5 c3 e1`; `a5-c3-e1` and
+/// `a5xc3xe1` are taken too).
 pub fn move_payload(app: &str, picked: &str) -> Result<HashMap<String, Value>, String> {
     let number = |key: &str, max: u64| -> Result<HashMap<String, Value>, String> {
         let n: u64 = picked.trim().parse().map_err(|_| format!("Pick 0–{max}"))?;
@@ -510,8 +554,32 @@ pub fn move_payload(app: &str, picked: &str) -> Result<HashMap<String, Value>, S
             }
             Ok(HashMap::from([("m".to_string(), Value::from(uci))]))
         }
+        "checkers" => {
+            let path: Vec<String> = picked
+                .to_ascii_lowercase()
+                .split(|c: char| c.is_whitespace() || c == '-' || c == 'x')
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            let square = |s: &String| s.len() == 2 && matches!(s.as_bytes()[0], b'a'..=b'h') && matches!(s.as_bytes()[1], b'1'..=b'8');
+            if path.len() < 2 || !path.iter().all(square) {
+                return Err("Write a checkers move as its squares, e.g. a3 b4 (a5 c3 e1 for a double jump)".into());
+            }
+            Ok(HashMap::from([("m".to_string(), Value::from(path.join(" ")))]))
+        }
         _ => Err(format!("There's no game called {app}")),
     }
+}
+
+/// The checkers moves that go by `path` (square indices, a8 = 0, from the
+/// piece moved on): the one that ends there, else those that go on.
+pub fn checkers_moves<'a>(legal: &'a [String], path: &[usize]) -> Vec<&'a String> {
+    let named: Vec<String> = path.iter().map(|i| square_name(*i)).collect();
+    let named = named.join(" ");
+    if let Some(done) = legal.iter().find(|m| **m == named) {
+        return vec![done];
+    }
+    legal.iter().filter(|m| m.starts_with(&format!("{named} "))).collect()
 }
 
 /// A chess move from one square to another (indices, a8 = 0), among the
@@ -615,6 +683,59 @@ mod tests {
         played(deliver(&ben, AMY, &amy.act("ttt", &session, "resign", HashMap::new()).unwrap()));
         assert_eq!(amy.view("ttt", &session).unwrap().summary, "You resigned");
         assert_eq!(ben.view("ttt", &session).unwrap().summary, "They resigned: you won");
+    }
+
+    #[test]
+    fn checkers_jumps_must_be_made_and_resigning() {
+        let (amy, ben) = (player(AMY), player(BEN));
+        let challenge = amy.challenge("checkers", &hex::encode(BEN)).unwrap();
+        assert_eq!(challenge.text, "[LRGP Checkers] Sent a challenge!");
+        let session = challenge.game.session.clone();
+        played(deliver(&ben, AMY, &challenge));
+        played(deliver(&amy, BEN, &ben.act("checkers", &session, "accept", HashMap::new()).unwrap()));
+        let Board::Checkers { black: amy_black, legal, cells, .. } = amy.view("checkers", &session).unwrap().board else { panic!() };
+        let (black, white, black_key, white_key) = if amy_black { (&amy, &ben, AMY, BEN) } else { (&ben, &amy, BEN, AMY) };
+        // Black moves first: seven ways to go.
+        assert_eq!(legal.len(), if amy_black { 7 } else { 0 });
+        assert_eq!(cells.iter().filter(|c| **c == 'b').count(), 12);
+        let play = |who: &Games, other: &Games, from: [u8; 16], path: &str| {
+            let prepared = who.act("checkers", &session, "move", move_payload("checkers", path).unwrap()).unwrap();
+            assert_eq!(prepared.text, format!("[LRGP Checkers] {}", path.replace('-', " ")));
+            played(deliver(other, from, &prepared));
+        };
+        play(black, white, black_key, "d6 c5");
+        play(white, black, white_key, "e3-d4");
+        // Black must take: only the jump is offered.
+        let Board::Checkers { legal, must_capture, .. } = black.view("checkers", &session).unwrap().board else { panic!() };
+        assert_eq!((legal, must_capture), (vec!["c5 e3".to_string()], true));
+        assert!(black.act("checkers", &session, "move", move_payload("checkers", "b6 a5").unwrap()).is_err());
+        play(black, white, black_key, "c5 e3");
+        let view = white.view("checkers", &session).unwrap();
+        let Board::Checkers { legal, must_capture, last, cells, .. } = view.board else { panic!() };
+        let mut legal = legal;
+        legal.sort();
+        assert_eq!((legal, must_capture, last.as_deref()), (vec!["d2 f4".to_string(), "f2 d4".to_string()], true, Some("c5 e3")));
+        assert_eq!(cells.iter().filter(|c| **c == 'w').count(), 11);
+        assert!(!view.actions.iter().any(|a| a == DRAW_CLAIM));
+        assert_eq!(white.act("checkers", &session, DRAW_CLAIM, HashMap::new()).unwrap_err(), "There's no draw to claim");
+        // From the squares picked: the one move that ends there.
+        let at = |s: &str| (8 - (s.as_bytes()[1] - b'0') as usize) * 8 + (s.as_bytes()[0] - b'a') as usize;
+        let Board::Checkers { legal, .. } = white.view("checkers", &session).unwrap().board else { panic!() };
+        assert_eq!(checkers_moves(&legal, &[at("d2")]), vec!["d2 f4"]);
+        assert_eq!(checkers_moves(&legal, &[at("d2"), at("f4")]), vec!["d2 f4"]);
+        assert!(checkers_moves(&legal, &[at("d2"), at("c3")]).is_empty());
+        play(white, black, white_key, "d2 f4");
+        played(deliver(black, white_key, &white.act("checkers", &session, "resign", HashMap::new()).unwrap()));
+        assert_eq!(white.view("checkers", &session).unwrap().summary, "You resigned");
+        assert_eq!(black.view("checkers", &session).unwrap().summary, "They resigned: you won");
+        assert!(move_payload("checkers", "a3").is_err());
+        assert!(move_payload("checkers", "a3 z9").is_err());
+        assert_eq!(move_payload("checkers", " A5xC3xE1 ").unwrap()["m"], Value::from("a5 c3 e1"));
+        // How a checkers game ends, said of whoever lost.
+        let meta = |reason: &str| serde_json::Map::from_iter([("terminal_reason".to_string(), Json::from(reason))]);
+        assert_eq!(win_reason(&meta("np"), "they"), ": they have no pieces left");
+        assert_eq!(win_reason(&meta("nm"), "you"), ": you can't move");
+        assert_eq!(draw_reason(&meta("40m")), ": forty-move rule");
     }
 
     #[test]

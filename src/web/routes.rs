@@ -1231,7 +1231,8 @@ async fn start_game(State(state): State<WebState>, axum::Json(body): axum::Json<
 #[derive(Deserialize)]
 struct GameAction {
     command: String,
-    /// A move: a cell, a column, a chess move (`e2e4`).
+    /// A move: a cell, a column, a chess move (`e2e4`), a checkers move
+    /// (`a5 c3 e1`).
     #[serde(default)]
     picked: Option<String>,
 }

@@ -74,7 +74,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     if games.is_empty() {
-        let hint = "No games yet.\n\nPress n to challenge someone to Tic-Tac-Toe, Four in a Row or Chess (or g in a conversation). \
+        let hint = "No games yet.\n\nPress n to challenge someone to Tic-Tac-Toe, Four in a Row, Checkers or Chess (or g in a conversation). \
                     Each move goes as a message, so they can answer whenever they're next online.";
         frame.render_widget(Paragraph::new(hint).wrap(Wrap { trim: true }).style(Style::default().fg(dim())), inner);
         return;
@@ -137,7 +137,7 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     let (board_w, board_h) = match &game.board {
         Board::TicTacToe { .. } => (17, 5),
         Board::FourInARow { .. } => (30, 7),
-        Board::Chess { .. } => (28, 9),
+        Board::Chess { .. } | Board::Checkers { .. } => (28, 9),
     };
     // The board in the middle, where it stands above it, what you are
     // below, and how your last move went (and what came with theirs).
@@ -156,6 +156,9 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
             draw_four_in_a_row(frame, board_area, cells, *mine, *last, cursor, game.yours && app.game_playing)
         }
         Board::Chess { fen, white, last, .. } => draw_chess(frame, board_area, fen, *white, last.as_deref(), cursor, screen.from),
+        Board::Checkers { cells, black, last, .. } => {
+            draw_checkers(frame, board_area, cells, *black, last.as_deref(), cursor, &screen.path)
+        }
     };
     app.regions.game_board = BoardRegion { area: inner, ..region };
     let below = Rect { y: board_area.y + board_area.height + 1, height: 1, ..column };
@@ -223,13 +226,16 @@ fn hints(game: &GameView, unsent: bool) -> String {
         keys.extend(["a accept", "d decline"]);
     }
     if game.yours && game.status == "active" && game.draw_offer != Some(true) {
-        keys.push(if game.app == "chess" { "Enter pick/move · t type" } else { "Enter play" });
+        keys.push(if matches!(game.app.as_str(), "chess" | "checkers") { "Enter pick/move · t type" } else { "Enter play" });
     }
     if can("draw_accept") {
         keys.extend(["y accept draw", "n refuse"]);
     }
     if can("draw_offer") {
         keys.push("D offer draw");
+    }
+    if can(crate::games::DRAW_CLAIM) {
+        keys.push("C claim draw");
     }
     if can("resign") {
         keys.push("R resign");
@@ -258,6 +264,16 @@ fn footnote(game: &GameView) -> String {
                 .rev()
                 .collect();
             if shown.is_empty() { format!("You're {side}") } else { format!("You're {side} · {}", shown.join("  ")) }
+        }
+        Board::Checkers { black, last, must_capture, legal, .. } => {
+            let mut said = vec![if *black { "You're Black (dark pieces)" } else { "You're White (light pieces)" }.to_string()];
+            if *must_capture && !legal.is_empty() {
+                said.push("you must jump".into());
+            }
+            if let Some(last) = last {
+                said.push(format!("last {last}"));
+            }
+            said.join(" · ")
         }
     }
 }
@@ -405,6 +421,57 @@ fn draw_chess(
     BoardRegion { origin: Position::new(area.x + 2, area.y), cell: (3, 1), across: 8, down: 8, area }
 }
 
+/// A checkers board: Black (dark pieces) at the top, as it starts, unless
+/// you're Black. Men are discs, kings ringed ones.
+fn draw_checkers(
+    frame: &mut Frame,
+    area: Rect,
+    cells: &[char],
+    black: bool,
+    last: Option<&str>,
+    cursor: usize,
+    path: &[usize],
+) -> BoardRegion {
+    let index = |square: &str| {
+        let b = square.as_bytes();
+        (b.len() == 2).then(|| (8 - (b[1] - b'0') as usize) * 8 + (b[0] - b'a') as usize)
+    };
+    let last: Vec<usize> = last.map(|m| m.split(' ').filter_map(index).collect()).unwrap_or_default();
+    let mut lines = Vec::new();
+    for shown_row in 0..8 {
+        let mut spans = Vec::new();
+        let row = if black { 7 - shown_row } else { shown_row };
+        spans.push(Span::styled(format!("{} ", 8 - row), Style::default().fg(dim())));
+        for shown_col in 0..8 {
+            let col = if black { 7 - shown_col } else { shown_col };
+            let i = row * 8 + col;
+            let piece = cells.get(i).copied().unwrap_or(' ');
+            let mut bg = if (row + col) % 2 == 0 { LIGHT_SQUARE } else { DARK_SQUARE };
+            if last.contains(&i) {
+                bg = LAST_MOVE;
+            }
+            if path.contains(&i) {
+                bg = Color::Rgb(0x5a, 0x8a, 0x3a);
+            }
+            if i == cursor {
+                bg = accent();
+            }
+            let fg = if piece.eq_ignore_ascii_case(&'w') { Color::Rgb(0xff, 0xff, 0xff) } else { Color::Rgb(0x10, 0x10, 0x10) };
+            let glyph = match piece {
+                'b' | 'w' => '●',
+                'B' | 'W' => '◉',
+                _ => ' ',
+            };
+            spans.push(Span::styled(format!(" {glyph} "), Style::default().fg(fg).bg(bg).bold()));
+        }
+        lines.push(Line::from(spans));
+    }
+    let files: String = (0..8).map(|c| format!(" {} ", (b'a' + if black { 7 - c } else { c }) as char)).collect();
+    lines.push(Line::styled(format!("  {files}"), Style::default().fg(dim())));
+    frame.render_widget(Paragraph::new(lines), area);
+    BoardRegion { origin: Position::new(area.x + 2, area.y), cell: (3, 1), across: 8, down: 8, area }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -493,6 +560,46 @@ mod tests {
         assert_eq!(app.tab, Tab::Messages);
         key(&mut app, KeyCode::Char('2'));
         assert_eq!(app.tab, Tab::Games);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_checkers_board_drawn_for_either_side() {
+        use std::collections::HashMap;
+
+        use crate::games::{Games, fields};
+        let dir = std::env::temp_dir().join(format!("rettui-ui-checkers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, _net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let (me, them) = ([0xa1; 16], [0xb2; 16]);
+        app.games.set_me(&me);
+        let mut ben = Games::default();
+        ben.set_me(&them);
+        let wire = |prepared: &crate::games::Prepared| -> HashMap<u8, Vec<u8>> {
+            fields(&hex::decode(prepared.game.envelope.as_ref().unwrap()).unwrap()).into_iter().collect()
+        };
+        let challenge = app.games.challenge("checkers", &hex::encode(them)).unwrap();
+        let session = challenge.game.session.clone();
+        ben.receive(&hex::encode(me), &wire(&challenge));
+        app.games.receive(&hex::encode(them), &wire(&ben.act("checkers", &session, "accept", HashMap::new()).unwrap()));
+        app.show_game("checkers", &session);
+        app.game_playing = true;
+        let mut terminal = Terminal::new(TestBackend::new(110, 34)).unwrap();
+        terminal.draw(|f| super::super::draw(f, &mut app)).unwrap();
+        let shown = screen(&terminal);
+        let view = app.games.view("checkers", &session).unwrap();
+        let crate::games::Board::Checkers { black, .. } = view.board else { panic!() };
+        let side = if black { "You're Black (dark pieces)" } else { "You're White (light pieces)" };
+        assert!(shown.contains(side) && shown.contains("Checkers with"), "{shown}");
+        // Your pieces are at the bottom, whichever side you are; the files
+        // read the other way for Black.
+        let files = if black { " h  g  f  e  d  c  b  a " } else { " a  b  c  d  e  f  g  h " };
+        assert!(shown.contains(files), "{shown}");
+        // Six rows of four, twelve pieces a side.
+        assert_eq!(shown.lines().filter(|l| l.matches('●').count() == 4).count(), 6, "{shown}");
+        if black {
+            assert!(shown.contains("Enter pick/move · t type"), "{shown}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -75,7 +75,8 @@ pub enum MenuItem {
 /// What a game's prompts ask.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GamePrompt {
-    /// A chess move, typed (`e7e8n` to promote to a knight).
+    /// A chess or checkers move, typed (`e7e8n` to promote to a knight,
+    /// `a5 c3 e1` to jump twice).
     Move {
         app: String,
         session: String,
@@ -115,14 +116,18 @@ impl BoardRegion {
 }
 
 /// The game selected in the Games tab (terminal UI): which, and the square
-/// or column picked (a chess move's first square once chosen).
+/// or column picked (a chess move's first square once chosen, a checkers
+/// move's squares so far).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameScreen {
     pub app: String,
     pub session: String,
     pub cursor: usize,
     pub from: Option<usize>,
-    /// The cursor's been put on your side of a chess board (which side
+    /// A checkers move's squares, picked so far: the piece, then where it
+    /// lands (each jump of several).
+    pub path: Vec<usize>,
+    /// The cursor's been put on your side of a chess or checkers board (which side
     /// that is isn't known until the challenge is accepted).
     pub placed: bool,
 }
@@ -512,7 +517,7 @@ impl App {
             }
             KeyCode::Enter | KeyCode::Char(' ') => self.play_at_cursor(&game),
             // A cell or column by number, as on a keypad (1 the first).
-            KeyCode::Char(c @ '1'..='9') if game.app != "chess" => {
+            KeyCode::Char(c @ '1'..='9') if !matches!(game.app.as_str(), "chess" | "checkers") => {
                 let picked = c as usize - '1' as usize;
                 self.game_action(app, session, "move", Some(&picked.to_string()))
             }
@@ -521,14 +526,20 @@ impl App {
             KeyCode::Char('D') if can("draw_offer") => self.game_action(app, session, "draw_offer", None),
             KeyCode::Char('D' | 'y') if can("draw_accept") => self.game_action(app, session, "draw_accept", None),
             KeyCode::Char('n') if can("draw_decline") => self.game_action(app, session, "draw_decline", None),
+            KeyCode::Char('C') if can(crate::games::DRAW_CLAIM) => self.game_action(app, session, crate::games::DRAW_CLAIM, None),
             KeyCode::Char('R') if can("resign") => {
                 let prompt = GamePrompt::ConfirmResign { app: app.into(), session: session.into() };
                 self.open_prompt(PromptKind::Game(prompt), &format!("Resign this game of {}? Type y", game.name), "");
                 Ok(())
             }
-            KeyCode::Char('t') if game.app == "chess" && game.yours && game.status == "active" => {
+            KeyCode::Char('t') if matches!(game.app.as_str(), "chess" | "checkers") && game.yours && game.status == "active" => {
                 let prompt = GamePrompt::Move { app: app.into(), session: session.into() };
-                self.open_prompt(PromptKind::Game(prompt), "Your move, by its squares (e2e4; e7e8n promotes to a knight)", "");
+                let ask = if game.app == "chess" {
+                    "Your move, by its squares (e2e4; e7e8n promotes to a knight)"
+                } else {
+                    "Your move, by its squares (a3 b4; a5 c3 e1 jumps twice)"
+                };
+                self.open_prompt(PromptKind::Game(prompt), ask, "");
                 Ok(())
             }
             KeyCode::Char('r') if self.game_unsent(&game) => self.game_action(app, session, "resend", None),
@@ -544,7 +555,7 @@ impl App {
     }
 
     /// Move the cursor on the board, as it's shown (Black sees the chess
-    /// board turned round).
+    /// board turned round, and the checkers one).
     fn move_game_cursor(&mut self, game: &GameView, code: KeyCode) {
         let Some(screen) = self.game_view.as_mut() else { return };
         let (dx, dy): (i32, i32) = match code {
@@ -557,6 +568,7 @@ impl App {
             Board::TicTacToe { .. } => (3, 3, false),
             Board::FourInARow { .. } => (7, 1, false),
             Board::Chess { white, .. } => (8, 8, !white),
+            Board::Checkers { black, .. } => (8, 8, *black),
         };
         let (dx, dy) = if turned { (-dx, -dy) } else { (dx, dy) };
         let (x, y) = ((screen.cursor % width) as i32 + dx, (screen.cursor / width) as i32 + dy);
@@ -566,9 +578,14 @@ impl App {
     }
 
     /// Play the square or column under the cursor: for chess, the first
-    /// square picks a piece of yours, the second moves it there.
+    /// square picks a piece of yours, the second moves it there; for
+    /// checkers, the next squares are where it lands, until the move's
+    /// whole.
     fn play_at_cursor(&mut self, game: &GameView) -> Result<(), String> {
         let Some(screen) = self.game_view.clone() else { return Ok(()) };
+        if let Board::Checkers { cells, black, legal, must_capture, .. } = &game.board {
+            return self.play_checkers(game, &screen, cells, *black, legal, *must_capture);
+        }
         let Board::Chess { fen, white, legal, .. } = &game.board else {
             return self.game_action(&screen.app, &screen.session, "move", Some(&screen.cursor.to_string()));
         };
@@ -592,6 +609,61 @@ impl App {
         Ok(())
     }
 
+    fn play_checkers(
+        &mut self,
+        game: &GameView,
+        screen: &GameScreen,
+        cells: &[char],
+        black: bool,
+        legal: &[String],
+        must_capture: bool,
+    ) -> Result<(), String> {
+        let at = screen.cursor;
+        let own = cells.get(at).is_some_and(|p| p.to_ascii_lowercase() == if black { 'b' } else { 'w' });
+        // Your piece: picked (again, to start over), or put down.
+        if screen.path.len() <= 1 && own || screen.path.first() == Some(&at) {
+            if screen.path == [at] {
+                self.set_checkers_path(Vec::new());
+            } else if crate::games::checkers_moves(legal, &[at]).is_empty() {
+                return Err(match () {
+                    _ if !game.yours => "It isn't your move",
+                    _ if must_capture => "You must jump, with a piece that can",
+                    _ => "That piece can't move",
+                }
+                .into());
+            } else {
+                self.set_checkers_path(vec![at]);
+            }
+            return Ok(());
+        }
+        if screen.path.is_empty() {
+            return Err("Pick one of your pieces first".into());
+        }
+        let path = [screen.path.as_slice(), &[at]].concat();
+        match crate::games::checkers_moves(legal, &path)[..] {
+            [] if must_capture => Err("You must jump".into()),
+            [] => Err("That isn't a legal move".into()),
+            // One move goes this way: made, all its jumps.
+            [whole] => {
+                let whole = whole.clone();
+                self.game_action(&screen.app, &screen.session, "move", Some(&whole))?;
+                self.set_checkers_path(Vec::new());
+                Ok(())
+            }
+            // Several go on from here: where to next?
+            _ => {
+                self.set_checkers_path(path);
+                Ok(())
+            }
+        }
+    }
+
+    fn set_checkers_path(&mut self, path: Vec<usize>) {
+        if let Some(screen) = self.game_view.as_mut() {
+            screen.path = path;
+        }
+    }
+
     fn set_chess_from(&mut self, from: Option<usize>) {
         if let Some(screen) = self.game_view.as_mut() {
             screen.from = from;
@@ -604,9 +676,9 @@ impl App {
         let board = self.regions.game_board;
         let (Some(shown), Some(screen)) = (board.square(at), self.game_view.clone()) else { return };
         let Some(game) = self.games.view(&screen.app, &screen.session) else { return };
-        // Black's chess board is shown turned round.
+        // Black sees either board turned round.
         let index = match &game.board {
-            Board::Chess { white: false, .. } => 63 - shown,
+            Board::Chess { white: false, .. } | Board::Checkers { black: true, .. } => 63 - shown,
             _ => shown,
         };
         if let Some(screen) = self.game_view.as_mut() {
@@ -672,19 +744,37 @@ impl App {
             "four_in_a_row" => 3,
             _ => 52,
         };
+        let placed = !matches!(app, "chess" | "checkers");
         self.game_view =
-            Some(GameScreen { app: app.to_string(), session: session.to_string(), cursor, from: None, placed: app != "chess" });
+            Some(GameScreen { app: app.to_string(), session: session.to_string(), cursor, from: None, path: Vec::new(), placed });
         self.place_game_cursor();
     }
 
-    /// Once a chess game has begun, put the cursor on your first pawn to
-    /// move: e2 for White, e7 for Black.
+    /// Once a chess or checkers game has begun, put the cursor on a piece
+    /// of yours: e2 or e7, the king's pawn, in chess; c3 or f6, on the
+    /// front row, in checkers.
     pub fn place_game_cursor(&mut self) {
         let Some(screen) = self.game_view.as_ref().filter(|s| !s.placed) else { return };
         let Some(game) = self.games.view(&screen.app, &screen.session).filter(|g| g.status == "active") else { return };
-        let Board::Chess { white, .. } = game.board else { return };
+        let cursor = match game.board {
+            Board::Chess { white, .. } => {
+                if white {
+                    52
+                } else {
+                    12
+                }
+            }
+            Board::Checkers { black, .. } => {
+                if black {
+                    21
+                } else {
+                    42
+                }
+            }
+            _ => return,
+        };
         if let Some(screen) = self.game_view.as_mut() {
-            (screen.cursor, screen.placed) = (if white { 52 } else { 12 }, true);
+            (screen.cursor, screen.placed) = (cursor, true);
         }
     }
 }
@@ -944,6 +1034,76 @@ mod tests {
         press(&mut amy, KeyCode::Enter);
         assert!(amy.app.games.view("chess", &session).is_none());
         amy.app.show_game("chess", &session);
+        for p in [amy, ben] {
+            let _ = std::fs::remove_dir_all(p.dir);
+        }
+    }
+
+    #[test]
+    fn checkers_at_the_keyboard_a_jump_and_a_claim_not_yet_there() {
+        let (mut amy, mut ben) = (player("checkers-amy", AMY), player("checkers-ben", BEN));
+        let session = amy.app.start_game(&hex::encode(BEN), "checkers").unwrap();
+        ben.app.on_message(arrives(&mut amy, AMY));
+        ben.app.game_action("checkers", &session, "accept", None).unwrap();
+        amy.app.on_message(arrives(&mut ben, BEN));
+        for p in [&mut amy, &mut ben] {
+            p.app.show_game("checkers", &session);
+            p.app.game_playing = true;
+        }
+        let amy_black = matches!(amy.app.games.view("checkers", &session).unwrap().board, Board::Checkers { black: true, .. });
+        let ((black, black_key), (white, white_key)) =
+            if amy_black { ((&mut amy, AMY), (&mut ben, BEN)) } else { ((&mut ben, BEN), (&mut amy, AMY)) };
+        // The cursor starts on a piece of yours, on the front row.
+        assert_eq!(black.app.game_view.as_ref().unwrap().cursor, 21);
+        assert_eq!(white.app.game_view.as_ref().unwrap().cursor, 42);
+        let sq = |s: &str| (8 - (s.as_bytes()[1] - b'0') as usize) * 8 + (s.as_bytes()[0] - b'a') as usize;
+        let at = |player: &mut Player, square: &str| {
+            player.app.game_view.as_mut().unwrap().cursor = sq(square);
+            press(player, KeyCode::Enter);
+        };
+        let warned = |player: &Player| player.app.log.back().cloned().unwrap_or_default();
+        // Not White's move yet; a back-row piece of Black's is stuck.
+        at(white, "c3");
+        assert!(warned(white).contains("It isn't your move"), "{}", warned(white));
+        at(black, "a7");
+        assert!(warned(black).contains("That piece can't move"));
+        // Picked, put down, picked again; an empty square first.
+        at(black, "c5");
+        assert!(warned(black).contains("Pick one of your pieces first"));
+        at(black, "d6");
+        at(black, "d6");
+        assert!(black.app.game_view.as_ref().unwrap().path.is_empty());
+        at(black, "d6");
+        at(black, "d4");
+        assert!(warned(black).contains("That isn't a legal move"));
+        at(black, "c5");
+        white.app.on_message(arrives(black, black_key));
+        // White types its move.
+        press(white, KeyCode::Char('t'));
+        for c in "e3 d4".chars() {
+            press(white, KeyCode::Char(c));
+        }
+        press(white, KeyCode::Enter);
+        black.app.on_message(arrives(white, white_key));
+        // Black must jump: another piece won't do; the jump, by its squares.
+        at(black, "b6");
+        assert!(warned(black).contains("You must jump"));
+        at(black, "c5");
+        at(black, "a3");
+        assert!(warned(black).contains("You must jump"));
+        at(black, "e3");
+        white.app.on_message(arrives(black, black_key));
+        let view = white.app.games.view("checkers", &session).unwrap();
+        assert!(matches!(&view.board, Board::Checkers { last: Some(last), must_capture: true, .. } if last == "c5 e3"));
+        // Moving about the board: White sees it the right way up.
+        white.app.game_view.as_mut().unwrap().cursor = sq("d2");
+        press(white, KeyCode::Up);
+        assert_eq!(white.app.game_view.as_ref().unwrap().cursor, sq("d3"));
+        press(black, KeyCode::Up);
+        // No draw to claim; C does nothing.
+        assert!(!view.actions.iter().any(|a| a == crate::games::DRAW_CLAIM));
+        press(white, KeyCode::Char('C'));
+        assert_eq!(white.app.games.view("checkers", &session).unwrap().status, "active");
         for p in [amy, ben] {
             let _ = std::fs::remove_dir_all(p.dir);
         }
