@@ -340,7 +340,10 @@ fn draw_four_in_a_row(
 }
 
 /// A chess piece's glyph: the filled ones for both sides, told apart by
-/// colour (they read better than the outlined ones in a terminal).
+/// colour (they read better than the outlined ones in a terminal). But
+/// the pawn's outlined: the filled one (U+265F) is an emoji too, which
+/// terminals may draw from an emoji font, in its own colours (both sides'
+/// pawns alike), whatever colour it's given.
 fn chess_glyph(piece: char) -> char {
     match piece.to_ascii_lowercase() {
         'k' => '♚',
@@ -348,7 +351,7 @@ fn chess_glyph(piece: char) -> char {
         'r' => '♜',
         'b' => '♝',
         'n' => '♞',
-        'p' => '♟',
+        'p' => '♙',
         _ => ' ',
     }
 }
@@ -404,6 +407,15 @@ fn draw_chess(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn no_chess_piece_is_drawn_as_an_emoji() {
+        // The black pawn (U+265F) is the one chess symbol that's an emoji
+        // too: drawn from an emoji font, its colour would be lost.
+        for piece in "kqrbnpKQRBNP".chars() {
+            assert_ne!(super::chess_glyph(piece), '\u{265F}', "{piece}");
+        }
+    }
+
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 

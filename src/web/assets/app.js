@@ -2108,7 +2108,9 @@ function dialog(title, body, { className = '', onclose } = {}) {
 // conversations lead there.
 
 const GAME_NAMES = { ttt: 'Tic-Tac-Toe', four_in_a_row: 'Four in a Row', chess: 'Chess' };
-const CHESS_GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+// The pawn (U+265F) is an emoji too: asked for as text (U+FE0E), so it's
+// drawn in its side's colour, not an emoji font's.
+const CHESS_GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟\uFE0E' };
 
 // Show a game in the Games tab, selected (one just started, or a
 // notification about it), whatever the list is filtered by.
