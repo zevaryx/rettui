@@ -90,6 +90,11 @@ pub(super) fn expand_home(path: &str) -> PathBuf {
 
 /// Open a file or web address with the desktop's default application.
 fn open_external(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
+    // Tests open nothing on the computer running them.
+    if cfg!(test) {
+        let _ = target;
+        return Ok(());
+    }
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(windows) {

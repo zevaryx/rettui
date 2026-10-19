@@ -20,7 +20,7 @@ pub struct Clipboard {
 impl Clipboard {
     /// `RETTUI_CLIPBOARD=osc52` skips the system clipboard.
     pub fn new() -> Self {
-        let osc52_only = std::env::var("RETTUI_CLIPBOARD").is_ok_and(|v| v == "osc52");
+        let osc52_only = cfg!(test) || std::env::var("RETTUI_CLIPBOARD").is_ok_and(|v| v == "osc52");
         let system = if osc52_only {
             None
         } else {
@@ -36,10 +36,14 @@ impl Clipboard {
     /// Copy text. Always also sent as OSC 52, so it lands in the local
     /// clipboard even when rettui runs over SSH.
     pub fn copy(&mut self, text: &str) {
+        // Tests see what was copied, and leave the computer's clipboard (and
+        // the terminal running them) alone.
         #[cfg(test)]
         {
             self.last = Some(text.to_string());
+            return;
         }
+        #[allow(unreachable_code)]
         if let Some(system) = &mut self.system
             && let Err(e) = system.set_text(text.to_string())
         {
