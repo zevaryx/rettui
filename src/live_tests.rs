@@ -208,7 +208,7 @@ async fn two_rettuis_message_each_other_and_find_their_way() {
     })
     .await;
     amy.app.forget_path(&to_ben).unwrap();
-    until(&mut amy, &mut ben, "the path forgotten", |a, _| a.app.path_lookups.get(&to_ben).is_none()).await;
+    until(&mut amy, &mut ben, "the path forgotten", |a, _| !a.app.path_lookups.contains_key(&to_ben)).await;
     // Both see their interface up.
     assert!(amy.app.interfaces.iter().any(|i| i.online) && ben.app.interfaces.iter().any(|i| i.online));
     let _ = (&amy.identity, &ben.identity);
