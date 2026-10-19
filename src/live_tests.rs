@@ -248,6 +248,17 @@ async fn amys_node_propagation_node_and_hub() {
     ben.app.navigate(crate::app::resolve_url(&format!("{node}:/page/nope.mu"), None).unwrap());
     until(&mut amy, &mut ben, "Ben told the page isn't there", |_, b| b.app.browser.loading.is_none()).await;
 
+    // Amy blocks Ben (his identity known, so in Reticulum too), then lets
+    // him back.
+    amy.app.block_contact(&to_ben).unwrap();
+    until(&mut amy, &mut ben, "Ben blocked in Reticulum", |a, _| a.app.log.iter().any(|l| l.contains("Blocked") && l.contains("identity")))
+        .await;
+    amy.app.unblock_contact(&to_ben).unwrap();
+    until(&mut amy, &mut ben, "Ben unblocked in Reticulum", |a, _| {
+        a.app.log.iter().any(|l| l.contains("Unblocked") && l.contains("identity"))
+    })
+    .await;
+
     // Through Amy's propagation node: Ben leaves a message there for Amy,
     // who collects it by syncing.
     let pn = hex::encode(amy.app.pn.hash);
@@ -398,10 +409,12 @@ async fn the_command_line_against_a_running_rettui() {
     while_running(&mut amy, crate::cli::probe(&settings, &paths, &node, None)).await.unwrap();
     assert!(crate::cli::path(&settings, "nope", false).await.is_err());
 
-    // `rettui sync` with Amy's propagation node, and `rettui listen`.
+    // `rettui sync` with Amy's propagation node, and `rettui listen` while
+    // she writes.
     while_running(&mut amy, crate::cli::sync(&settings, &paths, identity.clone(), Some(&pn))).await.unwrap();
     assert!(crate::cli::sync(&settings, &paths, identity.clone(), None).await.is_err());
-    while_running(&mut amy, crate::cli::listen(&settings, &paths, identity.clone(), 1)).await.unwrap();
+    amy.app.send_message(from_cli.clone(), "Heard while listening".into(), Vec::new(), DeliveryMode::Direct, None).unwrap();
+    while_running(&mut amy, crate::cli::listen(&settings, &paths, identity.clone(), 4)).await.unwrap();
 
     // `rettui backup` and `rettui restore`.
     let backup = dir.join("backup.tar.gz");
@@ -820,7 +833,7 @@ async fn the_network_actor_command_by_command() {
     send(&mut amy, NetCommand::RecheckPropagation);
     send(&mut amy, NetCommand::AutoPropagation { enabled: false, known: Vec::new() });
     send(&mut amy, NetCommand::SetDiscoveredEntryPoints(2));
-    send(&mut amy, NetCommand::SetDiscoveredEntryPoints(0));
+    send(&mut amy, NetCommand::SetDiscoveredEntryPoints(1));
     // Nothing hosted: said so.
     send(&mut amy, NetCommand::HostReload);
     send(&mut amy, NetCommand::HostAnnounce);
@@ -836,6 +849,9 @@ async fn the_network_actor_command_by_command() {
 
     // Bootstrap only: the entry point that can't be brought back is said.
     until_one(&mut amy, "the Bootstrap only note", |a| a.app.log.iter().any(|l| l.contains("Odd is Bootstrap only"))).await;
+    // A few looks for entry points (none are found here), once started.
+    let started = Instant::now();
+    until_one(&mut amy, "a few looks for entry points", |_| started.elapsed() > Duration::from_secs(8)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

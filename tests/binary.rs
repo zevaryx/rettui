@@ -189,6 +189,20 @@ fn get_tls(port: u16, ca: &Path) -> (String, String) {
     (head.lines().next().unwrap_or_default().to_string(), body.to_string())
 }
 
+/// A plain HTTP POST of `{}` (with the token), its status line.
+fn post(port: u16, path: &str, token: &str) -> String {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+    )
+    .unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).unwrap();
+    raw.lines().next().unwrap_or_default().to_string()
+}
+
 /// A plain HTTP GET (with the token), its status line and body.
 fn get(port: u16, path: &str, token: &str) -> (String, String) {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -225,6 +239,19 @@ fn the_web_ui_from_start_to_stop() {
         std::thread::sleep(Duration::from_millis(200));
     }
     assert!(get(port, "/api/conversations", &token).0.contains("200"));
+
+    // Reticulum restarted from the web UI: down, then up again.
+    assert!(post(port, "/api/reticulum/restart", &token).contains("200"));
+    let started = Instant::now();
+    loop {
+        let (_, body) = get(port, "/api/state", &token);
+        if body.contains("\"state\":\"online\"") && started.elapsed() > Duration::from_millis(500) {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(30), "Reticulum didn't start again: {body}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(post(port, "/api/announce", &token).contains("200"));
 
     // The same token the next time.
     let status = web.stop();

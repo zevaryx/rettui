@@ -1326,4 +1326,28 @@ mod tests {
         assert_eq!(lxmf_display_name(b"").as_deref(), None);
         assert_eq!(lxmf_display_name(&[0xff, 0xfe]).as_deref(), None);
     }
+
+    #[test]
+    fn interface_details_and_rates_as_rnstatus_has_them() {
+        let busy = InterfaceInfo {
+            name: "Server".into(),
+            online: true,
+            bitrate: 10_000_000,
+            mtu: 500,
+            mode: "ACCESS_POINT".into(),
+            clients: Some(1),
+            announce_queue: Some(2),
+            held_announces: 1,
+            tx_drops: 3,
+            ..InterfaceInfo::default()
+        };
+        let details = busy.details().join(", ");
+        for part in ["mode access point", "1 client", "2 announces queued", "1 announce held", "3 dropped"] {
+            assert!(details.contains(part), "{part}: {details}");
+        }
+        let many = InterfaceInfo { clients: Some(4), announce_queue: Some(1), held_announces: 2, ..busy };
+        assert!(many.details().join(", ").contains("4 clients"));
+        assert_eq!([bit_rate(2_500_000_000), bit_rate(1_500), bit_rate(10)], ["2.50 Gbps", "1.50 kbps", "10 bps"]);
+        assert!(Stop::Restart.total_wait() > Stop::Quit.total_wait() && Stop::Restart.runtime_wait() > Stop::Quit.runtime_wait());
+    }
 }
