@@ -39,7 +39,7 @@ pub(super) fn draw_reticulum(frame: &mut Frame, app: &mut App, area: Rect) {
     let status_height = 5 + app.rns.check.warnings.len().min(3) as u16 + u16::from(app.uses_external_shared_instance());
     let [status, body] = Layout::vertical([Constraint::Length(status_height), Constraint::Min(5)]).areas(area);
     draw_file_status(frame, app, status);
-    let [sections, options] = Layout::horizontal([Constraint::Length(super::side_width(body.width, 34)), Constraint::Min(20)]).areas(body);
+    let [sections, options] = Layout::horizontal([Constraint::Length(super::side_width(app, body, 34)), Constraint::Min(20)]).areas(body);
     draw_sections(frame, app, sections);
     draw_options(frame, app, options);
     draw_picker(frame, app, area);

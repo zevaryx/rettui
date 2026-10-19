@@ -136,6 +136,11 @@ pub struct Settings {
     pub date_style: String,
     /// The terminal UI's colours: one of [`crate::ui::THEMES`].
     pub tui_theme: String,
+    /// How wide each tab's side list is (terminal UI), by tab, in
+    /// columns, as dragged or set with `<` and `>`; a tab not here has its
+    /// own default width.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub pane_widths: std::collections::BTreeMap<String, u16>,
     /// Host an LXMF propagation node (messages kept in `propagation/`).
     pub pn_enabled: bool,
     /// Name the propagation node announces; the display name when unset.
@@ -212,6 +217,7 @@ impl Default for Settings {
             discovered_entry_points: 0,
             clock: "24-hour".into(),
             tui_theme: "dark".into(),
+            pane_widths: Default::default(),
             date_style: "month-day".into(),
             pn_enabled: false,
             pn_name: None,

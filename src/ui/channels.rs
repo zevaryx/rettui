@@ -177,12 +177,12 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     app.channels.sync_draft();
     let active = app.channels.active();
     let show_members = area.width >= 90 && active.as_ref().is_some_and(|(_, room)| !room.is_empty() && whisper_peer(room).is_none());
-    let [list_area, chat_area, members_area] = Layout::horizontal([
-        Constraint::Length(super::side_width(area.width, 30)),
-        Constraint::Min(20),
-        Constraint::Length(if show_members { 24 } else { 0 }),
-    ])
-    .areas(area);
+    // The list shares what the members' column leaves.
+    let members = if show_members { 24 } else { 0 };
+    let shared = Rect { width: area.width.saturating_sub(members), ..area };
+    let [list_area, chat_area, members_area] =
+        Layout::horizontal([Constraint::Length(super::side_width(app, shared, 30)), Constraint::Min(20), Constraint::Length(members)])
+            .areas(area);
 
     // Hub and room list.
     let list_block = block("Channels", !app.channels.typing);

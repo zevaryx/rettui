@@ -16,7 +16,7 @@ use crate::app::node::NodeStatus;
 
 pub(super) fn draw_hub(frame: &mut Frame, app: &mut App, area: Rect) {
     // Wide enough for the 32-character hub address.
-    let [left, right] = Layout::horizontal([Constraint::Length(super::side_width(area.width, 43)), Constraint::Min(20)]).areas(area);
+    let [left, right] = Layout::horizontal([Constraint::Length(super::side_width(app, area, 43)), Constraint::Min(20)]).areas(area);
     let [status_area, replies_area] = Layout::vertical([Constraint::Length(10), Constraint::Min(3)]).areas(left);
     let [list_area, details_area] = Layout::vertical([Constraint::Min(5), Constraint::Length(9)]).areas(right);
     draw_status(frame, app, status_area);

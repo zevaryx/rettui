@@ -88,7 +88,7 @@ fn clipped(text: &str, width: usize) -> String {
 
 pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let [list_area, chat_area] =
-        Layout::horizontal([Constraint::Length(super::side_width(area.width, 30)), Constraint::Min(20)]).areas(area);
+        Layout::horizontal([Constraint::Length(super::side_width(app, area, 30)), Constraint::Min(20)]).areas(area);
 
     let order = app.conversation_order();
     let list_block = block("Conversations", !app.composing);

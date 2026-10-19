@@ -210,6 +210,19 @@ impl App {
                 self.send(NetCommand::Sync);
                 return;
             }
+            // The side list narrower, wider, or as it was.
+            KeyCode::Char('<') => {
+                self.nudge_side(false);
+                return;
+            }
+            KeyCode::Char('>') => {
+                self.nudge_side(true);
+                return;
+            }
+            KeyCode::Char('=') => {
+                self.reset_side();
+                return;
+            }
             _ => {}
         }
 
@@ -410,9 +423,15 @@ impl App {
             // In the page editor, dragging selects text.
             MouseEventKind::Drag(MouseButton::Left) if self.tab == Tab::Node && self.node.dragging => self.drag_node(at),
             MouseEventKind::Up(MouseButton::Left) if self.node.dragging => self.node.dragging = false,
+            // The side list's border: dragged, it resizes the list.
+            MouseEventKind::Drag(MouseButton::Left) if self.resizing_side.is_some() => self.drag_side_border(at.x),
+            MouseEventKind::Up(MouseButton::Left) if self.resizing_side.is_some() => self.release_side_border(),
             MouseEventKind::Down(MouseButton::Left) => {
                 let double = self.last_click.is_some_and(|(when, pos)| pos.y == at.y && when.elapsed() < DOUBLE_CLICK);
                 self.last_click = Some((Instant::now(), at));
+                if self.press_side_border(at, double) {
+                    return;
+                }
                 // A press in a chat history may start a selection (and is a
                 // click all the same: a link, a name, a message).
                 self.chat_selection = self.chat_history().filter(|area| area.contains(at)).map(|area| ChatSelection {

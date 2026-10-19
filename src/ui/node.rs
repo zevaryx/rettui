@@ -22,7 +22,7 @@ use crate::nomad::pages::Root;
 
 pub(super) fn draw_node(frame: &mut Frame, app: &mut App, area: Rect) {
     // Wide enough for the 32-character node address.
-    let [left, right] = Layout::horizontal([Constraint::Length(super::side_width(area.width, 43)), Constraint::Min(20)]).areas(area);
+    let [left, right] = Layout::horizontal([Constraint::Length(super::side_width(app, area, 43)), Constraint::Min(20)]).areas(area);
     let [status_area, list_area] = Layout::vertical([Constraint::Length(7), Constraint::Min(3)]).areas(left);
     draw_status(frame, app, status_area);
     draw_pages(frame, app, list_area);

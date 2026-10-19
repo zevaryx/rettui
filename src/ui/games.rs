@@ -40,7 +40,7 @@ fn padded(mut spans: Vec<Span<'static>>, width: usize, style: Style) -> Line<'st
 pub(super) fn draw_games(frame: &mut Frame, app: &mut App, area: Rect) {
     app.sync_game_selection();
     let [list_area, board_area] =
-        Layout::horizontal([Constraint::Length(super::side_width(area.width, 34)), Constraint::Min(20)]).areas(area);
+        Layout::horizontal([Constraint::Length(super::side_width(app, area, 34)), Constraint::Min(20)]).areas(area);
     draw_list(frame, app, list_area);
     draw_board_pane(frame, app, board_area);
 }

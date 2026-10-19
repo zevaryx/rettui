@@ -35,6 +35,7 @@ mod messages;
 pub mod network;
 pub mod node;
 pub mod notify;
+pub mod panes;
 pub mod paths;
 pub mod reach;
 pub mod reticulum;
@@ -273,6 +274,9 @@ pub struct Regions {
     pub games_first: usize,
     /// The filters above the list (All, Active…).
     pub games_filters: Vec<(Rect, games::GameFilter)>,
+    /// The shown tab's side list and the pane beside it (none in a tab
+    /// without one), for resizing.
+    pub side_split: Option<panes::SideSplit>,
     pub game_board: games::BoardRegion,
     pub game_menu: Rect,
     pub game_menu_box: Rect,
@@ -557,6 +561,8 @@ pub struct App {
     cache: Cache,
     /// Time and cell of the previous left click, for double-click detection.
     last_click: Option<(Instant, Position)>,
+    /// The side list being resized (its border dragged).
+    resizing_side: Option<panes::SideSplit>,
     /// Text selected with the mouse in a chat history (Messages, Channels).
     pub chat_selection: Option<ChatSelection>,
     next_request: u64,
@@ -716,6 +722,7 @@ impl App {
             notice: None,
             cache,
             last_click: None,
+            resizing_side: None,
             chat_selection: None,
             next_request: 1,
             restart_pending: false,

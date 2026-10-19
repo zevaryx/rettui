@@ -25,7 +25,16 @@ pub struct Keys {
 }
 
 /// Keys that work in every tab, unless typing.
-const EVERYWHERE: KeyList = &[("1–9", "tabs"), ("A", "announce"), ("S", "sync"), ("^L", "redraw"), ("q", "quit"), ("?", "keys")];
+const EVERYWHERE: KeyList = &[
+    ("1–9", "tabs"),
+    ("< >", "list width"),
+    ("=", "list width back"),
+    ("A", "announce"),
+    ("S", "sync"),
+    ("^L", "redraw"),
+    ("q", "quit"),
+    ("?", "keys"),
+];
 /// Keys that work while typing, too.
 const ALWAYS: KeyList = &[("F1", "keys"), ("^L", "redraw"), ("^C", "quit")];
 

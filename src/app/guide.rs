@@ -371,7 +371,7 @@ impl App {
 
     /// Set something in the settings the user doesn't edit, and save it
     /// (with the file's other values as they are).
-    fn save_flag(&mut self, set: impl Fn(&mut crate::config::Settings)) {
+    pub(super) fn save_flag(&mut self, set: impl Fn(&mut crate::config::Settings)) {
         set(&mut self.settings);
         match self.saved_settings() {
             Ok(mut saved) => {

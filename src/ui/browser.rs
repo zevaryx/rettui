@@ -16,7 +16,7 @@ use crate::nomad::micron::source::{Token, tokenize, visible};
 use crate::term::images::draw_placements;
 
 pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
-    let [pane, content] = Layout::horizontal([Constraint::Length(super::side_width(area.width, 32)), Constraint::Min(20)]).areas(area);
+    let [pane, content] = Layout::horizontal([Constraint::Length(super::side_width(app, area, 32)), Constraint::Min(20)]).areas(area);
     draw_browser_pane(frame, app, pane);
 
     let [address, body] = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).areas(content);

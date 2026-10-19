@@ -89,8 +89,13 @@ fn picked_style() -> Style {
 
 /// Width for a side pane (a list beside the main view): `preferred` when
 /// there is room, else about a third of `total`, and never below 16.
-fn side_width(total: u16, preferred: u16) -> u16 {
-    preferred.min((total / 3).max(16)).min(total)
+/// The shown tab's side list's width in `area` (which it shares with the
+/// pane beside it): as the user left it, or `preferred`. Kept for
+/// resizing it (see `crate::app::panes`).
+fn side_width(app: &mut App, area: ratatui::layout::Rect, preferred: u16) -> u16 {
+    let split = crate::app::panes::side_split(&app.settings, app.tab, area, preferred);
+    app.regions.side_split = Some(split);
+    split.width
 }
 
 fn block(title: &str, focused: bool) -> Block<'_> {
@@ -160,6 +165,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(main);
 
     draw_sidebar(frame, app, sidebar);
+    app.regions.side_split = None;
     match app.tab {
         Tab::Messages => draw_messages(frame, app, body),
         Tab::Games => games::draw_games(frame, app, body),
