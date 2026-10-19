@@ -583,6 +583,13 @@ async fn talking_in_a_hub_at_the_keyboard() {
     amy.app.hub_op("lobby", &who, true).unwrap();
     amy.app.hub_op("lobby", &who, false).unwrap();
     until(&mut amy, &mut ben, "Ben seeing the topic", |_, b| b.heard(hub, "lobby").contains("Welcome all")).await;
+    // Ben pings the hub; Amy renames it as it runs (nobody disconnected).
+    let ben_index = ben.app.channels.hub_index(hub).unwrap();
+    ben.app.channel_submit(ben_index, "lobby", "/ping");
+    until(&mut amy, &mut ben, "Ben's pong", |_, b| b.heard(hub, "lobby").contains("Pong from hub")).await;
+    amy.app.update_settings(&[("hub_name", "Amy's renamed hub")]).unwrap();
+    until(&mut amy, &mut ben, "the hub renamed", |a, _| a.app.hub.replies.iter().any(|(text, _)| text.to_lowercase().contains("reload")))
+        .await;
     amy.key(KeyCode::Char('9'));
     for code in [KeyCode::Tab, KeyCode::Down, KeyCode::Up, KeyCode::Tab, KeyCode::Down, KeyCode::BackTab, KeyCode::Char('y')] {
         amy.key(code);

@@ -1232,4 +1232,75 @@ mod tests {
         app.on_fetched(image, Err("gone".into()));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn partials_from_other_nodes_the_cache_and_addresses_in_messages() {
+        let dir = std::env::temp_dir().join(format!("rettui-browser-partials-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let node = [0xcd; 16];
+        let fetches = |net: &mut tokio::sync::mpsc::UnboundedReceiver<NetCommand>| -> Vec<(u64, String)> {
+            std::iter::from_fn(|| net.try_recv().ok())
+                .filter_map(|c| match c {
+                    NetCommand::Fetch { id, path, .. } => Some((id, path)),
+                    _ => None,
+                })
+                .collect()
+        };
+        // A page with a partial from the same node, and one at an address
+        // that can't be read.
+        let page = Location { node, path: "/page/parts.mu".into(), fields: BTreeMap::new() };
+        app.navigate(page.clone());
+        let (id, _) = fetches(&mut net)[0].clone();
+        app.on_fetched(id, Ok(FetchedContent { data: b"top\n`{:/page/p.mu`5}\n`{not an address}\nend".to_vec(), metadata: None }));
+        let asked = fetches(&mut net);
+        let (part, _) = asked.iter().find(|(_, path)| path == "/page/p.mu").cloned().unwrap();
+        app.on_fetched(part, Ok(FetchedContent { data: b"`(pic`:/media/in.png)\nfrom the part".to_vec(), metadata: None }));
+        assert!(app.browser.partials[0].content.as_deref() == Some("`(pic`:/media/in.png)\nfrom the part"));
+        assert!(app.browser.partials[1].content.as_deref().unwrap().contains("can't read"));
+        assert!(fetches(&mut net).iter().any(|(_, path)| path == "/media/in.png"));
+        // Reloaded: failed this time.
+        app.browser.partials[0].loaded_at = Some(Instant::now() - std::time::Duration::from_secs(60));
+        app.refresh_partials();
+        let again = fetches(&mut net);
+        if let Some((part, _)) = again.iter().find(|(_, path)| path == "/page/p.mu") {
+            app.on_fetched(*part, Err("gone".into()));
+            assert!(app.browser.partials[0].content.as_deref().unwrap().contains("Could not load"));
+        }
+        // Opened again: from the cache, no request.
+        app.navigate(Location { node, path: "/page/other.mu".into(), fields: BTreeMap::new() });
+        let (other, _) = fetches(&mut net)[0].clone();
+        app.on_fetched(other, Ok(FetchedContent { data: b"other".to_vec(), metadata: None }));
+        app.navigate(page.clone());
+        let _ = fetches(&mut net);
+        app.navigate(Location { node, path: "/page/other.mu".into(), fields: BTreeMap::new() });
+        assert!(fetches(&mut net).iter().all(|(_, path)| path != "/page/other.mu"), "{:?}", app.log);
+        assert!(app.browser.cached_age.is_some());
+        // Identifying to the node reloads it; the source, with and without
+        // a page.
+        app.tab = Tab::Browser;
+        app.browser.focus = BrowserFocus::Page;
+        press(&mut app, KeyCode::Char('I'));
+        assert!(app.identifies_to(node));
+        press(&mut app, KeyCode::Char('I'));
+        app.browser.source = None;
+        press(&mut app, KeyCode::Char('u'));
+
+        // Addresses in messages, each kind.
+        for (address, said) in [
+            ("lxmf@zz", "Bad LXMF address"),
+            ("lxma://nonsense", ""),
+            ("not anything", "Cannot open"),
+            ("rrc://0101010101010101010101010101010101", ""),
+        ] {
+            app.open_address(address);
+            if !said.is_empty() {
+                assert!(app.log.iter().any(|l| l.contains(said)), "{address}: {:?}", app.log);
+            }
+            app.prompt = None;
+        }
+        app.open_address(&format!("lxmf@{}", "ab".repeat(16)));
+        assert_eq!(app.active_conversation.as_deref(), Some("ab".repeat(16).as_str()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

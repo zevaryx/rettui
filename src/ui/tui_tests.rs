@@ -1348,3 +1348,31 @@ fn network_peers_of_each_kind_and_the_announce_viewer() {
     }
     tui.draw();
 }
+
+#[test]
+fn the_browser_by_mouse() {
+    let mut tui = Tui::new("browser-mouse");
+    let pages = tui.dir.join("node/pages");
+    std::fs::create_dir_all(&pages).unwrap();
+    std::fs::write(pages.join("index.mu"), ">Home\n`[About`:/page/about.mu]\n".to_string() + &"line\n".repeat(80)).unwrap();
+    std::fs::write(pages.join("about.mu"), "About").unwrap();
+    let home = format!("{}:/page/index.mu", hex::encode(tui.app.node.hash));
+    tui.app.store.saved.push(crate::store::Bookmark { name: "Home".into(), url: home.clone() });
+    tui.app.open_address(&home);
+    tui.tab(Tab::Browser);
+    let (source, address, search) = (tui.app.regions.source_button, tui.app.regions.address, tui.app.regions.browser_search);
+    let tabs = tui.app.regions.browser_tabs.clone();
+    tui.click_in(source).click_in(source);
+    tui.click_in(address).key(KeyCode::Esc);
+    for (area, _) in tabs {
+        tui.click_in(area);
+    }
+    tui.click_in(search).key(KeyCode::Esc);
+    let list = tui.app.regions.browser_list;
+    tui.click(list.x + 1, list.y);
+    // Selecting text on the page past its edges, then a click on a link.
+    let page = tui.app.regions.page;
+    tui.drag((page.x + 1, page.y + 1), (page.x + 10, page.y + page.height + 2));
+    tui.drag((page.x + 1, page.y + 3), (page.x + 10, page.y.saturating_sub(1)));
+    tui.click(page.x + 2, page.y + 1);
+}

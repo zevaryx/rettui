@@ -857,21 +857,22 @@ async fn the_guide_pages_partials_and_previews() {
     // editor's preview with this node's pictures.
     web.serve(
         "/page/links.mu",
-        "`[Mail`lxmf@abababababababababababababababab] `[Chat`rrc://abababababababababababababababab/lobby] `[Other`cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/page/x.mu]",
+        "`[Mail`lxmf@abababababababababababababababab] `[Chat`rrc://abababababababababababababababab/lobby] `[Other`cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/page/x.mu]\n`(A picture`:/media/a b.png)",
     );
     let page = web.get("/api/page?url=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/page/links.mu").await.json();
     let html = page["html"].as_str().unwrap();
-    assert!(html.contains("lxmf@abab") && html.contains("rrc://abab"), "{html}");
-    web.serve("/page/part.mu", "`[img`:/media/a b.png] part");
+    assert!(html.contains("lxmf@abab") && html.contains("rrc://abab") && html.contains("a%20b.png"), "{html}");
+    web.serve("/page/part.mu", "`(img`:/media/a b.png)\npart");
     let partial = web.post("/api/partial", json!({ "url": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/page/part.mu", "fields": {} })).await.json();
     assert!(partial["html"].as_str().unwrap().contains("part"), "{partial}");
     let node = web.with(|app| hex::encode(app.node.hash)).await;
     let preview = web
         .post(
             "/api/node/preview",
-            json!({ "content": format!("`[a`{node}:/media/own.png] `[b`cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/media/x.png]") }),
+            json!({ "content": format!("`(a`{node}:/media/own.png)\n`(b`cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/media/x.png)") }),
         )
         .await
         .json();
-    assert!(preview["html"].is_string(), "{preview}");
+    let preview = preview["html"].as_str().unwrap();
+    assert!(preview.contains("api/node/media?path=own.png") && preview.contains("api/media?url=cdcd"), "{preview}");
 }
