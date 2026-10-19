@@ -1376,3 +1376,77 @@ fn the_browser_by_mouse() {
     tui.drag((page.x + 1, page.y + 3), (page.x + 10, page.y.saturating_sub(1)));
     tui.click(page.x + 2, page.y + 1);
 }
+
+#[test]
+fn every_user_menu_action_by_key_and_click() {
+    let mut tui = Tui::new("user-menu");
+    let hub = with_hilltop(&mut tui);
+    let actions = crate::app::channels::users::UserAction::ALL.len();
+    // Each action by Enter, from the room and from the hub's own buffer.
+    for room in [Some("lobby".to_string()), None] {
+        for row in 0..actions {
+            tui.settle().tab(Tab::Channels);
+            tui.app.channels.selected = Some(crate::app::channels::Target { hub, room: room.clone() });
+            tui.app.channels.menu = None;
+            tui.app.open_user_menu(&CAROL);
+            for _ in 0..row {
+                tui.key(KeyCode::Down);
+            }
+            tui.key(KeyCode::Enter);
+        }
+    }
+    // The hub doesn't pass whispers; someone known only in part.
+    let index = tui.app.channels.hub_index(hub).unwrap();
+    tui.app.channels.hubs[index].direct_notices = false;
+    tui.settle().tab(Tab::Channels);
+    tui.app.channels.selected = Some(crate::app::channels::Target { hub, room: Some("lobby".into()) });
+    tui.app.open_user_menu(&CAROL);
+    tui.key(KeyCode::Char('w')).key(KeyCode::Esc);
+    tui.app.open_user_menu(&[0xdd; 4]);
+    tui.app.open_user_menu(&tui.app.identity_hash.clone());
+    // By the mouse: each row of the menu, and of the member picker.
+    for row in 0..actions as u16 {
+        tui.app.channels.menu = None;
+        tui.app.channels.selected = Some(crate::app::channels::Target { hub, room: Some("lobby".into()) });
+        tui.tab(Tab::Channels);
+        tui.app.open_user_menu(&CAROL);
+        tui.draw();
+        let popup = tui.app.regions.channel_popup;
+        tui.click(popup.x + 2, popup.y + row);
+    }
+    tui.settle().tab(Tab::Channels);
+    tui.app.channels.selected = Some(crate::app::channels::Target { hub, room: Some("lobby".into()) });
+    tui.app.channels.menu = None;
+    tui.key(KeyCode::Char('m')).draw();
+    let popup = tui.app.regions.channel_popup;
+    tui.click(popup.x + 2, popup.y + 1);
+}
+
+#[test]
+fn the_status_tab_in_every_state() {
+    use crate::app::node::NodeStatus;
+    use crate::app::{NetState, SyncState};
+    let mut tui = Tui::with("status-states", |s| s.update_check = true);
+    tui.tab(Tab::Status);
+    tui.app.updates.checked.latest = Some(crate::update::Release { version: "99.0.0".into(), url: "https://example.org/r".into() });
+    tui.app.identity_pending = Some([7; 16]);
+    tui.app.settings.propagation_node = Some("ab".repeat(16));
+    let stats = crate::lxmf::pn::PnStats { messages: 3, bytes: 2048, received: 4, delivered_here: 1, served: 2, rejected: 1, peers: 1 };
+    let states = [
+        (NetState::Starting, SyncState::Idle, NodeStatus::Starting),
+        (NetState::Failed("no config".into()), SyncState::Running(std::time::Instant::now()), NodeStatus::Failed("full".into())),
+        (NetState::Online, SyncState::Done(chrono::Local::now(), Ok(2)), NodeStatus::Running),
+        (NetState::Online, SyncState::Done(chrono::Local::now(), Err("no node".into())), NodeStatus::Off),
+    ];
+    for (net, sync, status) in states {
+        tui.app.net_state = net;
+        tui.app.sync = sync;
+        tui.app.pn.status = status.clone();
+        tui.app.pn.stats = Some(stats.clone());
+        tui.app.hub.status = status;
+        tui.app.hub.address = Some(([9; 16], [1; 64]));
+        tui.draw();
+    }
+    tui.app.updates.installed = Some("99.0.0".into());
+    assert!(tui.draw().contains("99.0.0"));
+}

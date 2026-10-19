@@ -455,6 +455,8 @@ async fn talking_in_a_hub_at_the_keyboard() {
     let (mut amy, mut ben) = pair("chat", |s| {
         s.hub_enabled = true;
         s.hub_name = Some("Amy's hub".into());
+        // Longer than a packet: it comes as a Resource.
+        s.hub_greeting = Some(format!("Welcome to the hill. {}", "This hub is for talking about hills. ".repeat(40)));
     })
     .await;
     until(&mut amy, &mut ben, "Amy's hub running", |a, _| a.app.hub.status == crate::app::node::NodeStatus::Running).await;
@@ -583,6 +585,12 @@ async fn talking_in_a_hub_at_the_keyboard() {
     amy.app.hub_op("lobby", &who, true).unwrap();
     amy.app.hub_op("lobby", &who, false).unwrap();
     until(&mut amy, &mut ben, "Ben seeing the topic", |_, b| b.heard(hub, "lobby").contains("Welcome all")).await;
+    until(&mut amy, &mut ben, "Ben getting the long greeting", |_, b| {
+        let index = b.app.channels.hub_index(hub).unwrap();
+        b.app.channels.hubs[index].motd.as_deref().is_some_and(|m| m.contains("talking about hills"))
+            || b.app.channels.hubs[index].buffers.values().flatten().any(|l| l.text.contains("talking about hills"))
+    })
+    .await;
     // Ben pings the hub; Amy renames it as it runs (nobody disconnected).
     let ben_index = ben.app.channels.hub_index(hub).unwrap();
     ben.app.channel_submit(ben_index, "lobby", "/ping");

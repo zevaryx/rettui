@@ -676,4 +676,29 @@ mod tests {
         assert_eq!(square_name(63), "h1");
         assert_eq!(chess_squares("8/8/8/8/8/8/8/K6k w - - 0 1")[56], 'K');
     }
+
+    #[test]
+    fn games_that_cant_be_read_are_said_and_the_rest_kept() {
+        let dir = std::env::temp_dir().join(format!("rettui-games-load-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Not JSON; not a file; neither stops the rest.
+        let broken = dir.join("broken.json");
+        std::fs::write(&broken, "not json").unwrap();
+        let (_, problems) = Games::load(&broken);
+        assert!(problems[0].contains("Couldn't read the games"), "{problems:?}");
+        let (_, problems) = Games::load(&dir);
+        assert!(problems[0].contains("Couldn't read"), "{problems:?}");
+        assert!(Games::load(&dir.join("missing.json")).1.is_empty());
+        assert_eq!(game_name("other"), "other");
+        // Not set up yet: nothing played.
+        let games = Games::default();
+        assert!(matches!(games.receive("ab", &HashMap::new()), Received::Rejected(_)));
+        let mut games = Games::default();
+        games.set_me(&[1; 16]);
+        assert!(matches!(games.receive("ab", &HashMap::new()), Received::Rejected(why) if why.contains("not a game")));
+        let garbled = HashMap::from([(FIELD_CUSTOM_TYPE, vec![0xc1]), (FIELD_CUSTOM_META, vec![0xc1])]);
+        assert!(matches!(games.receive("ab", &garbled), Received::Rejected(_)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
