@@ -16,6 +16,8 @@
 //! - [`views`]: JSON snapshots of the app state.
 //! - [`push`]: Web Push.
 
+#[cfg(test)]
+mod api_tests;
 pub mod mbtiles;
 mod push;
 mod routes;
@@ -621,4 +623,204 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     net::shutdown(&net_tx, &mut net_rx, net::Stop::Quit).await;
     owner.app.finish_saves();
     result
+}
+
+/// The web UI for tests: its router, on a test [`App`] whose jobs run on a
+/// thread of their own (as `run`'s loop does), driven as a browser would.
+/// What the app tells the network is kept (see [`testing::TestWeb::sent`]);
+/// a page asked for is answered from [`testing::TestWeb::pages`], as a node
+/// would, or not at all.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode, header};
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::nomad::FetchedContent;
+
+    pub const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// Pages by path (any node): their content, or why they can't be had.
+    pub type Pages = Arc<Mutex<HashMap<String, Result<Vec<u8>, String>>>>;
+
+    pub struct TestWeb {
+        router: axum::Router,
+        pub dir: PathBuf,
+        sent: Arc<Mutex<Vec<NetCommand>>>,
+        pub pages: Pages,
+        state: WebState,
+    }
+
+    /// An answer: its status, headers and body.
+    pub struct Answer {
+        pub status: StatusCode,
+        pub headers: axum::http::HeaderMap,
+        pub body: Vec<u8>,
+    }
+
+    impl Answer {
+        pub fn json(&self) -> Value {
+            serde_json::from_slice(&self.body).unwrap_or_else(|e| panic!("not JSON ({e}): {}", String::from_utf8_lossy(&self.body)))
+        }
+
+        pub fn text(&self) -> String {
+            String::from_utf8_lossy(&self.body).into_owned()
+        }
+
+        /// The error an API call answered with.
+        pub fn error(&self) -> String {
+            self.json()["error"].as_str().unwrap_or_default().to_string()
+        }
+    }
+
+    impl TestWeb {
+        /// A web UI on a new app in a fresh folder named for the test.
+        pub fn start(name: &str) -> Self {
+            Self::start_with(name, Settings::default(), Store::default())
+        }
+
+        /// Its own Reticulum config (never the user's), and map tiles only
+        /// from an offline file, unless `settings` say otherwise.
+        pub fn start_with(name: &str, mut settings: Settings, store: Store) -> Self {
+            let dir = std::env::temp_dir().join(format!("rettui-web-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            if settings.rns_config.is_none() {
+                settings.rns_config = Some(dir.join("rns").display().to_string());
+            }
+            if settings.map_tiles.as_deref() == Some(crate::config::OSM_TILES) {
+                settings.map_tiles = None;
+            }
+            let (mut app, mut net) = crate::app::test_app_with_net(&dir, settings, store);
+            app.tab = Tab::Status;
+            let paths = app.paths.clone();
+            let mut owner = Owner { app, fetches: HashMap::new(), next_request: FIRST_WEB_REQUEST, recent: VecDeque::new() };
+            let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
+            let sent: Arc<Mutex<Vec<NetCommand>>> = Arc::default();
+            let pages: Pages = Arc::default();
+            let (kept, served) = (sent.clone(), pages.clone());
+            std::thread::spawn(move || {
+                while let Some(job) = jobs.blocking_recv() {
+                    (job.run)(&mut owner);
+                    owner.app.tab = Tab::Status;
+                    for notification in owner.app.take_notifications() {
+                        owner.recent.push_back((owner.recent.len() as u64 + 1, notification));
+                    }
+                    while let Ok(command) = net.try_recv() {
+                        if let NetCommand::Fetch { id, path, .. } = &command
+                            && let Some(page) = served.lock().unwrap().get(path).cloned()
+                        {
+                            let result = page.map(|data| FetchedContent { data, metadata: None });
+                            owner.apply(NetEvent::Fetched { id: *id, result });
+                        }
+                        kept.lock().unwrap().push(command);
+                    }
+                }
+            });
+            let state = WebState {
+                jobs: jobs_tx,
+                changes: broadcast::channel(64).0,
+                notices: broadcast::channel(64).0,
+                push: push::WebPush::load(&paths).unwrap(),
+                identity: Arc::new(Identity::new()),
+                token: Arc::new(std::sync::RwLock::new(TOKEN.to_string())),
+                signed_out: tokio::sync::watch::channel(0).0,
+                paths: Arc::new(paths),
+                link_base: "http://127.0.0.1:8740".into(),
+                https: false,
+                ca: None,
+            };
+            TestWeb { router: routes::router(state.clone()), dir, sent, pages, state }
+        }
+
+        /// Run something on the app, as a job (and wait for it).
+        pub async fn with<T: Send + 'static>(&self, f: impl FnOnce(&mut App) -> T + Send + 'static) -> T {
+            self.state.write(move |owner| f(&mut owner.app)).await.unwrap()
+        }
+
+        /// Run something on the owner (the app and what the web UI keeps).
+        pub async fn with_owner<T: Send + 'static>(&self, f: impl FnOnce(&mut Owner) -> T + Send + 'static) -> T {
+            self.state.write(f).await.unwrap()
+        }
+
+        /// Serve a page (on any node) at `path`.
+        pub fn serve(&self, path: &str, content: &str) {
+            self.pages.lock().unwrap().insert(path.to_string(), Ok(content.as_bytes().to_vec()));
+        }
+
+        async fn answer(&self, request: Request<Body>) -> Answer {
+            let response = self.router.clone().oneshot(request).await.unwrap();
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec();
+            Answer { status, headers, body }
+        }
+
+        /// A request, logged in unless `anonymous`, with these headers.
+        pub async fn send(&self, method: Method, path: &str, body: Option<Value>, anonymous: bool) -> Answer {
+            self.send_with(method, path, body, anonymous, &[]).await
+        }
+
+        pub async fn send_with(
+            &self,
+            method: Method,
+            path: &str,
+            body: Option<Value>,
+            anonymous: bool,
+            headers: &[(&str, &str)],
+        ) -> Answer {
+            let mut request = Request::builder().method(method).uri(path);
+            if !anonymous {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+            }
+            for (name, value) in headers {
+                request = request.header(*name, *value);
+            }
+            let request = match body {
+                Some(json) => request.header(header::CONTENT_TYPE, "application/json").body(Body::from(json.to_string())),
+                None => request.body(Body::empty()),
+            }
+            .unwrap();
+            self.answer(request).await
+        }
+
+        pub async fn get(&self, path: &str) -> Answer {
+            self.send(Method::GET, path, None, false).await
+        }
+
+        pub async fn post(&self, path: &str, body: Value) -> Answer {
+            self.send(Method::POST, path, Some(body), false).await
+        }
+
+        pub async fn delete(&self, path: &str) -> Answer {
+            self.send(Method::DELETE, path, None, false).await
+        }
+
+        /// Raw bytes posted (an upload).
+        pub async fn post_bytes(&self, path: &str, content_type: &str, bytes: Vec<u8>) -> Answer {
+            let request = Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(bytes))
+                .unwrap();
+            self.answer(request).await
+        }
+
+        /// What the app has told the network since last asked.
+        pub fn sent(&self) -> Vec<NetCommand> {
+            std::mem::take(&mut *self.sent.lock().unwrap())
+        }
+    }
+
+    impl Drop for TestWeb {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
 }

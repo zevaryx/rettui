@@ -116,6 +116,11 @@ windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_
 # clicks, on tokio (rettui's runtime).
 zbus = { version = "6", default-features = false, features = ["tokio", "service"] }
 
+[dev-dependencies]
+# Driving the web UI's router in tests, as a browser would (already built
+# for axum).
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
 # Image decoding is very slow unoptimised (seconds per picture), so debug
 # builds optimise the decoders.
 [profile.dev.package.image]
