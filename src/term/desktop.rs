@@ -214,7 +214,7 @@ mod xdg {
 
     use futures_util::StreamExt;
     use tokio::sync::mpsc::UnboundedReceiver;
-    use zbus::zvariant::Value;
+    use zbus::Variant;
 
     use super::Failing;
     use crate::app::notify::{Notification, Target};
@@ -278,7 +278,7 @@ mod xdg {
         let body = notification.body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
         // "default" is the action of clicking the notification itself.
         let actions = vec!["default", "Open"];
-        let hints: HashMap<&str, Value> = HashMap::new();
+        let hints: HashMap<&str, Variant> = HashMap::new();
         let reply = bus
             .call_method(
                 Some(SERVICE),
@@ -294,7 +294,8 @@ mod xdg {
 
     /// The notification service's signals, on this connection.
     async fn listen(bus: &zbus::Connection) -> Result<zbus::MessageStream, String> {
-        let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(SERVICE).map_err(|e| e.to_string())?.build();
+        let rule =
+            zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(SERVICE).build().map_err(|e| e.to_string())?;
         zbus::MessageStream::for_match_rule(rule, bus, None).await.map_err(|e| e.to_string())
     }
 
@@ -476,7 +477,7 @@ mod tests {
             _summary: &str,
             _body: &str,
             actions: Vec<String>,
-            _hints: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+            _hints: std::collections::HashMap<String, zbus::OwnedVariant>,
             _timeout: i32,
         ) -> u32 {
             assert_eq!(actions, ["default", "Open"]);
@@ -490,15 +491,8 @@ mod tests {
     #[ignore = "needs a D-Bus session bus"]
     async fn clicking_a_notification_opens_what_its_about() {
         let senders = Arc::new(Mutex::new(Vec::new()));
-        let service = zbus::connection::Builder::session()
-            .unwrap()
-            .name(SERVICE)
-            .unwrap()
-            .serve_at(PATH, Service { senders: senders.clone() })
-            .unwrap()
-            .build()
-            .await
-            .unwrap();
+        let service =
+            zbus::connection::Builder::session().name(SERVICE).serve_at(PATH, Service { senders: senders.clone() }).build().await.unwrap();
         let cache = std::env::temp_dir().join(format!("rettui-desktop-{}", std::process::id()));
         let desktop = Desktop::start(&cache);
         let about = |key: &str| Target::Conversation { key: key.into() };

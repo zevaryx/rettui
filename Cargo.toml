@@ -87,7 +87,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-notify-rust = "4.18.1"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 codec2 = "0.3.1"
 # Offline map tiles from an MBTiles file (SQLite), for the web UI's map;
@@ -96,11 +95,16 @@ rusqlite = { version = "0.40", default-features = false, features = ["bundled"] 
 # Unpacking a release to update to (see src/update/install.rs): .tar.gz
 # for Linux and macOS, .zip for Windows.
 tar = { version = "0.4", default-features = false }
-zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(unix)'.dependencies]
 # Bounded terminal capability probe (poll/read on stdin).
 libc = "0.2"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+# Desktop notifications on Windows and macOS (on Linux and the BSDs rettui
+# speaks D-Bus itself, below): without its D-Bus side, which these don't use.
+notify-rust = { version = "4.18.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 # Bringing the console window forward when a notification is clicked (the
@@ -109,8 +113,8 @@ windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 # Desktop notifications over D-Bus, on the connection that hears their
-# clicks (notify-rust's own, already built, with nothing more turned on).
-zbus = { version = "5.19", default-features = false, features = ["async-io"] }
+# clicks, on tokio (rettui's runtime).
+zbus = { version = "6", default-features = false, features = ["tokio", "service"] }
 
 # Image decoding is very slow unoptimised (seconds per picture), so debug
 # builds optimise the decoders.
