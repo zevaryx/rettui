@@ -201,7 +201,7 @@ impl App {
         names
     }
 
-    fn selected_peer(&self) -> Option<(String, PeerKind)> {
+    pub(crate) fn selected_peer(&self) -> Option<(String, PeerKind)> {
         let i = self.peers.selected()?;
         self.network_rows().get(i).map(|(k, p)| ((*k).clone(), p.kind))
     }

@@ -613,3 +613,96 @@ fn messages_at_the_keyboard_and_with_the_mouse() {
     tui.key(KeyCode::Char('X')).answer("n");
     assert!(tui.app.store.conversations.contains_key(BOB));
 }
+
+#[test]
+fn the_network_and_status_tabs() {
+    use crate::net::{NetEvent, PeerKind};
+    let mut tui = Tui::new("network");
+    for (n, kind, name) in [(1u8, PeerKind::Lxmf, "Bob"), (2, PeerKind::Nomad, "News"), (3, PeerKind::Propagation, "Relay")] {
+        tui.app.on_net(NetEvent::Announce { kind, hash: [n; 16], name: Some(name.into()), hops: n });
+    }
+    tui.tab(Tab::Network);
+    let shown = tui.draw();
+    assert!(shown.contains("Bob") && shown.contains("News") && shown.contains("Relay"), "{shown}");
+    // Moved through, sorted, filtered, searched.
+    for code in [
+        KeyCode::Down,
+        KeyCode::Up,
+        KeyCode::Char('s'),
+        KeyCode::Char('s'),
+        KeyCode::Char('s'),
+        KeyCode::Char('i'),
+        KeyCode::Char('f'),
+        KeyCode::Char('f'),
+        KeyCode::Char('f'),
+        KeyCode::Char('f'),
+    ] {
+        tui.key(code);
+    }
+    tui.key(KeyCode::Char('/')).keys("bo").key(KeyCode::Enter).key(KeyCode::Esc);
+    // A conversation from the list; a node to browse; the propagation node.
+    tui.tab(Tab::Network).key(KeyCode::Enter);
+    tui.tab(Tab::Network).key(KeyCode::Char('m'));
+    tui.tab(Tab::Network);
+    let relay = hex::encode([3u8; 16]);
+    tui.key(KeyCode::Char('f')); // every kind again
+    for _ in 0..3 {
+        if tui.app.selected_peer().is_some_and(|(key, _)| key == relay) {
+            break;
+        }
+        tui.key(KeyCode::Down);
+    }
+    tui.key(KeyCode::Char('p'));
+    assert_eq!(tui.app.settings.propagation_node.as_deref(), Some(relay.as_str()));
+    // The announce viewer.
+    tui.key(KeyCode::Char('a')).key(KeyCode::Down).key(KeyCode::Up).key(KeyCode::Char('a'));
+    let list = tui.app.regions.peers;
+    tui.click(list.x + 2, list.y + 1).scroll(list.x + 1, list.y + 1, true).scroll(list.x + 1, list.y + 1, false);
+
+    // Status: the settings, by section, edited.
+    tui.tab(Tab::Status);
+    for code in [KeyCode::Down, KeyCode::Down, KeyCode::Up, KeyCode::Tab, KeyCode::Tab, KeyCode::BackTab, KeyCode::Right, KeyCode::Left] {
+        tui.key(code);
+    }
+    for _ in 0..6 {
+        tui.key(KeyCode::Enter);
+        if tui.app.prompt.is_some() {
+            tui.key(KeyCode::Esc);
+        }
+        tui.key(KeyCode::Down);
+    }
+    // The address as a QR code, the guide, backups asked for, the first
+    // steps hidden, an identity to import asked for, updates.
+    tui.app.on_net(NetEvent::Started { lxmf_hash: [9; 16], public_key: [1; 64], known: crate::net::remote::KnownIdentities::none() });
+    tui.key(KeyCode::Char('c'));
+    assert!(tui.app.paper_view.is_some());
+    tui.key(KeyCode::Char('q'));
+    tui.key(KeyCode::Char('g'));
+    if tui.app.guide.is_some() {
+        tui.key(KeyCode::Down).key(KeyCode::Up).key(KeyCode::Esc);
+    }
+    tui.settle();
+    let backup = tui.dir.join("backup.tar.gz").display().to_string();
+    tui.key(KeyCode::Char('B')).answer(&backup);
+    let identity = tui.dir.join("identity-copy").display().to_string();
+    tui.key(KeyCode::Char('b')).answer(&identity);
+    tui.key(KeyCode::Char('i')).answer("/no/such/identity");
+    tui.settle();
+    tui.key(KeyCode::Char('x')).key(KeyCode::Char('u')).key(KeyCode::Char('U')).key(KeyCode::Char('y'));
+    tui.settle();
+    tui.key(KeyCode::Char('e'));
+    tui.settle();
+    // The keys, listed.
+    tui.key(KeyCode::Char('?'));
+    assert!(tui.app.keys_help);
+    tui.key(KeyCode::Char('x'));
+    tui.key(KeyCode::F(1)).click(0, 0);
+    // Every tab drawn, and the sidebar clicked.
+    for tab in Tab::ALL {
+        tui.tab(tab);
+    }
+    if let Some(&(area, _)) = tui.app.regions.tabs.first() {
+        tui.click_in(area);
+    }
+    tui.ctrl('l');
+}

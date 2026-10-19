@@ -591,3 +591,117 @@ async fn talking_in_a_hub_at_the_keyboard() {
     amy.pump();
     ben.pump();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn games_over_the_network_at_the_keyboard() {
+    use crossterm::event::KeyCode;
+    let (mut amy, mut ben) = pair("games", |_| {}).await;
+    let (to_amy, to_ben) = (amy.address(), ben.address());
+    // Amy challenges Ben to Tic-Tac-Toe from the Games tab: n, who, which.
+    amy.app.add_contact(&to_ben).unwrap();
+    amy.key(KeyCode::Char('2'));
+    amy.key(KeyCode::Char('n'));
+    let who = amy.app.game_menu_items().iter().position(|i| matches!(i, crate::app::games::MenuItem::Contact(k) if *k == to_ben)).unwrap();
+    for _ in 0..who {
+        amy.key(KeyCode::Down);
+    }
+    amy.key(KeyCode::Enter);
+    amy.key(KeyCode::Enter); // Tic-Tac-Toe, the first
+    until(&mut amy, &mut ben, "Ben challenged", |_, b| b.app.games.waiting(None) == 1).await;
+    // Ben accepts on the board.
+    ben.key(KeyCode::Char('2'));
+    ben.key(KeyCode::Enter);
+    assert!(ben.app.game_playing);
+    ben.key(KeyCode::Char('a'));
+    until(&mut amy, &mut ben, "Amy's move", |a, _| a.app.game_list().first().is_some_and(|g| g.yours)).await;
+    // Turn about: Amy by cursor, Ben by number, Amy by a click...
+    amy.key(KeyCode::Enter);
+    assert!(amy.app.game_playing);
+    amy.key(KeyCode::Left);
+    amy.key(KeyCode::Up);
+    amy.key(KeyCode::Enter); // top left
+    until(&mut amy, &mut ben, "Ben's move", |_, b| b.app.game_list().first().is_some_and(|g| g.yours)).await;
+    ben.key(KeyCode::Char('5'));
+    until(&mut amy, &mut ben, "Amy's second move", |a, _| a.app.game_list().first().is_some_and(|g| g.yours)).await;
+    amy.draw();
+    let board = amy.app.regions.game_board;
+    let (w, h) = board.cell;
+    amy.app.on_mouse(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: board.origin.x + w, // the top middle
+        row: board.origin.y,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    });
+    until(&mut amy, &mut ben, "Ben's second move", |_, b| b.app.game_list().first().is_some_and(|g| g.yours)).await;
+    // Ben offers a draw; Amy takes it.
+    ben.key(KeyCode::Char('D'));
+    until(&mut amy, &mut ben, "Amy offered a draw", |a, _| a.app.game_list().first().is_some_and(|g| g.draw_offer == Some(true))).await;
+    amy.key(KeyCode::Char('y'));
+    until(&mut amy, &mut ben, "the game over", |_, b| b.app.game_list().first().is_some_and(|g| g.status == "completed")).await;
+    let _ = (h, &to_amy);
+
+    // Chess, typed moves and a resignation; Four in a Row by number.
+    let session = amy.app.start_game(&to_ben, "chess").unwrap();
+    until(&mut amy, &mut ben, "Ben challenged to chess", |_, b| b.app.games.view("chess", &session).is_some()).await;
+    ben.app.game_action("chess", &session, "accept", None).unwrap();
+    until(&mut amy, &mut ben, "the chess game begun", |a, _| a.app.games.view("chess", &session).is_some_and(|g| g.status == "active"))
+        .await;
+    let white_is_amy = amy.app.games.view("chess", &session).unwrap().yours;
+    let (white, black) = if white_is_amy { (&mut amy, &mut ben) } else { (&mut ben, &mut amy) };
+    white.app.show_game("chess", &session);
+    white.key(KeyCode::Enter);
+    white.key(KeyCode::Char('t'));
+    white.line("e2e4");
+    white.key(KeyCode::Esc);
+    let _ = black;
+    until(&mut amy, &mut ben, "the first chess move arriving", |a, b| {
+        let moved = |p: &Peer| {
+            p.app
+                .games
+                .view("chess", &session)
+                .is_some_and(|g| matches!(&g.board, crate::games::Board::Chess { moves, .. } if !moves.is_empty()))
+        };
+        moved(a) && moved(b)
+    })
+    .await;
+    // The black side: the board turned round, the cursor moved, a piece picked.
+    let black = if white_is_amy { &mut ben } else { &mut amy };
+    black.app.show_game("chess", &session);
+    black.key(KeyCode::Enter);
+    for code in [KeyCode::Up, KeyCode::Down, KeyCode::Left, KeyCode::Right, KeyCode::Enter, KeyCode::Enter] {
+        black.key(code);
+    }
+    black.key(KeyCode::Char('R'));
+    black.line("y");
+    until(&mut amy, &mut ben, "the resignation arriving", |a, b| {
+        [a, b].iter().all(|p| p.app.games.view("chess", &session).is_some_and(|g| g.status == "completed"))
+    })
+    .await;
+    let session = ben.app.start_game(&to_amy, "four_in_a_row").unwrap();
+    until(&mut amy, &mut ben, "Amy challenged to Four in a Row", |a, _| a.app.games.view("four_in_a_row", &session).is_some()).await;
+    amy.app.show_game("four_in_a_row", &session);
+    amy.key(KeyCode::Enter);
+    amy.key(KeyCode::Char('d')); // declined
+    until(&mut amy, &mut ben, "Ben hearing it was declined", |_, b| {
+        b.app.games.view("four_in_a_row", &session).is_some_and(|g| g.status == "declined")
+    })
+    .await;
+    // The list: filtered, moved through, a game forgotten.
+    amy.key(KeyCode::Esc);
+    for code in [
+        KeyCode::Char('f'),
+        KeyCode::Char('f'),
+        KeyCode::Char('f'),
+        KeyCode::Char('f'),
+        KeyCode::Down,
+        KeyCode::Up,
+        KeyCode::End,
+        KeyCode::Home,
+    ] {
+        amy.key(code);
+    }
+    amy.key(KeyCode::Char('x'));
+    amy.line("y");
+    amy.key(KeyCode::Char('c'));
+    assert_eq!(amy.app.tab, crate::app::Tab::Messages);
+}

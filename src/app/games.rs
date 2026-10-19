@@ -633,7 +633,7 @@ impl App {
 
     /// Show a game in the Games tab, selected (a notification about it, or
     /// one just started).
-    pub(super) fn show_game(&mut self, app: &str, session: &str) {
+    pub(crate) fn show_game(&mut self, app: &str, session: &str) {
         let Some(game) = self.games.view(app, session) else {
             return self.warn("That game isn't kept any more");
         };
