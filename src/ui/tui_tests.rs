@@ -1045,3 +1045,148 @@ fn overlays_keys_and_the_wheel_everywhere() {
     tui.ctrl('c');
     assert!(tui.app.should_quit);
 }
+
+#[test]
+fn the_node_editor_wrapping_its_preview_and_the_mouse() {
+    let mut tui = Tui::with("node-wrap", |s| s.wrap_lines = true);
+    let pages = tui.dir.join("node/pages");
+    std::fs::create_dir_all(pages.join("blog")).unwrap();
+    let long = "A line much longer than the editor is wide, so that it wraps onto rows of its own. ".repeat(6);
+    std::fs::write(pages.join("index.mu"), format!(">Home\n{long}\n🦀 wide characters 🦀 too\n{}", "more\n".repeat(60))).unwrap();
+    std::fs::write(pages.join("blog/first.mu"), "First").unwrap();
+    image::RgbImage::from_pixel(4, 4, image::Rgb([1, 2, 3])).save(pages.join("logo.png")).unwrap();
+    std::fs::create_dir_all(tui.dir.join("node/files")).unwrap();
+    std::fs::write(tui.dir.join("node/files/notes.txt"), "notes").unwrap();
+    tui.tab(Tab::Node);
+
+    // Every row of the list: Enter on each (a page opens, a picture or a
+    // file says what it is), n in each (a new page in its folder).
+    let rows = tui.app.node_rows().len();
+    for row in 0..rows {
+        tui.settle();
+        tui.app.node.editing = false;
+        tui.app.node.list.select(Some(row));
+        tui.key(KeyCode::Enter);
+        if tui.app.prompt.is_some() {
+            tui.answer("y");
+        }
+        tui.app.node.editing = false;
+        tui.app.node.list.select(Some(row));
+        tui.key(KeyCode::Char('n')).key(KeyCode::Esc);
+    }
+    assert!(tui.said().contains("is a picture") || tui.said().contains("is a file"), "{}", tui.said());
+
+    // The home page, wrapped, worked through by keys and the mouse.
+    let home = tui.app.node_rows().iter().position(|row| tui.app.node_entry(row).is_some_and(|e| e.path == "index.mu")).unwrap();
+    tui.settle();
+    tui.app.node.list.select(Some(home));
+    tui.key(KeyCode::Enter).key(KeyCode::Right);
+    for _ in 0..4 {
+        tui.key(KeyCode::Down).key(KeyCode::End);
+    }
+    tui.ctrl('v');
+    let editor = tui.app.regions.node_editor;
+    assert!(!editor.is_empty());
+    tui.click(editor.x + 3, editor.y + 1);
+    tui.drag((editor.x + 3, editor.y + 1), (editor.x + 10, editor.y + editor.height + 2));
+    tui.drag((editor.x + 3, editor.y + 3), (editor.x + 10, editor.y.saturating_sub(1)));
+    tui.scroll(editor.x + 2, editor.y + 2, true).scroll(editor.x + 2, editor.y + 2, false);
+    // The preview alone: keys scroll it; formatting and pasting wait.
+    while tui.app.node.view != crate::app::node::PageView::Preview {
+        tui.ctrl('p');
+    }
+    for key in [KeyCode::Char('j'), KeyCode::Char('k'), KeyCode::Char(' '), KeyCode::Down, KeyCode::Up, KeyCode::Home] {
+        tui.key(key);
+    }
+    tui.alt('b');
+    tui.app.node.editing = true;
+    tui.app.on_paste("not now");
+    assert!(tui.said().contains("Switch to the editor"), "{}", tui.said());
+    let preview = tui.app.regions.node_preview;
+    tui.scroll(preview.x + 2, preview.y + 2, true).scroll(preview.x + 2, preview.y + 2, false);
+    tui.ctrl('p').ctrl('p').key(KeyCode::Esc);
+    tui.ask(crate::app::PromptKind::Format(crate::app::format::Action::Upload), "/no/such/file");
+}
+
+#[test]
+fn the_hub_tab_running_with_people_rooms_and_bans() {
+    use crate::net::NetEvent;
+    use crate::rrc::host::{HubEvent, HubPerson, HubRoom, HubSnapshot};
+    let mut tui = Tui::with("hub-tab", |s| s.hub_enabled = true);
+    tui.tab(Tab::Hub);
+    // Not running yet: what needs it says so.
+    tui.key(KeyCode::Char('a')).key(KeyCode::Char('j'));
+    tui.app.on_net(NetEvent::Hub(HubEvent::Failed("port taken".into())));
+    tui.draw();
+    tui.app.on_net(NetEvent::Hub(HubEvent::Started { hash: [7; 16], public_key: [1; 64] }));
+    let carol = "cc".repeat(16);
+    let room = |name: &str, members: Vec<String>| HubRoom {
+        name: name.into(),
+        registered: name == "lobby",
+        modes: "+nt".into(),
+        topic: Some("Hello".into()),
+        members,
+        founder: None,
+        operators: vec![carol.clone()],
+        voiced: Vec::new(),
+        banned: vec!["dd".repeat(16)],
+        key: None,
+        invited: Vec::new(),
+    };
+    let snapshot = HubSnapshot {
+        people: vec![HubPerson {
+            identity: carol.clone(),
+            nick: Some("carol".into()),
+            rooms: vec!["lobby".into()],
+            since: 1,
+            links: 1,
+            operator: false,
+        }],
+        rooms: vec![room("lobby", vec![carol.clone()]), room("dev", vec![carol.clone(), "ee".repeat(16)])],
+        klines: vec!["ff".repeat(16)],
+        ..HubSnapshot::default()
+    };
+    tui.app.on_net(NetEvent::Hub(HubEvent::State(snapshot)));
+    tui.app.on_net(NetEvent::Hub(HubEvent::Reply { text: "Stats\nmore".into(), error: false }));
+    tui.app.on_net(NetEvent::Hub(HubEvent::Reply { text: "No".into(), error: true }));
+    assert!(tui.draw().contains("carol"));
+
+    // Each pane, its keys, and each prompt answered.
+    use crate::app::PromptKind::Hub;
+    use crate::app::hub::HubPrompt;
+    tui.key(KeyCode::Char('y')).key(KeyCode::Char('a'));
+    tui.key(KeyCode::Char(':')).answer("/stats");
+    tui.key(KeyCode::Char('n')).answer("garden");
+    for key in ['K', 'b', 'o', 'v'] {
+        tui.key(KeyCode::Char(key)).answer("lobby");
+    }
+    tui.key(KeyCode::Char('B')).answer("y");
+    tui.key(KeyCode::Char('d'));
+    tui.key(KeyCode::Tab);
+    tui.key(KeyCode::Char('t')).answer("New topic");
+    tui.key(KeyCode::Char('m')).answer("+m");
+    tui.key(KeyCode::Char('r')).key(KeyCode::Char('j')).key(KeyCode::Char('r')).key(KeyCode::Char('k'));
+    tui.key(KeyCode::Char('R')).answer("hall");
+    tui.key(KeyCode::Down).key(KeyCode::Char('D')).answer("y");
+    tui.key(KeyCode::Char('D')).answer("n");
+    tui.key(KeyCode::Right);
+    tui.key(KeyCode::Char('x')).key(KeyCode::Down).key(KeyCode::Delete);
+    tui.key(KeyCode::Left).key(KeyCode::BackTab).key(KeyCode::Char('h')).key(KeyCode::Char('l'));
+    for prompt in [HubPrompt::Op(carol.clone()), HubPrompt::Voice(carol.clone()), HubPrompt::ConfirmKline(carol.clone())] {
+        tui.ask(Hub(prompt.clone()), "dev").ask(Hub(prompt), "");
+    }
+    tui.ask(Hub(HubPrompt::ConfirmDelete("dev".into())), "no").ask(Hub(HubPrompt::Command), "/");
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::HubAction(_))));
+
+    // The mouse: each pane's heading, a row, the wheel.
+    tui.draw();
+    for (area, _) in tui.app.regions.hub_panes.clone() {
+        tui.click_in(area);
+    }
+    let list = tui.app.regions.hub_list;
+    tui.click(list.x + 1, list.y).scroll(list.x + 1, list.y, true).scroll(list.x + 1, list.y, false);
+    // Stopped: its last state isn't shown; started again, then off by e.
+    tui.app.on_net(NetEvent::Hub(HubEvent::Stopped));
+    tui.app.on_net(NetEvent::Hub(HubEvent::State(HubSnapshot::default())));
+    tui.key(KeyCode::Char('e')).key(KeyCode::Char('e'));
+}

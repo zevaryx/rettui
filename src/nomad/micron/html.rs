@@ -381,4 +381,54 @@ mod tests {
         assert_eq!(css_color(Color::Indexed(196)).as_deref(), Some("#ff0000"));
         assert_eq!(css_color(Color::Reset), None);
     }
+
+    #[test]
+    fn every_colour_and_style_as_css() {
+        for color in [
+            Color::Black,
+            Color::Red,
+            Color::Green,
+            Color::Yellow,
+            Color::Blue,
+            Color::Magenta,
+            Color::Cyan,
+            Color::Gray,
+            Color::DarkGray,
+            Color::LightRed,
+            Color::LightGreen,
+            Color::LightYellow,
+            Color::LightBlue,
+            Color::LightMagenta,
+            Color::LightCyan,
+            Color::White,
+            Color::Indexed(3),
+            Color::Indexed(100),
+            Color::Indexed(250),
+        ] {
+            assert!(css_color(color).is_some_and(|c| c.starts_with('#') && c.len() == 7), "{color:?}");
+        }
+        assert_eq!(css_color(Color::Indexed(232)).as_deref(), Some("#080808"));
+        assert_eq!(css_color(Color::Reset), None);
+        let style = Style::default().bg(Color::Blue).add_modifier(Modifier::ITALIC | Modifier::UNDERLINED);
+        assert_eq!(css(style), "background:#2472c8;font-style:italic;text-decoration:underline;");
+    }
+
+    #[test]
+    fn tables_folds_fields_and_pictures_not_shown() {
+        let source = "`tc20\n| Name | Age |\n| :--- | --: |\n| `!Ann`! | `[3`:/page/a.mu] |\n| Bo |\n`t\n\
+                      `+>Open\ninside\n`->>Folded\ndeeper\n<\nafter\n\
+                      Notes: `<20x3|notes`two>\nSecret: `<!8|pw`x>\n`(A picture`:/media/p.png)\n`c`>Centre\n`r`>Right";
+        let page = parse(source);
+        let html = page.to_html(|url| url.to_string(), |_| None);
+        assert!(html.contains("<table class=\"m-table\"") && html.contains("<th") && html.contains("<td"), "{html}");
+        assert!(html.contains("m-fold-head") && html.contains("m-fold hidden"), "{html}");
+        assert!(html.contains("<textarea") && html.contains("type=\"password\""), "{html}");
+        assert!(html.contains("[image: A picture]"), "{html}");
+        assert!(html.contains("text-align:center") && html.contains("text-align:right"), "{html}");
+        // The page's source, coloured.
+        let source_view = source_html("`!bold`! \\` escaped\n# a comment\n#!c=0\n`=literal`=\n`(img`:/x.png)\n`<f`v>\n\ttab");
+        for class in ["t-tag", "t-escape", "t-comment", "t-directive", "t-image", "t-field"] {
+            assert!(source_view.contains(class), "{class}: {source_view}");
+        }
+    }
 }

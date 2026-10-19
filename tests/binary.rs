@@ -239,3 +239,62 @@ fn the_web_ui_over_https_for_other_devices() {
     assert!(!bad.status.success() && said(&bad).contains("--web expects an address"), "{}", said(&bad));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The terminal UI, in a terminal of its own (`script` makes one): it draws,
+/// takes keys, and quits on q.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_terminal_ui_starts_and_quits() {
+    if Command::new("script").arg("--version").output().is_err() {
+        return;
+    }
+    let dir = folder("tui", "");
+    let program = format!(
+        "stty cols 120 rows 40; exec {} --data-dir {} --rns-config {}",
+        env!("CARGO_BIN_EXE_rettui"),
+        dir.join("data").display(),
+        dir.join("rns").display()
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &program, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut out = child.stdout.take().unwrap();
+    let screen = Arc::new(Mutex::new(Vec::new()));
+    let kept = screen.clone();
+    std::thread::spawn(move || {
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = out.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            kept.lock().unwrap().extend_from_slice(&chunk[..n]);
+        }
+    });
+    let shown = |text: &str| String::from_utf8_lossy(&screen.lock().unwrap()).contains(text);
+    let started = Instant::now();
+    while !shown("Messages") {
+        assert!(started.elapsed() < Duration::from_secs(30), "the terminal UI didn't draw");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // A few tabs, then q.
+    let mut keys = child.stdin.take().unwrap();
+    for key in ["2", "3", "5", "7", "1", "\x0c"] {
+        keys.write_all(key.as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    keys.write_all(b"q").unwrap();
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(started.elapsed() < Duration::from_secs(30), "the terminal UI didn't quit");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "{status:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -410,3 +410,55 @@ pub fn restore(paths: &Paths, file: &Path, force: bool) -> Result<()> {
     println!("{done}.");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lxmf::fields::{Audio, Location, Reaction, Telemetry};
+
+    #[test]
+    fn messages_printed_with_what_they_brought() {
+        let downloads = std::env::temp_dir().join(format!("rettui-cli-print-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&downloads);
+        let mut message = InboundMessage {
+            source: [0xab; 16],
+            title: "Hello".into(),
+            content: "Two\nlines".into(),
+            timestamp: 1_800_000_000.0,
+            verified: false,
+            attachments: vec![crate::lxmf::Attachment { name: "../notes.txt".into(), data: b"notes".to_vec(), image: false }],
+            ..Default::default()
+        };
+        message.extras.reaction = Some(Reaction { to: [1; 32], emoji: "👍".into() });
+        message.extras.telemetry = Some(Telemetry {
+            time: None,
+            location: Some(Location {
+                latitude: 51.5,
+                longitude: -0.1,
+                altitude: None,
+                speed: None,
+                bearing: None,
+                accuracy: None,
+                updated: None,
+            }),
+        });
+        message.extras.audio = Some(Audio { mode: lxmf_core::constants::AM_OPUS_OGG, data: b"OggS".to_vec(), wav: None });
+        print_message(&message, &downloads);
+        // Saved where downloads go, by their own names only.
+        assert_eq!(std::fs::read(downloads.join("notes.txt")).unwrap(), b"notes");
+        assert_eq!(std::fs::read_dir(&downloads).unwrap().count(), 2);
+        // A folder that can't be made: said, not stopped.
+        let blocked = downloads.join("notes.txt").join("inside");
+        print_message(&message, &blocked);
+        // Nothing but a note.
+        print_message(&InboundMessage { source: [1; 16], ..Default::default() }, &downloads);
+        let _ = std::fs::remove_dir_all(&downloads);
+    }
+
+    #[test]
+    fn a_qr_code_only_for_a_terminal() {
+        // Tests don't print to a terminal: nothing, and no failure.
+        print_qr("lxma://abc");
+        print_qr(&"x".repeat(5000));
+    }
+}
