@@ -36,12 +36,17 @@ impl Peer {
     /// Reticulum interface (no shared instance, nothing else on the
     /// machine).
     fn start(name: &str, interface: &str, settings: impl FnOnce(&mut Settings)) -> Self {
+        Self::start_in(name, "", interface, settings)
+    }
+
+    /// [`Peer::start`], with more for the config's `[reticulum]` section.
+    fn start_in(name: &str, reticulum: &str, interface: &str, settings: impl FnOnce(&mut Settings)) -> Self {
         let dir = std::env::temp_dir().join(format!("rettui-live-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let rns = dir.join("rns");
         std::fs::create_dir_all(&rns).unwrap();
         let config = format!(
-            "[reticulum]\n  enable_transport = No\n  share_instance = No\n  panic_on_interface_error = No\n\n\
+            "[reticulum]\n  enable_transport = No\n  share_instance = No\n  panic_on_interface_error = No\n{reticulum}\n\
              [logging]\n  loglevel = 2\n\n[interfaces]\n{interface}"
         );
         std::fs::write(rns.join("config"), config).unwrap();
@@ -704,4 +709,119 @@ async fn games_over_the_network_at_the_keyboard() {
     amy.line("y");
     amy.key(KeyCode::Char('c'));
     assert_eq!(amy.app.tab, crate::app::Tab::Messages);
+}
+
+/// Pump one until `done` (or it's taken too long: `what` didn't happen).
+async fn until_one(peer: &mut Peer, what: &str, mut done: impl FnMut(&Peer) -> bool) {
+    let started = Instant::now();
+    loop {
+        peer.pump();
+        if done(peer) {
+            return;
+        }
+        if started.elapsed() > PATIENCE {
+            let log = peer.app.log.iter().rev().take(20).cloned().collect::<Vec<_>>().join("\n  ");
+            panic!("{what} didn't happen in time. The log:\n  {log}");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_network_actor_command_by_command() {
+    use net::NetCommand;
+    let port = free_port();
+    // Interface discovery on, with an entry point to bring back (one that
+    // isn't there) and one that can't be.
+    let interfaces = format!(
+        "  [[Server]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n\
+         \n  [[Entry]]\n    type = TCPClientInterface\n    bootstrap_only = Yes\n    target_host = 127.0.0.1\n    target_port = 1\n    networkname = net\n    passphrase = pass\n\
+         \n  [[Odd]]\n    type = UDPInterface\n    bootstrap_only = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {}\n    forward_ip = 127.0.0.1\n    forward_port = {}\n",
+        free_port(),
+        free_port()
+    );
+    let mut amy = Peer::start_in("actor", "  discover_interfaces = Yes\n", &interfaces, |s| s.discovered_entry_points = 1);
+    until_one(&mut amy, "Amy starting", |a| a.app.lxmf_hash.is_some()).await;
+    let me = amy.app.lxmf_hash.unwrap();
+    let send = |amy: &mut Peer, command: NetCommand| amy.app.send(command);
+
+    // A paper message to itself, written and read back in.
+    let paper = crate::lxmf::paper::Paper { to: me, content: "On paper".into(), timestamp: 1_800_000_000.0, reply: None, format: None };
+    let public_key = amy.app.public_key.unwrap();
+    send(&mut amy, NetCommand::Remember { to: me, public_key });
+    send(&mut amy, NetCommand::WritePaper { id: 1, paper });
+    let started = Instant::now();
+    let link = loop {
+        let mut found = None;
+        while let Ok(event) = amy.events.try_recv() {
+            match event {
+                net::NetEvent::Paper { result, .. } => found = Some(result.expect("written")),
+                other => amy.app.on_net(other),
+            }
+        }
+        if let Some((link, _)) = found {
+            break link;
+        }
+        assert!(started.elapsed() < PATIENCE, "the paper message wasn't written");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    send(&mut amy, NetCommand::ReadPaper(link));
+    send(&mut amy, NetCommand::ReadPaper("lxm://nonsense".into()));
+    until_one(&mut amy, "the paper message read back in", |a| {
+        a.app.store.conversations.values().any(|c| c.messages.iter().any(|m| m.content == "On paper"))
+    })
+    .await;
+    // Saying who it is, and what it takes.
+    send(&mut amy, NetCommand::SetDisplayName("Amy again".into()));
+    send(&mut amy, NetCommand::SetPolicy { stamp_cost: Some(9), max_bytes: 1_000_000 });
+    send(&mut amy, NetCommand::SetPolicy { stamp_cost: Some(9), max_bytes: 2_000_000 });
+    send(&mut amy, NetCommand::SetContacts { trusted: vec![[5; 16]], exempt: vec![[6; 16]] });
+    send(&mut amy, NetCommand::Remember { to: [5; 16], public_key: [1; 64] });
+    send(&mut amy, NetCommand::Blackhole { to: [7; 16], block: true, quiet: false });
+    send(&mut amy, NetCommand::Blackhole { to: [7; 16], block: false, quiet: true });
+    // Timers, and picking a propagation node.
+    send(
+        &mut amy,
+        NetCommand::SetIntervals {
+            announce: net::AnnounceSchedule::Every(Duration::from_secs(3600)),
+            sync: Some(Duration::from_secs(600)),
+        },
+    );
+    send(&mut amy, NetCommand::SetPropagationNode(Some([8; 16])));
+    send(&mut amy, NetCommand::Sync);
+    send(&mut amy, NetCommand::AutoPropagation { enabled: true, known: vec![([8; 16], 1, 1_800_000_000)] });
+    send(&mut amy, NetCommand::RecheckPropagation);
+    send(&mut amy, NetCommand::AutoPropagation { enabled: false, known: Vec::new() });
+    send(&mut amy, NetCommand::SetDiscoveredEntryPoints(2));
+    send(&mut amy, NetCommand::SetDiscoveredEntryPoints(0));
+    // Nothing hosted: said so.
+    send(&mut amy, NetCommand::HostReload);
+    send(&mut amy, NetCommand::HostAnnounce);
+    send(&mut amy, NetCommand::Host(None));
+    send(&mut amy, NetCommand::HubAction(crate::rrc::host::HubAction::Announce));
+    send(&mut amy, NetCommand::Hub(None));
+    send(&mut amy, NetCommand::Propagation(None));
+    until_one(&mut amy, "the node and hub said not to be running", |a| {
+        a.app.log.iter().any(|l| l.contains("Node announce failed"))
+            && a.app.hub.replies.iter().any(|(text, _)| text.contains("isn't running"))
+    })
+    .await;
+
+    // Bootstrap only: the entry point that can't be brought back is said.
+    until_one(&mut amy, "the Bootstrap only note", |a| a.app.log.iter().any(|l| l.contains("Odd is Bootstrap only"))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discovered_entry_points_left_to_the_config() {
+    // The config connects to what it finds itself, or doesn't look: rettui
+    // says why its own setting does nothing.
+    for (name, reticulum, why) in [
+        ("auto", "  discover_interfaces = Yes\n  autoconnect_discovered_interfaces = 2\n", "connects to entry points it finds itself"),
+        ("off", "", "interface discovery is off"),
+    ] {
+        let mut peer = Peer::start_in(&format!("discovery-{name}"), reticulum, "", |s| s.discovered_entry_points = 1);
+        until_one(&mut peer, why, |p| p.app.log.iter().any(|l| l.contains(why))).await;
+        peer.app.send(net::NetCommand::SetDiscoveredEntryPoints(3));
+        until_one(&mut peer, "the setting said to wait", |p| p.app.log.iter().any(|l| l.contains("takes effect once"))).await;
+    }
 }

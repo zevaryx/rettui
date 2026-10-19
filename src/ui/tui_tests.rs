@@ -395,10 +395,10 @@ fn browsing_this_clients_own_node() {
 }
 
 /// Bob, who writes.
-const BOB: &str = "abababababababababababababababab";
+pub(crate) const BOB: &str = "abababababababababababababababab";
 
 /// A conversation with Bob: words, a picture, a location, a failed reply.
-fn with_bob(tui: &mut Tui) {
+pub(crate) fn with_bob(tui: &mut Tui) {
     use crate::lxmf::Location;
     use crate::store::{Conversation, Message, MessageState, StoredAttachment};
     let picture = tui.dir.join("cat.png");
@@ -858,7 +858,7 @@ fn channels_at_the_keyboard_and_with_the_mouse() {
 
 impl Tui {
     /// A prompt of this kind, answered.
-    fn ask(&mut self, kind: crate::app::PromptKind, text: &str) -> &mut Self {
+    pub(crate) fn ask(&mut self, kind: crate::app::PromptKind, text: &str) -> &mut Self {
         self.app.prompt = Some(crate::app::Prompt { kind, title: "Asked".into(), input: crate::term::input::TextInput::with_text(text) });
         self.draw();
         self.key(KeyCode::Enter)

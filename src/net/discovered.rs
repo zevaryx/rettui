@@ -545,4 +545,42 @@ mod tests {
         assert_eq!(others, ["Back"], "a TCP client only can be brought back; one off is left out");
         assert_eq!(configured.len(), 3);
     }
+
+    #[test]
+    fn only_transport_nodes_reachable_over_tcp_are_tried() {
+        use rns_transport::discovery::app_data::DiscoveryInfo;
+        let record = |name: &str, kind: &str, transport: bool, host: Option<&str>, status: Option<DiscoveryStatus>| DiscoveredInterface {
+            info: DiscoveryInfo {
+                name: name.into(),
+                interface_type: kind.into(),
+                transport_enabled: transport,
+                reachable_on: host.map(str::to_string),
+                port: Some(4242),
+                ifac_netname: Some("net".into()),
+                ..DiscoveryInfo::default()
+            },
+            network_id: [0; 16],
+            hops: 1,
+            stamp_value: 0,
+            stamp: Vec::new(),
+            discovered: 0,
+            last_heard: 0,
+            heard_count: 1,
+            status,
+        };
+        let found = [
+            record("good", "BackboneInterface", true, Some("example.org"), None),
+            record("tcp", "TCPServerInterface", true, Some("[2001:db8::1]"), None),
+            record("stale", "BackboneInterface", true, Some("example.org"), Some(DiscoveryStatus::Stale)),
+            record("no transport", "BackboneInterface", false, Some("example.org"), None),
+            record("radio", "RNodeInterface", true, Some("example.org"), None),
+            record("nowhere", "BackboneInterface", true, None, None),
+            record("here", "BackboneInterface", true, Some("127.0.0.1"), None),
+            record("tor", "BackboneInterface", true, Some("abc.onion"), None),
+            record("yggdrasil", "BackboneInterface", true, Some("[200::1]"), None),
+        ];
+        let names: Vec<_> = candidates(&found).into_iter().map(|c| c.name).collect();
+        assert_eq!(names, ["good", "tcp"]);
+        assert_eq!(candidates(&found)[0].network_name.as_deref(), Some("net"));
+    }
 }

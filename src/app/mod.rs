@@ -68,6 +68,9 @@ pub use browser::{Browser, BrowserFocus, BrowserPane, Location, resolve_url};
 /// An app for tests: its data in `dir` (settings saved there too), and no
 /// network.
 #[cfg(test)]
+mod app_tests;
+
+#[cfg(test)]
 pub(crate) fn test_app(dir: &std::path::Path, settings: Settings, store: Store) -> App {
     test_app_with_net(dir, settings, store).0
 }

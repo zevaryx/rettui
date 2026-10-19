@@ -1098,4 +1098,138 @@ mod tests {
         assert_eq!(saved(&app).last().unwrap().1, format!("{}:/page/about.mu", "ee".repeat(16)));
         let _ = std::fs::remove_dir_all(app.paths.node.parent().unwrap());
     }
+
+    #[test]
+    fn every_kind_of_link_and_key_on_a_page() {
+        let page = "`[Next heading`#]\n`[Nowhere`#gone]\n`[Reload none`p:9]\n`[Hub`rrc://0101010101010101010101010101010101]\n\
+                    `[Bob`lxmf@abababababababababababababababab]\n`[Bad`lxmf@zz]\n`[Broken`nonsense link]\n\
+                    `[About`:/page/about.mu`name]\n>Heading\n`<?|agree|yes`Agree> `<^|pick|a`A> `<^|pick|b`B>\nName: `<name`Ann>\n\
+                    `(pic`:/media/pic.png)";
+        let mut app = showing("links", &[("index.mu", page), ("about.mu", "About us")]);
+        std::fs::create_dir_all(app.paths.node.join("media")).unwrap();
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(app.paths.node.join("media/pic.png"), png).unwrap();
+        app.tab = Tab::Browser;
+        app.browser.focus = BrowserFocus::Page;
+        let items = app.browser.page.as_ref().unwrap().items.len();
+        // Each item activated in turn, back to the page each time.
+        for index in 0..items {
+            if app.browser.location.as_ref().is_some_and(|l| l.path != "/page/index.mu") {
+                app.back();
+            }
+            app.tab = Tab::Browser;
+            app.prompt = None;
+            app.activate(index);
+        }
+        assert!(app.log.iter().any(|l| l.contains("There's no anchor #gone")), "{:?}", app.log);
+        assert!(app.log.iter().any(|l| l.contains("No part of this page has the id 9")));
+        assert!(app.log.iter().any(|l| l.contains("Bad LXMF address")));
+        assert!(app.store.conversations.contains_key(&"ab".repeat(16)));
+        app.prompt = None;
+        app.tab = Tab::Browser;
+        app.back();
+        app.browser.focus = BrowserFocus::Page;
+        // Its picture decoded and shown (and one no longer on the page not).
+        let url = format!("{}:/media/pic.png", hex::encode(app.node.hash));
+        let picture = || Picture::decode(&std::fs::read(app.paths.node.join("media/pic.png")).unwrap());
+        let (one, two) = (picture(), picture());
+        app.on_page_image(url.clone(), one);
+        app.on_page_image("elsewhere".into(), two);
+        app.on_page_image(url, None);
+
+        // The page's keys.
+        for code in [
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Char('n'),
+            KeyCode::Char('p'),
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::PageDown,
+            KeyCode::Char(' '),
+            KeyCode::PageUp,
+            KeyCode::Home,
+            KeyCode::Char('L'),
+            KeyCode::Char('y'),
+            KeyCode::Char('Y'),
+            KeyCode::Char('u'),
+            KeyCode::Char('Y'),
+            KeyCode::Esc,
+            KeyCode::Char('I'),
+            KeyCode::Char('I'),
+            KeyCode::Char('H'),
+            KeyCode::Char('r'),
+            KeyCode::Char('s'),
+            KeyCode::Char('t'),
+            KeyCode::Char('t'),
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Char('R'),
+        ] {
+            app.prompt = None;
+            app.tab = Tab::Browser;
+            press(&mut app, code);
+        }
+        app.browser.selected = None;
+        press(&mut app, KeyCode::Char('L'));
+        app.settings.home = Some(format!("{}:/page/about.mu", hex::encode(app.node.hash)));
+        press(&mut app, KeyCode::Char('H'));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('g'));
+        app.prompt = None;
+        // The pane: saved pages listed, opened and removed.
+        app.browser.focus = BrowserFocus::Pane;
+        app.browser.pane = BrowserPane::Saved;
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Enter);
+        app.browser.focus = BrowserFocus::Pane;
+        press(&mut app, KeyCode::Char('x'));
+        type_text(&mut app, "/");
+        press(&mut app, KeyCode::Esc);
+        let _ = std::fs::remove_dir_all(app.paths.node.parent().unwrap());
+    }
+
+    #[test]
+    fn files_pictures_and_failures_from_other_nodes() {
+        let dir = std::env::temp_dir().join(format!("rettui-browser-remote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let node = [0xcd; 16];
+        let fetched = |net: &mut tokio::sync::mpsc::UnboundedReceiver<NetCommand>| {
+            std::iter::from_fn(|| net.try_recv().ok())
+                .filter_map(|c| match c {
+                    NetCommand::Fetch { id, path, .. } => Some((id, path)),
+                    _ => None,
+                })
+                .last()
+        };
+        // A file: saved in Downloads under the name it came with.
+        app.navigate(Location { node, path: "/file/notes.txt".into(), fields: BTreeMap::new() });
+        let (id, _) = fetched(&mut net).unwrap();
+        app.on_fetched(id, Ok(FetchedContent { data: b"notes".to_vec(), metadata: None }));
+        assert_eq!(std::fs::read(app.paths.downloads.join("notes.txt")).unwrap(), b"notes");
+        // A page that didn't come: said; one superseded: dropped.
+        app.navigate(Location { node, path: "/page/gone.mu".into(), fields: BTreeMap::new() });
+        let (id, _) = fetched(&mut net).unwrap();
+        app.on_fetched(id + 100, Ok(FetchedContent { data: b"late".to_vec(), metadata: None }));
+        app.on_fetched(id, Err("no path".into()));
+        assert_eq!(app.browser.error.as_deref(), Some("no path"));
+        // A page with a picture: fetched, kept, and asked for once.
+        app.navigate(Location { node, path: "/page/pic.mu".into(), fields: BTreeMap::new() });
+        let (id, _) = fetched(&mut net).unwrap();
+        app.on_fetched(id, Ok(FetchedContent { data: b"`(pic`:/media/a.png)".to_vec(), metadata: None }));
+        let (image, path) = fetched(&mut net).unwrap();
+        assert_eq!(path, "/media/a.png");
+        app.on_fetched(image, Ok(FetchedContent { data: vec![1, 2, 3], metadata: None }));
+        app.navigate(Location { node, path: "/page/pic2.mu".into(), fields: BTreeMap::new() });
+        let (id, _) = fetched(&mut net).unwrap();
+        app.on_fetched(id, Ok(FetchedContent { data: b"`(pic`:/media/b.png)".to_vec(), metadata: None }));
+        let (image, _) = fetched(&mut net).unwrap();
+        app.on_fetched(image, Err("gone".into()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
