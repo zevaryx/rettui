@@ -556,16 +556,11 @@ async fn talking_in_a_hub_at_the_keyboard() {
 
     // Amy, the hub's operator: her panel's actions on Ben.
     let ben_identity = hex::encode(ben.app.identity_hash);
-    let actions: Vec<Box<dyn Fn(&mut App) -> Result<(), String>>> = vec![
-        Box::new(|app| app.hub_topic("lobby", "Welcome all")),
-        Box::new(|app| app.hub_modes("lobby", "+m")),
-        Box::new(|app| app.hub_modes("lobby", "-m")),
-        Box::new(|app| app.hub_register("lobby", true)),
-        Box::new(|app| app.hub_run("/stats")),
-    ];
-    for action in &actions {
-        action(&mut amy.app).unwrap();
-    }
+    amy.app.hub_topic("lobby", "Welcome all").unwrap();
+    amy.app.hub_modes("lobby", "+m").unwrap();
+    amy.app.hub_modes("lobby", "-m").unwrap();
+    amy.app.hub_register("lobby", true).unwrap();
+    amy.app.hub_run("/stats").unwrap();
     let who = ben_identity.clone();
     amy.app.hub_voice("lobby", &who, true).unwrap();
     amy.app.hub_op("lobby", &who, true).unwrap();
