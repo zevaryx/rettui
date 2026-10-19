@@ -162,6 +162,33 @@ impl Drop for Web {
     }
 }
 
+/// A GET over TLS (the web UI's own certificate, its authority trusted),
+/// its status line and body.
+#[cfg(unix)]
+fn get_tls(port: u16, ca: &Path) -> (String, String) {
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::{CertificateDer, ServerName};
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(CertificateDer::from_pem_file(ca).unwrap()).unwrap();
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connection = rustls::ClientConnection::new(std::sync::Arc::new(config), ServerName::try_from("127.0.0.1").unwrap()).unwrap();
+    let tcp = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    // The server may keep the connection open after answering.
+    tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut tls = rustls::StreamOwned::new(connection, tcp);
+    write!(tls, "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").unwrap();
+    let mut raw = Vec::new();
+    let _ = tls.read_to_end(&mut raw);
+    let raw = String::from_utf8_lossy(&raw).into_owned();
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
+    (head.lines().next().unwrap_or_default().to_string(), body.to_string())
+}
+
 /// A plain HTTP GET (with the token), its status line and body.
 fn get(port: u16, path: &str, token: &str) -> (String, String) {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -220,6 +247,17 @@ fn the_web_ui_over_https_for_other_devices() {
     assert!(shown.contains(&format!("https://127.0.0.1:{port}/?token=")), "{shown}");
     assert!(shown.contains("rettui-ca.crt") && shown.contains("anyone with the link"), "{shown}");
     assert!(dir.join("data/web-tls").is_dir());
+    // Plain HTTP on the HTTPS port: sent to the https:// address.
+    let (status, _) = get(port, "/api/state", "x");
+    assert!(status.contains("301"), "{status}");
+    let mut odd = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    odd.write_all(b"nonsense\r\n\r\n").unwrap();
+    let mut answer = String::new();
+    let _ = odd.read_to_string(&mut answer);
+    assert!(answer.contains("400"), "{answer}");
+    // Over TLS, trusting rettui's own certificate authority.
+    let (status, body) = get_tls(port, &dir.join("data/web-tls/ca.pem"));
+    assert!(status.contains("401") || status.contains("200"), "{status} {body}");
     assert!(web.stop().success());
 
     // Its own certificate and key, from files: the ones just made.
@@ -233,6 +271,13 @@ fn the_web_ui_over_https_for_other_devices() {
     );
     web.wait_for("rettui web UI: https://");
     assert!(web.stop().success());
+
+    // A certificate file with no certificate in it.
+    let empty = dir.join("empty.pem");
+    std::fs::write(&empty, "nothing here").unwrap();
+    let none =
+        run(&dir, &["--web", &format!("127.0.0.1:{port}"), "--tls-cert", empty.to_str().unwrap(), "--tls-key", key.to_str().unwrap()]);
+    assert!(!none.status.success() && said(&none).contains("no certificate"), "{}", said(&none));
 
     // A bad address, said.
     let bad = run(&dir, &["--web", "nowhere"]);

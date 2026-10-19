@@ -1190,3 +1190,161 @@ fn the_hub_tab_running_with_people_rooms_and_bans() {
     tui.app.on_net(NetEvent::Hub(HubEvent::State(HubSnapshot::default())));
     tui.key(KeyCode::Char('e')).key(KeyCode::Char('e'));
 }
+
+#[test]
+fn drawn_in_every_state_messages_and_channels() {
+    use crate::store::{Message, MessageState, StoredAttachment};
+    let mut tui = Tui::new("drawn");
+    with_bob(&mut tui);
+    // Voice messages (one it can't play), a picture decoded, an archive.
+    let ogg = tui.dir.join("voice.ogg");
+    std::fs::write(&ogg, b"OggS").unwrap();
+    let picture = tui.dir.join("cat.png");
+    let voice = |name: &str, path: &std::path::Path| StoredAttachment {
+        name: name.into(),
+        path: path.to_path_buf(),
+        size: 4,
+        image: false,
+        voice: Some("Opus".into()),
+    };
+    let conversation = tui.app.store.conversations.get_mut(BOB).unwrap();
+    conversation.archived = 3;
+    conversation.messages.push(Message {
+        id: "d".repeat(64),
+        incoming: true,
+        timestamp: 1_800_000_010.0,
+        state: MessageState::Received { verified: true },
+        attachments: vec![voice("voice.ogg", &ogg), voice("voice.spx", &tui.dir.join("voice.spx"))],
+        ..Message::default()
+    });
+    tui.app.on_decoded(crate::term::images::Decoded {
+        what: crate::term::images::DecodeFor::File(picture.clone()),
+        picture: crate::term::images::Picture::decode(&std::fs::read(&picture).unwrap()),
+    });
+    tui.tab(Tab::Messages);
+    tui.app.open_newest_conversation();
+    tui.app.attachments = vec![picture, ogg];
+    tui.app.delivery_mode = crate::lxmf::DeliveryMode::Paper;
+    tui.app.store.contacts.entry(BOB.into()).or_default().alias =
+        Some("Robert with a name far too long for the list beside the chat".into());
+    for _ in 0..3 {
+        tui.key(KeyCode::PageUp);
+    }
+    let screen = tui.draw();
+    assert!(screen.contains("Voice message") && screen.contains("archive"), "{screen}");
+
+    // Channels: whispers both ways, a line still being sent, a mention
+    // being typed, and the user menu where whispers don't go.
+    let mut tui = Tui::new("drawn-channels");
+    let hub = with_hilltop(&mut tui);
+    let index = tui.app.channels.hub_index(hub).unwrap();
+    let whisper = format!("@{}", hex::encode(CAROL));
+    let lines: Vec<crate::app::channels::ChatLine> = serde_json::from_value(serde_json::json!([
+        { "kind": "Private", "src": hex::encode([0u8; 16]), "text": "to carol", "ts": 1, "own": true },
+        { "kind": "Private", "src": hex::encode(CAROL), "nick": "carol", "text": "from carol", "ts": 2 },
+    ]))
+    .unwrap();
+    tui.app.channels.hubs[index].buffers.get_mut("lobby").unwrap().extend(lines.clone());
+    tui.app.channels.hubs[index].buffers.insert(whisper.clone(), lines);
+    tui.app.channels.hubs[index].buffers.get_mut("lobby").unwrap().last_mut().unwrap().pending = Some(vec![1]);
+    tui.draw();
+    tui.key(KeyCode::Enter).keys("hi @ca");
+    assert!(!tui.app.regions.channel_mentions.is_empty(), "{}", tui.draw());
+    if let Some((area, _)) = tui.app.regions.channel_mentions.first().cloned() {
+        tui.click_in(area);
+    }
+    tui.key(KeyCode::Esc);
+    tui.app.channels.hubs[index].direct_notices = false;
+    tui.app.channels.selected = Some(crate::app::channels::Target { hub, room: None });
+    tui.app.open_user_menu(&CAROL);
+    tui.draw();
+    tui.app.channels.selected = Some(crate::app::channels::Target { hub, room: Some(whisper) });
+    tui.app.channels.menu = None;
+    assert!(tui.draw().contains("from carol"));
+}
+
+#[test]
+fn network_peers_of_each_kind_and_the_announce_viewer() {
+    use crate::net::heard::{Heard, Kind};
+    use crate::net::{NetEvent, PeerKind};
+    let mut tui = Tui::new("network-kinds");
+    for (n, kind, name) in [(1u8, PeerKind::Lxmf, "Bob"), (2, PeerKind::Nomad, "Library"), (3, PeerKind::Propagation, "Relay")] {
+        tui.app.on_net(NetEvent::Announce { kind, hash: [n; 16], name: Some(name.into()), hops: 1 });
+    }
+    for (n, kind) in [(1u8, Kind::Lxmf), (2, Kind::Nomad), (3, Kind::Propagation), (4, Kind::Rrc), (5, Kind::Phone), (6, Kind::Other)] {
+        tui.app.on_net(NetEvent::Heard(Heard { hash: [n; 16], kind, aspect: None, name: Some(format!("heard {n}")), hops: 2 }));
+    }
+    tui.tab(Tab::Network);
+    // Each peer: opened, and the keys for its kind.
+    for row in 0..3 {
+        for key in [KeyCode::Enter, KeyCode::Char('m'), KeyCode::Char('p'), KeyCode::Char('y'), KeyCode::Char('T'), KeyCode::Char('D')] {
+            tui.settle().tab(Tab::Network);
+            tui.app.peers.select(Some(row));
+            tui.key(key);
+        }
+        tui.settle().tab(Tab::Network);
+        tui.app.peers.select(Some(row));
+        tui.key(KeyCode::Char('P')).key(KeyCode::Esc);
+    }
+    // Blocking Bob from here, then unblocking him.
+    tui.settle().tab(Tab::Network);
+    let bob = tui.app.network_rows().iter().position(|(_, p)| p.kind == PeerKind::Lxmf).unwrap();
+    tui.app.peers.select(Some(bob));
+    tui.key(KeyCode::Char('b')).answer("y");
+    tui.app.net_filter = crate::app::network::NetFilter::Blocked;
+    tui.app.peers.select(Some(0));
+    tui.key(KeyCode::Char('b'));
+    tui.app.net_filter = crate::app::network::NetFilter::All;
+    // The mouse: the search box, a row, a double click.
+    tui.settle().tab(Tab::Network).draw();
+    let (search, peers) = (tui.app.regions.net_search, tui.app.regions.peers);
+    tui.click_in(search).key(KeyCode::Esc);
+    tui.click(peers.x + 2, peers.y).double_click(peers.x + 2, peers.y + 1);
+
+    // The announce viewer: each kind opened, its keys, its filter.
+    tui.settle().tab(Tab::Network).key(KeyCode::Char('a'));
+    for row in 0..6 {
+        tui.settle().tab(Tab::Network);
+        tui.app.announce_log.open = true;
+        tui.app.announce_log.list.select(Some(row));
+        tui.key(KeyCode::Enter);
+        if tui.app.prompt.is_some() {
+            tui.key(KeyCode::Esc);
+        }
+    }
+    tui.settle().tab(Tab::Network);
+    tui.app.announce_log.open = true;
+    for key in [
+        KeyCode::Char('g'),
+        KeyCode::Char('j'),
+        KeyCode::Char('k'),
+        KeyCode::Home,
+        KeyCode::End,
+        KeyCode::Char('G'),
+        KeyCode::Char('f'),
+        KeyCode::Char('f'),
+        KeyCode::Char('i'),
+        KeyCode::Char('y'),
+        KeyCode::Char('/'),
+        KeyCode::Esc,
+        KeyCode::Esc,
+    ] {
+        tui.key(key);
+    }
+    tui.app.announce_log.open = true;
+    tui.draw();
+    let peers = tui.app.regions.peers;
+    tui.click(peers.x + 2, peers.y).double_click(peers.x + 2, peers.y + 1).click(0, HEIGHT - 1);
+    for filter in crate::app::announces::HeardFilter::ALL {
+        assert!(!filter.label().is_empty());
+    }
+    // Held on an older one while more come: it stays selected.
+    tui.settle().tab(Tab::Network);
+    tui.app.announce_log.open = true;
+    tui.key(KeyCode::Char('g'));
+    for n in 0..(crate::app::announces::KEPT + 5) {
+        let hash = [(n % 250) as u8, (n / 250) as u8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9];
+        tui.app.on_net(NetEvent::Heard(Heard { hash, kind: Kind::Other, aspect: None, name: None, hops: 1 }));
+    }
+    tui.draw();
+}
