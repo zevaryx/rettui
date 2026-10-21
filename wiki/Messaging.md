@@ -338,6 +338,17 @@ rettui shows what each one is, rather than an empty message:
   under the message they react to, with who reacted. A reaction that
   arrives before its message waits for it. A reaction to one of your
   messages gets a notification; it isn't counted as unread.
+- **Sensor readings** (Sideband's telemetry, field `0x02`, beside or
+  without a location) show under the message, one a line, as Sideband's
+  own list says them: battery (charge, charging, temperature), pressure,
+  temperature, humidity, light, acceleration, gravity, rotation, the
+  magnetic field, proximity, the radio link (quality, RSSI, SNR), where it
+  was received and how far, the processor (how busy, its load averages),
+  memory, storage, tanks and fuel, power used and made, information text
+  and readings of the sender's own. Reticulum transport and propagation
+  node statistics, and connection maps, are only named. Like location
+  updates, readings don't notify you or count as unread, and newer ones
+  replace the ones before.
 - **Locations** (Sideband and Columba telemetry, field `0x02`) show as a
   line with the coordinates. Click it (or open it, below) to see it on
   OpenStreetMap, or on [the map](#locations-and-the-map). Location updates
@@ -441,6 +452,15 @@ default), *trusted* (only contacts you trust) or *contacts* (any contact).
 As with *Answer commands*, the answer is a message in the conversation, at
 most one a minute to each sender, and the request's line says whether it
 was answered, or why not. With no *Location* set, nothing is sent.
+
+*Send sensor readings* (Status, Location, `telemetry_sensors`; off unless
+turned on) sends this computer's readings with its location (an answer to
+a location request, a location shared, live updates), as Sideband sends
+its own, so Sideband shows them on your entry: the battery's charge and
+whether it's charging (Linux), how busy the processor is with its load
+averages (Linux and macOS), memory used (Linux), and the storage rettui
+keeps its data on (Linux and macOS). Your message shows what was sent.
+Windows sends none of them.
 
 The **map** shows everyone's newest location, the newest first, and this
 station's if it's set. Someone who said they'd stopped sharing (as Columba

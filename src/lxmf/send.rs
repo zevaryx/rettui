@@ -68,7 +68,7 @@ pub(super) async fn build_message(
     }
     // As Sideband sends it: the readings in bytes (msgpack `bin`).
     if let Some(location) = &outgoing.location {
-        message.set_field(FIELD_TELEMETRY, super::fields::telemetry_field(location, outgoing.timestamp as i64));
+        message.set_field(FIELD_TELEMETRY, super::fields::telemetry_field(location, &outgoing.sensors, outgoing.timestamp as i64));
     }
     // A game's move: the protocol's name and the envelope, both native
     // msgpack (as bytes they wouldn't be LRGP).

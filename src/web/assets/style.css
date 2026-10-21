@@ -382,6 +382,7 @@ header .avatar.icon { font-size: 17px; }
 .attachment.voice { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .attachment.voice audio { height: 32px; max-width: 100%; }
 .message .location { margin-top: 2px; }
+.message .sensors { margin-top: 2px; font-size: 13px; overflow-wrap: anywhere; }
 /* The map (🗺): tiles under the places, a list beside (under, on phones). */
 .dialog.map-dialog { width: min(1100px, 100%); height: min(780px, 100%); overflow: hidden; }
 .map-body { flex: 1; display: flex; gap: 10px; min-height: 0; }

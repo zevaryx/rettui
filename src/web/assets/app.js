@@ -3788,6 +3788,8 @@ app.views.messages = {
       m.location ? el('div', { class: 'location' }, '📍 ',
         el('a', { href: m.location.map, target: '_blank', rel: 'noopener noreferrer', text: m.location.label, title: 'Show it on OpenStreetMap' }),
         el('button', { class: 'inline', text: 'Map', title: 'Show it on the map, with everyone else\'s', onclick: () => mapDialog({ at: m.location, name: m.incoming ? conversation.name : 'You', key: m.incoming ? conversation.key : null }) })) : null,
+      m.sensors?.length ? el('div', { class: 'sensors' }, ...m.sensors.map((r) =>
+        el('div', {}, el('span', { class: 'dim', text: `${r.sensor}: ` }), r.value))) : null,
       (m.notes || []).map((note) => el('div', { class: 'note dim', text: note })),
       m.attachments.map((a) => {
         const url = base + a.index;
@@ -3944,7 +3946,7 @@ app.views.messages = {
   opening(m) {
     const first = (text) => (text || '').split('\n').map((l) => l.trim()).find(Boolean);
     const file = m.attachments[0] && (m.attachments[0].voice ? '🎤 Voice message' : `📎 ${m.attachments[0].name}`);
-    return first(m.content) || first(m.title) || file || (m.location ? '📍 Location' : '') || m.notes?.[0] || '';
+    return first(m.content) || first(m.title) || file || (m.location ? '📍 Location' : '') || (m.sensors?.length ? '📟 Sensor readings' : '') || m.notes?.[0] || '';
   },
 
   // What a reply answers, above its text: a click shows that message.

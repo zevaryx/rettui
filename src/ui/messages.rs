@@ -300,6 +300,18 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 Some(HistoryHit::Link(url)),
             ));
         }
+        // Sensor readings: one a line, the sensor dimmed.
+        for reading in &message.sensors {
+            for (i, line) in wrap(&format!("{}: {}", reading.sensor, reading.value), inner_width).into_iter().enumerate() {
+                let line = match line.split_once(": ").filter(|_| i == 0) {
+                    Some((sensor, value)) => {
+                        Line::from(vec![Span::styled(format!("{sensor}: "), Style::default().fg(dim())), Span::raw(value.to_string())])
+                    }
+                    None => Line::raw(line),
+                };
+                lines.push((line, None));
+            }
+        }
         for note in &message.notes {
             for line in wrap(note, inner_width) {
                 lines.push((Line::styled(line, Style::default().fg(dim()).add_modifier(Modifier::ITALIC)), None));

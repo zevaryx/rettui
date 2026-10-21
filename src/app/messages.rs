@@ -79,6 +79,7 @@ impl App {
             self.keep_appearance(&key, appearance, message.timestamp);
         }
         let location = extras.telemetry.as_ref().and_then(|t| t.location);
+        let sensors = extras.telemetry.as_ref().map(|t| t.sensors.clone()).unwrap_or_default();
         // Nothing to show but what the fields say. A reaction's text may be
         // its emoji again, for clients without reactions (Mesh-Client sends
         // it so): that's the reaction, not a message as well.
@@ -87,7 +88,8 @@ impl App {
             && message.title.trim().is_empty()
             && message.attachments.is_empty()
             && extras.audio.is_none()
-            && location.is_none();
+            && location.is_none()
+            && sensors.is_empty();
         let mut notes = extras.notes(bare);
         // Sideband's commands: answered if set to, and said so either way.
         let answers: Vec<String> = extras.commands.iter().filter_map(|c| c.answer()).collect();
@@ -163,6 +165,7 @@ impl App {
             attachments,
             reply: message.reply.clone().map(|reply| ReplyTo { hash: hex::encode(reply.to), quote: reply.quote }),
             location,
+            sensors,
             notes,
             format: extras.format.filter(|_| !message.content.trim().is_empty()),
             signal: message.signal,
@@ -512,6 +515,15 @@ impl App {
         self.share_location(key.to_string(), location, String::new(), mode, None).map(|_| ()).map_err(|e| format!("Not answered: {e}"))
     }
 
+    /// This computer's sensor readings, as telemetry entries, to go with a
+    /// location (`with_location`) if *Send sensor readings* is on.
+    fn own_sensors(&self, with_location: bool) -> Vec<(rmpv::Value, rmpv::Value)> {
+        if !with_location || !self.settings.telemetry_sensors {
+            return Vec::new();
+        }
+        lxmf::sensors::Local::now(&self.paths.base).entries()
+    }
+
     /// Our icon, as the settings have it (none unless one's set).
     pub fn own_appearance(&self) -> Option<lxmf::fields::Appearance> {
         let icon = self.settings.icon.clone()?;
@@ -700,6 +712,8 @@ impl App {
         let timestamp = now();
         // Written in Markdown, and marked so (unless that's turned off).
         let format = (self.settings.markdown_messages && !content.trim().is_empty()).then_some(TextFormat::Markdown);
+        // This computer's readings go with a location, if they're shared.
+        let sensors = self.own_sensors(location.is_some());
         self.store.conversations.entry(key).or_default().messages.push(Message {
             id: format!("local-{id}"),
             content: content.clone(),
@@ -709,6 +723,7 @@ impl App {
             reply: reply.clone(),
             format,
             location,
+            sensors: lxmf::sensors::read(&sensors),
             ..Message::default()
         });
         self.store_dirty = true;
@@ -724,8 +739,15 @@ impl App {
         } else {
             let appearance = self.own_appearance();
             let audio = voice.map(|v| (v.mode, v.frames));
-            let message =
-                lxmf::Outgoing { reply, format, appearance, audio, location, ..lxmf::Outgoing::text(to, content, files, mode, timestamp) };
+            let message = lxmf::Outgoing {
+                reply,
+                format,
+                appearance,
+                audio,
+                location,
+                sensors,
+                ..lxmf::Outgoing::text(to, content, files, mode, timestamp)
+            };
             self.send(NetCommand::SendMessage { id, message: Box::new(message) });
         }
         Ok(id)
@@ -959,11 +981,14 @@ impl App {
         };
         message.state = MessageState::Sending;
         let (content, timestamp, format, location) = (message.content.clone(), message.timestamp, message.format, message.location);
+        let had_sensors = !message.sensors.is_empty();
         let reply = message.reply.clone().and_then(|reply| {
             let to = hex::decode(&reply.hash).ok()?.try_into().ok()?;
             Some(lxmf::Reply { to, quote: reply.quote })
         });
         self.store_dirty = true;
+        // Readings sent with it go again as they are now.
+        let sensors = if had_sensors { self.own_sensors(location.is_some()) } else { Vec::new() };
         if mode == DeliveryMode::Paper {
             self.send(NetCommand::WritePaper { id: number, paper: lxmf::paper::Paper { to, content, timestamp, reply, format } });
         } else {
@@ -974,6 +999,7 @@ impl App {
                 appearance,
                 audio,
                 location,
+                sensors,
                 game,
                 ..lxmf::Outgoing::text(to, content, files, mode, timestamp)
             };
@@ -1833,7 +1859,7 @@ mod tests {
             updated: None,
         };
         let update = |n: u8, lat: f64| {
-            from_them(n, "", Extras { telemetry: Some(Telemetry { time: None, location: Some(at(lat)) }), ..Extras::default() })
+            from_them(n, "", Extras { telemetry: Some(Telemetry { location: Some(at(lat)), ..Telemetry::default() }), ..Extras::default() })
         };
         app.on_message(update(1, 50.0));
         app.on_message(update(2, 51.0));
@@ -1859,6 +1885,47 @@ mod tests {
         let last = app.store.conversations[&key()].messages.last().unwrap().clone();
         assert_eq!(last.notes, ["Sent something rettui can't show (LXMF field 0x77)"]);
         assert!(app.take_notifications().is_empty());
+        // Sensor readings, without a location: shown, and a newer set
+        // replaces the one before.
+        let readings = |n: u8, percent: &str| {
+            let sensors = vec![crate::lxmf::sensors::Reading { sensor: "Battery".into(), value: percent.into() }];
+            from_them(n, "", Extras { telemetry: Some(Telemetry { sensors, ..Telemetry::default() }), ..Extras::default() })
+        };
+        app.on_message(readings(7, "80%"));
+        app.on_message(readings(8, "79%"));
+        let last = app.store.conversations[&key()].messages.last().unwrap().clone();
+        assert_eq!((last.sensors[0].value.as_str(), last.opening().as_str(), last.notes.len()), ("79%", "📟 Sensor readings", 0));
+        assert_eq!(app.store.conversations[&key()].messages.len(), 6);
+        assert!(app.take_notifications().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sensor_readings_go_with_a_location_when_set_to() {
+        use crate::net::NetCommand;
+        let dir = temp_dir("own-sensors");
+        let settings = crate::config::Settings { telemetry_sensors: true, ..crate::config::Settings::default() };
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, settings, Store::default());
+        while net.try_recv().is_ok() {}
+        let sent = |app: &mut App, net: &mut tokio::sync::mpsc::UnboundedReceiver<NetCommand>| {
+            app.share_location(key(), lxmf::Location::at(51.5, -0.1), String::new(), DeliveryMode::Direct, None).unwrap();
+            let outgoing = std::iter::from_fn(|| net.try_recv().ok()).find_map(|c| match c {
+                NetCommand::SendMessage { message, .. } => Some(*message),
+                _ => None,
+            });
+            (outgoing.unwrap(), app.store.conversations[&key()].messages.last().unwrap().sensors.clone())
+        };
+        // Here, a Unix computer with storage: its readings go, and are shown.
+        let (outgoing, shown) = sent(&mut app, &mut net);
+        if cfg!(unix) {
+            assert!(!outgoing.sensors.is_empty());
+            assert!(shown.iter().any(|r| r.sensor == "Storage"), "{shown:?}");
+        }
+        assert_eq!(shown, lxmf::sensors::read(&outgoing.sensors));
+        // Off: the location alone.
+        app.settings.telemetry_sensors = false;
+        let (outgoing, shown) = sent(&mut app, &mut net);
+        assert!(outgoing.sensors.is_empty() && shown.is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

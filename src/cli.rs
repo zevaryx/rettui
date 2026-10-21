@@ -431,7 +431,6 @@ mod tests {
         };
         message.extras.reaction = Some(Reaction { to: [1; 32], emoji: "👍".into() });
         message.extras.telemetry = Some(Telemetry {
-            time: None,
             location: Some(Location {
                 latitude: 51.5,
                 longitude: -0.1,
@@ -441,6 +440,7 @@ mod tests {
                 accuracy: None,
                 updated: None,
             }),
+            ..Telemetry::default()
         });
         message.extras.audio = Some(Audio { mode: lxmf_core::constants::AM_OPUS_OGG, data: b"OggS".to_vec(), wav: None });
         print_message(&message, &downloads);

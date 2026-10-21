@@ -49,6 +49,9 @@ pub(super) fn draw_archive(frame: &mut Frame, app: &mut App) {
         if let Some(location) = message.location {
             lines.push(Line::styled(format!("📍 {}", location.label()), dim));
         }
+        for reading in &message.sensors {
+            lines.extend(wrap(&format!("{}: {}", reading.sensor, reading.value), columns).into_iter().map(|l| Line::styled(l, dim)));
+        }
         for note in &message.notes {
             lines.extend(wrap(note, columns).into_iter().map(|l| Line::styled(l, dim)));
         }

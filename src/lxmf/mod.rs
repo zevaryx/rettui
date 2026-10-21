@@ -20,6 +20,7 @@ pub mod pn;
 pub mod policy;
 pub mod ratchets;
 mod send;
+pub mod sensors;
 mod sync;
 pub mod voice;
 
@@ -148,6 +149,9 @@ pub struct Outgoing {
     pub audio: Option<(u8, Vec<u8>)>,
     /// Where we are, shared (as Sideband shares it, in telemetry).
     pub location: Option<Location>,
+    /// This computer's sensor readings, with the location (telemetry
+    /// entries, see [`sensors::Local::entries`]).
+    pub sensors: Vec<(rmpv::Value, rmpv::Value)>,
     /// A live location share stopped (as Columba says it).
     pub cease: bool,
     /// A game's move (LRGP): its envelope, msgpack (see `crate::games`).
@@ -173,6 +177,7 @@ impl Outgoing {
             appearance: None,
             audio: None,
             location: None,
+            sensors: Vec::new(),
             cease: false,
             game: None,
         }

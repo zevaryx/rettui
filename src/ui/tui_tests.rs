@@ -588,6 +588,27 @@ fn identities_listed_and_picked_with_the_mouse() {
     let _ = std::fs::remove_dir_all(&tui.dir);
 }
 
+/// Sensor readings a message brought, under it.
+#[test]
+fn sensor_readings_drawn_under_their_message() {
+    let mut tui = Tui::new("sensors");
+    with_bob(&mut tui);
+    let reading = |sensor: &str, value: &str| crate::lxmf::sensors::Reading { sensor: sensor.into(), value: value.into() };
+    let message = crate::store::Message {
+        id: "sensors".into(),
+        incoming: true,
+        timestamp: 1_900_000_000.0,
+        sensors: vec![reading("Battery", "80%, charging"), reading("Temperature", "21.5 °C")],
+        ..crate::store::Message::default()
+    };
+    tui.app.store.conversations.get_mut(BOB).unwrap().messages.push(message);
+    tui.tab(Tab::Messages);
+    tui.key(KeyCode::Down).key(KeyCode::Up);
+    let screen = tui.draw();
+    assert!(screen.contains("Battery: 80%, charging") && screen.contains("Temperature: 21.5 °C"), "{screen}");
+    let _ = std::fs::remove_dir_all(&tui.dir);
+}
+
 #[test]
 fn messages_at_the_keyboard_and_with_the_mouse() {
     let mut tui = Tui::new("messages");

@@ -7,8 +7,9 @@
 //!   them. Older Columba put `{"reaction_to": <hex>, "emoji": <text>}` in
 //!   field 0x10, which is read too.
 //! - Telemetry (`FIELD_TELEMETRY`, 0x02): a msgpack map of sensor readings,
-//!   which is how Sideband and Columba send location updates. Only the
-//!   time (sensor 0x01) and location (sensor 0x02) are read. A location is
+//!   which is how Sideband and Columba send location updates. The time
+//!   (sensor 0x01) and location (sensor 0x02) are read here, the rest of
+//!   Sideband's sensors in `super::sensors`. A location is
 //!   `[lat, lon, altitude, speed, bearing, accuracy, updated]`, the first six
 //!   as big-endian integers in bytes (degrees × 10⁶, then metres, m/s,
 //!   degrees and metres × 10²).
@@ -264,6 +265,8 @@ const EARTH_RADIUS: f64 = 6_371_008.8;
 pub struct Telemetry {
     pub time: Option<i64>,
     pub location: Option<Location>,
+    /// The other sensors' readings, in words.
+    pub sensors: Vec<super::sensors::Reading>,
 }
 
 /// Sensor numbers in a telemetry map.
@@ -311,7 +314,8 @@ fn location_of(value: &Value) -> Option<Location> {
 /// Columba reads it): sensor readings in msgpack, in bytes, with the time
 /// and the location, all seven of its parts there (Sideband reads none if
 /// one is missing), each a big-endian integer. What isn't known is 0.
-pub fn telemetry_field(location: &Location, time: i64) -> Vec<u8> {
+/// Other sensors' entries (`sensors`) go with them.
+pub fn telemetry_field(location: &Location, sensors: &[(Value, Value)], time: i64) -> Vec<u8> {
     let int = |v: Option<f64>, scale: f64| (v.unwrap_or(0.0) * scale).round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
     let unsigned = |v: Option<f64>| (v.unwrap_or(0.0) * 1e2).round().clamp(0.0, f64::from(u32::MAX)) as u32;
     let accuracy = (location.accuracy.unwrap_or(0.0) * 1e2).round().clamp(0.0, f64::from(u16::MAX)) as u16;
@@ -324,7 +328,9 @@ pub fn telemetry_field(location: &Location, time: i64) -> Vec<u8> {
         Value::Binary(accuracy.to_be_bytes().to_vec()),
         Value::from(location.updated.unwrap_or(time)),
     ]);
-    encode(&Value::Map(vec![(Value::from(SENSOR_TIME), Value::from(time)), (Value::from(SENSOR_LOCATION), reading)]))
+    let mut map = vec![(Value::from(SENSOR_TIME), Value::from(time)), (Value::from(SENSOR_LOCATION), reading)];
+    map.extend(sensors.iter().cloned());
+    encode(&Value::Map(map))
 }
 
 /// The telemetry a message carries, if any.
@@ -335,6 +341,7 @@ pub fn telemetry_of(message: &LxMessage) -> Option<Telemetry> {
     Some(Telemetry {
         time: at(&sensors, SENSOR_TIME).and_then(Value::as_i64),
         location: at(&sensors, SENSOR_LOCATION).and_then(location_of),
+        sensors: super::sensors::read(&sensors),
     })
 }
 
@@ -565,7 +572,7 @@ impl Extras {
     /// `bare` (nothing else to show), fields rettui can't show are named.
     pub fn notes(&self, bare: bool) -> Vec<String> {
         let mut notes: Vec<String> = Vec::new();
-        if self.telemetry.as_ref().is_some_and(|t| t.location.is_none()) {
+        if self.telemetry.as_ref().is_some_and(|t| t.location.is_none() && t.sensors.is_empty()) {
             notes.push("Sent a telemetry update without a location".into());
         }
         if self.ceased {
@@ -702,7 +709,7 @@ mod tests {
     fn a_location_sent_as_sideband_packs_it() {
         let at = Location { altitude: Some(35.5), accuracy: Some(12.0), ..Location::at(51.50735, -0.127758) };
         let mut sent = message();
-        sent.set_field(FIELD_TELEMETRY, telemetry_field(&at, 1_790_000_000));
+        sent.set_field(FIELD_TELEMETRY, telemetry_field(&at, &[], 1_790_000_000));
         let got = telemetry_of(&received(&sent)).unwrap();
         assert_eq!(got.time, Some(1_790_000_000));
         let back = got.location.unwrap();
@@ -716,8 +723,15 @@ mod tests {
         // An accuracy too big for its two bytes is as big as they hold.
         let rough = Location { accuracy: Some(5000.0), ..at };
         let mut sent = message();
-        sent.set_field(FIELD_TELEMETRY, telemetry_field(&rough, 1));
+        sent.set_field(FIELD_TELEMETRY, telemetry_field(&rough, &[], 1));
         assert_eq!(telemetry_of(&received(&sent)).unwrap().location.unwrap().accuracy, Some(655.35));
+        // With this computer's readings beside it.
+        let local = super::super::sensors::Local { battery: Some((60.0, true)), ..Default::default() };
+        let mut sent = message();
+        sent.set_field(FIELD_TELEMETRY, telemetry_field(&at, &local.entries(), 1));
+        let got = telemetry_of(&received(&sent)).unwrap();
+        assert!(got.location.is_some());
+        assert_eq!((got.sensors[0].sensor.as_str(), got.sensors[0].value.as_str()), ("Battery", "60%, charging"));
     }
 
     #[test]

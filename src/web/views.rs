@@ -294,6 +294,8 @@ fn message(m: &Message, conversation: &Conversation) -> Value {
             "latitude": l.latitude, "longitude": l.longitude, "accuracy": l.accuracy,
             "label": l.label(), "map": l.map_url(),
         })),
+        // Sensor readings it brought (or ours, sent with a location).
+        "sensors": m.sensors,
         "notes": m.notes,
         // How it was heard, over a radio that says.
         "signal": m.signal.map(|s| json!({ "short": s.short(), "label": s.label() })),

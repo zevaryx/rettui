@@ -136,6 +136,10 @@ pub struct Message {
     /// Where they were, if it brought a location.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<crate::lxmf::Location>,
+    /// Sensor readings it brought (or this computer's, sent with a
+    /// location), in words.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sensors: Vec<crate::lxmf::sensors::Reading>,
     /// What else it brought, in words: a command asked for, a location
     /// share that stopped, something rettui can't show.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -187,6 +191,7 @@ impl Message {
                 })
             })
             .or_else(|| self.location.map(|_| "📍 Location".to_string()))
+            .or_else(|| self.sensors.first().map(|_| "📟 Sensor readings".to_string()))
             .or_else(|| self.notes.first().cloned())
             .unwrap_or_default()
     }
@@ -204,7 +209,11 @@ impl Message {
     /// Whether `other` is the same kind of quiet message (a newer location
     /// update, the same command again), which replaces this one.
     pub fn same_quiet_kind(&self, other: &Message) -> bool {
-        self.is_quiet() && other.is_quiet() && self.location.is_some() == other.location.is_some() && self.notes == other.notes
+        self.is_quiet()
+            && other.is_quiet()
+            && self.location.is_some() == other.location.is_some()
+            && self.sensors.is_empty() == other.sensors.is_empty()
+            && self.notes == other.notes
     }
 }
 

@@ -93,6 +93,9 @@ pub struct Settings {
     /// Answer location requests (Sideband's telemetry requests) with
     /// [`Settings::location`]: one of [`ANSWER_COMMANDS`].
     pub location_requests: String,
+    /// Send this computer's sensor readings (battery, processor, memory,
+    /// storage) with its location, as Sideband sends its own.
+    pub telemetry_sensors: bool,
     /// Where the web UI's map gets its tiles (`{z}`, `{x}` and `{y}` in
     /// it), fetched and kept by rettui; none draws the map without them.
     pub map_tiles: Option<String>,
@@ -209,6 +212,7 @@ impl Default for Settings {
             answer_commands: "off".into(),
             location: None,
             location_requests: "off".into(),
+            telemetry_sensors: false,
             map_tiles: Some(OSM_TILES.into()),
             map_tiles_file: None,
             stamp_cost: 0,
@@ -572,7 +576,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "rrc_messages_kept",
         ],
     ),
-    (Section::Location, &["location", "location_requests", "map_tiles", "map_tiles_file"]),
+    (Section::Location, &["location", "location_requests", "telemetry_sensors", "map_tiles", "map_tiles_file"]),
     (Section::Browsing, &["home", "cache_hours"]),
     (
         Section::Hosting,
@@ -707,6 +711,13 @@ pub const FIELDS: &[Field] = &[
         label: "Answer commands",
         help: "Answer the ping, echo and signal report commands Sideband sends, as Sideband does: off; trusted (only from contacts you trust); or contacts (any contact). Answers go as messages, shown in the conversation, at most one a minute to each sender",
         kind: FieldKind::Choice(ANSWER_COMMANDS),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "telemetry_sensors",
+        label: "Send sensor readings",
+        help: "With this station's location (an answer to a location request, or a location shared), also send this computer's battery charge (Linux), how busy its processor is, its memory (Linux) and the storage rettui keeps its data on, as Sideband sends its own sensors. Sideband shows them on your entry; rettui shows what was sent",
+        kind: FieldKind::Toggle,
         effect: Effect::Now,
     },
     Field {
@@ -1142,6 +1153,7 @@ impl Settings {
             "answer_commands" => self.answer_commands.clone(),
             "location" => self.location.clone().unwrap_or_default(),
             "location_requests" => self.location_requests.clone(),
+            "telemetry_sensors" => self.telemetry_sensors.to_string(),
             "map_tiles" => self.map_tiles.clone().unwrap_or_default(),
             "map_tiles_file" => self.map_tiles_file.clone().unwrap_or_default(),
             "stamp_cost" => self.stamp_cost.to_string(),
@@ -1236,6 +1248,7 @@ impl Settings {
                 };
             }
             "location_requests" => self.location_requests = choice(value, ANSWER_COMMANDS).map_err(fail)?,
+            "telemetry_sensors" => self.telemetry_sensors = toggle(value).map_err(fail)?,
             "map_tiles" => {
                 if let Some(url) = optional(value) {
                     let web = url.starts_with("https://") || url.starts_with("http://");
