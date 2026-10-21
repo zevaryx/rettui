@@ -1,6 +1,7 @@
 //! Games over LXMF: LRGP (the Lightweight Reticulum Gaming Protocol), as
 //! Ratspeak's lrgp-rs and lrgp-py play it. Tic-Tac-Toe, Four in a Row,
-//! Checkers and Chess, two players, each move one LXMF message.
+//! Dots and Boxes, Gomoku, Reversi, Mancala, Checkers, Chess and Hex, two
+//! players, each move one LXMF message.
 //!
 //! A game message is an ordinary LXMF message whose text says what it is
 //! for clients without games (`[LRGP Chess] e2e4`), with two fields:
@@ -40,7 +41,7 @@ use serde_json::Value as Json;
 pub const DRAW_CLAIM: &str = "draw_claim";
 
 /// The games there are, in the order they're offered.
-pub const GAMES: [&str; 4] = ["ttt", "four_in_a_row", "checkers", "chess"];
+pub const GAMES: [&str; 9] = ["ttt", "four_in_a_row", "dots_and_boxes", "gomoku", "reversi", "mancala", "checkers", "chess", "hex"];
 
 /// A game's name, as shown.
 pub fn game_name(app: &str) -> &str {
@@ -49,6 +50,11 @@ pub fn game_name(app: &str) -> &str {
         "four_in_a_row" => "Four in a Row",
         "checkers" => "Checkers",
         "chess" => "Chess",
+        "hex" => "Hex",
+        "gomoku" => "Gomoku",
+        "reversi" => "Reversi",
+        "dots_and_boxes" => "Dots and Boxes",
+        "mancala" => "Mancala",
         other => other,
     }
 }
@@ -151,6 +157,36 @@ pub enum Board {
     /// (square paths, as `a3 b4` or `a5 c3 e1`), the last move, and
     /// whether a capture must be made.
     Checkers { cells: Vec<char>, black: bool, legal: Vec<String>, last: Option<String>, must_capture: bool },
+    /// 121 cells, a11 first: `b`, `w` or ` `. Whether you're Black (who
+    /// moves first, and joins the top and bottom; White joins the left and
+    /// right), the cells you can play (`f6`, and `swap` as White's first
+    /// move), and the last move.
+    Hex { cells: Vec<char>, black: bool, legal: Vec<String>, last: Option<String> },
+    /// 225 points, a15 first: `b`, `w` or ` `; as Hex's otherwise.
+    Gomoku { cells: Vec<char>, black: bool, legal: Vec<String>, last: Option<String> },
+    /// 64 squares, a8 first: `b`, `w` or ` `; as Hex's otherwise, with each
+    /// side's discs, and whether the last move left the other side without
+    /// one (so its mover moves again).
+    Reversi { cells: Vec<char>, black: bool, legal: Vec<String>, last: Option<String>, black_count: u64, white_count: u64, skipped: bool },
+    /// The grid, eleven rows of eleven, top first: `+` a dot, `-` and `|`
+    /// lines drawn (` ` not), and boxes `b`, `w` or ` `. Whether you're
+    /// Black (who moves first), the lines you can draw (`c3h` to the right
+    /// of c3, `c3v` up from it), the last, each side's boxes, and whether
+    /// the last move claimed one (so its mover moves again).
+    DotsAndBoxes {
+        rows: Vec<String>,
+        black: bool,
+        legal: Vec<String>,
+        last: Option<String>,
+        black_boxes: u64,
+        white_boxes: u64,
+        extra_turn: bool,
+    },
+    /// The fourteen holes' seeds, as they're sown: Black's pits `a`–`f`,
+    /// Black's store, White's `g`–`l`, White's store. Whether you're Black
+    /// (who moves first), the pits you can sow, the last, and whether it
+    /// ended in its mover's store (so they move again).
+    Mancala { holes: Vec<u64>, black: bool, legal: Vec<String>, last: Option<String>, extra_turn: bool },
 }
 
 impl Board {
@@ -162,7 +198,11 @@ impl Board {
             Board::TicTacToe { cells, .. } => chunk(cells, 3),
             Board::FourInARow { cells, .. } => chunk(cells, 7),
             Board::Chess { fen, .. } => chess_squares(fen).chunks(8).map(|row| row.iter().collect()).collect(),
-            Board::Checkers { cells, .. } => chunk(cells, 8),
+            Board::Checkers { cells, .. } | Board::Reversi { cells, .. } => chunk(cells, 8),
+            Board::Hex { cells, .. } => chunk(cells, 11),
+            Board::Gomoku { cells, .. } => chunk(cells, 15),
+            Board::DotsAndBoxes { rows, .. } => rows.clone(),
+            Board::Mancala { holes, .. } => vec![holes.iter().map(u64::to_string).collect::<Vec<_>>().join(",")],
         }
     }
 }
@@ -184,9 +224,60 @@ pub fn chess_squares(fen: &str) -> Vec<char> {
 
 /// A chess square's name (`e4`) from its index, a8 = 0.
 pub fn square_name(index: usize) -> String {
-    let file = (b'a' + (index % 8) as u8) as char;
-    let rank = 8 - index / 8;
+    grid_square_name(index, 8)
+}
+
+/// A square's name on a board `size` across (`h8`), from its index: the
+/// top left (`a` on the top rank) is 0.
+pub fn grid_square_name(index: usize, size: usize) -> String {
+    let file = (b'a' + (index % size) as u8) as char;
+    let rank = size - index / size;
     format!("{file}{rank}")
+}
+
+/// A square's index on a board `size` across (the top left is 0), from its
+/// name (`h8`).
+pub fn grid_square_index(name: &str, size: usize) -> Option<usize> {
+    let (&file, rank) = name.as_bytes().split_first()?;
+    let file = file.checked_sub(b'a')? as usize;
+    let rank: usize = std::str::from_utf8(rank).ok()?.parse().ok()?;
+    (file < size && (1..=size).contains(&rank) && !name[1..].starts_with('0')).then(|| (size - rank) * size + file)
+}
+
+/// The Dots and Boxes line (`c3h`, `c3v`) at a place in its grid (row and
+/// column of eleven, the top row 0), if there's a line there.
+pub fn dots_line(row: usize, col: usize) -> Option<String> {
+    let up = 10usize.checked_sub(row)?;
+    if col > 10 {
+        return None;
+    }
+    let file = |c: usize| (b'a' + (c / 2) as u8) as char;
+    match (up % 2, col % 2) {
+        // A dot row, between two dots: the line to the right.
+        (0, 1) => Some(format!("{}{}h", file(col), up / 2 + 1)),
+        // Between two dot rows, under a dot: the line up.
+        (1, 0) => Some(format!("{}{}v", file(col), up / 2 + 1)),
+        _ => None,
+    }
+}
+
+/// Where a Dots and Boxes line (`c3h`) is in the grid: its row and column.
+pub fn dots_place(line: &str) -> Option<(usize, usize)> {
+    let (dot, way) = line.split_at(line.len().checked_sub(1)?);
+    let at = grid_square_index(dot, 6)?;
+    let (row, col) = ((at / 6) * 2, (at % 6) * 2);
+    match way {
+        // Dots on the f file have no line to their right.
+        "h" if col < 10 => Some((row, col + 1)),
+        "v" => Some((row.checked_sub(1)?, col)),
+        _ => None,
+    }
+}
+
+/// The Mancala pits on your side (`a`–`f` for Black, `g`–`l` for White),
+/// from your left: and their holes in `Board::Mancala`'s `holes`.
+pub fn mancala_pits(black: bool) -> [(char, usize); 6] {
+    std::array::from_fn(|i| if black { ((b'a' + i as u8) as char, i) } else { ((b'g' + i as u8) as char, i + 7) })
 }
 
 pub struct Games {
@@ -394,6 +485,7 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
     let winner = field("winner");
     let terminal = field("terminal");
     let draw_by = field("draw_offered_by");
+    let score = score(meta);
     let draw_offer = (meta.get("draw_offered").and_then(Json::as_bool) == Some(true) && !draw_by.is_empty()).then(|| draw_by != me);
 
     let yours = match status.as_str() {
@@ -407,20 +499,20 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
         STATUS_DECLINED => if started { "They declined" } else { "You declined" }.to_string(),
         STATUS_EXPIRED => "Expired".to_string(),
         STATUS_COMPLETED => match terminal.as_str() {
-            "draw" => format!("Draw{}", draw_reason(meta)),
+            "draw" => format!("Draw{}", draw_reason(meta, score)),
             "resign" if winner == me => "They resigned: you won".to_string(),
             "resign" => "You resigned".to_string(),
             // Checkers says a resignation is a win, for the other side.
             "win" if field("terminal_reason") == "rsn" && winner == me => "They resigned: you won".to_string(),
             "win" if field("terminal_reason") == "rsn" => "You resigned".to_string(),
             _ if winner.is_empty() => "Draw".to_string(),
-            _ if winner == me => format!("You won{}", win_reason(meta, "they")),
-            _ => format!("They won{}", win_reason(meta, "you")),
+            _ if winner == me => format!("You won{}", win_reason(meta, "they", score)),
+            _ => format!("They won{}", win_reason(meta, "you", score.map(|(mine, theirs)| (theirs, mine)))),
         },
         STATUS_ACTIVE => match draw_offer {
             Some(true) => "They offered a draw".to_string(),
-            _ if turn == me => format!("Your move{}", check_note(meta)),
-            _ => "Their move".to_string(),
+            _ if turn == me => format!("Your move{}{}", check_note(meta), again(meta, "they")),
+            _ => format!("Their move{}", again(meta, "you")),
         },
         other => other.to_string(),
     };
@@ -447,6 +539,19 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
         cells.resize(size, ' ');
         cells
     };
+    // lrgp lists the side to move's: only yours are offered.
+    let legal = || -> Vec<String> {
+        (status == STATUS_ACTIVE && turn == me && draw_offer != Some(true))
+            .then(|| meta.get("legal_moves"))
+            .flatten()
+            .and_then(Json::as_array)
+            .map(|moves| moves.iter().filter_map(Json::as_str).map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    let last = || Some(field("last_move")).filter(|m| !m.is_empty());
+    let count = |key: &str| meta.get(key).and_then(Json::as_u64).unwrap_or(0);
+    let flag = |key: &str| meta.get(key).and_then(Json::as_bool).unwrap_or(false);
+    let black = field("my_color") == "b";
     let board = match app {
         "ttt" => Board::TicTacToe { cells: cells(field("board"), 9), mine: marker("my_marker") },
         "four_in_a_row" => Board::FourInARow {
@@ -457,14 +562,8 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
         "chess" => Board::Chess {
             fen: field("fen"),
             white: field("my_color") == "w",
-            // lrgp lists the side to move's: only yours are offered.
-            legal: (status == STATUS_ACTIVE && turn == me && draw_offer != Some(true))
-                .then(|| meta.get("legal_moves"))
-                .flatten()
-                .and_then(Json::as_array)
-                .map(|moves| moves.iter().filter_map(Json::as_str).map(str::to_string).collect())
-                .unwrap_or_default(),
-            last: Some(field("last_move")).filter(|m| !m.is_empty()),
+            legal: legal(),
+            last: last(),
             check: meta.get("in_check").and_then(Json::as_bool).unwrap_or(false),
             moves: meta
                 .get("moves")
@@ -472,18 +571,38 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
                 .map(|moves| moves.iter().filter_map(Json::as_str).map(str::to_string).collect())
                 .unwrap_or_default(),
         },
-        "checkers" => Board::Checkers {
+        "checkers" => {
+            Board::Checkers { cells: cells(field("board"), 64), black, legal: legal(), last: last(), must_capture: flag("must_capture") }
+        }
+        "hex" => Board::Hex { cells: cells(field("board"), 121), black, legal: legal(), last: last() },
+        "gomoku" => Board::Gomoku { cells: cells(field("board"), 225), black, legal: legal(), last: last() },
+        "reversi" => Board::Reversi {
             cells: cells(field("board"), 64),
-            black: field("my_color") == "b",
-            legal: (status == STATUS_ACTIVE && turn == me && draw_offer != Some(true))
-                .then(|| meta.get("legal_moves"))
-                .flatten()
-                .and_then(Json::as_array)
-                .map(|moves| moves.iter().filter_map(Json::as_str).map(str::to_string).collect())
-                .unwrap_or_default(),
-            last: Some(field("last_move")).filter(|m| !m.is_empty()),
-            must_capture: meta.get("must_capture").and_then(Json::as_bool).unwrap_or(false),
+            black,
+            legal: legal(),
+            last: last(),
+            black_count: count("black_count"),
+            white_count: count("white_count"),
+            skipped: flag("skipped_turn"),
         },
+        "dots_and_boxes" => {
+            let mut grid: Vec<char> = field("board").chars().map(|c| if c == '_' { ' ' } else { c }).collect();
+            grid.resize(121, ' ');
+            Board::DotsAndBoxes {
+                rows: grid.chunks(11).map(|row| row.iter().collect()).collect(),
+                black,
+                legal: legal(),
+                last: last(),
+                black_boxes: count("black_boxes"),
+                white_boxes: count("white_boxes"),
+                extra_turn: flag("extra_turn"),
+            }
+        }
+        "mancala" => {
+            let mut holes: Vec<u64> = field("board").split(',').map(|n| n.trim().parse().unwrap_or(0)).collect();
+            holes.resize(14, 0);
+            Board::Mancala { holes, black, legal: legal(), last: last(), extra_turn: flag("extra_turn") }
+        }
         _ => return None,
     };
     Some(GameView {
@@ -502,27 +621,56 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
     })
 }
 
-/// How a chess or checkers game was won, after "You won": `loser` is who
-/// lost (`they` or `you`).
-fn win_reason(meta: &serde_json::Map<String, Json>, loser: &str) -> String {
+/// How a game was won, after "You won": `loser` is who lost (`they` or
+/// `you`), `score` the winner's and the loser's discs, boxes or seeds.
+fn win_reason(meta: &serde_json::Map<String, Json>, loser: &str, score: Option<(u64, u64)>) -> String {
     match meta.get("terminal_reason").and_then(Json::as_str) {
         Some("cm") => " by checkmate".into(),
         Some("np") => format!(": {loser} have no pieces left"),
         Some("nm") => format!(": {loser} can't move"),
+        Some("con") => format!(" by joining {} sides", if loser == "they" { "your" } else { "their" }),
+        Some("5ir") => " with five in a row".into(),
+        Some("cnt") => score.map(|(won, lost)| format!(", {won}–{lost}")).unwrap_or_default(),
         _ => String::new(),
     }
 }
 
-/// How a chess game was drawn, after "Draw".
-fn draw_reason(meta: &serde_json::Map<String, Json>) -> &'static str {
+/// How a game was drawn, after "Draw".
+fn draw_reason(meta: &serde_json::Map<String, Json>, score: Option<(u64, u64)>) -> String {
     match meta.get("terminal_reason").and_then(Json::as_str) {
-        Some("sm") => ": stalemate",
-        Some("ins") => ": not enough pieces to mate",
-        Some("3fr") => ": threefold repetition",
-        Some("50m") => ": fifty-move rule",
-        Some("40m") => ": forty-move rule",
-        Some("agr") => " by agreement",
-        _ => "",
+        Some("sm") => ": stalemate".into(),
+        Some("ins") => ": not enough pieces to mate".into(),
+        Some("3fr") => ": threefold repetition".into(),
+        Some("50m") => ": fifty-move rule".into(),
+        Some("40m") => ": forty-move rule".into(),
+        Some("ful") => ": the board is full".into(),
+        Some("cnt") => score.map(|(mine, theirs)| format!(", {mine}–{theirs}")).unwrap_or_default(),
+        Some("agr") => " by agreement".into(),
+        _ => String::new(),
+    }
+}
+
+/// Your discs, boxes or seeds (in your store) and theirs, in a game that
+/// counts them.
+fn score(meta: &serde_json::Map<String, Json>) -> Option<(u64, u64)> {
+    let pair = ["count", "boxes", "store"].iter().find_map(|what| {
+        let get = |side: &str| meta.get(&format!("{side}_{what}")).and_then(Json::as_u64);
+        Some((get("black")?, get("white")?))
+    })?;
+    let black = meta.get("my_color").and_then(Json::as_str) == Some("b");
+    Some(if black { pair } else { (pair.1, pair.0) })
+}
+
+/// After "Your move" or "Their move": whether it's the same player's again
+/// (a box claimed, the last seed in their store, or `other` with no move).
+fn again(meta: &serde_json::Map<String, Json>, other: &str) -> String {
+    let flag = |key: &str| meta.get(key).and_then(Json::as_bool) == Some(true);
+    if flag("skipped_turn") {
+        format!(" again: {other} can't move")
+    } else if flag("extra_turn") {
+        " again".into()
+    } else {
+        String::new()
     }
 }
 
@@ -533,8 +681,10 @@ fn check_note(meta: &serde_json::Map<String, Json>) -> &'static str {
 /// A move as the game takes it, from what a player picked: a cell (0–8)
 /// for Tic-Tac-Toe, a column (0–6) for Four in a Row, a chess move (UCI;
 /// a pawn reaching the far rank is made a queen unless it says otherwise),
-/// or a checkers move (its squares, `a3 b4` or `a5 c3 e1`; `a5-c3-e1` and
-/// `a5xc3xe1` are taken too).
+/// a checkers move (its squares, `a3 b4` or `a5 c3 e1`; `a5-c3-e1` and
+/// `a5xc3xe1` are taken too), a square for Hex, Gomoku and Reversi (`h8`;
+/// Hex's `swap` too), a line for Dots and Boxes (`c3h`, `c3v`), or a pit
+/// for Mancala (`a`–`l`).
 pub fn move_payload(app: &str, picked: &str) -> Result<HashMap<String, Value>, String> {
     let number = |key: &str, max: u64| -> Result<HashMap<String, Value>, String> {
         let n: u64 = picked.trim().parse().map_err(|_| format!("Pick 0–{max}"))?;
@@ -566,6 +716,34 @@ pub fn move_payload(app: &str, picked: &str) -> Result<HashMap<String, Value>, S
                 return Err("Write a checkers move as its squares, e.g. a3 b4 (a5 c3 e1 for a double jump)".into());
             }
             Ok(HashMap::from([("m".to_string(), Value::from(path.join(" ")))]))
+        }
+        "hex" | "gomoku" | "reversi" => {
+            let size = match app {
+                "hex" => 11,
+                "gomoku" => 15,
+                _ => 8,
+            };
+            let square = picked.trim().to_ascii_lowercase();
+            if !(app == "hex" && square == "swap") && grid_square_index(&square, size).is_none() {
+                let last = grid_square_name(size - 1, size);
+                let swap = if app == "hex" { ", or swap" } else { "" };
+                return Err(format!("Write a square, a1 to {last}{swap}"));
+            }
+            Ok(HashMap::from([("m".to_string(), Value::from(square))]))
+        }
+        "dots_and_boxes" => {
+            let line = picked.trim().to_ascii_lowercase();
+            if dots_place(&line).is_none_or(|(row, col)| dots_line(row, col).as_deref() != Some(line.as_str())) {
+                return Err("Write a line as a dot and which way: c3h to the right of c3, c3v up from it".into());
+            }
+            Ok(HashMap::from([("m".to_string(), Value::from(line))]))
+        }
+        "mancala" => {
+            let pit = picked.trim().to_ascii_lowercase();
+            if !matches!(pit.as_bytes(), [b'a'..=b'l']) {
+                return Err("Write a pit, a to l".into());
+            }
+            Ok(HashMap::from([("m".to_string(), Value::from(pit))]))
         }
         _ => Err(format!("There's no game called {app}")),
     }
@@ -733,9 +911,188 @@ mod tests {
         assert_eq!(move_payload("checkers", " A5xC3xE1 ").unwrap()["m"], Value::from("a5 c3 e1"));
         // How a checkers game ends, said of whoever lost.
         let meta = |reason: &str| serde_json::Map::from_iter([("terminal_reason".to_string(), Json::from(reason))]);
-        assert_eq!(win_reason(&meta("np"), "they"), ": they have no pieces left");
-        assert_eq!(win_reason(&meta("nm"), "you"), ": you can't move");
-        assert_eq!(draw_reason(&meta("40m")), ": forty-move rule");
+        assert_eq!(win_reason(&meta("np"), "they", None), ": they have no pieces left");
+        assert_eq!(win_reason(&meta("nm"), "you", None), ": you can't move");
+        assert_eq!(draw_reason(&meta("40m"), None), ": forty-move rule");
+    }
+
+    /// A game of `app` begun and accepted: its session, and who moves
+    /// first (Black) and second, with their keys.
+    fn begun<'a>(amy: &'a Games, ben: &'a Games, app: &str) -> (String, [(&'a Games, [u8; 16]); 2]) {
+        let challenge = amy.challenge(app, &hex::encode(BEN)).unwrap();
+        let session = challenge.game.session.clone();
+        played(deliver(ben, AMY, &challenge));
+        played(deliver(amy, BEN, &ben.act(app, &session, "accept", HashMap::new()).unwrap()));
+        let first = amy.view(app, &session).unwrap().yours;
+        (session, if first { [(amy, AMY), (ben, BEN)] } else { [(ben, BEN), (amy, AMY)] })
+    }
+
+    /// Play `picked` as `who`, and deliver it.
+    fn play(app: &str, session: &str, who: (&Games, [u8; 16]), other: (&Games, [u8; 16]), picked: &str) -> Prepared {
+        let prepared = who.0.act(app, session, "move", move_payload(app, picked).unwrap()).unwrap();
+        played(deliver(other.0, who.1, &prepared));
+        prepared
+    }
+
+    #[test]
+    fn gomoku_five_in_a_row() {
+        let (amy, ben) = (player(AMY), player(BEN));
+        let (session, [black, white]) = begun(&amy, &ben, "gomoku");
+        let Board::Gomoku { legal, black: is_black, cells, .. } = black.0.view("gomoku", &session).unwrap().board else { panic!() };
+        assert_eq!((legal.len(), is_black, cells.len()), (225, true, 225));
+        for (b, w) in [("h8", "a1"), ("i8", "a2"), ("j8", "a3"), ("k8", "a4")] {
+            play("gomoku", &session, black, white, b);
+            play("gomoku", &session, white, black, w);
+        }
+        // Taken: refused before it's sent.
+        assert!(black.0.act("gomoku", &session, "move", move_payload("gomoku", "a1").unwrap()).is_err());
+        let won = play("gomoku", &session, black, white, "l8");
+        assert_eq!(won.text, "[LRGP Gomoku] l8 (game won)");
+        assert_eq!(black.0.view("gomoku", &session).unwrap().summary, "You won with five in a row");
+        let lost = white.0.view("gomoku", &session).unwrap();
+        assert_eq!(lost.summary, "They won with five in a row");
+        assert_eq!(lost.board.rows()[7], "       bbbbb   ");
+        assert!(matches!(lost.board, Board::Gomoku { last: Some(ref m), ref legal, black: false, .. } if m == "l8" && legal.is_empty()));
+        assert!(move_payload("gomoku", "p1").is_err() && move_payload("gomoku", "a16").is_err() && move_payload("gomoku", "a01").is_err());
+        assert_eq!(move_payload("gomoku", " O15 ").unwrap()["m"], Value::from("o15"));
+    }
+
+    #[test]
+    fn hex_swapped_then_joined_and_resigned() {
+        let (amy, ben) = (player(AMY), player(BEN));
+        let (session, [black, white]) = begun(&amy, &ben, "hex");
+        play("hex", &session, black, white, "c7");
+        // White may take Black's stone, mirrored: c7 becomes g3.
+        let Board::Hex { legal, .. } = white.0.view("hex", &session).unwrap().board else { panic!() };
+        assert_eq!((legal.len(), legal.last().map(String::as_str)), (121, Some("swap")));
+        play("hex", &session, white, black, "swap");
+        let view = black.0.view("hex", &session).unwrap();
+        assert_eq!(view.summary, "Your move");
+        let Board::Hex { cells, legal, last, .. } = view.board else { panic!() };
+        assert_eq!(cells[grid_square_index("g3", 11).unwrap()], 'w');
+        assert_eq!(cells.iter().filter(|c| **c != ' ').count(), 1);
+        assert!(!legal.contains(&"swap".to_string()) && last.as_deref() == Some("swap"));
+        // Black joins top and bottom down the f file; White plays along a.
+        for rank in 1..=10 {
+            play("hex", &session, black, white, &format!("f{rank}"));
+            play("hex", &session, white, black, &format!("a{rank}"));
+        }
+        play("hex", &session, black, white, "f11");
+        assert_eq!(black.0.view("hex", &session).unwrap().summary, "You won by joining your sides");
+        assert_eq!(white.0.view("hex", &session).unwrap().summary, "They won by joining their sides");
+        assert!(move_payload("hex", "l1").is_err());
+        assert_eq!(move_payload("hex", "SWAP").unwrap()["m"], Value::from("swap"));
+        assert!(move_payload("gomoku", "swap").is_err());
+        // Another, resigned.
+        let (session, [black, white]) = begun(&amy, &ben, "hex");
+        played(deliver(white.0, black.1, &black.0.act("hex", &session, "resign", HashMap::new()).unwrap()));
+        assert_eq!(white.0.view("hex", &session).unwrap().summary, "They resigned: you won");
+    }
+
+    #[test]
+    fn reversi_counts_and_a_draw_by_agreement() {
+        let (amy, ben) = (player(AMY), player(BEN));
+        let (session, [black, white]) = begun(&amy, &ben, "reversi");
+        let Board::Reversi { legal, black_count, white_count, .. } = black.0.view("reversi", &session).unwrap().board else { panic!() };
+        assert_eq!((legal, black_count, white_count), (vec!["d3".to_string(), "c4".into(), "f5".into(), "e6".into()], 2, 2));
+        assert!(black.0.act("reversi", &session, "move", move_payload("reversi", "a1").unwrap()).is_err());
+        play("reversi", &session, black, white, "d3");
+        let view = white.0.view("reversi", &session).unwrap();
+        let Board::Reversi { cells, black_count, white_count, skipped, .. } = &view.board else { panic!() };
+        assert_eq!((*black_count, *white_count, *skipped), (4, 1, false));
+        assert_eq!(cells[grid_square_index("d4", 8).unwrap()], 'b');
+        assert_eq!(view.board.rows()[5], "   b    ");
+        // A draw, agreed.
+        played(deliver(black.0, white.1, &white.0.act("reversi", &session, "draw_offer", HashMap::new()).unwrap()));
+        played(deliver(white.0, black.1, &black.0.act("reversi", &session, "draw_accept", HashMap::new()).unwrap()));
+        assert_eq!(white.0.view("reversi", &session).unwrap().summary, "Draw by agreement");
+        // How a game of discs ends, and moves again when one side can't.
+        let meta = |pairs: &[(&str, Json)]| serde_json::Map::from_iter(pairs.iter().map(|(k, v)| (k.to_string(), v.clone())));
+        let counted =
+            meta(&[("my_color", "w".into()), ("black_count", 20.into()), ("white_count", 44.into()), ("terminal_reason", "cnt".into())]);
+        assert_eq!(score(&counted), Some((44, 20)));
+        assert_eq!(win_reason(&counted, "they", score(&counted)), ", 44–20");
+        assert_eq!(
+            draw_reason(
+                &meta(&[
+                    ("terminal_reason", "cnt".into()),
+                    ("my_color", "b".into()),
+                    ("black_count", 32.into()),
+                    ("white_count", 32.into())
+                ]),
+                Some((32, 32))
+            ),
+            ", 32–32"
+        );
+        assert_eq!(draw_reason(&meta(&[("terminal_reason", "ful".into())]), None), ": the board is full");
+        assert_eq!(again(&meta(&[("skipped_turn", true.into())]), "they"), " again: they can't move");
+    }
+
+    #[test]
+    fn dots_and_boxes_a_box_claimed_moves_again() {
+        let (amy, ben) = (player(AMY), player(BEN));
+        let (session, [black, white]) = begun(&amy, &ben, "dots_and_boxes");
+        let Board::DotsAndBoxes { legal, rows, .. } = black.0.view("dots_and_boxes", &session).unwrap().board else { panic!() };
+        assert_eq!((legal.len(), rows.len(), rows[0].as_str()), (60, 11, "+ + + + + +"));
+        play("dots_and_boxes", &session, black, white, "a1h");
+        play("dots_and_boxes", &session, white, black, "a1v");
+        play("dots_and_boxes", &session, black, white, "a2h");
+        // White closes the box: White's, and White's move again.
+        play("dots_and_boxes", &session, white, black, "b1v");
+        let view = white.0.view("dots_and_boxes", &session).unwrap();
+        assert_eq!((view.summary.as_str(), view.yours), ("Your move again", true));
+        assert_eq!(black.0.view("dots_and_boxes", &session).unwrap().summary, "Their move again");
+        let Board::DotsAndBoxes { rows, black_boxes, white_boxes, extra_turn, .. } = view.board else { panic!() };
+        assert_eq!((&rows[8][..3], &rows[9][..3], &rows[10][..3]), ("+-+", "|w|", "+-+"));
+        assert_eq!((black_boxes, white_boxes, extra_turn), (0, 1, true));
+        // Lines and where they are in the grid.
+        assert_eq!((dots_line(10, 1).as_deref(), dots_line(9, 0).as_deref(), dots_line(9, 1)), (Some("a1h"), Some("a1v"), None));
+        assert_eq!((dots_place("a1h"), dots_place("a1v"), dots_place("f6h"), dots_place("a6v")), (Some((10, 1)), Some((9, 0)), None, None));
+        assert_eq!(dots_line(0, 9).as_deref(), Some("e6h"));
+        assert!(move_payload("dots_and_boxes", "f1h").is_err() && move_payload("dots_and_boxes", "c3").is_err());
+        assert_eq!(move_payload("dots_and_boxes", "C3V").unwrap()["m"], Value::from("c3v"));
+    }
+
+    #[test]
+    fn mancala_sowing_into_your_store_moves_again() {
+        let (amy, ben) = (player(AMY), player(BEN));
+        let (session, [black, white]) = begun(&amy, &ben, "mancala");
+        let Board::Mancala { holes, legal, .. } = black.0.view("mancala", &session).unwrap().board else { panic!() };
+        assert_eq!((holes, legal.len()), (vec![4, 4, 4, 4, 4, 4, 0, 4, 4, 4, 4, 4, 4, 0], 6));
+        // c's four seeds: d, e, f, and the last in Black's store.
+        play("mancala", &session, black, white, "c");
+        let view = black.0.view("mancala", &session).unwrap();
+        assert_eq!(view.summary, "Your move again");
+        let Board::Mancala { holes, extra_turn, .. } = &view.board else { panic!() };
+        assert_eq!((&holes[..7], *extra_turn), (&[4, 4, 0, 5, 5, 5, 1][..], true));
+        // An empty pit can't be sown; nor can theirs.
+        assert!(black.0.act("mancala", &session, "move", move_payload("mancala", "c").unwrap()).is_err());
+        assert!(black.0.act("mancala", &session, "move", move_payload("mancala", "g").unwrap()).is_err());
+        play("mancala", &session, black, white, "a");
+        let Board::Mancala { legal, .. } = white.0.view("mancala", &session).unwrap().board else { panic!() };
+        assert_eq!(legal, ["g", "h", "i", "j", "k", "l"]);
+        assert_eq!(mancala_pits(false)[0], ('g', 7));
+        assert_eq!(mancala_pits(true)[5], ('f', 5));
+        assert!(move_payload("mancala", "m").is_err() && move_payload("mancala", "ab").is_err());
+        assert_eq!(move_payload("mancala", "L").unwrap()["m"], Value::from("l"));
+        assert_eq!(
+            score(&serde_json::Map::from_iter([
+                ("my_color".to_string(), Json::from("b")),
+                ("black_store".to_string(), Json::from(30)),
+                ("white_store".to_string(), Json::from(18)),
+            ])),
+            Some((30, 18))
+        );
+    }
+
+    #[test]
+    fn every_game_is_named_and_its_squares() {
+        for app in GAMES {
+            assert_ne!(game_name(app), app, "{app}");
+        }
+        assert_eq!((grid_square_name(0, 11), grid_square_name(120, 11)), ("a11".to_string(), "k1".to_string()));
+        assert_eq!((grid_square_index("a11", 11), grid_square_index("k1", 11), grid_square_index("l1", 11)), (Some(0), Some(120), None));
+        assert_eq!((grid_square_index("a0", 8), grid_square_index("", 8), grid_square_index("a", 8)), (None, None, None));
     }
 
     #[test]

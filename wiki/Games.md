@@ -1,5 +1,6 @@
 rettui plays two-player games with your contacts over LXMF: **Tic-Tac-Toe**,
-**Four in a Row**, **Checkers** and **Chess**. Each move goes as a message to them, so a
+**Four in a Row**, **Dots and Boxes**, **Gomoku**, **Reversi**, **Mancala**,
+**Checkers**, **Chess** and **Hex**. Each move goes as a message to them, so a
 game goes wherever messages go (direct, or through a propagation node to
 someone who's offline) and takes as long as you both like. The moves aren't
 in your conversation with them: the Games tab shows the games.
@@ -37,8 +38,10 @@ Games tab, or starts a new one with them if there's none; the conversation's
 title (the button, in the web UI) says when a game waits on you.
 
 Your challenge goes as a message. They accept or decline it; whoever
-challenged moves first (in Chess and Checkers the colours are drawn when the
-challenge is accepted; White moves first in Chess, Black in Checkers).
+challenged moves first in Tic-Tac-Toe and Four in a Row. In the others who
+moves first is drawn when the challenge is accepted: White in Chess, Black
+in the rest (in Dots and Boxes and Mancala, Black is just the one who goes
+first).
 
 ## Playing
 
@@ -53,6 +56,11 @@ keys below play; in the list, `f` filters it, `c` opens the conversation and
 | Four in a Row | `←→` and `Enter`, or `1`–`7`, or click a column | click a column |
 | Chess | arrows and `Enter` on one of your pieces, then on where it goes; or a click on each; `t` to type a move by its squares (`e2e4`, `e7e8n` to promote to a knight) | click a piece (the squares it can go to are marked), then where it goes; a pawn reaching the far rank asks what it becomes |
 | Checkers | arrows and `Enter` on one of your pieces, then on each square it lands on; or a click on each; `t` to type a move by its squares (`a3 b4`, `a5 c3 e1` for a double jump) | click a piece, then each square it lands on (the next ones are marked) |
+| Dots and Boxes | arrows (from line to line) and `Enter`, or a click on a line; `t` to type one (`c3h` from c3 to the right, `c3v` from c3 up) | click a line |
+| Gomoku | arrows and `Enter`, or a click on a point; `t` to type one (`h8`) | click a point |
+| Reversi | arrows and `Enter`, or a click on a square (your moves are dotted); `t` to type one (`d3`) | click a dotted square |
+| Mancala | `←→` and `Enter`, or `1`–`6` (your pits, from your left), or a click on a pit | click one of your pits |
+| Hex | arrows and `Enter`, or a click on a cell; `t` to type one (`f6`); `s` to swap | click a cell; **Swap** |
 | Accept / decline a challenge | `a` / `d` | buttons |
 | Offer a draw | `D` | button |
 | Answer a draw offered | `y` / `n` | buttons |
@@ -64,7 +72,8 @@ keys below play; in the list, `f` filters it, `c` opens the conversation and
 
 Black sees the chess board turned round, and in the terminal the cursor
 starts on your e-pawn. Moves that aren't allowed (out of turn, a full column,
-an illegal chess move) are refused before anything is sent.
+an illegal chess move, a taken point, an empty pit) are refused before
+anything is sent. Every game can be drawn by agreement (**Offer a draw**).
 
 Checkers is American checkers (English draughts) on the dark squares: Black
 starts at the top and moves first, so Black sees the board turned round,
@@ -74,6 +83,37 @@ which ends its move. Jumps must be taken (the board says "you must jump"),
 and once you start one you finish it: with several jumps you pick each
 landing square in turn, and where only one way goes on the rest is made for
 you. Whoever has no piece, or no move, left loses.
+
+**Dots and Boxes** is played on 5×5 boxes (6×6 dots). Draw a line
+between two dots; one that closes a box (or two) makes it yours, and you
+draw another. Once every box is claimed, whoever has more wins.
+
+**Gomoku** is freestyle, on a 15×15 board: five or more of your stones in a
+row (across, down or diagonally) wins; a full board with no five is a draw.
+In the terminal your stones are in your colour, theirs in yellow; in the web
+UI they're black and white.
+
+**Reversi** (Othello) is on 8×8, starting with four discs in the middle. A
+disc must be put where it traps a line of theirs between it and one of
+yours, in any of the eight directions, and every trapped disc turns over.
+Your possible moves are dotted. When a player can't move, the other goes
+again, and the board says so ("Your move again: they can't move"); when
+neither can, whoever has more discs wins.
+
+**Mancala** is Kalah, six pits a side with four seeds in each. Your pits
+are along the bottom, from your left, and your store is on the right. Pick
+a pit of yours: its seeds are sown one by one anticlockwise, into your store
+but not theirs. If the last lands in your store you go again; if it lands in
+an empty pit of yours, it and the seeds in the pit facing it go to your
+store. When either side's pits are all empty, the seeds left go to their
+owner's store, and whoever has more in their store wins (24–24 is a draw).
+
+**Hex** is on an 11×11 rhombus of hexagons. Black wants an unbroken chain
+of stones from the top edge to the bottom one (the lettered edges, in
+Black's colour), White one from left to right (the numbered edges). Hex
+can't be drawn. Since going first is an advantage, White's first move may
+be **swap**: Black's stone becomes White's, mirrored across the diagonal
+(`c7` becomes `g3`), and Black moves next.
 
 Draws in Chess and Checkers come by agreement, or by claim: when the same
 position has come up three times, or (Chess) fifty moves have gone without a

@@ -4,10 +4,11 @@ What changed in each release of rettui. Releases before v1.6.0 are described on 
 
 ## v1.9.0
 
-Changes since v1.8.0: Checkers, claiming a draw in Chess and Checkers, reactions from Mesh-Client no longer show as a message as well, two small fixes found while writing tests, a LICENSE file, and code coverage measured in CI.
+Changes since v1.8.0: six new games (Checkers, Dots and Boxes, Gomoku, Reversi, Mancala and Hex), claiming a draw in Chess and Checkers, reactions from Mesh-Client no longer show as a message as well, two small fixes found while writing tests, a LICENSE file, and code coverage measured in CI.
 
 ### Added
 - **Checkers:** a fourth game, American checkers (English draughts), from lrgp-rs's new `checkers.1`, so it plays against other LRGP clients that have it. In the terminal, `Enter` on one of your pieces and then on each square it lands on (`t` types a move as `a5 c3 e1`); in the web UI, a click on each. Jumps must be taken and finished, and the board says so; where only one way goes on, the rest of a multi-jump is made for you. Black moves first and, like Black in Chess, sees the board turned round. See [Games](https://github.com/zevaryx/rettui/wiki/Games).
+- **Dots and Boxes, Gomoku, Reversi, Mancala and Hex:** five more games, from lrgp-rs's `dots_and_boxes.1`, `gomoku.1`, `reversi.1`, `mancala.1` and `hex.1`, so they play against other LRGP clients that have them. Each move is one square, line or pit: in the terminal, the arrows and `Enter`, a click, or `t` to type it (`1`–`6` pick a Mancala pit); in the web UI, a click. Dots and Boxes is 5×5 boxes, and closing a box earns another line; Gomoku is freestyle five in a row on 15×15; Reversi passes for a side with no move ("Your move again: they can't move") and dots where you can play; Mancala is Kalah, six pits of four, with your pits along the bottom and your store on the right; Hex is 11×11 with the swap rule (`s`, or **Swap**). Games won on a count say the score ("You won, 36–28"). See [Games](https://github.com/zevaryx/rettui/wiki/Games).
 - **Claim a draw** in Chess and Checkers (`C` in the terminal, a button in the web UI): offered when the same position has come up three times, or after fifty moves (Chess) or forty (Checkers) without a capture or a pawn or man moving. The game ends at once; the other side checks the claim.
 
 ### Fixed

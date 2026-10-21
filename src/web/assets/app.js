@@ -2107,7 +2107,10 @@ function dialog(title, body, { className = '', onclose } = {}) {
 // its history). They have a tab of their own (app.views.games);
 // conversations lead there.
 
-const GAME_NAMES = { ttt: 'Tic-Tac-Toe', four_in_a_row: 'Four in a Row', checkers: 'Checkers', chess: 'Chess' };
+const GAME_NAMES = {
+  ttt: 'Tic-Tac-Toe', four_in_a_row: 'Four in a Row', dots_and_boxes: 'Dots and Boxes', gomoku: 'Gomoku', reversi: 'Reversi',
+  mancala: 'Mancala', checkers: 'Checkers', chess: 'Chess', hex: 'Hex',
+};
 // The pawn (U+265F) is an emoji too: asked for as text (U+FE0E), so it's
 // drawn in its side's colour, not an emoji font's.
 const CHESS_GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟\uFE0E' };
@@ -2185,6 +2188,9 @@ function gameBoard(app, session, onForget) {
       can('draw_decline') ? button('Refuse the draw', 'draw_decline') : null,
       can('draw_offer') ? button('Offer a draw', 'draw_offer') : null,
       can('draw_claim') ? button('Claim a draw', 'draw_claim', `Claim a draw (${game.board.kind === 'chess' ? 'threefold repetition or fifty moves' : 'threefold repetition or forty moves'})? The game ends at once.`) : null,
+      // Hex: White's first move may take Black's stone instead.
+      playing && game.board.kind === 'hex' && game.board.legal.includes('swap')
+        ? el('button', { text: 'Swap', title: 'Take their stone as yours, mirrored, instead of placing one', onclick: () => act('move', 'swap') }) : null,
       can('resign') ? button('Resign', 'resign', `Resign this game of ${game.name}?`) : null,
       game.unsent ? button('↻ Send again', 'resend') : null,
       el('button', { class: 'danger', text: 'Forget', title: 'Remove it from your games (they aren\'t told)', onclick: async () => {
@@ -2208,6 +2214,21 @@ function gameBoard(app, session, onForget) {
     const b = game.board;
     if (b.kind === 'tic_tac_toe') return `You're ${b.mine}`;
     if (b.kind === 'four_in_a_row') return 'Yours are in your colour, theirs in yellow';
+    const lastly = (said) => b.last ? `${said} · last ${b.last}` : said;
+    if (b.kind === 'hex') return lastly(b.black ? 'You\'re Black: join top and bottom' : 'You\'re White: join left and right');
+    if (b.kind === 'gomoku') return lastly(`You're ${b.black ? 'Black' : 'White'} · five in a row wins`);
+    if (b.kind === 'reversi') {
+      const [mine, theirs] = b.black ? [b.black_count, b.white_count] : [b.white_count, b.black_count];
+      return lastly(`You're ${b.black ? 'Black' : 'White'} · discs: you ${mine}, them ${theirs}`);
+    }
+    if (b.kind === 'dots_and_boxes') {
+      const [mine, theirs] = b.black ? [b.black_boxes, b.white_boxes] : [b.white_boxes, b.black_boxes];
+      return lastly(`Boxes: you ${mine}, them ${theirs} · ${b.black ? 'you' : 'they'} went first`);
+    }
+    if (b.kind === 'mancala') {
+      const [mine, theirs] = b.black ? [b.holes[6], b.holes[13]] : [b.holes[13], b.holes[6]];
+      return lastly(`Your pits below, your store on the right: ${mine} to ${theirs}`);
+    }
     if (b.kind === 'checkers') {
       const said = [b.black ? 'You\'re Black (dark pieces)' : 'You\'re White (light pieces)'];
       if (b.must_capture && b.legal.length) said.push('you must jump');
@@ -2240,6 +2261,10 @@ function gameBoard(app, session, onForget) {
       }))));
     }
     if (b.kind === 'checkers') return checkersBoard(b, playing);
+    if (b.kind === 'hex') return hexBoard(b, playing);
+    if (b.kind === 'gomoku' || b.kind === 'reversi') return stonesBoard(b, playing);
+    if (b.kind === 'dots_and_boxes') return dotsBoard(b, playing);
+    if (b.kind === 'mancala') return mancalaBoard(b, playing);
     // Chess: Black sees the board turned round. A piece of yours, then a
     // square it can go to; a pawn reaching the far rank asks what it becomes.
     const squares = chessSquares(b.fen);
@@ -2311,6 +2336,86 @@ function gameBoard(app, session, onForget) {
         },
       }, piece === ' ' ? '' : el('span', { class: 'disc ' + (piece.toLowerCase() === 'w' ? 'white' : 'black') + (piece === piece.toUpperCase() ? ' king' : '') }));
     }));
+  };
+  // A square's name on a board `size` across, from its index (the top left
+  // is 0).
+  const squareOn = (i, size) => 'abcdefghijklmno'[i % size] + (size - Math.floor(i / size));
+  // Black's colour and White's: yours, or theirs.
+  const sides = (b) => b.black ? ['mine', 'theirs'] : ['theirs', 'mine'];
+  // Hex: a rhombus, each row set right of the one above. Black joins the
+  // top and bottom (lettered in Black's colour), White the left and right
+  // (numbered in White's).
+  const hexBoard = (b, playing) => {
+    const [first, second] = sides(b);
+    const letters = () => el('div', { class: 'hex-files ' + first }, [...'abcdefghijk'].map((f) => el('span', { text: f })));
+    const rows = [...Array(11).keys()].map((row) => el('div', { class: 'hex-row', style: `--row: ${row}` },
+      el('span', { class: 'hex-rank ' + second, text: String(11 - row) }),
+      [...Array(11).keys()].map((col) => {
+        const i = row * 11 + col;
+        const stone = b.cells[i];
+        const name = squareOn(i, 11);
+        return el('button', {
+          class: 'cell' + (stone === ' ' ? '' : ' ' + (stone === 'b' ? first : second)) + (b.last === name ? ' last' : ''),
+          'aria-label': name + (stone === ' ' ? '' : stone === 'b' ? ' Black' : ' White'),
+          disabled: !playing || !b.legal.includes(name),
+          onclick: () => act('move', name),
+        });
+      }),
+      el('span', { class: 'hex-rank ' + second, text: String(11 - row) })));
+    return el('div', { class: 'board hex' }, letters(), rows, el('div', { class: 'hex-files bottom ' + first, style: '--row: 11' }, [...'abcdefghijk'].map((f) => el('span', { text: f }))));
+  };
+  // Gomoku (15 by 15, on the points) and Reversi (8 by 8, on green): black
+  // and white stones, and (your move) where one can go.
+  const stonesBoard = (b, playing) => {
+    const size = b.kind === 'gomoku' ? 15 : 8;
+    return el('div', { class: `board stones ${b.kind}` }, b.cells.map((stone, i) => {
+      const name = squareOn(i, size);
+      const open = playing && b.legal.includes(name);
+      return el('button', {
+        class: 'point' + (b.last === name ? ' last' : '') + (open && b.kind === 'reversi' ? ' open' : ''),
+        'aria-label': name + (stone === ' ' ? '' : stone === 'b' ? ' Black' : ' White'),
+        disabled: !open,
+        onclick: () => act('move', name),
+      }, stone === ' ' ? '' : el('span', { class: 'stone ' + (stone === 'b' ? 'black' : 'white') }));
+    }));
+  };
+  // Dots and Boxes: dots, the lines between them (a click draws one), and
+  // boxes filled in their owner's colour.
+  const dotsBoard = (b, playing) => {
+    const [first, second] = sides(b);
+    const cells = [];
+    b.rows.forEach((text, row) => [...text].forEach((c, col) => {
+      const up = 10 - row;
+      if (up % 2 === 0 && col % 2 === 0) return cells.push(el('span', { class: 'dot' }));
+      if (up % 2 === 1 && col % 2 === 1) return cells.push(el('span', { class: 'box' + (c === 'b' ? ' ' + first : c === 'w' ? ' ' + second : '') }));
+      const line = `${'abcdef'[Math.floor(col / 2)]}${Math.floor(up / 2) + 1}${up % 2 === 0 ? 'h' : 'v'}`;
+      const drawn = c === '-' || c === '|';
+      cells.push(el('button', {
+        class: 'line ' + (up % 2 === 0 ? 'across' : 'down') + (drawn ? ' drawn' : '') + (b.last === line ? ' last' : ''),
+        'aria-label': line + (drawn ? ' (drawn)' : ''),
+        disabled: !playing || drawn,
+        onclick: () => act('move', line),
+      }));
+    }));
+    return el('div', { class: 'board dots' + (playing ? ' playing' : '') }, cells);
+  };
+  // Mancala: your pits below, from your left, your store on the right;
+  // theirs above, the other way round, their store on the left.
+  const mancalaBoard = (b, playing) => {
+    const pits = (black) => black ? [0, 1, 2, 3, 4, 5].map((i) => ['abcdef'[i], i]) : [0, 1, 2, 3, 4, 5].map((i) => ['ghijkl'[i], i + 7]);
+    const [myStore, theirStore] = b.black ? [6, 13] : [13, 6];
+    const pit = ([letter, hole], mine) => el('button', {
+      class: 'pit ' + (mine ? 'mine' : 'theirs') + (b.last === letter ? ' last' : ''),
+      'aria-label': `${mine ? 'Your' : 'Their'} pit ${letter}: ${b.holes[hole]} seeds`,
+      title: letter,
+      disabled: !mine || !playing || !b.legal.includes(letter),
+      onclick: () => act('move', letter),
+    }, el('span', { text: String(b.holes[hole]) }));
+    return el('div', { class: 'board mancala' },
+      el('div', { class: 'store theirs', 'aria-label': `Their store: ${b.holes[theirStore]}`, text: String(b.holes[theirStore]) }),
+      pits(!b.black).reverse().map((p) => pit(p, false)),
+      pits(b.black).map((p) => pit(p, true)),
+      el('div', { class: 'store mine', 'aria-label': `Your store: ${b.holes[myStore]}`, text: String(b.holes[myStore]) }));
   };
   return { node: body, draw };
 }

@@ -121,7 +121,8 @@ pub fn keys(app: &App) -> Keys {
             &[
                 ("Enter", "play"),
                 ("arrows", "choose"),
-                ("1–9", "cell/column"),
+                ("1–9", "cell/column/pit"),
+                ("s", "swap (Hex)"),
                 ("a/d", "accept/decline"),
                 ("D", "offer draw"),
                 ("C", "claim a draw"),

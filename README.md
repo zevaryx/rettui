@@ -35,8 +35,8 @@ configuration. It is built on:
 
 - **Messaging (LXMF):** conversations with any LXMF client, direct or through
   a propagation node, with attachments, stamps and ratchets.
-- **Games:** Tic-Tac-Toe, Four in a Row, Checkers and Chess with your contacts, a
-  move a message, over [LRGP](https://github.com/ratspeak/lrgp-rs) as other
+- **Games:** Tic-Tac-Toe, Four in a Row, Dots and Boxes, Gomoku, Reversi,
+  Mancala, Checkers, Chess and Hex with your contacts, a move a message, over [LRGP](https://github.com/ratspeak/lrgp-rs) as other
   LRGP clients play them.
 - **Chat (RRC):** hubs, rooms and whispers over Reticulum Relay Chat, the
   IRC-like protocol NomadNet 1.4 also speaks.

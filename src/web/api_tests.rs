@@ -356,6 +356,45 @@ async fn a_checkers_board_over_the_api() {
 }
 
 #[tokio::test]
+async fn the_newer_games_over_the_api() {
+    use crate::games::{Games, fields};
+    let web = TestWeb::start("newer-games");
+    web.post("/api/conversations", json!({ "address": BOB })).await;
+    web.with(|app| app.games.set_me(&[0xa1; 16])).await;
+    let mut bob = Games::default();
+    bob.set_me(&hex::decode(BOB).unwrap().try_into().unwrap());
+    let wire = |prepared: &crate::games::Prepared| -> std::collections::HashMap<u8, Vec<u8>> {
+        fields(&hex::decode(prepared.game.envelope.as_ref().unwrap()).unwrap()).into_iter().collect()
+    };
+    // Each game's board, its size, and a move of the first mover's.
+    for (app, size, first) in
+        [("hex", 121, "f6"), ("gomoku", 225, "h8"), ("reversi", 64, "d3"), ("dots_and_boxes", 11, "c3h"), ("mancala", 14, "c")]
+    {
+        let challenge = web.with(move |a| a.games.challenge(app, BOB)).await.unwrap();
+        let session = challenge.game.session.clone();
+        bob.receive(&hex::encode([0xa1; 16]), &wire(&challenge));
+        let accept = bob.act(app, &session, "accept", Default::default()).unwrap();
+        web.with(move |a| a.games.receive(BOB, &wire(&accept))).await;
+        let game = web.get(&format!("/api/games/{app}/{session}")).await.json();
+        assert_eq!((game["status"].as_str(), game["board"]["kind"].as_str()), (Some("active"), Some(app)), "{game}");
+        let shown = ["cells", "rows", "holes"].iter().find_map(|k| game["board"][k].as_array()).unwrap();
+        assert_eq!(shown.len(), size, "{app}");
+        let black = game["board"]["black"].as_bool().unwrap();
+        if !black {
+            let theirs = bob.act(app, &session, "move", crate::games::move_payload(app, first).unwrap()).unwrap();
+            web.with(move |a| a.games.receive(BOB, &wire(&theirs))).await;
+            assert_eq!(web.get(&format!("/api/games/{app}/{session}")).await.json()["board"]["last"], first);
+            continue;
+        }
+        let bad = web.post(&format!("/api/games/{app}/{session}"), json!({ "command": "move", "picked": "zz9" })).await;
+        assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{app}");
+        let moved = web.post(&format!("/api/games/{app}/{session}"), json!({ "command": "move", "picked": first })).await;
+        assert_eq!(moved.status, StatusCode::OK, "{app}: {}", moved.text());
+        assert_eq!(web.get(&format!("/api/games/{app}/{session}")).await.json()["board"]["last"], first);
+    }
+}
+
+#[tokio::test]
 async fn the_network_paths_and_announces() {
     let web = TestWeb::start("network");
     web.with(|app| {

@@ -75,8 +75,8 @@ pub enum MenuItem {
 /// What a game's prompts ask.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GamePrompt {
-    /// A chess or checkers move, typed (`e7e8n` to promote to a knight,
-    /// `a5 c3 e1` to jump twice).
+    /// A move typed: chess or checkers (`e7e8n` to promote to a knight,
+    /// `a5 c3 e1` to jump twice), a square (`h8`) or a line (`c3h`).
     Move {
         app: String,
         session: String,
@@ -99,6 +99,11 @@ pub struct BoardRegion {
     pub cell: (u16, u16),
     pub across: u16,
     pub down: u16,
+    /// How far right each row starts from the one above (Hex's).
+    pub skew: u16,
+    /// Every other column one wide, from the first (Dots and Boxes' dots
+    /// and the lines up from them), between those `cell` wide.
+    pub narrow_even: bool,
     /// The whole box.
     pub area: Rect,
 }
@@ -107,10 +112,12 @@ impl BoardRegion {
     /// The square at `at` (as shown, row by row from the top left).
     pub fn square(&self, at: Position) -> Option<usize> {
         let (w, h) = self.cell;
-        if w == 0 || h == 0 || at.x < self.origin.x || at.y < self.origin.y {
+        if w == 0 || h == 0 || at.y < self.origin.y {
             return None;
         }
-        let (col, row) = ((at.x - self.origin.x) / w, (at.y - self.origin.y) / h);
+        let row = (at.y - self.origin.y) / h;
+        let x = at.x.checked_sub(self.origin.x + row * self.skew)?;
+        let col = if self.narrow_even { x / (w + 1) * 2 + u16::from(x % (w + 1) != 0) } else { x / w };
         (col < self.across && row < self.down).then_some((row * self.across + col) as usize)
     }
 }
@@ -516,11 +523,19 @@ impl App {
                 Ok(())
             }
             KeyCode::Enter | KeyCode::Char(' ') => self.play_at_cursor(&game),
-            // A cell or column by number, as on a keypad (1 the first).
-            KeyCode::Char(c @ '1'..='9') if !matches!(game.app.as_str(), "chess" | "checkers") => {
+            // A cell or column by number, as on a keypad (1 the first); a pit
+            // of yours, from your left.
+            KeyCode::Char(c @ '1'..='9') if matches!(game.app.as_str(), "ttt" | "four_in_a_row") => {
                 let picked = c as usize - '1' as usize;
                 self.game_action(app, session, "move", Some(&picked.to_string()))
             }
+            KeyCode::Char(c @ '1'..='6') if game.app == "mancala" => {
+                if let Some(screen) = self.game_view.as_mut() {
+                    screen.cursor = c as usize - '1' as usize;
+                }
+                self.play_at_cursor(&game)
+            }
+            KeyCode::Char('s') if typed_moves(&game) && game.app == "hex" => self.game_action(app, session, "move", Some("swap")),
             KeyCode::Char('a') if can("accept") => self.game_action(app, session, "accept", None),
             KeyCode::Char('d') if can("decline") => self.game_action(app, session, "decline", None),
             KeyCode::Char('D') if can("draw_offer") => self.game_action(app, session, "draw_offer", None),
@@ -532,12 +547,14 @@ impl App {
                 self.open_prompt(PromptKind::Game(prompt), &format!("Resign this game of {}? Type y", game.name), "");
                 Ok(())
             }
-            KeyCode::Char('t') if matches!(game.app.as_str(), "chess" | "checkers") && game.yours && game.status == "active" => {
+            KeyCode::Char('t') if typed_moves(&game) && game.yours && game.status == "active" => {
                 let prompt = GamePrompt::Move { app: app.into(), session: session.into() };
-                let ask = if game.app == "chess" {
-                    "Your move, by its squares (e2e4; e7e8n promotes to a knight)"
-                } else {
-                    "Your move, by its squares (a3 b4; a5 c3 e1 jumps twice)"
+                let ask = match game.app.as_str() {
+                    "chess" => "Your move, by its squares (e2e4; e7e8n promotes to a knight)",
+                    "checkers" => "Your move, by its squares (a3 b4; a5 c3 e1 jumps twice)",
+                    "dots_and_boxes" => "Your line, by a dot and which way (c3h to the right of c3, c3v up from it)",
+                    "hex" => "Your move, by its cell (f6; swap, as White's first move, takes Black's)",
+                    _ => "Your move, by its square (d3)",
                 };
                 self.open_prompt(PromptKind::Game(prompt), ask, "");
                 Ok(())
@@ -569,6 +586,14 @@ impl App {
             Board::FourInARow { .. } => (7, 1, false),
             Board::Chess { white, .. } => (8, 8, !white),
             Board::Checkers { black, .. } => (8, 8, *black),
+            Board::Reversi { .. } => (8, 8, false),
+            Board::Hex { .. } => (11, 11, false),
+            Board::Gomoku { .. } => (15, 15, false),
+            Board::Mancala { .. } => (6, 1, false),
+            Board::DotsAndBoxes { .. } => {
+                screen.cursor = dots_step(screen.cursor, dx, dy);
+                return;
+            }
         };
         let (dx, dy) = if turned { (-dx, -dy) } else { (dx, dy) };
         let (x, y) = ((screen.cursor % width) as i32 + dx, (screen.cursor / width) as i32 + dy);
@@ -585,6 +610,33 @@ impl App {
         let Some(screen) = self.game_view.clone() else { return Ok(()) };
         if let Board::Checkers { cells, black, legal, must_capture, .. } = &game.board {
             return self.play_checkers(game, &screen, cells, *black, legal, *must_capture);
+        }
+        // One square, line or pit: played if it's a move you can make.
+        let named = match &game.board {
+            Board::Hex { legal, .. } => Some((crate::games::grid_square_name(screen.cursor, 11), legal, "That cell is taken")),
+            Board::Gomoku { legal, .. } => Some((crate::games::grid_square_name(screen.cursor, 15), legal, "That point is taken")),
+            Board::Reversi { legal, .. } => {
+                Some((crate::games::grid_square_name(screen.cursor, 8), legal, "A disc there must turn over some of theirs"))
+            }
+            Board::DotsAndBoxes { legal, .. } => {
+                let line =
+                    crate::games::dots_line(screen.cursor / 11, screen.cursor % 11).ok_or("Put the cursor on a line between two dots")?;
+                Some((line, legal, "That line's drawn already"))
+            }
+            Board::Mancala { black, legal, .. } => {
+                let (pit, _) = crate::games::mancala_pits(*black)[screen.cursor.min(5)];
+                Some((pit.to_string(), legal, "That pit is empty"))
+            }
+            _ => None,
+        };
+        if let Some((named, legal, taken)) = named {
+            if !game.yours || game.status != "active" || game.draw_offer == Some(true) {
+                return Err("It isn't your move".into());
+            }
+            if !legal.contains(&named) {
+                return Err(taken.into());
+            }
+            return self.game_action(&screen.app, &screen.session, "move", Some(&named));
         }
         let Board::Chess { fen, white, legal, .. } = &game.board else {
             return self.game_action(&screen.app, &screen.session, "move", Some(&screen.cursor.to_string()));
@@ -742,6 +794,13 @@ impl App {
         let cursor = match app {
             "ttt" => 4,
             "four_in_a_row" => 3,
+            "mancala" => 0,
+            // d5, by the four discs Reversi starts with.
+            "reversi" => 27,
+            "hex" => 60,
+            "gomoku" => 112,
+            // c3v, the middle of the grid.
+            "dots_and_boxes" => 59,
             _ => 52,
         };
         let placed = !matches!(app, "chess" | "checkers");
@@ -779,12 +838,36 @@ impl App {
     }
 }
 
+/// Whether a game's moves can be typed (`t`): those with squares or lines
+/// to name.
+fn typed_moves(game: &GameView) -> bool {
+    matches!(game.app.as_str(), "chess" | "checkers" | "hex" | "gomoku" | "reversi" | "dots_and_boxes")
+}
+
+/// The Dots and Boxes cursor (a place in the grid of eleven, row by row)
+/// moved one way: along a row from line to line, over the dots and boxes
+/// between; up or down, to the nearest line in the next row (lines to the
+/// right of dots and lines up from them, by turns).
+fn dots_step(cursor: usize, dx: i32, dy: i32) -> usize {
+    let (row, col) = ((cursor / 11) as i32, (cursor % 11) as i32);
+    let fine = |r: i32, c: i32| (0..11).contains(&r) && (0..11).contains(&c) && (r + c) % 2 == 1;
+    let to = if dy == 0 {
+        [(row, col + 2 * dx), (row, col + dx)].into_iter().find(|(r, c)| fine(*r, *c))
+    } else {
+        // Down to the line from the dot below on the right, up to the one on
+        // the left: so one undoes the other.
+        [(row + dy, col), (row + dy, col + dy), (row + dy, col - dy)].into_iter().find(|(r, c)| fine(*r, *c))
+    };
+    to.map_or(cursor, |(r, c)| (r * 11 + c) as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use tokio::sync::mpsc::UnboundedReceiver;
 
     use super::*;
     use crate::config::Settings;
+    use crate::games::Board::Hex;
     use crate::store::Store;
 
     const AMY: [u8; 16] = [0xa1; 16];
@@ -833,7 +916,14 @@ mod tests {
 
     #[test]
     fn clicks_land_on_squares() {
-        let board = BoardRegion { origin: Position::new(10, 5), cell: (3, 1), across: 8, down: 8, area: Rect::new(0, 0, 50, 20) };
+        let board = BoardRegion {
+            origin: Position::new(10, 5),
+            cell: (3, 1),
+            across: 8,
+            down: 8,
+            area: Rect::new(0, 0, 50, 20),
+            ..Default::default()
+        };
         assert_eq!(board.square(Position::new(10, 5)), Some(0));
         assert_eq!(board.square(Position::new(12, 5)), Some(0));
         assert_eq!(board.square(Position::new(13, 6)), Some(9));
@@ -1107,6 +1197,143 @@ mod tests {
         for p in [amy, ben] {
             let _ = std::fs::remove_dir_all(p.dir);
         }
+    }
+
+    /// A game of `app` begun by Amy and accepted by Ben, both on its board:
+    /// (first mover, their key), (second, theirs), and the session.
+    fn begun(amy: &mut Player, ben: &mut Player, app: &str) -> String {
+        let session = amy.app.start_game(&hex::encode(BEN), app).unwrap();
+        ben.app.on_message(arrives(amy, AMY));
+        ben.app.game_action(app, &session, "accept", None).unwrap();
+        amy.app.on_message(arrives(ben, BEN));
+        for p in [amy, ben] {
+            p.app.show_game(app, &session);
+            p.app.game_playing = true;
+        }
+        session
+    }
+
+    #[test]
+    fn the_newer_games_at_the_keyboard_and_by_clicks() {
+        let (mut amy, mut ben) = (player("new-amy", AMY), player("new-ben", BEN));
+        let warned = |player: &Player| player.app.log.back().cloned().unwrap_or_default();
+
+        // Mancala: 3 sows your third pit; it ends in your store, so again.
+        let session = begun(&mut amy, &mut ben, "mancala");
+        let amy_first = amy.app.games.view("mancala", &session).unwrap().yours;
+        let ((first, first_key), (second, _)) =
+            if amy_first { ((&mut amy, AMY), (&mut ben, BEN)) } else { ((&mut ben, BEN), (&mut amy, AMY)) };
+        press(second, KeyCode::Char('1'));
+        assert!(warned(second).contains("It isn't your move"), "{}", warned(second));
+        press(first, KeyCode::Char('3'));
+        second.app.on_message(arrives(first, first_key));
+        assert_eq!(first.app.games.view("mancala", &session).unwrap().summary, "Your move again");
+        // The cursor along your pits; an empty one can't be sown.
+        press(first, KeyCode::Right);
+        press(first, KeyCode::Left);
+        assert_eq!(first.app.game_view.as_ref().unwrap().cursor, 2);
+        press(first, KeyCode::Enter);
+        assert!(warned(first).contains("That pit is empty"), "{}", warned(first));
+
+        // Dots and Boxes: the cursor goes from line to line.
+        let session = begun(&mut amy, &mut ben, "dots_and_boxes");
+        let amy_first = amy.app.games.view("dots_and_boxes", &session).unwrap().yours;
+        let ((first, first_key), (second, second_key)) =
+            if amy_first { ((&mut amy, AMY), (&mut ben, BEN)) } else { ((&mut ben, BEN), (&mut amy, AMY)) };
+        let cursor = |p: &Player| p.app.game_view.as_ref().unwrap().cursor;
+        assert_eq!(crate::games::dots_line(cursor(first) / 11, cursor(first) % 11).as_deref(), Some("c3v"));
+        press(first, KeyCode::Right);
+        assert_eq!(crate::games::dots_line(cursor(first) / 11, cursor(first) % 11).as_deref(), Some("d3v"));
+        press(first, KeyCode::Down);
+        assert_eq!(crate::games::dots_line(cursor(first) / 11, cursor(first) % 11).as_deref(), Some("d3h"));
+        press(first, KeyCode::Up);
+        assert_eq!(crate::games::dots_line(cursor(first) / 11, cursor(first) % 11).as_deref(), Some("d3v"));
+        press(first, KeyCode::Enter);
+        second.app.on_message(arrives(first, first_key));
+        assert!(matches!(&second.app.games.view("dots_and_boxes", &session).unwrap().board,
+            Board::DotsAndBoxes { last: Some(l), .. } if l == "d3v"));
+        // Typed; then the same line again, refused.
+        press(second, KeyCode::Char('t'));
+        for c in "a1h".chars() {
+            press(second, KeyCode::Char(c));
+        }
+        press(second, KeyCode::Enter);
+        first.app.on_message(arrives(second, second_key));
+        first.app.game_view.as_mut().unwrap().cursor = 10 * 11 + 1;
+        press(first, KeyCode::Enter);
+        assert!(warned(first).contains("That line's drawn already"), "{}", warned(first));
+        // A dot isn't a line; the cursor stays on the grid at its edge.
+        first.app.game_view.as_mut().unwrap().cursor = 0;
+        press(first, KeyCode::Enter);
+        assert!(warned(first).contains("Put the cursor on a line"));
+        assert_eq!(dots_step(1, -1, 0), 1);
+        assert_eq!(dots_step(1, 0, -1), 1);
+
+        // Hex: a click on a cell; White swaps it with s.
+        let session = begun(&mut amy, &mut ben, "hex");
+        let amy_first = amy.app.games.view("hex", &session).unwrap().yours;
+        let ((first, first_key), (second, second_key)) =
+            if amy_first { ((&mut amy, AMY), (&mut ben, BEN)) } else { ((&mut ben, BEN), (&mut amy, AMY)) };
+        first.app.regions.game_board = BoardRegion {
+            origin: Position::new(10, 5),
+            cell: (2, 1),
+            across: 11,
+            down: 11,
+            skew: 1,
+            area: Rect::new(0, 0, 60, 30),
+            ..Default::default()
+        };
+        // Row 2 (rank 9) starts two to the right: its third cell, c9.
+        first.app.click_games(Position::new(10 + 2 + 4, 7));
+        second.app.on_message(arrives(first, first_key));
+        assert!(matches!(&second.app.games.view("hex", &session).unwrap().board, Hex { last: Some(l), .. } if l == "c9"));
+        press(second, KeyCode::Char('s'));
+        first.app.on_message(arrives(second, second_key));
+        let Hex { cells, .. } = first.app.games.view("hex", &session).unwrap().board else { panic!() };
+        assert_eq!(cells[crate::games::grid_square_index("i3", 11).unwrap()], 'w');
+        // Once swapped, s isn't a move: nothing's sent.
+        press(first, KeyCode::Char('s'));
+        assert!(first.net.try_recv().is_err());
+
+        // Gomoku and Reversi from the cursor; Reversi only where it turns
+        // a disc over.
+        for app in ["gomoku", "reversi"] {
+            let session = begun(&mut amy, &mut ben, app);
+            let amy_first = amy.app.games.view(app, &session).unwrap().yours;
+            let ((first, first_key), (second, _)) =
+                if amy_first { ((&mut amy, AMY), (&mut ben, BEN)) } else { ((&mut ben, BEN), (&mut amy, AMY)) };
+            if app == "reversi" {
+                first.app.game_view.as_mut().unwrap().cursor = 0;
+                press(first, KeyCode::Enter);
+                assert!(warned(first).contains("must turn over"), "{}", warned(first));
+                // d3: up from d5, twice.
+                first.app.game_view.as_mut().unwrap().cursor = 27;
+                press(first, KeyCode::Down);
+                press(first, KeyCode::Down);
+            }
+            press(first, KeyCode::Enter);
+            second.app.on_message(arrives(first, first_key));
+            let view = second.app.games.view(app, &session).unwrap();
+            assert_eq!(view.summary, "Your move", "{app}: {:?}", first.app.log);
+            press(second, KeyCode::Enter);
+            if app == "gomoku" {
+                assert!(warned(second).contains("That point is taken"), "{}", warned(second));
+            }
+        }
+        for p in [amy, ben] {
+            let _ = std::fs::remove_dir_all(p.dir);
+        }
+    }
+
+    #[test]
+    fn clicks_on_dots_and_boxes_land_on_lines() {
+        // Dots one wide, the lines between three.
+        let grid = BoardRegion { origin: Position::new(2, 0), cell: (3, 1), across: 11, down: 11, narrow_even: true, ..Default::default() };
+        assert_eq!(grid.square(Position::new(2, 0)), Some(0));
+        assert_eq!(grid.square(Position::new(3, 0)), Some(1));
+        assert_eq!(grid.square(Position::new(5, 0)), Some(1));
+        assert_eq!(grid.square(Position::new(6, 1)), Some(13));
+        assert_eq!(grid.square(Position::new(1, 0)), None);
     }
 
     #[test]
