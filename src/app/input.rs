@@ -132,6 +132,10 @@ impl App {
             self.rns_history_key(key);
             return;
         }
+        if self.tab == Tab::Status && self.identities_view.is_some() {
+            self.identities_key(key);
+            return;
+        }
         if self.message_search.is_some() && self.tab == Tab::Messages {
             self.message_search_key(key);
             return;
@@ -560,6 +564,7 @@ impl App {
             Tab::Network => self.click_network(at, double),
             Tab::Browser => self.click_browser(at),
             Tab::Node => self.click_node(at, double),
+            Tab::Status if self.identities_view.is_some() => self.click_identities(at, double),
             Tab::Status => self.click_status(at, double),
             Tab::Reticulum if self.rns.picker.is_some() => self.click_rns_picker(at),
             Tab::Reticulum if self.rns.history.is_some() => self.click_rns_history(at),

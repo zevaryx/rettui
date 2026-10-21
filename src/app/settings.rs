@@ -291,6 +291,7 @@ impl App {
                 self.confirm("First steps hidden");
             }
             KeyCode::Char('i') => self.ask_identity_file(),
+            KeyCode::Char('I') => self.open_identities(),
             KeyCode::Char('U') => self.ask_install_update(),
             KeyCode::Char('u') => {
                 let doing = self.check_for_updates();

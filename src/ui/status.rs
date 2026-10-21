@@ -129,6 +129,9 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
+    if app.identities_view.is_some() {
+        return draw_identities(frame, app, area);
+    }
     // The largest group, its tabs, its help and the box.
     let settings_height = Section::ALL.iter().map(|s| s.fields().count()).max().unwrap_or(0) as u16 + 4;
     let steps = app.first_steps();
@@ -330,6 +333,50 @@ fn log_rows<'a>(log: impl DoubleEndedIterator<Item = &'a String>, width: usize, 
     rows.truncate(height);
     rows.reverse();
     rows
+}
+
+/// The identities kept (`I`): two rows each, the one in use marked.
+fn draw_identities(frame: &mut Frame, app: &mut App, area: Rect) {
+    let hints = " Enter switch · n new · i from a file · r rename · c QR code · y copy · x delete · Esc close ";
+    let list_block = block("Identities", true).title_bottom(Line::styled(hints, Style::default().fg(dim())));
+    let inner = list_block.inner(area);
+    frame.render_widget(list_block, area);
+    app.regions.identities_list = inner;
+    let Some(view) = &mut app.identities_view else { return };
+    // Scrolled so the one selected shows.
+    let rows = (inner.height as usize / 2).max(1);
+    view.top = view.top.min(view.selected).max(view.selected.saturating_sub(rows - 1));
+    let top = view.top;
+    let items: Vec<ListItem> = view
+        .list
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(rows)
+        .map(|(i, profile)| {
+            let style = if i == view.selected { Style::default().bg(selected_bg()) } else { Style::default() };
+            let mut name = vec![Span::raw(if profile.active { " ● " } else { "   " }), Span::raw(profile.name.clone()).bold()];
+            if profile.active {
+                name.push(Span::styled("  in use", Style::default().fg(Color::Green)));
+            }
+            if profile.id.is_empty() {
+                name.push(Span::styled("  the first", Style::default().fg(dim())));
+            }
+            ListItem::new(vec![Line::from(name), Line::styled(format!("   {}", hex::encode(profile.lxmf)), Style::default().fg(accent()))])
+                .style(style)
+        })
+        .collect();
+    let mut lines = items;
+    if view.list.len() == 1 {
+        lines.push(ListItem::new(vec![
+            Line::raw(""),
+            Line::styled(
+                "   Another identity is another LXMF address, with its own name, conversations, contacts and settings. n makes one.",
+                Style::default().fg(dim()),
+            ),
+        ]));
+    }
+    frame.render_widget(List::new(lines), inner);
 }
 
 #[cfg(test)]

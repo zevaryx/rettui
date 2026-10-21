@@ -90,6 +90,51 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `web_push_key`: the web UI's key for background notifications (Web Push),
   and `web_push.json`: the browsers that turned them on. Deleting the key
   makes browsers subscribe again the next time they open rettui.
+- `identities/`: the [other identities](#several-identities) kept here, a
+  folder each, and `active`, which says which is in use.
+
+## Several identities
+
+rettui can keep several identities and use one at a time, as Columba and
+MeshChat can. Each is an LXMF address of its own, with its own name,
+conversations, contacts, games, settings and ratchets, so switching is
+being someone else: a work address and a personal one, say, or one for a
+group.
+
+`I` in the Status tab lists them (the web UI: **👤 Identities**, beside the
+display name), the one in use marked:
+
+- **New** (`n`, **+ New identity**): a new key and address, with the name
+  it announces. It starts with the settings of the one in use, but nothing
+  hosted (node, propagation node, hub), shared (location) or drawn (icon)
+  of it; the keys of others heard so far come along, so it can write to
+  them at once.
+- **From a file** (`i`, terminal only): keep the identity in a file from
+  Sideband, NomadNet, MeshChat or another rettui as another one, rather
+  than in place of the one in use (`i` in the Status tab does that).
+- **Switch** (`Enter`, **Switch**): everything is saved, then rettui
+  starts over as that identity: its settings, conversations and network
+  (it announces as it). The web UI comes back at the same address, with
+  the same login, and loads again by itself. rettui starts as the identity
+  used last.
+- **Rename** (`r`), **QR code** (`c`) of its `lxma://` link, to be added as a
+  contact, and **copy** that link (`y`).
+- **Delete** (`x`, terminal only): an identity, with its key,
+  conversations and contacts, once its name is typed. Not the first (it's
+  the data directory's own) nor the one in use. Back it up first (switch
+  to it, `b`) if its address may be wanted again.
+
+The first identity is kept where it always was, in the data directory
+itself; each one added is a folder in `identities/` (named by the start of
+its LXMF address) laid out as the data directory is, with its own
+`identity`, `settings.json`, `store.json.gz` and the rest. What isn't about
+who you are is the data directory's, whichever identity is in use: the
+log, the web UI's login, certificates and browsers, the update check, the
+page cache, map pictures and the Reticulum config's history. A
+[backup](#backups) is of the identity in use.
+
+The web UI can't bring an identity in from a file, copy one or delete one:
+its login would otherwise give the keys away.
 
 ## Backups
 

@@ -245,8 +245,12 @@ impl Default for Settings {
 
 #[derive(Clone)]
 pub struct Paths {
-    /// The data directory itself.
+    /// The data directory of the identity in use: the data directory
+    /// itself, or its folder in `identities/` (see `crate::identities`).
     pub base: PathBuf,
+    /// The data directory itself, whose files (the log, the web UI's, the
+    /// caches) every identity shares.
+    pub root: PathBuf,
     pub settings: PathBuf,
     pub identity: PathBuf,
     pub store: PathBuf,
@@ -298,31 +302,34 @@ impl Paths {
             }
         };
         fs::create_dir_all(&base).with_context(|| format!("creating {}", base.display()))?;
+        let root = base;
+        let base = crate::identities::active_dir(&root);
         Ok(Self {
             settings: base.join("settings.json"),
             identity: base.join("identity"),
             store: base.join("store.json.gz"),
-            log: base.join("rettui.log"),
+            log: root.join("rettui.log"),
             downloads: base.join("downloads"),
             known_identities: base.join("known_identities.json"),
             tickets: base.join("tickets.json"),
             ratchets: base.join("ratchets"),
-            cache: base.join("cache"),
+            cache: root.join("cache"),
             rrc_history: base.join("rrc"),
             archive: base.join("archive"),
             uploads: base.join("uploads"),
-            web_token: base.join("web_token"),
-            web_tls: base.join("web-tls"),
-            web_push_key: base.join("web_push_key"),
-            web_push: base.join("web_push.json"),
+            web_token: root.join("web_token"),
+            web_tls: root.join("web-tls"),
+            web_push_key: root.join("web_push_key"),
+            web_push: root.join("web_push.json"),
             node: base.join("node"),
             propagation: base.join("propagation"),
             rrc_hub: base.join("rrc-hub"),
             rrc_hub_identity: base.join("rrc-hub-identity"),
-            map_tiles: base.join("map-tiles"),
-            update_check: base.join("update-check.json"),
+            map_tiles: root.join("map-tiles"),
+            update_check: root.join("update-check.json"),
             games: base.join("games.json"),
-            reticulum_history: base.join("reticulum-history"),
+            reticulum_history: root.join("reticulum-history"),
+            root,
             base,
         })
     }
@@ -1015,7 +1022,7 @@ pub const FIELDS: &[Field] = &[
 /// Most entry points found by discovery connected to at once.
 const MAX_DISCOVERED_ENTRY_POINTS: u64 = 16;
 /// Longest display name accepted.
-const MAX_DISPLAY_NAME: usize = 128;
+pub const MAX_DISPLAY_NAME: usize = 128;
 /// Upper bounds for numbers (a year), so durations cannot overflow.
 const MAX_MINUTES: u64 = 525_600;
 /// How often the LXMF address may be announced on its own, in minutes:

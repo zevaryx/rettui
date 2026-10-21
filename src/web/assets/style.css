@@ -1144,3 +1144,10 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .rns-history { grid-template-columns: 1fr; }
   .rns-versions { max-height: 28vh; }
 }
+
+/* The identities kept: each name and address in full, its buttons
+   beneath them where there's no room beside. */
+.dialog.identities-dialog { width: min(640px, 100%); }
+.identities .identity { flex-wrap: wrap; gap: 6px 10px; cursor: default; }
+.identities .identity .main { flex: 1 1 260px; }
+.identities .identity .name, .identities .identity .sub { white-space: normal; overflow-wrap: anywhere; }

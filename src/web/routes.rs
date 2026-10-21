@@ -162,6 +162,9 @@ pub fn router(state: WebState) -> Router {
         .route("/reticulum/history", get(reticulum_history))
         .route("/reticulum/history/{id}", get(reticulum_version))
         .route("/reticulum/history/{id}/restore", post(reticulum_restore))
+        .route("/identities", get(identities_list).post(identities_add))
+        .route("/identities/{id}/switch", post(identities_switch))
+        .route("/identities/{id}/rename", post(identities_rename))
         .route("/emoji", get(emoji_list))
         .route("/emoji/recent", get(recent_emoji).post(pick_emoji))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
@@ -2311,6 +2314,56 @@ async fn reticulum_version(State(state): State<WebState>, Path(id): Path<String>
 async fn reticulum_restore(State(state): State<WebState>, Path(id): Path<String>) -> ApiResult {
     let warnings = state.write(move |o| o.app.rns_restore(&id, true)).await??;
     Ok(axum::Json(json!({ "warnings": warnings })))
+}
+
+/// An identity's id in the API: `-` for the first (whose own is empty).
+fn identity_id(id: &str) -> String {
+    if id == "-" { String::new() } else { id.to_string() }
+}
+
+/// The identities kept here (see `crate::identities`). Their keys stay in
+/// the terminal: the web UI can't bring one in, copy one or delete one.
+async fn identities_list(State(state): State<WebState>) -> ApiResult {
+    let list = state.read(|o| o.app.identities()).await?;
+    let listed: Vec<Value> = list
+        .iter()
+        .map(|p| {
+            json!({
+                "id": if p.id.is_empty() { "-" } else { p.id.as_str() },
+                "name": p.name,
+                "address": hex::encode(p.lxmf),
+                "link": p.link,
+                "active": p.active,
+                "first": p.id.is_empty(),
+            })
+        })
+        .collect();
+    Ok(axum::Json(json!({ "identities": listed, "most": crate::identities::MOST })))
+}
+
+#[derive(Deserialize)]
+struct IdentityName {
+    name: String,
+}
+
+/// Keep a new identity.
+async fn identities_add(State(state): State<WebState>, axum::Json(body): axum::Json<IdentityName>) -> ApiResult {
+    let profile = state.write(move |o| o.app.add_identity(&body.name, None)).await??;
+    Ok(axum::Json(json!({ "id": profile.id, "name": profile.name, "address": hex::encode(profile.lxmf) })))
+}
+
+/// Switch: rettui saves everything and starts over as the other identity;
+/// browsers load again once it's back.
+async fn identities_switch(State(state): State<WebState>, Path(id): Path<String>) -> ApiResult {
+    let id = identity_id(&id);
+    let profile = state.write(move |o| o.app.switch_identity(&id)).await??;
+    Ok(axum::Json(json!({ "name": profile.name, "address": hex::encode(profile.lxmf) })))
+}
+
+async fn identities_rename(State(state): State<WebState>, Path(id): Path<String>, axum::Json(body): axum::Json<IdentityName>) -> ApiResult {
+    let id = identity_id(&id);
+    state.write(move |o| o.app.rename_identity(&id, &body.name)).await??;
+    Ok(axum::Json(json!({ "ok": true })))
 }
 
 #[cfg(test)]

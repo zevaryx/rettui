@@ -7,6 +7,7 @@ mod emoji;
 mod games;
 mod https;
 mod icons;
+mod identities;
 mod links;
 #[cfg(test)]
 mod live_tests;
@@ -204,7 +205,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     // What updating on Windows left (the program it replaced).
     update::install::tidy();
-    let paths = Paths::new(cli.data_dir)?;
+    let paths = Paths::new(cli.data_dir.clone())?;
     // Before anything is loaded (and, in a new data directory, made).
     match &cli.command {
         Some(Command::Backup { file, with_files, without_identity }) => {
@@ -214,15 +215,7 @@ async fn main() -> Result<()> {
         Some(Command::Restore { file, force }) => return cli::restore(&paths, file, *force),
         _ => {}
     }
-    let mut settings = Settings::load(&paths.settings)?;
-    if cli.rns_config.is_some() {
-        settings.rns_config = cli.rns_config;
-    }
-    if settings.rns_config.is_none() {
-        settings.rns_config = config::default_rns_config();
-    }
-    clock::set(&settings.clock, &settings.date_style);
-    ui::set_theme(&settings.tui_theme);
+    let settings = load_settings(&paths, cli.rns_config.clone())?;
 
     let log_file = std::fs::OpenOptions::new()
         .create(true)
@@ -248,7 +241,12 @@ async fn main() -> Result<()> {
             (Some(cert), Some(key)) => Some(web::tls::Https::Files { cert, key }),
             _ => cli.https.then_some(web::tls::Https::Own),
         };
-        return web::run(settings, paths, identity, &address, https).await;
+        let (mut settings, mut paths, mut identity) = (settings, paths, identity);
+        // Switching identity starts the web UI over as the other one.
+        while web::run(settings, paths, identity, &address, https.clone()).await?.is_some() {
+            (settings, paths, identity) = switched(&cli.data_dir, cli.rns_config.clone())?;
+        }
+        return Ok(());
     }
 
     match cli.command {
@@ -276,8 +274,42 @@ async fn main() -> Result<()> {
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         Some(Command::Update { yes }) => cli::update(yes).await,
         Some(Command::Backup { .. } | Command::Restore { .. }) => unreachable!("handled before loading"),
-        None => run_tui(settings, paths, identity).await,
+        None => {
+            let (mut settings, mut paths, mut identity) = (settings, paths, identity);
+            // Switching identity starts over as the other one.
+            while run_tui(settings, paths, identity).await?.is_some() {
+                (settings, paths, identity) = switched(&cli.data_dir, cli.rns_config.clone())?;
+            }
+            Ok(())
+        }
     }
+}
+
+/// The settings in `paths` (with the Reticulum config given on the command
+/// line, if one was), applied to what's global.
+fn load_settings(paths: &Paths, rns_config: Option<String>) -> Result<Settings> {
+    let mut settings = Settings::load(&paths.settings)?;
+    if rns_config.is_some() {
+        settings.rns_config = rns_config;
+    }
+    if settings.rns_config.is_none() {
+        settings.rns_config = config::default_rns_config();
+    }
+    clock::set(&settings.clock, &settings.date_style);
+    ui::set_theme(&settings.tui_theme);
+    // (Not before logging starts, which takes the level itself.)
+    let _ = logging::set_level(&settings.log_level);
+    Ok(settings)
+}
+
+/// After switching identity: the identity now in use, its data directory
+/// and settings.
+fn switched(data_dir: &Option<PathBuf>, rns_config: Option<String>) -> Result<(Settings, Paths, rns_identity::identity::Identity)> {
+    let paths = Paths::new(data_dir.clone())?;
+    let settings = load_settings(&paths, rns_config)?;
+    let identity = config::load_identity(&paths.identity)?;
+    tracing::info!("now using the identity in {}", paths.base.display());
+    Ok((settings, paths, identity))
 }
 
 /// Network options for an interactive session (the TUI or the web UI).
@@ -304,7 +336,9 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
     }
 }
 
-async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::identity::Identity) -> Result<()> {
+/// The terminal UI, until it quits; or the name of the identity it's
+/// switching to.
+async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::identity::Identity) -> Result<Option<String>> {
     let identity_hash = identity.hash;
     let store = Store::load(&paths.store).unwrap_or_else(|e| {
         tracing::warn!("could not load store, starting empty: {e}");
@@ -361,7 +395,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
                 Some(Ok(Event::FocusLost)) => app.set_focus(false),
                 Some(Ok(_)) => {}
                 Some(Err(e)) => break Err(e.into()),
-                None => break Ok(()),
+                None => break Ok(None),
             },
             Some(event) = net_rx.recv() => {
                 app.on_net(event);
@@ -386,7 +420,10 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
             app.open_notified(target);
         }
         if app.should_quit {
-            break Ok(());
+            break Ok(None);
+        }
+        if let Some(name) = app.take_switch() {
+            break Ok(Some(name));
         }
         if app.take_rns_restart() {
             // Show "restarting" while the old stack stops.

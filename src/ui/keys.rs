@@ -450,6 +450,20 @@ pub fn keys(app: &App) -> Keys {
                 ("↑↓", "select"),
             ],
         ),
+        Tab::Status if app.identities_view.is_some() => mode(
+            "Identities",
+            &[
+                ("Enter", "switch"),
+                ("n", "new"),
+                ("i", "from a file"),
+                ("r", "rename"),
+                ("c", "QR code"),
+                ("y", "copy"),
+                ("x", "delete"),
+                ("↑↓", "select"),
+                ("Esc", "close"),
+            ],
+        ),
         Tab::Status if !app.first_steps().is_empty() => mode(
             "Status",
             &[
@@ -462,6 +476,7 @@ pub fn keys(app: &App) -> Keys {
                 ("b", "back up identity"),
                 ("B", "back up all"),
                 ("i", "identity"),
+                ("I", "identities"),
                 ("u", "check for updates"),
                 ("U", "install update"),
                 ("^R", "restart"),
@@ -529,6 +544,7 @@ pub fn keys(app: &App) -> Keys {
                 ("b", "back up identity"),
                 ("B", "back up all"),
                 ("i", "identity"),
+                ("I", "identities"),
                 ("u", "check for updates"),
                 ("U", "install update"),
                 ("^R", "restart"),

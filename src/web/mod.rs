@@ -477,7 +477,9 @@ fn reachable_ip(listening: IpAddr) -> Option<IpAddr> {
         .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
 }
 
-pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: &str, https: Option<tls::Https>) -> Result<()> {
+/// The web UI, until it's stopped; or the name of the identity it's
+/// switching to (it's started again as that one).
+pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: &str, https: Option<tls::Https>) -> Result<Option<String>> {
     let address: SocketAddr = address.parse().with_context(|| format!("--web expects an address like {DEFAULT_ADDRESS}, not {address}"))?;
     let token = load_token(&paths)?;
     // Certificates first: a problem with them stops rettui before it starts.
@@ -588,7 +590,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 }
             }
             _ = save.tick() => owner.app.save_if_dirty(),
-            () = &mut shutdown => break Ok(()),
+            () = &mut shutdown => break Ok(None),
         }
         for notification in owner.app.take_notifications() {
             next_notice += 1;
@@ -609,6 +611,11 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         }
         if server.is_finished() {
             break Err(anyhow::anyhow!("the web server stopped"));
+        }
+        if let Some(name) = owner.app.take_switch() {
+            // Browsers load again once it's back, as the other identity.
+            notify(&changes, Scope::ALL);
+            break Ok(Some(name));
         }
         if owner.app.take_rns_restart() {
             // Browsers see "starting" while the old stack stops; page loads

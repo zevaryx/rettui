@@ -27,6 +27,7 @@ pub mod forward;
 pub mod games;
 pub mod guide;
 pub mod hub;
+pub mod identities;
 pub mod identity;
 mod input;
 pub mod live;
@@ -155,6 +156,13 @@ pub enum PromptKind {
     ConfirmImportIdentity(PathBuf),
     /// Where to save a copy of the identity.
     BackUpIdentity,
+    /// Another identity kept: its name (and the file it's from, if any);
+    /// the file first; another name; switching and deleting, confirmed.
+    NewIdentity(Option<PathBuf>),
+    IdentityFromFile,
+    RenameIdentity(String),
+    ConfirmSwitchIdentity(String),
+    ConfirmDeleteIdentity(String),
     /// Where to save a backup of everything.
     BackUpAll,
     ConfirmDeleteMessage {
@@ -325,6 +333,8 @@ pub struct Regions {
     pub rns_editor: Rect,
     pub rns_picker: Rect,
     pub rns_history_list: Rect,
+    /// Status tab: the identities list (`I`).
+    pub identities_list: Rect,
     /// Channels tab: hub/room list, message history, input, and the
     /// clickable public rooms shown for a hub.
     pub channel_list: Rect,
@@ -601,6 +611,10 @@ pub struct App {
     reads: Vec<String>,
     /// A paper message shown as a QR code (terminal UI).
     pub paper_view: Option<PaperView>,
+    /// The identities list (`I` in the Status tab).
+    pub identities_view: Option<identities::IdentitiesView>,
+    /// The identity chosen to switch to (its name), for the run loop.
+    switching: Option<String>,
     /// The conversation a paper message was just read into.
     pub paper_read: Option<String>,
     /// Whether the window has the focus (as far as the terminal says; the
@@ -748,6 +762,8 @@ impl App {
             notifications: Vec::new(),
             reads: Vec::new(),
             paper_view: None,
+            identities_view: None,
+            switching: None,
             paper_read: None,
             focused: true,
             games,
@@ -1180,6 +1196,11 @@ impl App {
             kind @ (PromptKind::ImportIdentity | PromptKind::ConfirmImportIdentity(_) | PromptKind::BackUpIdentity) => {
                 self.submit_identity_prompt(kind, &text)
             }
+            kind @ (PromptKind::NewIdentity(_)
+            | PromptKind::IdentityFromFile
+            | PromptKind::RenameIdentity(_)
+            | PromptKind::ConfirmSwitchIdentity(_)
+            | PromptKind::ConfirmDeleteIdentity(_)) => self.submit_identities_prompt(kind, &text),
             PromptKind::BackUpAll => self.submit_backup_prompt(&text),
             PromptKind::ContactNotes(key) => {
                 // Lines were shown as ↵ to edit on one line.

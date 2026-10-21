@@ -356,6 +356,38 @@ async fn a_checkers_board_over_the_api() {
 }
 
 #[tokio::test]
+async fn identities_over_the_api() {
+    let web = TestWeb::start("identities");
+    web.with(|app| {
+        crate::config::load_identity(&app.paths.identity).unwrap();
+    })
+    .await;
+    let list = || async { web.get("/api/identities").await.json()["identities"].as_array().unwrap().clone() };
+    let [first] = list().await.try_into().unwrap();
+    assert_eq!((first["id"].as_str(), first["active"].as_bool(), first["first"].as_bool()), (Some("-"), Some(true), Some(true)));
+    assert!(first["link"].as_str().unwrap().starts_with("lxma://"));
+    let made = web.post("/api/identities", json!({ "name": "Work" })).await;
+    assert_eq!(made.status, StatusCode::OK, "{}", made.text());
+    assert_eq!(web.post("/api/identities", json!({ "name": " " })).await.status, StatusCode::BAD_REQUEST);
+    let work = list().await[1].clone();
+    assert_eq!((work["name"].as_str(), work["active"].as_bool()), (Some("Work"), Some(false)));
+    let id = work["id"].as_str().unwrap().to_string();
+    // Renamed: another, and the one in use (its display name).
+    let renamed = web.post(&format!("/api/identities/{id}/rename"), json!({ "name": "Office" })).await;
+    assert_eq!(renamed.status, StatusCode::OK, "{}", renamed.text());
+    web.post("/api/identities/-/rename", json!({ "name": "Home" })).await;
+    let names: Vec<String> = list().await.iter().map(|p| p["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, ["Home", "Office"]);
+    // Switched: the run loop is told, and starts over as it.
+    assert_eq!(web.post("/api/identities/-/switch", json!({})).await.status, StatusCode::BAD_REQUEST, "in use already");
+    let switched = web.post(&format!("/api/identities/{id}/switch"), json!({})).await;
+    assert_eq!(switched.json()["name"], "Office");
+    assert_eq!(web.with(|app| app.take_switch()).await.as_deref(), Some("Office"));
+    // No deleting, or bringing one in, from here.
+    assert_eq!(web.post(&format!("/api/identities/{id}/delete"), json!({})).await.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn the_reticulum_configs_history_over_the_api() {
     let web = TestWeb::start("rns-history");
     assert!(web.get("/api/reticulum/history").await.json()["versions"].as_array().unwrap().is_empty());
@@ -746,10 +778,11 @@ async fn live_updates_notifications_and_signing_out() {
     let _ = state.notices.send(Notice::Show(99, notification));
     let _ = state.notices.send(Notice::Read(format!("conversation:{BOB}")));
     let mut said = String::new();
-    while !said.contains("event: read") {
+    // The two channels are read in no set order: until both have come.
+    while !(said.contains("event: read") && said.contains("data: 7 all")) {
         said += &tokio::time::timeout(std::time::Duration::from_secs(5), events.next()).await.unwrap().unwrap();
     }
-    assert!(said.contains("data: 7 all") && said.contains("\"body\":\"Again\""), "{said}");
+    assert!(said.contains("\"body\":\"Again\""), "{said}");
     assert_eq!(said.matches("event: notify").count(), 1, "{said}");
 
     // Too many changes at once: one event says to refetch it all.

@@ -6663,7 +6663,8 @@ app.views.status = {
       toast(s.version.status);
     }
     this.info.replaceChildren(
-      label('Display name'), el('span', { style: 'font-weight:600', text: s.display_name }),
+      label('Display name'), el('div', { class: 'row' }, el('span', { style: 'font-weight:600', text: s.display_name }),
+        el('button', { text: '👤 Identities', title: 'Keep several identities (LXMF addresses, each with its own conversations and settings) and switch between them', onclick: () => identitiesDialog() })),
       label('LXMF address'), el('div', { class: 'row' }, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.lxmf_address || '(starting)' }),
         s.lxmf_address ? el('button', { text: 'Copy', title: 'Your address with your key (lxma://), so whoever you give it to can write to you at once',
           onclick: () => copy(s.identity_link || s.lxmf_address, s.identity_link ? 'your LXMF address, with your key' : 'your LXMF address') }) : null,
@@ -7541,6 +7542,65 @@ async function rnsHistory(changed) {
   };
   dialog('Reticulum config history', () => el('div', { class: 'rns-history' },
     list, el('div', { class: 'rns-version' }, modes, summary, diff, el('div', { class: 'row actions' }, restore))), { className: 'rns-history-dialog' });
+  show();
+}
+
+// The identities kept (see rettui's src/identities.rs): each an LXMF address
+// with its own name, conversations, contacts and settings. Switching starts
+// rettui over as the other one, and this page loads again once it's back.
+// Keys stay in the terminal: bringing one in from a file, and deleting one,
+// are done there.
+async function identitiesDialog() {
+  const body = el('div', { class: 'identities' });
+  let closeDialog;
+  const show = async () => {
+    const listed = await attempt(() => api.get('/identities'));
+    if (!listed) return;
+    const rows = listed.identities.map((p) => el('div', { class: 'list-item identity' + (p.active ? ' selected' : '') },
+      el('span', { class: 'main' },
+        el('div', { class: 'name' }, el('strong', { text: p.name }),
+          p.active ? el('span', { class: 'online', text: '  in use' }) : null,
+          p.first ? el('span', { class: 'dim', text: '  the first' }) : null),
+        el('div', { class: 'sub mono', text: p.address })),
+      el('div', { class: 'row' },
+        el('button', { text: 'QR code', title: 'Its address as a QR code, to be added as a contact', onclick: () => showAddress(p.link) }),
+        el('button', { text: 'Rename', onclick: async () => {
+          const name = prompt('Name (the one it announces)', p.name);
+          if (name === null || !name.trim()) return;
+          if (await attempt(() => api.post(`/identities/${p.id}/rename`, { name }))) {
+            show();
+            if (p.active) refresh();
+          }
+        } }),
+        p.active ? null : el('button', { class: 'primary', text: 'Switch', onclick: () => switchIdentity(p) }))));
+    body.replaceChildren(
+      el('p', { class: 'dim', text: 'Each identity is an LXMF address of its own, with its own name, conversations, contacts and settings; one is used at a time. Bringing one in from a file and deleting one are done in the terminal (Status, I), as they handle keys.' }),
+      ...rows,
+      listed.identities.length < listed.most ? el('div', { class: 'row actions' },
+        el('button', { text: '+ New identity', onclick: async () => {
+          const name = prompt('Name of the new identity (the one it announces)');
+          if (name === null || !name.trim()) return;
+          const made = await attempt(() => api.post('/identities', { name }));
+          if (made) {
+            toast(`Kept ${made.name}: Switch uses it`);
+            show();
+          }
+        } })) : null);
+  };
+  const switchIdentity = async (p) => {
+    if (!confirm(`Switch to ${p.name} (${p.address})?\nEverything is saved, and rettui starts again as it: this page loads again once it's back.`)) return;
+    if (!await attempt(() => api.post(`/identities/${p.id}/switch`))) return;
+    closeDialog?.();
+    toast(`Switching to ${p.name}…`);
+    // Back when the web UI answers again, as the other identity.
+    for (let i = 0; i < 60; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const state = await api.get('/state').catch(() => null);
+      if (state && state.lxmf_address === p.address) return location.reload();
+    }
+    location.reload();
+  };
+  closeDialog = dialog('Identities', () => body, { className: 'identities-dialog' });
   show();
 }
 

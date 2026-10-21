@@ -567,6 +567,27 @@ fn a_voice_message_recorded_and_sent() {
     let _ = std::fs::remove_dir_all(&tui.dir);
 }
 
+/// The identities list over the Status tab: drawn, picked by a click,
+/// switched to by a double click (asked first).
+#[test]
+fn identities_listed_and_picked_with_the_mouse() {
+    let mut tui = Tui::with("identities", |s| s.display_name = "Amy".into());
+    crate::config::load_identity(&tui.app.paths.identity).unwrap();
+    let work = tui.app.add_identity("Amy at work", None).unwrap();
+    tui.tab(Tab::Status).key(KeyCode::Char('I'));
+    let screen = tui.draw();
+    assert!(screen.contains("Identities") && screen.contains("Amy at work") && screen.contains("in use"), "{screen}");
+    assert!(screen.contains(&hex::encode(work.lxmf)));
+    let list = tui.app.regions.identities_list;
+    tui.click(list.x + 4, list.y + 2);
+    assert_eq!(tui.app.identities_view.as_ref().unwrap().selected, 1);
+    tui.double_click(list.x + 4, list.y + 2);
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.starts_with("Switch to Amy at work")));
+    tui.key(KeyCode::Esc).key(KeyCode::Esc);
+    assert!(tui.app.identities_view.is_none());
+    let _ = std::fs::remove_dir_all(&tui.dir);
+}
+
 #[test]
 fn messages_at_the_keyboard_and_with_the_mouse() {
     let mut tui = Tui::new("messages");
