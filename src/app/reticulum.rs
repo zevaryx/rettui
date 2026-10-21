@@ -14,8 +14,12 @@ use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 
 use super::{App, PromptKind};
+use crate::reticulum::history::{self, DiffLine, History, Version};
 use crate::reticulum::schema::{self, Kind};
 use crate::reticulum::{self as rns, Check, OptionView, Section};
+
+/// Unchanged lines shown around each change in a comparison.
+pub const DIFF_CONTEXT: usize = 3;
 use crate::term::textarea::TextArea;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +64,19 @@ impl RnsText {
     }
 }
 
+/// Earlier versions of the config file (`H`): the list, and how the one
+/// selected differs from the one before it or from the file now.
+pub struct RnsHistoryView {
+    pub versions: Vec<Version>,
+    pub list: ListState,
+    /// Compared with the file as it is now, rather than the version before.
+    pub against_current: bool,
+    pub lines: Vec<DiffLine>,
+    pub error: Option<String>,
+    /// The comparison's first line shown.
+    pub scroll: usize,
+}
+
 pub struct RnsState {
     pub path: PathBuf,
     /// The file as last read (rsReticulum's default when it does not exist).
@@ -76,6 +93,7 @@ pub struct RnsState {
     pub focus: RnsFocus,
     pub picker: Option<Picker>,
     pub editor: Option<RnsText>,
+    pub history: Option<RnsHistoryView>,
 }
 
 impl Default for RnsState {
@@ -94,6 +112,7 @@ impl Default for RnsState {
             focus: RnsFocus::Sections,
             picker: None,
             editor: None,
+            history: None,
         }
     }
 }
@@ -193,45 +212,114 @@ impl App {
         state.option_list.select(row);
     }
 
-    /// Change the file: read it, apply `edit`, check and save. Returns the
-    /// warnings about interfaces that will not start.
-    pub(super) fn rns_edit(&mut self, restricted: bool, edit: impl FnOnce(&str) -> Result<String, String>) -> Result<Vec<String>, String> {
+    /// Change the file: read it, apply `edit`, check and save, keeping the
+    /// version saved (and the file before, if it isn't kept already) in its
+    /// history, as `what`. Returns the warnings about interfaces that will
+    /// not start.
+    pub(super) fn rns_edit(
+        &mut self,
+        restricted: bool,
+        what: &str,
+        edit: impl FnOnce(&str) -> Result<String, String>,
+    ) -> Result<Vec<String>, String> {
         let path = self.rns_path();
-        let (before, _) = rns::load(&path)?;
+        let (before, existed) = rns::load(&path)?;
         let after = edit(&before)?;
         if after == before && path.is_file() {
             return Ok(Vec::new());
         }
         let check = rns::validate(&before, &after, restricted)?;
+        let history = self.rns_history();
+        let now = super::now();
+        if let Err(e) = history.before_saving(&path, existed.then_some(before.as_str()), now) {
+            self.log(e);
+        }
         rns::save(&path, &after)?;
+        if let Err(e) = history.record(&path, &after, what, now) {
+            self.log(e);
+        }
         self.log(format!("Saved {} (applies when Reticulum restarts)", path.display()));
         self.rns_reload();
         Ok(check.warnings)
     }
 
     pub fn rns_set_options(&mut self, section: &Section, changes: &[(&str, &str)], restricted: bool) -> Result<Vec<String>, String> {
+        let said: Vec<String> = changes
+            .iter()
+            .map(
+                |(key, value)| {
+                    if value.trim().is_empty() { format!("{key} back to its default") } else { format!("{key} = {}", value.trim()) }
+                },
+            )
+            .collect();
+        let what = match &section {
+            Section::Interface(name) => format!("{name}: {}", said.join(", ")),
+            other => format!("{}: {}", other.title(), said.join(", ")),
+        };
         let section = section.clone();
-        self.rns_edit(restricted, |text| rns::set_options(text, &section, changes))
+        self.rns_edit(restricted, &what, |text| rns::set_options(text, &section, changes))
     }
 
     pub fn rns_add_interface(&mut self, name: &str, kind: &str, restricted: bool) -> Result<Vec<String>, String> {
-        self.rns_edit(restricted, |text| rns::add_interface(text, name, kind))
+        let what = format!("Added interface {} ({kind})", name.trim());
+        self.rns_edit(restricted, &what, |text| rns::add_interface(text, name, kind))
     }
 
     pub fn rns_rename_interface(&mut self, name: &str, to: &str, restricted: bool) -> Result<Vec<String>, String> {
-        let warnings = self.rns_edit(restricted, |text| rns::rename_interface(text, name, to))?;
+        let what = format!("Renamed interface {name} to {}", to.trim());
+        let warnings = self.rns_edit(restricted, &what, |text| rns::rename_interface(text, name, to))?;
         self.rns_select(&Section::Interface(to.trim().to_string()));
         Ok(warnings)
     }
 
     pub fn rns_remove_interface(&mut self, name: &str, restricted: bool) -> Result<Vec<String>, String> {
-        self.rns_edit(restricted, |text| rns::remove_interface(text, name))
+        self.rns_edit(restricted, &format!("Removed interface {name}"), |text| rns::remove_interface(text, name))
     }
 
     /// Replace the whole file with edited text.
     pub fn rns_save_text(&mut self, text: &str, restricted: bool) -> Result<Vec<String>, String> {
         let text = text.to_string();
-        self.rns_edit(restricted, move |_| Ok(text))
+        self.rns_edit(restricted, "Edited as text", move |_| Ok(text))
+    }
+
+    // ---- History -------------------------------------------------------------
+
+    /// Earlier versions of the config file (see [`rns::history`]).
+    pub fn rns_history(&self) -> History {
+        History::new(self.paths.reticulum_history.clone())
+    }
+
+    /// The versions kept of the config file in use, newest first.
+    pub fn rns_versions(&self) -> Vec<Version> {
+        self.rns_history().list(&self.rns_path())
+    }
+
+    /// How a version differs: from the one before it (what it changed), or
+    /// (`against_current`) from the file as it is now (what putting it
+    /// back would change).
+    pub fn rns_compare(&self, id: &str, against_current: bool) -> Result<Vec<DiffLine>, String> {
+        let history = self.rns_history();
+        let versions = self.rns_versions();
+        let at = versions.iter().position(|v| v.id == id).ok_or("There's no such version of this config file")?;
+        let text = history.text(id)?;
+        if against_current {
+            let (current, _) = rns::load(&self.rns_path())?;
+            return Ok(history::diff(&current, &text, DIFF_CONTEXT));
+        }
+        let before = match versions.get(at + 1) {
+            Some(older) => history.text(&older.id)?,
+            None => String::new(),
+        };
+        Ok(history::diff(&before, &text, DIFF_CONTEXT))
+    }
+
+    /// Put an earlier version back (checked and saved as any edit is; the
+    /// file it replaces is kept too).
+    pub fn rns_restore(&mut self, id: &str, restricted: bool) -> Result<Vec<String>, String> {
+        let version = self.rns_versions().into_iter().find(|v| v.id == id).ok_or("There's no such version of this config file")?;
+        let text = self.rns_history().text(id)?;
+        let what = format!("Put back the version of {}", crate::clock::when(version.time));
+        self.rns_edit(restricted, &what, move |_| Ok(text))
     }
 
     // ---- TUI ---------------------------------------------------------------
@@ -278,6 +366,7 @@ impl App {
             KeyCode::PageDown => self.rns_move(10),
             KeyCode::PageUp => self.rns_move(-10),
             KeyCode::Char('t') => self.rns_open_text(),
+            KeyCode::Char('H') => self.rns_open_history(),
             KeyCode::Char('R') => {
                 self.rns_reload();
                 self.confirm("Reloaded the Reticulum config");
@@ -468,7 +557,102 @@ impl App {
             PromptKind::ConfirmDiscardRns if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") => {
                 self.rns.editor = None;
             }
+            PromptKind::ConfirmRestoreRns(id) if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") => {
+                let result = self.rns_restore(&id, false);
+                if result.is_ok() {
+                    self.rns_open_history();
+                }
+                self.rns_report(result, "Put the earlier version back");
+            }
             _ => {}
+        }
+    }
+
+    // ---- History, in the TUI ------------------------------------------------
+
+    fn rns_open_history(&mut self) {
+        let versions = self.rns_versions();
+        if versions.is_empty() {
+            return self.warn("No earlier versions yet: rettui keeps one each time it saves the Reticulum config");
+        }
+        let against_current = self.rns.history.as_ref().is_some_and(|h| h.against_current);
+        self.rns.history = Some(RnsHistoryView {
+            versions,
+            list: ListState::default().with_selected(Some(0)),
+            against_current,
+            lines: Vec::new(),
+            error: None,
+            scroll: 0,
+        });
+        self.rns_history_compare();
+    }
+
+    /// Compare the version selected, as the view says.
+    fn rns_history_compare(&mut self) {
+        let Some(view) = &self.rns.history else { return };
+        let Some(version) = view.list.selected().and_then(|i| view.versions.get(i)) else { return };
+        let result = self.rns_compare(&version.id, view.against_current);
+        if let Some(view) = &mut self.rns.history {
+            view.scroll = 0;
+            match result {
+                Ok(lines) => (view.lines, view.error) = (lines, None),
+                Err(e) => (view.lines, view.error) = (Vec::new(), Some(e)),
+            }
+        }
+    }
+
+    fn rns_history_select(&mut self, index: usize) {
+        let Some(view) = &mut self.rns.history else { return };
+        let index = index.min(view.versions.len().saturating_sub(1));
+        if view.list.selected() != Some(index) {
+            view.list.select(Some(index));
+            self.rns_history_compare();
+        }
+    }
+
+    pub(super) fn rns_history_key(&mut self, key: KeyEvent) {
+        let Some(view) = &mut self.rns.history else { return };
+        let at = view.list.selected().unwrap_or(0);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('H') => self.rns.history = None,
+            KeyCode::Down | KeyCode::Char('j') => self.rns_history_select(at + 1),
+            KeyCode::Up | KeyCode::Char('k') => self.rns_history_select(at.saturating_sub(1)),
+            KeyCode::Home => self.rns_history_select(0),
+            KeyCode::End => self.rns_history_select(usize::MAX),
+            KeyCode::PageDown => view.scroll = (view.scroll + 10).min(view.lines.len().saturating_sub(1)),
+            KeyCode::PageUp => view.scroll = view.scroll.saturating_sub(10),
+            KeyCode::Char('c') => {
+                view.against_current = !view.against_current;
+                self.rns_history_compare();
+            }
+            KeyCode::Enter | KeyCode::Char('r') => {
+                let Some(version) = view.versions.get(at).cloned() else { return };
+                let title = format!("Put back the version of {} ({})? Type y", crate::clock::when(version.time), version.what);
+                self.open_prompt(PromptKind::ConfirmRestoreRns(version.id), &title, "");
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn click_rns_history(&mut self, at: Position) {
+        let list = self.regions.rns_history_list;
+        let Some(view) = &self.rns.history else { return };
+        if list.contains(at) {
+            // Two lines a version.
+            let index = view.list.offset() + (at.y - list.y) as usize / 2;
+            if index < view.versions.len() {
+                self.rns_history_select(index);
+            }
+        }
+    }
+
+    pub(super) fn scroll_rns_history(&mut self, at: Position, delta: isize) {
+        let Some(view) = &mut self.rns.history else { return };
+        if self.regions.rns_history_list.contains(at) {
+            let index = view.list.selected().unwrap_or(0).saturating_add_signed(delta.signum());
+            self.rns_history_select(index);
+        } else {
+            view.scroll = view.scroll.saturating_add_signed(delta * 3).min(view.lines.len().saturating_sub(1));
         }
     }
 

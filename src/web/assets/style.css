@@ -1127,3 +1127,20 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   #connection { top: calc(62px + env(safe-area-inset-top)); font-size: 14px; }
   .toast { max-width: none; }
 }
+.dialog.rns-history-dialog { width: min(1000px, 100%); }
+.rns-history { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 12px; min-height: 0; }
+.rns-versions { display: flex; flex-direction: column; gap: 4px; max-height: 60vh; overflow-y: auto; }
+.rns-versions .list-item { text-align: left; }
+.rns-version { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.rns-version .subtabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.rns-version .subtabs button.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.rns-diff { margin: 0; max-height: 52vh; overflow: auto; font: 12.5px/1.45 var(--mono, monospace); background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 8px; white-space: pre; }
+.rns-diff .added, .rns-diff-summary .added { color: var(--green, #4c4); }
+.rns-diff .removed, .rns-diff-summary .removed { color: var(--red, #e55); }
+.rns-diff .added { background: color-mix(in srgb, var(--green, #4c4) 12%, transparent); }
+.rns-diff .removed { background: color-mix(in srgb, var(--red, #e55) 12%, transparent); }
+.rns-diff .skipped { color: var(--dim); font-style: italic; }
+@media (max-width: 700px) {
+  .rns-history { grid-template-columns: 1fr; }
+  .rns-versions { max-height: 28vh; }
+}

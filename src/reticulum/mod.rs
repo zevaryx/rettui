@@ -7,6 +7,7 @@
 //! after a restart (of rettui, or of whatever runs the shared instance).
 
 pub mod doc;
+pub mod history;
 pub mod schema;
 
 use std::collections::BTreeSet;

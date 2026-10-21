@@ -128,6 +128,10 @@ impl App {
             self.rns_editor_key(key);
             return;
         }
+        if self.tab == Tab::Reticulum && self.rns.history.is_some() {
+            self.rns_history_key(key);
+            return;
+        }
         if self.message_search.is_some() && self.tab == Tab::Messages {
             self.message_search_key(key);
             return;
@@ -530,6 +534,7 @@ impl App {
             Tab::Node => self.scroll_node(at, delta),
             Tab::Status if self.regions.settings.contains(at) => self.move_setting(delta.signum()),
             Tab::Status => {}
+            Tab::Reticulum if self.rns.history.is_some() => self.scroll_rns_history(at, delta),
             Tab::Reticulum => self.scroll_rns(at, delta),
             Tab::Hub => self.scroll_hub(delta.signum()),
         }
@@ -553,6 +558,7 @@ impl App {
             Tab::Node => self.click_node(at, double),
             Tab::Status => self.click_status(at, double),
             Tab::Reticulum if self.rns.picker.is_some() => self.click_rns_picker(at),
+            Tab::Reticulum if self.rns.history.is_some() => self.click_rns_history(at),
             Tab::Reticulum => self.click_rns(at, double),
             Tab::Hub => self.click_hub(at),
         }

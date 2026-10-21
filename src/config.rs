@@ -275,6 +275,9 @@ pub struct Paths {
     pub update_check: PathBuf,
     /// Games played over LXMF (see `crate::games`).
     pub games: PathBuf,
+    /// Earlier versions of the Reticulum config (see
+    /// `crate::reticulum::history`).
+    pub reticulum_history: PathBuf,
 }
 
 impl Paths {
@@ -310,6 +313,7 @@ impl Paths {
             map_tiles: base.join("map-tiles"),
             update_check: base.join("update-check.json"),
             games: base.join("games.json"),
+            reticulum_history: base.join("reticulum-history"),
             base,
         })
     }

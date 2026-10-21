@@ -190,6 +190,8 @@ pub enum PromptKind {
     ConfirmDeleteInterface(String),
     RnsOption(crate::reticulum::Section, String),
     ConfirmDiscardRns,
+    /// Put back this version of the Reticulum config (its id).
+    ConfirmRestoreRns(String),
     /// Restart the Reticulum stack.
     ConfirmRestartRns,
     /// The page editor's formatting that needs an answer (a colour, an
@@ -321,6 +323,7 @@ pub struct Regions {
     pub rns_options: Rect,
     pub rns_editor: Rect,
     pub rns_picker: Rect,
+    pub rns_history_list: Rect,
     /// Channels tab: hub/room list, message history, input, and the
     /// clickable public rooms shown for a hub.
     pub channel_list: Rect,
@@ -1269,7 +1272,8 @@ impl App {
             | PromptKind::RenameInterface(_)
             | PromptKind::ConfirmDeleteInterface(_)
             | PromptKind::RnsOption(..)
-            | PromptKind::ConfirmDiscardRns) => {
+            | PromptKind::ConfirmDiscardRns
+            | PromptKind::ConfirmRestoreRns(_)) => {
                 let text = prompt.input.text().to_string();
                 self.submit_rns_prompt(kind, &text);
             }

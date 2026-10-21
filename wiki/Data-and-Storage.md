@@ -50,6 +50,10 @@ rettui keeps its data in `~/.local/share/rettui/`:
   trusted contacts and ones they gave you. Only you can read it.
 - `games.json`: your [games](Games) with contacts, as LRGP keeps them (the
   board, whose turn it is, the moves). Saved as moves are made.
+- `reticulum-history/`: earlier versions of the Reticulum config, as rettui
+  saved them ([History](Settings-and-Reticulum-Config)), the newest 50 of
+  each config file: one `.config` file each, listed in `index.json`. Not in
+  backups: the config they're of is this computer's.
 - `rrc-hub/` and `rrc-hub-identity`: the [RRC hub hosted
   here](Hosting-a-Node#rrc-hub), once it has started: rsRRCD's
   `config.yaml`, its registered rooms (`rooms.yaml`), and the hub's own

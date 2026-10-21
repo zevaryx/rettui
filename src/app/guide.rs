@@ -315,7 +315,8 @@ impl App {
             let ours = (discover || view.has_discovery) && rns::discovery_connects(&self.guide_config()) == 0;
             if !add.is_empty() || discover {
                 let mut added = Vec::new();
-                let warnings = self.rns_edit(restricted, |text| {
+                let what = "Added entry points (Getting started)";
+                let warnings = self.rns_edit(restricted, what, |text| {
                     let mut text = text.to_string();
                     for entry in &add {
                         let (with, name) = rns::add_entry_point(&text, entry.name, entry.host, entry.port, ours)?;

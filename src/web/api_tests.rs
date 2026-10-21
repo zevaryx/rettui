@@ -356,6 +356,51 @@ async fn a_checkers_board_over_the_api() {
 }
 
 #[tokio::test]
+async fn the_reticulum_configs_history_over_the_api() {
+    let web = TestWeb::start("rns-history");
+    assert!(web.get("/api/reticulum/history").await.json()["versions"].as_array().unwrap().is_empty());
+    let added = web.post("/api/reticulum/interfaces", json!({ "action": "add", "name": "Local", "type": "AutoInterface" })).await;
+    assert_eq!(added.status, StatusCode::OK, "{}", added.text());
+    // A pipe interface, added in the terminal (the web UI can't).
+    let pipe = "PipeInterface";
+    web.with(move |app| {
+        app.rns_add_interface("Pipe", pipe, false).unwrap();
+        app.rns_set_options(&crate::reticulum::Section::Interface("Pipe".into()), &[("command", "cat")], false).unwrap();
+    })
+    .await;
+    let removed = web.post("/api/reticulum/interfaces", json!({ "action": "delete", "name": "Pipe" })).await;
+    assert_eq!(removed.status, StatusCode::OK, "{}", removed.text());
+    let versions = web.get("/api/reticulum/history").await.json()["versions"].as_array().unwrap().clone();
+    let whats: Vec<&str> = versions.iter().map(|v| v["what"].as_str().unwrap()).collect();
+    assert_eq!(
+        whats,
+        ["Removed interface Pipe", "Pipe: command = cat", "Added interface Pipe (PipeInterface)", "Added interface Local (AutoInterface)"]
+    );
+    assert!(versions[0]["when"].as_str().is_some_and(|w| !w.is_empty()));
+    // What the newest changed: Pipe's lines removed.
+    let id = |n: usize| versions[n]["id"].as_str().unwrap().to_string();
+    let newest = web.get(&format!("/api/reticulum/history/{}", id(0))).await.json();
+    assert!(newest["removed"].as_u64().unwrap() >= 3 && newest["added"] == 0, "{newest}");
+    let removed_pipe =
+        newest["lines"].as_array().unwrap().iter().any(|l| l["kind"] == "removed" && l["text"].as_str().unwrap().trim() == "[[Pipe]]");
+    assert!(removed_pipe, "{newest}");
+    // Compared with the file now: no differences.
+    let now = web.get(&format!("/api/reticulum/history/{}?against=current", id(0))).await.json();
+    assert_eq!((now["added"].as_u64(), now["removed"].as_u64()), (Some(0), Some(0)));
+    // Putting back a version with the pipe's command isn't for the web UI.
+    let refused = web.post(&format!("/api/reticulum/history/{}/restore", id(1)), json!({})).await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.text());
+    assert!(!std::fs::read_to_string(web.with(|app| app.rns_path()).await).unwrap().contains("[[Pipe]]"));
+    // The oldest is fine.
+    let back = web.post(&format!("/api/reticulum/history/{}/restore", id(3)), json!({})).await;
+    assert_eq!(back.status, StatusCode::OK, "{}", back.text());
+    let versions = web.get("/api/reticulum/history").await.json()["versions"].as_array().unwrap().clone();
+    assert!(versions[0]["what"].as_str().unwrap().starts_with("Put back the version of"));
+    assert_eq!(web.get("/api/reticulum/history/nope").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.post("/api/reticulum/history/123/restore", json!({})).await.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn the_newer_games_over_the_api() {
     use crate::games::{Games, fields};
     let web = TestWeb::start("newer-games");

@@ -424,10 +424,15 @@ pub fn keys(app: &App) -> Keys {
         Tab::Reticulum if app.rns.editor.is_some() => {
             typing("Config as text", &[("^S", "save"), ("Esc", "close"), ("^Z/^Y", "undo/redo"), ("^V", "paste")])
         }
+        Tab::Reticulum if app.rns.history.is_some() => mode(
+            "Earlier versions",
+            &[("↑↓", "version"), ("Enter", "put back"), ("c", "compare with"), ("PgUp/Dn", "scroll"), ("Esc", "close")],
+        ),
         Tab::Reticulum => mode(
             "Reticulum",
             &[
                 ("Enter", "edit"),
+                ("H", "history"),
                 ("Tab", "section"),
                 ("a", "add"),
                 ("Space", "on/off"),

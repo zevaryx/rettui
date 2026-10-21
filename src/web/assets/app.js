@@ -7271,7 +7271,10 @@ app.views.reticulum = {
       ...(interfaces.length ? interfaces.map(item) : [el('div', { class: 'empty', text: 'No interfaces.' })]),
       el('div', { class: 'list-item' + (this.textMode ? ' selected' : ''), onclick: () => this.openText() },
         el('span', { class: 'main' }, el('div', { class: 'name', text: '✎ Edit as text' }),
-          el('div', { class: 'sub', text: 'The whole file, comments included' }))));
+          el('div', { class: 'sub', text: 'The whole file, comments included' }))),
+      el('div', { class: 'list-item', onclick: () => rnsHistory(() => this.load(true)) },
+        el('span', { class: 'main' }, el('div', { class: 'name', text: '🕘 History' }),
+          el('div', { class: 'sub', text: 'Earlier versions: what each changed, and putting one back' }))));
     if (this.textMode) return this.renderText();
     this.formScroll.classList.remove('hidden');
     this.text.classList.add('hidden');
@@ -7489,6 +7492,57 @@ app.views.reticulum = {
     }
   },
 };
+
+// Earlier versions of the Reticulum config: the list, how the one picked
+// differs (from the version before it, or from the file now), and putting
+// it back. `changed` runs once one is put back.
+async function rnsHistory(changed) {
+  const listed = await attempt(() => api.get('/reticulum/history'));
+  if (!listed) return;
+  if (!listed.versions.length) return toast('No earlier versions yet: rettui keeps one each time it saves the Reticulum config');
+  let versions = listed.versions;
+  let picked = versions[0].id;
+  let against = 'previous';
+  const list = el('div', { class: 'rns-versions' });
+  const summary = el('div', { class: 'rns-diff-summary' });
+  const diff = el('pre', { class: 'rns-diff' });
+  const modes = el('div', { class: 'subtabs' });
+  const restore = el('button', { class: 'primary', text: 'Put this version back' });
+  const show = async () => {
+    list.replaceChildren(...versions.map((v) => el('button', {
+      class: 'list-item' + (v.id === picked ? ' selected' : ''),
+      onclick: () => { picked = v.id; show(); },
+    }, el('span', { class: 'main' }, el('div', { class: 'name', text: v.when }), el('div', { class: 'sub', text: v.what })))));
+    modes.replaceChildren(...[['previous', 'What it changed'], ['current', 'What putting it back would change']].map(([mode, text]) =>
+      el('button', { class: mode === against ? 'active' : '', text, onclick: () => { against = mode; show(); } })));
+    const result = await api.get(`/reticulum/history/${picked}?against=${against}`).catch((e) => ({ error: e.message }));
+    if (result.error) {
+      summary.textContent = result.error;
+      diff.replaceChildren();
+      return;
+    }
+    summary.replaceChildren(...(result.added + result.removed
+      ? [el('span', { class: 'added', text: `+${result.added} ` }), el('span', { class: 'removed', text: `−${result.removed} ` }), el('span', { class: 'dim', text: 'lines' })]
+      : [el('span', { class: 'dim', text: 'No differences' })]));
+    diff.replaceChildren(...result.lines.map((line) => line.kind === 'skipped'
+      ? el('div', { class: 'skipped', text: `⋯ ${line.text} unchanged line${line.text === 1 ? '' : 's'}` })
+      : el('div', { class: line.kind, text: { added: '+ ', removed: '- ', same: '  ' }[line.kind] + line.text })));
+  };
+  restore.onclick = async () => {
+    const version = versions.find((v) => v.id === picked);
+    if (!confirm(`Put back the version of ${version.when} (${version.what})? The file now is kept in the history too.`)) return;
+    const result = await attempt(() => api.post(`/reticulum/history/${picked}/restore`), 'Put the earlier version back; restart Reticulum to apply it');
+    if (!result) return;
+    if (result.warnings.length) toast(result.warnings.join(' · '));
+    changed?.();
+    const again = await api.get('/reticulum/history').catch(() => null);
+    if (again) [versions, picked, against] = [again.versions, again.versions[0].id, 'current'];
+    show();
+  };
+  dialog('Reticulum config history', () => el('div', { class: 'rns-history' },
+    list, el('div', { class: 'rns-version' }, modes, summary, diff, el('div', { class: 'row actions' }, restore))), { className: 'rns-history-dialog' });
+  show();
+}
 
 // Restart the Reticulum stack (from the Status and Reticulum sections).
 async function restartReticulum() {

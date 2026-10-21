@@ -159,6 +159,9 @@ pub fn router(state: WebState) -> Router {
         .route("/reticulum/text", post(reticulum_text))
         .route("/reticulum/check", post(reticulum_check))
         .route("/reticulum/restart", post(reticulum_restart))
+        .route("/reticulum/history", get(reticulum_history))
+        .route("/reticulum/history/{id}", get(reticulum_version))
+        .route("/reticulum/history/{id}/restore", post(reticulum_restore))
         .route("/emoji", get(emoji_list))
         .route("/emoji/recent", get(recent_emoji).post(pick_emoji))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
@@ -2276,6 +2279,37 @@ async fn reticulum_check(axum::Json(body): axum::Json<RnsTextBody>) -> ApiResult
 
 async fn reticulum_text(State(state): State<WebState>, axum::Json(body): axum::Json<RnsTextBody>) -> ApiResult {
     let warnings = state.write(move |o| o.app.rns_save_text(&body.text, true)).await??;
+    Ok(axum::Json(json!({ "warnings": warnings })))
+}
+
+/// Earlier versions of the config file, newest first.
+async fn reticulum_history(State(state): State<WebState>) -> ApiResult {
+    let versions = state.read(|o| o.app.rns_versions()).await?;
+    let listed: Vec<Value> =
+        versions.iter().map(|v| json!({ "id": v.id, "time": v.time, "when": crate::clock::when(v.time), "what": v.what })).collect();
+    Ok(axum::Json(json!({ "versions": listed })))
+}
+
+#[derive(Deserialize)]
+struct VersionQuery {
+    /// `current`: compared with the file now (what putting it back would
+    /// change), else with the version before it (what it changed).
+    #[serde(default)]
+    against: Option<String>,
+}
+
+/// How a version differs, line by line.
+async fn reticulum_version(State(state): State<WebState>, Path(id): Path<String>, Query(query): Query<VersionQuery>) -> ApiResult {
+    let current = query.against.as_deref() == Some("current");
+    let lines = state.read(move |o| o.app.rns_compare(&id, current)).await?.map_err(bad)?;
+    let (added, removed) = crate::reticulum::history::counts(&lines);
+    Ok(axum::Json(json!({ "lines": lines, "added": added, "removed": removed })))
+}
+
+/// Put an earlier version back (as an edit from here: no new pipe
+/// commands).
+async fn reticulum_restore(State(state): State<WebState>, Path(id): Path<String>) -> ApiResult {
+    let warnings = state.write(move |o| o.app.rns_restore(&id, true)).await??;
     Ok(axum::Json(json!({ "warnings": warnings })))
 }
 

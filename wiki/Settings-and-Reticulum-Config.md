@@ -67,6 +67,21 @@ of the Reticulum instance it uses. Where files are kept is in
     file Reticulum couldn't load is never saved. The previous version is kept
     as `config.backup`. Interfaces that will fail to start (a missing port,
     say) are shown as warnings.
+  - **History:** each time rettui saves the file it keeps that version, with
+    what was done ("Removed interface Hilltop", "Logging: loglevel = 5",
+    "Edited as text"), and, the first time, the file as it was before rettui
+    changed it; a file another program changed meanwhile is kept too
+    ("Changed outside rettui"). `H` in the Reticulum tab (**🕘 History** in
+    the web UI) lists them, newest first, beside how the one picked
+    differs, line by line: from the version before it (*What it changed*),
+    or from the file now (*What putting it back would change*; `c` switches
+    between them). `Enter` (**Put this version back**) puts it back, after
+    asking: it's checked and saved as any edit is, and kept in the history
+    in its turn, so it can be undone the same way. The newest 50 versions of
+    each config file are kept, in `reticulum-history/` in rettui's
+    [data folder](Data-and-Storage). In the web UI, a version that would add
+    or change a pipe interface's command can't be put back (the terminal
+    can).
   - **Applying:** Reticulum reads the file when it starts. Restart the
     Reticulum stack from inside rettui to apply changes (see below). If
     another program such as rnsd runs the shared instance, the interfaces are

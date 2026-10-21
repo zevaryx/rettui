@@ -233,6 +233,59 @@ fn the_reticulum_tab_option_by_option_and_as_text() {
 }
 
 #[test]
+fn the_reticulum_configs_earlier_versions_compared_and_put_back() {
+    let mut tui = Tui::new("rns-history");
+    tui.tab(Tab::Reticulum);
+    // Nothing kept yet.
+    tui.key(KeyCode::Char('H'));
+    assert!(tui.app.rns.history.is_none() && tui.app.log.back().unwrap().contains("No earlier versions"));
+    // A file of the user's own, then two changes here.
+    let path = tui.app.rns_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "[reticulum]\n  share_instance = Yes\n\n[interfaces]\n";
+    std::fs::write(&path, original).unwrap();
+    tui.key(KeyCode::Char('R'));
+    tui.key(KeyCode::Char('a')).answer("Hill");
+    tui.key(KeyCode::Enter);
+    tui.app.rns_set_options(&crate::reticulum::Section::Interface("Hill".into()), &[("enabled", "no")], false).unwrap();
+    let whats: Vec<String> = tui.app.rns_versions().iter().map(|v| v.what.clone()).collect();
+    assert_eq!(whats, ["Hill: enabled = no", "Added interface Hill (AutoInterface)", "As it was before rettui changed it"]);
+
+    // The newest: what it changed.
+    tui.key(KeyCode::Char('H'));
+    let shown = tui.draw();
+    assert!(shown.contains("Earlier versions") && shown.contains("What it changed") && shown.contains("Hill: enabled = no"), "{shown}");
+    assert!(shown.contains("+ ") && shown.contains("enabled = no"), "{shown}");
+    // The oldest, compared with the file now: putting it back removes Hill.
+    tui.key(KeyCode::End).key(KeyCode::Char('c'));
+    let shown = tui.draw();
+    assert!(shown.contains("What putting it back would change") && shown.contains("- ") && shown.contains("[[Hill]]"), "{shown}");
+    tui.key(KeyCode::PageDown).key(KeyCode::PageUp).key(KeyCode::Up).key(KeyCode::Down).key(KeyCode::Home).key(KeyCode::End);
+    // Clicks pick a version (two lines each); the wheel moves through them
+    // or the comparison.
+    let list = tui.app.regions.rns_history_list;
+    tui.click(list.x + 1, list.y + 2);
+    assert_eq!(tui.app.rns.history.as_ref().unwrap().list.selected(), Some(1));
+    tui.scroll(list.x + 1, list.y + 1, false).scroll(list.x + 40, list.y + 1, false).scroll(list.x + 40, list.y + 1, true);
+    // Put back, asked first.
+    tui.key(KeyCode::End).key(KeyCode::Enter);
+    assert!(tui.app.prompt.as_ref().unwrap().title.contains("As it was before rettui changed it"));
+    tui.answer("y");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    let newest = tui.app.rns_versions().remove(0);
+    assert!(newest.what.starts_with("Put back the version of"), "{newest:?}");
+    // Still open, on the newest, compared as before (with the file now,
+    // which it is); Esc closes it.
+    assert_eq!(tui.app.rns.history.as_ref().unwrap().list.selected(), Some(0));
+    assert!(tui.draw().contains("No differences"));
+    tui.key(KeyCode::Esc);
+    assert!(tui.app.rns.history.is_none());
+    // A version of another config file isn't this one's to put back.
+    assert!(tui.app.rns_restore("1", false).is_err());
+    assert!(tui.app.rns_compare("1", false).is_err());
+}
+
+#[test]
 fn the_node_tab_pages_editor_and_files() {
     let mut tui = Tui::new("node");
     tui.tab(Tab::Node);

@@ -11,6 +11,7 @@ use super::editor::{Highlighted, draw_text_editor};
 use super::{accent, block, dim, selected_bg};
 use crate::app::App;
 use crate::app::reticulum::{RnsFocus, RnsRow, rns_truthy};
+use crate::reticulum::history::DiffLine;
 use crate::reticulum::schema::Kind;
 use crate::reticulum::{self as rns, EXTERNAL_NOTE, RESTART_NOTE, Section};
 
@@ -21,6 +22,7 @@ pub(super) fn draw_reticulum(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.rns_options = Rect::default();
     app.regions.rns_editor = Rect::default();
     app.regions.rns_picker = Rect::default();
+    app.regions.rns_history_list = Rect::default();
     if let Some(error) = &app.rns.load_error {
         let text = vec![
             Line::styled(error.clone(), Style::default().fg(Color::Red)),
@@ -32,6 +34,10 @@ pub(super) fn draw_reticulum(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     if app.rns.editor.is_some() {
         draw_text(frame, app, area);
+        return;
+    }
+    if app.rns.history.is_some() {
+        draw_history(frame, app, area);
         return;
     }
     // Borders, the file, the check, the restart note, warnings, and the
@@ -121,8 +127,8 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
         other => other.title(),
     });
     let hints = match state.section() {
-        Some(Section::Interface(_)) => " Enter edit · d default · Space on/off · r rename · x delete · t text ",
-        _ => " Enter edit · d default · t edit as text ",
+        Some(Section::Interface(_)) => " Enter edit · d default · Space on/off · r rename · x delete · t text · H history ",
+        _ => " Enter edit · d default · t edit as text · H history ",
     };
     let options_block = block(&title, focused).title_bottom(Line::styled(hints, Style::default().fg(dim())));
     let inner = options_block.inner(area);
@@ -189,6 +195,62 @@ fn draw_picker(frame: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = picker.choices.iter().map(|(_, label)| ListItem::new(format!(" {label}"))).collect();
     let list = List::new(items).block(picker_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, rect, &mut picker.list);
+}
+
+/// Earlier versions (`H`): the list, newest first, and how the selected
+/// one differs from the one before it, or from the file now.
+fn draw_history(frame: &mut Frame, app: &mut App, area: Rect) {
+    let width = super::side_width(app, area, 36);
+    let Some(view) = &mut app.rns.history else { return };
+    let [list_area, diff_area] = Layout::horizontal([Constraint::Length(width), Constraint::Min(20)]).areas(area);
+    let list_block = block("Earlier versions", true).title_bottom(Line::styled(" Enter put back ", Style::default().fg(dim())));
+    let inner = list_block.inner(list_area);
+    frame.render_widget(list_block, list_area);
+    app.regions.rns_history_list = inner;
+    let room = inner.width.saturating_sub(2) as usize;
+    let items: Vec<ListItem> = view
+        .versions
+        .iter()
+        .map(|v| {
+            let what: String = v.what.chars().take(room).collect();
+            ListItem::new(vec![
+                Line::from(Span::raw(format!(" {}", crate::clock::when(v.time))).bold()),
+                Line::styled(format!(" {what}"), Style::default().fg(dim())),
+            ])
+        })
+        .collect();
+    // Two lines a version: clicks find theirs by halving.
+    let list = List::new(items).highlight_style(Style::default().bg(selected_bg()));
+    frame.render_stateful_widget(list, inner, &mut view.list);
+
+    let title = if view.against_current { "What putting it back would change" } else { "What it changed" };
+    let other = if view.against_current { "the version before" } else { "the file now" };
+    let hints = format!(" c compare with {other} · PgUp/PgDn scroll · Esc close ");
+    let diff_block = block(title, false).title_bottom(Line::styled(hints, Style::default().fg(dim())));
+    let inner = diff_block.inner(diff_area);
+    frame.render_widget(diff_block, diff_area);
+    let (added, removed) = rns::history::counts(&view.lines);
+    let mut lines = vec![match (&view.error, added + removed) {
+        (Some(error), _) => Line::styled(error.clone(), Style::default().fg(Color::Red)),
+        (None, 0) => Line::styled("No differences", Style::default().fg(dim())),
+        (None, _) => Line::from(vec![
+            Span::styled(format!("+{added} "), Style::default().fg(Color::Green)),
+            Span::styled(format!("−{removed} "), Style::default().fg(Color::Red)),
+            Span::styled("lines", Style::default().fg(dim())),
+        ]),
+    }];
+    lines.push(Line::raw(""));
+    for line in view.lines.iter().skip(view.scroll).take(inner.height as usize) {
+        lines.push(match line {
+            DiffLine::Added(text) => Line::styled(format!("+ {text}"), Style::default().fg(Color::Green)),
+            DiffLine::Removed(text) => Line::styled(format!("- {text}"), Style::default().fg(Color::Red)),
+            DiffLine::Same(text) => Line::raw(format!("  {text}")),
+            DiffLine::Skipped(n) => {
+                Line::styled(format!("  ⋯ {n} unchanged line{}", if *n == 1 { "" } else { "s" }), Style::default().fg(dim()).italic())
+            }
+        });
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Colours for the config file: sections, keys, values and comments.
