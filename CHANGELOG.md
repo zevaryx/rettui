@@ -24,6 +24,9 @@ Changes since v1.8.0: six new games (Checkers, Dots and Boxes, Gomoku, Reversi, 
 - **The Games tab in a terminal one line high** no longer stops rettui.
 - **Drafts stay with their conversation:** opening a conversation from a link or a notification while writing in another no longer carries the half-written message over to the one being opened.
 
+### Security
+- **Certificates through emSign's distrusted intermediates** are no longer accepted for outgoing HTTPS (update checks, map tiles): `rustls-webpki` is updated to 0.103.16, which rejects them, and `webpki-roots` to 1.0.10, which drops the emSign ECC root they chain to ([RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382), [RUSTSEC-2026-0381](https://rustsec.org/advisories/RUSTSEC-2026-0381)). Those intermediates' private keys are known publicly.
+
 ### Docs and development
 - **License file:** the repository now has a `LICENSE` file with the full text of the AGPL-3.0-or-later, the license rettui (and rsReticulum, rsLXMF and rsNomad, which it links) was already under.
 - **Badges** in the README: CI, coverage, release, latest version, Docker image and license.
