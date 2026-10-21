@@ -119,6 +119,13 @@ pub struct Settings {
     /// How big pictures you send may be: one of
     /// [`crate::app::shrink::PICTURE_SIZES`] (smaller ones are made first).
     pub picture_size: String,
+    /// The Codec2 mode voice messages are sent in: one of
+    /// [`crate::lxmf::voice::SEND_MODES`].
+    pub voice_mode: String,
+    /// The program the terminal UI records voice messages with (its
+    /// output: raw 16-bit mono 8 kHz sound); found by itself when unset
+    /// (see `crate::app::recorder`).
+    pub voice_recorder: Option<String>,
     /// How much goes to `rettui.log`: one of [`crate::logging::LEVELS`].
     pub log_level: String,
     /// Ask GitHub once a day whether there's a newer release (see
@@ -212,6 +219,8 @@ impl Default for Settings {
             show_first_steps: false,
             markdown_messages: true,
             picture_size: "medium".into(),
+            voice_mode: "3200".into(),
+            voice_recorder: None,
             log_level: "warn".into(),
             update_check: false,
             discovered_entry_points: 0,
@@ -438,9 +447,10 @@ impl Field {
     pub fn web_access(&self) -> WebAccess {
         match self.key {
             // Another config directory could hold pipe interfaces, whose
-            // commands Reticulum runs; another node folder could hold
+            // commands Reticulum runs; the recorder is a command run;
+            // another node folder could hold
             // executable pages, or share files that aren't meant to be.
-            "rns_config" | "node_dir" | "map_tiles_file" => WebAccess::TerminalOnly,
+            "rns_config" | "node_dir" | "map_tiles_file" | "voice_recorder" => WebAccess::TerminalOnly,
             "node_executable_pages" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }
@@ -548,6 +558,8 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "max_message_kb",
             "markdown_messages",
             "picture_size",
+            "voice_mode",
+            "voice_recorder",
             "messages_kept",
             "message_storage_mb",
             "rrc_messages_kept",
@@ -744,6 +756,20 @@ pub const FIELDS: &[Field] = &[
         label: "Send pictures at",
         help: "Pictures you send are made smaller first, as Sideband and MeshChat do, to fit: small (480 pixels on the longest side, for LoRa), medium (1024), large (2048, often too big for a propagation node), or original (as they are). GIFs go as they are. A picture made smaller leaves out its metadata, such as where a photo was taken",
         kind: FieldKind::Choice(crate::app::shrink::PICTURE_SIZES),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "voice_mode",
+        label: "Send voice at",
+        help: "The Codec2 mode voice messages you record go in, in bits a second: 3200 is the clearest (a minute is 24 KB); 1200 is a minute in 9 KB; 700C, a minute in 5 KB, is for LoRa, and harder to make out. Sideband, MeshChat and Columba play them all",
+        kind: FieldKind::Choice(crate::lxmf::voice::SEND_MODES),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "voice_recorder",
+        label: "Voice recorder",
+        help: "The program the terminal UI records voice messages with (v in a conversation). Empty: the first of parecord, arecord, rec (SoX) and ffmpeg found. Your own must write raw 16-bit little-endian mono 8 kHz sound to its output until it's stopped, as `arecord -q -t raw -f S16_LE -c 1 -r 8000` does. Changed only in the terminal",
+        kind: FieldKind::Optional,
         effect: Effect::Now,
     },
     Field {
@@ -1041,8 +1067,11 @@ fn between(value: &str, (low, high): (u64, u64)) -> Result<u64, String> {
 
 /// One of `choices`.
 fn choice(value: &str, choices: &[&str]) -> Result<String, String> {
-    let value = value.trim().to_lowercase();
-    if choices.contains(&value.as_str()) { Ok(value) } else { Err(format!("one of {}", choices.join(", "))) }
+    let value = value.trim();
+    match choices.iter().find(|c| c.eq_ignore_ascii_case(value)) {
+        Some(choice) => Ok(choice.to_string()),
+        None => Err(format!("one of {}", choices.join(", "))),
+    }
 }
 
 fn number(value: &str, max: u64) -> Result<u64, String> {
@@ -1112,6 +1141,8 @@ impl Settings {
             "max_message_kb" => self.max_message_kb.to_string(),
             "markdown_messages" => self.markdown_messages.to_string(),
             "picture_size" => self.picture_size.clone(),
+            "voice_mode" => self.voice_mode.clone(),
+            "voice_recorder" => self.voice_recorder.clone().unwrap_or_default(),
             "log_level" => self.log_level.clone(),
             "update_check" => self.update_check.to_string(),
             "discovered_entry_points" => self.discovered_entry_points.to_string(),
@@ -1238,6 +1269,8 @@ impl Settings {
             }
             "markdown_messages" => self.markdown_messages = toggle(value).map_err(fail)?,
             "picture_size" => self.picture_size = choice(value, crate::app::shrink::PICTURE_SIZES).map_err(fail)?,
+            "voice_mode" => self.voice_mode = choice(value, crate::lxmf::voice::SEND_MODES).map_err(fail)?,
+            "voice_recorder" => self.voice_recorder = optional(value),
             "log_level" => self.log_level = choice(value, crate::logging::LEVELS).map_err(fail)?,
             "update_check" => self.update_check = toggle(value).map_err(fail)?,
             "clock" => self.clock = choice(value, crate::clock::CLOCKS).map_err(fail)?,

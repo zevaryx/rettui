@@ -145,6 +145,9 @@ pub fn keys(app: &App) -> Keys {
                 ("Home/End", "first/last"),
             ],
         ),
+        Tab::Messages if app.recording_seconds().is_some() => {
+            mode("Recording", &[("v", "stop, to send"), ("M-r", "stop, writing"), ("Esc", "throw away")])
+        }
         Tab::Messages if app.composing && app.reply.is_some() => typing(
             "Replying",
             &[("Enter", "send"), ("↑↓", "other"), ("Esc", "no reply"), ("^E", "emoji"), ("^O", "attach"), ("^V", "paste")],
@@ -159,6 +162,7 @@ pub fn keys(app: &App) -> Keys {
                 ("^O", "attach"),
                 ("^V", "paste"),
                 ("^X", "detach"),
+                ("M-r", "record voice"),
                 ("^P", "delivery"),
                 (":name", "emoji"),
                 ("PgUp/Dn", "scroll"),
@@ -203,6 +207,7 @@ pub fn keys(app: &App) -> Keys {
                 ("n", "new"),
                 ("y", "copy"),
                 ("a", "attach"),
+                ("v", "record voice"),
                 ("o", "open"),
                 ("d", "delivery"),
                 ("p", "read paper"),

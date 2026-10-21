@@ -406,6 +406,12 @@ impl App {
         let Some(key) = self.active_conversation.clone() else {
             return;
         };
+        if self.recording.is_some() {
+            return self.warn("Stop recording first (v, or Alt+R while writing)");
+        }
+        if self.voice_draft_here().is_some() {
+            return self.send_voice_draft(key);
+        }
         if self.compose.text().trim().is_empty() && self.attachments.is_empty() {
             return;
         }
@@ -430,6 +436,30 @@ impl App {
             self.delivery_mode = self.delivery_for(&key);
         }
         self.message_scroll = 0;
+    }
+
+    /// Send the voice message recorded here, with what's written.
+    fn send_voice_draft(&mut self, key: String) {
+        let Some(draft) = self.voice_draft.take() else { return };
+        let content = self.compose.take();
+        let reply = self.reply.take();
+        if let Err(e) = self.send_voice_samples(key, content.clone(), &draft.samples, self.delivery_mode, reply.clone()) {
+            self.warn(e);
+            self.compose = TextInput::with_text(&content);
+            self.reply = reply;
+            self.voice_draft = Some(draft);
+            return;
+        }
+        self.message_scroll = 0;
+    }
+
+    /// Ctrl+X while writing: the files attached, and a voice message
+    /// recorded, are taken off.
+    pub(super) fn clear_attachments(&mut self) {
+        self.attachments.clear();
+        if self.voice_draft_here().is_some() {
+            self.voice_draft = None;
+        }
     }
 
     /// Send `answers` to `key`'s commands, if they're someone whose commands
@@ -570,9 +600,7 @@ impl App {
     }
 
     /// Send a voice message recorded in the web UI (a WAV file: 8 kHz mono
-    /// 16-bit), with any text, as Codec2 in LXMF's audio field, the way
-    /// Sideband and MeshChat send theirs. What was sent is kept to play:
-    /// the WAV file of the Codec2 frames, and the frames beside it.
+    /// 16-bit), with any text: [`App::send_voice_samples`].
     pub fn send_voice(
         &mut self,
         key: String,
@@ -582,8 +610,24 @@ impl App {
         reply: Option<String>,
     ) -> Result<u64, String> {
         let samples = lxmf::voice::wav_samples(recording)?;
-        let frames = lxmf::voice::codec2_encode(lxmf::voice::SEND_MODE, &samples).ok_or("Nothing was recorded")?;
-        let played = lxmf::voice::codec2_wav(lxmf::voice::SEND_MODE, &frames).ok_or("Nothing was recorded")?;
+        self.send_voice_samples(key, content, &samples, mode, reply)
+    }
+
+    /// Send a recording (8 kHz samples), with any text, as Codec2 in LXMF's
+    /// audio field (in the `voice_mode` setting's mode), the way Sideband
+    /// and MeshChat send theirs. What was sent is kept to play: the WAV
+    /// file of the Codec2 frames, and the frames beside it.
+    pub fn send_voice_samples(
+        &mut self,
+        key: String,
+        content: String,
+        samples: &[i16],
+        mode: DeliveryMode,
+        reply: Option<String>,
+    ) -> Result<u64, String> {
+        let voice_mode = lxmf::voice::send_mode(&self.settings.voice_mode);
+        let frames = lxmf::voice::codec2_encode(voice_mode, samples).ok_or("Nothing was recorded")?;
+        let played = lxmf::voice::codec2_wav(voice_mode, &frames).ok_or("Nothing was recorded")?;
         let wav = super::files::unique_path(&self.paths.uploads, "voice-message.wav");
         let kept = std::fs::create_dir_all(&self.paths.uploads)
             .and_then(|()| std::fs::write(&wav, &played))
@@ -591,7 +635,7 @@ impl App {
         if let Err(e) = kept {
             return Err(format!("Couldn't keep the recording: {e}"));
         }
-        let voice = Voice { mode: lxmf::voice::SEND_MODE, frames, wav: wav.clone() };
+        let voice = Voice { mode: voice_mode, frames, wav: wav.clone() };
         self.send_with(key, content, Vec::new(), mode, reply, Some(voice), None).map_err(|(e, ..)| {
             let _ = std::fs::remove_file(&wav);
             let _ = std::fs::remove_file(wav.with_extension("codec2"));
@@ -894,7 +938,11 @@ impl App {
             return Err("Only a message that failed can be sent again".into());
         }
         // A recording goes as its Codec2 frames again, the rest as files.
-        let audio = message.attachments.iter().find_map(|a| a.frames_path()).and_then(|path| std::fs::read(path).ok());
+        // (in the mode it was recorded in, which its codec names).
+        let audio = message.attachments.iter().find_map(|a| {
+            let mode = a.voice.as_deref().and_then(lxmf::voice::mode_named).unwrap_or(lxmf::voice::send_mode(""));
+            Some((mode, std::fs::read(a.frames_path()?).ok()?))
+        });
         let files: Vec<PathBuf> = message.attachments.iter().filter(|a| a.frames_path().is_none()).map(|a| a.path.clone()).collect();
         if let Some(missing) = message.attachments.iter().find(|a| !a.path.is_file()) {
             return Err(format!("{} isn't there any more, so it can't be sent again", missing.name));
@@ -920,7 +968,6 @@ impl App {
             self.send(NetCommand::WritePaper { id: number, paper: lxmf::paper::Paper { to, content, timestamp, reply, format } });
         } else {
             let appearance = self.own_appearance();
-            let audio = audio.map(|frames| (lxmf::voice::SEND_MODE, frames));
             let message = lxmf::Outgoing {
                 reply,
                 format,
@@ -1298,6 +1345,9 @@ impl App {
     }
 
     pub(super) fn open_attach_prompt(&mut self) {
+        if self.voice_draft_here().is_some() || self.recording.is_some() {
+            return self.warn("A voice message goes on its own, or with text: Ctrl+X takes it off");
+        }
         if self.active_conversation.is_some() {
             self.open_prompt(PromptKind::Attach, "Attach file (path)", "~/");
         }
@@ -1306,6 +1356,9 @@ impl App {
     pub(super) fn messages_key(&mut self, key: KeyEvent) {
         if self.picked.is_some() && self.picked_key(key) {
             return;
+        }
+        if self.recording.is_some() && key.code == KeyCode::Esc {
+            return self.stop_recording(false);
         }
         let count = self.store.conversations.len();
         match key.code {
@@ -1347,6 +1400,7 @@ impl App {
                 }
             }
             KeyCode::Char('a') => self.open_attach_prompt(),
+            KeyCode::Char('v') if self.active_conversation.is_some() || self.recording.is_some() => self.toggle_recording(),
             KeyCode::Char('o') => self.open_latest_attachment(),
             KeyCode::Char('d') => self.cycle_delivery(),
             KeyCode::Char('p') => {
@@ -1857,7 +1911,7 @@ mod tests {
         });
         // 50 frames of 8 bytes: a second at 3200 bit/s.
         let (mode, frames) = audio.unwrap();
-        assert_eq!((mode, frames.len()), (crate::lxmf::voice::SEND_MODE, 400));
+        assert_eq!((mode, frames.len()), (lxmf_core::constants::AM_CODEC2_3200, 400));
         let stored = app.store.conversations[&key()].messages.last().unwrap().clone();
         let attachment = &stored.attachments[0];
         assert_eq!((attachment.name.as_str(), attachment.voice.as_deref()), ("voice-message.wav", Some("Codec2 3200")));
@@ -1870,12 +1924,30 @@ mod tests {
             _ => None,
         });
         let again = again.unwrap();
-        assert_eq!((again.audio.map(|(_, f)| f), again.attachments.len()), (Some(frames), 0));
+        assert_eq!((again.audio, again.attachments.len()), (Some((mode, frames)), 0));
         // Deleted: both its files go.
         let (wav_path, frames_path) = (attachment.path.clone(), attachment.frames_path().unwrap());
         app.delete_message(&key(), &stored.id).unwrap();
         assert!(!wav_path.exists() && !frames_path.exists());
         assert!(app.send_voice(key(), String::new(), b"not a wav", DeliveryMode::Direct, None).is_err());
+        // In the mode set: 700C, 25 frames of 4 bytes; sent again in it.
+        app.settings.voice_mode = "700C".into();
+        let id = app.send_voice(key(), String::new(), &wav, DeliveryMode::Direct, None).unwrap();
+        let audio = std::iter::from_fn(|| net.try_recv().ok()).find_map(|c| match c {
+            NetCommand::SendMessage { message, .. } => message.audio,
+            _ => None,
+        });
+        assert_eq!(audio.as_ref().map(|(mode, frames)| (*mode, frames.len())), Some((lxmf_core::constants::AM_CODEC2_700C, 100)));
+        let stored = app.store.conversations[&key()].messages.last().unwrap().clone();
+        assert_eq!(stored.attachments[0].voice.as_deref(), Some("Codec2 700C"));
+        app.settings.voice_mode = "3200".into();
+        app.on_net(NetEvent::Delivery { id, result: Err("no path".into()) });
+        app.retry_message(&key(), &stored.id, DeliveryMode::Direct).unwrap();
+        let again = std::iter::from_fn(|| net.try_recv().ok()).find_map(|c| match c {
+            NetCommand::SendMessage { message, .. } => message.audio,
+            _ => None,
+        });
+        assert_eq!(again, audio);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1898,7 +1970,8 @@ mod tests {
         assert_eq!(std::fs::read(&opus.path).unwrap(), b"OggS opus");
         assert!(opus.path.ends_with("voice-message.ogg") && opus.playable());
         assert_eq!(opus.voice.as_deref(), Some("Opus"));
-        // Codec2 1200 is decoded to WAV (10 frames: 0.4 s); 700C can't be.
+        // Codec2 1200 is decoded to WAV (10 frames: 0.4 s); 700C without a
+        // whole frame (4 bytes) can't be.
         assert!(codec2.playable() && codec2.path.ends_with("voice-message.wav"));
         assert_eq!((codec2.voice.as_deref(), codec2.size), (Some("Codec2 1200"), 44 + 3200 * 2));
         assert!(!c700.playable() && c700.path.to_string_lossy().ends_with(".codec2"));

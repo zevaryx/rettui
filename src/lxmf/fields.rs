@@ -778,14 +778,16 @@ mod tests {
         let audio = extras.audio.unwrap();
         assert!(audio.playable());
         assert_eq!((audio.codec().as_str(), audio.file_name().as_str()), ("Opus", "voice-message.ogg"));
-        // Codec2 that decodes is saved as WAV; what doesn't, as it came.
+        // Codec2 that decodes is saved as WAV; what doesn't (not a whole
+        // frame), as it came.
         let codec2 = Audio::new(0x04, vec![0; 12]).decoded();
         assert!(codec2.playable());
         assert_eq!((codec2.codec().as_str(), codec2.file_name().as_str()), ("Codec2 1200", "voice-message.wav"));
         assert!(super::super::voice::is_wav(codec2.file().1));
-        let c700 = Audio::new(0x03, vec![0; 12]).decoded();
+        let c700 = Audio::new(0x03, vec![0; 3]).decoded();
         assert!(!c700.playable());
-        assert_eq!((c700.file_name().as_str(), c700.file().1), ("voice-message-700c.codec2", &[0u8; 12][..]));
+        assert_eq!((c700.file_name().as_str(), c700.file().1), ("voice-message-700c.codec2", &[0u8; 3][..]));
+        assert!(Audio::new(0x03, vec![0; 12]).decoded().playable(), "700C decodes");
         // A field nobody knows, on an empty message, is named; an icon's
         // appearance isn't.
         let mut odd = message();

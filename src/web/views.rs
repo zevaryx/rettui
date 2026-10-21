@@ -67,6 +67,8 @@ pub fn state(app: &App) -> Value {
         "date_style": app.settings.date_style,
         // How big pictures sent may be (the composer says they'll shrink).
         "picture_size": app.settings.picture_size,
+        // The Codec2 mode voice messages go in (the composer says).
+        "voice_mode": app.settings.voice_mode,
         // A newer release, if one's out and update checks are on.
         "update": app.update_available().map(|r| {
             let how = match &app.updates.install {

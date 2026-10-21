@@ -38,6 +38,7 @@ pub mod notify;
 pub mod panes;
 pub mod paths;
 pub mod reach;
+pub mod recorder;
 pub mod reticulum;
 mod saver;
 pub mod search;
@@ -524,6 +525,10 @@ pub struct App {
     pub shortcode: emoji::Shortcode,
     pub message_scroll: usize,
     pub attachments: Vec<PathBuf>,
+    /// A voice message being recorded (`v`), and to whom.
+    recording: Option<(String, recorder::Recording)>,
+    /// One recorded, to send with what's written.
+    voice_draft: Option<recorder::VoiceDraft>,
     /// What's written and attached in the conversations not open.
     drafts: HashMap<String, (TextInput, Vec<PathBuf>, Option<String>)>,
     pub delivery_mode: DeliveryMode,
@@ -703,6 +708,8 @@ impl App {
             shortcode: emoji::Shortcode::default(),
             message_scroll: 0,
             attachments: Vec::new(),
+            recording: None,
+            voice_draft: None,
             drafts: HashMap::new(),
             delivery_mode: DeliveryMode::Auto,
             auto_resent: HashMap::new(),
@@ -1436,6 +1443,7 @@ impl App {
     /// Periodic work (called about twice a second).
     pub fn on_tick(&mut self) {
         self.updates_tick();
+        self.recording_tick();
         self.live_tick();
         self.channels_tick();
         self.watch_connection();

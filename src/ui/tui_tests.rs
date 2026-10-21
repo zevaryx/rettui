@@ -504,6 +504,69 @@ pub(crate) fn with_bob(tui: &mut Tui) {
     tui.app.store.contacts.entry(BOB.into()).or_default().alias = Some("Bob".into());
 }
 
+/// A voice message recorded (by a stand-in recorder: a second of a tone),
+/// written to, and sent; another thrown away.
+#[cfg(unix)]
+#[test]
+fn a_voice_message_recorded_and_sent() {
+    let tone = std::env::temp_dir().join(format!("rettui-tone-{}.raw", std::process::id()));
+    let samples: Vec<u8> = (0..8000).flat_map(|i| (((i as f32 * 0.25).sin() * 8000.0) as i16).to_le_bytes()).collect();
+    std::fs::write(&tone, samples).unwrap();
+    let recorder = format!("cat '{}'", tone.display());
+    let mut tui = Tui::with("voice", |s| s.voice_recorder = Some(recorder));
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    tui.key(KeyCode::Down).key(KeyCode::Up);
+    while tui.net.try_recv().is_ok() {}
+    tui.key(KeyCode::Char('v'));
+    assert!(tui.app.recording_seconds().is_some());
+    assert!(tui.draw().contains("recording 0:"));
+    // It ends by itself (cat does), and is kept to send.
+    for _ in 0..100 {
+        tui.app.on_tick();
+        if tui.app.recording_seconds().is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(tui.app.voice_draft_here().map(|d| d.seconds()), Some(1));
+    let screen = tui.draw();
+    assert!(tui.app.composing && screen.contains("1 s, as Codec2 3200"), "{screen}");
+    tui.ctrl('o');
+    assert!(tui.app.prompt.is_none(), "no files with a voice message");
+    tui.keys("Listen").key(KeyCode::Enter);
+    let sent = std::iter::from_fn(|| tui.net.try_recv().ok()).find_map(|c| match c {
+        NetCommand::SendMessage { message, .. } => Some(*message),
+        _ => None,
+    });
+    let sent = sent.unwrap();
+    assert_eq!(sent.content, "Listen");
+    assert_eq!(sent.audio.map(|(mode, frames)| (mode, frames.len())), Some((lxmf_core::constants::AM_CODEC2_3200, 400)));
+    assert!(tui.app.voice_draft_here().is_none());
+    // Another, stopped while writing (Alt+R), then thrown away (Ctrl+X); and
+    // one thrown away while recording (Esc).
+    tui.app.settings.voice_recorder = Some("cat /dev/zero".into());
+    tui.alt('r');
+    assert!(tui.app.recording_seconds().is_some());
+    tui.alt('r');
+    assert!(tui.app.voice_draft_here().is_some());
+    tui.ctrl('x');
+    assert!(tui.app.voice_draft_here().is_none());
+    tui.key(KeyCode::Esc).key(KeyCode::Char('v'));
+    assert!(tui.app.recording_seconds().is_some());
+    // Writing while it records; Enter waits for it.
+    tui.key(KeyCode::Enter).keys("Hi").key(KeyCode::Enter);
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("Stop recording first")));
+    tui.key(KeyCode::Esc);
+    assert!(tui.app.recording_seconds().is_none() && tui.app.voice_draft_here().is_none());
+    // No recorder: why not.
+    tui.app.settings.voice_recorder = Some("rettui-no-such-recorder".into());
+    tui.key(KeyCode::Esc).key(KeyCode::Char('v'));
+    assert!(tui.app.recording_seconds().is_none());
+    let _ = std::fs::remove_file(tone);
+    let _ = std::fs::remove_dir_all(&tui.dir);
+}
+
 #[test]
 fn messages_at_the_keyboard_and_with_the_mouse() {
     let mut tui = Tui::new("messages");

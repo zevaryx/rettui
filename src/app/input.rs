@@ -171,7 +171,9 @@ impl App {
                 return;
             }
             match key.code {
-                // Esc gives up the reply first, then the writing.
+                // Esc throws a recording away first, then gives up the
+                // reply, then the writing.
+                KeyCode::Esc if self.recording.is_some() => self.stop_recording(false),
                 KeyCode::Esc if self.reply.is_some() => self.reply = None,
                 KeyCode::Esc => self.composing = false,
                 KeyCode::Char('r') if ctrl => self.move_reply(true),
@@ -181,10 +183,12 @@ impl App {
                 KeyCode::PageUp => self.message_scroll = self.message_scroll.saturating_add(self.history_page()),
                 KeyCode::PageDown => self.message_scroll = self.message_scroll.saturating_sub(self.history_page()),
                 KeyCode::Char('o') if ctrl => self.open_attach_prompt(),
-                KeyCode::Char('x') if ctrl => self.attachments.clear(),
+                KeyCode::Char('x') if ctrl => self.clear_attachments(),
                 KeyCode::Char('p') if ctrl => self.cycle_delivery(),
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
                 KeyCode::Char('e') if ctrl => self.open_emoji_picker(),
+                // Stops a recording (as v does outside), or starts one.
+                KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::ALT) => self.toggle_recording(),
                 _ => {
                     self.compose.handle(key);
                     self.shortcode_typed(key.code == KeyCode::Char(':'));

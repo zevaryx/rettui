@@ -361,18 +361,36 @@ rettui shows what each one is, rather than an empty message:
   - Opus recordings are saved as `.ogg` files, as they came.
   - Codec2 recordings (the low-bandwidth modes MeshChat, Columba and
     Sideband can send) are decoded when they arrive and saved as `.wav`
-    files (8 kHz mono). The 3200, 2400, 1600, 1400, 1300 and 1200 modes are
-    decoded, up to ten minutes; 700C, 450 and 450PWB aren't yet, so those
-    are saved as they came (`.codec2`) and marked as not playable.
-  - **Recording one** (web UI): the 🎤 button beside **Attach** records
-    from the microphone; press it again (⏹ shows how long so far) to stop,
-    listen to it, then **Send** it, with text if you like. It goes as
-    Codec2 at 3200 bit/s (about 400 bytes a second, so a minute is 24 KB:
-    light enough for LoRa), which Sideband, MeshChat and Columba play; you
-    hear what they will. Up to five minutes. Browsers only let a secure
-    page use the microphone: open the web UI at `localhost`, or over
-    [HTTPS](Web-UI). The TUI can't record, but sends audio files as
-    attachments.
+    files, up to ten minutes. Every mode is decoded: 3200, 2400, 1600,
+    1400, 1300, 1200, 700C and 450 to 8 kHz mono, and 450PWB (450's bits
+    decoded "pseudo wideband") to 16 kHz. A recording without a whole
+    frame is saved as it came (`.codec2`) and marked as not playable.
+  - **Recording one** in the web UI: the 🎤 button beside **Attach**
+    records from the microphone; press it again (⏹ shows how long so far)
+    to stop, listen to it, then **Send** it, with text if you like.
+    Browsers only let a secure page use the microphone: open the web UI at
+    `localhost`, or over [HTTPS](Web-UI).
+  - **Recording one** in the TUI: `v` in a conversation starts recording
+    (the box you write in says 🔴 and how long so far), `v` again stops,
+    then write anything to go with it and `Enter` sends it (`Ctrl-X` throws
+    it away). While writing, `Alt-R` starts and stops one; `Esc` throws a
+    recording away while it records. The TUI records with a program that's
+    installed rather than a sound library (which servers and Docker images
+    don't have): the first of `parecord` (PulseAudio and PipeWire),
+    `arecord` (ALSA), `rec` (SoX) and `ffmpeg` it finds (on macOS `rec` or
+    `ffmpeg`, on Windows SoX's `sox`). *Voice recorder* (Status, Messages,
+    `voice_recorder`) runs another instead: it must write raw 16-bit
+    little-endian mono 8 kHz sound to its output until it's stopped, like
+    `arecord -q -t raw -f S16_LE -c 1 -r 8000`. It's changed only in the
+    terminal, as it's a program run.
+  - Either way it goes as Codec2 in the mode *Send voice at* (Status,
+    Messages, `voice_mode`) has: 3200 bit/s by default, the clearest
+    (about 400 bytes a second, so a minute is 24 KB), down to 1200 (a
+    minute in 9 KB) and 700C (a minute in 5 KB, for LoRa, though harder to
+    make out). Sideband, MeshChat and Columba play them all, and you hear
+    what they will. Up to five minutes. A message that failed goes again
+    in the mode it was recorded in. rettui doesn't send 450: Codec2 only
+    decodes that one well.
   - **Voice calls** (Sideband's, over LXST) aren't something rettui can
     make or answer. LXST, the library they use, is published under
     CC BY-NC-ND 4.0, which doesn't allow adaptations of it to be shared,

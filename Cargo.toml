@@ -88,7 +88,7 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pulldown-cmark = { version = "0.13.4", default-features = false }
-codec2 = "0.3.1"
+codec2 = { path = "vendor/codec2" }
 # Offline map tiles from an MBTiles file (SQLite), for the web UI's map;
 # SQLite built in, so nothing needs installing.
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }

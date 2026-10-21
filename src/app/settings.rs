@@ -129,6 +129,8 @@ impl App {
                     self.settings.icon_background = after.icon_background.clone();
                 }
                 "picture_size" => self.settings.picture_size = after.picture_size.clone(),
+                "voice_mode" => self.settings.voice_mode = after.voice_mode.clone(),
+                "voice_recorder" => self.settings.voice_recorder = after.voice_recorder.clone(),
                 "tui_theme" => {
                     self.settings.tui_theme = after.tui_theme.clone();
                     crate::ui::set_theme(&after.tui_theme);
@@ -417,6 +419,7 @@ mod tests {
                     "hub_name" => "Hilltop chat".into(),
                     "hub_greeting" => "Welcome\\nand hello".into(),
                     "quiet_hours" => "22:00-07:00".into(),
+                    "voice_recorder" => "arecord -q -t raw -f S16_LE -c 1 -r 8000".into(),
                     other => panic!("give {other} a value to change it to here"),
                 },
             };

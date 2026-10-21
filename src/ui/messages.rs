@@ -436,6 +436,11 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             .collect();
         compose_title.push_str(&format!(" · 📎 {}", names.join(", ")));
     }
+    if let Some(seconds) = app.recording_seconds() {
+        compose_title.push_str(&format!(" · 🔴 recording {}:{:02} (v stops, Esc throws away)", seconds / 60, seconds % 60));
+    } else if let Some(draft) = app.voice_draft_here() {
+        compose_title.push_str(&format!(" · 🎤 {} s, as Codec2 {}", draft.seconds(), app.settings.voice_mode));
+    }
     let mut compose_block = block(&compose_title, app.composing);
     if let Some((_, target)) = app.reply_target() {
         let author = if target.incoming { name.as_str() } else { "You" };

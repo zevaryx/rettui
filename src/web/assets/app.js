@@ -3264,7 +3264,7 @@ app.views.messages = {
       el('div', { class: 'row' }, this.text),
       el('div', { class: 'row' },
         el('button', { text: '📎 Attach', onclick: () => this.fileInput.click() }),
-        this.micButton = el('button', { text: '🎤', title: 'Record a voice message (sent as Codec2, as Sideband and MeshChat play)', onclick: () => this.toggleRecording() }),
+        this.micButton = el('button', { text: '🎤', title: 'Record a voice message (sent as Codec2, in the mode Settings → Messages has, as Sideband and MeshChat play)', onclick: () => this.toggleRecording() }),
         el('button', { text: '📍', title: 'Share a location ( L )', onclick: () => this.shareLocation() }),
         this.emojiButton,
         mode,
@@ -3336,7 +3336,7 @@ app.views.messages = {
   renderChips() {
     const size = app.status?.picture_size;
     const voice = this.voice ? [el('span', { class: 'chip voice-chip' },
-      el('span', { text: `🎤 ${Math.round(this.voice.seconds)} s, as Codec2 ` }),
+      el('span', { text: `🎤 ${Math.round(this.voice.seconds)} s, as Codec2 ${app.status?.voice_mode || '3200'} ` }),
       el('audio', { controls: true, preload: 'auto', src: this.voice.url }),
       el('button', { text: '×', title: 'Throw it away', onclick: () => {
         this.voice = null;
