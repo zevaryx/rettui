@@ -1382,8 +1382,13 @@ pub fn load_identity(path: &Path) -> Result<Identity> {
 }
 
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, bytes)?;
+    let mut file = fs::File::create(&tmp)?;
+    file.write_all(bytes)?;
+    // On the disk before it takes the old one's place: otherwise a power
+    // cut can leave the file empty (the rename kept, the data not).
+    file.sync_all()?;
     fs::rename(&tmp, path)?;
     Ok(())
 }
@@ -1398,7 +1403,9 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(&tmp)?.write_all(bytes)?;
+    let mut file = options.open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
     fs::rename(&tmp, path)?;
     Ok(())
 }

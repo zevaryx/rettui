@@ -3415,11 +3415,6 @@ app.views.messages = {
     return echoSent(this, { key, node, parent: shown && this.history, scroller: this.history, slot: 'conversation' });
   },
 
-  echo(key, node) {
-    const shown = this.lastKey === key;
-    return echoSent(this, { key, node, parent: shown && this.history, scroller: this.history, slot: 'conversation' });
-  },
-
   // Messages matching the search, newest first, in the list's place.
   async runSearch() {
     const request = ++this.searchRequest;

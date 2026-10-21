@@ -14,6 +14,8 @@ Changes since v1.8.0: six new games (Checkers, Dots and Boxes, Gomoku, Reversi, 
 ### Fixed
 - **Reactions from Mesh-Client:** a reaction from [Mesh-Client](https://github.com/Colorado-Mesh/mesh-client) no longer shows as a message as well as on the message it's for. Mesh-Client puts the emoji in the message's text too (for clients without reactions); a reaction whose text is just its emoji is now only the reaction. ([#31](https://github.com/zevaryx/rettui/issues/31))
 - **Stopping the web UI right after it starts:** a stop (Ctrl-C or SIGTERM) sent while `rettui --web` was still starting up could end it abruptly instead of shutting it down cleanly; the signals are now listened for before the link is printed.
+- **Saving survives a power cut:** settings, messages, games and the rest are now on the disk before they replace the copy saved before. A power cut (or a crash of the computer) while saving could leave a file empty on some file systems, losing what was in it.
+- **The Games tab in a terminal one line high** no longer stops rettui.
 - **Drafts stay with their conversation:** opening a conversation from a link or a notification while writing in another no longer carries the half-written message over to the one being opened.
 
 ### Docs and development

@@ -85,7 +85,11 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_widget(Paragraph::new(hint).wrap(Wrap { trim: true }).style(Style::default().fg(dim())), inner);
         return;
     }
-    let rows = (inner.height as usize / 2).max(1);
+    // Two lines a game; the last may show only its first.
+    let rows = (inner.height as usize).div_ceil(2);
+    if rows == 0 {
+        return;
+    }
     let selected = app.game_selected.min(games.len() - 1);
     let first = app.regions.games_first.min(selected).max((selected + 1).saturating_sub(rows));
     app.regions.games_first = first;
@@ -882,6 +886,15 @@ mod tests {
             ] {
                 println!("{}", drawn(app, moves, "show").0);
             }
+        }
+    }
+
+    #[test]
+    fn the_games_tab_in_a_window_a_line_or_two_high() {
+        let (_, mut app, _) = drawn("ttt", &[], "short");
+        for height in 1..=4 {
+            let mut terminal = Terminal::new(TestBackend::new(60, height)).unwrap();
+            terminal.draw(|f| super::super::draw(f, &mut app)).unwrap();
         }
     }
 

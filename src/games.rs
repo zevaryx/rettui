@@ -263,7 +263,7 @@ pub fn dots_line(row: usize, col: usize) -> Option<String> {
 
 /// Where a Dots and Boxes line (`c3h`) is in the grid: its row and column.
 pub fn dots_place(line: &str) -> Option<(usize, usize)> {
-    let (dot, way) = line.split_at(line.len().checked_sub(1)?);
+    let (dot, way) = line.split_at(line.char_indices().last()?.0);
     let at = grid_square_index(dot, 6)?;
     let (row, col) = ((at / 6) * 2, (at % 6) * 2);
     match way {
@@ -1050,6 +1050,9 @@ mod tests {
         assert_eq!((dots_place("a1h"), dots_place("a1v"), dots_place("f6h"), dots_place("a6v")), (Some((10, 1)), Some((9, 0)), None, None));
         assert_eq!(dots_line(0, 9).as_deref(), Some("e6h"));
         assert!(move_payload("dots_and_boxes", "f1h").is_err() && move_payload("dots_and_boxes", "c3").is_err());
+        // Whatever is typed: refused, not a panic.
+        assert!(move_payload("dots_and_boxes", "é").is_err() && move_payload("dots_and_boxes", "c3é").is_err());
+        assert_eq!(dots_place(""), None);
         assert_eq!(move_payload("dots_and_boxes", "C3V").unwrap()["m"], Value::from("c3v"));
     }
 
