@@ -24,7 +24,9 @@ fun Activity.showClearOfBars(root: View) {
     root.setOnApplyWindowInsetsListener { view, insets ->
         val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime())
         view.setPadding(own[0] + bars.left, own[1] + bars.top, own[2] + bars.right, own[3] + bars.bottom)
-        insets
+        // Used up here: the web UI makes room for them too (its CSS's
+        // safe-area insets), which would leave the room twice.
+        WindowInsets.CONSUMED
     }
     root.requestApplyInsets()
 }
