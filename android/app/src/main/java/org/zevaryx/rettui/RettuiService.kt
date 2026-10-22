@@ -37,7 +37,6 @@ import java.net.URL
 class RettuiService : Service() {
     companion object {
         private const val TAG = "rettui"
-        const val PORT = 8740
         const val ACTION_STOP = "org.zevaryx.rettui.STOP"
         private const val CHANNEL_SERVICE = "service"
         private const val CHANNEL_MESSAGES = "messages"
@@ -51,8 +50,8 @@ class RettuiService : Service() {
             File(Rettui.dataDir(context), "web_token").takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.length >= 32 }
 
         /** Whether the web UI answers. */
-        fun listening(): Boolean = try {
-            Socket().use { it.connect(InetSocketAddress("127.0.0.1", PORT), 300) }
+        fun listening(context: Context): Boolean = try {
+            Socket().use { it.connect(InetSocketAddress("127.0.0.1", Rettui.port(context)), 300) }
             true
         } catch (e: Exception) {
             false
@@ -123,7 +122,7 @@ class RettuiService : Service() {
 
         val log = logFile(this).apply { writeText("") }
         Os.setenv("RUST_BACKTRACE", "1", true)
-        val args = Rettui.args(this, "--web", "127.0.0.1:$PORT")
+        val args = Rettui.args(this, "--web", "127.0.0.1:${Rettui.choosePort(this)}")
         runner = Thread({
             val code = try {
                 Native.run(args, log.path)
@@ -182,12 +181,12 @@ class RettuiService : Service() {
         while (running && !Thread.currentThread().isInterrupted) {
             try {
                 val token = token(this)
-                if (token == null || !listening()) {
+                if (token == null || !listening(this)) {
                     Thread.sleep(1000)
                     continue
                 }
                 val since = prefs.getString("since", null)
-                val url = URL("http://127.0.0.1:$PORT/api/events" + (since?.let { "?since=$it" } ?: ""))
+                val url = URL("http://127.0.0.1:${Rettui.port(this)}/api/events" + (since?.let { "?since=$it" } ?: ""))
                 val connection = url.openConnection() as HttpURLConnection
                 connection.setRequestProperty("Authorization", "Bearer $token")
                 connection.setRequestProperty("Accept", "text/event-stream")

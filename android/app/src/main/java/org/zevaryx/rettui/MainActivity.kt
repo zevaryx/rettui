@@ -1,7 +1,9 @@
 package org.zevaryx.rettui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -12,7 +14,9 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.MediaStore
+import android.provider.Settings
 import android.view.Gravity
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -57,13 +61,16 @@ class MainActivity : Activity() {
         private const val ASK_LOCATION = 3
         private const val PICK_FILES = 4
 
+        /** Links other apps may open with rettui (see AndroidManifest.xml). */
+        private val SCHEMES = setOf("lxma", "lxmf", "nomadnetwork", "rrc")
     }
 
     private val main = Handler(Looper.getMainLooper())
     private lateinit var web: WebView
     private lateinit var waiting: TextView
     private var loaded = false
-    private var target: String? = null
+    /** What the page is to do once it has loaded (a notification's, a share's). */
+    private val pending = mutableListOf<String>()
     private var waitedSince = 0L
     private var pendingPermission: PermissionRequest? = null
     private var pendingLocation: Pair<String, GeolocationPermissions.Callback>? = null
@@ -71,7 +78,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        target = intent.getStringExtra(EXTRA_TARGET)
+        handle(intent)
         waiting = TextView(this).apply {
             text = getString(R.string.starting)
             gravity = Gravity.CENTER
@@ -97,9 +104,27 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.getStringExtra(EXTRA_TARGET)?.let { opened ->
-            if (loaded) openTarget(opened) else target = opened
+        handle(intent)
+    }
+
+    /**
+     * What the app was opened for: a notification tapped (what it's about),
+     * text shared from another app, or a link to open. Only strings reach
+     * the page, quoted; it parses and checks them itself.
+     */
+    private fun handle(intent: Intent) {
+        intent.getStringExtra(EXTRA_TARGET)?.let { return page("try { openTarget(JSON.parse(${JSONObject.quote(it)})) } catch (e) { console.warn(e) }") }
+        val shared = when (intent.action) {
+            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
+            Intent.ACTION_VIEW -> intent.data?.takeIf { it.scheme?.lowercase() in SCHEMES }?.toString()
+            else -> null
         }
+        shared?.takeIf { it.isNotBlank() }?.let { page("shareText(${JSONObject.quote(it.take(50_000))})") }
+    }
+
+    /** Have the page run `js`, now or once it's loaded. */
+    private fun page(js: String) {
+        if (loaded) web.evaluateJavascript(js, null) else pending.add(js)
     }
 
     override fun onResume() {
@@ -121,6 +146,29 @@ class MainActivity : Activity() {
         RettuiService.start(this)
         waitedSince = System.currentTimeMillis()
         waitForRettui()
+        askBattery()
+    }
+
+    /**
+     * Once: ask to be left out of battery optimisation, which on many
+     * phones stops background apps, and with them Reticulum and messages.
+     */
+    private fun askBattery() {
+        val prefs = getSharedPreferences("app", MODE_PRIVATE)
+        if (getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName) || prefs.getBoolean("asked_battery", false)) return
+        prefs.edit().putBoolean("asked_battery", true).apply()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.battery)
+            .setMessage(R.string.battery_note)
+            .setPositiveButton(R.string.battery_allow) { _, _ ->
+                runCatching {
+                    @SuppressLint("BatteryLife")
+                    val ask = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+                    startActivity(ask)
+                }
+            }
+            .setNegativeButton(R.string.battery_not_now, null)
+            .show()
     }
 
     /** Load the web UI once rettui answers; if it stops, say so. */
@@ -128,7 +176,7 @@ class MainActivity : Activity() {
         Thread {
             while (true) {
                 val token = RettuiService.token(this)
-                if (token != null && RettuiService.listening()) {
+                if (token != null && RettuiService.listening(this)) {
                     main.post { show(token) }
                     return@Thread
                 }
@@ -145,7 +193,7 @@ class MainActivity : Activity() {
     private fun show(token: String) {
         waiting.visibility = android.view.View.GONE
         web.visibility = android.view.View.VISIBLE
-        web.loadUrl("http://127.0.0.1:${RettuiService.PORT}/?token=$token")
+        web.loadUrl("http://127.0.0.1:${Rettui.port(this)}/?token=$token")
     }
 
     private fun stopped() {
@@ -181,12 +229,7 @@ class MainActivity : Activity() {
         })
     }
 
-    private fun openTarget(json: String) {
-        // Only JSON reaches the page: quoted as a string, then parsed there.
-        web.evaluateJavascript("try { openTarget(JSON.parse(${JSONObject.quote(json)})) } catch (e) { console.warn(e) }", null)
-    }
-
-    private fun local(uri: Uri) = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == RettuiService.PORT
+    private fun local(uri: Uri) = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == Rettui.port(this)
 
     private fun setUpWebView() {
         web.setBackgroundColor(Color.rgb(0x16, 0x18, 0x1d))
@@ -218,10 +261,8 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 loaded = true
-                target?.let {
-                    target = null
-                    openTarget(it)
-                }
+                pending.forEach { view.evaluateJavascript(it, null) }
+                pending.clear()
             }
         }
         web.webChromeClient = object : WebChromeClient() {

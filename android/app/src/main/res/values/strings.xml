@@ -48,4 +48,8 @@
     <string name="rnode_add_note">Its name in the Reticulum config:</string>
     <string name="rnode_add_button">Add</string>
     <string name="rnode_added">Added %1$s. In the web UI\'s Reticulum section, set its frequency, bandwidth, spreading factor, coding rate and TX power to what people near you use (and what your country allows), then Restart Reticulum.</string>
+    <string name="battery">Keep running in the background?</string>
+    <string name="battery_note">To save battery, many phones stop apps running in the background, and with rettui, Reticulum: messages only arrive while the app is open. Allowing rettui to run in the background keeps it reachable. It uses some more battery.</string>
+    <string name="battery_allow">Allow</string>
+    <string name="battery_not_now">Not now</string>
 </resources>

@@ -2144,6 +2144,39 @@ async function showGames(key) {
   newGameDialog(key);
 }
 
+// Text shared from another app (rettui's Android app passes it on): a link
+// alone opens; anything else starts a message, in the conversation picked.
+// Waits for the page to be ready.
+function shareText(text) {
+  if (!started) return void sharedOnStart.push(text);
+  text = String(text ?? '').slice(0, 50_000).trim();
+  if (!text) return;
+  const [link] = findLinks(text);
+  if (link && link[0] === 0 && link[1] === text.length) return openLink(link[2]);
+  shareDialog(text, link?.[2]);
+}
+
+async function shareDialog(text, link) {
+  const conversations = await attempt(() => api.get('/conversations'));
+  if (!conversations) return;
+  const who = el('select', {}, conversations.map((c) => el('option', { value: c.key, text: c.name })));
+  dialog('Shared with rettui', (close) => el('div', { class: 'share' },
+    el('p', { class: 'dim', text: text.length > 300 ? text.slice(0, 300) + '…' : text }),
+    conversations.length ? el('label', { class: 'field' }, el('span', { text: 'Write to' }), who)
+      : el('p', { class: 'dim', text: 'No conversations yet: start one in Messages first.' }),
+    el('div', { class: 'row actions' },
+      link ? el('button', { text: 'Open the link', title: link, onclick: () => { close(); openLink(link); } }) : null,
+      conversations.length ? el('button', { class: 'primary', text: 'Write', onclick: () => {
+        close();
+        const view = app.views.messages;
+        // Put in its box, after anything written there already.
+        draftRestore(view, who.value, { text, files: [], reply: null });
+        view.selected = who.value;
+        switchTab('messages', { focus: true });
+        setPane(view, 'detail');
+      } }) : null)));
+}
+
 // Start a new game: who with (from your conversations, or `peer`), and
 // which game.
 async function newGameDialog(peer) {
@@ -7717,6 +7750,7 @@ let openOnStart = (() => {
   }
 })();
 let started = false;
+const sharedOnStart = [];
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (!e.data || !('open' in e.data)) return;
   if (started) openTarget(e.data.open);
@@ -7728,6 +7762,7 @@ refreshStatus().then(() => {
   switchTab(app.views[initial] ? initial : 'messages');
   started = true;
   if (openOnStart) openTarget(openOnStart);
+  sharedOnStart.splice(0).forEach(shareText);
   listen();
   notifications.start();
   setTimeout(prefetch, 300);

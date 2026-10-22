@@ -6,6 +6,8 @@ import android.system.Os
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.net.URL
 
 /** rettui as the app has it: where its data is, its commands, and its process. */
@@ -15,6 +17,25 @@ object Rettui {
 
     /** rettui's data directory: identity, settings, messages. */
     fun dataDir(context: Context) = File(context.filesDir, "rettui")
+
+    /** The web UI's usual port. */
+    private const val PORT = 8740
+
+    /** The port the web UI is on (kept in a file, for the app's other process). */
+    fun port(context: Context): Int = runCatching { File(context.filesDir, "port").readText().trim().toInt() }.getOrDefault(PORT)
+
+    /**
+     * Pick the web UI's port before it starts: the one it had (so the page
+     * keeps what this browser saved for it), or another app has that one:
+     * any free one.
+     */
+    fun choosePort(context: Context): Int {
+        val loopback = InetAddress.getByName("127.0.0.1")
+        val free = { port: Int -> runCatching { ServerSocket(port, 1, loopback).use { it.localPort } }.getOrNull() }
+        val port = free(port(context)) ?: free(0) ?: PORT
+        File(context.filesDir, "port").writeText(port.toString())
+        return port
+    }
 
     /** rettui's arguments for the app's data directory and Reticulum config, then `args`. */
     fun args(context: Context, vararg args: String): Array<String> {
@@ -63,7 +84,7 @@ object Rettui {
      */
     fun api(context: Context, path: String, body: JSONObject? = null): Said = try {
         val token = RettuiService.token(context) ?: error("rettui isn't running")
-        val connection = URL("http://127.0.0.1:${RettuiService.PORT}/api/$path").openConnection() as HttpURLConnection
+        val connection = URL("http://127.0.0.1:${port(context)}/api/$path").openConnection() as HttpURLConnection
         connection.setRequestProperty("Authorization", "Bearer $token")
         connection.connectTimeout = 3000
         connection.readTimeout = 15_000

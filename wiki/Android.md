@@ -48,6 +48,19 @@ repository.
   microphone or location the first time.
 - Downloads (exports, backups, files from messages) go in Downloads.
 - If rettui stops, the app shows what it printed, with **Start again**.
+- **Sharing with rettui:** share text from another app to rettui. A link on
+  its own (`lxma://`, `lxmf@…`, a NomadNet page, `rrc://`) opens. Other text
+  asks which conversation to write it in, and goes in that conversation's
+  message box, not sent yet. Reticulum links tapped in other apps
+  (`lxma://`, `lxmf://`, `nomadnetwork://`, `rrc://`) open in rettui too.
+- The web UI uses port 8740 on the phone. If another app has that port,
+  rettui takes a free one, and keeps it from then on.
+
+Some phones stop background apps to save battery, and with rettui,
+Reticulum: messages then only arrive while the app is open. The first time
+it starts, rettui asks to be allowed to run in the background. To change
+that later: *Settings > Apps > rettui > Battery > Unrestricted* (the
+wording differs between phones).
 
 ## Identity and backups
 
