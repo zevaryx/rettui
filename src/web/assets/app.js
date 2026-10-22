@@ -4600,16 +4600,19 @@ app.views.channels = {
       this.header.replaceChildren(
         el('span', { class: 'title grow' }, '#' + room, view.topic ? el('span', { class: 'dim', style: 'font-weight:400', text: ' — ' + view.topic }) : null),
         view.joined
-          ? el('button', { text: 'Leave', onclick: () => this.hubAction(hash, 'leave', { room }) })
+          ? el('button', { class: 'more', text: 'Leave', onclick: () => this.hubAction(hash, 'leave', { room }) })
           : el('button', { text: 'Join', onclick: () => this.hubAction(hash, 'join', { room }) }),
         el('button', { class: 'phone-only', text: `Members ${view.members.length}`, onclick: () => setPane(this, 'members') }),
         bellButton(view.notify_level, `Notifications in #${room}`, (e) => this.notifyMenu(e, hub, room, view)),
-        // A setting ("Show joins and leaves"), here where it matters.
-        el('label', { class: 'toggle', title: 'Show people joining and leaving the room in the chat' },
+        // A setting ("Show joins and leaves"), here where it matters; on a
+        // phone, behind ⋯.
+        el('label', { class: 'toggle phone-hidden', title: 'Show people joining and leaving the room in the chat' },
           el('input', { type: 'checkbox', checked: view.show_joins, onchange: (e) => attempt(
             () => api.post('/settings', { values: { show_joins: String(e.target.checked) } }),
             e.target.checked ? 'Showing people joining and leaving' : 'Hiding people joining and leaving') }),
           ' Show joins'),
+        el('button', { class: 'more phone-sheet', text: view.show_joins ? 'Hide joins and leaves' : 'Show joins and leaves',
+          onclick: (e) => e.currentTarget.closest('header').querySelector('.toggle input').click() }),
         el('button', { class: 'more', text: 'Copy link', onclick: () => copy(entry?.link, 'link') }),
         el('button', { class: 'danger more', text: 'Forget', title: 'Leave and delete the messages', onclick: async () => {
           if (!confirm(`Leave #${room} and delete its messages?`)) return;
@@ -4709,8 +4712,11 @@ app.views.channels = {
       const name = line.nick || '';
       const color = line.own ? 'var(--accent)' : nickColor(line.src);
       const date = new Date(line.ts);
-      const time = this.view?.chat_dates === false ? clockTime(date, true)
+      const full = this.view?.chat_dates === false ? clockTime(date, true)
         : clockDay(date, date.getFullYear() !== new Date().getFullYear()) + ' ' + clockTime(date, true);
+      // A phone has no room for a column of dates: the time, and the rest
+      // when held on.
+      const time = phone.matches ? clockTime(date) : full;
       // Other people's names open the user menu.
       const user = !line.own && line.src && this.view?.users[line.src] && ['msg', 'action', 'private'].includes(line.kind);
       // In a whisper conversation, whispers read like ordinary chat.
@@ -4730,7 +4736,7 @@ app.views.channels = {
         default: prefix = el('span', { class: 'prefix', text: '— ' });
       }
       return el('div', { class: 'chat-line ' + kind, dataset: { ts: line.ts } },
-        el('span', { class: 'time', text: time }),
+        el('span', { class: 'time', text: time, title: full }),
         el('span', { class: 'body' }, prefix,
           el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [], line.mentions || [])),
           line.pending ? el('span', { class: 'pending', text: ' …' }) : null));
