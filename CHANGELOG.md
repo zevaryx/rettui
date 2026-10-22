@@ -4,13 +4,16 @@ What changed in each release of rettui. Releases before v1.6.0 are described on 
 
 ## v1.10.0
 
-Changes since v1.9.0: a first version of an Android app, attached to the release, the web UI reworked for phones, how to play each game beside its board, and copying an identity, or keeping another, from the command line.
+Changes since v1.9.0: a first version of an Android app, attached to the release, the web UI reworked for phones, how to play each game beside its board, copying an identity, or keeping another, from the command line, and development prereleases of `dev` on command.
 
 ### Added
 - **How to play:** each game's board says, in a few sentences, how the game is played and won, under **How to play** (in the terminal, when the window is tall enough for it). See [Games](https://github.com/zevaryx/rettui/wiki/Games).
 - **The web UI on phones, reworked:** the sections are in a bar at the bottom of the screen (Messages, Channels, Games, Browser, and More for the rest) rather than a drawer; what you read is in the phone's own font; a conversation's header and the Network screen keep their less used buttons behind ⋯; and the message box is one line, with + for files, locations and the way of delivery, and 🎤 that turns into Send. Larger screens are unchanged. See [Web UI](https://github.com/zevaryx/rettui/wiki/Web-UI). Notices go when tapped or swiped aside, and Messages, Games and Channels have a round + button for a new conversation, game or hub.
 - **`rettui identity export FILE`** saves a copy of the identity in use, never over another file. **`rettui identity import FILE --name NAME`** keeps the identity in a file (Sideband's, NomadNet's, MeshChat's or another rettui's) as another identity, to switch to in Status > Identities; the one in use stays. See [Running](https://github.com/zevaryx/rettui/wiki/Running#commands).
 - **Android app:** rettui, with its whole Reticulum stack, runs on an Android phone, with the web UI as the app's screen. It keeps running in the background and shows messages and mentions as Android notifications, which can be answered or marked read from the notification. Voice recording, location sharing, file uploads and downloads work. Its *Identity and backups* screen saves a copy of the identity, keeps another from a file, and saves and restores full backups, which the web UI can't. TCP and UDP interfaces work, and the app's *RNodes* screen adds RNodes over USB and Bluetooth; AutoInterface doesn't find peers yet. Text, pictures and files shared from other apps go into a message, Reticulum links shared or tapped there open in rettui, and it asks once to keep running in the background. Its back button closes an open dialog or sheet before going back a pane, its notifications show rettui's own icon, and joins and leaves in RRC rooms start hidden on it. Each release now has the APK attached (`rettui-v1.10.0-android-arm64-v8a.apk`, for almost every phone), and it installs over earlier test builds signed with the same key. See [Android](https://github.com/zevaryx/rettui/wiki/Android).
+
+### Docs and development
+- **Development prereleases:** *Actions > Prerelease > Run workflow* (on `dev`) publishes a prerelease of `dev`'s newest commit, `v1.10.0-dev.1` and so on, built and attached like a release, with a link to what changed since the last release. `dev` isn't changed: the tag holds a commit with the prerelease's version. Self-update leaves prereleases out. See [Development](https://github.com/zevaryx/rettui/wiki/Development).
 
 ## v1.9.0
 

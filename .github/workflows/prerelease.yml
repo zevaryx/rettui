@@ -1,0 +1,68 @@
+name: Prerelease
+
+# A development prerelease of dev, on command: Actions > Prerelease > Run
+# workflow (on dev). It tags dev's newest commit, with its version set to
+# the prerelease's, as v<version>-dev.<n> (see
+# .github/scripts/prepare-prerelease.sh), then starts the Release workflow
+# on that tag, which builds and publishes it as a prerelease. dev itself
+# isn't changed: the tag holds a commit of its own.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version it leads up to, like 1.10.0 (empty for the next one after the newest release)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# One at a time, so two don't take the same number.
+concurrency:
+  group: prerelease
+
+jobs:
+  tag:
+    name: Tag and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Only from dev
+        if: github.ref != 'refs/heads/dev'
+        run: |
+          echo "::error::Run this on dev (Use workflow from: dev), not $GITHUB_REF_NAME"
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          # The tags, to number it and find the newest release.
+          fetch-depth: 0
+
+      - name: Version, Cargo.lock and changelog
+        id: prepare
+        env:
+          VERSION: ${{ inputs.version }}
+        run: echo "tag=$(.github/scripts/prepare-prerelease.sh "$VERSION")" >> "$GITHUB_OUTPUT"
+
+      - name: Tag
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -am "chore(release): $TAG"
+          git tag -a "$TAG" -m "rettui $TAG"
+          git push origin "refs/tags/$TAG"
+
+      # A tag pushed with this workflow's token starts no workflow, so the
+      # Release workflow is started on it by hand.
+      - name: Start the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+          echo "### $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tagged; the Release workflow is building it: https://github.com/$GITHUB_REPOSITORY/actions/workflows/release.yml" >> "$GITHUB_STEP_SUMMARY"
