@@ -1095,13 +1095,10 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .show-more { padding: 14px 16px; }
 
   /* Browser */
-  .toolbar { padding: 8px 10px; gap: 8px; flex-wrap: wrap; }
+  /* One row: back, the address, Go and ⋯ (the page's buttons, in a sheet). */
+  .toolbar { padding: 8px 10px; gap: 8px; flex-wrap: nowrap; }
   .toolbar input { flex: 1 1 0; min-width: 0; }
-  .more-tools {
-    display: flex; gap: 8px; flex: 1 1 100%; overflow-x: auto;
-    scrollbar-width: none; margin: 0 -10px; padding: 0 10px;
-  }
-  .more-tools button { flex: none; }
+  .toolbar .more-tools { display: none; }
   .page-status { padding: 6px 14px; flex-wrap: wrap; row-gap: 2px; }
   .page { padding: 12px 14px; }
   .micron { font-size: 14px; }

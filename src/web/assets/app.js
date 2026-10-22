@@ -5388,6 +5388,7 @@ app.views.browser = {
       el('button', { text: '↑', title: 'Previous (Shift+Enter)', onclick: () => this.find(-1) }),
       el('button', { text: '↓', title: 'Next (Enter)', onclick: () => this.find(1) }),
       el('button', { text: '×', title: 'Done (Esc)', onclick: () => this.closeFind() }));
+    const tools = el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find, this.buttons.clear);
     root.append(
       el('section', { class: 'panel side' }, el('header', {}, this.paneTabs,
         el('button', { class: 'phone-only', text: 'Address…', onclick: () => {
@@ -5396,8 +5397,13 @@ app.views.browser = {
         } }), this.search), this.paneList),
       el('section', { class: 'panel grow pane-main' },
         el('div', { class: 'toolbar' }, this.buttons.back, this.address, el('button', { class: 'primary', text: 'Go', onclick: () => this.go(this.address.value) }),
-          // Their own row on a phone.
-          el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find, this.buttons.clear)),
+          tools,
+          // On a phone the page's buttons wait behind ⋯.
+          el('button', { class: 'phone-only', text: '⋯', title: 'More', 'aria-label': 'More actions', onclick: (e) => {
+            e.stopPropagation();
+            openSheet(this.page?.title || this.page?.url || 'Page', [...tools.children].filter((b) => !b.disabled)
+              .map((b) => ({ text: b.textContent, action: () => b.click() })));
+          } })),
         this.status, this.findBar, this.content));
     this.renderPane();
     this.renderPage();
@@ -5525,7 +5531,8 @@ app.views.browser = {
     this.status.replaceChildren(...status);
     this.status.classList.toggle('hidden', !status.length);
     if (!this.page) {
-      this.content.replaceChildren(el('div', { class: 'empty', text: 'Pick a node or saved page on the left, or enter an address above.' }));
+      this.content.replaceChildren(el('div', { class: 'empty', text: phone.matches ? 'Pick a node or saved page from the list, or enter an address above.'
+        : 'Pick a node or saved page on the left, or enter an address above.' }));
       return;
     }
     // Server-rendered: all page text is escaped and the CSP blocks scripts.
