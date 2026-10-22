@@ -3321,20 +3321,27 @@ app.views.messages = {
       el('option', { value: m, text: label, selected: m === this.mode })));
     // What the message being written answers, if anything.
     this.replyBar = el('div', { class: 'reply-bar hidden' });
+    // On a phone it's one line: + (the rest of these, in a sheet), what's
+    // written, and 🎤 until there's something to send, then Send.
+    this.emojiButton.classList.add('phone-tucked');
+    this.text.addEventListener('input', () => this.updateSendable());
     this.compose = el('div', { class: 'compose' },
       this.emojiList.list,
       this.replyBar,
       this.chips,
       el('div', { class: 'row' }, this.text),
       el('div', { class: 'row' },
-        el('button', { text: '📎 Attach', onclick: () => this.fileInput.click() }),
-        this.micButton = el('button', { text: '🎤', title: 'Record a voice message (sent as Codec2, in the mode Settings → Messages has, as Sideband and MeshChat play)', onclick: () => this.toggleRecording() }),
-        el('button', { text: '📍', title: 'Share a location ( L )', onclick: () => this.shareLocation() }),
+        el('button', { class: 'phone-only compose-plus', text: '+', title: 'Files, a location, the way of delivery', 'aria-label': 'Add to the message',
+          onclick: (e) => { e.stopPropagation(); this.composeMenu(); } }),
+        el('button', { class: 'phone-tucked', text: '📎 Attach', onclick: () => this.fileInput.click() }),
+        this.micButton = el('button', { class: 'mic-button', text: '🎤', title: 'Record a voice message (sent as Codec2, in the mode Settings → Messages has, as Sideband and MeshChat play)', onclick: () => this.toggleRecording() }),
+        el('button', { class: 'phone-tucked', text: '📍', title: 'Share a location ( L )', onclick: () => this.shareLocation() }),
         this.emojiButton,
         mode,
-        el('span', { class: 'grow' }),
-        el('button', { class: 'primary', text: 'Send', onclick: () => this.send() })),
+        el('span', { class: 'grow phone-tucked' }),
+        el('button', { class: 'primary send-button', text: 'Send', onclick: () => this.send() })),
       this.fileInput);
+    mode.classList.add('phone-tucked');
     root.append(
       el('section', { class: 'panel side' },
         // On a phone the top bar names the section already.
@@ -3357,6 +3364,28 @@ app.views.messages = {
   newConversation() {
     const address = prompt('LXMF address (32 hex characters), or an lxma:// link');
     if (address) openConversation(address);
+  },
+
+  // The phone's + : what the box's other buttons do, in a sheet.
+  composeMenu() {
+    openSheet('Add to the message', [
+      { text: '📎 Files or pictures', action: () => this.fileInput.click() },
+      { text: '📍 Share a location', action: () => this.shareLocation() },
+      ...[...this.modeSelect.options].map((option) => ({
+        text: `Send: ${option.textContent}`, checked: option.value === this.modeSelect.value, action: () => {
+          this.modeSelect.value = option.value;
+          this.modeSelect.dispatchEvent(new Event('change'));
+        },
+      })),
+    ]);
+  },
+
+  // Whether there's something to send (a phone shows Send for it, else 🎤).
+  updateSendable() {
+    this.compose?.classList.toggle('sendable', !!(this.text.value.trim() || this.pending.length || this.voice));
+    // On a phone the box starts one line high and grows with what's in it.
+    this.text.style.height = '';
+    if (phone.matches && this.text.value) this.text.style.height = Math.min(this.text.scrollHeight + 2, 160) + 'px';
   },
 
   // Record a voice message, or stop and keep it to send.
@@ -3388,7 +3417,7 @@ app.views.messages = {
     };
     tick();
     this.recordingTimer = setInterval(tick, 250);
-    this.cancelRecording = el('button', { text: '✕', title: 'Throw the recording away', onclick: async () => {
+    this.cancelRecording = el('button', { class: 'mic-cancel', text: '✕', title: 'Throw the recording away', onclick: async () => {
       clearInterval(this.recordingTimer);
       await recorder.stop(false);
       this.micButton.textContent = '🎤';
@@ -3416,6 +3445,7 @@ app.views.messages = {
         this.pending.splice(i, 1);
         this.renderChips();
       } }))));
+    this.updateSendable();
   },
 
   async update() {

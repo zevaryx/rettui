@@ -1024,10 +1024,23 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .message .meta { font-size: 12.5px; margin-bottom: 2px; }
   .message .content { font-size: 15.5px; line-height: 1.45; }
   .attachment img { max-width: 100%; }
-  .compose { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); gap: 8px; }
-  .compose textarea { min-height: 46px; }
-  .compose .row { flex-wrap: nowrap; }
-  .compose select { flex: 0 1 auto; min-width: 0; }
+  /* One line: +, what's written, then 🎤 or Send (see the compose box in
+     app.js); what's above it (replies, files, :emoji) spans the line. */
+  .compose {
+    display: grid; grid-template-columns: auto 1fr auto auto; align-items: end;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); gap: 8px;
+  }
+  .compose > :not(.row) { grid-column: 1 / -1; }
+  .compose > .row { display: contents; }
+  .compose .phone-tucked { display: none; }
+  .compose .compose-plus { order: 1; width: 44px; height: 44px; padding: 0; font-size: 24px; line-height: 1; border-radius: 50%; }
+  .compose textarea { order: 2; height: 44px; min-height: 44px; border-radius: 22px; padding: 11px 16px; }
+  .compose .mic-button, .compose .mic-cancel, .compose .send-button { order: 3; min-height: 44px; border-radius: 22px; }
+  .compose .mic-button { width: 44px; padding: 0; }
+  .compose .mic-button.on { width: auto; padding: 0 14px; }
+  /* 🎤 until there's something to send; recording, it stays to stop. */
+  .compose:not(.sendable) .send-button { display: none; }
+  .compose.sendable .mic-button:not(.on) { display: none; }
 
   /* Channels */
   .chat { font-size: 14px; padding: 10px 12px; line-height: 1.5; }
