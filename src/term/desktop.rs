@@ -60,11 +60,13 @@ impl Desktop {
 }
 
 /// Text as it's shown: one failure said once, until one works again.
+#[cfg(not(target_os = "android"))]
 struct Failing {
     failed: mpsc::Sender<String>,
     failing: bool,
 }
 
+#[cfg(not(target_os = "android"))]
 impl Failing {
     fn report(&mut self, result: Result<(), String>) {
         match result {
@@ -78,13 +80,13 @@ impl Failing {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
 fn run(pending: UnboundedReceiver<Notification>, icon: String, failed: mpsc::Sender<String>, clicked: mpsc::Sender<Target>) -> bool {
     tokio::spawn(xdg::run(pending, icon, Failing { failed, failing: false }, clicked));
     true
 }
 
-#[cfg(not(all(unix, not(target_os = "macos"))))]
+#[cfg(any(windows, target_os = "macos"))]
 fn run(mut pending: UnboundedReceiver<Notification>, _icon: String, failed: mpsc::Sender<String>, clicked: mpsc::Sender<Target>) -> bool {
     let mut failing = Failing { failed, failing: false };
     std::thread::Builder::new()
@@ -97,6 +99,13 @@ fn run(mut pending: UnboundedReceiver<Notification>, _icon: String, failed: mpsc
             }
         })
         .is_ok()
+}
+
+/// Android: none from here. The app rettui runs in posts its own, from the
+/// web UI's live events.
+#[cfg(target_os = "android")]
+fn run(_pending: UnboundedReceiver<Notification>, _icon: String, _failed: mpsc::Sender<String>, _clicked: mpsc::Sender<Target>) -> bool {
+    false
 }
 
 /// Windows: toasts, as Windows PowerShell's (a program that isn't
@@ -207,7 +216,7 @@ fn terminal_bundle(program: &str) -> Option<&'static str> {
 /// The freedesktop notification service, spoken to directly: notify-rust
 /// shows each on a connection of its own, which a click may not reach
 /// rettui on once a newer notification has replaced it.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
 mod xdg {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, mpsc};
@@ -332,7 +341,7 @@ mod xdg {
 /// (which Windows runs for WSL). What it says is handed over in the
 /// environment, never as part of the script, so no message can add to it.
 /// A click can't come back.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
 mod wsl {
     use std::process::Stdio;
 
@@ -407,7 +416,7 @@ mod platform_tests {
     }
 
     /// Under WSL: what's said goes in the environment, not the script.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
     #[tokio::test]
     async fn wsl_hands_windows_the_text_apart_from_the_script() {
         use base64::Engine;

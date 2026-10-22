@@ -5,6 +5,27 @@ use std::io::Write;
 
 use base64::Engine;
 
+/// Android has no system clipboard rettui can reach (the web UI uses the
+/// WebView's): OSC 52 only.
+#[cfg(target_os = "android")]
+mod arboard {
+    pub struct Clipboard;
+
+    impl Clipboard {
+        pub fn new() -> Result<Self, &'static str> {
+            Err("none on Android")
+        }
+
+        pub fn set_text(&mut self, _text: String) -> Result<(), &'static str> {
+            Ok(())
+        }
+
+        pub fn get_text(&mut self) -> Result<String, &'static str> {
+            Err("none on Android")
+        }
+    }
+}
+
 /// OSC 52 payloads beyond this are commonly truncated or refused.
 const MAX_OSC52_BYTES: usize = 100_000;
 

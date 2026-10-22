@@ -42,8 +42,6 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 rmpv = "1"
 # Terminal graphics (Kitty) with capability detection.
 ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
-# System clipboard (X11 and Wayland); OSC 52 covers SSH sessions.
-arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 base64 = "0.22"
 # RRC (Reticulum Relay Chat) wire format.
 ciborium = "0.2"
@@ -111,7 +109,12 @@ notify-rust = { version = "4.18.2", default-features = false }
 # version the rest already uses).
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
 
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# System clipboard (X11 and Wayland); OSC 52 covers SSH sessions. Android
+# has none a program outside an app can reach.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))'.dependencies]
 # Desktop notifications over D-Bus, on the connection that hears their
 # clicks, on tokio (rettui's runtime).
 zbus = { version = "6", default-features = false, features = ["tokio", "service"] }

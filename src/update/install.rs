@@ -49,6 +49,11 @@ pub fn build_label() -> String {
 impl Install {
     /// How this copy is updated (looked at once a run).
     pub fn here() -> Self {
+        // The Android app's copy is in the app, where only installing a
+        // new APK replaces it.
+        if cfg!(target_os = "android") {
+            return Self::Elsewhere("In the Android app: install its new APK".into());
+        }
         let exe = std::env::current_exe().and_then(|p| p.canonicalize());
         Self::from(RELEASE_TARGET, in_container(), exe)
     }

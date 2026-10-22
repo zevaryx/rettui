@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Three linked nodes: a mesh. Notification icons are one colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2a3,3 0,1 1,0 6a3,3 0,1 1,0 -6zM5,15a3,3 0,1 1,0 6a3,3 0,1 1,0 -6zM19,15a3,3 0,1 1,0 6a3,3 0,1 1,0 -6zM11,7.5h2l4.6,8.2l-1.7,1L12,9.8L8.1,16.7l-1.7,-1zM7.5,17h9v2h-9z" />
+</vector>

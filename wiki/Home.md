@@ -35,6 +35,8 @@ it can edit your Reticulum configuration. It is built on:
   login link (see [Web UI](Web-UI)).
 - **Docker:** a Dockerfile and a Compose file run the web UI in a container
   (see [Docker](Docker)).
+- **Android (test builds):** an app that runs rettui on the phone, with the
+  web UI as its screen (see [Android](Android)).
 - **Command line:** send a message, listen for messages, sync, fetch a page,
   or print your address without starting a UI (see [Running](Running)).
 
@@ -47,6 +49,7 @@ it can edit your Reticulum configuration. It is built on:
 - [Using the TUI](Using-the-TUI): keys, mouse, copy and paste
 - [Web UI](Web-UI): logging in, phones, slow links, the JSON API
 - [Docker](Docker): running the web UI in a container
+- [Android](Android): the Android app's test builds
 
 **What it does**
 

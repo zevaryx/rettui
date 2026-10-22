@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">rettui</string>
+    <string name="channel_service">Running</string>
+    <string name="channel_messages">Messages</string>
+    <string name="running">Reticulum is running</string>
+    <string name="running_detail">Tap to open. Messages keep arriving while the app is closed.</string>
+    <string name="stop">Stop</string>
+    <string name="starting">Starting rettui…</string>
+    <string name="stopped">rettui stopped. Its log is below.</string>
+    <string name="restart">Start again</string>
+</resources>

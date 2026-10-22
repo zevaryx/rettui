@@ -40,6 +40,14 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   - Download the archives from the run's *Artifacts*.
   - They're named after the version and commit, for example
     `rettui-v1.2.0-a4e545b-x86_64-unknown-linux-gnu.tar.gz`.
+- **Android** ([android.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/android.yml)) builds a test
+  APK of the [Android app](Android) (`android/`):
+  - Run it from *Actions > Android > Run workflow*, or push to
+    `feature/android`.
+  - Download the APK from the run's *Artifacts*.
+  - It cross-builds rettui with the NDK (`android/build-rust.sh`), then
+    runs Gradle. The `ANDROID_KEYSTORE` secret, if set, signs every build
+    with one key.
 - **Release** ([release.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/release.yml)) runs when a
   tag starting with `v` is pushed. Before tagging, add the release to
   [CHANGELOG.md](https://github.com/zevaryx/rettui/blob/main/CHANGELOG.md) under a `## v1.7.0` heading (a

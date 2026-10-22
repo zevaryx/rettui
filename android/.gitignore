@@ -1,0 +1,6 @@
+.gradle/
+build/
+local.properties
+*.keystore
+# Built by build-rust.sh.
+app/src/main/jniLibs/

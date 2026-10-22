@@ -2,6 +2,13 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
+## v1.10.0
+
+Changes since v1.9.0: a first test version of an Android app.
+
+### Added
+- **Android app (test builds):** rettui, with its whole Reticulum stack, runs on an Android phone, with the web UI as the app's screen. It keeps running in the background and shows messages and mentions as Android notifications. Voice recording, location sharing, file uploads and downloads work. TCP, UDP and AutoInterface work; RNodes over USB or Bluetooth don't yet. There's no release of it yet: *Actions > Android > Run workflow* builds an APK to try. See [Android](https://github.com/zevaryx/rettui/wiki/Android).
+
 ## v1.9.0
 
 Changes since v1.8.0: six new games (Checkers, Dots and Boxes, Gomoku, Reversi, Mancala and Hex), claiming a draw in Chess and Checkers, a history of the Reticulum config to compare and put back, every Codec2 mode decoded and voice messages recorded in the terminal, several identities to switch between, Sideband's sensor readings shown and this computer's sent, reactions from Mesh-Client no longer show as a message as well, two small fixes found while writing tests, a LICENSE file, and code coverage measured in CI.

@@ -361,14 +361,31 @@ fn battery() -> Option<(f64, bool)> {
 /// is (shared between its cores).
 #[cfg(unix)]
 fn processor() -> Option<(f64, [f64; 3])> {
+    let averages = load_averages()?;
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as f64;
+    Some(((averages[0] / cores).clamp(0.0, 1.0), averages))
+}
+
+#[cfg(all(unix, not(target_os = "android")))]
+fn load_averages() -> Option<[f64; 3]> {
     let mut averages = [0f64; 3];
     // SAFETY: getloadavg writes at most the 3 values asked for.
     let got = unsafe { libc::getloadavg(averages.as_mut_ptr(), 3) };
-    if got != 3 {
-        return None;
-    }
-    let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as f64;
-    Some(((averages[0] / cores).clamp(0.0, 1.0), averages))
+    (got == 3).then_some(averages)
+}
+
+/// Android: from `/proc/loadavg` (libc doesn't offer getloadavg there), which
+/// newer versions keep from apps.
+#[cfg(target_os = "android")]
+fn load_averages() -> Option<[f64; 3]> {
+    parse_loadavg(&std::fs::read_to_string("/proc/loadavg").ok()?)
+}
+
+/// The first three numbers of `/proc/loadavg`.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn parse_loadavg(text: &str) -> Option<[f64; 3]> {
+    let mut numbers = text.split_whitespace().map(|n| n.parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0));
+    Some([numbers.next()??, numbers.next()??, numbers.next()??])
 }
 
 #[cfg(not(unix))]
@@ -413,6 +430,14 @@ fn storage(_dir: &Path) -> Option<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_averages_from_proc() {
+        assert_eq!(parse_loadavg("0.52 1.25 2.00 3/812 41234\n"), Some([0.52, 1.25, 2.0]));
+        for odd in ["", "0.5 1.0", "0.5 x 1.0", "NaN 1 1", "-1 1 1"] {
+            assert_eq!(parse_loadavg(odd), None, "{odd:?}");
+        }
+    }
 
     fn map(entries: Vec<(u64, Value)>) -> Vec<(Value, Value)> {
         entries.into_iter().map(|(k, v)| (Value::from(k), v)).collect()
