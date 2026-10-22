@@ -27,4 +27,13 @@
     <string name="working">Working…</string>
     <string name="done">Done</string>
     <string name="failed">That didn\'t work</string>
+    <string name="usb">USB RNodes</string>
+    <string name="usb_note">RNodes plugged in over USB (with an OTG adapter or a USB-C cable). Tap one to let rettui use it and add it to the Reticulum config.</string>
+    <string name="usb_none">Nothing is plugged in. Plug in an RNode, and this list shows it.</string>
+    <string name="usb_denied">Android wasn\'t allowed to let rettui use it. Tap it again to be asked again.</string>
+    <string name="usb_add">Add as an RNode interface</string>
+    <string name="usb_add_note">Its name in the Reticulum config:</string>
+    <string name="usb_add_button">Add</string>
+    <string name="usb_default_name">RNode over USB</string>
+    <string name="usb_added">Added %1$s. In the web UI\'s Reticulum section, set its frequency, bandwidth, spreading factor, coding rate and TX power to what people near you use (and what your country allows), then Restart Reticulum.</string>
 </resources>

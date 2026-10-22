@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build rettui for Android and put it in the app, as the native library
-# app/src/main/jniLibs/<abi>/librettui.so (the app runs it as a program).
+# app/src/main/jniLibs/<abi>/librettui.so, which the app loads.
 #
 #   ./build-rust.sh [arm64-v8a|x86_64 ...]    (default: arm64-v8a)
 #
@@ -31,8 +31,8 @@ for abi in "$@"; do
   export "CARGO_TARGET_${env_target}_LINKER=$bin/$target$api-clang"
   export "CC_${target//-/_}=$bin/$target$api-clang"
   export "AR_${target//-/_}=$bin/llvm-ar"
-  cargo build --locked --release --target "$target" --manifest-path "$here/../Cargo.toml"
+  cargo rustc --locked --release --lib --crate-type cdylib --target "$target" --manifest-path "$here/../Cargo.toml"
   mkdir -p "$here/app/src/main/jniLibs/$abi"
-  "$bin/llvm-strip" -o "$here/app/src/main/jniLibs/$abi/librettui.so" "$here/../target/$target/release/rettui"
+  "$bin/llvm-strip" -o "$here/app/src/main/jniLibs/$abi/librettui.so" "$here/../target/$target/release/librettui.so"
   echo "Built $here/app/src/main/jniLibs/$abi/librettui.so"
 done

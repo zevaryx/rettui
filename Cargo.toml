@@ -114,6 +114,13 @@ windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_
 # has none a program outside an app can reach.
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# The Android app loads rettui as a library and calls it through JNI; the
+# Java VM is handed on to rsReticulum (AutoInterface, USB RNodes). The same
+# versions rsReticulum uses.
+jni = "0.19"
+rns-interface = { path = "deps/rsReticulum/crates/rns-interface" }
+
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))'.dependencies]
 # Desktop notifications over D-Bus, on the connection that hears their
 # clicks, on tokio (rettui's runtime).

@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- AutoInterface finds peers on the local network by multicast. -->
@@ -38,6 +40,21 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <!-- Opened by plugging in an RNode, too: agreeing lets rettui use it. -->
+        <activity
+            android:name=".UsbActivity"
+            android:exported="true"
+            android:label="@string/usb"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.DeviceDefault">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/rnode_usb" />
+        </activity>
+
         <activity
             android:name=".BackupsActivity"
             android:exported="false"
@@ -47,6 +64,7 @@
         <service
             android:name=".RettuiService"
             android:exported="false"
+            android:process=":rettui"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

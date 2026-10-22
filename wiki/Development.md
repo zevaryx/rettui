@@ -19,7 +19,9 @@ state as the TUI.
 | `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty, Sixel, iTerm2 or half blocks), desktop notifications (`desktop`) | ratatui-image, notify-rust |
 | `web/` | Web UI: HTTP API, login, live updates and notifications, and the page's HTML/CSS/JS, service worker, font and logo (`web/assets`) | axum |
 
-`cli.rs` has the shell commands (`send`, `listen`, `sync`, `fetch`), and
+`main.rs` only calls `lib.rs`, which has the command line and starts the
+TUI or the web UI; the [Android app](Android) loads the same library and
+calls it through `android.rs` (JNI). `cli.rs` has the shell commands (`send`, `listen`, `sync`, `fetch`), and
 `store.rs` and `config.rs` hold what is saved to disk, and `app/saver.rs`
 writes the store and chat history in the background.
 

@@ -81,7 +81,9 @@ Add the radio as an interface in the **Reticulum** tab (in either UI): add
 an interface (`a` in the terminal) of type **RNode (LoRa)** and set:
 
 - **Port:** the serial device, such as `/dev/ttyUSB0` or `/dev/ttyACM0` on
-  Linux, `/dev/cu.usbserial-…` on macOS or `COM3` on Windows.
+  Linux, `/dev/cu.usbserial-…` on macOS or `COM3` on Windows. In the
+  [Android app](Android#rnodes-over-usb), its *USB RNodes* screen adds the
+  interface with the right port.
 - **Frequency, Bandwidth, Spreading factor, Coding rate:** radios only hear
   each other when all four match, so use what people near you use. The
   new interface starts from an example; change it to your area's.

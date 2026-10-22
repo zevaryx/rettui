@@ -72,6 +72,23 @@ shown when rettui stops. On it:
 Back up the identity before uninstalling the app: uninstalling deletes
 everything the app keeps.
 
+## RNodes over USB
+
+Plug an [RNode](RNode-Radios) into the phone (a USB-C cable, or an OTG
+adapter). Android asks whether to open rettui for it: say yes, and rettui
+may use it from then on. Otherwise, open **🔌 USB RNode** in the web UI's
+Reticulum section, or long-press the app's icon.
+
+The *USB RNodes* screen lists what's plugged in. Tap the RNode, allow rettui
+to use it if asked, and give it a name. It's added to the Reticulum config
+as an RNode interface on an `androidusb://` port. Its USB IDs (and serial
+number) are added too, so it's found again after it's unplugged.
+
+Before restarting Reticulum, set the interface's frequency, bandwidth,
+spreading factor, coding rate and TX power in the Reticulum section. Use
+what people near you use, and what your country allows. A new interface
+starts from an example, which may not be right where you are.
+
 Some phones stop background apps to save battery. If messages only arrive
 while the app is open, allow it to run in the background: *Settings >
 Apps > rettui > Battery > Unrestricted* (the wording differs between
@@ -79,8 +96,7 @@ phones).
 
 ## What it can't do yet
 
-- **Interfaces:** TCP, UDP and AutoInterface (other Reticulum devices on
-  the same Wi-Fi) work. RNodes over USB or Bluetooth don't yet.
+- **RNodes over Bluetooth** don't work yet.
 - **No terminal UI.**
 - It hasn't been tested on many phones yet. Reports of what does and
   doesn't work are welcome in the
@@ -88,13 +104,20 @@ phones).
 
 ## How it works
 
-The APK carries rettui built for Android, as `lib/<abi>/librettui.so`.
-Android unpacks it where the app may run programs from. A foreground
-service runs it as
+The APK carries rettui built for Android as a library,
+`lib/<abi>/librettui.so`. A foreground service loads it in a process of its
+own and runs it as `rettui` would run on a computer:
 
 ```sh
-librettui.so --data-dir <app files>/rettui --rns-config <app files>/rettui/reticulum --web 127.0.0.1:8740
+rettui --data-dir <app files>/rettui --rns-config <app files>/rettui/reticulum --web 127.0.0.1:8740
 ```
+
+Since rettui runs inside the app, rsReticulum can call Android through Java.
+It does that to find the network interfaces for AutoInterface and to open
+USB RNodes. **Stop** asks rettui to save everything and stop, and then its
+process ends, so each start begins fresh. The *Identity and backups* screen
+calls rettui's own commands (`identity export`, `identity import`, `backup`,
+`restore`) the same way.
 
 The app's screen is a WebView of `http://127.0.0.1:8740`, logged in with
 the token rettui keeps in its data directory. Only this phone can reach
@@ -113,6 +136,7 @@ ANDROID_HOME=~/Android/Sdk ./build-rust.sh           # or: ./build-rust.sh arm64
 ./gradlew assembleDebug                              # app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`build-rust.sh` cross-builds rettui with the NDK's compilers and puts it in
+`build-rust.sh` cross-builds rettui as a library (`cargo rustc --lib
+--crate-type cdylib`) with the NDK's compilers and puts it in
 `app/src/main/jniLibs`. Android Studio can open `android/` as a project
 once that's done.

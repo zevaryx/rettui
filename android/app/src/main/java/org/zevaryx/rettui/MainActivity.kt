@@ -47,8 +47,8 @@ class MainActivity : Activity() {
          */
         const val AGENT = "rettui-android/1"
 
-        /** The web UI's link to the app's identity and backups screen. */
-        const val BACKUPS_LINK = "rettui-app:backups"
+        /** The web UI's links to the app's own screens. */
+        private val SCREENS = mapOf("rettui-app:backups" to BackupsActivity::class.java, "rettui-app:usb" to UsbActivity::class.java)
 
         /** What a notification tapped is about (JSON, as the web UI has it). */
         const val EXTRA_TARGET = "target"
@@ -57,10 +57,6 @@ class MainActivity : Activity() {
         private const val ASK_LOCATION = 3
         private const val PICK_FILES = 4
 
-        /** Whether the web UI is on screen (it shows notifications then). */
-        @Volatile
-        var visible = false
-            private set
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -108,11 +104,11 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        visible = true
+        Rettui.setShowing(this, true)
     }
 
     override fun onPause() {
-        visible = false
+        Rettui.setShowing(this, false)
         super.onPause()
     }
 
@@ -137,7 +133,7 @@ class MainActivity : Activity() {
                     return@Thread
                 }
                 // It never started, or stopped: the service went.
-                if (!RettuiService.running && System.currentTimeMillis() - waitedSince > 3000) {
+                if (!Rettui.running(this) && System.currentTimeMillis() - waitedSince > 3000) {
                     main.post { stopped() }
                     return@Thread
                 }
@@ -208,8 +204,8 @@ class MainActivity : Activity() {
             // Anything not rettui's opens in the phone's browser.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (local(request.url)) return false
-                if (request.url.toString() == BACKUPS_LINK) {
-                    startActivity(Intent(this@MainActivity, BackupsActivity::class.java))
+                SCREENS[request.url.toString()]?.let {
+                    startActivity(Intent(this@MainActivity, it))
                     return true
                 }
                 try {

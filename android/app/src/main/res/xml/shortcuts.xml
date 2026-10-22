@@ -11,4 +11,14 @@
             android:targetPackage="org.zevaryx.rettui"
             android:targetClass="org.zevaryx.rettui.BackupsActivity" />
     </shortcut>
+    <shortcut
+        android:shortcutId="usb"
+        android:enabled="true"
+        android:icon="@drawable/ic_launcher"
+        android:shortcutShortLabel="@string/usb">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="org.zevaryx.rettui"
+            android:targetClass="org.zevaryx.rettui.UsbActivity" />
+    </shortcut>
 </shortcuts>

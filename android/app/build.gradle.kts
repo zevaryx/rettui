@@ -41,7 +41,8 @@ android {
     }
 
     packaging {
-        // rettui runs as a program, so it has to be a file on disk.
+        // rettui compressed in the APK (half the download), and unpacked
+        // when it's installed.
         jniLibs.useLegacyPackaging = true
     }
 

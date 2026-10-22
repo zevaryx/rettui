@@ -10,8 +10,11 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
+import android.system.Os
 import android.util.Log
 import org.json.JSONObject
 import java.io.File
@@ -19,14 +22,17 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
-import java.util.concurrent.TimeUnit
 
 /**
- * Runs rettui (the program packed in the APK as librettui.so) with its web
- * UI on this phone only, and keeps it running while the app is closed: a
+ * Runs rettui (loaded from the APK as librettui.so) with its web UI on
+ * this phone only, and keeps it running while the app is closed: a
  * foreground service, with its notification. It also listens to the web
  * UI's live events and shows rettui's notifications (messages, mentions)
  * as Android's, since a WebView can't.
+ *
+ * It has a process of its own (`:rettui`): rettui keeps some state for
+ * as long as its process lives, so each start is in a new one, and the
+ * process ends with it.
  */
 class RettuiService : Service() {
     companion object {
@@ -36,11 +42,6 @@ class RettuiService : Service() {
         private const val CHANNEL_SERVICE = "service"
         private const val CHANNEL_MESSAGES = "messages"
         private const val ID_SERVICE = 1
-
-        /** Whether rettui is running (or starting), for the activity. */
-        @Volatile
-        var running = false
-            private set
 
         /** What rettui printed last run, shown if it stops. */
         fun logFile(context: Context) = File(context.filesDir, "rettui-output.txt")
@@ -61,29 +62,28 @@ class RettuiService : Service() {
             context.startForegroundService(Intent(context, RettuiService::class.java))
         }
 
-        /** The rettui running, if this app started it. */
-        @Volatile
-        private var process: Process? = null
-
         /**
-         * Stop rettui and wait until it has saved everything and exited (as
-         * restoring a backup needs). Whether it has.
+         * Stop rettui and wait until it has saved everything and its process
+         * has ended (as restoring a backup needs). Whether it has.
          */
-        fun stopAndWait(context: Context, seconds: Long = 20): Boolean {
-            val running = process
+        fun stopAndWait(context: Context, seconds: Long = 25): Boolean {
             context.stopService(Intent(context, RettuiService::class.java))
-            if (running != null && !running.waitFor(seconds, TimeUnit.SECONDS)) return false
-            // One this app didn't start (left from before) can't be stopped
-            // from here.
-            val until = System.currentTimeMillis() + 3000
-            while (listening() && System.currentTimeMillis() < until) Thread.sleep(100)
-            return !listening()
+            val until = System.currentTimeMillis() + seconds * 1000
+            while (Rettui.running(context)) {
+                if (System.currentTimeMillis() > until) return false
+                Thread.sleep(200)
+            }
+            return true
         }
     }
 
+    @Volatile
+    private var running = false
+    private var runner: Thread? = null
     private var listener: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: WifiManager.MulticastLock? = null
+    private val main = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -121,31 +121,21 @@ class RettuiService : Service() {
         multicastLock = getSystemService(WifiManager::class.java)
             .createMulticastLock("rettui").apply { setReferenceCounted(false); acquire() }
 
-        // One left over from before (the app was stopped, its program
-        // wasn't): use it.
-        if (listening()) {
-            Log.i(TAG, "rettui is running already")
-        } else {
-            val builder = Rettui.builder(this, "--web", "127.0.0.1:$PORT")
-            builder.environment()["RUST_BACKTRACE"] = "1"
-            builder.redirectOutput(logFile(this))
-            val started = try {
-                builder.start()
-            } catch (e: Exception) {
-                logFile(this).writeText("Couldn't start rettui: $e\n")
-                stopSelf()
-                return
+        val log = logFile(this).apply { writeText("") }
+        Os.setenv("RUST_BACKTRACE", "1", true)
+        val args = Rettui.args(this, "--web", "127.0.0.1:$PORT")
+        runner = Thread({
+            val code = try {
+                Native.run(args, log.path)
+            } catch (e: Throwable) {
+                log.appendText("Couldn't start rettui: $e\n")
+                -1
             }
-            process = started
-            Thread({
-                val code = started.waitFor()
-                Log.i(TAG, "rettui stopped ($code)")
-                if (process === started) {
-                    process = null
-                    stopSelf()
-                }
-            }, "rettui-wait").start()
-        }
+            Log.i(TAG, "rettui stopped ($code)")
+            // Stopped by itself (it failed, or its process is ending): the
+            // service goes too.
+            main.post { stopSelf() }
+        }, "rettui").apply { start() }
         listener = Thread(::listen, "rettui-events").apply { isDaemon = true; start() }
     }
 
@@ -153,16 +143,17 @@ class RettuiService : Service() {
         running = false
         listener?.interrupt()
         listener = null
-        process?.let { stopping ->
-            process = null
-            // SIGTERM: rettui saves everything, then exits.
-            stopping.destroy()
-            Thread({
-                if (!stopping.waitFor(10, TimeUnit.SECONDS)) stopping.destroyForcibly()
-            }, "rettui-stop").start()
-        }
         wakeLock?.takeIf { it.isHeld }?.release()
         multicastLock?.takeIf { it.isHeld }?.release()
+        val stopping = runner
+        runner = null
+        // rettui saves everything and stops; then its process ends, to
+        // start clean next time.
+        Native.stop()
+        Thread({
+            stopping?.join(20_000)
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }, "rettui-stop").start()
         super.onDestroy()
     }
 
@@ -247,7 +238,7 @@ class RettuiService : Service() {
             val tag = json.optString("tag")
             when (event) {
                 // The web UI on screen shows its own.
-                "notify" -> if (!MainActivity.visible) {
+                "notify" -> if (!Rettui.showing(this)) {
                     val target = json.optJSONObject("target")?.toString() ?: "{}"
                     val open = PendingIntent.getActivity(
                         this,

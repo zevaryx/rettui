@@ -16,8 +16,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -170,16 +169,7 @@ class BackupsActivity : Activity() {
 
     /** Tell rettui the identity is backed up (its first steps say so). */
     private fun markBackedUp() {
-        val token = RettuiService.token(this) ?: return
-        try {
-            val connection = URL("http://127.0.0.1:${RettuiService.PORT}/api/identity/backed-up").openConnection() as HttpURLConnection
-            connection.requestMethod = "POST"
-            connection.setRequestProperty("Authorization", "Bearer $token")
-            connection.connectTimeout = 2000
-            connection.responseCode
-            connection.disconnect()
-        } catch (e: Exception) {
-        }
+        Rettui.api(this, "identity/backed-up", JSONObject())
     }
 
     private fun askName(then: (String) -> Unit) {

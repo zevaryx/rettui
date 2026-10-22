@@ -413,10 +413,19 @@ impl WebState {
     }
 }
 
-/// Ctrl-C, or SIGTERM (what `docker stop` and systemd send): listened for
-/// from now (not from when it's first awaited), so a stop right after
-/// starting is still a clean one.
-fn shutdown_signal() -> impl std::future::Future<Output = ()> {
+/// Ctrl-C, SIGTERM (what `docker stop` and systemd send), or a stop asked
+/// for from within ([`crate::request_stop`]).
+async fn shutdown_signal() {
+    let signal = os_signal();
+    tokio::select! {
+        () = signal => {}
+        () = crate::stop_requested() => {}
+    }
+}
+
+/// Ctrl-C or SIGTERM: listened for from now (not from when it's first
+/// awaited), so a stop right after starting is still a clean one.
+fn os_signal() -> impl std::future::Future<Output = ()> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
