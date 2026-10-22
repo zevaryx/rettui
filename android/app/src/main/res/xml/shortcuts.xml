@@ -4,7 +4,7 @@
     <shortcut
         android:shortcutId="backups"
         android:enabled="true"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:shortcutShortLabel="@string/backups">
         <intent
             android:action="android.intent.action.VIEW"
@@ -14,7 +14,7 @@
     <shortcut
         android:shortcutId="rnodes"
         android:enabled="true"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:shortcutShortLabel="@string/rnodes">
         <intent
             android:action="android.intent.action.VIEW"
