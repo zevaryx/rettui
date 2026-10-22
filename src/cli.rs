@@ -404,6 +404,25 @@ pub fn backup(paths: &Paths, file: Option<PathBuf>, options: crate::backup::Opti
     Ok(())
 }
 
+/// Save a copy of the identity in use to `file`.
+pub fn export_identity(paths: &Paths, file: &Path) -> Result<()> {
+    let identity = crate::app::identity::copy_identity(&paths.identity, file).map_err(|e| anyhow!(e))?;
+    let address = hex::encode(crate::app::identity::lxmf_address(&identity));
+    println!("Saved the identity with LXMF address {address} to {}.", file.display());
+    println!("Keep it private: whoever has it can pose as you and read what's sent to you.");
+    Ok(())
+}
+
+/// Keep the identity in `file` as another identity, named `name`.
+pub fn import_identity(paths: &Paths, file: &Path, name: &str) -> Result<()> {
+    let identity = crate::app::identity::read_identity(file).map_err(|e| anyhow!(e))?;
+    let settings = Settings::load(&paths.settings)?;
+    let profile = crate::identities::add(paths, &settings, name, Some(identity)).map_err(|e| anyhow!(e))?;
+    println!("Kept {} (LXMF address {}) as another identity.", profile.name, hex::encode(profile.lxmf));
+    println!("Switch to it in Status > Identities (I in the terminal UI).");
+    Ok(())
+}
+
 /// Restore the backup `file` into the data directory.
 pub fn restore(paths: &Paths, file: &Path, force: bool) -> Result<()> {
     let done = crate::backup::restore(file, &paths.base, force).map_err(|e| anyhow!(e))?;

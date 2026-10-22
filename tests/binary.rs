@@ -95,6 +95,36 @@ fn backing_up_and_restoring() {
 }
 
 #[test]
+fn an_identity_copied_and_kept_elsewhere() {
+    let dir = folder("identity", "");
+    // None yet: nothing to copy.
+    let file = dir.join("identity-copy");
+    let none = run(&dir, &["identity", "export", file.to_str().unwrap()]);
+    assert!(!none.status.success() && said(&none).contains("start rettui once"), "{}", said(&none));
+
+    let address = String::from_utf8_lossy(&run(&dir, &["address"]).stdout).trim().to_string();
+    let export = run(&dir, &["identity", "export", file.to_str().unwrap()]);
+    assert!(export.status.success() && said(&export).contains(&address), "{}", said(&export));
+    let again = run(&dir, &["identity", "export", file.to_str().unwrap()]);
+    assert!(!again.status.success() && said(&again).contains("exists already"), "{}", said(&again));
+
+    // Kept as another identity in another data directory, whose own stays
+    // in use.
+    let other = folder("identity-other", "");
+    let theirs = String::from_utf8_lossy(&run(&other, &["address"]).stdout).trim().to_string();
+    let import = run(&other, &["identity", "import", file.to_str().unwrap(), "--name", "Amy"]);
+    assert!(import.status.success() && said(&import).contains(&address), "{}", said(&import));
+    assert!(other.join("data/identities").join(&address[..16]).join("identity").is_file());
+    assert_eq!(String::from_utf8_lossy(&run(&other, &["address"]).stdout).trim(), theirs);
+    let twice = run(&other, &["identity", "import", file.to_str().unwrap(), "--name", "Amy"]);
+    assert!(!twice.status.success() && said(&twice).contains("here already"), "{}", said(&twice));
+    let not = run(&other, &["identity", "import", dir.join("rns/config").to_str().unwrap(), "--name", "X"]);
+    assert!(!not.status.success() && said(&not).contains("isn't an identity file"), "{}", said(&not));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&other);
+}
+
+#[test]
 fn a_message_on_paper() {
     let dir = folder("paper", "");
     let to = String::from_utf8_lossy(&run(&dir, &["address", "--link"]).stdout).trim().to_string();

@@ -9,4 +9,22 @@
     <string name="starting">Starting rettui…</string>
     <string name="stopped">rettui stopped. Its log is below.</string>
     <string name="restart">Start again</string>
+    <string name="backups">Identity and backups</string>
+    <string name="identity">Your identity</string>
+    <string name="identity_note">The private key behind your address. Lost, your address is gone for good; whoever has a copy can pose as you and read what\'s sent to you. Keep copies somewhere private.</string>
+    <string name="identity_save">Save a copy of the identity in use</string>
+    <string name="identity_bring">Keep another identity from a file</string>
+    <string name="identity_name">Its name (the one it announces)</string>
+    <string name="identity_name_hint">Name</string>
+    <string name="keep">Keep</string>
+    <string name="backup">Full backup</string>
+    <string name="backup_note">Settings, contacts, messages and the identity in use, in one file, to restore here after reinstalling or on another device (rettui restore on a computer).</string>
+    <string name="backup_save">Save a full backup</string>
+    <string name="backup_restore">Restore a backup</string>
+    <string name="restore_confirm">rettui stops, the backup takes the place of what\'s here (which is moved aside, not deleted), and rettui starts again.</string>
+    <string name="restore">Restore</string>
+    <string name="restore_not_stopped">rettui didn\'t stop, so nothing was restored. Try again, or stop it from its notification first.</string>
+    <string name="working">Working…</string>
+    <string name="done">Done</string>
+    <string name="failed">That didn\'t work</string>
 </resources>

@@ -192,11 +192,35 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Save a copy of your identity, or keep another from a file.
+    ///
+    /// The identity is the private key behind your addresses: whoever has
+    /// it can pose as you. Reticulum programs keep it in the same format,
+    /// so Sideband's, NomadNet's or MeshChat's file works here, and this
+    /// one there.
+    Identity {
+        #[command(subcommand)]
+        action: IdentityAction,
+    },
     /// Download waiting messages from the propagation node.
     Sync {
         /// Propagation node to use instead of the configured one.
         #[arg(long)]
         node: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum IdentityAction {
+    /// Save a copy of the identity in use (never over another file).
+    Export { file: PathBuf },
+    /// Keep the identity in a file as another identity, to switch to (in
+    /// Status > Identities). The one in use stays as it is.
+    Import {
+        file: PathBuf,
+        /// The name it announces.
+        #[arg(long)]
+        name: String,
     },
 }
 
@@ -213,6 +237,8 @@ async fn main() -> Result<()> {
             return cli::backup(&paths, file.clone(), options);
         }
         Some(Command::Restore { file, force }) => return cli::restore(&paths, file, *force),
+        Some(Command::Identity { action: IdentityAction::Export { file } }) => return cli::export_identity(&paths, file),
+        Some(Command::Identity { action: IdentityAction::Import { file, name } }) => return cli::import_identity(&paths, file, name),
         _ => {}
     }
     let settings = load_settings(&paths, cli.rns_config.clone())?;
@@ -273,7 +299,7 @@ async fn main() -> Result<()> {
         Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         Some(Command::Update { yes }) => cli::update(yes).await,
-        Some(Command::Backup { .. } | Command::Restore { .. }) => unreachable!("handled before loading"),
+        Some(Command::Backup { .. } | Command::Restore { .. } | Command::Identity { .. }) => unreachable!("handled before loading"),
         None => {
             let (mut settings, mut paths, mut identity) = (settings, paths, identity);
             // Switching identity starts over as the other one.

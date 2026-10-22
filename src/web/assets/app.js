@@ -59,6 +59,13 @@ async function upload(path, file) {
 
 // A hub room's name as shown: #lobby (a room some client named "#lobby"
 // isn't "##lobby").
+// In rettui's Android app, whose own screen (not this page) handles the
+// identity and backups: the page only links to it.
+const IN_ANDROID_APP = /\brettui-android\//.test(navigator.userAgent);
+const ANDROID_BACKUPS = 'rettui-app:backups';
+const androidBackupsButton = (text) => el('button', { text, title: "The app's own screen: save a copy of the identity, keep another from a file, back up and restore",
+  onclick: () => { location.href = ANDROID_BACKUPS; } });
+
 const roomLabel = (name) => (name.startsWith('#') ? name : '#' + name);
 
 // The folder something on the node is in ('' at the top).
@@ -6719,8 +6726,10 @@ app.views.status = {
       label('Backup'), el('div', {},
         el('button', { text: 'Download a backup', title: 'Settings, contacts and messages, in one file to restore with rettui restore',
           onclick: () => el('a', { href: 'api/backup', download: '' }).click() }),
-        el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text:
-          'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' })),
+        IN_ANDROID_APP ? androidBackupsButton('🔑 Identity and backups') : null,
+        el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text: IN_ANDROID_APP
+          ? 'Download a backup: settings, contacts and messages, without your identity. Identity and backups (the app\'s own screen) saves the identity too, and restores.'
+          : 'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' })),
       label('Known'), el('span', { text: `${s.known} destinations` }),
       label('Notifications'), notifications.describe(),
       label('Theme'), el('select', { title: 'This browser\'s colours', onchange: (e) => theme.set(e.target.value) },
@@ -7576,7 +7585,9 @@ async function identitiesDialog() {
         } }),
         p.active ? null : el('button', { class: 'primary', text: 'Switch', onclick: () => switchIdentity(p) }))));
     body.replaceChildren(
-      el('p', { class: 'dim', text: 'Each identity is an LXMF address of its own, with its own name, conversations, contacts and settings; one is used at a time. Bringing one in from a file and deleting one are done in the terminal (Status, I), as they handle keys.' }),
+      el('p', { class: 'dim', text: 'Each identity is an LXMF address of its own, with its own name, conversations, contacts and settings; one is used at a time. '
+        + (IN_ANDROID_APP ? 'Bringing one in from a file is done in the app\'s Identity and backups screen, and deleting one in the terminal, as they handle keys.'
+          : 'Bringing one in from a file and deleting one are done in the terminal (Status, I), as they handle keys.') }),
       ...rows,
       listed.identities.length < listed.most ? el('div', { class: 'row actions' },
         el('button', { text: '+ New identity', onclick: async () => {
@@ -7587,7 +7598,8 @@ async function identitiesDialog() {
             toast(`Kept ${made.name}: Switch uses it`);
             show();
           }
-        } })) : null);
+        } }),
+        IN_ANDROID_APP ? androidBackupsButton('From a file…') : null) : null);
   };
   const switchIdentity = async (p) => {
     if (!confirm(`Switch to ${p.name} (${p.address})?\nEverything is saved, and rettui starts again as it: this page loads again once it's back.`)) return;

@@ -42,15 +42,12 @@ class RettuiService : Service() {
         var running = false
             private set
 
-        /** rettui's data directory: identity, settings, messages. */
-        fun dataDir(context: Context) = File(context.filesDir, "rettui")
-
         /** What rettui printed last run, shown if it stops. */
         fun logFile(context: Context) = File(context.filesDir, "rettui-output.txt")
 
         /** The web UI's login token, once rettui has made it. */
         fun token(context: Context): String? =
-            File(dataDir(context), "web_token").takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.length >= 32 }
+            File(Rettui.dataDir(context), "web_token").takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.length >= 32 }
 
         /** Whether the web UI answers. */
         fun listening(): Boolean = try {
@@ -63,9 +60,27 @@ class RettuiService : Service() {
         fun start(context: Context) {
             context.startForegroundService(Intent(context, RettuiService::class.java))
         }
+
+        /** The rettui running, if this app started it. */
+        @Volatile
+        private var process: Process? = null
+
+        /**
+         * Stop rettui and wait until it has saved everything and exited (as
+         * restoring a backup needs). Whether it has.
+         */
+        fun stopAndWait(context: Context, seconds: Long = 20): Boolean {
+            val running = process
+            context.stopService(Intent(context, RettuiService::class.java))
+            if (running != null && !running.waitFor(seconds, TimeUnit.SECONDS)) return false
+            // One this app didn't start (left from before) can't be stopped
+            // from here.
+            val until = System.currentTimeMillis() + 3000
+            while (listening() && System.currentTimeMillis() < until) Thread.sleep(100)
+            return !listening()
+        }
     }
 
-    private var process: Process? = null
     private var listener: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -111,18 +126,8 @@ class RettuiService : Service() {
         if (listening()) {
             Log.i(TAG, "rettui is running already")
         } else {
-            val data = dataDir(this).apply { mkdirs() }
-            val exe = File(applicationInfo.nativeLibraryDir, "librettui.so")
-            val builder = ProcessBuilder(
-                exe.path,
-                "--data-dir", data.path,
-                "--rns-config", File(data, "reticulum").path,
-                "--web", "127.0.0.1:$PORT",
-            )
-            builder.environment()["HOME"] = filesDir.path
-            builder.environment()["TMPDIR"] = cacheDir.path
+            val builder = Rettui.builder(this, "--web", "127.0.0.1:$PORT")
             builder.environment()["RUST_BACKTRACE"] = "1"
-            builder.redirectErrorStream(true)
             builder.redirectOutput(logFile(this))
             val started = try {
                 builder.start()

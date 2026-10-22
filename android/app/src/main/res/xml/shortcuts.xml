@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-pressing the app's icon. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="backups"
+        android:enabled="true"
+        android:icon="@drawable/ic_launcher"
+        android:shortcutShortLabel="@string/backups">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="org.zevaryx.rettui"
+            android:targetClass="org.zevaryx.rettui.BackupsActivity" />
+    </shortcut>
+</shortcuts>

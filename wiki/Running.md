@@ -120,6 +120,8 @@ rettui probe <address> [--name NAME]  # time an answer, as rnprobe does
 rettui update [--yes]  # check for a newer release, and install it (see Installing)
 rettui backup [FILE] [--with-files] [--without-identity]  # everything to one file (see Data and Storage)
 rettui restore FILE [--force]  # restore one, with rettui stopped
+rettui identity export FILE  # save a copy of the identity in use (never over another file)
+rettui identity import FILE --name NAME  # keep another identity from a file, to switch to
 rettui address [--link]      # print your LXMF address (--link: as an lxma:// link with your key)
 ```
 
@@ -135,6 +137,12 @@ paths; otherwise, the paths the last run with this Reticulum config saved.
 `probe --name` gives a destination's full name (such as `rnsh.listen`) for
 kinds rettui can't tell, which are sent a probe packet they must prove. See
 [Network](Network) for how paths and probes work.
+
+`identity export` and `identity import` work on identity files from any
+Reticulum program (Sideband, NomadNet, MeshChat, another rettui), all in the
+same format. `import` keeps the identity as another one beside the one in use,
+which stays in use: switch to it in Status > Identities (`I` in the terminal
+UI). See [Data and Storage](Data-and-Storage#several-identities).
 
 `send --mode paper` writes a [paper message](Messaging#paper-messages)
 instead of sending it. It prints the `lxm://` link, and before it the QR code

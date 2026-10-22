@@ -134,7 +134,9 @@ page cache, map pictures and the Reticulum config's history. A
 [backup](#backups) is of the identity in use.
 
 The web UI can't bring an identity in from a file, copy one or delete one:
-its login would otherwise give the keys away.
+its login would otherwise give the keys away. `rettui identity export FILE`
+and `rettui identity import FILE --name NAME` do the first two from the
+command line, and the [Android app](Android) has a screen of its own for them.
 
 ## Backups
 
@@ -154,7 +156,8 @@ Attachments (`downloads/`, `uploads/`) are left out unless asked for.
   it's done.
 - **Web UI:** **Download a backup** (Status, *Backup*). It never has the
   identity (the login link would otherwise give away the key): back that
-  up in the terminal UI, or with `rettui backup`.
+  up in the terminal UI, or with `rettui backup`. In the
+  [Android app](Android), *Identity and backups* saves one with the identity.
 - **Command line:** `rettui backup [FILE]` (by default
   `rettui-backup-<date>.tar.gz` here); `--with-files` adds attachments,
   `--without-identity` leaves the identity out. It reads what's saved, so

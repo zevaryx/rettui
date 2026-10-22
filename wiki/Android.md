@@ -49,6 +49,29 @@ repository.
 - Downloads (exports, backups, files from messages) go in Downloads.
 - If rettui stops, the app shows what it printed, with **Start again**.
 
+## Identity and backups
+
+The web UI never reads or saves identity keys, since anyone with its login
+link could then copy yours. The app has a screen of its own for them,
+*Identity and backups*. Open it from **🔑 Identity and backups** in the web
+UI's Status section, by long-pressing the app's icon, or from the screen
+shown when rettui stops. On it:
+
+- **Save a copy of the identity in use:** pick where (Downloads, a USB
+  stick, a cloud folder). Keep the copy private: whoever has it can pose as
+  you and read what's sent to you.
+- **Keep another identity from a file:** an identity file from Sideband,
+  NomadNet, MeshChat or another rettui, kept beside yours under a name you
+  give it. Switch to it in Status > **👤 Identities**.
+- **Save a full backup:** settings, contacts, messages and the identity in
+  use, in one file. `rettui restore` restores it on a computer.
+- **Restore a backup:** one saved here or by rettui on a computer. rettui
+  stops, the backup takes the place of what's here (moved aside into a
+  `before-restore-<time>` folder, not deleted), and rettui starts again.
+
+Back up the identity before uninstalling the app: uninstalling deletes
+everything the app keeps.
+
 Some phones stop background apps to save battery. If messages only arrive
 while the app is open, allow it to run in the background: *Settings >
 Apps > rettui > Battery > Unrestricted* (the wording differs between
@@ -58,10 +81,6 @@ phones).
 
 - **Interfaces:** TCP, UDP and AutoInterface (other Reticulum devices on
   the same Wi-Fi) work. RNodes over USB or Bluetooth don't yet.
-- **The identity stays in the app.** The web UI never reads or exports
-  identity keys (see [Web UI](Web-UI)), and the app has no terminal, so
-  there's no way yet to back up its identity or bring one in.
-  Uninstalling the app loses it.
 - **No terminal UI.**
 - It hasn't been tested on many phones yet. Reports of what does and
   doesn't work are welcome in the

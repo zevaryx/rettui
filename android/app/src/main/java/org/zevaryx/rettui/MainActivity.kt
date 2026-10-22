@@ -41,6 +41,15 @@ import java.net.URL
  */
 class MainActivity : Activity() {
     companion object {
+        /**
+         * Said in the WebView's user agent, so the web UI offers what only
+         * the app has (its identity and backups screen).
+         */
+        const val AGENT = "rettui-android/1"
+
+        /** The web UI's link to the app's identity and backups screen. */
+        const val BACKUPS_LINK = "rettui-app:backups"
+
         /** What a notification tapped is about (JSON, as the web UI has it). */
         const val EXTRA_TARGET = "target"
         private const val ASK_START = 1
@@ -158,6 +167,12 @@ class MainActivity : Activity() {
                 text = getString(R.string.restart)
                 setOnClickListener { recreate() }
             })
+            // A backup can be restored, or the identity saved, even with
+            // rettui failing to start.
+            addView(Button(context).apply {
+                text = getString(R.string.backups)
+                setOnClickListener { startActivity(Intent(this@MainActivity, BackupsActivity::class.java)) }
+            })
             addView(ScrollView(context).apply {
                 addView(TextView(context).apply {
                     text = log
@@ -186,12 +201,17 @@ class MainActivity : Activity() {
             setGeolocationEnabled(true)
             allowFileAccess = false
             allowContentAccess = false
+            userAgentString = "$userAgentString $AGENT"
         }
         CookieManager.getInstance().setAcceptCookie(true)
         web.webViewClient = object : WebViewClient() {
             // Anything not rettui's opens in the phone's browser.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (local(request.url)) return false
+                if (request.url.toString() == BACKUPS_LINK) {
+                    startActivity(Intent(this@MainActivity, BackupsActivity::class.java))
+                    return true
+                }
                 try {
                     startActivity(Intent(Intent.ACTION_VIEW, request.url))
                 } catch (e: Exception) {
