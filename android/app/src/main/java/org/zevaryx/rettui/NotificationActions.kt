@@ -44,6 +44,7 @@ class NotificationActions : BroadcastReceiver() {
                         tag, 0,
                         Notification.Builder(context, RettuiService.CHANNEL_MESSAGES)
                             .setSmallIcon(R.drawable.ic_notification)
+                            .setColor(context.getColor(R.color.accent))
                             .setContentTitle(context.getString(if (text != null) R.string.reply_failed else R.string.read_failed))
                             .setContentText(said.text.take(300))
                             .setAutoCancel(true)
