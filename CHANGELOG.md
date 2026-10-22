@@ -2,6 +2,13 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
+## v1.10.0
+
+Changes since v1.9.0: development prereleases of `dev`, made on command.
+
+### Docs and development
+- **Development prereleases:** *Actions > Prerelease > Run workflow* (on `dev`) publishes a prerelease of `dev`'s newest commit, `v1.10.0-dev.1` and so on, built and attached like a release, with a link to what changed since the last release. `dev` isn't changed: the tag holds a commit with the prerelease's version. Self-update leaves prereleases out. See [Development](https://github.com/zevaryx/rettui/wiki/Development).
+
 ## v1.9.0
 
 Changes since v1.8.0: six new games (Checkers, Dots and Boxes, Gomoku, Reversi, Mancala and Hex), claiming a draw in Chess and Checkers, a history of the Reticulum config to compare and put back, every Codec2 mode decoded and voice messages recorded in the terminal, several identities to switch between, Sideband's sensor readings shown and this computer's sent, reactions from Mesh-Client no longer show as a message as well, two small fixes found while writing tests, a LICENSE file, and code coverage measured in CI.

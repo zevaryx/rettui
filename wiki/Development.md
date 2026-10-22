@@ -64,7 +64,26 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
      package to the AUR (see *Homebrew and the AUR* below).
 
   A tag containing a hyphen (`v1.3.0-rc.1`) makes a prerelease. Its image
-  gets only the version tag, not `latest`.
+  gets only the version tag, not `latest`. *Run workflow* on a version tag
+  does the same as pushing it.
+- **Prerelease** ([prerelease.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/prerelease.yml))
+  makes a development prerelease of `dev`, on command: *Actions >
+  Prerelease > Run workflow*, on `dev`. It:
+  1. picks the version it leads up to: the one typed in, else
+     `Cargo.toml`'s if that isn't released yet, else the next minor
+     version after the newest release (`1.10.0` after `v1.9.0`);
+  2. numbers it from that version's earlier ones: `v1.10.0-dev.1`, then
+     `v1.10.0-dev.2`;
+  3. sets that version in `Cargo.toml` and `Cargo.lock`, and adds a
+     section for it to `CHANGELOG.md` (what it is, a link to the commits
+     since the last release, then the version's own section if there is
+     one yet), all by `.github/scripts/prepare-prerelease.sh`;
+  4. commits that and tags the commit, without changing `dev`;
+  5. starts the Release workflow on the tag, which builds and publishes
+     it as a prerelease (no Homebrew or AUR, no `latest` image).
+
+  Self-update leaves prereleases out, so they're only for those who
+  download one.
 - **Branch image** ([docker-branch.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/docker-branch.yml))
   runs on every push to a branch other than `main`. It builds the Linux
   binaries and pushes an image tagged with the branch name: pushing to
