@@ -86,6 +86,10 @@
             android:label="@string/backups"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
 
+        <receiver
+            android:name=".NotificationActions"
+            android:exported="false" />
+
         <service
             android:name=".RettuiService"
             android:exported="false"

@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.RemoteInput
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -39,7 +40,7 @@ class RettuiService : Service() {
         private const val TAG = "rettui"
         const val ACTION_STOP = "org.zevaryx.rettui.STOP"
         private const val CHANNEL_SERVICE = "service"
-        private const val CHANNEL_MESSAGES = "messages"
+        const val CHANNEL_MESSAGES = "messages"
         private const val ID_SERVICE = 1
 
         /** What rettui printed last run, shown if it stops. */
@@ -178,6 +179,20 @@ class RettuiService : Service() {
 
     // ---- rettui's notifications ---------------------------------------------
 
+    /** Reply or Mark read, for the notification `tag` about `target`. */
+    private fun action(name: String, label: Int, tag: String, target: String, reply: Boolean): Notification.Action {
+        val intent = Intent(this, NotificationActions::class.java)
+            .setAction(name)
+            .putExtra(NotificationActions.EXTRA_TAG, tag)
+            .putExtra(NotificationActions.EXTRA_TARGET, target)
+        // Android puts the reply in the intent, so that one stays mutable.
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (reply && Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
+        val pending = PendingIntent.getBroadcast(this, (name + tag).hashCode(), intent, flags)
+        val builder = Notification.Action.Builder(null, getString(label), pending)
+        if (reply) builder.addRemoteInput(RemoteInput.Builder(NotificationActions.REPLY).setLabel(getString(R.string.reply)).build())
+        return builder.build()
+    }
+
     /** The web UI's live events, for as long as the service runs. */
     private fun listen() {
         val prefs = getSharedPreferences("events", MODE_PRIVATE)
@@ -248,15 +263,20 @@ class RettuiService : Service() {
                         Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_TARGET, target),
                         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                     )
-                    val notification = Notification.Builder(this, CHANNEL_MESSAGES)
+                    val builder = Notification.Builder(this, CHANNEL_MESSAGES)
                         .setSmallIcon(R.drawable.ic_notification)
                         .setContentTitle(json.optString("title").take(200))
                         .setContentText(json.optString("body").take(1000))
                         .setStyle(Notification.BigTextStyle().bigText(json.optString("body").take(1000)))
                         .setContentIntent(open)
                         .setAutoCancel(true)
-                        .build()
-                    manager.notify(tag, 0, notification)
+                    // A conversation or a room can be answered, or marked
+                    // read, from here.
+                    if (json.optJSONObject("target")?.optString("kind") in setOf("conversation", "room")) {
+                        builder.addAction(action(NotificationActions.ACTION_REPLY, R.string.reply, tag, target, reply = true))
+                        builder.addAction(action(NotificationActions.ACTION_READ, R.string.mark_read, tag, target, reply = false))
+                    }
+                    manager.notify(tag, 0, builder.build())
                 }
                 // Read, here or elsewhere: its notification goes.
                 "read" -> manager.cancel(tag, 0)

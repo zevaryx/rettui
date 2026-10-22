@@ -54,4 +54,8 @@
     <string name="battery_note">To save battery, many phones stop apps running in the background, and with rettui, Reticulum: messages only arrive while the app is open. Allowing rettui to run in the background keeps it reachable. It uses some more battery.</string>
     <string name="battery_allow">Allow</string>
     <string name="battery_not_now">Not now</string>
+    <string name="reply">Reply</string>
+    <string name="mark_read">Mark read</string>
+    <string name="reply_failed">Your reply wasn\'t sent</string>
+    <string name="read_failed">Couldn\'t mark it read</string>
 </resources>

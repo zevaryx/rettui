@@ -43,7 +43,9 @@ repository.
   arriving. Its notification ("Reticulum is running") says so; **Stop**
   in it stops rettui.
 - Messages and mentions show as Android notifications while the app isn't
-  on screen. Tapping one opens what it's about.
+  on screen. Tapping one opens what it's about. **Reply** answers from the
+  notification (a message goes the way set for that conversation), and
+  **Mark read** marks it read without opening rettui.
 - Recording voice messages and sharing your location ask for the
   microphone or location the first time.
 - Downloads (exports, backups, files from messages) go in Downloads.
