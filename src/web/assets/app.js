@@ -598,6 +598,10 @@ const TABS = [
   { id: 'hub', icon: '⊛', title: 'Hub' },
 ];
 
+// On a phone, the bar at the bottom of the screen has these; the rest are
+// under More.
+const BOTTOM_TABS = ['messages', 'channels', 'games', 'browser'];
+
 const app = {
   tab: null,
   status: null,
@@ -625,11 +629,11 @@ function renderSidebar() {
         // On a phone, the section on screen goes back to its list.
         if (tab.id === app.tab && phone.matches) setPane(app.views[tab.id], 'list', { record: false });
         switchTab(tab.id);
-        setDrawer(false);
       },
     }, el('span', { class: 'icon', text: tab.icon }), el('span', { class: 'label', text: tab.title }), badge);
   }));
   tabs.dataset.drawn = drawn;
+  renderBottombar(unread, drawn);
   liveWatch.update();
   // The version, marked when a newer release is out (it links to that).
   const version = $('#sidebar .version');
@@ -801,8 +805,10 @@ window.addEventListener('resize', () => app.views[app.tab]?.fitSide?.());
 //
 // On a small screen a section shows one pane at a time: its list, or what
 // was picked from it, with a back button in the top bar (the phone's own
-// back button works too). The sidebar is a drawer. Larger screens show
-// everything side by side, and none of this changes them.
+// back button works too). The sections are in a bar at the bottom of the
+// screen, under the lists (not over a chat, whose box to write in is
+// there). Larger screens show everything side by side, with the sidebar,
+// and none of this changes them.
 
 // Keep in step with the phone `@media` in style.css.
 const phone = matchMedia('(max-width: 760px), (pointer: coarse) and (max-height: 500px)');
@@ -862,23 +868,48 @@ window.addEventListener('popstate', (e) => {
   setPane(view, e.state?.tab === app.tab ? e.state.pane : 'list', { record: false });
 });
 
-// The top bar: the section's name, and the menu (in a list) or back (deeper).
+// The top bar: the section's name, and back (deeper than a list). The
+// bottom bar shows only with a list.
 function renderAppbar() {
   const view = app.views[app.tab];
   const deeper = !!view?.panes && (view.pane || 'list') !== 'list';
-  $('#nav-menu').classList.toggle('hidden', deeper);
   $('#nav-back').classList.toggle('hidden', !deeper);
+  document.body.classList.toggle('deeper', deeper);
   $('#appbar-title').textContent = TABS.find((t) => t.id === app.tab)?.title || '';
-  // Unread in another section shows on the menu button.
-  const unread = app.status?.unread || {};
-  const elsewhere = (app.tab !== 'messages' && unread.messages) || (app.tab !== 'channels' && unread.channels);
-  $('#nav-menu').classList.toggle('unread', !!elsewhere);
-  $('#nav-menu').classList.toggle('mention', app.tab !== 'channels' && !!unread.mention);
 }
 
-function setDrawer(open) {
-  document.body.classList.toggle('drawer-open', open);
-  $('#nav-menu').setAttribute('aria-expanded', String(open));
+// The bottom bar (phones): the sections used most, each with its unread
+// count, and More for the rest. `drawn` says what it shows, as the sidebar's.
+function renderBottombar(unread, drawn) {
+  const bar = $('#bottombar');
+  if (bar.dataset.drawn === drawn) return;
+  bar.dataset.drawn = drawn;
+  const counts = { messages: unread.messages, games: unread.games, channels: unread.channels };
+  const item = (icon, title, active, count, mention, onclick) => el('button', {
+    class: 'bottom-tab' + (active ? ' active' : ''), 'aria-current': active ? 'page' : null, title, onclick,
+  }, el('span', { class: 'icon', text: icon }), el('span', { class: 'label', text: title }),
+  count ? el('span', { class: 'badge' + (mention ? ' mention' : ''), text: count > 99 ? '99+' : count }) : null);
+  const more = TABS.filter((t) => !BOTTOM_TABS.includes(t.id));
+  bar.replaceChildren(
+    ...BOTTOM_TABS.map((id) => {
+      const tab = TABS.find((t) => t.id === id);
+      return item(tab.icon, tab.title, app.tab === id, counts[id], id === 'channels' && unread.mention, () => {
+        // The section on screen goes back to its list.
+        if (id === app.tab) setPane(app.views[id], 'list', { record: false });
+        switchTab(id);
+      });
+    }),
+    item('⋯', 'More', more.some((t) => t.id === app.tab), 0, false, () => openSheet(whoLine(), more.map((tab) => ({
+      text: `${tab.icon}  ${tab.title}`, checked: tab.id === app.tab, action: () => switchTab(tab.id),
+    })))));
+}
+
+// Who you are and how the network is, for the top of More.
+function whoLine() {
+  const s = app.status;
+  if (!s) return 'More';
+  const online = s.net.state === 'online' ? `${s.interfaces_online}/${s.interfaces.length} interfaces` : s.net.state;
+  return `${s.display_name || 'rettui'} · ${online}`;
 }
 
 // A header's less used buttons (class "more") go behind this on a phone,
@@ -942,14 +973,11 @@ function closeSheet() {
   sheet = null;
 }
 
-$('#nav-menu').addEventListener('click', () => setDrawer(true));
 $('#nav-back').addEventListener('click', paneBack);
-$('#scrim').addEventListener('click', () => setDrawer(false));
 // ---- swipes (phones) --------------------------------------------------------
 //
 // A swipe follows the finger, and finishes or springs back when it lifts:
-// right from a list opens the drawer, and left closes it; right from what
-// was picked goes back to the list (left from a room shows its members);
+// right from what was picked goes back to the list (left from a room shows its members);
 // down on a sheet closes it. A swipe that starts where something scrolls
 // sideways, or in a text field, is left to that, and so is the screen's
 // very edge, where phones have a back gesture of their own.
@@ -1056,12 +1084,10 @@ function pickSwipe(dx, dy) {
   }
   if (open || swipe.edge || (window.visualViewport?.scale ?? 1) > 1.01) return null;
   if (scrollsFrom(target, 'x', Math.sign(dx), document.body)) return null;
-  const drawer = document.body.classList.contains('drawer-open');
-  if (drawer) return dx < 0 ? { axis: 'x', dir: -1, size: $('#sidebar').offsetWidth, ...drawerSwipe(false) } : null;
   const view = app.views[app.tab];
   const pane = view?.panes ? view.pane || 'list' : 'list';
   if (dx > 0) {
-    if (pane === 'list') return { axis: 'x', dir: 1, size: $('#sidebar').offsetWidth, ...drawerSwipe(true) };
+    if (pane === 'list') return null;
     return { axis: 'x', dir: 1, size: view.root.clientWidth, ...paneSwipe(view, PANE_UP[pane], false) };
   }
   if (pane === 'detail' && view.root.querySelector(':scope > .members:not(.hidden)')) {
@@ -1094,30 +1120,6 @@ function afterMove(node, then) {
   };
   node.addEventListener('transitionend', run);
   setTimeout(run, SWIPE_TIME + 60);
-}
-
-// The drawer, sliding out with the finger (or back in).
-function drawerSwipe(opening) {
-  const sidebar = $('#sidebar');
-  const scrim = $('#scrim');
-  const width = sidebar.offsetWidth;
-  for (const node of [sidebar, scrim]) node.style.transition = 'none';
-  sidebar.style.visibility = 'visible';
-  sidebar.style.boxShadow = '8px 0 32px #000c';
-  return {
-    move(along) {
-      const shown = Math.min(1, opening ? along / width : 1 - along / width);
-      sidebar.style.transform = `translateX(${(shown - 1) * 102}%)`;
-      scrim.style.opacity = shown;
-    },
-    // The stylesheet's own transitions take it from where the finger left it.
-    end(done, finished) {
-      for (const node of [sidebar, scrim]) node.style.transition = '';
-      sidebar.style.transform = sidebar.style.visibility = sidebar.style.boxShadow = scrim.style.opacity = '';
-      setDrawer(opening === done);
-      setTimeout(finished, SWIPE_TIME);
-    },
-  };
 }
 
 // One pane sliding over another: going back, the pane on screen slides
@@ -1174,7 +1176,6 @@ function sheetSwipe(node, close) {
 }
 
 phone.addEventListener('change', () => {
-  setDrawer(false);
   closeSheet();
   renderAppbar();
   if (app.views.messages.text) app.views.messages.text.placeholder = composePlaceholder();
@@ -7708,7 +7709,6 @@ function keysDialog() {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) return setDrawer(false);
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
   // As in the terminal UI, Esc stops writing (the shortcuts work again),
   // unless it closed something first (the list @ opens).

@@ -900,12 +900,12 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 /* ---- phones ------------------------------------------------------------- */
 /* Not on larger screens: the phone's top bar, and things only a phone
    needs (the toolbar's second row lays out as part of the first). */
-#appbar, #scrim, .phone-only { display: none; }
+#appbar, #bottombar, .phone-only { display: none; }
 .more-tools { display: contents; }
 
 /* A phone (or a small window) shows one pane at a time, full width, under
-   a top bar; the sidebar is a drawer. Keep the query in step with `phone`
-   in app.js. */
+   a top bar, with the sections in a bar at the bottom (under the lists).
+   Keep the query in step with `phone` in app.js. */
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   html, body { font-size: 15px; }
   body { flex-direction: column; height: 100dvh; }
@@ -928,7 +928,7 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .toggle input { width: 20px; height: 20px; }
   .bell .bell-label { display: none; }
 
-  /* The top bar: menu (or back), and the section's name. */
+  /* The top bar: back (deeper than a list), and the section's name. */
   #appbar {
     display: flex; align-items: center; gap: 2px; flex: none;
     min-height: calc(54px + env(safe-area-inset-top));
@@ -940,36 +940,27 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
     background: none; border: 0; font-size: 22px; line-height: 1;
   }
   #appbar-title { flex: 1; min-width: 0; font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Unread elsewhere: a dot on the menu button. */
-  #nav-menu.unread::after, #nav-menu.mention::after {
-    content: ''; position: absolute; top: 9px; right: 8px; width: 10px; height: 10px;
-    border-radius: 50%; background: var(--yellow); border: 2px solid var(--bg);
-  }
-  #nav-menu.mention::after { background: var(--red); }
+  #nav-back.hidden + #appbar-title { padding-left: 12px; }
 
-  /* The sidebar as a drawer. */
-  /* Hidden (to taps and screen readers too) once it has slid away. */
-  #sidebar {
-    position: fixed; z-index: 40; top: 0; bottom: 0; left: 0;
-    width: min(300px, 86vw); overflow-y: auto;
-    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
-    transform: translateX(-102%); visibility: hidden;
-    transition: transform .22s ease, visibility 0s linear .22s;
+  /* The sections: in the bottom bar, not the sidebar. */
+  #sidebar { display: none; }
+  #bottombar {
+    display: flex; flex: none;
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: var(--bg); border-top: 1px solid var(--border);
   }
-  .drawer-open #sidebar { transform: none; visibility: visible; box-shadow: 8px 0 32px #000c; transition: transform .22s ease; }
-  #scrim {
-    display: block; position: fixed; inset: 0; z-index: 35; background: #000a;
-    opacity: 0; pointer-events: none; transition: opacity .22s ease;
+  /* Deeper than a list (a chat, a page): the screen is the pane's. */
+  body.deeper #bottombar { display: none; }
+  .bottom-tab {
+    position: relative; flex: 1 1 0; min-width: 0; min-height: 58px; padding: 6px 2px 4px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    background: none; border: 0; border-radius: 0; color: var(--dim);
   }
-  .drawer-open #scrim { opacity: 1; pointer-events: auto; }
-  /* Everything the icon rail hides. */
-  .brand { display: flex; padding: 18px 20px 14px; }
-  .brand .wordmark { height: 24px; }
-  .mark { display: none; }
-  .tab { padding: 14px 20px; gap: 16px; font-size: 16px; }
-  .tab .label { display: inline; }
-  .tab .icon { width: 24px; font-size: 18px; }
-  .who { display: block; padding: 16px 20px; font-size: 14px; }
+  .bottom-tab .icon { font-size: 20px; line-height: 1; }
+  .bottom-tab .label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .bottom-tab.active { color: var(--accent); }
+  .bottom-tab.active .icon { background: var(--raised); border-radius: 14px; padding: 3px 16px; }
+  .bottom-tab .badge { position: absolute; top: 4px; left: calc(50% + 6px); margin: 0; font-size: 11px; padding: 0 6px; }
 
   /* The section fills the screen under the bar. */
   #main { flex: 1; min-height: 0; flex-direction: column; padding: 0; gap: 0; }
