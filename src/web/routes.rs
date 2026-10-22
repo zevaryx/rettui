@@ -1214,6 +1214,7 @@ async fn game(State(state): State<WebState>, Path((app, session)): Path<(String,
                 // How your last move went, and what came with theirs.
                 value["notes"] = json!(o.app.game_notes(&game));
                 value["unsent"] = json!(o.app.game_unsent(&game));
+                value["rules"] = json!(crate::games::game_rules(&game.app));
                 value
             })
         })

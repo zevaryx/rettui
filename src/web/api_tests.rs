@@ -309,6 +309,7 @@ async fn games_over_the_api() {
     let game = web.get(&format!("/api/games/ttt/{session}")).await.json();
     assert_eq!(game["status"], "pending");
     assert!(game["notes"].is_array());
+    assert!(game["rules"].as_str().unwrap().contains("Three of yours in a row"), "{game}");
     // Not their move to make; nor a game that isn't.
     assert_eq!(
         web.post(&format!("/api/games/ttt/{session}"), json!({ "command": "move", "picked": "4" })).await.status,

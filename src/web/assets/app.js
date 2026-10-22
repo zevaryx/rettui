@@ -2272,7 +2272,8 @@ function gameBoard(app, session, onForget) {
       el('div', { class: 'dim game-note', text: note(game) }),
       // How your last move went, and what came with theirs.
       ...(game.notes || []).map((text) => el('div', { class: 'game-note warn', text })),
-      el('div', { class: 'game-actions' }, actions));
+      el('div', { class: 'game-actions' }, actions),
+      ...(game.rules ? [el('div', { class: 'game-rules' }, el('h4', { text: 'How to play' }), el('p', { text: game.rules }))] : []));
   };
   const note = (game) => {
     const b = game.board;

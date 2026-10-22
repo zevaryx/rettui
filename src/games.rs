@@ -59,6 +59,56 @@ pub fn game_name(app: &str) -> &str {
     }
 }
 
+/// How a game is played, in a few sentences, shown beside its board.
+pub fn game_rules(app: &str) -> &'static str {
+    match app {
+        "ttt" => {
+            "Take turns putting your mark in an empty cell. Three of yours in a row, across, down or diagonally, wins. \
+             A full board with no three in a row is a draw."
+        }
+        "four_in_a_row" => {
+            "Take turns dropping a piece into a column: it falls to the lowest empty space. Four of yours in a row, \
+             across, down or diagonally, wins. A full board with no four in a row is a draw."
+        }
+        "dots_and_boxes" => {
+            "Take turns drawing a line between two neighbouring dots. A line that closes a box (or two) makes it yours, \
+             and you draw another. When every box is claimed, whoever has more wins."
+        }
+        "gomoku" => {
+            "Take turns putting a stone on an empty point. Five or more of yours in an unbroken row, across, down or \
+             diagonally, wins. A full board with no five in a row is a draw."
+        }
+        "reversi" => {
+            "Put a disc where it traps a straight line of theirs between it and one of yours, in any direction: every \
+             trapped disc turns to your colour. Your possible moves are dotted. If you can't move, they go again; when \
+             neither of you can, whoever has more discs wins."
+        }
+        "mancala" => {
+            "Pick one of your pits (along the bottom): its seeds are sown one by one anticlockwise, into your store (on \
+             the right) but not theirs. If the last lands in your store, go again; if it lands in an empty pit of yours, \
+             it and the seeds facing it go to your store. When one side's pits are empty, each keeps what's left on \
+             their side, and whoever has more in their store wins."
+        }
+        "checkers" => {
+            "Pieces move one square diagonally forward, on the dark squares; one reaching the far row is crowned a \
+             king, which moves forward or back. Take a piece by jumping over it to the empty square beyond, and keep \
+             jumping while you can. Jumps must be taken. Whoever has no pieces, or no move, left loses."
+        }
+        "chess" => {
+            "Each piece moves its own way: the king one square, the queen any distance in any direction, rooks \
+             straight, bishops diagonally, knights in an L that jumps, pawns forward (taking diagonally, and becoming \
+             another piece on the far rank). Win by checkmate: their king attacked, with no move that saves it. With no legal move but not in check, it's \
+             stalemate, a draw."
+        }
+        "hex" => {
+            "Take turns putting a stone on an empty cell. Black wins by joining the top and bottom edges with an \
+             unbroken chain of their stones, White by joining left and right. There are no draws. White's first move \
+             may be a swap: taking Black's first stone as their own."
+        }
+        _ => "",
+    }
+}
+
 /// What a message of a game is: which game and session, and what it did.
 /// Kept on the message (see `store::Message::game`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1092,6 +1142,7 @@ mod tests {
     fn every_game_is_named_and_its_squares() {
         for app in GAMES {
             assert_ne!(game_name(app), app, "{app}");
+            assert!(!game_rules(app).is_empty(), "{app}");
         }
         assert_eq!((grid_square_name(0, 11), grid_square_name(120, 11)), ("a11".to_string(), "k1".to_string()));
         assert_eq!((grid_square_index("a11", 11), grid_square_index("k1", 11), grid_square_index("l1", 11)), (Some(0), Some(120), None));
@@ -1172,6 +1223,7 @@ mod tests {
         assert!(problems[0].contains("Couldn't read"), "{problems:?}");
         assert!(Games::load(&dir.join("missing.json")).1.is_empty());
         assert_eq!(game_name("other"), "other");
+        assert_eq!(game_rules("other"), "");
         // Not set up yet: nothing played.
         let games = Games::default();
         assert!(matches!(games.receive("ab", &HashMap::new()), Received::Rejected(_)));
