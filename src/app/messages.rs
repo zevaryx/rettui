@@ -1713,6 +1713,7 @@ mod tests {
         let forgotten =
             std::iter::from_fn(|| net.try_recv().ok()).any(|c| matches!(c, NetCommand::ForgetKnown(ref h) if h == &vec![[8; 16]]));
         assert!(forgotten);
+        app.finish_saves();
         std::fs::remove_dir_all(dir).unwrap();
     }
 
