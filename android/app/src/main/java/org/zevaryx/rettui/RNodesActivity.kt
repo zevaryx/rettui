@@ -106,8 +106,7 @@ class RNodesActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 48, 48, 48)
         }
-        setContentView(ScrollView(this).apply {
-            setBackgroundColor(Color.rgb(0x16, 0x18, 0x1d))
+        showClearOfBars(ScrollView(this).apply {
             addView(list)
         })
         // The answer comes from this app's own pending intent; nothing else
@@ -132,6 +131,12 @@ class RNodesActivity : Activity() {
 
     private fun show() {
         list.removeAllViews()
+        list.addView(TextView(this).apply {
+            text = getString(R.string.rnodes)
+            textSize = 24f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        })
         heading(getString(R.string.usb))
         note(getString(R.string.usb_note))
         val devices = usb.deviceList.values.sortedBy { it.deviceName }

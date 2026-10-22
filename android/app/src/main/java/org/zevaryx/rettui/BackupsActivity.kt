@@ -65,6 +65,12 @@ class BackupsActivity : Activity() {
             setOnClickListener { run() }
         })
 
+        column.addView(TextView(this).apply {
+            text = getString(R.string.backups)
+            textSize = 24f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        })
         heading(getString(R.string.identity))
         note(getString(R.string.identity_note))
         action(getString(R.string.identity_save)) {
@@ -80,8 +86,7 @@ class BackupsActivity : Activity() {
         }
         action(getString(R.string.backup_restore)) { open(OPEN_BACKUP) }
 
-        setContentView(ScrollView(this).apply {
-            setBackgroundColor(Color.rgb(0x16, 0x18, 0x1d))
+        showClearOfBars(ScrollView(this).apply {
             addView(column)
         })
     }

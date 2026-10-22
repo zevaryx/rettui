@@ -84,11 +84,10 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             textSize = 18f
             setTextColor(Color.LTGRAY)
-            setBackgroundColor(Color.rgb(0x16, 0x18, 0x1d))
         }
         web = WebView(this).apply { visibility = android.view.View.GONE }
         setUpWebView()
-        setContentView(LinearLayout(this).apply {
+        showClearOfBars(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(waiting, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -229,9 +228,8 @@ class MainActivity : Activity() {
     private fun stopped() {
         val byYou = Rettui.stoppedByYou(this)
         val log = if (byYou) "" else RettuiService.logFile(this).takeIf { it.isFile }?.readText()?.takeLast(20_000) ?: ""
-        setContentView(LinearLayout(this).apply {
+        showClearOfBars(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(0x16, 0x18, 0x1d))
             setPadding(32, 48, 32, 32)
             addView(TextView(context).apply {
                 text = getString(if (byYou) R.string.stopped_by_you else R.string.stopped)
@@ -267,7 +265,7 @@ class MainActivity : Activity() {
     private fun local(uri: Uri) = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == Rettui.port(this)
 
     private fun setUpWebView() {
-        web.setBackgroundColor(Color.rgb(0x16, 0x18, 0x1d))
+        web.setBackgroundColor(BACKGROUND)
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true

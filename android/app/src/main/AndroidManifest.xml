@@ -71,7 +71,7 @@
             android:exported="true"
             android:label="@string/rnodes"
             android:launchMode="singleTop"
-            android:theme="@android:style/Theme.DeviceDefault">
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
@@ -84,7 +84,7 @@
             android:name=".BackupsActivity"
             android:exported="false"
             android:label="@string/backups"
-            android:theme="@android:style/Theme.DeviceDefault" />
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
 
         <service
             android:name=".RettuiService"
