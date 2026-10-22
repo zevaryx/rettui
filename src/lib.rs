@@ -23,6 +23,7 @@ mod markdown;
 mod names;
 mod net;
 mod nomad;
+mod power;
 mod reticulum;
 mod rrc;
 mod store;
@@ -398,7 +399,22 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         tickets: paths.tickets.clone(),
         ratchets: paths.ratchets.clone(),
         discovered_entry_points: settings.discovered_entry_points,
+        notes: android_start(settings, paths),
     }
+}
+
+/// On a phone, before Reticulum starts: AutoInterface kept off mobile data
+/// (its multicast there kept the mobile radio awake), and the locks the app
+/// holds for rettui (see [`power`]). What was done, for the log.
+fn android_start(settings: &Settings, paths: &Paths) -> Vec<String> {
+    if !cfg!(target_os = "android") {
+        return Vec::new();
+    }
+    let notes = app::reticulum::leave_out_mobile_data(settings.rns_config.as_deref(), paths.reticulum_history.clone());
+    power::set_wake(settings.keep_awake);
+    let text = reticulum::load(&reticulum::config_path(settings.rns_config.as_deref())).map(|(text, _)| text).unwrap_or_default();
+    power::set_multicast(reticulum::has_auto_interface(&text));
+    notes.into_iter().collect()
 }
 
 /// The terminal UI, until it quits; or the name of the identity it's

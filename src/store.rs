@@ -485,6 +485,9 @@ pub struct Store {
     pub rewrite_peers: bool,
 }
 
+/// Days a peer is kept after it was last heard (see [`Store::prune_peers`]).
+pub const PEER_DAYS: i64 = 30;
+
 /// The first bytes of a gzip file.
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -825,6 +828,33 @@ impl Store {
 
     /// A copy to save in the background: everything the store file holds,
     /// which leaves out the peers (see [`encode_peers`]).
+    /// Forget peers not heard from in [`PEER_DAYS`] that nothing here
+    /// refers to (a conversation, a contact, a saved page, a hub, a node
+    /// identified to) and that aren't in `kept`: on a busy network they'd
+    /// pile up for good, in memory and on disk. Those forgotten. A peer
+    /// from before rettui kept when it was heard stays.
+    pub fn prune_peers(&mut self, now: i64, kept: &[String]) -> Vec<String> {
+        let cutoff = now - PEER_DAYS * 86_400;
+        let referred = |key: &str| {
+            self.conversations.contains_key(key)
+                || self.contacts.contains_key(key)
+                || self.identified_nodes.contains(key)
+                || self.rrc_hubs.iter().any(|h| h.hash == key)
+                || self.saved.iter().any(|b| b.url.starts_with(key))
+                || kept.iter().any(|k| k == key)
+        };
+        let old: Vec<String> = self
+            .peers
+            .iter()
+            .filter(|(key, peer)| peer.last_seen != 0 && peer.last_seen < cutoff && !referred(key))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &old {
+            self.peers.remove(key);
+        }
+        old
+    }
+
     pub fn snapshot(&self) -> Self {
         Self {
             peers: HashMap::new(),
@@ -934,6 +964,32 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_peers_forgotten_unless_something_refers_to_them() {
+        let day = 86_400;
+        let now = 100 * day;
+        let mut store = Store::default();
+        let peer = |last_seen| Peer { kind: PeerKind::Lxmf, name: None, hops: 1, last_seen };
+        let key = |n: u8| format!("{n:02x}").repeat(16);
+        store.peers.insert(key(1), peer(now - day));
+        for n in 2..=8 {
+            store.peers.insert(key(n), peer(now - (PEER_DAYS + 1) * day));
+        }
+        store.peers.insert(key(9), peer(0));
+        store.conversations.insert(key(3), Conversation::default());
+        store.contacts.insert(key(4), Contact::default());
+        store.identified_nodes.insert(key(5));
+        store.saved.push(Bookmark { name: "Home".into(), url: format!("{}:/page/index.mu", key(6)) });
+        let hub =
+            serde_json::json!({ "hash": key(7), "aspect": "rrc.hub", "name": "Hub", "rooms": [], "nick": null, "auto_connect": false });
+        store.rrc_hubs.push(serde_json::from_value(hub).unwrap());
+        let mut gone = store.prune_peers(now, &[key(8)]);
+        gone.sort();
+        assert_eq!(gone, vec![key(2)], "heard lately, referred to, kept and undated stay");
+        assert_eq!(store.peers.len(), 8);
+        assert!(store.prune_peers(now, &[]).contains(&key(8)));
+    }
 
     #[test]
     fn hubs_and_conversations_saved_before_notifications_load_with_the_defaults() {

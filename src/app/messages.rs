@@ -1687,6 +1687,36 @@ mod tests {
     }
 
     #[test]
+    fn heard_again_saves_later_and_old_peers_are_forgotten() {
+        let dir = temp_dir("heard-again");
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let announce = |hash| crate::net::NetEvent::Announce { kind: crate::net::PeerKind::Lxmf, hash, name: Some("Bob".into()), hops: 2 };
+        app.on_net(announce([7; 16]));
+        app.save_if_dirty();
+        // The same again: only when it was heard changed, saved in a while.
+        app.on_net(announce([7; 16]));
+        assert!(!app.peers_dirty && app.peers_seen_dirty);
+        app.save_if_dirty();
+        assert!(app.peers_seen_dirty, "not yet");
+        app.peers_saved -= super::super::PEERS_SEEN_EVERY;
+        app.save_if_dirty();
+        assert!(!app.peers_seen_dirty);
+
+        // Not heard from in over a month, nor written to: forgotten, with its key.
+        let old = "08".repeat(16);
+        app.on_net(announce([8; 16]));
+        app.store.peers.get_mut(&old).unwrap().last_seen -= (crate::store::PEER_DAYS + 1) * 86_400;
+        app.peers_pruned -= super::super::PRUNE_PEERS_EVERY;
+        app.on_tick();
+        assert!(!app.store.peers.contains_key(&old) && app.store.peers.contains_key(&"07".repeat(16)));
+        assert!(app.log.iter().any(|l| l.contains("Forgot 1 peer(s) not heard from in 30 days")), "{:?}", app.log);
+        let forgotten =
+            std::iter::from_fn(|| net.try_recv().ok()).any(|c| matches!(c, NetCommand::ForgetKnown(ref h) if h == &vec![[8; 16]]));
+        assert!(forgotten);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn replies_name_and_quote_the_message_they_answer() {
         use crate::lxmf::{Delivered, Reply, Sent};
         use crate::net::NetEvent;

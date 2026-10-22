@@ -63,6 +63,9 @@ pub struct Settings {
     pub wrap_lines: bool,
     /// Show people joining and leaving RRC rooms in the chat.
     pub show_joins: bool,
+    /// In the Android app: keep the phone's processor awake while rettui
+    /// runs (a wake lock; see `RettuiService`).
+    pub keep_awake: bool,
     /// The date with each chat line's time (RRC rooms).
     pub chat_dates: bool,
     /// Messages each RRC room and whisper conversation keeps.
@@ -201,6 +204,7 @@ impl Default for Settings {
             node_executable_pages: false,
             // A phone's screen is small: only what people say, there.
             show_joins: !cfg!(target_os = "android"),
+            keep_awake: false,
             chat_dates: true,
             rrc_messages_kept: 500,
             wrap_lines: false,
@@ -601,7 +605,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
     ),
     (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins", "chat_dates"]),
     (Section::Notifications, &["notify_messages", "notify_rrc", "quiet_hours", "quiet_hours_trusted"]),
-    (Section::System, &["log_level", "update_check", "discovered_entry_points", "rns_config"]),
+    (Section::System, &["log_level", "update_check", "discovered_entry_points", "keep_awake", "rns_config"]),
 ];
 
 impl Field {
@@ -967,6 +971,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "keep_awake",
+        label: "Keep the phone awake",
+        help: "In the Android app: keep the phone's processor awake while rettui runs, so its timers (announcing, syncing, keeping links up) run on time with the screen off. Messages arrive without it; it uses more battery",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "chat_dates",
         label: "Dates on chat lines",
         help: "Show the date with the time of each line in RRC rooms and whispers (as the Dates setting writes it), not only the time. D toggles it in the terminal UI's Channels tab",
@@ -1144,6 +1155,7 @@ impl Settings {
             "node_executable_pages" => self.node_executable_pages.to_string(),
             "wrap_lines" => self.wrap_lines.to_string(),
             "show_joins" => self.show_joins.to_string(),
+            "keep_awake" => self.keep_awake.to_string(),
             "chat_dates" => self.chat_dates.to_string(),
             "notify_messages" => self.notify_messages.to_string(),
             "notify_rrc" => self.notify_rrc.to_string(),
@@ -1221,6 +1233,7 @@ impl Settings {
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
+            "keep_awake" => self.keep_awake = toggle(value).map_err(fail)?,
             "chat_dates" => self.chat_dates = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,

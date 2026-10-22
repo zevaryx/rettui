@@ -71,6 +71,13 @@ pub extern "system" fn Java_org_zevaryx_rettui_Native_stop(_env: JNIEnv, _class:
     crate::request_stop();
 }
 
+/// `Native.wants()`: the locks rettui needs the app to hold (see
+/// [`crate::power`]): bit 1 a wake lock, bit 2 Wi-Fi's multicast lock.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_zevaryx_rettui_Native_wants(_env: JNIEnv, _class: JClass) -> jint {
+    jint::from(crate::power::wants())
+}
+
 /// Send standard output and error to `file` until what's returned is called.
 fn redirect(file: &std::fs::File) -> impl FnOnce() {
     use std::os::fd::AsRawFd;

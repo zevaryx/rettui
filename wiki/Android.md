@@ -78,6 +78,32 @@ it starts, rettui asks to be allowed to run in the background. To change
 that later: *Settings > Apps > rettui > Battery > Unrestricted* (the
 wording differs between phones).
 
+### Battery
+
+rettui keeps running with the screen off, so it tries to use as little as it
+can then:
+
+- **AutoInterface stays off mobile data.** Before Reticulum starts, rettui
+  adds the phone's mobile data interfaces (`rmnet…`, `ccmni…` and so on) to
+  *Ignored devices* of each AutoInterface that's on. AutoInterface finds no
+  one there, and its messages every few seconds kept the mobile radio from
+  sleeping: on a Pixel, most of the battery rettui used. The change is in
+  the Reticulum config's history, and an AutoInterface limited to chosen
+  *Devices* is left as it is.
+- **The phone may sleep.** rettui doesn't keep the processor awake, unless
+  *Keep the phone awake* (Status, under System) is on. Messages still
+  arrive while the phone sleeps, since incoming traffic wakes it; turn the
+  setting on if they come late, or links drop while the screen is off. It
+  takes effect within 15 seconds.
+- **Wi-Fi multicast only for AutoInterface.** The app asks Wi-Fi to pass
+  multicast, which costs power, only while an AutoInterface is on.
+- **The page rests in the background.** Out of sight, the web UI fetches
+  nothing; it catches up when you open the app again. Notifications come
+  from the service meanwhile.
+
+To see what rettui uses, *Settings > Battery > Battery usage*, or
+`adb shell dumpsys batterystats org.zevaryx.rettui` on a computer.
+
 ## Identity and backups
 
 The web UI never reads or saves identity keys, since anyone with its login

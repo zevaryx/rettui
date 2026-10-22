@@ -17,4 +17,8 @@ object Native {
     /** Ask the web UI to save everything and stop. */
     @JvmStatic
     external fun stop()
+
+    /** The locks rettui needs held (see rettui's src/power.rs): 1 a wake lock, 2 Wi-Fi's multicast lock. */
+    @JvmStatic
+    external fun wants(): Int
 }

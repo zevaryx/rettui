@@ -38,14 +38,18 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `peers.json.gz`: the LXMF peers, NomadNet nodes and propagation nodes
   heard. Announces arrive several a second on a busy network, so they are
   saved apart from the store, which is then only written again when a
-  conversation changes. Earlier versions kept them in the store; the first
-  launch after upgrading moves them.
+  conversation changes. A new peer, or a changed name, is saved within 10
+  seconds; only hearing one again, every 5 minutes. A peer not heard from in
+  30 days is forgotten (with its key in `known_identities.json`), unless
+  you have a conversation with it, it's a contact, a saved page or hub is
+  on it, or it's your propagation node. Earlier versions kept them in the
+  store; the first launch after upgrading moves them.
 - `archive/`: older messages (see *Message history* below), one file per
   month, such as `archive/2026-09.jsonl.gz`: one message per line, with the
   conversation it's from. Read it with `zcat archive/*.jsonl.gz | jq`.
 - `known_identities.json`: public keys from LXMF and propagation-node
-  announces, so you can reach peers that are offline now. Saved every few
-  seconds and when rettui exits.
+  announces, so you can reach peers that are offline now. Saved every 30
+  seconds (when it changed) and when rettui exits.
 - `tickets.json`: [stamp tickets](Messaging#blocking-and-spam) you gave
   trusted contacts and ones they gave you. Only you can read it.
 - `games.json`: your [games](Games) with contacts, as LRGP keeps them (the

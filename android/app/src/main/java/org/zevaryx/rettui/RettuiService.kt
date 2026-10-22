@@ -117,12 +117,11 @@ class RettuiService : Service() {
     private fun launch() {
         running = true
         Rettui.setStoppedByYou(this, false)
-        // Reticulum keeps links alive in the background, and AutoInterface
-        // hears its peers by multicast, which Wi-Fi drops unless asked.
+        // Held only while rettui asks (see applyLocks): both cost battery.
         wakeLock = getSystemService(PowerManager::class.java)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "rettui:reticulum").apply { acquire() }
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "rettui:reticulum").apply { setReferenceCounted(false) }
         multicastLock = getSystemService(WifiManager::class.java)
-            .createMulticastLock("rettui").apply { setReferenceCounted(false); acquire() }
+            .createMulticastLock("rettui").apply { setReferenceCounted(false) }
 
         val log = logFile(this).apply { writeText("") }
         Os.setenv("RUST_BACKTRACE", "1", true)
@@ -142,12 +141,34 @@ class RettuiService : Service() {
         listener = Thread(::listen, "rettui-events").apply { isDaemon = true; start() }
     }
 
+    /**
+     * Hold what rettui asks for (its `Native.wants()`), and nothing else: a
+     * wake lock with Keep the phone awake on (otherwise the phone sleeps,
+     * and incoming traffic still wakes it), and Wi-Fi's multicast lock while
+     * an AutoInterface is on (it hears its peers by multicast, which Wi-Fi
+     * drops unless asked).
+     */
+    @Synchronized
+    private fun applyLocks() {
+        if (!running) return
+        val wants = try {
+            Native.wants()
+        } catch (e: Throwable) {
+            0
+        }
+        wakeLock?.let { if (wants and 1 != 0) { if (!it.isHeld) it.acquire() } else if (it.isHeld) it.release() }
+        multicastLock?.let { if (wants and 2 != 0) { if (!it.isHeld) it.acquire() } else if (it.isHeld) it.release() }
+    }
+
     override fun onDestroy() {
-        running = false
         listener?.interrupt()
         listener = null
-        wakeLock?.takeIf { it.isHeld }?.release()
-        multicastLock?.takeIf { it.isHeld }?.release()
+        // After this, applyLocks takes nothing again.
+        synchronized(this) {
+            running = false
+            wakeLock?.takeIf { it.isHeld }?.release()
+            multicastLock?.takeIf { it.isHeld }?.release()
+        }
         val stopping = runner
         runner = null
         // rettui saves everything and stops; then its process ends, to
@@ -198,6 +219,7 @@ class RettuiService : Service() {
     private fun listen() {
         val prefs = getSharedPreferences("events", MODE_PRIVATE)
         while (running && !Thread.currentThread().isInterrupted) {
+            applyLocks()
             try {
                 val token = token(this)
                 if (token == null || !listening(this)) {
@@ -215,6 +237,9 @@ class RettuiService : Service() {
                     var id: String? = null
                     val data = StringBuilder()
                     connection.inputStream.bufferedReader().forEachLine { line ->
+                        // A line at least every 15 s (the stream's keep-alive):
+                        // a changed setting takes effect by then.
+                        applyLocks()
                         when {
                             line.isEmpty() -> {
                                 if (event.isNotEmpty() && data.isNotEmpty()) {

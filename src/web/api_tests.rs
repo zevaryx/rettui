@@ -84,6 +84,9 @@ async fn state_settings_and_the_little_things() {
     assert_eq!(state["net"]["state"], "starting");
     assert_eq!(state["own_certificate"], false);
     assert!(state["unread"]["messages"].is_number());
+    // The log only when asked for (Status shows it).
+    assert!(state.get("log").is_none());
+    assert!(web.get("/api/state?log=1").await.json()["log"].is_array());
 
     // Settings: read, changed (all or none), and said back.
     let settings = web.get("/api/settings").await.json();

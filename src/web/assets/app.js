@@ -1320,7 +1320,8 @@ function applyWrap(textarea) {
 
 async function refreshStatus() {
   try {
-    app.status = await api.get('/state');
+    // The log only for Status, which shows it.
+    app.status = await api.get('/state' + (app.tab === 'status' ? '?log=1' : ''));
     // A new install: the guide opens by itself, once a page load.
     if (app.status.welcome && !app.guideShown) {
       app.guideShown = true;
@@ -1383,8 +1384,23 @@ function refreshPeers() {
     peersTimer = null;
     peersFetched = Date.now();
     if (app.tab === 'network' || app.tab === 'browser') refresh();
-    else refreshSidebar();
+    else refreshStatusSoon();
   }, Math.max(0, peersFetched + PEERS_EVERY - Date.now()));
+}
+
+// The status changing (counters, the log): a busy network changes it
+// several times a second, so it's fetched at most every STATUS_EVERY ms
+// (the latest included).
+const STATUS_EVERY = 2000;
+let statusTimer = null;
+let statusFetched = 0;
+function refreshStatusSoon() {
+  if (statusTimer) return;
+  statusTimer = setTimeout(() => {
+    statusTimer = null;
+    statusFetched = Date.now();
+    refreshSidebar();
+  }, Math.max(0, statusFetched + STATUS_EVERY - Date.now()));
 }
 
 // Just the status (counters and the log, every few seconds): the sidebar,
@@ -1682,11 +1698,15 @@ function listen() {
   // Channels section, and unread counts in the sidebar), the hub hosted
   // here ("hub").
   events.onmessage = (e) => {
+    // A page nobody sees (a background tab, the Android app in the
+    // background) fetches nothing: it catches up once it shows again (see
+    // visibilitychange below). Notifications come on their own events.
+    if (document.visibilityState === 'hidden') return;
     const parts = new Set((e.data.split(' ')[1] || 'all').split(','));
     if (parts.has('all') || (parts.has('node') && app.tab === 'node') || (parts.has('channels') && app.tab === 'channels')
       || (parts.has('hub') && app.tab === 'hub')) refresh();
     else if (parts.has('peers')) refreshPeers();
-    else refreshSidebar();
+    else refreshStatusSoon();
   };
   events.addEventListener('notify', (e) => {
     if (e.lastEventId) {
@@ -7035,7 +7055,12 @@ app.views.status = {
       i.details?.length ? el('div', { class: 'iface-details dim', text: i.details.join(' · ') }) : null,
       trafficGraph(i.history)))
       : [el('div', { class: 'empty', text: noInterfaces })]));
-    stickToBottom(this.log, () => this.log.replaceChildren(...s.log.map((line) => el('div', { text: line }))));
+    // Fetched for Status only, and drawn again only when it changed.
+    const log = s.log && JSON.stringify([s.log.length, s.log.at(-1), s.log[0]]);
+    if (log && this.log.dataset.drawn !== log) {
+      this.log.dataset.drawn = log;
+      stickToBottom(this.log, () => this.log.replaceChildren(...s.log.map((line) => el('div', { text: line }))));
+    }
     // Pick up changes made elsewhere (the TUI's editor, or by hand).
     if (settings) this.loadSettings();
   },

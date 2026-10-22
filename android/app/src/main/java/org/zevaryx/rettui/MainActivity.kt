@@ -434,6 +434,21 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
+    // Out of sight, the page does nothing: its timers stop, and it counts as
+    // hidden, so it fetches nothing until it shows again (rettui's service
+    // shows notifications meanwhile).
+    override fun onStop() {
+        web.onPause()
+        web.pauseTimers()
+        super.onStop()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        web.resumeTimers()
+        web.onResume()
+    }
+
     override fun onDestroy() {
         web.destroy()
         super.onDestroy()

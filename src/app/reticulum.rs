@@ -742,6 +742,25 @@ impl App {
     }
 }
 
+/// On a phone, before Reticulum starts: every AutoInterface leaves out
+/// mobile data interfaces (see [`rns::without_mobile_data`]), the change
+/// kept in the config's history like any other. What was done, for the
+/// log.
+pub fn leave_out_mobile_data(rns_config: Option<&str>, history: PathBuf) -> Option<String> {
+    let path = rns::config_path(rns_config);
+    let (before, existed) = rns::load(&path).ok()?;
+    let after = rns::without_mobile_data(&before)?;
+    let history = History::new(history);
+    let now = super::now();
+    // Kept in the log by the history itself when they fail.
+    let _ = history.before_saving(&path, existed.then_some(before.as_str()), now);
+    if let Err(e) = rns::save(&path, &after) {
+        return Some(e);
+    }
+    let _ = history.record(&path, &after, "AutoInterface leaves out mobile data", now);
+    Some("AutoInterface leaves out mobile data interfaces now (ignored_devices in the Reticulum config): it kept the phone's mobile radio awake".into())
+}
+
 pub fn rns_truthy(value: &str) -> bool {
     matches!(value.trim().to_ascii_lowercase().as_str(), "yes" | "true" | "on" | "1")
 }
@@ -783,6 +802,23 @@ mod tests {
         app.log.clear();
         start(&mut app, "Shared Instance[default]");
         assert_eq!(said(&app, "Interface discovery is on"), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn mobile_data_left_out_once_and_kept_in_history() {
+        let dir = std::env::temp_dir().join(format!("rettui-mobile-data-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (rns_dir, history) = (dir.join("rns"), dir.join("history"));
+        let rns_config = rns_dir.display().to_string();
+        // No config yet (a first start): rsReticulum's default is written, with them left out.
+        let said = super::leave_out_mobile_data(Some(&rns_config), history.clone()).unwrap();
+        assert!(said.contains("leaves out mobile data"), "{said}");
+        let text = std::fs::read_to_string(rns_dir.join("config")).unwrap();
+        assert!(text.contains("rmnet2") && text.contains("type = AutoInterface"), "{text}");
+        assert_eq!(super::leave_out_mobile_data(Some(&rns_config), history.clone()), None, "already");
+        let versions = crate::reticulum::history::History::new(history).list(&rns_dir.join("config"));
+        assert_eq!(versions.first().map(|v| v.what.as_str()), Some("AutoInterface leaves out mobile data"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

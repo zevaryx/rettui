@@ -40,6 +40,10 @@ pub use remote::{
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 /// Read the path table every so many stats intervals (30 s).
 const ROUTES_EVERY: u32 = 6;
+/// Known identities and stamp tickets are saved (when changed) every this
+/// many stats ticks: on a busy network new ones come several a second,
+/// and each save writes the whole file.
+const KNOWN_SAVE_EVERY: u32 = 6;
 
 /// How long an event loop applies a burst of network events before it
 /// draws or answers requests again; the rest wait for the next turn.
@@ -118,6 +122,9 @@ pub enum NetCommand {
     /// Forget the path to a destination (answered with
     /// [`NetEvent::PathForgotten`]).
     ForgetPath(Hash),
+    /// Forget the keys kept for peers the app forgot (not heard from in a
+    /// while).
+    ForgetKnown(Vec<Hash>),
     /// Probe any destination (answered with [`NetEvent::Probed`]; how
     /// finding a path goes, with [`NetEvent::PathProgress`]).
     Probe(Hash),
@@ -413,6 +420,9 @@ pub struct NetOptions {
     /// Entry points interface discovery finds to connect to (see
     /// [`discovered`]).
     pub discovered_entry_points: u32,
+    /// Lines for the log once it's running (what was done to the config
+    /// before it started).
+    pub notes: Vec<String>,
 }
 
 /// When the LXMF address is announced on its own (besides at start, when
@@ -511,6 +521,9 @@ async fn run(
     ev: mpsc::UnboundedSender<NetEvent>,
 ) -> Result<(), String> {
     let runtime = start_runtime(options.rns_config.as_deref()).await?;
+    for note in &options.notes {
+        let _ = ev.send(NetEvent::Log(note.clone()));
+    }
     // Interface discovery (finding entry points, and publishing ours) needs
     // a stamper, which rsReticulum leaves to the program: without it, the
     // discovery options in the config do nothing. It's idle unless they're
@@ -724,6 +737,7 @@ async fn run(
     let mut stats_timer = tokio::time::interval(STATS_INTERVAL);
     // The path table, every so many stats ticks (it can be long).
     let mut routes_due = 0u32;
+    let mut known_save_due = KNOWN_SAVE_EVERY;
     let mut reannounce = reannounce::Reannounce::default();
     let log = |line: String| {
         let _ = ev.send(NetEvent::Log(line));
@@ -779,7 +793,9 @@ async fn run(
                     routes_due = ROUTES_EVERY;
                 }
                 routes_due = routes_due.saturating_sub(1);
-                if known_save.as_ref().is_none_or(|save| save.is_finished()) {
+                known_save_due = known_save_due.saturating_sub(1);
+                if known_save_due == 0 && known_save.as_ref().is_none_or(|save| save.is_finished()) {
+                    known_save_due = KNOWN_SAVE_EVERY;
                     let (known, policy) = (known.clone(), policy.clone());
                     known_save = Some(tokio::spawn(async move {
                         KnownIdentities::save_in_background(&known).await;
@@ -866,6 +882,7 @@ async fn run(
                     }
                     NetCommand::SetContacts { trusted, exempt } => policy.lock().unwrap().set_contacts(trusted, exempt),
                     NetCommand::Remember { to, public_key } => known.lock().unwrap().remember(to, &public_key, None),
+                    NetCommand::ForgetKnown(peers) => known.lock().unwrap().forget(&peers),
                     NetCommand::Ping(to) => {
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
                         tokio::spawn(async move {
