@@ -907,6 +907,10 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
    a top bar, with the sections in a bar at the bottom (under the lists).
    Keep the query in step with `phone` in app.js. */
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  /* Read in the phone's own font; what's laid out in columns or copied
+     exactly (Micron pages, code, logs, addresses) stays monospace. */
+  :root { --sans: system-ui, -apple-system, Roboto, "Segoe UI", sans-serif; }
+  .chat, .chat-input input, .hub-reply, .motd, .members .member { font-family: var(--sans); font-size: 15px; }
   html, body { font-size: 15px; }
   body { flex-direction: column; height: 100dvh; }
   button { min-height: 40px; padding: 6px 14px; border-radius: 8px; }
