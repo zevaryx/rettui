@@ -199,7 +199,8 @@ impl Default for Settings {
             node_announce_interval_mins: 360,
             node_dir: None,
             node_executable_pages: false,
-            show_joins: true,
+            // A phone's screen is small: only what people say, there.
+            show_joins: !cfg!(target_os = "android"),
             chat_dates: true,
             rrc_messages_kept: 500,
             wrap_lines: false,
