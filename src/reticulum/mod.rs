@@ -56,7 +56,7 @@ pub fn save(path: &Path, text: &str) -> Result<(), String> {
     if let Ok(metadata) = std::fs::metadata(path) {
         let _ = std::fs::set_permissions(&temp, metadata.permissions());
     }
-    std::fs::rename(&temp, path).map_err(fail)
+    crate::config::replace(&temp, path).map_err(fail)
 }
 
 /// Problems found in a config: an error stops Reticulum from starting (and

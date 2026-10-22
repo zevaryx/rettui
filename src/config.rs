@@ -1446,8 +1446,26 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     // On the disk before it takes the old one's place: otherwise a power
     // cut can leave the file empty (the rename kept, the data not).
     file.sync_all()?;
-    fs::rename(&tmp, path)?;
+    drop(file);
+    replace(&tmp, path)?;
     Ok(())
+}
+
+/// Put `tmp` in `path`'s place. On Windows a file just written is often
+/// opened for a moment by something else (a virus scanner, the search
+/// indexer), and renaming it fails with "access denied" until that's
+/// done, so it's tried again for a little while.
+pub fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match fs::rename(tmp, path) {
+            Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            done => return done,
+        }
+    }
 }
 
 /// [`write_atomic`] for secrets: only the owner can read the file, from the
@@ -1463,7 +1481,8 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = options.open(&tmp)?;
     file.write_all(bytes)?;
     file.sync_all()?;
-    fs::rename(&tmp, path)?;
+    drop(file);
+    replace(&tmp, path)?;
     Ok(())
 }
 
