@@ -3,7 +3,8 @@ name: Android
 # A test build of the Android app (android/): Actions > Android > Run
 # workflow, then download the APK from the run's Artifacts. It runs on every
 # push to feature/android too, since GitHub offers Run workflow only for
-# workflows on the default branch.
+# workflows on the default branch. The release workflow builds the APK it
+# attaches with this too (a release build: not debuggable).
 #
 # Each build is signed with the key in the ANDROID_KEYSTORE secret (a
 # keystore, base64), if there is one, so a new APK installs over the last;
@@ -20,6 +21,20 @@ on:
           - arm64-v8a
           - x86_64
           - arm64-v8a x86_64
+  workflow_call:
+    inputs:
+      abis:
+        description: Phones it runs on (arm64-v8a, x86_64, or both)
+        type: string
+        default: arm64-v8a
+      version:
+        description: Version in the APK's name (the tag, for a release; else Cargo.toml's and the commit)
+        type: string
+        default: ""
+      release:
+        description: A release build (not debuggable) instead of a test build
+        type: boolean
+        default: false
   push:
     branches: [feature/android]
 
@@ -36,6 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ABIS: ${{ inputs.abis || 'arm64-v8a' }}
+      BUILD_TYPE: ${{ inputs.release && 'release' || 'debug' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -76,29 +92,48 @@ jobs:
           if [ -n "$KEYSTORE" ]; then
             echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/rettui.keystore"
             echo "RETTUI_KEYSTORE=$RUNNER_TEMP/rettui.keystore" >> "$GITHUB_ENV"
+          elif [ "$BUILD_TYPE" = release ]; then
+            echo "::warning::No ANDROID_KEYSTORE secret: the release's APK is signed with a key of this run's own, so it won't install over another build"
           fi
+
+      # Minutes since late 2023: higher for every build, test or release, so
+      # each installs over the ones before it.
+      - name: Version code
+        run: echo "RETTUI_VERSION_CODE=$(( ($(date +%s) - 1700000000) / 60 ))" >> "$GITHUB_ENV"
 
       - uses: gradle/actions/setup-gradle@v5
 
       - name: Build the APK
         working-directory: android
         env:
-          RETTUI_VERSION_CODE: ${{ github.run_number }}
           RETTUI_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           RETTUI_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           RETTUI_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew "assemble${BUILD_TYPE^}" --no-daemon
 
+      # A test build: rettui-<version>-<commit>-<abis>.apk, in an artifact
+      # of that name. A release's: rettui-<tag>-android-<abis>.apk, in an
+      # artifact named as the release workflow gathers them (rettui-*).
       - name: Name it
         id: name
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
-          name="rettui-$version-${GITHUB_SHA::7}-${ABIS// /-}"
-          mv android/app/build/outputs/apk/debug/app-debug.apk "$name.apk"
+          abis="${ABIS// /-}"
+          if [ -n "$VERSION" ]; then
+            name="rettui-$VERSION-android-$abis"
+            artifact="rettui-android-$abis"
+          else
+            version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+            name="rettui-$version-${GITHUB_SHA::7}-$abis"
+            artifact="$name"
+          fi
+          mv "android/app/build/outputs/apk/$BUILD_TYPE/app-$BUILD_TYPE.apk" "$name.apk"
           echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.name.outputs.name }}
+          name: ${{ steps.name.outputs.artifact }}
           path: ${{ steps.name.outputs.name }}.apk
           if-no-files-found: error

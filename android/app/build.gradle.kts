@@ -3,7 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// The app's version is rettui's, from Cargo.toml; CI numbers each build.
+// The app's version is rettui's, from Cargo.toml. CI numbers each build
+// (RETTUI_VERSION_CODE) by the minutes since late 2023, so every build,
+// test or release, installs over any earlier one.
 val rettuiVersion = Regex("""(?m)^version = "([^"]+)"""")
     .find(rootDir.resolve("../Cargo.toml").readText())?.groupValues?.get(1) ?: "0.0.0"
 
@@ -37,6 +39,13 @@ android {
     buildTypes {
         debug {
             signingConfigs.findByName("shared")?.let { signingConfig = it }
+        }
+        // Releases: not debuggable (adb can't read the app's files, the
+        // identity among them), signed with the same key as test builds,
+        // so either installs over the other.
+        release {
+            signingConfig = signingConfigs.findByName("shared") ?: signingConfigs.getByName("debug")
+            isMinifyEnabled = false
         }
     }
 

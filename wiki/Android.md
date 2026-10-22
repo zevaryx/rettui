@@ -1,9 +1,16 @@
 An Android app is being built: rettui itself, with its whole Reticulum
 stack, running on the phone, and its [web UI](Web-UI) as the app's screen.
-It's an early test version. There's no release of it yet, only test builds
-from GitHub Actions.
+It's an early test version.
 
-## Getting a test build
+## Getting it
+
+From a [release](https://github.com/zevaryx/rettui/releases) (from v1.10.0
+on): download `rettui-<version>-android-arm64-v8a.apk`, copy it to the
+phone and open it. Android asks once to allow installing apps from the app
+you opened it with (Files, a browser). It installs over a test build, and a
+later release installs over it, keeping everything.
+
+### Test builds
 
 1. On GitHub, go to *Actions > Android > Run workflow*. Pick the phones it's
    for (`arm64-v8a` covers almost every phone; `x86_64` is for the

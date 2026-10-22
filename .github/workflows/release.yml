@@ -1,9 +1,9 @@
 name: Release
 
 # Pushing a version tag (v1.2.0, or v1.3.0-rc.1 for a prerelease) builds
-# every platform, publishes the Docker image to GitHub's container registry
-# and makes a GitHub release with the archives and Debian packages
-# attached (and, for a release, a Homebrew formula and the AUR's PKGBUILD),
+# every platform and the Android app, publishes the Docker image to GitHub's
+# container registry and makes a GitHub release with the archives, Debian
+# packages and APK attached (and, for a release, a Homebrew formula and the AUR's PKGBUILD),
 # and the tag's section of CHANGELOG.md as its notes.
 on:
   push:
@@ -35,6 +35,16 @@ jobs:
     with:
       version: ${{ github.ref_name }}
 
+  # The Android app (arm64-v8a: almost every phone), signed with the
+  # ANDROID_KEYSTORE secret's key, as the test builds are.
+  android:
+    needs: check
+    uses: ./.github/workflows/android.yml
+    secrets: inherit
+    with:
+      version: ${{ github.ref_name }}
+      release: true
+
   docker:
     needs: build
     permissions:
@@ -50,7 +60,7 @@ jobs:
 
   release:
     name: GitHub release
-    needs: [build, docker]
+    needs: [build, android, docker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
