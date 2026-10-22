@@ -125,9 +125,56 @@ const api = {
 };
 
 function toast(text, error = false) {
-  const node = el('div', { class: 'toast' + (error ? ' error' : ''), text });
+  const node = el('div', { class: 'toast' + (error ? ' error' : ''), text, title: 'Tap to dismiss', role: 'status' });
   $('#toasts').append(node);
   setTimeout(() => node.remove(), error ? 6000 : 3000);
+  dismissable(node);
+}
+
+// A notice goes when tapped, or swiped sideways or up (it follows the
+// finger, and springs back from a short swipe).
+function dismissable(node) {
+  let start = null;
+  const gone = (dx, dy) => {
+    node.style.transition = 'transform .15s ease-out, opacity .15s ease-out';
+    node.style.transform = `translate(${dx}px, ${dy}px)`;
+    node.style.opacity = '0';
+    setTimeout(() => node.remove(), 150);
+  };
+  node.addEventListener('pointerdown', (e) => {
+    start = { x: e.clientX, y: e.clientY };
+    node.setPointerCapture?.(e.pointerId);
+    node.style.transition = 'none';
+  });
+  node.addEventListener('pointermove', (e) => {
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = Math.min(0, e.clientY - start.y);
+    node.style.transform = `translate(${dx}px, ${dy}px)`;
+    node.style.opacity = String(Math.max(0.2, 1 - Math.max(Math.abs(dx), -dy) / 200));
+  });
+  const end = (e) => {
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    start = null;
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) gone(0, 0);
+    else if (Math.abs(dx) > 60) gone(Math.sign(dx) * node.offsetWidth, 0);
+    else if (dy < -30) gone(0, -node.offsetHeight);
+    else {
+      node.style.transition = 'transform .15s ease-out, opacity .15s ease-out';
+      node.style.transform = '';
+      node.style.opacity = '';
+    }
+  };
+  node.addEventListener('pointerup', end);
+  node.addEventListener('pointercancel', (e) => end({ clientX: start?.x ?? e.clientX, clientY: start?.y ?? e.clientY }));
+}
+
+// On a phone, a list's main action as a round button at the bottom right
+// (its header button is hidden there).
+function fab(label, onclick) {
+  return el('button', { class: 'fab phone-only', text: '+', title: label, 'aria-label': label, onclick });
 }
 
 // Run an action, reporting failures instead of throwing.
@@ -3348,11 +3395,12 @@ app.views.messages = {
         // On a phone the top bar names the section already.
         el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Conversations' }),
           el('button', { class: 'more', text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
-          el('button', { text: '+ New', onclick: () => this.newConversation() }),
+          el('button', { class: 'phone-hidden', text: '+ New', onclick: () => this.newConversation() }),
           el('button', { class: 'more', text: '🗺', 'data-label': '🗺 Map of shared locations', title: 'Map of the locations shared with you ( M )', onclick: () => mapDialog({ key: this.selected }) }),
           moreButton(), this.readAll, this.search),
         this.list),
-      el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose));
+      el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose),
+      fab('New conversation', () => this.newConversation()));
     this.renderChips();
     this.lastKey = null;
     this.shown(options);
@@ -4194,10 +4242,11 @@ app.views.games = {
     root.append(
       el('section', { class: 'panel side' },
         el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Games' }),
-          el('button', { text: '+ New game', title: 'Challenge someone  ( n )', onclick: () => newGameDialog() }),
+          el('button', { class: 'phone-hidden', text: '+ New game', title: 'Challenge someone  ( n )', onclick: () => newGameDialog() }),
           this.filters),
         this.list),
-      el('section', { class: 'panel grow pane-main' }, this.header, this.body));
+      el('section', { class: 'panel grow pane-main' }, this.header, this.body),
+      fab('New game', () => newGameDialog()));
     this.board = null;
   },
 
@@ -4344,10 +4393,11 @@ app.views.channels = {
     root.append(
       el('section', { class: 'panel side' },
         el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Channels' }),
-          el('button', { text: '+ Add hub', onclick: () => this.addHub() }), this.search),
+          el('button', { class: 'phone-hidden', text: '+ Add hub', onclick: () => this.addHub() }), this.search),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.body, this.inputBar),
-      this.membersPanel);
+      this.membersPanel,
+      fab('Add a hub', () => this.addHub()));
     this.lastView = null;
   },
 

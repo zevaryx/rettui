@@ -842,7 +842,7 @@ a.chat-link:hover { filter: brightness(1.25); }
 
 /* ---- toasts ------------------------------------------------------------- */
 
-#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; pointer-events: none; }
 /* The live connection is down: the page may be out of date. */
 #connection {
   position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 50;
@@ -853,6 +853,8 @@ a.chat-link:hover { filter: brightness(1.25); }
 #connection button { padding: 2px 10px; }
 .toast { background: var(--raised); border: 1px solid var(--border); border-left: 4px solid var(--green); border-radius: 8px; padding: 8px 14px; max-width: 420px; box-shadow: 0 4px 16px #0008; }
 .toast.error { border-left-color: var(--red); }
+/* Only the notices themselves catch taps (a tap or swipe dismisses one). */
+.toast { pointer-events: auto; cursor: pointer; touch-action: none; user-select: none; }
 
 @media (max-width: 900px) {
   #sidebar { width: 58px; }
@@ -967,6 +969,18 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   }
   /* Deeper than a list (a chat, a page): the screen is the pane's. */
   body.deeper #bottombar { display: none; }
+  /* A list's main action, at the bottom right above the bottom bar. */
+  .view:has(> .fab) { position: relative; }
+  .fab {
+    display: flex; position: absolute; right: 16px; bottom: 16px; z-index: 5;
+    width: 56px; height: 56px; min-height: 0; padding: 0; border-radius: 16px; border: 0;
+    align-items: center; justify-content: center; font-size: 28px; font-weight: 400; line-height: 1;
+    background: var(--accent); color: var(--on-accent); box-shadow: 0 4px 14px #0008;
+  }
+  .fab:active { filter: brightness(.9); }
+  body.deeper .fab { display: none; }
+  /* Room under the list's last row to scroll it clear of the button. */
+  body:not(.deeper) .view:has(> .fab) .panel.side .scroll { padding-bottom: 84px; }
   .bottom-tab {
     position: relative; flex: 1 1 0; min-width: 0; min-height: 58px; padding: 6px 2px 4px;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
@@ -981,7 +995,7 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   /* The section fills the screen under the bar. */
   #main { flex: 1; min-height: 0; flex-direction: column; padding: 0; gap: 0; }
   .view { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
-  .view > * { flex: 1 1 auto; min-height: 0; width: auto !important; }
+  .view > :not(.fab) { flex: 1 1 auto; min-height: 0; width: auto !important; }
   .column { gap: 0; }
   .side, .members { width: auto; }
   .resizer { display: none; }
