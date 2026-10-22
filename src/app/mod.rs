@@ -50,7 +50,7 @@ mod updates;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::{Position, Rect};
 use ratatui::widgets::ListState;
@@ -95,6 +95,10 @@ pub(crate) fn test_app_with_net(
 pub use network::{NetFilter, NetSearch, match_mask};
 
 const LOG_LINES: usize = 500;
+/// How often peers are saved when all that changed is when they were heard.
+const PEERS_SEEN_EVERY: Duration = Duration::from_secs(5 * 60);
+/// How often peers not heard from in a while are forgotten.
+const PRUNE_PEERS_EVERY: Duration = Duration::from_secs(6 * 3600);
 
 /// Scrolled as far back as it goes (Home): drawing stops at the top. Far
 /// from `usize::MAX`, since drawing adds the view's height to it.
@@ -454,6 +458,12 @@ pub struct App {
     pub(crate) store_dirty: bool,
     /// The peers heard changed (they're saved apart from the store).
     pub(crate) peers_dirty: bool,
+    /// Only when peers were last heard changed: saved every
+    /// [`PEERS_SEEN_EVERY`], as a busy network announces several a second.
+    peers_seen_dirty: bool,
+    peers_saved: Instant,
+    /// When peers not heard from in a while were last forgotten.
+    peers_pruned: Instant,
     net: UnboundedSender<NetCommand>,
     /// This client's identity hash (RRC sender id).
     pub identity_hash: Hash,
@@ -676,6 +686,10 @@ impl App {
             paths,
             store_dirty: store.rewrite_store,
             peers_dirty: store.rewrite_peers,
+            peers_seen_dirty: false,
+            peers_saved: Instant::now(),
+            // The first prune a minute after starting.
+            peers_pruned: Instant::now().checked_sub(PRUNE_PEERS_EVERY - Duration::from_secs(60)).unwrap_or_else(Instant::now),
             store,
             net,
             identity_hash,
@@ -828,7 +842,9 @@ impl App {
         }
         // Peers first: a store of an earlier version still holds them until
         // it's written again.
-        if self.peers_dirty {
+        if self.peers_dirty || (self.peers_seen_dirty && self.peers_saved.elapsed() >= PEERS_SEEN_EVERY) {
+            self.peers_seen_dirty = false;
+            self.peers_saved = Instant::now();
             let peers = self.store.peers.clone();
             let path = crate::store::peers_path(&self.paths.store);
             self.saver.write(path, "peers", move || crate::store::encode_peers(&peers));
@@ -848,8 +864,23 @@ impl App {
         }
     }
 
+    /// Forget peers not heard from in a while (see [`Store::prune_peers`]),
+    /// and the keys kept for them.
+    fn prune_peers(&mut self) {
+        self.peers_pruned = Instant::now();
+        let kept: Vec<String> = self.settings.propagation_node.iter().cloned().collect();
+        let gone = self.store.prune_peers(now() as i64, &kept);
+        if gone.is_empty() {
+            return;
+        }
+        self.peers_dirty = true;
+        self.log(format!("Forgot {} peer(s) not heard from in {} days", gone.len(), crate::store::PEER_DAYS));
+        self.send(NetCommand::ForgetKnown(gone.iter().filter_map(|key| crate::net::parse_hash(key)).collect()));
+    }
+
     /// Save what changed and wait until everything is written, before exiting.
     pub fn finish_saves(&mut self) {
+        self.peers_dirty |= self.peers_seen_dirty;
         self.save_if_dirty();
         self.saver.finish();
     }
@@ -1033,13 +1064,20 @@ impl App {
                     self.resend_on_announce(&key);
                 }
                 let peer = self.store.peers.entry(key).or_insert(Peer { kind, name: None, hops, last_seen: 0 });
+                // New, or more changed than when it was heard: saved with the
+                // next save (within 10 s).
+                let changed = peer.last_seen == 0 || peer.kind != kind || peer.hops != hops || (name.is_some() && peer.name != name);
                 peer.kind = kind;
                 peer.hops = hops;
                 peer.last_seen = now() as i64;
                 if name.is_some() {
                     peer.name = name;
                 }
-                self.peers_dirty = true;
+                if changed {
+                    self.peers_dirty = true;
+                } else {
+                    self.peers_seen_dirty = true;
+                }
             }
             NetEvent::Heard(heard) => self.on_heard(heard),
             NetEvent::Announced => {
@@ -1469,6 +1507,9 @@ impl App {
         self.channels_tick();
         self.watch_connection();
         self.refresh_partials();
+        if self.peers_pruned.elapsed() >= PRUNE_PEERS_EVERY {
+            self.prune_peers();
+        }
         for report in self.saver.reports() {
             match report {
                 saver::Report::Failed(e) => self.fail(e),

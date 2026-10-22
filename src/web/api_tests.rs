@@ -84,6 +84,9 @@ async fn state_settings_and_the_little_things() {
     assert_eq!(state["net"]["state"], "starting");
     assert_eq!(state["own_certificate"], false);
     assert!(state["unread"]["messages"].is_number());
+    // The log only when asked for (Status shows it).
+    assert!(state.get("log").is_none());
+    assert!(web.get("/api/state?log=1").await.json()["log"].is_array());
 
     // Settings: read, changed (all or none), and said back.
     let settings = web.get("/api/settings").await.json();
@@ -309,6 +312,7 @@ async fn games_over_the_api() {
     let game = web.get(&format!("/api/games/ttt/{session}")).await.json();
     assert_eq!(game["status"], "pending");
     assert!(game["notes"].is_array());
+    assert!(game["rules"].as_str().unwrap().contains("Three of yours in a row"), "{game}");
     // Not their move to make; nor a game that isn't.
     assert_eq!(
         web.post(&format!("/api/games/ttt/{session}"), json!({ "command": "move", "picked": "4" })).await.status,

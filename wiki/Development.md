@@ -19,7 +19,9 @@ state as the TUI.
 | `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty, Sixel, iTerm2 or half blocks), desktop notifications (`desktop`) | ratatui-image, notify-rust |
 | `web/` | Web UI: HTTP API, login, live updates and notifications, and the page's HTML/CSS/JS, service worker, font and logo (`web/assets`) | axum |
 
-`cli.rs` has the shell commands (`send`, `listen`, `sync`, `fetch`), and
+`main.rs` only calls `lib.rs`, which has the command line and starts the
+TUI or the web UI; the [Android app](Android) loads the same library and
+calls it through `android.rs` (JNI). `cli.rs` has the shell commands (`send`, `listen`, `sync`, `fetch`), and
 `store.rs` and `config.rs` hold what is saved to disk, and `app/saver.rs`
 writes the store and chat history in the background.
 
@@ -40,13 +42,26 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   - Download the archives from the run's *Artifacts*.
   - They're named after the version and commit, for example
     `rettui-v1.2.0-a4e545b-x86_64-unknown-linux-gnu.tar.gz`.
+- **Android** ([android.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/android.yml)) builds a test
+  APK of the [Android app](Android) (`android/`):
+  - Run it from *Actions > Android > Run workflow*, or push to
+    `feature/android`.
+  - Download the APK from the run's *Artifacts*.
+  - It cross-builds rettui with the NDK (`android/build-rust.sh`), then
+    runs Gradle. The `ANDROID_KEYSTORE` secret, if set, signs every build
+    with one key.
+  - Each build's version code is the minutes since late 2023, so any
+    build, test or release, installs over an earlier one.
+  - The Release workflow calls it for a release build (not debuggable,
+    so `adb` can't read the app's files), signed with the same key.
 - **Release** ([release.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/release.yml)) runs when a
   tag starting with `v` is pushed. Before tagging, add the release to
   [CHANGELOG.md](https://github.com/zevaryx/rettui/blob/main/CHANGELOG.md) under a `## v1.7.0` heading (a
   prerelease, `v1.7.0-rc.1`, may have its own, or uses the release's). It:
   1. checks the tag matches the version in `Cargo.toml`, and that
      `CHANGELOG.md` has its section;
-  2. builds every platform with the Build workflow;
+  2. builds every platform with the Build workflow, and the Android app
+     (`rettui-v1.7.0-android-arm64-v8a.apk`) with the Android workflow;
   3. pushes the Docker image to `ghcr.io`, using those Linux binaries
      (the Dockerfile's `prebuilt` stage);
   4. makes Debian packages of the Linux binaries
@@ -56,7 +71,7 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
      (`rettui.rb`, by `.github/scripts/homebrew-formula.sh`) and the
      AUR's `rettui-bin` package (`PKGBUILD` and `.SRCINFO`, by
      `.github/scripts/aur-pkgbuild.sh`) from the checksums;
-  6. creates a GitHub release with the archives, the packages,
+  6. creates a GitHub release with the archives, the packages, the APK,
      `SHA256SUMS`, `rettui.rb` and `PKGBUILD`, and the tag's section of
      `CHANGELOG.md` (printed by `.github/scripts/release-notes.sh v1.7.0`)
      as its notes, with the Docker image's name;

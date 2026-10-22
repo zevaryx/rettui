@@ -52,10 +52,11 @@ host. rettui works with each of them, as they differ (see
   list. A mention of someone else shows in the same colour as their name
   in the chat.
 - **Joins and leaves:** people joining and leaving a room show in its
-  chat. `J` (TUI), or **Show joins** in a room's header (web UI), hides or
-  shows them. It's one setting for every room ("Show joins and leaves"
-  under Status), and hiding them loses nothing: they come back when turned
-  on again.
+  chat. `J` (TUI), or **Show joins** in a room's header (web UI; behind ⋯
+  on a phone), hides or shows them. It's one setting for every room ("Show
+  joins and leaves" under Status), and hiding them loses nothing: they come
+  back when turned on again. The [Android app](Android) starts with them
+  hidden.
 - **Times and dates:** each line shows the date it was said with its time
   (as the *Dates* and *Clock* settings write them; the year too, for
   another year's). `D` (TUI), or "Dates on chat lines" under Status, shows

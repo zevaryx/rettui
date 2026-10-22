@@ -120,6 +120,13 @@ impl KnownIdentities {
         self.dirty = true;
     }
 
+    /// Forget what was kept for `destinations`.
+    pub(crate) fn forget(&mut self, destinations: &[Hash]) {
+        for destination in destinations {
+            self.dirty |= self.entries.remove(&hex::encode(destination)).is_some();
+        }
+    }
+
     fn get(&self, destination: Hash) -> Option<Remote> {
         let entry = self.entries.get(&hex::encode(destination))?;
         let identity = Identity::from_public_key(&hex::decode(&entry.key).ok()?).ok()?;
@@ -458,6 +465,17 @@ mod tests {
         let heard = Signal::of(Some(-91.4), Some(4.25), Some(87.0)).unwrap();
         assert_eq!(heard.label(), "RSSI -91 dBm, SNR 4.2 dB, link quality 87%");
         assert_eq!(Signal::of(None, Some(-3.0), None).unwrap().label(), "SNR -3.0 dB");
+    }
+
+    #[test]
+    fn forgets_only_what_it_kept() {
+        let mut known = KnownIdentities::default();
+        known.remember([1; 16], &[2; 64], None);
+        known.dirty = false;
+        known.forget(&[[9; 16]]);
+        assert!(!known.dirty, "nothing kept for it");
+        known.forget(&[[1; 16], [9; 16]]);
+        assert!(known.dirty && known.entries.is_empty());
     }
 
     #[test]

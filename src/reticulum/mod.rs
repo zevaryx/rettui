@@ -449,6 +449,56 @@ pub fn has_interface_to(text: &str, host: &str) -> bool {
     })
 }
 
+/// Phones' mobile data interfaces, by the names their modems give them
+/// (Qualcomm's `rmnet_data`, Samsung's and Google's `rmnet`, MediaTek's
+/// `ccmni`, Unisoc's `seth_lte`). AutoInterface finds no peers there, but
+/// its multicast every few seconds keeps the mobile radio from sleeping:
+/// most of the battery rettui used on a Pixel. rsReticulum leaves out only
+/// some of them.
+pub fn mobile_data_devices() -> Vec<String> {
+    [("rmnet", 10), ("rmnet_data", 12), ("ccmni", 10), ("seth_lte", 8)]
+        .iter()
+        .flat_map(|(prefix, count)| (0..*count).map(move |i| format!("{prefix}{i}")))
+        .collect()
+}
+
+/// The config with every AutoInterface that's on (and not limited to
+/// chosen `devices`) also ignoring [`mobile_data_devices`]; None when
+/// they all do already.
+pub fn without_mobile_data(text: &str) -> Option<String> {
+    let mut doc = Doc::new(text);
+    let mut changed = false;
+    for name in doc.subsections("interfaces") {
+        let path = ["interfaces", name.as_str()];
+        let kind = doc.raw_value(&path, "type").unwrap_or_default();
+        let listed = |key: &str| -> Vec<String> {
+            let value = doc.raw_value(&path, key).unwrap_or_default();
+            value.split(',').map(|i| i.trim().trim_matches(['"', '\'']).to_string()).filter(|i| !i.is_empty()).collect()
+        };
+        if kind.trim_matches(['"', '\'', ' ']) != "AutoInterface" || !interface_on(&doc, &name) || !listed("devices").is_empty() {
+            continue;
+        }
+        let mut ignored = listed("ignored_devices");
+        let missing: Vec<String> = mobile_data_devices().into_iter().filter(|d| !ignored.contains(d)).collect();
+        if missing.is_empty() {
+            continue;
+        }
+        ignored.extend(missing);
+        doc.set(&path, "ignored_devices", &[], Some(&format_list(&ignored)));
+        changed = true;
+    }
+    changed.then(|| doc.text())
+}
+
+/// Whether an AutoInterface is on.
+pub fn has_auto_interface(text: &str) -> bool {
+    let doc = Doc::new(text);
+    doc.subsections("interfaces").iter().any(|name| {
+        interface_on(&doc, name)
+            && doc.raw_value(&["interfaces", name], "type").is_some_and(|kind| kind.trim_matches(['"', '\'', ' ']) == "AutoInterface")
+    })
+}
+
 /// Whether an interface that's on is one of the user's own, other than the
 /// Auto interface (which reaches only the local network): an entry point,
 /// a radio, and so on.
@@ -642,5 +692,33 @@ mod tests {
         let sneaky = format!("{DEFAULT}    command = /bin/evil\n");
         let switched = set_options(&sneaky, &Section::Interface("Default Interface".into()), &[("type", "PipeInterface")]).unwrap();
         assert!(validate(&sneaky, &switched, true).is_err());
+    }
+
+    #[test]
+    fn auto_interfaces_leave_out_mobile_data() {
+        let changed = without_mobile_data(DEFAULT).expect("the default AutoInterface gets them");
+        let (config, check) = check(&changed);
+        assert!(check.error.is_none(), "{check:?}");
+        let views = options(config.as_ref(), &Section::Interface("Default Interface".into()));
+        let ignored = views.iter().find(|v| v.key == "ignored_devices").unwrap().value.clone().unwrap();
+        for name in ["rmnet2", "rmnet_data0", "ccmni1", "seth_lte0"] {
+            assert!(ignored.split(',').any(|i| i.trim() == name), "{name} in {ignored}");
+        }
+        assert_eq!(without_mobile_data(&changed), None, "once is enough");
+        assert!(has_auto_interface(DEFAULT) && !has_auto_interface(&DEFAULT.replace("enabled = Yes", "enabled = No")));
+
+        // The user's own are kept; one limited to chosen devices, one
+        // that's off and other interfaces are left alone.
+        let own = format!("{DEFAULT}    ignored_devices = wlan1, rmnet0\n");
+        let kept = without_mobile_data(&own).unwrap();
+        assert!(kept.contains("ignored_devices = wlan1, rmnet0, rmnet1,"), "{kept}");
+        assert_eq!(kept.matches("rmnet0").count(), 1);
+        for text in [
+            format!("{DEFAULT}    devices = wlan0\n"),
+            DEFAULT.replace("enabled = Yes", "enabled = No"),
+            "[interfaces]\n  [[Hub]]\n    type = TCPClientInterface\n    target_host = a.b\n    target_port = 4242\n".into(),
+        ] {
+            assert_eq!(without_mobile_data(&text), None, "{text}");
+        }
     }
 }

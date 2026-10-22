@@ -157,7 +157,13 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     // below, and how your last move went (and what came with theirs).
     let notes = app.game_notes(&game);
     let notes_h = if notes.is_empty() { 0 } else { notes.len() as u16 + 1 };
-    let column = centered(inner, inner.width, board_h + 4 + notes_h);
+    // How to play, along the bottom, when the pane has room for it too.
+    let rules = crate::games::game_rules(&game.app);
+    let rules_width = inner.width.saturating_sub(4).min(80);
+    let rules_h = wrapped_height(rules, rules_width) + 2;
+    let show_rules = !rules.is_empty() && inner.height > board_h + 4 + notes_h + rules_h;
+    let top = if show_rules { Rect { height: inner.height - rules_h, ..inner } } else { inner };
+    let column = centered(top, top.width, board_h + 4 + notes_h);
     let status = if game.yours { Style::default().fg(accent()).bold() } else { Style::default().bold() };
     frame.render_widget(Paragraph::new(Span::styled(game.summary.clone(), status)).centered(), Rect { height: 1, ..column });
     let board_area =
@@ -183,10 +189,36 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     let below = Rect { y: board_area.y + board_area.height + 1, height: 1, ..column };
     frame.render_widget(Paragraph::new(Span::styled(footnote(&game), Style::default().fg(dim()))).centered(), below);
     if !notes.is_empty() {
-        let area = Rect { y: below.y + 2, height: inner.bottom().saturating_sub(below.y + 2), ..column };
+        let area = Rect { y: below.y + 2, height: top.bottom().saturating_sub(below.y + 2), ..column };
         let lines: Vec<Line> = notes.into_iter().map(|note| Line::styled(note, Style::default().fg(THEIRS))).collect();
         frame.render_widget(Paragraph::new(lines).centered().wrap(Wrap { trim: true }), area);
     }
+    if show_rules {
+        let area = Rect { x: inner.x + (inner.width - rules_width) / 2, y: top.bottom() + 1, width: rules_width, height: rules_h - 1 };
+        let lines = vec![Line::styled("How to play", Style::default().fg(dim()).bold()), Line::styled(rules, Style::default().fg(dim()))];
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+    }
+}
+
+/// How many lines `text` takes wrapped at word boundaries to `width`.
+fn wrapped_height(text: &str, width: u16) -> u16 {
+    let width = usize::from(width.max(1));
+    let mut lines = 1;
+    let mut used = 0;
+    for word in text.split_whitespace() {
+        let len = word.chars().count();
+        if used > 0 && used + 1 + len > width {
+            lines += 1;
+            used = 0;
+        }
+        used = if used == 0 { len } else { used + 1 + len };
+        // A word longer than the line runs onto the next ones.
+        while used > width {
+            lines += 1;
+            used -= width;
+        }
+    }
+    lines
 }
 
 /// Starting a new game: who with (your conversations), then which game.
@@ -744,6 +776,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn rules_wrapped_by_words() {
+        assert_eq!(super::wrapped_height("one two three", 13), 1);
+        assert_eq!(super::wrapped_height("one two three", 12), 2);
+        assert_eq!(super::wrapped_height("one two six", 3), 3);
+        // A word longer than the line goes on over the next.
+        assert_eq!(super::wrapped_height("abcdefgh", 3), 3);
+        assert_eq!(super::wrapped_height("", 10), 1);
+    }
+
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -789,6 +831,8 @@ mod tests {
         let shown = draw(&mut terminal, &mut app);
         assert!(shown.contains("Four in a Row with") && shown.contains("Waiting for them to accept"), "{shown}");
         assert!(shown.contains("Four in a Row ·"), "listed: {shown}");
+        // And how it's played, below the board.
+        assert!(shown.contains("How to play") && shown.contains("dropping a piece into a column"), "{shown}");
         // The challenge went as a message, kept with the games' moves, not
         // in the conversation; being sent, it says so.
         let conversation = &app.store.conversations[&peer];

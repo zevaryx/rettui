@@ -725,8 +725,20 @@ async fn search_messages(State(state): State<WebState>, Query(query): Query<Sear
     Ok(axum::Json(state.read(move |o| views::search(&o.app, &query.q, query.within.as_deref())).await?))
 }
 
-async fn get_state(State(state): State<WebState>) -> ApiResult {
+#[derive(Deserialize)]
+struct StateQuery {
+    /// With the log (up to 500 lines): only Status shows it, and the state
+    /// is fetched every few seconds on a busy network.
+    log: Option<String>,
+}
+
+async fn get_state(State(state): State<WebState>, Query(query): Query<StateQuery>) -> ApiResult {
     let mut view = state.read(|o| views::state(&o.app)).await?;
+    if query.log.is_none()
+        && let Some(view) = view.as_object_mut()
+    {
+        view.remove("log");
+    }
     // With --https and rettui's own certificate: devices install its
     // authority from the Status page.
     view["own_certificate"] = json!(state.ca.is_some());
@@ -1214,6 +1226,7 @@ async fn game(State(state): State<WebState>, Path((app, session)): Path<(String,
                 // How your last move went, and what came with theirs.
                 value["notes"] = json!(o.app.game_notes(&game));
                 value["unsent"] = json!(o.app.game_unsent(&game));
+                value["rules"] = json!(crate::games::game_rules(&game.app));
                 value
             })
         })

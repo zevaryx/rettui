@@ -51,6 +51,18 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
+/// Save a copy of the identity in `from` to `to`, readable by its owner
+/// only, and never over another file. The identity copied.
+pub fn copy_identity(from: &Path, to: &Path) -> Result<Identity, String> {
+    if to.exists() {
+        return Err(format!("{} exists already: pick another name", to.display()));
+    }
+    let identity = read_identity(from).map_err(|_| "There's no identity to copy yet: start rettui once, and it makes one".to_string())?;
+    let key = std::fs::read(from).map_err(|e| format!("Couldn't read your identity: {e}"))?;
+    write_private(to, &key).map_err(|e| format!("Couldn't save {}: {e}", to.display()))?;
+    Ok(identity)
+}
+
 impl App {
     /// Where the identity in use is kept.
     fn identity_file(&self) -> &Path {
@@ -133,11 +145,7 @@ impl App {
     /// Save a copy of the identity in use to `to`, readable by its owner
     /// only, and never over another file.
     pub fn back_up_identity(&mut self, to: &Path) -> Result<PathBuf, String> {
-        if to.exists() {
-            return Err(format!("{} exists already: pick another name", to.display()));
-        }
-        let key = std::fs::read(self.identity_file()).map_err(|e| format!("Couldn't read your identity: {e}"))?;
-        write_private(to, &key).map_err(|e| format!("Couldn't save {}: {e}", to.display()))?;
+        copy_identity(self.identity_file(), to)?;
         self.identity_backed_up();
         Ok(to.to_path_buf())
     }

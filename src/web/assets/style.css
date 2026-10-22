@@ -293,7 +293,7 @@ kbd { font-family: var(--mono); font-size: 12px; background: var(--raised); bord
   background: var(--raised); color: var(--dim);
   font-weight: 600; font-size: 15px; line-height: 1;
 }
-.avatar.icon { font-weight: 400; font-size: 19px; }
+.avatar.icon { font-weight: 400; font-size: 19px; font-family: var(--mono); }
 /* Their face (LXMFace), for those without an icon: its own colours. */
 .avatar.face { background: none; object-fit: cover; }
 header .avatar { width: 26px; height: 26px; font-size: 13px; }
@@ -302,7 +302,7 @@ header .avatar.icon { font-size: 17px; }
 #who-name .avatar { width: 20px; height: 20px; font-size: 11px; }
 #who-name .avatar.icon { font-size: 13px; }
 .icon-picks { display: flex; flex-wrap: wrap; gap: 4px; max-height: 168px; overflow: auto; margin-top: 6px; }
-.icon-pick { width: 36px; height: 36px; padding: 0; font-size: 20px; line-height: 1; }
+.icon-pick { width: 36px; height: 36px; padding: 0; font-size: 20px; line-height: 1; font-family: var(--mono); }
 .icon-pick.selected { border-color: var(--accent); }
 .list-item .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-item .sub { color: var(--dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -460,6 +460,9 @@ header .avatar.icon { font-size: 17px; }
 .game > .game-summary.yours { color: var(--accent); }
 .game-note { font-size: 12.5px; text-align: center; max-width: 100%; }
 .game-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.game-rules { max-width: 60ch; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border); color: var(--dim); font-size: 13px; }
+.game-rules h4 { margin: 0 0 4px; font-size: 13px; color: var(--text); }
+.game-rules p { margin: 0; line-height: 1.5; }
 .board button { padding: 0; border-radius: 0; min-height: 0; }
 .board button:disabled { opacity: 1; cursor: default; }
 .board .mine { color: var(--accent); }
@@ -839,7 +842,7 @@ a.chat-link:hover { filter: brightness(1.25); }
 
 /* ---- toasts ------------------------------------------------------------- */
 
-#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; pointer-events: none; }
 /* The live connection is down: the page may be out of date. */
 #connection {
   position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 50;
@@ -850,6 +853,8 @@ a.chat-link:hover { filter: brightness(1.25); }
 #connection button { padding: 2px 10px; }
 .toast { background: var(--raised); border: 1px solid var(--border); border-left: 4px solid var(--green); border-radius: 8px; padding: 8px 14px; max-width: 420px; box-shadow: 0 4px 16px #0008; }
 .toast.error { border-left-color: var(--red); }
+/* Only the notices themselves catch taps (a tap or swipe dismisses one). */
+.toast { pointer-events: auto; cursor: pointer; touch-action: none; user-select: none; }
 
 @media (max-width: 900px) {
   #sidebar { width: 58px; }
@@ -886,6 +891,15 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 /* A labelled input in a dialog (a contact's name and notes). */
 .dialog label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--dim); }
 .dialog label.field input, .dialog label.field textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+/* A question (in place of the browser's confirm and prompt boxes). */
+.dialog.ask-dialog { width: min(420px, 100%); }
+.dialog .ask { display: flex; flex-direction: column; gap: 10px; }
+.dialog .ask p { font-size: 14px; overflow-wrap: anywhere; }
+.dialog .ask p.dim { font-size: 13px; }
+.dialog .ask .status.error { color: var(--red); font-size: 13px; }
+.dialog .ask button.danger { background: var(--red); border-color: var(--red); color: var(--on-accent); font-weight: 600; }
+.dialog .ask .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.dialog .ask .choices button { font-size: 16px; padding: 10px; }
 
 /* Printing a paper message prints its code alone. */
 @media print {
@@ -900,13 +914,19 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 /* ---- phones ------------------------------------------------------------- */
 /* Not on larger screens: the phone's top bar, and things only a phone
    needs (the toolbar's second row lays out as part of the first). */
-#appbar, #scrim, .phone-only { display: none; }
+#appbar, #bottombar, .phone-only, .phone-sheet { display: none; }
 .more-tools { display: contents; }
 
 /* A phone (or a small window) shows one pane at a time, full width, under
-   a top bar; the sidebar is a drawer. Keep the query in step with `phone`
-   in app.js. */
+   a top bar, with the sections in a bar at the bottom (under the lists).
+   Keep the query in step with `phone` in app.js. */
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  /* Read in the phone's own font; what's laid out in columns or copied
+     exactly (Micron pages, code, logs, addresses) stays monospace. Nerd
+     Font still draws what the phone's has no glyph for: people's icons
+     (Material Design Icons, in the private use area). */
+  :root { --sans: system-ui, -apple-system, Roboto, "Segoe UI", "FiraCode Nerd Font", sans-serif; }
+  .chat, .chat-input input, .hub-reply, .motd, .members .member { font-family: var(--sans); font-size: 15px; }
   html, body { font-size: 15px; }
   body { flex-direction: column; height: 100dvh; }
   button { min-height: 40px; padding: 6px 14px; border-radius: 8px; }
@@ -916,6 +936,12 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   }
   select { min-height: 42px; }
   .phone-only { display: inline-block; }
+  .phone-hidden { display: none !important; }
+  /* Without its title (the top bar has it), a list's header keeps its
+     buttons to the right. */
+  .panel > header:has(> .phone-hidden) { justify-content: flex-end; }
+  /* A list's search shares its row with the list's buttons. */
+  .panel > header:not(:has(.subtabs)) .pane-search { flex: 1 1 0; order: -1; }
   /* Less used header buttons wait behind ⋯ (see moreButton in app.js). */
   .panel > header button.more { display: none; }
   .more-button { font-size: 20px; line-height: 1; padding: 4px 12px; }
@@ -923,12 +949,15 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   /* Long names and addresses in a header end in … rather than run under
      its buttons. */
   .panel > header .title, .panel > header .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .view[data-view=network] .panel > header select { flex: 1 1 0; min-width: 0; }
+  /* Search on a line of its own, then what's shown and in what order. */
+  .network-tools { flex-wrap: wrap; }
+  .network-tools > input { flex: 1 1 100%; }
+  .network-tools > select { flex: 1 1 0; min-width: 0; }
   .toggle { font-size: 14px; min-height: 40px; }
   .toggle input { width: 20px; height: 20px; }
   .bell .bell-label { display: none; }
 
-  /* The top bar: menu (or back), and the section's name. */
+  /* The top bar: back (deeper than a list), and the section's name. */
   #appbar {
     display: flex; align-items: center; gap: 2px; flex: none;
     min-height: calc(54px + env(safe-area-inset-top));
@@ -940,41 +969,44 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
     background: none; border: 0; font-size: 22px; line-height: 1;
   }
   #appbar-title { flex: 1; min-width: 0; font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Unread elsewhere: a dot on the menu button. */
-  #nav-menu.unread::after, #nav-menu.mention::after {
-    content: ''; position: absolute; top: 9px; right: 8px; width: 10px; height: 10px;
-    border-radius: 50%; background: var(--yellow); border: 2px solid var(--bg);
-  }
-  #nav-menu.mention::after { background: var(--red); }
+  #nav-back.hidden + #appbar-title { padding-left: 12px; }
 
-  /* The sidebar as a drawer. */
-  /* Hidden (to taps and screen readers too) once it has slid away. */
-  #sidebar {
-    position: fixed; z-index: 40; top: 0; bottom: 0; left: 0;
-    width: min(300px, 86vw); overflow-y: auto;
-    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
-    transform: translateX(-102%); visibility: hidden;
-    transition: transform .22s ease, visibility 0s linear .22s;
+  /* The sections: in the bottom bar, not the sidebar. */
+  #sidebar { display: none; }
+  #bottombar {
+    display: flex; flex: none;
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: var(--bg); border-top: 1px solid var(--border);
   }
-  .drawer-open #sidebar { transform: none; visibility: visible; box-shadow: 8px 0 32px #000c; transition: transform .22s ease; }
-  #scrim {
-    display: block; position: fixed; inset: 0; z-index: 35; background: #000a;
-    opacity: 0; pointer-events: none; transition: opacity .22s ease;
+  /* Deeper than a list (a chat, a page): the screen is the pane's. */
+  body.deeper #bottombar { display: none; }
+  /* A list's main action, at the bottom right above the bottom bar. */
+  .view:has(> .fab) { position: relative; }
+  .fab {
+    display: flex; position: absolute; right: 16px; bottom: 16px; z-index: 5;
+    width: 56px; height: 56px; min-height: 0; padding: 0; border-radius: 16px; border: 0;
+    align-items: center; justify-content: center; font-size: 28px; font-weight: 400; line-height: 1;
+    background: var(--accent); color: var(--on-accent); box-shadow: 0 4px 14px #0008;
   }
-  .drawer-open #scrim { opacity: 1; pointer-events: auto; }
-  /* Everything the icon rail hides. */
-  .brand { display: flex; padding: 18px 20px 14px; }
-  .brand .wordmark { height: 24px; }
-  .mark { display: none; }
-  .tab { padding: 14px 20px; gap: 16px; font-size: 16px; }
-  .tab .label { display: inline; }
-  .tab .icon { width: 24px; font-size: 18px; }
-  .who { display: block; padding: 16px 20px; font-size: 14px; }
+  .fab:active { filter: brightness(.9); }
+  body.deeper .fab { display: none; }
+  /* Room under the list's last row to scroll it clear of the button. */
+  body:not(.deeper) .view:has(> .fab) .panel.side .scroll { padding-bottom: 84px; }
+  .bottom-tab {
+    position: relative; flex: 1 1 0; min-width: 0; min-height: 58px; padding: 6px 2px 4px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    background: none; border: 0; border-radius: 0; color: var(--dim);
+  }
+  .bottom-tab .icon { font-size: 20px; line-height: 1; }
+  .bottom-tab .label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .bottom-tab.active { color: var(--accent); }
+  .bottom-tab.active .icon { background: var(--raised); border-radius: 14px; padding: 3px 16px; }
+  .bottom-tab .badge { position: absolute; top: 4px; left: calc(50% + 6px); margin: 0; font-size: 11px; padding: 0 6px; }
 
   /* The section fills the screen under the bar. */
   #main { flex: 1; min-height: 0; flex-direction: column; padding: 0; gap: 0; }
   .view { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
-  .view > * { flex: 1 1 auto; min-height: 0; width: auto !important; }
+  .view > :not(.fab) { flex: 1 1 auto; min-height: 0; width: auto !important; }
   .column { gap: 0; }
   .side, .members { width: auto; }
   .resizer { display: none; }
@@ -1025,20 +1057,40 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .message .meta { font-size: 12.5px; margin-bottom: 2px; }
   .message .content { font-size: 15.5px; line-height: 1.45; }
   .attachment img { max-width: 100%; }
-  .compose { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); gap: 8px; }
-  .compose textarea { min-height: 46px; }
-  .compose .row { flex-wrap: nowrap; }
-  .compose select { flex: 0 1 auto; min-width: 0; }
+  /* One line: +, what's written, then 🎤 or Send (see the compose box in
+     app.js); what's above it (replies, files, :emoji) spans the line. */
+  .compose {
+    display: grid; grid-template-columns: auto 1fr auto auto; align-items: end;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); gap: 8px;
+  }
+  .compose > :not(.row) { grid-column: 1 / -1; }
+  .compose > .row { display: contents; }
+  .compose .phone-tucked { display: none; }
+  .compose .compose-plus { order: 1; width: 44px; height: 44px; padding: 0; font-size: 24px; line-height: 1; border-radius: 50%; }
+  .compose textarea { order: 2; height: 44px; min-height: 44px; border-radius: 22px; padding: 11px 16px; }
+  .compose .mic-button, .compose .mic-cancel, .compose .send-button { order: 3; min-height: 44px; border-radius: 22px; }
+  .compose .mic-button { width: 44px; padding: 0; }
+  .compose .mic-button.on { width: auto; padding: 0 14px; }
+  /* 🎤 until there's something to send; recording, it stays to stop. */
+  .compose:not(.sendable) .send-button { display: none; }
+  .compose.sendable .mic-button:not(.on) { display: none; }
 
   /* Channels */
   .chat { font-size: 14px; padding: 10px 12px; line-height: 1.5; }
   .chat-line { padding: 1px 0; }
   .chat-line .time { font-size: 11.5px; padding-top: 2px; }
-  .chat-input { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
+  .chat-input { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); gap: 8px; align-items: center; }
+  /* As the message box: a round field, and Send; phones' keyboards have
+     emoji. */
+  .chat-input input { min-height: 44px; border-radius: 22px; padding: 0 16px; }
+  .chat-input .emoji-button { display: none; }
+  .chat-input button.primary { min-height: 44px; border-radius: 22px; }
   .chat-input input { min-width: 0; }
   .members .member { padding: 12px 16px; font-size: 15px; border-bottom: 1px solid var(--line); }
   .hub-info { grid-template-columns: 84px 1fr; gap: 6px 12px; padding: 14px 16px; }
   .hub-info > * { min-width: 0; overflow-wrap: anywhere; }
+  /* A whole address on one line. */
+  .hub-info .mono { font-size: 13px; }
   .motd, .public-rooms { padding-left: 16px; padding-right: 16px; }
   .public-room { padding: 6px 0; }
   .mention-list { left: 10px; right: 10px; max-width: none; max-height: 45vh; }
@@ -1075,13 +1127,10 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .show-more { padding: 14px 16px; }
 
   /* Browser */
-  .toolbar { padding: 8px 10px; gap: 8px; flex-wrap: wrap; }
+  /* One row: back, the address, Go and ⋯ (the page's buttons, in a sheet). */
+  .toolbar { padding: 8px 10px; gap: 8px; flex-wrap: nowrap; }
   .toolbar input { flex: 1 1 0; min-width: 0; }
-  .more-tools {
-    display: flex; gap: 8px; flex: 1 1 100%; overflow-x: auto;
-    scrollbar-width: none; margin: 0 -10px; padding: 0 10px;
-  }
-  .more-tools button { flex: none; }
+  .toolbar .more-tools { display: none; }
   .page-status { padding: 6px 14px; flex-wrap: wrap; row-gap: 2px; }
   .page { padding: 12px 14px; }
   .micron { font-size: 14px; }
@@ -1105,6 +1154,12 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .view[data-view=status] .panel { max-height: none !important; border-bottom: 1px solid var(--border); }
   .view[data-view=status] .scroll { overflow: visible; }
   .view[data-view=status] .log { max-height: 60vh; overflow-y: auto; }
+  /* Save and the groups stay in reach while scrolling through settings;
+     the groups make one row that scrolls sideways. */
+  .settings-panel > header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--border); }
+  .settings-panel > .settings-groups { position: sticky; top: 56px; z-index: 2; background: var(--panel);
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 8px 16px; }
+  .settings-panel > .settings-groups button { flex: none; }
   .info { grid-template-columns: 1fr; gap: 0; padding: 6px 16px 14px; }
   .info .label { font-size: 12.5px; margin-top: 10px; }
   .info .row { flex-wrap: wrap; }
@@ -1118,10 +1173,19 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .setting .label { padding-top: 0; color: var(--text); font-weight: 600; }
   .setting input[type=checkbox] { width: 22px; height: 22px; margin: 2px 0; }
   .setting .help { font-size: 13.5px; }
+  .setting select { width: 100%; max-width: none; min-height: 44px; }
+  .setting input[type=color] { width: 64px; height: 40px; }
   .settings-footer { padding: 10px 16px 18px; overflow-wrap: anywhere; }
   .rns-file { padding: 0 16px 14px; }
   .rns-add { padding: 10px 16px; }
   .rns-iface { padding-left: 30px; }
+
+  /* Dialogs: clear of the system bars, long paths and addresses wrap. */
+  .overlay { padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
+  .dialog { overflow-wrap: anywhere; }
+  .dialog > header { font-size: 16px; padding-top: 14px; }
+  .dialog p { font-size: 14px; }
+  .dialog .actions button { min-height: 40px; }
 
   /* Notices go at the top, clear of the writing box. */
   #toasts { left: 10px; right: 10px; bottom: auto; top: calc(62px + env(safe-area-inset-top)); z-index: 45; }

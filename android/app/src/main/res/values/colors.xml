@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The brand icon's background. -->
+    <color name="ic_launcher_background">#23272E</color>
+    <!-- rettui's cyan, the prompt's: notifications are tinted with it. -->
+    <color name="accent">#4FD6E0</color>
+</resources>

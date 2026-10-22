@@ -1,6 +1,6 @@
 [package]
 name = "rettui"
-version = "1.9.0"
+version = "1.10.0"
 edition = "2024"
 description = "Terminal Reticulum client: LXMF messaging and NomadNet browsing"
 # rsReticulum, rsLXMF and rsNomad are AGPL-3.0-or-later.
@@ -42,8 +42,6 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 rmpv = "1"
 # Terminal graphics (Kitty) with capability detection.
 ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
-# System clipboard (X11 and Wayland); OSC 52 covers SSH sessions.
-arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 base64 = "0.22"
 # RRC (Reticulum Relay Chat) wire format.
 ciborium = "0.2"
@@ -111,7 +109,24 @@ notify-rust = { version = "4.18.2", default-features = false }
 # version the rest already uses).
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
 
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# System clipboard (X11 and Wayland); OSC 52 covers SSH sessions. Android
+# has none a program outside an app can reach.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# The Android app loads rettui as a library and calls it through JNI; the
+# Java VM is handed on to rsReticulum (AutoInterface, USB RNodes). The same
+# versions rsReticulum uses.
+jni = "0.19"
+rns-interface = { path = "deps/rsReticulum/crates/rns-interface" }
+# RNodes over Bluetooth: rsReticulum's through btleplug, which wants its
+# own JNI start (with the newer jni it uses) and Java classes in the app.
+rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime", features = ["ble"] }
+btleplug = "=0.13.4"
+jni22 = { package = "jni", version = "0.22" }
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))'.dependencies]
 # Desktop notifications over D-Bus, on the connection that hears their
 # clicks, on tokio (rettui's runtime).
 zbus = { version = "6", default-features = false, features = ["tokio", "service"] }

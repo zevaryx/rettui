@@ -70,6 +70,10 @@ keys below play; in the list, `f` filters it, `c` opens the conversation and
 | Forget a game | `x` (asks first) | **Forget** |
 | Back to the list | `Esc` | ← (on a phone) |
 
+Under each board, **How to play** says in a few sentences how that game is
+played and won (in the terminal, when the window is tall enough for it). The
+rules in full are below.
+
 Black sees the chess board turned round, and in the terminal the cursor
 starts on your e-pawn. Moves that aren't allowed (out of turn, a full column,
 an illegal chess move, a taken point, an empty pit) are refused before

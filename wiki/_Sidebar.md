@@ -6,6 +6,7 @@
 - [Using the TUI](Using-the-TUI)
 - [Web UI](Web-UI)
 - [Docker](Docker)
+- [Android](Android)
 
 **What it does**
 - [Messaging](Messaging)

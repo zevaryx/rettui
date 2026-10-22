@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The USB serial chips RNodes use (rsReticulum's list), by vendor ID. -->
+<resources>
+    <usb-device vendor-id="1027" />  <!-- 0x0403 FTDI -->
+    <usb-device vendor-id="4292" />  <!-- 0x10C4 Silicon Labs CP210x -->
+    <usb-device vendor-id="6790" />  <!-- 0x1A86 WCH CH340/CH341 -->
+    <usb-device vendor-id="1317" />  <!-- 0x0525 CDC-ACM -->
+    <usb-device vendor-id="11914" /> <!-- 0x2E8A Raspberry Pi RP2040 -->
+    <usb-device vendor-id="12346" /> <!-- 0x303A Espressif ESP32-S3 -->
+    <usb-device vendor-id="9114" />  <!-- 0x239A Adafruit -->
+    <usb-device vendor-id="6421" />  <!-- 0x1915 Nordic nRF52840 -->
+</resources>

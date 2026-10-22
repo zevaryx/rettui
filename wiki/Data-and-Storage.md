@@ -38,14 +38,18 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `peers.json.gz`: the LXMF peers, NomadNet nodes and propagation nodes
   heard. Announces arrive several a second on a busy network, so they are
   saved apart from the store, which is then only written again when a
-  conversation changes. Earlier versions kept them in the store; the first
-  launch after upgrading moves them.
+  conversation changes. A new peer, or a changed name, is saved within 10
+  seconds; only hearing one again, every 5 minutes. A peer not heard from in
+  30 days is forgotten (with its key in `known_identities.json`), unless
+  you have a conversation with it, it's a contact, a saved page or hub is
+  on it, or it's your propagation node. Earlier versions kept them in the
+  store; the first launch after upgrading moves them.
 - `archive/`: older messages (see *Message history* below), one file per
   month, such as `archive/2026-09.jsonl.gz`: one message per line, with the
   conversation it's from. Read it with `zcat archive/*.jsonl.gz | jq`.
 - `known_identities.json`: public keys from LXMF and propagation-node
-  announces, so you can reach peers that are offline now. Saved every few
-  seconds and when rettui exits.
+  announces, so you can reach peers that are offline now. Saved every 30
+  seconds (when it changed) and when rettui exits.
 - `tickets.json`: [stamp tickets](Messaging#blocking-and-spam) you gave
   trusted contacts and ones they gave you. Only you can read it.
 - `games.json`: your [games](Games) with contacts, as LRGP keeps them (the
@@ -134,7 +138,9 @@ page cache, map pictures and the Reticulum config's history. A
 [backup](#backups) is of the identity in use.
 
 The web UI can't bring an identity in from a file, copy one or delete one:
-its login would otherwise give the keys away.
+its login would otherwise give the keys away. `rettui identity export FILE`
+and `rettui identity import FILE --name NAME` do the first two from the
+command line, and the [Android app](Android) has a screen of its own for them.
 
 ## Backups
 
@@ -154,7 +160,8 @@ Attachments (`downloads/`, `uploads/`) are left out unless asked for.
   it's done.
 - **Web UI:** **Download a backup** (Status, *Backup*). It never has the
   identity (the login link would otherwise give away the key): back that
-  up in the terminal UI, or with `rettui backup`.
+  up in the terminal UI, or with `rettui backup`. In the
+  [Android app](Android), *Identity and backups* saves one with the identity.
 - **Command line:** `rettui backup [FILE]` (by default
   `rettui-backup-<date>.tar.gz` here); `--with-files` adds attachments,
   `--without-identity` leaves the identity out. It reads what's saved, so

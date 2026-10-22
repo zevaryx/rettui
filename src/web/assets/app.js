@@ -59,6 +59,15 @@ async function upload(path, file) {
 
 // A hub room's name as shown: #lobby (a room some client named "#lobby"
 // isn't "##lobby").
+// In rettui's Android app, whose own screens (not this page) handle the
+// identity and backups, and RNodes over USB and Bluetooth: the page only
+// links to them.
+const IN_ANDROID_APP = /\brettui-android\//.test(navigator.userAgent);
+const androidBackupsButton = (text) => el('button', { text, title: "The app's own screen: save a copy of the identity, keep another from a file, back up and restore",
+  onclick: () => { location.href = 'rettui-app:backups'; } });
+const androidRNodesButton = () => el('button', { text: '📻 RNode', title: 'Let rettui use an RNode over USB or Bluetooth, and add it as an interface (the app\'s own screen)',
+  onclick: () => { location.href = 'rettui-app:rnodes'; } });
+
 const roomLabel = (name) => (name.startsWith('#') ? name : '#' + name);
 
 // The folder something on the node is in ('' at the top).
@@ -116,9 +125,56 @@ const api = {
 };
 
 function toast(text, error = false) {
-  const node = el('div', { class: 'toast' + (error ? ' error' : ''), text });
+  const node = el('div', { class: 'toast' + (error ? ' error' : ''), text, title: 'Tap to dismiss', role: 'status' });
   $('#toasts').append(node);
   setTimeout(() => node.remove(), error ? 6000 : 3000);
+  dismissable(node);
+}
+
+// A notice goes when tapped, or swiped sideways or up (it follows the
+// finger, and springs back from a short swipe).
+function dismissable(node) {
+  let start = null;
+  const gone = (dx, dy) => {
+    node.style.transition = 'transform .15s ease-out, opacity .15s ease-out';
+    node.style.transform = `translate(${dx}px, ${dy}px)`;
+    node.style.opacity = '0';
+    setTimeout(() => node.remove(), 150);
+  };
+  node.addEventListener('pointerdown', (e) => {
+    start = { x: e.clientX, y: e.clientY };
+    node.setPointerCapture?.(e.pointerId);
+    node.style.transition = 'none';
+  });
+  node.addEventListener('pointermove', (e) => {
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = Math.min(0, e.clientY - start.y);
+    node.style.transform = `translate(${dx}px, ${dy}px)`;
+    node.style.opacity = String(Math.max(0.2, 1 - Math.max(Math.abs(dx), -dy) / 200));
+  });
+  const end = (e) => {
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    start = null;
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) gone(0, 0);
+    else if (Math.abs(dx) > 60) gone(Math.sign(dx) * node.offsetWidth, 0);
+    else if (dy < -30) gone(0, -node.offsetHeight);
+    else {
+      node.style.transition = 'transform .15s ease-out, opacity .15s ease-out';
+      node.style.transform = '';
+      node.style.opacity = '';
+    }
+  };
+  node.addEventListener('pointerup', end);
+  node.addEventListener('pointercancel', (e) => end({ clientX: start?.x ?? e.clientX, clientY: start?.y ?? e.clientY }));
+}
+
+// On a phone, a list's main action as a round button at the bottom right
+// (its header button is hidden there).
+function fab(label, onclick) {
+  return el('button', { class: 'fab phone-only', text: '+', title: label, 'aria-label': label, onclick });
 }
 
 // Run an action, reporting failures instead of throwing.
@@ -589,6 +645,10 @@ const TABS = [
   { id: 'hub', icon: '⊛', title: 'Hub' },
 ];
 
+// On a phone, the bar at the bottom of the screen has these; the rest are
+// under More.
+const BOTTOM_TABS = ['messages', 'channels', 'games', 'browser'];
+
 const app = {
   tab: null,
   status: null,
@@ -616,11 +676,11 @@ function renderSidebar() {
         // On a phone, the section on screen goes back to its list.
         if (tab.id === app.tab && phone.matches) setPane(app.views[tab.id], 'list', { record: false });
         switchTab(tab.id);
-        setDrawer(false);
       },
     }, el('span', { class: 'icon', text: tab.icon }), el('span', { class: 'label', text: tab.title }), badge);
   }));
   tabs.dataset.drawn = drawn;
+  renderBottombar(unread, drawn);
   liveWatch.update();
   // The version, marked when a newer release is out (it links to that).
   const version = $('#sidebar .version');
@@ -792,8 +852,10 @@ window.addEventListener('resize', () => app.views[app.tab]?.fitSide?.());
 //
 // On a small screen a section shows one pane at a time: its list, or what
 // was picked from it, with a back button in the top bar (the phone's own
-// back button works too). The sidebar is a drawer. Larger screens show
-// everything side by side, and none of this changes them.
+// back button works too). The sections are in a bar at the bottom of the
+// screen, under the lists (not over a chat, whose box to write in is
+// there). Larger screens show everything side by side, with the sidebar,
+// and none of this changes them.
 
 // Keep in step with the phone `@media` in style.css.
 const phone = matchMedia('(max-width: 760px), (pointer: coarse) and (max-height: 500px)');
@@ -853,23 +915,48 @@ window.addEventListener('popstate', (e) => {
   setPane(view, e.state?.tab === app.tab ? e.state.pane : 'list', { record: false });
 });
 
-// The top bar: the section's name, and the menu (in a list) or back (deeper).
+// The top bar: the section's name, and back (deeper than a list). The
+// bottom bar shows only with a list.
 function renderAppbar() {
   const view = app.views[app.tab];
   const deeper = !!view?.panes && (view.pane || 'list') !== 'list';
-  $('#nav-menu').classList.toggle('hidden', deeper);
   $('#nav-back').classList.toggle('hidden', !deeper);
+  document.body.classList.toggle('deeper', deeper);
   $('#appbar-title').textContent = TABS.find((t) => t.id === app.tab)?.title || '';
-  // Unread in another section shows on the menu button.
-  const unread = app.status?.unread || {};
-  const elsewhere = (app.tab !== 'messages' && unread.messages) || (app.tab !== 'channels' && unread.channels);
-  $('#nav-menu').classList.toggle('unread', !!elsewhere);
-  $('#nav-menu').classList.toggle('mention', app.tab !== 'channels' && !!unread.mention);
 }
 
-function setDrawer(open) {
-  document.body.classList.toggle('drawer-open', open);
-  $('#nav-menu').setAttribute('aria-expanded', String(open));
+// The bottom bar (phones): the sections used most, each with its unread
+// count, and More for the rest. `drawn` says what it shows, as the sidebar's.
+function renderBottombar(unread, drawn) {
+  const bar = $('#bottombar');
+  if (bar.dataset.drawn === drawn) return;
+  bar.dataset.drawn = drawn;
+  const counts = { messages: unread.messages, games: unread.games, channels: unread.channels };
+  const item = (icon, title, active, count, mention, onclick) => el('button', {
+    class: 'bottom-tab' + (active ? ' active' : ''), 'aria-current': active ? 'page' : null, title, onclick,
+  }, el('span', { class: 'icon', text: icon }), el('span', { class: 'label', text: title }),
+  count ? el('span', { class: 'badge' + (mention ? ' mention' : ''), text: count > 99 ? '99+' : count }) : null);
+  const more = TABS.filter((t) => !BOTTOM_TABS.includes(t.id));
+  bar.replaceChildren(
+    ...BOTTOM_TABS.map((id) => {
+      const tab = TABS.find((t) => t.id === id);
+      return item(tab.icon, tab.title, app.tab === id, counts[id], id === 'channels' && unread.mention, () => {
+        // The section on screen goes back to its list.
+        if (id === app.tab) setPane(app.views[id], 'list', { record: false });
+        switchTab(id);
+      });
+    }),
+    item('⋯', 'More', more.some((t) => t.id === app.tab), 0, false, () => openSheet(whoLine(), more.map((tab) => ({
+      text: `${tab.icon}  ${tab.title}`, checked: tab.id === app.tab, action: () => switchTab(tab.id),
+    })))));
+}
+
+// Who you are and how the network is, for the top of More.
+function whoLine() {
+  const s = app.status;
+  if (!s) return 'More';
+  const online = s.net.state === 'online' ? `${s.interfaces_online}/${s.interfaces.length} interfaces` : s.net.state;
+  return `${s.display_name || 'rettui'} · ${online}`;
 }
 
 // A header's less used buttons (class "more") go behind this on a phone,
@@ -880,8 +967,9 @@ function moreButton() {
     e.stopPropagation();
     const header = e.currentTarget.closest('header');
     const buttons = [...header.querySelectorAll('button.more')];
+    // A button whose text is only an icon names itself in data-label.
     openSheet(header.querySelector('.title')?.textContent || '', buttons.map((button) => ({
-      text: button.textContent, danger: button.classList.contains('danger'), disabled: button.disabled, action: () => button.click(),
+      text: button.dataset.label || button.textContent, danger: button.classList.contains('danger'), disabled: button.disabled, action: () => button.click(),
     })));
   } });
 }
@@ -933,14 +1021,38 @@ function closeSheet() {
   sheet = null;
 }
 
-$('#nav-menu').addEventListener('click', () => setDrawer(true));
 $('#nav-back').addEventListener('click', paneBack);
-$('#scrim').addEventListener('click', () => setDrawer(false));
+
+// The Android app's back button: what's on top goes first (a sheet, the
+// emoji picker, a dialog), then a pane goes back to its list. False when
+// there's nothing to go back from, for the app to go to the background.
+window.rettuiBack = () => {
+  if (sheet) {
+    closeSheet();
+    return true;
+  }
+  if (emojiPicker.node && !emojiPicker.node.classList.contains('hidden')) {
+    emojiPicker.close(false);
+    return true;
+  }
+  const overlays = document.querySelectorAll('.overlay');
+  if (overlays.length) {
+    const top = overlays[overlays.length - 1];
+    if (top.close) top.close();
+    else top.remove();
+    return true;
+  }
+  const view = app.views[app.tab];
+  if (view?.panes && (view.pane || 'list') !== 'list') {
+    paneBack();
+    return true;
+  }
+  return false;
+};
 // ---- swipes (phones) --------------------------------------------------------
 //
 // A swipe follows the finger, and finishes or springs back when it lifts:
-// right from a list opens the drawer, and left closes it; right from what
-// was picked goes back to the list (left from a room shows its members);
+// right from what was picked goes back to the list (left from a room shows its members);
 // down on a sheet closes it. A swipe that starts where something scrolls
 // sideways, or in a text field, is left to that, and so is the screen's
 // very edge, where phones have a back gesture of their own.
@@ -1047,12 +1159,10 @@ function pickSwipe(dx, dy) {
   }
   if (open || swipe.edge || (window.visualViewport?.scale ?? 1) > 1.01) return null;
   if (scrollsFrom(target, 'x', Math.sign(dx), document.body)) return null;
-  const drawer = document.body.classList.contains('drawer-open');
-  if (drawer) return dx < 0 ? { axis: 'x', dir: -1, size: $('#sidebar').offsetWidth, ...drawerSwipe(false) } : null;
   const view = app.views[app.tab];
   const pane = view?.panes ? view.pane || 'list' : 'list';
   if (dx > 0) {
-    if (pane === 'list') return { axis: 'x', dir: 1, size: $('#sidebar').offsetWidth, ...drawerSwipe(true) };
+    if (pane === 'list') return null;
     return { axis: 'x', dir: 1, size: view.root.clientWidth, ...paneSwipe(view, PANE_UP[pane], false) };
   }
   if (pane === 'detail' && view.root.querySelector(':scope > .members:not(.hidden)')) {
@@ -1085,30 +1195,6 @@ function afterMove(node, then) {
   };
   node.addEventListener('transitionend', run);
   setTimeout(run, SWIPE_TIME + 60);
-}
-
-// The drawer, sliding out with the finger (or back in).
-function drawerSwipe(opening) {
-  const sidebar = $('#sidebar');
-  const scrim = $('#scrim');
-  const width = sidebar.offsetWidth;
-  for (const node of [sidebar, scrim]) node.style.transition = 'none';
-  sidebar.style.visibility = 'visible';
-  sidebar.style.boxShadow = '8px 0 32px #000c';
-  return {
-    move(along) {
-      const shown = Math.min(1, opening ? along / width : 1 - along / width);
-      sidebar.style.transform = `translateX(${(shown - 1) * 102}%)`;
-      scrim.style.opacity = shown;
-    },
-    // The stylesheet's own transitions take it from where the finger left it.
-    end(done, finished) {
-      for (const node of [sidebar, scrim]) node.style.transition = '';
-      sidebar.style.transform = sidebar.style.visibility = sidebar.style.boxShadow = scrim.style.opacity = '';
-      setDrawer(opening === done);
-      setTimeout(finished, SWIPE_TIME);
-    },
-  };
 }
 
 // One pane sliding over another: going back, the pane on screen slides
@@ -1165,7 +1251,6 @@ function sheetSwipe(node, close) {
 }
 
 phone.addEventListener('change', () => {
-  setDrawer(false);
   closeSheet();
   renderAppbar();
   if (app.views.messages.text) app.views.messages.text.placeholder = composePlaceholder();
@@ -1235,7 +1320,8 @@ function applyWrap(textarea) {
 
 async function refreshStatus() {
   try {
-    app.status = await api.get('/state');
+    // The log only for Status, which shows it.
+    app.status = await api.get('/state' + (app.tab === 'status' ? '?log=1' : ''));
     // A new install: the guide opens by itself, once a page load.
     if (app.status.welcome && !app.guideShown) {
       app.guideShown = true;
@@ -1298,8 +1384,23 @@ function refreshPeers() {
     peersTimer = null;
     peersFetched = Date.now();
     if (app.tab === 'network' || app.tab === 'browser') refresh();
-    else refreshSidebar();
+    else refreshStatusSoon();
   }, Math.max(0, peersFetched + PEERS_EVERY - Date.now()));
+}
+
+// The status changing (counters, the log): a busy network changes it
+// several times a second, so it's fetched at most every STATUS_EVERY ms
+// (the latest included).
+const STATUS_EVERY = 2000;
+let statusTimer = null;
+let statusFetched = 0;
+function refreshStatusSoon() {
+  if (statusTimer) return;
+  statusTimer = setTimeout(() => {
+    statusTimer = null;
+    statusFetched = Date.now();
+    refreshSidebar();
+  }, Math.max(0, statusFetched + STATUS_EVERY - Date.now()));
 }
 
 // Just the status (counters and the log, every few seconds): the sidebar,
@@ -1597,11 +1698,15 @@ function listen() {
   // Channels section, and unread counts in the sidebar), the hub hosted
   // here ("hub").
   events.onmessage = (e) => {
+    // A page nobody sees (a background tab, the Android app in the
+    // background) fetches nothing: it catches up once it shows again (see
+    // visibilitychange below). Notifications come on their own events.
+    if (document.visibilityState === 'hidden') return;
     const parts = new Set((e.data.split(' ')[1] || 'all').split(','));
     if (parts.has('all') || (parts.has('node') && app.tab === 'node') || (parts.has('channels') && app.tab === 'channels')
       || (parts.has('hub') && app.tab === 'hub')) refresh();
     else if (parts.has('peers')) refreshPeers();
-    else refreshSidebar();
+    else refreshStatusSoon();
   };
   events.addEventListener('notify', (e) => {
     if (e.lastEventId) {
@@ -1686,7 +1791,7 @@ async function openHubLink(link) {
   const hash = (link.match(/[0-9a-f]{32}/i) || [''])[0].toLowerCase();
   const hubs = await api.get('/channels').catch(() => []);
   const known = hubs.some((h) => h.hash === hash);
-  if (!known && !confirm(`Open RRC hub ${link}?\nConnecting tells the hub who you are.`)) return;
+  if (!known && !await ask(`Open RRC hub ${link}?\nConnecting tells the hub who you are.`, { title: 'Open a hub', yes: 'Open' })) return;
   const result = await attempt(() => api.post('/channels', { address: link }));
   if (result) {
     app.views.channels.selected = { hub: result.hub, room: result.room || '' };
@@ -2082,8 +2187,11 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
 // A dialog over the page: closed by its buttons, Escape or a click beside
 // it. Its close function (which `onclose` hears about).
 function dialog(title, body, { className = '', onclose } = {}) {
+  // Escape closes the one on top only (a question over another dialog).
   const onKey = (e) => {
-    if (e.key === 'Escape') close();
+    if (e.key !== 'Escape' || e.defaultPrevented || [...document.querySelectorAll('.overlay')].at(-1) !== overlay) return;
+    e.preventDefault();
+    close();
   };
   const close = () => {
     overlay.remove();
@@ -2096,8 +2204,95 @@ function dialog(title, body, { className = '', onclose } = {}) {
         el('button', { class: 'close', text: '×', title: 'Close', onclick: () => close() })),
       body(close)));
   document.addEventListener('keydown', onKey);
+  overlay.close = close;
   document.body.append(overlay);
   return close;
+}
+
+// Questions in dialogs of the page's own, not the browser's confirm() and
+// prompt(): those freeze the page while they're open (no new messages),
+// look like neither theme, and can be turned off for good by a tick box,
+// after which every question quietly answers Cancel.
+
+// A yes-or-no question: true when `yes` is pressed, false when it's closed
+// any other way. A question's lines after the first are its details.
+function ask(question, { title = 'Are you sure?', yes = 'OK', no = 'Cancel', danger = false } = {}) {
+  return new Promise((resolve) => {
+    let answer = false;
+    dialog(title, (close) => {
+      const button = el('button', { class: danger ? 'danger' : 'primary', text: yes, onclick: () => {
+        answer = true;
+        close();
+      } });
+      requestAnimationFrame(() => button.focus());
+      return el('div', { class: 'ask' },
+        String(question).split('\n').map((line, i) => el('p', { class: i ? 'dim' : '', text: line })),
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: no, onclick: () => close() }), button));
+    }, { className: 'ask-dialog', onclose: () => resolve(answer) });
+  });
+}
+
+// One of a few `choices` ({ text, value }), as buttons: its value, or null
+// when it's closed.
+function choose(title, choices, { text } = {}) {
+  return new Promise((resolve) => {
+    let answer = null;
+    dialog(title, (close) => {
+      const buttons = choices.map((c) => el('button', { text: c.text, onclick: () => {
+        answer = c.value;
+        close();
+      } }));
+      requestAnimationFrame(() => buttons[0]?.focus());
+      return el('div', { class: 'ask' }, text ? el('p', { text }) : null, el('div', { class: 'choices' }, buttons));
+    }, { className: 'ask-dialog', onclose: () => resolve(answer) });
+  });
+}
+
+// A line of text asked for: null when it's cancelled. With `act`, OK runs
+// it on the (trimmed) text while the dialog stays open, and what it throws
+// is shown there to put right; then it's what `act` returned.
+function askText(title, { label = '', value = '', placeholder = '', ok = 'OK', act, mono = false } = {}) {
+  return new Promise((resolve) => {
+    let answer = null;
+    dialog(title, (close) => {
+      const input = el('input', { type: 'text', value, placeholder, class: mono ? 'mono' : '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+      const error = el('div', { class: 'status error', role: 'alert' });
+      const button = el('button', { class: 'primary', text: ok });
+      const submit = async () => {
+        const text = input.value.trim();
+        if (!text) return input.focus();
+        if (!act) {
+          answer = text;
+          return close();
+        }
+        button.disabled = true;
+        try {
+          answer = await act(text);
+          close();
+        } catch (e) {
+          error.textContent = e.message;
+          input.focus();
+        } finally {
+          button.disabled = false;
+        }
+      };
+      button.onclick = submit;
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.isComposing) {
+          e.preventDefault();
+          if (!button.disabled) submit();
+        }
+      });
+      input.addEventListener('input', () => { error.textContent = ''; });
+      requestAnimationFrame(() => {
+        input.focus();
+        input.select();
+      });
+      return el('div', { class: 'ask' },
+        el('label', { class: 'field' }, label ? el('span', { text: label }) : null, input), error,
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: 'Cancel', onclick: () => close() }), button));
+    }, { className: 'ask-dialog', onclose: () => resolve(answer) });
+  });
 }
 
 // ---- Games (LRGP) -------------------------------------------------------------
@@ -2133,6 +2328,59 @@ async function showGames(key) {
   if (games.length) return showGame(games[0].app, games[0].session);
   switchTab('games');
   newGameDialog(key);
+}
+
+// Text shared from another app (rettui's Android app passes it on): a link
+// alone opens; anything else starts a message, in the conversation picked.
+// Waits for the page to be ready.
+function shareText(text) {
+  if (!started) return void sharedOnStart.push(() => shareText(text));
+  text = String(text ?? '').slice(0, 50_000).trim();
+  if (!text) return;
+  const [link] = findLinks(text);
+  if (link && link[0] === 0 && link[1] === text.length) return openLink(link[2]);
+  shareDialog(text, link?.[2], []);
+}
+
+// Files shared from another app, with any text: the app serves each at a
+// `url` of this page's own ({ url, name, type }), to attach to a message.
+async function shareFiles(text, files) {
+  if (!started) return void sharedOnStart.push(() => shareFiles(text, files));
+  const got = [];
+  for (const { url, name, type } of Array.isArray(files) ? files : []) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(response.statusText);
+      got.push(new File([await response.blob()], String(name || 'file'), { type: String(type || '') }));
+    } catch (e) {
+      toast(`Couldn't get ${name}: ${e.message}`, true);
+    }
+  }
+  text = String(text ?? '').slice(0, 50_000).trim();
+  if (got.length || text) shareDialog(text, null, got);
+}
+
+async function shareDialog(text, link, files) {
+  const conversations = await attempt(() => api.get('/conversations'));
+  if (!conversations) return;
+  const who = el('select', {}, conversations.map((c) => el('option', { value: c.key, text: c.name })));
+  const attached = files.map((f) => `📎 ${f.name} (${humanBytes(f.size)})`).join('\n');
+  const said = [text.length > 300 ? text.slice(0, 300) + '…' : text, attached].filter(Boolean).join('\n');
+  dialog('Shared with rettui', (close) => el('div', { class: 'share' },
+    el('p', { class: 'dim', style: 'white-space:pre-wrap', text: said }),
+    conversations.length ? el('label', { class: 'field' }, el('span', { text: 'Write to' }), who)
+      : el('p', { class: 'dim', text: 'No conversations yet: start one in Messages first.' }),
+    el('div', { class: 'row actions' },
+      link ? el('button', { text: 'Open the link', title: link, onclick: () => { close(); openLink(link); } }) : null,
+      conversations.length ? el('button', { class: 'primary', text: 'Write', onclick: () => {
+        close();
+        const view = app.views.messages;
+        // Put in its box, after anything written there already.
+        draftRestore(view, who.value, { text, files, reply: null });
+        view.selected = who.value;
+        switchTab('messages', { focus: true });
+        setPane(view, 'detail');
+      } }) : null)));
 }
 
 // Start a new game: who with (from your conversations, or `peer`), and
@@ -2180,7 +2428,7 @@ function gameBoard(app, session, onForget) {
     }
     const playing = game.yours && game.status === 'active' && game.draw_offer !== true;
     const can = (command) => game.actions.includes(command);
-    const button = (text, command, confirmText) => el('button', { text, onclick: () => (!confirmText || confirm(confirmText)) && act(command) });
+    const button = (text, command, question) => el('button', { text, onclick: async () => (!question || await ask(question, { title: text, yes: text, danger: true })) && act(command) });
     const actions = [
       can('accept') ? el('button', { class: 'primary', text: 'Accept', onclick: () => act('accept') }) : null,
       can('decline') ? button('Decline', 'decline') : null,
@@ -2195,7 +2443,8 @@ function gameBoard(app, session, onForget) {
       game.unsent ? button('↻ Send again', 'resend') : null,
       el('button', { class: 'danger', text: 'Forget', title: 'Remove it from your games (they aren\'t told)', onclick: async () => {
         const over = !['pending', 'active'].includes(game.status);
-        if (!confirm(over ? `Forget this game of ${game.name}?` : `Forget this game of ${game.name}? It isn't over: ${game.peer_name || 'they'} won't be told.`)) return;
+        const question = over ? `Forget this game of ${game.name}?` : `Forget this game of ${game.name}?\nIt isn't over: ${game.peer_name || 'they'} won't be told.`;
+        if (!await ask(question, { title: 'Forget the game', yes: 'Forget', danger: true })) return;
         if (await attempt(() => api.delete(`/games/${app}/${session}`), 'Forgotten')) {
           onForget?.();
           loadNow();
@@ -2208,7 +2457,8 @@ function gameBoard(app, session, onForget) {
       el('div', { class: 'dim game-note', text: note(game) }),
       // How your last move went, and what came with theirs.
       ...(game.notes || []).map((text) => el('div', { class: 'game-note warn', text })),
-      el('div', { class: 'game-actions' }, actions));
+      el('div', { class: 'game-actions' }, actions),
+      ...(game.rules ? [el('div', { class: 'game-rules' }, el('h4', { text: 'How to play' }), el('p', { text: game.rules }))] : []));
   };
   const note = (game) => {
     const b = game.board;
@@ -2290,8 +2540,9 @@ function gameBoard(app, session, onForget) {
           const moves = b.legal.filter((m) => m.startsWith(squareName(from) + squareName(i)));
           let move = moves[0];
           if (moves.length > 1) {
-            const choice = prompt('Promote to: q (queen), r (rook), b (bishop) or n (knight)', 'q');
-            move = moves.find((m) => m.endsWith((choice || '').trim().toLowerCase()[0] || 'q'));
+            const choice = await choose('Promote to', [['q', 'Queen'], ['r', 'Rook'], ['b', 'Bishop'], ['n', 'Knight']]
+              .map(([value, name]) => ({ value, text: `${CHESS_GLYPHS[value]} ${name}` })));
+            move = choice && moves.find((m) => m.endsWith(choice));
             if (!move) return;
           }
           act('move', move);
@@ -3257,29 +3508,38 @@ app.views.messages = {
       el('option', { value: m, text: label, selected: m === this.mode })));
     // What the message being written answers, if anything.
     this.replyBar = el('div', { class: 'reply-bar hidden' });
+    // On a phone it's one line: + (the rest of these, in a sheet), what's
+    // written, and 🎤 until there's something to send, then Send.
+    this.emojiButton.classList.add('phone-tucked');
+    this.text.addEventListener('input', () => this.updateSendable());
     this.compose = el('div', { class: 'compose' },
       this.emojiList.list,
       this.replyBar,
       this.chips,
       el('div', { class: 'row' }, this.text),
       el('div', { class: 'row' },
-        el('button', { text: '📎 Attach', onclick: () => this.fileInput.click() }),
-        this.micButton = el('button', { text: '🎤', title: 'Record a voice message (sent as Codec2, in the mode Settings → Messages has, as Sideband and MeshChat play)', onclick: () => this.toggleRecording() }),
-        el('button', { text: '📍', title: 'Share a location ( L )', onclick: () => this.shareLocation() }),
+        el('button', { class: 'phone-only compose-plus', text: '+', title: 'Files, a location, the way of delivery', 'aria-label': 'Add to the message',
+          onclick: (e) => { e.stopPropagation(); this.composeMenu(); } }),
+        el('button', { class: 'phone-tucked', text: '📎 Attach', onclick: () => this.fileInput.click() }),
+        this.micButton = el('button', { class: 'mic-button', text: '🎤', title: 'Record a voice message (sent as Codec2, in the mode Settings → Messages has, as Sideband and MeshChat play)', onclick: () => this.toggleRecording() }),
+        el('button', { class: 'phone-tucked', text: '📍', title: 'Share a location ( L )', onclick: () => this.shareLocation() }),
         this.emojiButton,
         mode,
-        el('span', { class: 'grow' }),
-        el('button', { class: 'primary', text: 'Send', onclick: () => this.send() })),
+        el('span', { class: 'grow phone-tucked' }),
+        el('button', { class: 'primary send-button', text: 'Send', onclick: () => this.send() })),
       this.fileInput);
+    mode.classList.add('phone-tucked');
     root.append(
       el('section', { class: 'panel side' },
-        el('header', {}, el('span', { class: 'title grow', text: 'Conversations' }),
-          el('button', { text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
-          el('button', { text: '+ New', onclick: () => this.newConversation() }),
-          el('button', { text: '🗺', title: 'Map of the locations shared with you ( M )', onclick: () => mapDialog({ key: this.selected }) }),
-          this.readAll, this.search),
+        // On a phone the top bar names the section already.
+        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Conversations' }),
+          el('button', { class: 'more', text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
+          el('button', { class: 'phone-hidden', text: '+ New', onclick: () => this.newConversation() }),
+          el('button', { class: 'more', text: '🗺', 'data-label': '🗺 Map of shared locations', title: 'Map of the locations shared with you ( M )', onclick: () => mapDialog({ key: this.selected }) }),
+          moreButton(), this.readAll, this.search),
         this.list),
-      el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose));
+      el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose),
+      fab('New conversation', () => this.newConversation()));
     this.renderChips();
     this.lastKey = null;
     this.shown(options);
@@ -3289,9 +3549,35 @@ app.views.messages = {
     if (options.focus) setTimeout(() => this.text.focus(), 50);
   },
 
-  newConversation() {
-    const address = prompt('LXMF address (32 hex characters), or an lxma:// link');
-    if (address) openConversation(address);
+  async newConversation() {
+    const key = await askText('New conversation', { label: 'Their LXMF address (32 hex characters), or an lxma:// link', ok: 'Open', mono: true,
+      act: async (address) => (await api.post('/conversations', { address })).key });
+    if (!key) return;
+    this.selected = key;
+    switchTab('messages', { focus: true });
+    setPane(this, 'detail');
+  },
+
+  // The phone's + : what the box's other buttons do, in a sheet.
+  composeMenu() {
+    openSheet('Add to the message', [
+      { text: '📎 Files or pictures', action: () => this.fileInput.click() },
+      { text: '📍 Share a location', action: () => this.shareLocation() },
+      ...[...this.modeSelect.options].map((option) => ({
+        text: `Send: ${option.textContent}`, checked: option.value === this.modeSelect.value, action: () => {
+          this.modeSelect.value = option.value;
+          this.modeSelect.dispatchEvent(new Event('change'));
+        },
+      })),
+    ]);
+  },
+
+  // Whether there's something to send (a phone shows Send for it, else 🎤).
+  updateSendable() {
+    this.compose?.classList.toggle('sendable', !!(this.text.value.trim() || this.pending.length || this.voice));
+    // On a phone the box starts one line high and grows with what's in it.
+    this.text.style.height = '';
+    if (phone.matches && this.text.value) this.text.style.height = Math.min(this.text.scrollHeight + 2, 160) + 'px';
   },
 
   // Record a voice message, or stop and keep it to send.
@@ -3323,7 +3609,7 @@ app.views.messages = {
     };
     tick();
     this.recordingTimer = setInterval(tick, 250);
-    this.cancelRecording = el('button', { text: '✕', title: 'Throw the recording away', onclick: async () => {
+    this.cancelRecording = el('button', { class: 'mic-cancel', text: '✕', title: 'Throw the recording away', onclick: async () => {
       clearInterval(this.recordingTimer);
       await recorder.stop(false);
       this.micButton.textContent = '🎤';
@@ -3351,6 +3637,7 @@ app.views.messages = {
         this.pending.splice(i, 1);
         this.renderChips();
       } }))));
+    this.updateSendable();
   },
 
   async update() {
@@ -3391,7 +3678,7 @@ app.views.messages = {
     el('div', { class: 'dim', style: 'font-size:12px;text-align:right' },
       c.last ? timeLabel(c.last.timestamp) : '',
       c.unread ? el('div', {}, el('span', { class: 'badge' + (c.request ? ' quiet' : ''), text: c.unread })) : null))].filter(Boolean)) :
-      [el('div', { class: 'empty', text: 'No conversations yet. Press + New, or message a peer from the Network tab.' })]));
+      [el('div', { class: 'empty', text: `No conversations yet. Press ${phone.matches ? 'the + button' : '+ New'}, or message a peer from the Network tab.` })]));
     this.compose.classList.toggle('hidden', !this.selected);
     if (!this.selected) {
       this.header.replaceChildren(el('span', { class: 'title', text: 'Messages' }));
@@ -3503,7 +3790,8 @@ app.views.messages = {
       avatar(conversation.icon, conversation.name, key),
       el('span', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: key }),
-      el('button', { class: 'pin-button' + (conversation.pinned ? ' on' : ''), text: '📌',
+      el('button', { class: 'more pin-button' + (conversation.pinned ? ' on' : ''), text: '📌',
+        'data-label': conversation.pinned ? '📌 Unpin' : '📌 Pin to the top',
         title: conversation.pinned ? 'Unpin it from the top of the list' : 'Pin it to the top of the list',
         onclick: () => this.setPinned(key, !conversation.pinned) }),
       conversation.live ? el('span', { class: 'live-chip', title: conversation.live.source === 'device' ? 'Sharing where this device is, while a page of rettui is open on it' : 'Sharing this station\'s Location' },
@@ -3511,14 +3799,20 @@ app.views.messages = {
         el('button', { class: 'inline', text: 'Stop', onclick: async () => {
           if (await attempt(() => api.post(`/conversations/${key}/live/stop`), 'Stopped sharing your location live')) loadNow();
         } })) : null,
-      bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
-      el('button', { class: 'games-button' + (conversation.games_waiting ? ' waiting' : ''),
+      ((bell) => {
+        bell.classList.add('more');
+        bell.dataset.label = conversation.muted ? '🔕 Notifications: off (turn on)' : '🔔 Notifications: on (turn off)';
+        return bell;
+      })(bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted))),
+      // A game waiting on you stays in sight on a phone.
+      el('button', { class: 'games-button' + (conversation.games_waiting ? ' waiting' : ' more'),
         text: conversation.games_waiting ? `🎲 Games · ${conversation.games_waiting}` : '🎲 Games',
         title: conversation.games_waiting ? `Games with them: ${conversation.games_waiting} waiting on you  ( g )` : 'Games with them: Tic-Tac-Toe, Four in a Row, Chess  ( g )',
         onclick: () => showGames(key) }),
-      el('button', { text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
-      el('button', { text: 'Copy address', title: conversation.link?.startsWith('lxma://') ? 'Their address with their key (lxma://), so whoever adds them can write at once' : 'Their address (their key isn\'t known yet)',
-        onclick: () => copyAddress(conversation.link || key, 'their') })].filter(Boolean));
+      el('button', { class: 'more', text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
+      el('button', { class: 'more', text: 'Copy address', title: conversation.link?.startsWith('lxma://') ? 'Their address with their key (lxma://), so whoever adds them can write at once' : 'Their address (their key isn\'t known yet)',
+        onclick: () => copyAddress(conversation.link || key, 'their') }),
+      moreButton()].filter(Boolean));
     // The newest messages only, unless asked for all: those not loaded, and
     // any loaded but not shown.
     const from = this.showAll === key ? 0 : Math.max(0, conversation.messages.length - this.LIMIT);
@@ -3570,7 +3864,7 @@ app.views.messages = {
 
   // Delete a conversation (asked first), and `close` what asked for it.
   async deleteConversation(key, conversation, close = () => {}) {
-    if (!confirm(`Delete the conversation with ${conversation.name}, its archived messages and the files it brought?`)) return;
+    if (!await ask(`Delete the conversation with ${conversation.name}?\nIts archived messages and the files it brought go too.`, { title: 'Delete the conversation', yes: 'Delete', danger: true })) return;
     if (await attempt(() => api.post(`/conversations/${key}/delete`), 'Deleted the conversation')) {
       close();
       if (this.selected === key) this.selected = null;
@@ -3837,7 +4131,7 @@ app.views.messages = {
   // trusting them (`unknown`), or block them (`blocked`, after asking).
   async setTrust(key, trust, conversation, after) {
     const name = conversation?.name || key;
-    if (trust === 'blocked' && !confirm(`Block ${name}? Their messages are dropped, the conversation is deleted, and their identity is blocked in Reticulum.`)) return false;
+    if (trust === 'blocked' && !await ask(`Block ${name}?\nTheir messages are dropped, the conversation is deleted, and their identity is blocked in Reticulum.`, { title: 'Block', yes: 'Block', danger: true })) return false;
     const said = { trusted: `Trusting ${name}`, untrusted: `Leaving ${name} as is`, unknown: `Not trusting ${name}`, blocked: `Blocked ${name}` }[trust];
     if (!await attempt(() => api.post(`/conversations/${key}/trust`, { trust }), said)) return false;
     if (trust === 'blocked' && this.selected === key) {
@@ -3860,7 +4154,7 @@ app.views.messages = {
     if (m.content?.trim() || m.attachments.length) items.push({ text: 'Forward…', action: () => this.forwardDialog(conversation.key, m) });
     if (m.state.kind === 'failed') items.push({ text: 'Send again', action: () => this.retry(conversation.key, m.id) });
     items.push({ text: m.attachments.length ? 'Delete (and its files)' : 'Delete', danger: true, action: async () => {
-      if (!confirm(m.attachments.length ? 'Delete this message and the files it brought?' : 'Delete this message?')) return;
+      if (!await ask(m.attachments.length ? 'Delete this message and the files it brought?' : 'Delete this message?', { title: 'Delete the message', yes: 'Delete', danger: true })) return;
       if (await attempt(() => api.post(`/conversations/${conversation.key}/messages/delete`, { id: m.id }), 'Deleted the message')) this.update();
     } });
     openSheet(null, items, anchor);
@@ -4090,11 +4384,12 @@ app.views.games = {
     this.setFilter(this.filter, false);
     root.append(
       el('section', { class: 'panel side' },
-        el('header', {}, el('span', { class: 'title grow', text: 'Games' }),
-          el('button', { text: '+ New game', title: 'Challenge someone  ( n )', onclick: () => newGameDialog() }),
+        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Games' }),
+          el('button', { class: 'phone-hidden', text: '+ New game', title: 'Challenge someone  ( n )', onclick: () => newGameDialog() }),
           this.filters),
         this.list),
-      el('section', { class: 'panel grow pane-main' }, this.header, this.body));
+      el('section', { class: 'panel grow pane-main' }, this.header, this.body),
+      fab('New game', () => newGameDialog()));
     this.board = null;
   },
 
@@ -4128,7 +4423,7 @@ app.views.games = {
         el('div', { class: 'sub' + (g.yours ? ' yours' : ''), text: g.summary })),
       g.yours ? el('div', {}, el('span', { class: 'badge', text: '●', title: 'Waiting on you' })) : null))
         : filter.id !== 'all' ? [el('div', { class: 'empty dim', text: `No ${filter.id} games.` })]
-        : [el('div', { class: 'empty dim', text: 'No games yet. + New game challenges someone to Tic-Tac-Toe, Four in a Row or Chess (or the 🎲 Games button in a conversation). Each move goes as a message, so they can answer whenever they\'re next online.' })]));
+        : [el('div', { class: 'empty dim', text: `No games yet. ${phone.matches ? 'The + button' : '+ New game'} challenges someone to a game such as Tic-Tac-Toe, Four in a Row or Chess (or the 🎲 Games button in a conversation). Each move goes as a message, so they can answer whenever they\'re next online.` })]));
     }
     const game = games.find(same);
     if (!game) {
@@ -4240,18 +4535,18 @@ app.views.channels = {
     });
     root.append(
       el('section', { class: 'panel side' },
-        el('header', {}, el('span', { class: 'title grow', text: 'Channels' }),
-          el('button', { text: '+ Add hub', onclick: () => this.addHub() }), this.search),
+        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Channels' }),
+          el('button', { class: 'phone-hidden', text: '+ Add hub', onclick: () => this.addHub() }), this.search),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.body, this.inputBar),
-      this.membersPanel);
+      this.membersPanel,
+      fab('Add a hub', () => this.addHub()));
     this.lastView = null;
   },
 
   async addHub() {
-    const address = prompt('RRC hub address (32 hex characters, or rrc://address/room)');
-    if (!address) return;
-    const result = await attempt(() => api.post('/channels', { address }));
+    const result = await askText('Add a hub', { label: 'RRC hub address (32 hex characters), or an rrc://address/room link', ok: 'Add', mono: true,
+      act: (address) => api.post('/channels', { address }) });
     if (result) {
       this.selected = { hub: result.hub, room: result.room || '' };
       setPane(this, 'detail');
@@ -4488,7 +4783,7 @@ app.views.channels = {
         el('button', { text: 'Actions', onclick: (e) => this.userMenu(e, whisper.src) }),
         bellButton(view.notify_level === 'off' ? 'off' : 'on', `Notifications from ${whisper.name}`, (e) => this.notifyMenu(e, hub, room, view)),
         el('button', { class: 'danger more', text: 'Close', title: 'Close the conversation and delete its messages', onclick: async () => {
-          if (!confirm(`Close the whisper conversation with ${whisper.name} and delete its messages?`)) return;
+          if (!await ask(`Close the whisper conversation with ${whisper.name} and delete its messages?`, { title: 'Close the whisper', yes: 'Close', danger: true })) return;
           await this.hubAction(hash, 'forget', { room });
           this.selected = { hub: hash, room: '' };
           this.update();
@@ -4498,19 +4793,22 @@ app.views.channels = {
       this.header.replaceChildren(
         el('span', { class: 'title grow' }, '#' + room, view.topic ? el('span', { class: 'dim', style: 'font-weight:400', text: ' — ' + view.topic }) : null),
         view.joined
-          ? el('button', { text: 'Leave', onclick: () => this.hubAction(hash, 'leave', { room }) })
+          ? el('button', { class: 'more', text: 'Leave', onclick: () => this.hubAction(hash, 'leave', { room }) })
           : el('button', { text: 'Join', onclick: () => this.hubAction(hash, 'join', { room }) }),
         el('button', { class: 'phone-only', text: `Members ${view.members.length}`, onclick: () => setPane(this, 'members') }),
         bellButton(view.notify_level, `Notifications in #${room}`, (e) => this.notifyMenu(e, hub, room, view)),
-        // A setting ("Show joins and leaves"), here where it matters.
-        el('label', { class: 'toggle', title: 'Show people joining and leaving the room in the chat' },
+        // A setting ("Show joins and leaves"), here where it matters; on a
+        // phone, behind ⋯.
+        el('label', { class: 'toggle phone-hidden', title: 'Show people joining and leaving the room in the chat' },
           el('input', { type: 'checkbox', checked: view.show_joins, onchange: (e) => attempt(
             () => api.post('/settings', { values: { show_joins: String(e.target.checked) } }),
             e.target.checked ? 'Showing people joining and leaving' : 'Hiding people joining and leaving') }),
           ' Show joins'),
+        el('button', { class: 'more phone-sheet', text: view.show_joins ? 'Hide joins and leaves' : 'Show joins and leaves',
+          onclick: (e) => e.currentTarget.closest('header').querySelector('.toggle input').click() }),
         el('button', { class: 'more', text: 'Copy link', onclick: () => copy(entry?.link, 'link') }),
         el('button', { class: 'danger more', text: 'Forget', title: 'Leave and delete the messages', onclick: async () => {
-          if (!confirm(`Leave #${room} and delete its messages?`)) return;
+          if (!await ask(`Leave #${room} and delete its messages?`, { title: 'Forget the room', yes: 'Leave', danger: true })) return;
           await this.hubAction(hash, 'forget', { room });
           this.selected = { hub: hash, room: '' };
           this.update();
@@ -4532,7 +4830,7 @@ app.views.channels = {
         bellButton(hub.notify, `Notifications from ${hub.name}`, (e) => this.notifyMenu(e, hub, '', view)),
         el('button', { class: 'more', text: 'Copy link', onclick: () => copy(hub.link, 'link') }),
         el('button', { class: 'danger more', text: 'Remove hub', onclick: async () => {
-          if (!confirm(`Remove hub ${hub.name} and its history?`)) return;
+          if (!await ask(`Remove hub ${hub.name} and its history?`, { title: 'Remove the hub', yes: 'Remove', danger: true })) return;
           await this.hubAction(hash, 'remove');
           this.selected = null;
           setPane(this, 'list');
@@ -4607,8 +4905,11 @@ app.views.channels = {
       const name = line.nick || '';
       const color = line.own ? 'var(--accent)' : nickColor(line.src);
       const date = new Date(line.ts);
-      const time = this.view?.chat_dates === false ? clockTime(date, true)
+      const full = this.view?.chat_dates === false ? clockTime(date, true)
         : clockDay(date, date.getFullYear() !== new Date().getFullYear()) + ' ' + clockTime(date, true);
+      // A phone has no room for a column of dates: the time, and the rest
+      // when held on.
+      const time = phone.matches ? clockTime(date) : full;
       // Other people's names open the user menu.
       const user = !line.own && line.src && this.view?.users[line.src] && ['msg', 'action', 'private'].includes(line.kind);
       // In a whisper conversation, whispers read like ordinary chat.
@@ -4628,7 +4929,7 @@ app.views.channels = {
         default: prefix = el('span', { class: 'prefix', text: '— ' });
       }
       return el('div', { class: 'chat-line ' + kind, dataset: { ts: line.ts } },
-        el('span', { class: 'time', text: time }),
+        el('span', { class: 'time', text: time, title: full }),
         el('span', { class: 'body' }, prefix,
           el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [], line.mentions || [])),
           line.pending ? el('span', { class: 'pending', text: ' …' }) : null));
@@ -4872,7 +5173,7 @@ app.views.channels = {
     if (!result) return restore();
     if (result.split) {
       const limit = this.hubs.find((h) => h.hash === hub)?.limits.message_bytes;
-      if (confirm(`That is over this hub's ${limit}-byte limit. Send it as ${result.split.length} messages?`)) {
+      if (await ask(`That is over this hub's ${limit}-byte limit. Send it as ${result.split.length} messages?`, { title: 'Too long for one message', yes: `Send ${result.split.length}` })) {
         if (!await this.hubAction(hub, 'split', { room, parts: result.split })) restore();
       } else {
         restore();
@@ -4962,7 +5263,7 @@ app.views.network = {
       this.update();
     } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes'], ['other', 'Everything else']]
       .map(([value, text]) => el('option', { value, text, selected: value === this.heardKind })));
-    this.modeButton = el('button', { title: 'Every announce as it\'s heard, of every kind, or the list of what\'s been heard  ( a )', onclick: () => this.toggleMode() });
+    this.modeButton = el('button', { class: 'more', title: 'Every announce as it\'s heard, of every kind, or the list of what\'s been heard  ( a )', onclick: () => this.toggleMode() });
     const sort = this.sortSelect = el('select', { title: 'Order', onchange: (e) => {
       this.sort = e.target.value;
       this.update();
@@ -4978,13 +5279,13 @@ app.views.network = {
     this.title = el('span', { class: 'title grow' });
     this.table = el('div', { class: 'scroll' });
     root.append(el('div', { class: 'column grow' },
-      el('section', { class: 'panel' }, el('header', {}, this.search, filter, this.heardSelect, sort, this.viaSelect, this.modeButton,
-        el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
-        el('button', { text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
-        el('button', { text: 'Find a path…', title: 'Find the path to any address', onclick: () => {
-          const address = prompt('Find a path to (address)', this.selected || '');
-          if (address?.trim()) pathDialog(address.trim().replace(/^<|>$/g, ''));
-        } }))),
+      el('section', { class: 'panel' }, el('header', { class: 'network-tools' }, this.search, filter, this.heardSelect, sort, this.viaSelect, this.modeButton,
+        el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
+        el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+        el('button', { class: 'more', text: 'Find a path…', title: 'Find the path to any address', onclick: async () => {
+          const address = await askText('Find a path', { label: 'To the address', value: this.selected || '', ok: 'Find', mono: true });
+          if (address) pathDialog(address.replace(/^<|>$/g, ''));
+        } }), moreButton())),
       el('section', { class: 'panel grow' }, el('header', {}, this.title), this.table)));
     this.showMode();
   },
@@ -5001,6 +5302,8 @@ app.views.network = {
   showMode() {
     const heard = this.mode === 'announces';
     this.modeButton.textContent = heard ? 'Heard list' : 'Announces';
+    // Its words in the ⋯ sheet on phones.
+    this.modeButton.dataset.label = heard ? 'Back to the heard list' : 'Every announce, as it\'s heard';
     this.filterSelect.classList.toggle('hidden', heard);
     this.sortSelect.classList.toggle('hidden', heard);
     this.heardSelect.classList.toggle('hidden', !heard);
@@ -5280,6 +5583,7 @@ app.views.browser = {
       el('button', { text: '↑', title: 'Previous (Shift+Enter)', onclick: () => this.find(-1) }),
       el('button', { text: '↓', title: 'Next (Enter)', onclick: () => this.find(1) }),
       el('button', { text: '×', title: 'Done (Esc)', onclick: () => this.closeFind() }));
+    const tools = el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find, this.buttons.clear);
     root.append(
       el('section', { class: 'panel side' }, el('header', {}, this.paneTabs,
         el('button', { class: 'phone-only', text: 'Address…', onclick: () => {
@@ -5288,8 +5592,13 @@ app.views.browser = {
         } }), this.search), this.paneList),
       el('section', { class: 'panel grow pane-main' },
         el('div', { class: 'toolbar' }, this.buttons.back, this.address, el('button', { class: 'primary', text: 'Go', onclick: () => this.go(this.address.value) }),
-          // Their own row on a phone.
-          el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find, this.buttons.clear)),
+          tools,
+          // On a phone the page's buttons wait behind ⋯.
+          el('button', { class: 'phone-only', text: '⋯', title: 'More', 'aria-label': 'More actions', onclick: (e) => {
+            e.stopPropagation();
+            openSheet(this.page?.title || this.page?.url || 'Page', [...tools.children].filter((b) => !b.disabled)
+              .map((b) => ({ text: b.textContent, action: () => b.click() })));
+          } })),
         this.status, this.findBar, this.content));
     this.renderPane();
     this.renderPage();
@@ -5417,7 +5726,8 @@ app.views.browser = {
     this.status.replaceChildren(...status);
     this.status.classList.toggle('hidden', !status.length);
     if (!this.page) {
-      this.content.replaceChildren(el('div', { class: 'empty', text: 'Pick a node or saved page on the left, or enter an address above.' }));
+      this.content.replaceChildren(el('div', { class: 'empty', text: phone.matches ? 'Pick a node or saved page from the list, or enter an address above.'
+        : 'Pick a node or saved page on the left, or enter an address above.' }));
       return;
     }
     // Server-rendered: all page text is escaped and the CSP blocks scripts.
@@ -5808,23 +6118,15 @@ const micron = {
   clean: (text) => text.replace(/[`[\]()<>|]/g, ''),
 
   // Apply an action; asks for what it needs (colours come from the palette).
-  run(t, action, answer) {
+  async run(t, action, answer) {
     const { selectionStart: start, selectionEnd: end, value } = t;
     const selected = value.slice(start, end);
     const oneLine = selected && !selected.includes('\n') ? this.clean(selected) : '';
-    const ask = (question) => {
-      const reply = prompt(question);
-      return reply === null ? null : reply.trim();
-    };
-    const name = (question) => {
-      const reply = ask(question);
-      if (reply === null) return null;
-      if (!/^[\p{L}\p{N}_-]+$/u.test(reply)) {
-        toast('Field names use letters, digits, - and _', true);
-        return null;
-      }
+    const address = (title, label) => askText(title, { label, ok: 'Insert', mono: true });
+    const name = (title) => askText(title, { label: 'Letters, digits, - and _', ok: 'Insert', act: async (reply) => {
+      if (!/^[\p{L}\p{N}_-]+$/u.test(reply)) throw new Error('Field names use letters, digits, - and _ only');
       return reply;
-    };
+    } });
     switch (action) {
       case 'bold': return this.toggle(t, '`!');
       case 'italic': return this.toggle(t, '`*');
@@ -5865,27 +6167,27 @@ const micron = {
         return this.setLines(t, from, to, out, out.length - 1);
       }
       case 'link': {
-        const url = ask('Link to (a page like :/page/about.mu, node:/page/…, lxmf@…, rrc://…)');
+        const url = await address('Link', 'Link to: a page like :/page/about.mu, node:/page/…, lxmf@…, rrc://…');
         if (!url) return;
         return this.replace(t, start, end, `\`[${oneLine || url}\`${url}]`);
       }
       case 'image': {
-        const url = ask('Image address (like :/media/logo.png)');
+        const url = await address('Image', 'Image address, like :/media/logo.png');
         if (!url) return;
         return this.replace(t, start, end, `\`(${oneLine || 'image'}\`${url})`);
       }
       case 'field': {
-        const field = name('Field name');
+        const field = await name('Field name');
         if (field) this.replace(t, start, end, `\`<24|${field}\`${oneLine}>`);
         return;
       }
       case 'checkbox': {
-        const field = name('Checkbox name');
+        const field = await name('Checkbox name');
         if (field) this.replace(t, start, end, `\`<?|${field}|yes\`${oneLine || field}>`);
         return;
       }
       case 'radio': {
-        const field = name('Radio group name');
+        const field = await name('Radio group name');
         const label = oneLine || 'Option';
         if (field) this.replace(t, start, end, `\`<^|${field}|${label}\`${label}>`);
         return;
@@ -6218,9 +6520,8 @@ app.views.node = {
   },
 
   async renameItem(root, entry) {
-    const to = prompt(`Rename ${root}/${entry.path} to (links to it follow)`, entry.path);
-    if (!to || to === entry.path) return;
-    const result = await attempt(() => api.post('/node/rename', { root, from: entry.path, to }));
+    const result = await askText(`Rename ${root}/${entry.path}`, { label: 'To (links to it follow)', value: entry.path, ok: 'Rename',
+      act: (to) => (to === entry.path ? null : api.post('/node/rename', { root, from: entry.path, to })) });
     if (result) this.moved(root, entry.path, result.path);
   },
 
@@ -6298,7 +6599,7 @@ app.views.node = {
   },
 
   async removeItem(root, path, name) {
-    if (!confirm(`Delete ${root}/${path}? Pages that show or link to ${name} won't find it any more.`)) return;
+    if (!await ask(`Delete ${root}/${path}?\nPages that show or link to ${name} won't find it any more.`, { title: 'Delete', yes: 'Delete', danger: true })) return;
     const done = await attempt(() => api.post('/node/delete', { root, path }), `Deleted ${root}/${path}`);
     if (done && root === 'pages' && this.open?.path === path) {
       this.open = null;
@@ -6315,7 +6616,7 @@ app.views.node = {
 
   async load(path) {
     if (this.open?.path === path) return setPane(this, 'detail');
-    if (this.dirty() && !confirm(`Discard unsaved changes to ${this.open.path}?`)) return;
+    if (this.dirty() && !await ask(`Discard unsaved changes to ${this.open.path}?`, { title: 'Unsaved changes', yes: 'Discard', danger: true })) return;
     setPane(this, 'detail');
     const page = await attempt(() => api.get('/node/page?path=' + encodeURIComponent(path)));
     if (!page) return;
@@ -6413,23 +6714,20 @@ app.views.node = {
   },
 
   async create() {
-    const name = prompt('New page (e.g. about, or blog/first)');
-    if (!name) return;
-    const result = await attempt(() => api.post('/node/pages', { name }));
+    const result = await askText('New page', { label: 'Its name, like about, or blog/first', ok: 'Create', act: (name) => api.post('/node/pages', { name }) });
     if (result) this.load(result.path);
   },
 
   async rename() {
     const open = this.open;
-    const to = prompt(`Rename ${open.path} to`, open.path);
-    if (!to || to === open.path) return;
-    const result = await attempt(() => api.post('/node/rename', { from: open.path, to }));
+    const result = await askText(`Rename ${open.path}`, { label: 'To', value: open.path, ok: 'Rename',
+      act: (to) => (to === open.path ? null : api.post('/node/rename', { from: open.path, to })) });
     if (result) this.moved('pages', open.path, result.path);
   },
 
   async remove() {
     const open = this.open;
-    if (!confirm(`Delete ${open.path}?`)) return;
+    if (!await ask(`Delete ${open.path}?`, { title: 'Delete the page', yes: 'Delete', danger: true })) return;
     const done = await attempt(() => api.post('/node/delete', { path: open.path }), `Deleted ${open.path}`);
     if (done) {
       this.open = null;
@@ -6462,7 +6760,7 @@ app.views.status = {
           el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
           el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }), moreButton()), this.info),
-        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
+        el('section', { class: 'panel grow settings-panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
           this.revertButton, this.saveButton), this.sectionTabs, el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
       el('div', { class: 'column', style: 'width:42%' },
         el('section', { class: 'panel', style: 'max-height:40%' }, el('header', { text: 'Interfaces' }), this.interfaces),
@@ -6686,7 +6984,7 @@ app.views.status = {
           el('a', { href: s.update.url, target: '_blank', rel: 'noopener noreferrer', text: 'what\'s new ↗' }),
           s.update.installing ? el('span', { class: 'dim', text: 'installing…' })
             : s.update.installable ? el('button', { text: 'Install', title: 'Download it from GitHub, check it, and put it in place of this one', onclick: async () => {
-              if (!confirm(`Install rettui ${s.update.version} in place of this one? rettui carries on as it is until it's started again.`)) return;
+              if (!await ask(`Install rettui ${s.update.version} in place of this one?\nrettui carries on as it is until it's started again.`, { title: 'Update', yes: 'Install' })) return;
               const done = await attempt(() => api.post('/update/install'));
               if (done) toast(done.doing);
               loadNow();
@@ -6719,8 +7017,10 @@ app.views.status = {
       label('Backup'), el('div', {},
         el('button', { text: 'Download a backup', title: 'Settings, contacts and messages, in one file to restore with rettui restore',
           onclick: () => el('a', { href: 'api/backup', download: '' }).click() }),
-        el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text:
-          'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' })),
+        IN_ANDROID_APP ? androidBackupsButton('🔑 Identity and backups') : null,
+        el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text: IN_ANDROID_APP
+          ? 'Download a backup: settings, contacts and messages, without your identity. Identity and backups (the app\'s own screen) saves the identity too, and restores.'
+          : 'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' })),
       label('Known'), el('span', { text: `${s.known} destinations` }),
       label('Notifications'), notifications.describe(),
       label('Theme'), el('select', { title: 'This browser\'s colours', onchange: (e) => theme.set(e.target.value) },
@@ -6731,7 +7031,7 @@ app.views.status = {
         el('span', { class: 'dim', text: 'This one stays signed in' }),
         el('button', { text: 'Sign out the others', title: 'A new login link (printed where rettui runs): every other browser, and scripts with the old token, must log in again; push notifications stop until browsers turn them on again',
           onclick: async () => {
-            if (!confirm('Sign every other browser out? They (and scripts using the old token) need the new link, printed where rettui runs, to log in again.')) return;
+            if (!await ask('Sign every other browser out?\nThey (and scripts using the old token) need the new link, printed where rettui runs, to log in again.', { title: 'Sign out the others', yes: 'Sign them out', danger: true })) return;
             if (await attempt(() => api.post('/sign-out-others'), 'Every other browser was signed out')) notifications.checkPush().catch(() => {});
           } })),
       // With --https and rettui's own certificate.
@@ -6755,7 +7055,12 @@ app.views.status = {
       i.details?.length ? el('div', { class: 'iface-details dim', text: i.details.join(' · ') }) : null,
       trafficGraph(i.history)))
       : [el('div', { class: 'empty', text: noInterfaces })]));
-    stickToBottom(this.log, () => this.log.replaceChildren(...s.log.map((line) => el('div', { text: line }))));
+    // Fetched for Status only, and drawn again only when it changed.
+    const log = s.log && JSON.stringify([s.log.length, s.log.at(-1), s.log[0]]);
+    if (log && this.log.dataset.drawn !== log) {
+      this.log.dataset.drawn = log;
+      stickToBottom(this.log, () => this.log.replaceChildren(...s.log.map((line) => el('div', { text: line }))));
+    }
     // Pick up changes made elsewhere (the TUI's editor, or by hand).
     if (settings) this.loadSettings();
   },
@@ -7048,21 +7353,23 @@ app.views.hub = {
     this.expectUntil = Date.now() + 5000;
   },
 
-  renameRoom(room) {
-    const answer = prompt(`Rename #${room.name} to`, room.name);
-    const to = answer?.trim().replace(/^#/, '').toLowerCase();
+  async renameRoom(room) {
+    const to = await askText(`Rename #${room.name}`, { label: 'To', value: room.name, ok: 'Rename', act: async (answer) => {
+      const to = answer.replace(/^#/, '').toLowerCase();
+      if (/\s/.test(to)) throw new Error('Room names are one word');
+      if (to !== room.name && this.hub.rooms.some((r) => r.name === to)) throw new Error(`There's a room #${to} already`);
+      return to;
+    } });
     if (!to || to === room.name) return;
-    if (/\s/.test(to)) return toast('Room names are one word', true);
-    if (this.hub.rooms.some((r) => r.name === to)) return toast(`There's a room #${to} already`, true);
     this.act('rename', { room: room.name, text: to });
     this.expect(to);
     this.openPage({ room: to });
   },
 
-  deleteRoom(room) {
+  async deleteRoom(room) {
     const people = room.members.length === 1 ? 'The one in it is taken out. ' : room.members.length ? `The ${room.members.length} in it are taken out. ` : '';
     const again = this.hub.open_rooms ? ' Anyone may make it again by joining it.' : '';
-    if (!confirm(`Delete #${room.name}? ${people}Its topic, settings and bans go too.${again}`)) return;
+    if (!await ask(`Delete #${room.name}?\n${people}Its topic, settings and bans go too.${again}`, { title: 'Delete the room', yes: 'Delete', danger: true })) return;
     this.act('delete', { room: room.name });
     this.show('rooms');
   },
@@ -7085,8 +7392,8 @@ app.views.hub = {
       toggle('Operator', op, (checked) => act('op', { on: checked }), founder ? { disabled: true, title: 'A room\'s founder is always one' } : {}),
       toggle('Voice', room.voiced.includes(id), (checked) => act('voice', { on: checked })),
       el('button', { text: 'Kick', onclick: () => act('kick') }),
-      el('button', { class: 'danger', text: 'Ban', onclick: () => {
-        if (confirm(`Ban ${this.nameOf(id)} from #${room.name}? They're taken out of it, and can't come back until the ban is lifted.`)) act('ban', { on: true });
+      el('button', { class: 'danger', text: 'Ban', onclick: async () => {
+        if (await ask(`Ban ${this.nameOf(id)} from #${room.name}?\nThey're taken out of it, and can't come back until the ban is lifted.`, { title: 'Ban', yes: 'Ban', danger: true })) act('ban', { on: true });
       } }));
   },
 
@@ -7111,8 +7418,8 @@ app.views.hub = {
       el('div', { class: 'hub-heading', text: 'The whole hub' }),
       el('div', { class: 'hub-member' },
         el('button', { text: 'Disconnect', title: 'Close their connection (they can come back)', onclick: () => this.act('disconnect', { identity }) }),
-        identity === hub.you ? null : el('button', { class: 'danger', text: 'Ban from the hub', onclick: () => {
-          if (confirm(`Ban ${name} from the whole hub? They're disconnected now, and every time they come back.`)) this.act('ban', { identity, on: true });
+        identity === hub.you ? null : el('button', { class: 'danger', text: 'Ban from the hub', onclick: async () => {
+          if (await ask(`Ban ${name} from the whole hub?\nThey're disconnected now, and every time they come back.`, { title: 'Ban from the hub', yes: 'Ban', danger: true })) this.act('ban', { identity, on: true });
         } })),
     ];
   },
@@ -7131,9 +7438,12 @@ app.views.hub = {
       || identity.slice(0, 12);
   },
 
-  newRoom() {
-    const room = prompt('New registered room (it stays, with its topic and settings, while nobody is in it)');
-    const name = room?.trim().replace(/^#/, '').toLowerCase();
+  async newRoom() {
+    const name = await askText('New registered room', { label: 'It stays, with its topic and settings, while nobody is in it', ok: 'Add', act: async (room) => {
+      const name = room.replace(/^#/, '').toLowerCase();
+      if (!name || /\s/.test(name)) throw new Error('Room names are one word');
+      return name;
+    } });
     if (!name) return;
     this.act('register', { room: name, on: true });
     this.showing = 'rooms';
@@ -7210,6 +7520,7 @@ app.views.reticulum = {
           el('button', { text: 'Restart', title: 'Restart Reticulum, to apply saved changes now', onclick: () => restartReticulum() })), this.fileCard),
         el('section', { class: 'panel grow' },
           el('header', {}, el('span', { class: 'title grow', text: 'Sections' }),
+            IN_ANDROID_APP ? androidRNodesButton() : null,
             el('button', { text: '+ Interface', onclick: () => this.showAdd() })),
           this.addForm, this.sections)),
       el('section', { class: 'panel grow pane-main' },
@@ -7290,7 +7601,7 @@ app.views.reticulum = {
   },
 
   async select(id) {
-    if (this.dirty() && !confirm('Discard unsaved changes?')) return;
+    if (this.dirty() && !await ask('Discard unsaved changes?', { title: 'Unsaved changes', yes: 'Discard', danger: true })) return;
     setPane(this, 'detail');
     this.textMode = false;
     this.section = id;
@@ -7421,18 +7732,19 @@ app.views.reticulum = {
   },
 
   async rename(name) {
-    const to = prompt(`Rename ${name} to`, name);
-    if (!to || to.trim() === name) return;
-    const result = await attempt(() => api.post('/reticulum/interfaces', { action: 'rename', name, to: to.trim() }));
+    let to = name;
+    const result = await askText(`Rename ${name}`, { label: 'To', value: name, ok: 'Rename', act: (text) => {
+      to = text;
+      return to === name ? null : api.post('/reticulum/interfaces', { action: 'rename', name, to });
+    } });
+    if (!result) return;
     this.report(result, `Renamed ${name}`);
-    if (result) {
-      this.section = 'interface:' + to.trim();
-      this.load(true);
-    }
+    this.section = 'interface:' + to;
+    this.load(true);
   },
 
   async remove(name) {
-    if (!confirm(`Delete the interface ${name} from the Reticulum config?`)) return;
+    if (!await ask(`Delete the interface ${name} from the Reticulum config?`, { title: 'Delete the interface', yes: 'Delete', danger: true })) return;
     const result = await attempt(() => api.post('/reticulum/interfaces', { action: 'delete', name }));
     this.report(result, `Deleted ${name}`);
     if (result) {
@@ -7445,7 +7757,7 @@ app.views.reticulum = {
 
   async openText() {
     if (this.textMode) return setPane(this, 'detail');
-    if (this.dirty() && !confirm('Discard unsaved changes?')) return;
+    if (this.dirty() && !await ask('Discard unsaved changes?', { title: 'Unsaved changes', yes: 'Discard', danger: true })) return;
     setPane(this, 'detail');
     this.textMode = true;
     await this.load(true);
@@ -7533,7 +7845,7 @@ async function rnsHistory(changed) {
   };
   restore.onclick = async () => {
     const version = versions.find((v) => v.id === picked);
-    if (!confirm(`Put back the version of ${version.when} (${version.what})? The file now is kept in the history too.`)) return;
+    if (!await ask(`Put back the version of ${version.when} (${version.what})?\nThe file now is kept in the history too.`, { title: 'Put back', yes: 'Put it back' })) return;
     const result = await attempt(() => api.post(`/reticulum/history/${picked}/restore`), 'Put the earlier version back; restart Reticulum to apply it');
     if (!result) return;
     if (result.warnings.length) toast(result.warnings.join(' · '));
@@ -7567,30 +7879,30 @@ async function identitiesDialog() {
       el('div', { class: 'row' },
         el('button', { text: 'QR code', title: 'Its address as a QR code, to be added as a contact', onclick: () => showAddress(p.link) }),
         el('button', { text: 'Rename', onclick: async () => {
-          const name = prompt('Name (the one it announces)', p.name);
-          if (name === null || !name.trim()) return;
-          if (await attempt(() => api.post(`/identities/${p.id}/rename`, { name }))) {
+          if (await askText(`Rename ${p.name}`, { label: 'Name (the one it announces)', value: p.name, ok: 'Rename',
+            act: async (name) => (await api.post(`/identities/${p.id}/rename`, { name }), true) })) {
             show();
             if (p.active) refresh();
           }
         } }),
         p.active ? null : el('button', { class: 'primary', text: 'Switch', onclick: () => switchIdentity(p) }))));
     body.replaceChildren(
-      el('p', { class: 'dim', text: 'Each identity is an LXMF address of its own, with its own name, conversations, contacts and settings; one is used at a time. Bringing one in from a file and deleting one are done in the terminal (Status, I), as they handle keys.' }),
+      el('p', { class: 'dim', text: 'Each identity is an LXMF address of its own, with its own name, conversations, contacts and settings; one is used at a time. '
+        + (IN_ANDROID_APP ? 'Bringing one in from a file is done in the app\'s Identity and backups screen, and deleting one in the terminal, as they handle keys.'
+          : 'Bringing one in from a file and deleting one are done in the terminal (Status, I), as they handle keys.') }),
       ...rows,
       listed.identities.length < listed.most ? el('div', { class: 'row actions' },
         el('button', { text: '+ New identity', onclick: async () => {
-          const name = prompt('Name of the new identity (the one it announces)');
-          if (name === null || !name.trim()) return;
-          const made = await attempt(() => api.post('/identities', { name }));
+          const made = await askText('New identity', { label: 'Its name (the one it announces)', ok: 'Create', act: (name) => api.post('/identities', { name }) });
           if (made) {
             toast(`Kept ${made.name}: Switch uses it`);
             show();
           }
-        } })) : null);
+        } }),
+        IN_ANDROID_APP ? androidBackupsButton('From a file…') : null) : null);
   };
   const switchIdentity = async (p) => {
-    if (!confirm(`Switch to ${p.name} (${p.address})?\nEverything is saved, and rettui starts again as it: this page loads again once it's back.`)) return;
+    if (!await ask(`Switch to ${p.name} (${p.address})?\nEverything is saved, and rettui starts again as it: this page loads again once it's back.`, { title: 'Switch identity', yes: 'Switch' })) return;
     if (!await attempt(() => api.post(`/identities/${p.id}/switch`))) return;
     closeDialog?.();
     toast(`Switching to ${p.name}…`);
@@ -7611,7 +7923,7 @@ async function restartReticulum() {
   const question = app.status?.external_shared_instance
     ? 'Reconnect to the shared instance?\nIts own program (such as rnsd) applies interface changes when it restarts.'
     : 'Restart Reticulum?\nLinks and transfers in progress stop; hubs reconnect and your node starts again.';
-  if (!confirm(question)) return;
+  if (!await ask(question, { title: 'Reticulum', yes: app.status?.external_shared_instance ? 'Reconnect' : 'Restart' })) return;
   attempt(() => api.post('/reticulum/restart'), 'Restarting Reticulum');
 }
 
@@ -7640,12 +7952,12 @@ function keysDialog() {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) return setDrawer(false);
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
   // As in the terminal UI, Esc stops writing (the shortcuts work again),
   // unless it closed something first (the list @ opens).
   if (typing && e.key === 'Escape' && !e.defaultPrevented) return document.activeElement.blur();
-  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  // Nor under a dialog: its own keys only.
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('.overlay')) return;
   if (e.key >= '1' && e.key <= String(TABS.length)) switchTab(TABS[Number(e.key) - 1].id);
   else if (e.key === '?') keysDialog();
   else if (['<', '>', '='].includes(e.key) && app.views[app.tab]?.resizeSide?.(e.key)) e.preventDefault();
@@ -7702,6 +8014,7 @@ let openOnStart = (() => {
   }
 })();
 let started = false;
+const sharedOnStart = [];
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (!e.data || !('open' in e.data)) return;
   if (started) openTarget(e.data.open);
@@ -7713,6 +8026,7 @@ refreshStatus().then(() => {
   switchTab(app.views[initial] ? initial : 'messages');
   started = true;
   if (openOnStart) openTarget(openOnStart);
+  sharedOnStart.splice(0).forEach((share) => share());
   listen();
   notifications.start();
   setTimeout(prefetch, 300);
