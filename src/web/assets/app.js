@@ -1771,7 +1771,7 @@ async function openHubLink(link) {
   const hash = (link.match(/[0-9a-f]{32}/i) || [''])[0].toLowerCase();
   const hubs = await api.get('/channels').catch(() => []);
   const known = hubs.some((h) => h.hash === hash);
-  if (!known && !confirm(`Open RRC hub ${link}?\nConnecting tells the hub who you are.`)) return;
+  if (!known && !await ask(`Open RRC hub ${link}?\nConnecting tells the hub who you are.`, { title: 'Open a hub', yes: 'Open' })) return;
   const result = await attempt(() => api.post('/channels', { address: link }));
   if (result) {
     app.views.channels.selected = { hub: result.hub, room: result.room || '' };
@@ -2167,8 +2167,11 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
 // A dialog over the page: closed by its buttons, Escape or a click beside
 // it. Its close function (which `onclose` hears about).
 function dialog(title, body, { className = '', onclose } = {}) {
+  // Escape closes the one on top only (a question over another dialog).
   const onKey = (e) => {
-    if (e.key === 'Escape') close();
+    if (e.key !== 'Escape' || e.defaultPrevented || [...document.querySelectorAll('.overlay')].at(-1) !== overlay) return;
+    e.preventDefault();
+    close();
   };
   const close = () => {
     overlay.remove();
@@ -2184,6 +2187,92 @@ function dialog(title, body, { className = '', onclose } = {}) {
   overlay.close = close;
   document.body.append(overlay);
   return close;
+}
+
+// Questions in dialogs of the page's own, not the browser's confirm() and
+// prompt(): those freeze the page while they're open (no new messages),
+// look like neither theme, and can be turned off for good by a tick box,
+// after which every question quietly answers Cancel.
+
+// A yes-or-no question: true when `yes` is pressed, false when it's closed
+// any other way. A question's lines after the first are its details.
+function ask(question, { title = 'Are you sure?', yes = 'OK', no = 'Cancel', danger = false } = {}) {
+  return new Promise((resolve) => {
+    let answer = false;
+    dialog(title, (close) => {
+      const button = el('button', { class: danger ? 'danger' : 'primary', text: yes, onclick: () => {
+        answer = true;
+        close();
+      } });
+      requestAnimationFrame(() => button.focus());
+      return el('div', { class: 'ask' },
+        String(question).split('\n').map((line, i) => el('p', { class: i ? 'dim' : '', text: line })),
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: no, onclick: () => close() }), button));
+    }, { className: 'ask-dialog', onclose: () => resolve(answer) });
+  });
+}
+
+// One of a few `choices` ({ text, value }), as buttons: its value, or null
+// when it's closed.
+function choose(title, choices, { text } = {}) {
+  return new Promise((resolve) => {
+    let answer = null;
+    dialog(title, (close) => {
+      const buttons = choices.map((c) => el('button', { text: c.text, onclick: () => {
+        answer = c.value;
+        close();
+      } }));
+      requestAnimationFrame(() => buttons[0]?.focus());
+      return el('div', { class: 'ask' }, text ? el('p', { text }) : null, el('div', { class: 'choices' }, buttons));
+    }, { className: 'ask-dialog', onclose: () => resolve(answer) });
+  });
+}
+
+// A line of text asked for: null when it's cancelled. With `act`, OK runs
+// it on the (trimmed) text while the dialog stays open, and what it throws
+// is shown there to put right; then it's what `act` returned.
+function askText(title, { label = '', value = '', placeholder = '', ok = 'OK', act, mono = false } = {}) {
+  return new Promise((resolve) => {
+    let answer = null;
+    dialog(title, (close) => {
+      const input = el('input', { type: 'text', value, placeholder, class: mono ? 'mono' : '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+      const error = el('div', { class: 'status error', role: 'alert' });
+      const button = el('button', { class: 'primary', text: ok });
+      const submit = async () => {
+        const text = input.value.trim();
+        if (!text) return input.focus();
+        if (!act) {
+          answer = text;
+          return close();
+        }
+        button.disabled = true;
+        try {
+          answer = await act(text);
+          close();
+        } catch (e) {
+          error.textContent = e.message;
+          input.focus();
+        } finally {
+          button.disabled = false;
+        }
+      };
+      button.onclick = submit;
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.isComposing) {
+          e.preventDefault();
+          if (!button.disabled) submit();
+        }
+      });
+      input.addEventListener('input', () => { error.textContent = ''; });
+      requestAnimationFrame(() => {
+        input.focus();
+        input.select();
+      });
+      return el('div', { class: 'ask' },
+        el('label', { class: 'field' }, label ? el('span', { text: label }) : null, input), error,
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: 'Cancel', onclick: () => close() }), button));
+    }, { className: 'ask-dialog', onclose: () => resolve(answer) });
+  });
 }
 
 // ---- Games (LRGP) -------------------------------------------------------------
@@ -2319,7 +2408,7 @@ function gameBoard(app, session, onForget) {
     }
     const playing = game.yours && game.status === 'active' && game.draw_offer !== true;
     const can = (command) => game.actions.includes(command);
-    const button = (text, command, confirmText) => el('button', { text, onclick: () => (!confirmText || confirm(confirmText)) && act(command) });
+    const button = (text, command, question) => el('button', { text, onclick: async () => (!question || await ask(question, { title: text, yes: text, danger: true })) && act(command) });
     const actions = [
       can('accept') ? el('button', { class: 'primary', text: 'Accept', onclick: () => act('accept') }) : null,
       can('decline') ? button('Decline', 'decline') : null,
@@ -2334,7 +2423,8 @@ function gameBoard(app, session, onForget) {
       game.unsent ? button('↻ Send again', 'resend') : null,
       el('button', { class: 'danger', text: 'Forget', title: 'Remove it from your games (they aren\'t told)', onclick: async () => {
         const over = !['pending', 'active'].includes(game.status);
-        if (!confirm(over ? `Forget this game of ${game.name}?` : `Forget this game of ${game.name}? It isn't over: ${game.peer_name || 'they'} won't be told.`)) return;
+        const question = over ? `Forget this game of ${game.name}?` : `Forget this game of ${game.name}?\nIt isn't over: ${game.peer_name || 'they'} won't be told.`;
+        if (!await ask(question, { title: 'Forget the game', yes: 'Forget', danger: true })) return;
         if (await attempt(() => api.delete(`/games/${app}/${session}`), 'Forgotten')) {
           onForget?.();
           loadNow();
@@ -2430,8 +2520,9 @@ function gameBoard(app, session, onForget) {
           const moves = b.legal.filter((m) => m.startsWith(squareName(from) + squareName(i)));
           let move = moves[0];
           if (moves.length > 1) {
-            const choice = prompt('Promote to: q (queen), r (rook), b (bishop) or n (knight)', 'q');
-            move = moves.find((m) => m.endsWith((choice || '').trim().toLowerCase()[0] || 'q'));
+            const choice = await choose('Promote to', [['q', 'Queen'], ['r', 'Rook'], ['b', 'Bishop'], ['n', 'Knight']]
+              .map(([value, name]) => ({ value, text: `${CHESS_GLYPHS[value]} ${name}` })));
+            move = choice && moves.find((m) => m.endsWith(choice));
             if (!move) return;
           }
           act('move', move);
@@ -3438,9 +3529,13 @@ app.views.messages = {
     if (options.focus) setTimeout(() => this.text.focus(), 50);
   },
 
-  newConversation() {
-    const address = prompt('LXMF address (32 hex characters), or an lxma:// link');
-    if (address) openConversation(address);
+  async newConversation() {
+    const key = await askText('New conversation', { label: 'Their LXMF address (32 hex characters), or an lxma:// link', ok: 'Open', mono: true,
+      act: async (address) => (await api.post('/conversations', { address })).key });
+    if (!key) return;
+    this.selected = key;
+    switchTab('messages', { focus: true });
+    setPane(this, 'detail');
   },
 
   // The phone's + : what the box's other buttons do, in a sheet.
@@ -3749,7 +3844,7 @@ app.views.messages = {
 
   // Delete a conversation (asked first), and `close` what asked for it.
   async deleteConversation(key, conversation, close = () => {}) {
-    if (!confirm(`Delete the conversation with ${conversation.name}, its archived messages and the files it brought?`)) return;
+    if (!await ask(`Delete the conversation with ${conversation.name}?\nIts archived messages and the files it brought go too.`, { title: 'Delete the conversation', yes: 'Delete', danger: true })) return;
     if (await attempt(() => api.post(`/conversations/${key}/delete`), 'Deleted the conversation')) {
       close();
       if (this.selected === key) this.selected = null;
@@ -4016,7 +4111,7 @@ app.views.messages = {
   // trusting them (`unknown`), or block them (`blocked`, after asking).
   async setTrust(key, trust, conversation, after) {
     const name = conversation?.name || key;
-    if (trust === 'blocked' && !confirm(`Block ${name}? Their messages are dropped, the conversation is deleted, and their identity is blocked in Reticulum.`)) return false;
+    if (trust === 'blocked' && !await ask(`Block ${name}?\nTheir messages are dropped, the conversation is deleted, and their identity is blocked in Reticulum.`, { title: 'Block', yes: 'Block', danger: true })) return false;
     const said = { trusted: `Trusting ${name}`, untrusted: `Leaving ${name} as is`, unknown: `Not trusting ${name}`, blocked: `Blocked ${name}` }[trust];
     if (!await attempt(() => api.post(`/conversations/${key}/trust`, { trust }), said)) return false;
     if (trust === 'blocked' && this.selected === key) {
@@ -4039,7 +4134,7 @@ app.views.messages = {
     if (m.content?.trim() || m.attachments.length) items.push({ text: 'Forward…', action: () => this.forwardDialog(conversation.key, m) });
     if (m.state.kind === 'failed') items.push({ text: 'Send again', action: () => this.retry(conversation.key, m.id) });
     items.push({ text: m.attachments.length ? 'Delete (and its files)' : 'Delete', danger: true, action: async () => {
-      if (!confirm(m.attachments.length ? 'Delete this message and the files it brought?' : 'Delete this message?')) return;
+      if (!await ask(m.attachments.length ? 'Delete this message and the files it brought?' : 'Delete this message?', { title: 'Delete the message', yes: 'Delete', danger: true })) return;
       if (await attempt(() => api.post(`/conversations/${conversation.key}/messages/delete`, { id: m.id }), 'Deleted the message')) this.update();
     } });
     openSheet(null, items, anchor);
@@ -4430,9 +4525,8 @@ app.views.channels = {
   },
 
   async addHub() {
-    const address = prompt('RRC hub address (32 hex characters, or rrc://address/room)');
-    if (!address) return;
-    const result = await attempt(() => api.post('/channels', { address }));
+    const result = await askText('Add a hub', { label: 'RRC hub address (32 hex characters), or an rrc://address/room link', ok: 'Add', mono: true,
+      act: (address) => api.post('/channels', { address }) });
     if (result) {
       this.selected = { hub: result.hub, room: result.room || '' };
       setPane(this, 'detail');
@@ -4669,7 +4763,7 @@ app.views.channels = {
         el('button', { text: 'Actions', onclick: (e) => this.userMenu(e, whisper.src) }),
         bellButton(view.notify_level === 'off' ? 'off' : 'on', `Notifications from ${whisper.name}`, (e) => this.notifyMenu(e, hub, room, view)),
         el('button', { class: 'danger more', text: 'Close', title: 'Close the conversation and delete its messages', onclick: async () => {
-          if (!confirm(`Close the whisper conversation with ${whisper.name} and delete its messages?`)) return;
+          if (!await ask(`Close the whisper conversation with ${whisper.name} and delete its messages?`, { title: 'Close the whisper', yes: 'Close', danger: true })) return;
           await this.hubAction(hash, 'forget', { room });
           this.selected = { hub: hash, room: '' };
           this.update();
@@ -4694,7 +4788,7 @@ app.views.channels = {
           onclick: (e) => e.currentTarget.closest('header').querySelector('.toggle input').click() }),
         el('button', { class: 'more', text: 'Copy link', onclick: () => copy(entry?.link, 'link') }),
         el('button', { class: 'danger more', text: 'Forget', title: 'Leave and delete the messages', onclick: async () => {
-          if (!confirm(`Leave #${room} and delete its messages?`)) return;
+          if (!await ask(`Leave #${room} and delete its messages?`, { title: 'Forget the room', yes: 'Leave', danger: true })) return;
           await this.hubAction(hash, 'forget', { room });
           this.selected = { hub: hash, room: '' };
           this.update();
@@ -4716,7 +4810,7 @@ app.views.channels = {
         bellButton(hub.notify, `Notifications from ${hub.name}`, (e) => this.notifyMenu(e, hub, '', view)),
         el('button', { class: 'more', text: 'Copy link', onclick: () => copy(hub.link, 'link') }),
         el('button', { class: 'danger more', text: 'Remove hub', onclick: async () => {
-          if (!confirm(`Remove hub ${hub.name} and its history?`)) return;
+          if (!await ask(`Remove hub ${hub.name} and its history?`, { title: 'Remove the hub', yes: 'Remove', danger: true })) return;
           await this.hubAction(hash, 'remove');
           this.selected = null;
           setPane(this, 'list');
@@ -5059,7 +5153,7 @@ app.views.channels = {
     if (!result) return restore();
     if (result.split) {
       const limit = this.hubs.find((h) => h.hash === hub)?.limits.message_bytes;
-      if (confirm(`That is over this hub's ${limit}-byte limit. Send it as ${result.split.length} messages?`)) {
+      if (await ask(`That is over this hub's ${limit}-byte limit. Send it as ${result.split.length} messages?`, { title: 'Too long for one message', yes: `Send ${result.split.length}` })) {
         if (!await this.hubAction(hub, 'split', { room, parts: result.split })) restore();
       } else {
         restore();
@@ -5168,9 +5262,9 @@ app.views.network = {
       el('section', { class: 'panel' }, el('header', { class: 'network-tools' }, this.search, filter, this.heardSelect, sort, this.viaSelect, this.modeButton,
         el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
-        el('button', { class: 'more', text: 'Find a path…', title: 'Find the path to any address', onclick: () => {
-          const address = prompt('Find a path to (address)', this.selected || '');
-          if (address?.trim()) pathDialog(address.trim().replace(/^<|>$/g, ''));
+        el('button', { class: 'more', text: 'Find a path…', title: 'Find the path to any address', onclick: async () => {
+          const address = await askText('Find a path', { label: 'To the address', value: this.selected || '', ok: 'Find', mono: true });
+          if (address) pathDialog(address.replace(/^<|>$/g, ''));
         } }), moreButton())),
       el('section', { class: 'panel grow' }, el('header', {}, this.title), this.table)));
     this.showMode();
@@ -6004,23 +6098,15 @@ const micron = {
   clean: (text) => text.replace(/[`[\]()<>|]/g, ''),
 
   // Apply an action; asks for what it needs (colours come from the palette).
-  run(t, action, answer) {
+  async run(t, action, answer) {
     const { selectionStart: start, selectionEnd: end, value } = t;
     const selected = value.slice(start, end);
     const oneLine = selected && !selected.includes('\n') ? this.clean(selected) : '';
-    const ask = (question) => {
-      const reply = prompt(question);
-      return reply === null ? null : reply.trim();
-    };
-    const name = (question) => {
-      const reply = ask(question);
-      if (reply === null) return null;
-      if (!/^[\p{L}\p{N}_-]+$/u.test(reply)) {
-        toast('Field names use letters, digits, - and _', true);
-        return null;
-      }
+    const address = (title, label) => askText(title, { label, ok: 'Insert', mono: true });
+    const name = (title) => askText(title, { label: 'Letters, digits, - and _', ok: 'Insert', act: async (reply) => {
+      if (!/^[\p{L}\p{N}_-]+$/u.test(reply)) throw new Error('Field names use letters, digits, - and _ only');
       return reply;
-    };
+    } });
     switch (action) {
       case 'bold': return this.toggle(t, '`!');
       case 'italic': return this.toggle(t, '`*');
@@ -6061,27 +6147,27 @@ const micron = {
         return this.setLines(t, from, to, out, out.length - 1);
       }
       case 'link': {
-        const url = ask('Link to (a page like :/page/about.mu, node:/page/…, lxmf@…, rrc://…)');
+        const url = await address('Link', 'Link to: a page like :/page/about.mu, node:/page/…, lxmf@…, rrc://…');
         if (!url) return;
         return this.replace(t, start, end, `\`[${oneLine || url}\`${url}]`);
       }
       case 'image': {
-        const url = ask('Image address (like :/media/logo.png)');
+        const url = await address('Image', 'Image address, like :/media/logo.png');
         if (!url) return;
         return this.replace(t, start, end, `\`(${oneLine || 'image'}\`${url})`);
       }
       case 'field': {
-        const field = name('Field name');
+        const field = await name('Field name');
         if (field) this.replace(t, start, end, `\`<24|${field}\`${oneLine}>`);
         return;
       }
       case 'checkbox': {
-        const field = name('Checkbox name');
+        const field = await name('Checkbox name');
         if (field) this.replace(t, start, end, `\`<?|${field}|yes\`${oneLine || field}>`);
         return;
       }
       case 'radio': {
-        const field = name('Radio group name');
+        const field = await name('Radio group name');
         const label = oneLine || 'Option';
         if (field) this.replace(t, start, end, `\`<^|${field}|${label}\`${label}>`);
         return;
@@ -6414,9 +6500,8 @@ app.views.node = {
   },
 
   async renameItem(root, entry) {
-    const to = prompt(`Rename ${root}/${entry.path} to (links to it follow)`, entry.path);
-    if (!to || to === entry.path) return;
-    const result = await attempt(() => api.post('/node/rename', { root, from: entry.path, to }));
+    const result = await askText(`Rename ${root}/${entry.path}`, { label: 'To (links to it follow)', value: entry.path, ok: 'Rename',
+      act: (to) => (to === entry.path ? null : api.post('/node/rename', { root, from: entry.path, to })) });
     if (result) this.moved(root, entry.path, result.path);
   },
 
@@ -6494,7 +6579,7 @@ app.views.node = {
   },
 
   async removeItem(root, path, name) {
-    if (!confirm(`Delete ${root}/${path}? Pages that show or link to ${name} won't find it any more.`)) return;
+    if (!await ask(`Delete ${root}/${path}?\nPages that show or link to ${name} won't find it any more.`, { title: 'Delete', yes: 'Delete', danger: true })) return;
     const done = await attempt(() => api.post('/node/delete', { root, path }), `Deleted ${root}/${path}`);
     if (done && root === 'pages' && this.open?.path === path) {
       this.open = null;
@@ -6511,7 +6596,7 @@ app.views.node = {
 
   async load(path) {
     if (this.open?.path === path) return setPane(this, 'detail');
-    if (this.dirty() && !confirm(`Discard unsaved changes to ${this.open.path}?`)) return;
+    if (this.dirty() && !await ask(`Discard unsaved changes to ${this.open.path}?`, { title: 'Unsaved changes', yes: 'Discard', danger: true })) return;
     setPane(this, 'detail');
     const page = await attempt(() => api.get('/node/page?path=' + encodeURIComponent(path)));
     if (!page) return;
@@ -6609,23 +6694,20 @@ app.views.node = {
   },
 
   async create() {
-    const name = prompt('New page (e.g. about, or blog/first)');
-    if (!name) return;
-    const result = await attempt(() => api.post('/node/pages', { name }));
+    const result = await askText('New page', { label: 'Its name, like about, or blog/first', ok: 'Create', act: (name) => api.post('/node/pages', { name }) });
     if (result) this.load(result.path);
   },
 
   async rename() {
     const open = this.open;
-    const to = prompt(`Rename ${open.path} to`, open.path);
-    if (!to || to === open.path) return;
-    const result = await attempt(() => api.post('/node/rename', { from: open.path, to }));
+    const result = await askText(`Rename ${open.path}`, { label: 'To', value: open.path, ok: 'Rename',
+      act: (to) => (to === open.path ? null : api.post('/node/rename', { from: open.path, to })) });
     if (result) this.moved('pages', open.path, result.path);
   },
 
   async remove() {
     const open = this.open;
-    if (!confirm(`Delete ${open.path}?`)) return;
+    if (!await ask(`Delete ${open.path}?`, { title: 'Delete the page', yes: 'Delete', danger: true })) return;
     const done = await attempt(() => api.post('/node/delete', { path: open.path }), `Deleted ${open.path}`);
     if (done) {
       this.open = null;
@@ -6882,7 +6964,7 @@ app.views.status = {
           el('a', { href: s.update.url, target: '_blank', rel: 'noopener noreferrer', text: 'what\'s new ↗' }),
           s.update.installing ? el('span', { class: 'dim', text: 'installing…' })
             : s.update.installable ? el('button', { text: 'Install', title: 'Download it from GitHub, check it, and put it in place of this one', onclick: async () => {
-              if (!confirm(`Install rettui ${s.update.version} in place of this one? rettui carries on as it is until it's started again.`)) return;
+              if (!await ask(`Install rettui ${s.update.version} in place of this one?\nrettui carries on as it is until it's started again.`, { title: 'Update', yes: 'Install' })) return;
               const done = await attempt(() => api.post('/update/install'));
               if (done) toast(done.doing);
               loadNow();
@@ -6929,7 +7011,7 @@ app.views.status = {
         el('span', { class: 'dim', text: 'This one stays signed in' }),
         el('button', { text: 'Sign out the others', title: 'A new login link (printed where rettui runs): every other browser, and scripts with the old token, must log in again; push notifications stop until browsers turn them on again',
           onclick: async () => {
-            if (!confirm('Sign every other browser out? They (and scripts using the old token) need the new link, printed where rettui runs, to log in again.')) return;
+            if (!await ask('Sign every other browser out?\nThey (and scripts using the old token) need the new link, printed where rettui runs, to log in again.', { title: 'Sign out the others', yes: 'Sign them out', danger: true })) return;
             if (await attempt(() => api.post('/sign-out-others'), 'Every other browser was signed out')) notifications.checkPush().catch(() => {});
           } })),
       // With --https and rettui's own certificate.
@@ -7246,21 +7328,23 @@ app.views.hub = {
     this.expectUntil = Date.now() + 5000;
   },
 
-  renameRoom(room) {
-    const answer = prompt(`Rename #${room.name} to`, room.name);
-    const to = answer?.trim().replace(/^#/, '').toLowerCase();
+  async renameRoom(room) {
+    const to = await askText(`Rename #${room.name}`, { label: 'To', value: room.name, ok: 'Rename', act: async (answer) => {
+      const to = answer.replace(/^#/, '').toLowerCase();
+      if (/\s/.test(to)) throw new Error('Room names are one word');
+      if (to !== room.name && this.hub.rooms.some((r) => r.name === to)) throw new Error(`There's a room #${to} already`);
+      return to;
+    } });
     if (!to || to === room.name) return;
-    if (/\s/.test(to)) return toast('Room names are one word', true);
-    if (this.hub.rooms.some((r) => r.name === to)) return toast(`There's a room #${to} already`, true);
     this.act('rename', { room: room.name, text: to });
     this.expect(to);
     this.openPage({ room: to });
   },
 
-  deleteRoom(room) {
+  async deleteRoom(room) {
     const people = room.members.length === 1 ? 'The one in it is taken out. ' : room.members.length ? `The ${room.members.length} in it are taken out. ` : '';
     const again = this.hub.open_rooms ? ' Anyone may make it again by joining it.' : '';
-    if (!confirm(`Delete #${room.name}? ${people}Its topic, settings and bans go too.${again}`)) return;
+    if (!await ask(`Delete #${room.name}?\n${people}Its topic, settings and bans go too.${again}`, { title: 'Delete the room', yes: 'Delete', danger: true })) return;
     this.act('delete', { room: room.name });
     this.show('rooms');
   },
@@ -7283,8 +7367,8 @@ app.views.hub = {
       toggle('Operator', op, (checked) => act('op', { on: checked }), founder ? { disabled: true, title: 'A room\'s founder is always one' } : {}),
       toggle('Voice', room.voiced.includes(id), (checked) => act('voice', { on: checked })),
       el('button', { text: 'Kick', onclick: () => act('kick') }),
-      el('button', { class: 'danger', text: 'Ban', onclick: () => {
-        if (confirm(`Ban ${this.nameOf(id)} from #${room.name}? They're taken out of it, and can't come back until the ban is lifted.`)) act('ban', { on: true });
+      el('button', { class: 'danger', text: 'Ban', onclick: async () => {
+        if (await ask(`Ban ${this.nameOf(id)} from #${room.name}?\nThey're taken out of it, and can't come back until the ban is lifted.`, { title: 'Ban', yes: 'Ban', danger: true })) act('ban', { on: true });
       } }));
   },
 
@@ -7309,8 +7393,8 @@ app.views.hub = {
       el('div', { class: 'hub-heading', text: 'The whole hub' }),
       el('div', { class: 'hub-member' },
         el('button', { text: 'Disconnect', title: 'Close their connection (they can come back)', onclick: () => this.act('disconnect', { identity }) }),
-        identity === hub.you ? null : el('button', { class: 'danger', text: 'Ban from the hub', onclick: () => {
-          if (confirm(`Ban ${name} from the whole hub? They're disconnected now, and every time they come back.`)) this.act('ban', { identity, on: true });
+        identity === hub.you ? null : el('button', { class: 'danger', text: 'Ban from the hub', onclick: async () => {
+          if (await ask(`Ban ${name} from the whole hub?\nThey're disconnected now, and every time they come back.`, { title: 'Ban from the hub', yes: 'Ban', danger: true })) this.act('ban', { identity, on: true });
         } })),
     ];
   },
@@ -7329,9 +7413,12 @@ app.views.hub = {
       || identity.slice(0, 12);
   },
 
-  newRoom() {
-    const room = prompt('New registered room (it stays, with its topic and settings, while nobody is in it)');
-    const name = room?.trim().replace(/^#/, '').toLowerCase();
+  async newRoom() {
+    const name = await askText('New registered room', { label: 'It stays, with its topic and settings, while nobody is in it', ok: 'Add', act: async (room) => {
+      const name = room.replace(/^#/, '').toLowerCase();
+      if (!name || /\s/.test(name)) throw new Error('Room names are one word');
+      return name;
+    } });
     if (!name) return;
     this.act('register', { room: name, on: true });
     this.showing = 'rooms';
@@ -7489,7 +7576,7 @@ app.views.reticulum = {
   },
 
   async select(id) {
-    if (this.dirty() && !confirm('Discard unsaved changes?')) return;
+    if (this.dirty() && !await ask('Discard unsaved changes?', { title: 'Unsaved changes', yes: 'Discard', danger: true })) return;
     setPane(this, 'detail');
     this.textMode = false;
     this.section = id;
@@ -7620,18 +7707,19 @@ app.views.reticulum = {
   },
 
   async rename(name) {
-    const to = prompt(`Rename ${name} to`, name);
-    if (!to || to.trim() === name) return;
-    const result = await attempt(() => api.post('/reticulum/interfaces', { action: 'rename', name, to: to.trim() }));
+    let to = name;
+    const result = await askText(`Rename ${name}`, { label: 'To', value: name, ok: 'Rename', act: (text) => {
+      to = text;
+      return to === name ? null : api.post('/reticulum/interfaces', { action: 'rename', name, to });
+    } });
+    if (!result) return;
     this.report(result, `Renamed ${name}`);
-    if (result) {
-      this.section = 'interface:' + to.trim();
-      this.load(true);
-    }
+    this.section = 'interface:' + to;
+    this.load(true);
   },
 
   async remove(name) {
-    if (!confirm(`Delete the interface ${name} from the Reticulum config?`)) return;
+    if (!await ask(`Delete the interface ${name} from the Reticulum config?`, { title: 'Delete the interface', yes: 'Delete', danger: true })) return;
     const result = await attempt(() => api.post('/reticulum/interfaces', { action: 'delete', name }));
     this.report(result, `Deleted ${name}`);
     if (result) {
@@ -7644,7 +7732,7 @@ app.views.reticulum = {
 
   async openText() {
     if (this.textMode) return setPane(this, 'detail');
-    if (this.dirty() && !confirm('Discard unsaved changes?')) return;
+    if (this.dirty() && !await ask('Discard unsaved changes?', { title: 'Unsaved changes', yes: 'Discard', danger: true })) return;
     setPane(this, 'detail');
     this.textMode = true;
     await this.load(true);
@@ -7732,7 +7820,7 @@ async function rnsHistory(changed) {
   };
   restore.onclick = async () => {
     const version = versions.find((v) => v.id === picked);
-    if (!confirm(`Put back the version of ${version.when} (${version.what})? The file now is kept in the history too.`)) return;
+    if (!await ask(`Put back the version of ${version.when} (${version.what})?\nThe file now is kept in the history too.`, { title: 'Put back', yes: 'Put it back' })) return;
     const result = await attempt(() => api.post(`/reticulum/history/${picked}/restore`), 'Put the earlier version back; restart Reticulum to apply it');
     if (!result) return;
     if (result.warnings.length) toast(result.warnings.join(' · '));
@@ -7766,9 +7854,8 @@ async function identitiesDialog() {
       el('div', { class: 'row' },
         el('button', { text: 'QR code', title: 'Its address as a QR code, to be added as a contact', onclick: () => showAddress(p.link) }),
         el('button', { text: 'Rename', onclick: async () => {
-          const name = prompt('Name (the one it announces)', p.name);
-          if (name === null || !name.trim()) return;
-          if (await attempt(() => api.post(`/identities/${p.id}/rename`, { name }))) {
+          if (await askText(`Rename ${p.name}`, { label: 'Name (the one it announces)', value: p.name, ok: 'Rename',
+            act: async (name) => (await api.post(`/identities/${p.id}/rename`, { name }), true) })) {
             show();
             if (p.active) refresh();
           }
@@ -7781,9 +7868,7 @@ async function identitiesDialog() {
       ...rows,
       listed.identities.length < listed.most ? el('div', { class: 'row actions' },
         el('button', { text: '+ New identity', onclick: async () => {
-          const name = prompt('Name of the new identity (the one it announces)');
-          if (name === null || !name.trim()) return;
-          const made = await attempt(() => api.post('/identities', { name }));
+          const made = await askText('New identity', { label: 'Its name (the one it announces)', ok: 'Create', act: (name) => api.post('/identities', { name }) });
           if (made) {
             toast(`Kept ${made.name}: Switch uses it`);
             show();
@@ -7792,7 +7877,7 @@ async function identitiesDialog() {
         IN_ANDROID_APP ? androidBackupsButton('From a file…') : null) : null);
   };
   const switchIdentity = async (p) => {
-    if (!confirm(`Switch to ${p.name} (${p.address})?\nEverything is saved, and rettui starts again as it: this page loads again once it's back.`)) return;
+    if (!await ask(`Switch to ${p.name} (${p.address})?\nEverything is saved, and rettui starts again as it: this page loads again once it's back.`, { title: 'Switch identity', yes: 'Switch' })) return;
     if (!await attempt(() => api.post(`/identities/${p.id}/switch`))) return;
     closeDialog?.();
     toast(`Switching to ${p.name}…`);
@@ -7813,7 +7898,7 @@ async function restartReticulum() {
   const question = app.status?.external_shared_instance
     ? 'Reconnect to the shared instance?\nIts own program (such as rnsd) applies interface changes when it restarts.'
     : 'Restart Reticulum?\nLinks and transfers in progress stop; hubs reconnect and your node starts again.';
-  if (!confirm(question)) return;
+  if (!await ask(question, { title: 'Reticulum', yes: app.status?.external_shared_instance ? 'Reconnect' : 'Restart' })) return;
   attempt(() => api.post('/reticulum/restart'), 'Restarting Reticulum');
 }
 
@@ -7846,7 +7931,8 @@ document.addEventListener('keydown', (e) => {
   // As in the terminal UI, Esc stops writing (the shortcuts work again),
   // unless it closed something first (the list @ opens).
   if (typing && e.key === 'Escape' && !e.defaultPrevented) return document.activeElement.blur();
-  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  // Nor under a dialog: its own keys only.
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('.overlay')) return;
   if (e.key >= '1' && e.key <= String(TABS.length)) switchTab(TABS[Number(e.key) - 1].id);
   else if (e.key === '?') keysDialog();
   else if (['<', '>', '='].includes(e.key) && app.views[app.tab]?.resizeSide?.(e.key)) e.preventDefault();

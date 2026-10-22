@@ -891,6 +891,15 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 /* A labelled input in a dialog (a contact's name and notes). */
 .dialog label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--dim); }
 .dialog label.field input, .dialog label.field textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+/* A question (in place of the browser's confirm and prompt boxes). */
+.dialog.ask-dialog { width: min(420px, 100%); }
+.dialog .ask { display: flex; flex-direction: column; gap: 10px; }
+.dialog .ask p { font-size: 14px; overflow-wrap: anywhere; }
+.dialog .ask p.dim { font-size: 13px; }
+.dialog .ask .status.error { color: var(--red); font-size: 13px; }
+.dialog .ask button.danger { background: var(--red); border-color: var(--red); color: var(--on-accent); font-weight: 600; }
+.dialog .ask .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.dialog .ask .choices button { font-size: 16px; padding: 10px; }
 
 /* Printing a paper message prints its code alone. */
 @media print {

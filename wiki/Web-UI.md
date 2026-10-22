@@ -169,6 +169,13 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 - **Notices:** what rettui says about something you did ("Announcing",
   an error) shows for a few seconds. Tap one, or swipe it aside, to dismiss
   it sooner.
+- **Questions:** what rettui asks before deleting, blocking or switching
+  something, and what it asks you to type (an address, a name), shows in a
+  dialog of its own, in its theme. The button says what it does, and is red
+  when it deletes. `Enter` answers, and `Escape` or a click beside the dialog
+  cancels. When what you typed is wrong (an address that isn't one), it says
+  why under the box and keeps what you typed. The page goes on updating
+  while a question is open, and keyboard shortcuts wait until it's closed.
 - **Font:** text uses Fira Code Nerd Font, which rettui serves itself
   (browsers never fetch fonts from a third party). On a phone, what you read
   (messages, lists, forms) is in the phone's own font instead, and only
