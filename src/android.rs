@@ -1,8 +1,8 @@
 //! The Android app's way in: it loads rettui as a library (`librettui.so`)
 //! and calls these through `org.zevaryx.rettui.Native`, in its own process.
 //! Run there, rather than as a program of its own, rettui can reach Java:
-//! rsReticulum finds AutoInterface's network interfaces and USB RNodes
-//! through it.
+//! rsReticulum finds AutoInterface's network interfaces, USB RNodes and (with
+//! btleplug, whose Java classes the app carries) Bluetooth RNodes through it.
 
 use std::ffi::c_void;
 use std::io::Write as _;
@@ -16,12 +16,22 @@ use jni::sys::{JNI_VERSION_1_6, jint, jobjectArray};
 /// them to its file.
 static OUTPUT: Mutex<()> = Mutex::new(());
 
-/// Java loading the library: rsReticulum keeps the VM for its JNI calls.
+/// Java loading the library: rsReticulum keeps the VM for its JNI calls,
+/// and btleplug finds its Java classes (only on this thread, whose class
+/// loader is the app's).
 #[unsafe(no_mangle)]
 pub extern "system" fn JNI_OnLoad(vm: *mut jni::sys::JavaVM, _reserved: *mut c_void) -> jint {
     // SAFETY: the VM Java passes, alive as long as the process.
     if let Ok(vm) = unsafe { jni::JavaVM::from_raw(vm) } {
         rns_interface::android_usb::init_vm(vm);
+    }
+    // SAFETY: the same VM.
+    let vm22 = unsafe { jni22::JavaVM::from_raw(vm.cast()) };
+    let bluetooth = vm22.attach_current_thread(|env| Ok::<_, jni22::errors::Error>(btleplug::platform::init(env)));
+    // Without it (no Bluetooth here), rsReticulum says so when a Bluetooth
+    // RNode is to start.
+    if let Ok(Ok(())) = bluetooth {
+        rns_interface::ble_rnode::mark_btleplug_initialized();
     }
     JNI_VERSION_1_6
 }

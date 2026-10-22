@@ -72,31 +72,31 @@ shown when rettui stops. On it:
 Back up the identity before uninstalling the app: uninstalling deletes
 everything the app keeps.
 
-## RNodes over USB
+## RNodes
 
-Plug an [RNode](RNode-Radios) into the phone (a USB-C cable, or an OTG
-adapter). Android asks whether to open rettui for it: say yes, and rettui
-may use it from then on. Otherwise, open **🔌 USB RNode** in the web UI's
-Reticulum section, or long-press the app's icon.
+The *RNodes* screen adds an [RNode](RNode-Radios) as an interface,
+over USB or Bluetooth. Open it with **📻 RNode** in the web UI's Reticulum
+section, or by long-pressing the app's icon.
 
-The *USB RNodes* screen lists what's plugged in. Tap the RNode, allow rettui
-to use it if asked, and give it a name. It's added to the Reticulum config
-as an RNode interface on an `androidusb://` port. Its USB IDs (and serial
-number) are added too, so it's found again after it's unplugged.
+- **Over USB:** plug the RNode in (a USB-C cable, or an OTG adapter).
+  Android asks whether to open rettui for it: say yes, and rettui may use it
+  from then on. On the screen, tap it, allow rettui to use it if asked, and
+  give it a name. It's added on an `androidusb://` port, with its USB IDs
+  (and serial number) so it's found again after it's unplugged.
+- **Over Bluetooth:** turn the RNode's Bluetooth on (its Bluetooth button,
+  or `rnodeconf --bluetooth-on`). Tap **Find RNodes nearby**, allow rettui
+  to find and connect to Bluetooth devices if asked, then tap the RNode and
+  give it a name. It's added on a `ble://` port by its name (such as
+  `RNode 3B87`). The first time rettui connects, Android asks to pair: type
+  the PIN the RNode shows.
 
 Before restarting Reticulum, set the interface's frequency, bandwidth,
 spreading factor, coding rate and TX power in the Reticulum section. Use
 what people near you use, and what your country allows. A new interface
 starts from an example, which may not be right where you are.
 
-Some phones stop background apps to save battery. If messages only arrive
-while the app is open, allow it to run in the background: *Settings >
-Apps > rettui > Battery > Unrestricted* (the wording differs between
-phones).
-
 ## What it can't do yet
 
-- **RNodes over Bluetooth** don't work yet.
 - **No terminal UI.**
 - It hasn't been tested on many phones yet. Reports of what does and
   doesn't work are welcome in the
@@ -114,7 +114,9 @@ rettui --data-dir <app files>/rettui --rns-config <app files>/rettui/reticulum -
 
 Since rettui runs inside the app, rsReticulum can call Android through Java.
 It does that to find the network interfaces for AutoInterface and to open
-USB RNodes. **Stop** asks rettui to save everything and stop, and then its
+USB RNodes. Bluetooth RNodes go through btleplug, whose Java classes the app
+carries (`android/btleplug`, copied from the btleplug crate in `Cargo.lock` by
+`build-rust.sh`). **Stop** asks rettui to save everything and stop, and then its
 process ends, so each start begins fresh. The *Identity and backups* screen
 calls rettui's own commands (`identity export`, `identity import`, `backup`,
 `restore`) the same way.

@@ -60,12 +60,13 @@ async function upload(path, file) {
 // A hub room's name as shown: #lobby (a room some client named "#lobby"
 // isn't "##lobby").
 // In rettui's Android app, whose own screens (not this page) handle the
-// identity and backups, and USB devices: the page only links to them.
+// identity and backups, and RNodes over USB and Bluetooth: the page only
+// links to them.
 const IN_ANDROID_APP = /\brettui-android\//.test(navigator.userAgent);
 const androidBackupsButton = (text) => el('button', { text, title: "The app's own screen: save a copy of the identity, keep another from a file, back up and restore",
   onclick: () => { location.href = 'rettui-app:backups'; } });
-const androidUsbButton = () => el('button', { text: '🔌 USB RNode', title: 'Let rettui use an RNode plugged in over USB, and add it as an interface (the app\'s own screen)',
-  onclick: () => { location.href = 'rettui-app:usb'; } });
+const androidRNodesButton = () => el('button', { text: '📻 RNode', title: 'Let rettui use an RNode over USB or Bluetooth, and add it as an interface (the app\'s own screen)',
+  onclick: () => { location.href = 'rettui-app:rnodes'; } });
 
 const roomLabel = (name) => (name.startsWith('#') ? name : '#' + name);
 
@@ -7220,7 +7221,7 @@ app.views.reticulum = {
           el('button', { text: 'Restart', title: 'Restart Reticulum, to apply saved changes now', onclick: () => restartReticulum() })), this.fileCard),
         el('section', { class: 'panel grow' },
           el('header', {}, el('span', { class: 'title grow', text: 'Sections' }),
-            IN_ANDROID_APP ? androidUsbButton() : null,
+            IN_ANDROID_APP ? androidRNodesButton() : null,
             el('button', { text: '+ Interface', onclick: () => this.showAdd() })),
           this.addForm, this.sections)),
       el('section', { class: 'panel grow pane-main' },

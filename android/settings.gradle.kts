@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "rettui"
-include(":app")
+include(":app", ":btleplug")

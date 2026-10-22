@@ -48,7 +48,7 @@ class MainActivity : Activity() {
         const val AGENT = "rettui-android/1"
 
         /** The web UI's links to the app's own screens. */
-        private val SCREENS = mapOf("rettui-app:backups" to BackupsActivity::class.java, "rettui-app:usb" to UsbActivity::class.java)
+        private val SCREENS = mapOf("rettui-app:backups" to BackupsActivity::class.java, "rettui-app:rnodes" to RNodesActivity::class.java)
 
         /** What a notification tapped is about (JSON, as the web UI has it). */
         const val EXTRA_TARGET = "target"

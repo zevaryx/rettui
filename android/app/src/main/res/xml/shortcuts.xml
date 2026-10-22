@@ -12,13 +12,13 @@
             android:targetClass="org.zevaryx.rettui.BackupsActivity" />
     </shortcut>
     <shortcut
-        android:shortcutId="usb"
+        android:shortcutId="rnodes"
         android:enabled="true"
         android:icon="@drawable/ic_launcher"
-        android:shortcutShortLabel="@string/usb">
+        android:shortcutShortLabel="@string/rnodes">
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="org.zevaryx.rettui"
-            android:targetClass="org.zevaryx.rettui.UsbActivity" />
+            android:targetClass="org.zevaryx.rettui.RNodesActivity" />
     </shortcut>
 </shortcuts>

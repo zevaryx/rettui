@@ -120,6 +120,11 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 # versions rsReticulum uses.
 jni = "0.19"
 rns-interface = { path = "deps/rsReticulum/crates/rns-interface" }
+# RNodes over Bluetooth: rsReticulum's through btleplug, which wants its
+# own JNI start (with the newer jni it uses) and Java classes in the app.
+rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime", features = ["ble"] }
+btleplug = "=0.13.4"
+jni22 = { package = "jni", version = "0.22" }
 
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))'.dependencies]
 # Desktop notifications over D-Bus, on the connection that hears their
