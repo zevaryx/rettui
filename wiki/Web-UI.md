@@ -149,8 +149,12 @@ rettui web UI: http://127.0.0.1:8740/?token=…
     easier to tap. Messages show as bubbles, yours on the right, and Network
     rows are cards.
   - **Fewer buttons:** less used buttons (such as a conversation's Contact
-    and Copy address, Copy link, Forget, Rename, Delete) wait behind ⋯. It
-    and a user's actions open as a sheet from the bottom of the screen.
+    and Copy address, Copy link, Forget, Rename, Delete, and the Browser's
+    Reload, Save and Source) wait behind ⋯. It and a user's actions open as
+    a sheet from the bottom of the screen. A list's search box shares a row
+    with its buttons.
+  - **Settings:** labels sit above their fields, and **Save**, **Revert**
+    and the settings' groups stay at the top while you scroll.
   - **Message box:** one line. **+** adds files or pictures, shares a
     location, or changes the way of delivery; the box grows as you write;
     🎤 records a voice message until there's something to send, when it

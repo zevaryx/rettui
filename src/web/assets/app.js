@@ -5070,7 +5070,7 @@ app.views.network = {
       this.update();
     } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes'], ['other', 'Everything else']]
       .map(([value, text]) => el('option', { value, text, selected: value === this.heardKind })));
-    this.modeButton = el('button', { title: 'Every announce as it\'s heard, of every kind, or the list of what\'s been heard  ( a )', onclick: () => this.toggleMode() });
+    this.modeButton = el('button', { class: 'more', title: 'Every announce as it\'s heard, of every kind, or the list of what\'s been heard  ( a )', onclick: () => this.toggleMode() });
     const sort = this.sortSelect = el('select', { title: 'Order', onchange: (e) => {
       this.sort = e.target.value;
       this.update();
@@ -5109,6 +5109,8 @@ app.views.network = {
   showMode() {
     const heard = this.mode === 'announces';
     this.modeButton.textContent = heard ? 'Heard list' : 'Announces';
+    // Its words in the ⋯ sheet on phones.
+    this.modeButton.dataset.label = heard ? 'Back to the heard list' : 'Every announce, as it\'s heard';
     this.filterSelect.classList.toggle('hidden', heard);
     this.sortSelect.classList.toggle('hidden', heard);
     this.heardSelect.classList.toggle('hidden', !heard);

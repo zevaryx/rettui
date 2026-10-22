@@ -924,6 +924,8 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   /* Without its title (the top bar has it), a list's header keeps its
      buttons to the right. */
   .panel > header:has(> .phone-hidden) { justify-content: flex-end; }
+  /* A list's search shares its row with the list's buttons. */
+  .panel > header:not(:has(.subtabs)) .pane-search { flex: 1 1 0; order: -1; }
   /* Less used header buttons wait behind ⋯ (see moreButton in app.js). */
   .panel > header button.more { display: none; }
   .more-button { font-size: 20px; line-height: 1; padding: 4px 12px; }
@@ -1059,6 +1061,8 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .members .member { padding: 12px 16px; font-size: 15px; border-bottom: 1px solid var(--line); }
   .hub-info { grid-template-columns: 84px 1fr; gap: 6px 12px; padding: 14px 16px; }
   .hub-info > * { min-width: 0; overflow-wrap: anywhere; }
+  /* A whole address on one line. */
+  .hub-info .mono { font-size: 13px; }
   .motd, .public-rooms { padding-left: 16px; padding-right: 16px; }
   .public-room { padding: 6px 0; }
   .mention-list { left: 10px; right: 10px; max-width: none; max-height: 45vh; }
@@ -1147,6 +1151,13 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .rns-file { padding: 0 16px 14px; }
   .rns-add { padding: 10px 16px; }
   .rns-iface { padding-left: 30px; }
+
+  /* Dialogs: clear of the system bars, long paths and addresses wrap. */
+  .overlay { padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
+  .dialog { overflow-wrap: anywhere; }
+  .dialog > header { font-size: 16px; padding-top: 14px; }
+  .dialog p { font-size: 14px; }
+  .dialog .actions button { min-height: 40px; }
 
   /* Notices go at the top, clear of the writing box. */
   #toasts { left: 10px; right: 10px; bottom: auto; top: calc(62px + env(safe-area-inset-top)); z-index: 45; }
