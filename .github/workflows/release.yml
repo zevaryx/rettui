@@ -4,10 +4,13 @@ name: Release
 # every platform, publishes the Docker image to GitHub's container registry
 # and makes a GitHub release with the archives and Debian packages
 # attached (and, for a release, a Homebrew formula and the AUR's PKGBUILD),
-# and the tag's section of CHANGELOG.md as its notes.
+# and the tag's section of CHANGELOG.md as its notes. The Prerelease
+# workflow starts it by hand on the tag it makes (Run workflow, on a tag,
+# does the same as pushing that tag).
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,6 +20,11 @@ jobs:
     name: Check the tag
     runs-on: ubuntu-latest
     steps:
+      - name: A version tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          echo "::error::Run this on a version tag (Use workflow from: Tags), not $GITHUB_REF_NAME"
+          exit 1
       - uses: actions/checkout@v7
       - name: Tag matches Cargo.toml
         run: |
