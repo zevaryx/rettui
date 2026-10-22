@@ -1374,7 +1374,7 @@ mod tests {
 
     #[test]
     fn only_you_make_rooms_unless_anyone_may() {
-        let dir = std::env::temp_dir().join(format!("rettui-hub-rooms-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rettui-hub-host-rooms-{}", std::process::id()));
         let (mut core, _rx) = core(&dir, false);
         connect(&mut core, 1, AMY, "amy");
         connect(&mut core, 2, YOU, "me");

@@ -1235,7 +1235,7 @@ mod tests {
 
     #[test]
     fn partials_from_other_nodes_the_cache_and_addresses_in_messages() {
-        let dir = std::env::temp_dir().join(format!("rettui-browser-partials-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rettui-browser-partials-elsewhere-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
         let node = [0xcd; 16];
