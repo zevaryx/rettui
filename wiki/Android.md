@@ -112,6 +112,8 @@ starts from an example, which may not be right where you are.
 
 ## What it can't do yet
 
+- **AutoInterface** (other Reticulum devices on the same Wi-Fi) doesn't
+  find peers yet. Use a TCP interface to an entry point instead.
 - **No terminal UI.**
 - It hasn't been tested on many phones yet. Reports of what does and
   doesn't work are welcome in the
