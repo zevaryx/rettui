@@ -152,7 +152,8 @@ rettui web UI: http://127.0.0.1:8740/?token=…
     and Copy address, Copy link, Forget, Rename, Delete, and the Browser's
     Reload, Save and Source) wait behind ⋯. It and a user's actions open as
     a sheet from the bottom of the screen. A list's search box shares a row
-    with its buttons.
+    with its buttons. Messages, Games and Channels have a round **+** at the
+    bottom right for a new conversation, a new game or a hub.
   - **Settings:** labels sit above their fields, and **Save**, **Revert**
     and the settings' groups stay at the top while you scroll.
   - **Message box:** one line. **+** adds files or pictures, shares a
@@ -165,6 +166,9 @@ rettui web UI: http://127.0.0.1:8740/?token=…
     flicked), and springs back otherwise. Swipes are left alone in text
     boxes, in rows that scroll sideways and at the very edge of the screen,
     where the phone has its own back gesture.
+- **Notices:** what rettui says about something you did ("Announcing",
+  an error) shows for a few seconds. Tap one, or swipe it aside, to dismiss
+  it sooner.
 - **Font:** text uses Fira Code Nerd Font, which rettui serves itself
   (browsers never fetch fonts from a third party). On a phone, what you read
   (messages, lists, forms) is in the phone's own font instead, and only

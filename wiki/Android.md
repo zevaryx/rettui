@@ -49,6 +49,10 @@ repository.
 - Recording voice messages and sharing your location ask for the
   microphone or location the first time.
 - Downloads (exports, backups, files from messages) go in Downloads.
+- The back button closes what's open on top (a ⋯ sheet, a dialog), then
+  goes back from a conversation, room or page to its list.
+- Joins and leaves in RRC rooms start hidden on the phone. **Show joins and
+  leaves** (behind ⋯ in a room) shows them.
 - After **Stop**, the app says rettui is stopped, with **Start**. If
   rettui stops by itself, the app shows what it printed, with **Start
   again**.

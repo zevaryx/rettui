@@ -183,7 +183,15 @@ class MainActivity : Activity() {
 
     @Deprecated("Activity's own back handling, kept for API 26")
     override fun onBackPressed() {
-        if (web.visibility == android.view.View.VISIBLE && web.canGoBack()) web.goBack() else moveTaskToBack(true)
+        if (web.visibility != android.view.View.VISIBLE) {
+            moveTaskToBack(true)
+            return
+        }
+        // The page first: it closes what's open on top, or goes back a pane.
+        web.evaluateJavascript("window.rettuiBack ? rettuiBack() : false") { handled ->
+            if (handled == "true") return@evaluateJavascript
+            if (web.canGoBack()) web.goBack() else moveTaskToBack(true)
+        }
     }
 
     private fun begin() {

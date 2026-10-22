@@ -1022,6 +1022,33 @@ function closeSheet() {
 }
 
 $('#nav-back').addEventListener('click', paneBack);
+
+// The Android app's back button: what's on top goes first (a sheet, the
+// emoji picker, a dialog), then a pane goes back to its list. False when
+// there's nothing to go back from, for the app to go to the background.
+window.rettuiBack = () => {
+  if (sheet) {
+    closeSheet();
+    return true;
+  }
+  if (emojiPicker.node && !emojiPicker.node.classList.contains('hidden')) {
+    emojiPicker.close(false);
+    return true;
+  }
+  const overlays = document.querySelectorAll('.overlay');
+  if (overlays.length) {
+    const top = overlays[overlays.length - 1];
+    if (top.close) top.close();
+    else top.remove();
+    return true;
+  }
+  const view = app.views[app.tab];
+  if (view?.panes && (view.pane || 'list') !== 'list') {
+    paneBack();
+    return true;
+  }
+  return false;
+};
 // ---- swipes (phones) --------------------------------------------------------
 //
 // A swipe follows the finger, and finishes or springs back when it lifts:
@@ -2154,6 +2181,7 @@ function dialog(title, body, { className = '', onclose } = {}) {
         el('button', { class: 'close', text: '×', title: 'Close', onclick: () => close() })),
       body(close)));
   document.addEventListener('keydown', onKey);
+  overlay.close = close;
   document.body.append(overlay);
   return close;
 }
@@ -3535,7 +3563,7 @@ app.views.messages = {
     el('div', { class: 'dim', style: 'font-size:12px;text-align:right' },
       c.last ? timeLabel(c.last.timestamp) : '',
       c.unread ? el('div', {}, el('span', { class: 'badge' + (c.request ? ' quiet' : ''), text: c.unread })) : null))].filter(Boolean)) :
-      [el('div', { class: 'empty', text: 'No conversations yet. Press + New, or message a peer from the Network tab.' })]));
+      [el('div', { class: 'empty', text: `No conversations yet. Press ${phone.matches ? 'the + button' : '+ New'}, or message a peer from the Network tab.` })]));
     this.compose.classList.toggle('hidden', !this.selected);
     if (!this.selected) {
       this.header.replaceChildren(el('span', { class: 'title', text: 'Messages' }));
@@ -4280,7 +4308,7 @@ app.views.games = {
         el('div', { class: 'sub' + (g.yours ? ' yours' : ''), text: g.summary })),
       g.yours ? el('div', {}, el('span', { class: 'badge', text: '●', title: 'Waiting on you' })) : null))
         : filter.id !== 'all' ? [el('div', { class: 'empty dim', text: `No ${filter.id} games.` })]
-        : [el('div', { class: 'empty dim', text: 'No games yet. + New game challenges someone to Tic-Tac-Toe, Four in a Row or Chess (or the 🎲 Games button in a conversation). Each move goes as a message, so they can answer whenever they\'re next online.' })]));
+        : [el('div', { class: 'empty dim', text: `No games yet. ${phone.matches ? 'The + button' : '+ New game'} challenges someone to a game such as Tic-Tac-Toe, Four in a Row or Chess (or the 🎲 Games button in a conversation). Each move goes as a message, so they can answer whenever they\'re next online.` })]));
     }
     const game = games.find(same);
     if (!game) {
