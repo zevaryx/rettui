@@ -316,6 +316,22 @@ mod address_tests {
     }
 }
 
+#[cfg(unix)]
+#[cfg(test)]
+mod signal_tests {
+    use super::*;
+
+    /// A SIGTERM before the stop is first waited for (as when rettui is
+    /// stopped right after it prints its link) still stops it cleanly,
+    /// instead of killing it.
+    #[tokio::test]
+    async fn a_stop_right_after_starting_is_heard() {
+        let shutdown = shutdown_signal();
+        assert!(std::process::Command::new("kill").arg("-TERM").arg(std::process::id().to_string()).status().unwrap().success());
+        tokio::time::timeout(std::time::Duration::from_secs(10), shutdown).await.expect("SIGTERM wasn't heard");
+    }
+}
+
 #[cfg(test)]
 mod scope_tests {
     use super::*;
@@ -414,12 +430,15 @@ impl WebState {
 }
 
 /// Ctrl-C, SIGTERM (what `docker stop` and systemd send), or a stop asked
-/// for from within ([`crate::request_stop`]).
-async fn shutdown_signal() {
+/// for from within ([`crate::request_stop`]). Not an `async fn`: the
+/// signals are listened for from the call, not from the first poll.
+fn shutdown_signal() -> impl std::future::Future<Output = ()> {
     let signal = os_signal();
-    tokio::select! {
-        () = signal => {}
-        () = crate::stop_requested() => {}
+    async move {
+        tokio::select! {
+            () = signal => {}
+            () = crate::stop_requested() => {}
+        }
     }
 }
 
