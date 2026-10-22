@@ -58,4 +58,5 @@
     <string name="mark_read">Mark read</string>
     <string name="reply_failed">Your reply wasn\'t sent</string>
     <string name="read_failed">Couldn\'t mark it read</string>
+    <string name="share_left_out">Left out (too big, or unreadable): %1$s</string>
 </resources>

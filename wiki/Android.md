@@ -52,10 +52,11 @@ repository.
 - After **Stop**, the app says rettui is stopped, with **Start**. If
   rettui stops by itself, the app shows what it printed, with **Start
   again**.
-- **Sharing with rettui:** share text from another app to rettui. A link on
-  its own (`lxma://`, `lxmf@…`, a NomadNet page, `rrc://`) opens. Other text
-  asks which conversation to write it in, and goes in that conversation's
-  message box, not sent yet. Reticulum links tapped in other apps
+- **Sharing with rettui:** share text, pictures or files from another app to
+  rettui. A link on its own (`lxma://`, `lxmf@…`, a NomadNet page,
+  `rrc://`) opens. Anything else asks which conversation it's for, and goes
+  in that conversation's message box, not sent yet (up to 40 MB of files at
+  once). Reticulum links tapped in other apps
   (`lxma://`, `lxmf://`, `nomadnetwork://`, `rrc://`) open in rettui too.
 - The web UI uses port 8740 on the phone. If another app has that port,
   rettui takes a free one, and keeps it from then on.

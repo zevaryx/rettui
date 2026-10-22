@@ -2148,20 +2148,40 @@ async function showGames(key) {
 // alone opens; anything else starts a message, in the conversation picked.
 // Waits for the page to be ready.
 function shareText(text) {
-  if (!started) return void sharedOnStart.push(text);
+  if (!started) return void sharedOnStart.push(() => shareText(text));
   text = String(text ?? '').slice(0, 50_000).trim();
   if (!text) return;
   const [link] = findLinks(text);
   if (link && link[0] === 0 && link[1] === text.length) return openLink(link[2]);
-  shareDialog(text, link?.[2]);
+  shareDialog(text, link?.[2], []);
 }
 
-async function shareDialog(text, link) {
+// Files shared from another app, with any text: the app serves each at a
+// `url` of this page's own ({ url, name, type }), to attach to a message.
+async function shareFiles(text, files) {
+  if (!started) return void sharedOnStart.push(() => shareFiles(text, files));
+  const got = [];
+  for (const { url, name, type } of Array.isArray(files) ? files : []) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(response.statusText);
+      got.push(new File([await response.blob()], String(name || 'file'), { type: String(type || '') }));
+    } catch (e) {
+      toast(`Couldn't get ${name}: ${e.message}`, true);
+    }
+  }
+  text = String(text ?? '').slice(0, 50_000).trim();
+  if (got.length || text) shareDialog(text, null, got);
+}
+
+async function shareDialog(text, link, files) {
   const conversations = await attempt(() => api.get('/conversations'));
   if (!conversations) return;
   const who = el('select', {}, conversations.map((c) => el('option', { value: c.key, text: c.name })));
+  const attached = files.map((f) => `📎 ${f.name} (${humanBytes(f.size)})`).join('\n');
+  const said = [text.length > 300 ? text.slice(0, 300) + '…' : text, attached].filter(Boolean).join('\n');
   dialog('Shared with rettui', (close) => el('div', { class: 'share' },
-    el('p', { class: 'dim', text: text.length > 300 ? text.slice(0, 300) + '…' : text }),
+    el('p', { class: 'dim', style: 'white-space:pre-wrap', text: said }),
     conversations.length ? el('label', { class: 'field' }, el('span', { text: 'Write to' }), who)
       : el('p', { class: 'dim', text: 'No conversations yet: start one in Messages first.' }),
     el('div', { class: 'row actions' },
@@ -2170,7 +2190,7 @@ async function shareDialog(text, link) {
         close();
         const view = app.views.messages;
         // Put in its box, after anything written there already.
-        draftRestore(view, who.value, { text, files: [], reply: null });
+        draftRestore(view, who.value, { text, files, reply: null });
         view.selected = who.value;
         switchTab('messages', { focus: true });
         setPane(view, 'detail');
@@ -7762,7 +7782,7 @@ refreshStatus().then(() => {
   switchTab(app.views[initial] ? initial : 'messages');
   started = true;
   if (openOnStart) openTarget(openOnStart);
-  sharedOnStart.splice(0).forEach(shareText);
+  sharedOnStart.splice(0).forEach((share) => share());
   listen();
   notifications.start();
   setTimeout(prefetch, 300);

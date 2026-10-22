@@ -26,6 +26,7 @@ import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -113,12 +114,33 @@ class MainActivity : Activity() {
      */
     private fun handle(intent: Intent) {
         intent.getStringExtra(EXTRA_TARGET)?.let { return page("try { openTarget(JSON.parse(${JSONObject.quote(it)})) } catch (e) { console.warn(e) }") }
+        val streams = streams(intent)
+        if (streams.isNotEmpty()) return shareFiles(intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty(), streams)
         val shared = when (intent.action) {
             Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
             Intent.ACTION_VIEW -> intent.data?.takeIf { it.scheme?.lowercase() in SCHEMES }?.toString()
             else -> null
         }
         shared?.takeIf { it.isNotBlank() }?.let { page("shareText(${JSONObject.quote(it.take(50_000))})") }
+    }
+
+    /** Files shared with the app (one, or several at once). */
+    @Suppress("DEPRECATION")
+    private fun streams(intent: Intent): List<Uri> = when (intent.action) {
+        Intent.ACTION_SEND -> listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri)
+        Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+        else -> emptyList()
+    }
+
+    /** Copy them in (away from the screen), then hand them to the page. */
+    private fun shareFiles(text: String, uris: List<Uri>) {
+        Thread {
+            val (files, left) = Shared.take(this, uris)
+            main.post {
+                if (left.isNotEmpty()) Toast.makeText(this, getString(R.string.share_left_out, left.joinToString()), Toast.LENGTH_LONG).show()
+                page("shareFiles(${JSONObject.quote(text.take(50_000))}, ${files})")
+            }
+        }.start()
     }
 
     /** Have the page run `js`, now or once it's loaded. */
@@ -277,6 +299,13 @@ class MainActivity : Activity() {
         }
         CookieManager.getInstance().setAcceptCookie(true)
         web.webViewClient = object : WebViewClient() {
+            // Files shared from other apps, which the page fetches (see Shared).
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                val url = request.url
+                if (!local(url) || url.path?.startsWith(Shared.PATH) != true) return null
+                return Shared.serve(this@MainActivity, url.path!!) ?: WebResourceResponse("text/plain", null, 404, "Not Found", null, null)
+            }
+
             // Anything not rettui's opens in the phone's browser.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (local(request.url)) return false
