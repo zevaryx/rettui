@@ -920,8 +920,9 @@ function moreButton() {
     e.stopPropagation();
     const header = e.currentTarget.closest('header');
     const buttons = [...header.querySelectorAll('button.more')];
+    // A button whose text is only an icon names itself in data-label.
     openSheet(header.querySelector('.title')?.textContent || '', buttons.map((button) => ({
-      text: button.textContent, danger: button.classList.contains('danger'), disabled: button.disabled, action: () => button.click(),
+      text: button.dataset.label || button.textContent, danger: button.classList.contains('danger'), disabled: button.disabled, action: () => button.click(),
     })));
   } });
 }
@@ -3336,11 +3337,12 @@ app.views.messages = {
       this.fileInput);
     root.append(
       el('section', { class: 'panel side' },
-        el('header', {}, el('span', { class: 'title grow', text: 'Conversations' }),
-          el('button', { text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
+        // On a phone the top bar names the section already.
+        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Conversations' }),
+          el('button', { class: 'more', text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
           el('button', { text: '+ New', onclick: () => this.newConversation() }),
-          el('button', { text: '🗺', title: 'Map of the locations shared with you ( M )', onclick: () => mapDialog({ key: this.selected }) }),
-          this.readAll, this.search),
+          el('button', { class: 'more', text: '🗺', 'data-label': '🗺 Map of shared locations', title: 'Map of the locations shared with you ( M )', onclick: () => mapDialog({ key: this.selected }) }),
+          moreButton(), this.readAll, this.search),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.history, this.compose));
     this.renderChips();
@@ -3566,7 +3568,8 @@ app.views.messages = {
       avatar(conversation.icon, conversation.name, key),
       el('span', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: key }),
-      el('button', { class: 'pin-button' + (conversation.pinned ? ' on' : ''), text: '📌',
+      el('button', { class: 'more pin-button' + (conversation.pinned ? ' on' : ''), text: '📌',
+        'data-label': conversation.pinned ? '📌 Unpin' : '📌 Pin to the top',
         title: conversation.pinned ? 'Unpin it from the top of the list' : 'Pin it to the top of the list',
         onclick: () => this.setPinned(key, !conversation.pinned) }),
       conversation.live ? el('span', { class: 'live-chip', title: conversation.live.source === 'device' ? 'Sharing where this device is, while a page of rettui is open on it' : 'Sharing this station\'s Location' },
@@ -3574,14 +3577,20 @@ app.views.messages = {
         el('button', { class: 'inline', text: 'Stop', onclick: async () => {
           if (await attempt(() => api.post(`/conversations/${key}/live/stop`), 'Stopped sharing your location live')) loadNow();
         } })) : null,
-      bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted)),
-      el('button', { class: 'games-button' + (conversation.games_waiting ? ' waiting' : ''),
+      ((bell) => {
+        bell.classList.add('more');
+        bell.dataset.label = conversation.muted ? '🔕 Notifications: off (turn on)' : '🔔 Notifications: on (turn off)';
+        return bell;
+      })(bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted))),
+      // A game waiting on you stays in sight on a phone.
+      el('button', { class: 'games-button' + (conversation.games_waiting ? ' waiting' : ' more'),
         text: conversation.games_waiting ? `🎲 Games · ${conversation.games_waiting}` : '🎲 Games',
         title: conversation.games_waiting ? `Games with them: ${conversation.games_waiting} waiting on you  ( g )` : 'Games with them: Tic-Tac-Toe, Four in a Row, Chess  ( g )',
         onclick: () => showGames(key) }),
-      el('button', { text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
-      el('button', { text: 'Copy address', title: conversation.link?.startsWith('lxma://') ? 'Their address with their key (lxma://), so whoever adds them can write at once' : 'Their address (their key isn\'t known yet)',
-        onclick: () => copyAddress(conversation.link || key, 'their') })].filter(Boolean));
+      el('button', { class: 'more', text: 'Contact', title: 'Your name for them, notes, and more', onclick: () => this.contactDialog(key, conversation) }),
+      el('button', { class: 'more', text: 'Copy address', title: conversation.link?.startsWith('lxma://') ? 'Their address with their key (lxma://), so whoever adds them can write at once' : 'Their address (their key isn\'t known yet)',
+        onclick: () => copyAddress(conversation.link || key, 'their') }),
+      moreButton()].filter(Boolean));
     // The newest messages only, unless asked for all: those not loaded, and
     // any loaded but not shown.
     const from = this.showAll === key ? 0 : Math.max(0, conversation.messages.length - this.LIMIT);
@@ -4153,7 +4162,7 @@ app.views.games = {
     this.setFilter(this.filter, false);
     root.append(
       el('section', { class: 'panel side' },
-        el('header', {}, el('span', { class: 'title grow', text: 'Games' }),
+        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Games' }),
           el('button', { text: '+ New game', title: 'Challenge someone  ( n )', onclick: () => newGameDialog() }),
           this.filters),
         this.list),
@@ -4303,7 +4312,7 @@ app.views.channels = {
     });
     root.append(
       el('section', { class: 'panel side' },
-        el('header', {}, el('span', { class: 'title grow', text: 'Channels' }),
+        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Channels' }),
           el('button', { text: '+ Add hub', onclick: () => this.addHub() }), this.search),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.body, this.inputBar),

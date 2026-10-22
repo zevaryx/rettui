@@ -920,6 +920,10 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   }
   select { min-height: 42px; }
   .phone-only { display: inline-block; }
+  .phone-hidden { display: none !important; }
+  /* Without its title (the top bar has it), a list's header keeps its
+     buttons to the right. */
+  .panel > header:has(> .phone-hidden) { justify-content: flex-end; }
   /* Less used header buttons wait behind ⋯ (see moreButton in app.js). */
   .panel > header button.more { display: none; }
   .more-button { font-size: 20px; line-height: 1; padding: 4px 12px; }
