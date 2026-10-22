@@ -47,7 +47,9 @@ repository.
 - Recording voice messages and sharing your location ask for the
   microphone or location the first time.
 - Downloads (exports, backups, files from messages) go in Downloads.
-- If rettui stops, the app shows what it printed, with **Start again**.
+- After **Stop**, the app says rettui is stopped, with **Start**. If
+  rettui stops by itself, the app shows what it printed, with **Start
+  again**.
 - **Sharing with rettui:** share text from another app to rettui. A link on
   its own (`lxma://`, `lxmf@…`, a NomadNet page, `rrc://`) opens. Other text
   asks which conversation to write it in, and goes in that conversation's

@@ -99,6 +99,8 @@ class RettuiService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // Stopped on purpose: the app says so, rather than wait for it.
+            Rettui.setStoppedByYou(this, true)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -113,6 +115,7 @@ class RettuiService : Service() {
 
     private fun launch() {
         running = true
+        Rettui.setStoppedByYou(this, false)
         // Reticulum keeps links alive in the background, and AutoInterface
         // hears its peers by multicast, which Wi-Fi drops unless asked.
         wakeLock = getSystemService(PowerManager::class.java)

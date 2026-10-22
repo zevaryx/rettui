@@ -130,11 +130,34 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         Rettui.setShowing(this, true)
+        watch.run()
     }
 
     override fun onPause() {
         Rettui.setShowing(this, false)
+        main.removeCallbacks(watch)
         super.onPause()
+    }
+
+    /**
+     * While the web UI is on screen: that rettui is still there. Stopped
+     * with Stop, the app says so; stopped otherwise (a backup restored, or
+     * a crash), it waits for rettui to be back.
+     */
+    private val watch = object : Runnable {
+        override fun run() {
+            main.removeCallbacks(this)
+            if (web.visibility != android.view.View.VISIBLE) return
+            if (!loaded || Rettui.running(this@MainActivity)) {
+                main.postDelayed(this, 2000)
+                return
+            }
+            web.visibility = android.view.View.GONE
+            if (Rettui.stoppedByYou(this@MainActivity)) return stopped()
+            waiting.visibility = android.view.View.VISIBLE
+            waitedSince = System.currentTimeMillis()
+            waitForRettui(grace = 20_000)
+        }
     }
 
     @Deprecated("Activity's own back handling, kept for API 26")
@@ -171,8 +194,11 @@ class MainActivity : Activity() {
             .show()
     }
 
-    /** Load the web UI once rettui answers; if it stops, say so. */
-    private fun waitForRettui() {
+    /**
+     * Load the web UI once rettui answers; if it isn't there `grace`
+     * milliseconds on (it failed, or was stopped), say so.
+     */
+    private fun waitForRettui(grace: Long = 3000) {
         Thread {
             while (true) {
                 val token = RettuiService.token(this)
@@ -181,7 +207,7 @@ class MainActivity : Activity() {
                     return@Thread
                 }
                 // It never started, or stopped: the service went.
-                if (!Rettui.running(this) && System.currentTimeMillis() - waitedSince > 3000) {
+                if (!Rettui.running(this) && System.currentTimeMillis() - waitedSince > grace) {
                     main.post { stopped() }
                     return@Thread
                 }
@@ -193,23 +219,32 @@ class MainActivity : Activity() {
     private fun show(token: String) {
         waiting.visibility = android.view.View.GONE
         web.visibility = android.view.View.VISIBLE
+        // Loaded again after rettui was away: its page starts over.
+        loaded = false
         web.loadUrl("http://127.0.0.1:${Rettui.port(this)}/?token=$token")
+        main.postDelayed(watch, 2000)
     }
 
+    /** rettui isn't running: stopped with Stop, or it failed (its log shown). */
     private fun stopped() {
-        val log = RettuiService.logFile(this).takeIf { it.isFile }?.readText()?.takeLast(20_000) ?: ""
+        val byYou = Rettui.stoppedByYou(this)
+        val log = if (byYou) "" else RettuiService.logFile(this).takeIf { it.isFile }?.readText()?.takeLast(20_000) ?: ""
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(0x16, 0x18, 0x1d))
             setPadding(32, 48, 32, 32)
             addView(TextView(context).apply {
-                text = getString(R.string.stopped)
+                text = getString(if (byYou) R.string.stopped_by_you else R.string.stopped)
                 textSize = 18f
                 setTextColor(Color.WHITE)
             })
             addView(Button(context).apply {
-                text = getString(R.string.restart)
-                setOnClickListener { recreate() }
+                text = getString(if (byYou) R.string.start else R.string.restart)
+                setOnClickListener {
+                    // Start over, without what the app was first opened for.
+                    intent = Intent(this@MainActivity, MainActivity::class.java)
+                    recreate()
+                }
             })
             // A backup can be restored, or the identity saved, even with
             // rettui failing to start.

@@ -78,6 +78,14 @@ object Rettui {
 
     fun showing(context: Context) = File(context.filesDir, "showing").exists()
 
+    /** rettui was stopped with Stop (not by a restore, nor a crash). */
+    fun setStoppedByYou(context: Context, stopped: Boolean) {
+        val flag = File(context.filesDir, "stopped")
+        if (stopped) flag.writeText("") else flag.delete()
+    }
+
+    fun stoppedByYou(context: Context) = File(context.filesDir, "stopped").exists()
+
     /**
      * Ask the web UI's API (`/api/<path>`), logged in with its token, as the
      * web UI itself does. What it answered, or why it couldn't.
