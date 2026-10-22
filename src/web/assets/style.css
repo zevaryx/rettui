@@ -931,7 +931,10 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   /* Long names and addresses in a header end in … rather than run under
      its buttons. */
   .panel > header .title, .panel > header .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .view[data-view=network] .panel > header select { flex: 1 1 0; min-width: 0; }
+  /* Search on a line of its own, then what's shown and in what order. */
+  .network-tools { flex-wrap: wrap; }
+  .network-tools > input { flex: 1 1 100%; }
+  .network-tools > select { flex: 1 1 0; min-width: 0; }
   .toggle { font-size: 14px; min-height: 40px; }
   .toggle input { width: 20px; height: 20px; }
   .bell .bell-label { display: none; }

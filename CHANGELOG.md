@@ -4,9 +4,10 @@ What changed in each release of rettui. Releases before v1.6.0 are described on 
 
 ## v1.10.0
 
-Changes since v1.9.0: a first test version of an Android app, and copying an identity, or keeping another, from the command line.
+Changes since v1.9.0: a first test version of an Android app, the web UI reworked for phones, and copying an identity, or keeping another, from the command line.
 
 ### Added
+- **The web UI on phones, reworked:** the sections are in a bar at the bottom of the screen (Messages, Channels, Games, Browser, and More for the rest) rather than a drawer; what you read is in the phone's own font; a conversation's header and the Network screen keep their less used buttons behind ⋯; and the message box is one line, with + for files, locations and the way of delivery, and 🎤 that turns into Send. Larger screens are unchanged. See [Web UI](https://github.com/zevaryx/rettui/wiki/Web-UI).
 - **`rettui identity export FILE`** saves a copy of the identity in use, never over another file. **`rettui identity import FILE --name NAME`** keeps the identity in a file (Sideband's, NomadNet's, MeshChat's or another rettui's) as another identity, to switch to in Status > Identities; the one in use stays. See [Running](https://github.com/zevaryx/rettui/wiki/Running#commands).
 - **Android app (test builds):** rettui, with its whole Reticulum stack, runs on an Android phone, with the web UI as the app's screen. It keeps running in the background and shows messages and mentions as Android notifications, which can be answered or marked read from the notification. Voice recording, location sharing, file uploads and downloads work. Its *Identity and backups* screen saves a copy of the identity, keeps another from a file, and saves and restores full backups, which the web UI can't. TCP and UDP interfaces work, and the app's *RNodes* screen adds RNodes over USB and Bluetooth; AutoInterface doesn't find peers yet. Text, pictures and files shared from other apps go into a message, Reticulum links shared or tapped there open in rettui, and it asks once to keep running in the background. There's no release of it yet: *Actions > Android > Run workflow* builds an APK to try. See [Android](https://github.com/zevaryx/rettui/wiki/Android).
 

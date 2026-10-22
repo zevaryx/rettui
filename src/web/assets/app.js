@@ -5080,13 +5080,13 @@ app.views.network = {
     this.title = el('span', { class: 'title grow' });
     this.table = el('div', { class: 'scroll' });
     root.append(el('div', { class: 'column grow' },
-      el('section', { class: 'panel' }, el('header', {}, this.search, filter, this.heardSelect, sort, this.viaSelect, this.modeButton,
-        el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
-        el('button', { text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
-        el('button', { text: 'Find a path…', title: 'Find the path to any address', onclick: () => {
+      el('section', { class: 'panel' }, el('header', { class: 'network-tools' }, this.search, filter, this.heardSelect, sort, this.viaSelect, this.modeButton,
+        el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
+        el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+        el('button', { class: 'more', text: 'Find a path…', title: 'Find the path to any address', onclick: () => {
           const address = prompt('Find a path to (address)', this.selected || '');
           if (address?.trim()) pathDialog(address.trim().replace(/^<|>$/g, ''));
-        } }))),
+        } }), moreButton())),
       el('section', { class: 'panel grow' }, el('header', {}, this.title), this.table)));
     this.showMode();
   },

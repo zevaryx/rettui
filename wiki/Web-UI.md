@@ -137,9 +137,10 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 - **Phones:** on a phone (or any window up to 760px wide, and phones held
   sideways) the web UI changes layout. Larger screens keep the side-by-side
   layout:
-  - **Drawer:** the sections are in a drawer, opened with ☰ in the top bar. A
-    dot on ☰ means something is unread in another section. Picking a section,
-    tapping outside the drawer, swiping it left or `Esc` closes it.
+  - **Bottom bar:** the sections are in a bar at the bottom of the screen:
+    Messages, Channels, Games and Browser, each with how many are unread,
+    and **More** for Network, Node, Status, Reticulum and Hub. The bar shows
+    under the lists; tapping the section you're in goes back to its list.
   - **One pane at a time:** a section shows its list (conversations, rooms,
     saved pages, node pages, config sections), then what you open from it,
     full screen. ← in the top bar, or the phone's back button, goes back. A
@@ -147,18 +148,23 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   - **Larger text and targets:** text is bigger, and rows and buttons are
     easier to tap. Messages show as bubbles, yours on the right, and Network
     rows are cards.
-  - **Fewer buttons:** less used buttons (such as Copy link, Forget, Rename,
-    Delete) wait behind ⋯. It and a user's actions open as a sheet from the
-    bottom of the screen.
-  - **Swipes:** swipe right from a list to open the drawer, and left to close
-    it. Swipe right from what you opened to go back to the list, and left in
-    a room to see its members. Swipe a sheet down to close it. A swipe
+  - **Fewer buttons:** less used buttons (such as a conversation's Contact
+    and Copy address, Copy link, Forget, Rename, Delete) wait behind ⋯. It
+    and a user's actions open as a sheet from the bottom of the screen.
+  - **Message box:** one line. **+** adds files or pictures, shares a
+    location, or changes the way of delivery; the box grows as you write;
+    🎤 records a voice message until there's something to send, when it
+    becomes **Send**.
+  - **Swipes:** swipe right from what you opened to go back to the list, and
+    left in a room to see its members. Swipe a sheet down to close it. A swipe
     follows your finger, finishes once it is a third of the way (or
     flicked), and springs back otherwise. Swipes are left alone in text
     boxes, in rows that scroll sideways and at the very edge of the screen,
     where the phone has its own back gesture.
-- **Font:** all text uses Fira Code Nerd Font, which rettui serves itself
-  (browsers never fetch fonts from a third party).
+- **Font:** text uses Fira Code Nerd Font, which rettui serves itself
+  (browsers never fetch fonts from a third party). On a phone, what you read
+  (messages, lists, forms) is in the phone's own font instead, and only
+  addresses, code, logs and NomadNet pages stay in Fira Code.
 - **Stopping:** Ctrl-C or SIGTERM stops it cleanly, leaving hubs and saving
   everything.
 - The TUI and the web UI can't use the same data directory at the same time.
