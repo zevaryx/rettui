@@ -6577,7 +6577,7 @@ app.views.status = {
           el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
           el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }), moreButton()), this.info),
-        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
+        el('section', { class: 'panel grow settings-panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
           this.revertButton, this.saveButton), this.sectionTabs, el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
       el('div', { class: 'column', style: 'width:42%' },
         el('section', { class: 'panel', style: 'max-height:40%' }, el('header', { text: 'Interfaces' }), this.interfaces),

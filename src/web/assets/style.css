@@ -1122,6 +1122,12 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .view[data-view=status] .panel { max-height: none !important; border-bottom: 1px solid var(--border); }
   .view[data-view=status] .scroll { overflow: visible; }
   .view[data-view=status] .log { max-height: 60vh; overflow-y: auto; }
+  /* Save and the groups stay in reach while scrolling through settings;
+     the groups make one row that scrolls sideways. */
+  .settings-panel > header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--border); }
+  .settings-panel > .settings-groups { position: sticky; top: 56px; z-index: 2; background: var(--panel);
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 8px 16px; }
+  .settings-panel > .settings-groups button { flex: none; }
   .info { grid-template-columns: 1fr; gap: 0; padding: 6px 16px 14px; }
   .info .label { font-size: 12.5px; margin-top: 10px; }
   .info .row { flex-wrap: wrap; }
@@ -1135,6 +1141,8 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .setting .label { padding-top: 0; color: var(--text); font-weight: 600; }
   .setting input[type=checkbox] { width: 22px; height: 22px; margin: 2px 0; }
   .setting .help { font-size: 13.5px; }
+  .setting select { width: 100%; max-width: none; min-height: 44px; }
+  .setting input[type=color] { width: 64px; height: 40px; }
   .settings-footer { padding: 10px 16px 18px; overflow-wrap: anywhere; }
   .rns-file { padding: 0 16px 14px; }
   .rns-add { padding: 10px 16px; }
