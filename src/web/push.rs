@@ -23,7 +23,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use hkdf::Hkdf;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::Generate;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -85,7 +86,7 @@ fn push_service(endpoint: &str) -> Option<String> {
 /// sender key pair `ours` and `salt` (new for each message).
 fn encrypt(payload: &[u8], theirs: &[u8], auth: &[u8], ours: &SecretKey, salt: &[u8; 16]) -> Result<Vec<u8>, String> {
     let their_key = PublicKey::from_sec1_bytes(theirs).map_err(|_| "bad browser key")?;
-    let our_public = ours.public_key().to_encoded_point(false);
+    let our_public = ours.public_key().to_sec1_point(false);
     let shared = p256::ecdh::diffie_hellman(ours.to_nonzero_scalar(), their_key.as_affine());
     // The input keying material, from the shared secret and the browser's
     // authentication secret.
@@ -161,12 +162,12 @@ impl WebPush {
         let secret = match std::fs::read_to_string(&paths.web_push_key) {
             Ok(text) => SecretKey::from_slice(&hex::decode(text.trim())?)?,
             Err(_) => {
-                let secret = SecretKey::random(&mut rand::rngs::OsRng);
+                let secret = SecretKey::try_generate()?;
                 crate::config::write_private(&paths.web_push_key, hex::encode(secret.to_bytes()).as_bytes())?;
                 secret
             }
         };
-        let public = B64.encode(secret.public_key().to_encoded_point(false).as_bytes());
+        let public = B64.encode(secret.public_key().to_sec1_point(false).as_bytes());
         let subscriptions: Vec<Subscription> =
             std::fs::read(&paths.web_push).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
         let subscriptions = Arc::new(Mutex::new(subscriptions));
@@ -308,7 +309,7 @@ impl Sender {
         let theirs = B64.decode(subscription.p256dh.trim_end_matches('=')).map_err(|_| Failure::Gone)?;
         let auth = B64.decode(subscription.auth.trim_end_matches('=')).map_err(|_| Failure::Gone)?;
         let salt: [u8; 16] = rand::random();
-        let body = encrypt(&push.payload, &theirs, &auth, &SecretKey::random(&mut rand::rngs::OsRng), &salt)
+        let body = encrypt(&push.payload, &theirs, &auth, &SecretKey::generate(), &salt)
             .map_err(|e| Failure::Refused(e.to_string()))?;
         let result = agent
             .post(&subscription.endpoint)
@@ -353,7 +354,7 @@ mod tests {
     fn encrypts_as_rfc_8291_does() {
         let ours = SecretKey::from_slice(&b64("yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw")).unwrap();
         assert_eq!(
-            B64.encode(ours.public_key().to_encoded_point(false).as_bytes()),
+            B64.encode(ours.public_key().to_sec1_point(false).as_bytes()),
             "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8"
         );
         let theirs = b64("BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4");
@@ -368,9 +369,9 @@ mod tests {
 
     #[test]
     fn vapid_tokens_verify_with_the_public_key() {
-        let secret = SecretKey::random(&mut rand::rngs::OsRng);
+        let secret = SecretKey::generate();
         let key = SigningKey::from(&secret);
-        let public = B64.encode(secret.public_key().to_encoded_point(false).as_bytes());
+        let public = B64.encode(secret.public_key().to_sec1_point(false).as_bytes());
         let header = vapid(&key, &public, "https://fcm.googleapis.com", 1_800_000_000);
         let (token, k) = header.strip_prefix("vapid t=").unwrap().split_once(", k=").unwrap();
         assert_eq!(k, public);

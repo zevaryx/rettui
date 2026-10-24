@@ -2,6 +2,7 @@
 //! [`super::testing`]): each route on a test app.
 
 use axum::http::{Method, StatusCode, header};
+use p256::elliptic_curve::Generate;
 use serde_json::json;
 
 use super::testing::{TOKEN, TestWeb};
@@ -812,7 +813,7 @@ async fn background_notifications_for_browsers() {
     let key = web.get("/api/push").await.json();
     assert!(key["key"].as_str().is_some_and(|k| k.len() > 40), "{key}");
     let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
-    let browser = p256::SecretKey::random(&mut rand::rngs::OsRng).public_key().to_sec1_bytes();
+    let browser = p256::SecretKey::generate().public_key().to_sec1_bytes();
     let endpoint = "https://fcm.googleapis.com/fcm/send/test";
     let subscription = json!({ "endpoint": endpoint, "keys": { "p256dh": b64(&browser), "auth": b64(&[7; 16]) } });
     assert_eq!(web.post("/api/push/subscribe", subscription.clone()).await.status, StatusCode::OK);
