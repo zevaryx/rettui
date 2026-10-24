@@ -309,8 +309,7 @@ impl Sender {
         let theirs = B64.decode(subscription.p256dh.trim_end_matches('=')).map_err(|_| Failure::Gone)?;
         let auth = B64.decode(subscription.auth.trim_end_matches('=')).map_err(|_| Failure::Gone)?;
         let salt: [u8; 16] = rand::random();
-        let body = encrypt(&push.payload, &theirs, &auth, &SecretKey::generate(), &salt)
-            .map_err(|e| Failure::Refused(e.to_string()))?;
+        let body = encrypt(&push.payload, &theirs, &auth, &SecretKey::generate(), &salt).map_err(|e| Failure::Refused(e.to_string()))?;
         let result = agent
             .post(&subscription.endpoint)
             .set("Authorization", &vapid(&self.key, &self.public, &audience, now()))
