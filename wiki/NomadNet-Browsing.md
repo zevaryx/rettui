@@ -60,15 +60,20 @@ network.
   marked, and `Enter` (or `↓`) goes to the next, `↑` (or `Shift+Enter` in
   the web UI) the one before, with how many there are; `Esc` is done.
 - **History:** `b` (or a right-click) goes back.
-- **Tabs:** several pages open at once, each with its own history. `T` opens
-  the selected link in a new tab (or, in the list, the selected saved page
-  or node; with nothing selected, the page shown again), `W` closes the tab,
-  and `[` and `]` go to the tab before or after. Once there's more than one,
-  the tabs are named across the top of the address bar (the node, and the
-  page unless it's the node's home page), and a click on one shows it. In
-  the web UI, Ctrl+click (⌘+click on a Mac) or a middle-click on a link,
-  saved page or node opens it in a new tab, **+** opens an empty one (on a
-  phone, **New tab** behind ⋯), and **×** on a tab closes it. A page
+- **Tabs:** several pages open at once, each with its own history. A saved
+  page or node picked from the list (a click or `Enter`) opens in a new tab,
+  unless the tab shown is empty, which takes it; `T` in the list opens it in
+  the tab shown instead. With the setting **Open pages in new tabs**
+  (Settings > Browsing) off, it's the other way round. On a page, `T` opens
+  the selected link in a new tab (with nothing selected, the page shown
+  again), `W` closes the tab, and `[` and `]` go to the tab before or after.
+  The tabs are named across the top of the address bar (the node, and the
+  page unless it's the node's home page), and a click on one shows it; with
+  the setting off, only once there's more than one. In the web UI,
+  Ctrl+click (⌘+click on a Mac) or a middle-click on a link opens it in a
+  new tab, and on a saved page or node does the other way from a click;
+  **+** opens an empty tab (on a phone, **New tab** behind ⋯), and **×** on
+  a tab closes it. A page
   loading in a tab out of sight goes on loading, and is there when you come
   back. Up to 12 tabs can be open.
 - **A node that won't answer:** while a page loads in the TUI, the address

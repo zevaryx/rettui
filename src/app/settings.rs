@@ -117,6 +117,7 @@ impl App {
                 "announce_at_start" => self.settings.announce_at_start = after.announce_at_start,
                 "wrap_lines" => self.settings.wrap_lines = after.wrap_lines,
                 "show_joins" => self.settings.show_joins = after.show_joins,
+                "browser_new_tabs" => self.settings.browser_new_tabs = after.browser_new_tabs,
                 "keep_awake" => {
                     self.settings.keep_awake = after.keep_awake;
                     // What the Android app holds (only read there).

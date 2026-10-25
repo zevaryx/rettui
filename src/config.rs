@@ -32,6 +32,9 @@ pub struct Settings {
     pub rns_config: Option<String>,
     /// Page opened by the browser's "home" key, e.g. `<hash>:/page/index.mu`.
     pub home: Option<String>,
+    /// A saved page or node picked from the Browser's list opens in a tab
+    /// of its own, and the tabs always show.
+    pub browser_new_tabs: bool,
     /// Outbound propagation node (hex destination hash).
     pub propagation_node: Option<String>,
     /// Minutes between automatic propagation node syncs; 0 disables them.
@@ -191,6 +194,7 @@ impl Default for Settings {
             announce_random_max_mins: ANNOUNCE_MINS.1,
             rns_config: None,
             home: None,
+            browser_new_tabs: true,
             propagation_node: None,
             sync_interval_mins: 120,
             auto_propagation_node: false,
@@ -582,7 +586,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
         ],
     ),
     (Section::Location, &["location", "location_requests", "telemetry_sensors", "map_tiles", "map_tiles_file"]),
-    (Section::Browsing, &["home", "cache_hours"]),
+    (Section::Browsing, &["home", "browser_new_tabs", "cache_hours"]),
     (
         Section::Hosting,
         &[
@@ -821,6 +825,13 @@ pub const FIELDS: &[Field] = &[
         label: "Home page",
         help: "NomadNet page opened by the browser's home key, e.g. <hash>:/page/index.mu",
         kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "browser_new_tabs",
+        label: "Open pages in new tabs",
+        help: "A saved page or node picked from the Browser's list opens in a tab of its own (an empty one is used first), and the tabs always show. T in the list (Ctrl+click in the web UI) opens it in the tab shown instead",
+        kind: FieldKind::Toggle,
         effect: Effect::Now,
     },
     Field {
@@ -1148,6 +1159,7 @@ impl Settings {
             "rrc_messages_kept" => self.rrc_messages_kept.to_string(),
             "message_storage_mb" => self.message_storage_mb.to_string(),
             "cache_hours" => self.cache_hours.to_string(),
+            "browser_new_tabs" => self.browser_new_tabs.to_string(),
             "node_enabled" => self.node_enabled.to_string(),
             "node_name" => self.node_name.clone().unwrap_or_default(),
             "node_announce_interval_mins" => self.node_announce_interval_mins.to_string(),
@@ -1234,6 +1246,7 @@ impl Settings {
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
             "keep_awake" => self.keep_awake = toggle(value).map_err(fail)?,
+            "browser_new_tabs" => self.browser_new_tabs = toggle(value).map_err(fail)?,
             "chat_dates" => self.chat_dates = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,

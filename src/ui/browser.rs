@@ -69,7 +69,7 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     if identified {
         badges.push(Span::styled(" identified ", Style::default().fg(Color::LightYellow)));
     }
-    let tabbed = app.browser_tab_count() > 1;
+    let tabbed = app.browser_tab_count() > 1 || app.settings.browser_new_tabs;
     // With tabs, they're the title, from the corner on.
     let address_block = if tabbed {
         Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(dim()))

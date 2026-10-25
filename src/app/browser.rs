@@ -432,10 +432,18 @@ impl App {
         self.browser.focus = focus;
     }
 
-    /// The selected link's page, or the selected saved page or node, in a
-    /// new tab; without one, the page on screen again.
+    /// The selected link's page in a new tab. In the list, the selected
+    /// saved page or node the other way from Enter (see
+    /// `browser_new_tabs`). Without one, the page on screen again.
     fn open_in_new_tab(&mut self) {
-        let location = if self.browser.focus == BrowserFocus::Pane { self.pane_selection() } else { self.selected_link_location() };
+        let location = if self.browser.focus == BrowserFocus::Pane {
+            match self.pane_selection() {
+                Some(location) => return self.open_in_tab(location, !self.settings.browser_new_tabs),
+                None => None,
+            }
+        } else {
+            self.selected_link_location()
+        };
         match location.or_else(|| self.browser.tab.location.clone()) {
             Some(location) => self.new_browser_tab(Some(location)),
             None => self.new_browser_tab(None),
@@ -750,6 +758,17 @@ impl App {
     /// Open the selected saved page or node next to the pane.
     fn open_pane_selection(&mut self) {
         if let Some(location) = self.pane_selection() {
+            self.open_in_tab(location, self.settings.browser_new_tabs);
+        }
+    }
+
+    /// Open `location` in a new tab, or in the tab shown. An empty tab
+    /// shown takes it either way.
+    fn open_in_tab(&mut self, location: Location, new: bool) {
+        let tab = &self.browser.tab;
+        if new && (tab.location.is_some() || tab.loading.is_some()) {
+            self.new_browser_tab(Some(location));
+        } else {
             self.navigate(location);
         }
     }
@@ -1467,8 +1486,32 @@ mod tests {
         app.browser.focus = BrowserFocus::Pane;
         app.browser.pane = BrowserPane::Saved;
         app.browser.saved_list.select(Some(0));
+        // Picked from the list: a new tab (as set by default), or with T the
+        // tab shown.
+        press(&mut app, KeyCode::Enter);
+        assert_eq!((app.browser_tab_count(), app.browser.current), (4, 3));
+        app.browser.focus = BrowserFocus::Pane;
         press(&mut app, KeyCode::Char('T'));
+        assert_eq!((app.browser_tab_count(), app.browser.current), (4, 3));
+        // The other way round when set so.
+        app.settings.browser_new_tabs = false;
+        app.browser.focus = BrowserFocus::Pane;
+        press(&mut app, KeyCode::Enter);
         assert_eq!(app.browser_tab_count(), 4);
+        app.browser.focus = BrowserFocus::Pane;
+        press(&mut app, KeyCode::Char('T'));
+        assert_eq!((app.browser_tab_count(), app.browser.current), (5, 4));
+        app.settings.browser_new_tabs = true;
+        // An empty tab takes what's picked rather than another opening.
+        app.new_browser_tab(None);
+        assert_eq!(app.browser_tab_count(), 6);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.browser_tab_count(), 6);
+        assert_eq!(app.browser.tab.location, Some(at("/page/index.mu")));
+        for _ in 0..2 {
+            app.close_browser_tab();
+        }
+        app.switch_browser_tab(3);
         // Closing: the next one shows, or the one before after the last.
         press(&mut app, KeyCode::Char('W'));
         assert_eq!((app.browser_tab_count(), app.browser.current), (3, 2));

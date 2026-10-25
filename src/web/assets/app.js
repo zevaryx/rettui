@@ -1329,6 +1329,8 @@ async function refreshStatus() {
     }
     renderSidebar();
     document.querySelectorAll('textarea.page-editor').forEach(applyWrap);
+    // Whether the Browser's tabs always show may have changed.
+    if (app.views.browser.tabStrip) app.views.browser.renderTabs();
   } catch (e) {
     console.warn(e);
   }
@@ -5512,6 +5514,11 @@ app.views.network = {
 // The most Browser tabs open at once (as in the terminal UI).
 const MAX_TABS = 12;
 
+// Whether pages picked from the Browser's list open in new tabs.
+function newTabs() {
+  return app.status?.browser_new_tabs ?? true;
+}
+
 // A page's name for its tab: the node's, and the page's own unless it's
 // the node's home page.
 function pageName(page) {
@@ -5980,13 +5987,15 @@ app.views.browser = {
     if (previous) this.go(previous, { record: false });
   },
 
-  // A list's page or node: here, or in a new tab with Ctrl (⌘) or the
-  // middle button.
+  // A list's page or node: in a new tab or the one shown, as set in
+  // Settings (Open pages in new tabs), the other way with Ctrl (⌘) or the
+  // middle button. An empty tab shown takes it either way.
   open(url, e) {
-    if (e && (e.ctrlKey || e.metaKey || e.button === 1)) {
-      e.preventDefault();
-      this.newTab(url);
-    } else this.go(url);
+    const flip = !!e && (e.ctrlKey || e.metaKey || e.button === 1);
+    if (flip) e.preventDefault();
+    const empty = !this.page && !this.loading;
+    if (newTabs() !== flip && !empty) this.newTab(url);
+    else this.go(url);
   },
 
   // A page that came for a tab out of sight.
@@ -6062,7 +6071,8 @@ app.views.browser = {
   },
 
   renderTabs() {
-    const many = this.tabs.length > 1;
+    // Always, when pages open in new tabs.
+    const many = this.tabs.length > 1 || newTabs();
     this.tabStrip.classList.toggle('hidden', !many);
     if (!many) return this.tabStrip.replaceChildren();
     this.tabStrip.replaceChildren(...this.tabs.map((tab) => {

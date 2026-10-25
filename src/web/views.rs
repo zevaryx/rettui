@@ -62,6 +62,8 @@ pub fn state(app: &App) -> Value {
         "icon": icon(app.own_appearance().as_ref()),
         "external_shared_instance": app.uses_external_shared_instance(),
         "wrap_lines": app.settings.wrap_lines,
+        // Pages picked from the Browser's list open in new tabs.
+        "browser_new_tabs": app.settings.browser_new_tabs,
         // How times and dates read (see `clock`).
         "clock": app.settings.clock,
         "date_style": app.settings.date_style,
