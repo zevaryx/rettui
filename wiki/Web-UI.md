@@ -23,7 +23,8 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   there once.
 - **Connection:** if the live connection to rettui drops (a phone asleep, a
   network change, a restart), a banner says so until it's back, and the page
-  catches up.
+  catches up. × hides the banner. The device losing its network isn't
+  enough: rettui on the same device (the Android app's) is still there.
 - **Scripts and proxies:** send the token in a header instead of using the
   link: `Authorization: Bearer <token>`, or `X-Rettui-Token: <token>` if
   `Authorization` is already taken (for example by a proxy's own login). The
@@ -141,6 +142,9 @@ rettui web UI: http://127.0.0.1:8740/?token=…
     Messages, Channels, Games and Browser, each with how many are unread,
     and **More** for Network, Node, Status, Reticulum and Hub. The bar shows
     under the lists; tapping the section you're in goes back to its list.
+    With the phone held sideways, the sections are in a rail down the left
+    instead, and the bars and headers are shorter, so the list or page gets
+    most of the screen.
   - **One pane at a time:** a section shows its list (conversations, rooms,
     saved pages, node pages, config sections), then what you open from it,
     full screen. ← in the top bar, or the phone's back button, goes back. A

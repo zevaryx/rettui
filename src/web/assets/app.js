@@ -1752,6 +1752,8 @@ function connectionLost(closed) {
     $('#connection').replaceChildren(...[
       el('span', { text: closed ? 'Disconnected from rettui' : navigator.onLine ? 'Connection lost: reconnecting…' : 'Offline: reconnecting when back online…' }),
       closed ? el('button', { text: 'Reload', onclick: () => location.reload() }) : null,
+      // Out of the way until the connection changes again.
+      el('button', { text: '×', title: 'Hide', 'aria-label': 'Hide', onclick: () => $('#connection').classList.add('hidden') }),
     ].filter(Boolean));
     $('#connection').classList.remove('hidden');
   }, closed ? 0 : 2000);
@@ -1767,7 +1769,13 @@ function connectionBack() {
   return was;
 }
 
-window.addEventListener('offline', () => connectionLost(false));
+// The device going offline isn't the page losing rettui: the Android app's
+// rettui runs on the phone itself, and stays reachable without a network.
+// Only the live connection failing (onerror above) says it's lost. Back
+// online, a connection that gave up starts again.
+window.addEventListener('online', () => {
+  if (events?.readyState === EventSource.CLOSED) listen();
+});
 // Back to the page (a phone waking, a tab brought forward): catch up, and
 // start again if the connection gave up meanwhile.
 document.addEventListener('visibilitychange', () => {

@@ -16,6 +16,8 @@ Changes since v1.9.0: a first version of an Android app, attached to the release
 
 ### Fixed
 - **Busy networks write less, and peers don't pile up:** hearing a known peer again was saved every 10 seconds, and new public keys every 5; now a peer heard again is saved every 5 minutes and keys every 30 seconds (new peers and names still within 10 seconds). Peers not heard from in 30 days are forgotten, with their keys, unless you have a conversation with them, they're a contact, a saved page or hub is on them, or they're your propagation node. See [Data and Storage](https://github.com/zevaryx/rettui/wiki/Data-and-Storage).
+- **Phones held sideways:** the web UI on a phone in landscape left a third of the screen or less for the list or page, under the top bar, the section's header and the bottom bar. The sections now go in a rail down the left, and the bars and headers are shorter. See [Web UI](https://github.com/zevaryx/rettui/wiki/Web-UI).
+- **A connection banner that wouldn't go:** in the Android app, losing Wi-Fi or mobile data showed "Offline: reconnecting when back online…" over the page, and it stayed until the app was closed, though rettui (on the phone itself) was still connected. The banner now shows only when the page loses rettui, and × hides it.
 - **The web UI fetches less:** the status it fetches every few seconds no longer carries the whole log (only Status asks for it, and redraws it only when it changed), status updates come at most every 2 seconds, and a page out of sight (a background tab) fetches nothing until it shows again. On a busy network a page fetched the status every 1.4 seconds, hidden or not.
 
 ### Docs and development

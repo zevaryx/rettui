@@ -1193,6 +1193,46 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .toast { max-width: none; }
 }
 .dialog.rns-history-dialog { width: min(1000px, 100%); }
+/* A phone on its side: little height, plenty of width. The sections go in
+   a rail down the left rather than a bar at the bottom, and the bars and
+   headers are shorter, so most of the screen is the list or the page. */
+@media (pointer: coarse) and (max-height: 500px) and (orientation: landscape) {
+  body {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "rail appbar" "rail main";
+  }
+  #appbar {
+    grid-area: appbar; min-height: calc(44px + env(safe-area-inset-top));
+    padding-left: 6px;
+  }
+  #appbar button { width: 40px; height: 40px; font-size: 20px; }
+  #appbar-title { font-size: 16px; }
+  #main { grid-area: main; }
+  #bottombar {
+    grid-area: rail; flex-direction: column; justify-content: center; width: calc(76px + env(safe-area-inset-left));
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
+    border-top: 0; border-right: 1px solid var(--border);
+  }
+  .bottom-tab { flex: 1 1 0; max-height: 64px; min-height: 0; width: 100%; padding: 2px; }
+  .bottom-tab .label { font-size: 11px; }
+  .bottom-tab .badge { top: 2px; }
+  button { min-height: 34px; padding: 4px 12px; }
+  input[type=text], input[type=search], input[type=password], input[type=number], select, textarea { padding: 6px 10px; }
+  select { min-height: 36px; }
+  .panel > header { padding: 6px 12px; min-height: 46px; flex-wrap: nowrap; }
+  /* The list's search beside its tabs and buttons, not under them. */
+  .panel > header .pane-search { flex: 1 1 140px; order: 0; }
+  .panel > header:not(:has(.subtabs)) .pane-search { order: -1; }
+  .network-tools { flex-wrap: nowrap; }
+  .network-tools > input { flex: 2 1 0; }
+  .network-tools > select { min-width: 120px; }
+  .toolbar { padding: 6px 10px; }
+  .list-item { padding: 8px 16px; min-height: 48px; }
+  .empty { padding: 14px 18px; }
+  .fab { width: 48px; height: 48px; right: 14px; bottom: 12px; font-size: 24px; }
+  body:not(.deeper) .view:has(> .fab) .panel.side .scroll { padding-bottom: 68px; }
+  #toasts, #connection { top: calc(50px + env(safe-area-inset-top)); }
+}
 .rns-history { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 12px; min-height: 0; }
 .rns-versions { display: flex; flex-direction: column; gap: 4px; max-height: 60vh; overflow-y: auto; }
 .rns-versions .list-item { text-align: left; }
