@@ -547,7 +547,13 @@ fn a_voice_message_recorded_and_sent() {
     // one thrown away while recording (Esc).
     tui.app.settings.voice_recorder = Some("cat /dev/zero".into());
     tui.alt('r');
-    assert!(tui.app.recording_seconds().is_some());
+    // Stopped once there's sound: one stopped before the recorder said
+    // anything has nothing to keep.
+    let started = std::time::Instant::now();
+    while tui.app.recording_seconds().is_some_and(|s| s < 1) && started.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(tui.app.recording_seconds().is_some_and(|s| s >= 1));
     tui.alt('r');
     assert!(tui.app.voice_draft_here().is_some());
     tui.ctrl('x');
