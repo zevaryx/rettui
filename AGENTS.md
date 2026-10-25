@@ -130,6 +130,9 @@ macOS and Windows:
   unreleased version's section: **Added**, **Fixed**, **Security** or
   **Docs and development**. Write it for users, and link to the wiki page.
   Keep that section's opening summary line up to date.
+- Whenever you change that section, make the open pull request from `dev`
+  to `main` say the same: its description is the section as it stands
+  (`.github/scripts/release-notes.sh v<version>` prints it).
 - Versioning: bump the major version only for real breaks in user-facing
   compatibility (data directory, settings, CLI, web API). New features
   bump the minor version. The version in `Cargo.toml` and the changelog
