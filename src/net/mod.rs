@@ -702,6 +702,8 @@ async fn run(
     let mut candidates: HashMap<Hash, autopn::Candidate> = HashMap::new();
     let (auto_tx, mut auto_rx) = mpsc::unbounded_channel::<Result<autopn::Pick, String>>();
     let mut auto_running = false;
+    // Checks in a row that found nothing.
+    let mut auto_failed = 0u32;
     let mut auto_started: Option<tokio::time::Instant> = None;
     let mut auto_next = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut auto_timer = tokio::time::interval(Duration::from_secs(15));
@@ -776,7 +778,8 @@ async fn run(
             }
             Some(result) = auto_rx.recv() => {
                 auto_running = false;
-                auto_next = tokio::time::Instant::now() + if result.is_ok() { autopn::RECHECK } else { autopn::RETRY };
+                auto_failed = if result.is_ok() { 0 } else { auto_failed + 1 };
+                auto_next = tokio::time::Instant::now() + if result.is_ok() { autopn::RECHECK } else { autopn::retry_after(auto_failed) };
                 if auto_pn {
                     if let Ok(pick) = &result {
                         propagation_node = Some(pick.node);
@@ -932,8 +935,12 @@ async fn run(
                             candidates.entry(hash).or_insert(autopn::Candidate { hash, hops, heard, stamp_cost });
                         }
                         auto_next = soon(auto_started);
+                        auto_failed = 0;
                     }
-                    NetCommand::RecheckPropagation => auto_next = auto_next.min(soon(auto_started)),
+                    NetCommand::RecheckPropagation => {
+                        auto_next = auto_next.min(soon(auto_started));
+                        auto_failed = 0;
+                    }
                     NetCommand::SetDiscoveredEntryPoints(count) => match discovered.as_mut() {
                         Some(manager) => manager.set_target(count as usize),
                         None if count > 0 => log("Discovered entry points takes effect once the Reticulum config finds entry points and leaves connecting to rettui (discover_interfaces on, autoconnect_discovered_interfaces 0), from the next start".into()),

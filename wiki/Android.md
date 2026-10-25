@@ -99,7 +99,15 @@ can then:
   multicast, which costs power, only while an AutoInterface is on.
 - **The page rests in the background.** Out of sight, the web UI fetches
   nothing; it catches up when you open the app again. Notifications come
-  from the service meanwhile.
+  from the service meanwhile, which hears only about notifications, not
+  every peer or announce heard.
+- **Less trying again.** An RRC hub that can't be reached is tried less and
+  less often, up to every 15 minutes, and a propagation node search that
+  finds none up to every 6 hours: each try goes out over the network.
+- **TCP connections and mobile data.** Reticulum's TCP interfaces check that
+  the other end is still there after 5 seconds of quiet (as Reticulum
+  does everywhere), which keeps mobile data busy while the phone is awake.
+  On mobile data, fewer TCP interfaces use less.
 
 To see what rettui uses, *Settings > Battery > Battery usage*, or
 `adb shell dumpsys batterystats org.zevaryx.rettui` on a computer.

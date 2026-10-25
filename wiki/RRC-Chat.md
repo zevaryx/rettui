@@ -88,8 +88,9 @@ host. rettui works with each of them, as they differ (see
   searched.
 - **Drafts:** what you write stays with its room or whisper conversation,
   as in [Messaging](Messaging), and in the web UI outlives reloading the page.
-- **Connections:** hubs reconnect automatically with backoff (toggle with
-  `a`) and rejoin your rooms quietly. Quitting leaves hubs properly, so others
+- **Connections:** hubs reconnect automatically (toggle with `a`) and
+  rejoin your rooms quietly. A hub that can't be reached is tried again
+  after 2 seconds, then less and less often, up to every 15 minutes. Quitting leaves hubs properly, so others
   see you go at once.
 
 ## Hubs differ

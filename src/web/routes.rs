@@ -749,6 +749,10 @@ async fn get_state(State(state): State<WebState>, Query(query): Query<StateQuery
 struct EventsQuery {
     /// The last notification this browser had (see [`events`]).
     since: Option<u64>,
+    /// `1`: notifications only, not what changed (the Android app's
+    /// service, which only shows notifications, isn't woken by every
+    /// announce).
+    notices: Option<String>,
 }
 
 /// A `notify` event: a notification, with its id (the browser's last event
@@ -786,6 +790,7 @@ async fn events(State(state): State<WebState>, Query(query): Query<EventsQuery>,
     };
     // Live notifications from before these were sent already.
     let caught_up = missed.iter().map(|(id, _)| *id).max().unwrap_or(0);
+    let changes_wanted = query.notices.as_deref() != Some("1");
     let replay: Vec<Result<Event, Infallible>> = missed.iter().filter_map(|(id, n)| notify_event(*id, n, true)).map(Ok).collect();
     // Every browser signed out since: the stream ends (and a reconnect
     // needs the new token).
@@ -796,7 +801,7 @@ async fn events(State(state): State<WebState>, Query(query): Query<EventsQuery>,
         let event = loop {
             tokio::select! {
                 _ = signed_out.changed() => return None,
-                change = changes.recv() => break match change {
+                change = changes.recv(), if changes_wanted => break match change {
                     Ok((version, scope)) => Event::default().data(format!("{version} {}", scope.name())),
                     // Missed some: one event covers them.
                     Err(RecvError::Lagged(_)) => Event::default().data("0 all"),

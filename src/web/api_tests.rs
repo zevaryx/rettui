@@ -799,6 +799,14 @@ async fn live_updates_notifications_and_signing_out() {
         said += &tokio::time::timeout(std::time::Duration::from_secs(5), events.next()).await.unwrap().unwrap();
     }
 
+    // Notifications only (the Android app's service): what changed isn't
+    // sent at all.
+    let mut quiet = Box::pin(web.events("/api/events?notices=1&since=99", None).await);
+    let _ = state.changes.send((8, Scope::ALL));
+    let _ = state.notices.send(Notice::Read(format!("conversation:{BOB}")));
+    let next = tokio::time::timeout(std::time::Duration::from_secs(5), quiet.next()).await.unwrap().unwrap();
+    assert!(next.contains("event: read") && !next.contains("8 all"), "{next}");
+
     // Signing every browser out ends the stream.
     let fresh = Box::pin(web.events("/api/events?since=0", None).await);
     let _ = state.signed_out.send(1);

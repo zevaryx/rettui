@@ -440,6 +440,8 @@ class MainActivity : Activity() {
     override fun onStop() {
         web.onPause()
         web.pauseTimers()
+        // Nor does it watch that rettui is there (asking Android every 2 s).
+        main.removeCallbacks(watch)
         super.onStop()
     }
 
@@ -447,6 +449,7 @@ class MainActivity : Activity() {
         super.onStart()
         web.resumeTimers()
         web.onResume()
+        if (web.visibility == android.view.View.VISIBLE) main.postDelayed(watch, 2000)
     }
 
     override fun onDestroy() {

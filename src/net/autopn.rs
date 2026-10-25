@@ -32,8 +32,16 @@ pub const PROBED: usize = 4;
 pub const RECHECK: Duration = Duration::from_secs(6 * 3600);
 /// Least time between checks, however often they're asked for.
 pub const MIN_GAP: Duration = Duration::from_secs(60);
-/// After a check that found nothing, the next.
+/// After a check that found nothing, the next; twice as long after each
+/// one more (see [`retry_after`]).
 pub const RETRY: Duration = Duration::from_secs(10 * 60);
+
+/// When to check again after `failed` checks in a row found nothing: 10
+/// minutes, then 20, 40 and so on, up to [`RECHECK`] (each check asks the
+/// network about every candidate).
+pub fn retry_after(failed: u32) -> Duration {
+    RETRY.saturating_mul(1 << failed.saturating_sub(1).min(8)).min(RECHECK)
+}
 
 /// A propagation node that might be picked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +140,14 @@ mod tests {
     use super::*;
 
     const NOW: i64 = 1_800_000_000;
+
+    #[test]
+    fn checks_that_find_nothing_come_less_often() {
+        let minutes = |failed| retry_after(failed).as_secs() / 60;
+        assert_eq!([0, 1, 2, 3, 5].map(minutes), [10, 10, 20, 40, 160]);
+        assert_eq!((minutes(6), retry_after(7)), (320, RECHECK));
+        assert_eq!(retry_after(100), RECHECK);
+    }
 
     fn candidate(n: u8, hops: u8, hours_ago: i64, stamp_cost: Option<u8>) -> Candidate {
         Candidate { hash: [n; 16], hops, heard: NOW - hours_ago * 3600, stamp_cost }

@@ -120,7 +120,10 @@ for you, as Sideband does when none is set:
   Nothing can make a node answer faster than it really does, so the
   measured time decides.
 - **Keeping it:** the node picked is checked again every 6 hours, and soon
-  after syncing with it or sending through it fails. It's replaced only if
+  after syncing with it or sending through it fails. When a check finds no
+  node that answers, the next comes 10 minutes later, then 20, 40 and so
+  on, up to every 6 hours; a propagation node newly heard is checked within
+  a minute. It's replaced only if
   it stops answering or another answers in under half its time. The Status
   tab shows which node is in use and how it was picked; picking one by hand
   (`p` in the Network tab, or the propagation node setting in either UI)

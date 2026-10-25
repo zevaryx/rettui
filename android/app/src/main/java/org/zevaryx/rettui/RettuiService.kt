@@ -227,7 +227,9 @@ class RettuiService : Service() {
                     continue
                 }
                 val since = prefs.getString("since", null)
-                val url = URL("http://127.0.0.1:${Rettui.port(this)}/api/events" + (since?.let { "?since=$it" } ?: ""))
+                // Notifications only: what changed (every announce, on a busy
+                // network) is the web UI's business, and would wake this.
+                val url = URL("http://127.0.0.1:${Rettui.port(this)}/api/events?notices=1" + (since?.let { "&since=$it" } ?: ""))
                 val connection = url.openConnection() as HttpURLConnection
                 connection.setRequestProperty("Authorization", "Bearer $token")
                 connection.setRequestProperty("Accept", "text/event-stream")

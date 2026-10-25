@@ -675,8 +675,11 @@ impl Channels {
     }
 }
 
+/// How long before trying a hub again: soon at first, then less and less
+/// often, up to every 15 minutes (each try asks the network for a path and
+/// a Link, which keeps a phone's radio awake).
 fn backoff(attempts: u32) -> Duration {
-    Duration::from_secs(2u64.saturating_pow(attempts.min(6)).clamp(2, 60))
+    Duration::from_secs(2u64.saturating_pow(attempts.min(10)).clamp(2, 15 * 60))
 }
 
 impl App {
@@ -992,7 +995,8 @@ mod tests {
     fn backoff_grows_and_caps() {
         assert_eq!(backoff(1), Duration::from_secs(2));
         assert_eq!(backoff(3), Duration::from_secs(8));
-        assert_eq!(backoff(20), Duration::from_secs(60));
+        assert_eq!(backoff(6), Duration::from_secs(64));
+        assert_eq!(backoff(20), Duration::from_secs(15 * 60));
     }
 
     #[test]
