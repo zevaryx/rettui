@@ -18,6 +18,14 @@ use crate::store::{MessageState, Store};
 /// Longest a step may take: paths are asked for and announces go round.
 const PATIENCE: Duration = Duration::from_secs(60);
 
+/// Every interface here takes in announces as they come. With ingress
+/// control on, three of Amy's announces within a second (as when Ben
+/// connects) start a burst on Ben's new interface, which holds announces
+/// of destinations he doesn't know yet. On a link this quiet the burst
+/// never ends in rsReticulum (ending it needs six recent announces), so a
+/// held one, released, is held again: Ben might never hear Amy's node.
+const TAKE_ALL: &str = "    ingress_control = No\n";
+
 /// One rettui: its app, what its network tells it, and its folder.
 struct Peer {
     app: App,
@@ -128,10 +136,12 @@ async fn until(amy: &mut Peer, ben: &mut Peer, what: &str, mut done: impl FnMut(
 /// hub); Ben connects to it. Both started, and each heard the other.
 async fn pair(name: &str, amy: impl FnOnce(&mut Settings)) -> (Peer, Peer) {
     let port = free_port();
-    let server =
-        format!("  [[Server]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n");
-    let client =
-        format!("  [[To Amy]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n");
+    let server = format!(
+        "  [[Server]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n{TAKE_ALL}"
+    );
+    let client = format!(
+        "  [[To Amy]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n{TAKE_ALL}"
+    );
     let mut amy = Peer::start(&format!("{name}-amy"), &server, amy);
     // Amy listening before Ben connects.
     let started = Instant::now();
@@ -333,7 +343,7 @@ async fn while_running<T>(amy: &mut Peer, work: impl std::future::Future<Output 
 async fn the_command_line_against_a_running_rettui() {
     use crate::app::node::NodeStatus;
     let port = free_port();
-    let server = format!("  [[Server]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n");
+    let server = format!("  [[Server]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n{TAKE_ALL}");
     let mut amy = Peer::start("cli-amy", &server, |s| {
         s.node_enabled = true;
         s.node_name = Some("Amy's node".into());
@@ -359,7 +369,7 @@ async fn the_command_line_against_a_running_rettui() {
         rns.join("config"),
         format!(
             "[reticulum]\n  share_instance = No\n\n[interfaces]\n  [[To Amy]]\n    type = TCPClientInterface\n    \
-             target_host = 127.0.0.1\n    target_port = {port}\n"
+             target_host = 127.0.0.1\n    target_port = {port}\n{TAKE_ALL}"
         ),
     )
     .unwrap();
