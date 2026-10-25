@@ -65,7 +65,7 @@ use crate::term::clipboard::Clipboard;
 use crate::term::images::{DecodeFor, Decoded, Graphics, Picture, decode_in_background};
 use crate::term::input::TextInput;
 
-pub use browser::{Browser, BrowserFocus, BrowserPane, Location, resolve_url};
+pub use browser::{Browser, BrowserFocus, BrowserPane, Location, PageTab, resolve_url};
 
 /// An app for tests: its data in `dir` (settings saved there too), and no
 /// network.
@@ -273,6 +273,8 @@ pub struct Regions {
     pub version: Rect,
     /// Browser pane sub-tabs and list.
     pub browser_tabs: Vec<(Rect, BrowserPane)>,
+    /// The Browser's page tabs (when there's more than one), by place.
+    pub page_tabs: Vec<(Rect, usize)>,
     pub browser_search: Rect,
     /// The message search's results, and the first one shown.
     pub message_search: Rect,
@@ -993,13 +995,13 @@ impl App {
             self.paste_channel_search(text);
         } else if self.forward.is_some() && self.tab == Tab::Messages {
             self.paste_forward(text);
-        } else if self.browser.find.is_some() && self.tab == Tab::Browser {
+        } else if self.browser.tab.find.is_some() && self.tab == Tab::Browser {
             self.paste_find(text);
         } else if self.browser.search.typing && self.tab == Tab::Browser {
             self.paste_browser_search(text);
         } else if let Some(field) = self.selected_text_field() {
             // Paste into the selected page field by opening its editor.
-            let page = self.browser.page.as_ref().expect("field implies a page");
+            let page = self.browser.tab.page.as_ref().expect("field implies a page");
             let current = &page.fields[field];
             let editing = if current.rows > 1 { browser::field_to_line(&current.value) } else { current.value.clone() };
             let mut input = TextInput::with_text(&editing);
@@ -1100,11 +1102,7 @@ impl App {
             NetEvent::Probed { to, result } => self.on_probed(to, result),
             NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
-            NetEvent::FetchProgress { id, text } => {
-                if let Some(pending) = self.browser.loading.as_mut().filter(|pending| pending.id == id) {
-                    pending.status = Some(text);
-                }
-            }
+            NetEvent::FetchProgress { id, text } => self.on_fetch_progress(id, text),
             NetEvent::Paper { id, result } => self.on_paper(id, result),
             NetEvent::SyncStarted => self.sync = SyncState::Running(Instant::now()),
             NetEvent::Synced(result) => {
@@ -1190,7 +1188,7 @@ impl App {
             }
             PromptKind::EditSetting(key) => self.update_setting(key, prompt.input.text()),
             PromptKind::EditField(f) => {
-                if let Some(page) = &mut self.browser.page
+                if let Some(page) = &mut self.browser.tab.page
                     && let Some(field) = page.fields.get_mut(f)
                 {
                     field.value =
@@ -1399,10 +1397,7 @@ impl App {
         self.pings.retain(|_, ping| *ping != contacts::PingState::Waiting);
         self.pn.restarting(crate::lxmf::pn::PnConfig::from_settings(&self.settings, &self.paths));
         self.hub.restarting(crate::rrc::host::HubHostConfig::from_settings(&self.settings, &self.paths, self.identity_hash));
-        if self.browser.loading.take().is_some() {
-            self.browser.error = Some("Reticulum restarted while loading; load the page again".into());
-        }
-        self.browser.media_requests.clear();
+        self.browser.restarted();
         // Deliveries in progress belong to the old stack.
         for conversation in self.store.conversations.values_mut() {
             for message in &mut conversation.messages {
@@ -1481,8 +1476,8 @@ impl App {
             (at, found.iter().map(|e| e.as_str()).collect::<Vec<_>>()).hash(&mut h);
         }
         (self.channels.typing, self.channels.menu.is_some(), self.channels.picker.is_some()).hash(&mut h);
-        (discriminant(&self.browser.pane), discriminant(&self.browser.focus), self.browser.source.is_some()).hash(&mut h);
-        (self.browser.search.typing, self.browser.find.is_some()).hash(&mut h);
+        (discriminant(&self.browser.pane), discriminant(&self.browser.focus), self.browser.tab.source.is_some()).hash(&mut h);
+        (self.browser.search.typing, self.browser.tab.find.is_some()).hash(&mut h);
         (self.node.editing, discriminant(&self.node.view), self.node.editor.is_some()).hash(&mut h);
         (discriminant(&self.rns.focus), self.rns.picker.is_some(), self.rns.editor.is_some()).hash(&mut h);
         h.finish()

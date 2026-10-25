@@ -6,14 +6,34 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{accent, ago, ago_secs, block, dim, highlighted, selected_bg};
-use crate::app::{App, BrowserFocus, BrowserPane, match_mask};
+use crate::app::{App, BrowserFocus, BrowserPane, PageTab, match_mask};
 use crate::net::PeerKind;
 use crate::nomad::micron::source::{Token, tokenize, visible};
 use crate::term::images::draw_placements;
+
+/// A Browser tab's name: the node its page is on, or what it's doing.
+fn tab_label(app: &App, tab: &PageTab) -> String {
+    let label = match (&tab.loading, &tab.location) {
+        (Some(_), None) => "loading…".to_string(),
+        (_, Some(location)) => {
+            let node = app.store.display_name(&hex::encode(location.node));
+            match location.path.trim_start_matches("/page/").trim_end_matches(".mu") {
+                "" | "index" => node,
+                page => format!("{node} · {page}"),
+            }
+        }
+        (None, None) => "New tab".to_string(),
+    };
+    let mut short: String = label.chars().take(24).collect();
+    if short.len() < label.len() {
+        short.push('…');
+    }
+    short
+}
 
 pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     let [pane, content] = Layout::horizontal([Constraint::Length(super::side_width(app, area, 32)), Constraint::Min(20)]).areas(area);
@@ -22,8 +42,8 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     let [address, body] = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).areas(content);
     app.regions.address = address;
 
-    let identified = app.browser.location.as_ref().is_some_and(|l| app.store.identified_nodes.contains(&hex::encode(l.node)));
-    let (url_text, url_style) = match (&app.browser.loading, &app.browser.location) {
+    let identified = app.browser.tab.location.as_ref().is_some_and(|l| app.store.identified_nodes.contains(&hex::encode(l.node)));
+    let (url_text, url_style) = match (&app.browser.tab.loading, &app.browser.tab.location) {
         (Some(pending), _) => (
             format!(
                 "{}  loading {}s…{}  (Esc to cancel)",
@@ -41,23 +61,48 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     // Badges live in the border so a long address cannot push them away.
     let mut badges = Vec::new();
-    if app.browser.loading.is_none()
-        && let Some(age) = app.browser.cached_age
+    if app.browser.tab.loading.is_none()
+        && let Some(age) = app.browser.tab.cached_age
     {
         badges.push(Span::styled(format!(" cached {} ago · r refresh ", ago_secs(age.as_secs())), Style::default().fg(dim())));
     }
     if identified {
         badges.push(Span::styled(" identified ", Style::default().fg(Color::LightYellow)));
     }
-    frame.render_widget(
-        Paragraph::new(Span::styled(url_text, url_style)).block(block("Address", false).title_top(Line::from(badges).right_aligned())),
-        address,
-    );
+    let tabbed = app.browser_tab_count() > 1;
+    // With tabs, they're the title, from the corner on.
+    let address_block = if tabbed {
+        Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(dim()))
+    } else {
+        block("Address", false)
+    };
+    let mut address_block = address_block.title_top(Line::from(badges).right_aligned());
+    app.regions.page_tabs.clear();
+    if tabbed {
+        // The tabs take the title's place, each clickable.
+        let labels: Vec<String> =
+            app.browser_tabs().iter().enumerate().map(|(i, tab)| format!(" {} {} ", i + 1, tab_label(app, tab))).collect();
+        let mut x = address.x + 1;
+        let mut spans = Vec::new();
+        for (i, label) in labels.into_iter().enumerate() {
+            let width = (label.width() as u16).min(address.right().saturating_sub(x + 1));
+            if width == 0 {
+                break;
+            }
+            app.regions.page_tabs.push((Rect::new(x, address.y, width, 1), i));
+            let style = if i == app.browser.current { Style::default().fg(Color::Black).bg(accent()) } else { Style::default().fg(dim()) };
+            spans.push(Span::styled(label, style));
+            x += width + 1;
+            spans.push(Span::raw("─"));
+        }
+        address_block = address_block.title(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(Span::styled(url_text, url_style)).block(address_block), address);
 
-    let view_source = app.browser.view_source;
+    let view_source = app.browser.tab.view_source;
     let mut body_block = block(if view_source { "Source" } else { "Page" }, app.browser.focus == BrowserFocus::Page);
     app.regions.source_button = Rect::default();
-    if app.browser.source.is_some() {
+    if app.browser.tab.source.is_some() {
         // A button in the title bar; `u` does the same.
         let (label, style) = if view_source {
             (" ◂ back to page ", Style::default().fg(Color::Black).bg(accent()))
@@ -75,7 +120,7 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     app.browser.viewport = inner.height as usize;
 
     let mut page_area = inner;
-    if let Some(error) = &app.browser.error {
+    if let Some(error) = &app.browser.tab.error {
         let [err, rest] = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(inner);
         frame.render_widget(Paragraph::new(format!("✗ {error}")).style(Style::default().fg(Color::Red)), err);
         page_area = rest;
@@ -86,24 +131,24 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
         draw_find(frame, app, page_area);
         return;
     }
-    let Some(page) = &app.browser.page else {
+    let Some(page) = &app.browser.tab.page else {
         app.regions.page_hits.clear();
         return;
     };
 
-    let layout = page.layout(page_area.width as usize, app.browser.selected, &app.browser.images, app.graphics.as_ref());
+    let layout = page.layout(page_area.width as usize, app.browser.tab.selected, &app.browser.tab.images, app.graphics.as_ref());
     let height = page_area.height as usize;
     let max_scroll = layout.lines.len().saturating_sub(height);
     // An anchor jumped to: its row at the top (a folded one's heading).
-    if let Some(line) = app.browser.jump_to.take() {
+    if let Some(line) = app.browser.tab.jump_to.take() {
         let row = layout.line_rows.iter().take(line + 1).rev().find_map(|row| *row);
         if let Some(row) = row {
-            app.browser.scroll = row;
+            app.browser.tab.scroll = row;
         }
     }
-    app.browser.scroll = app.browser.scroll.min(max_scroll);
-    app.browser.item_rows = layout.item_rows;
-    app.browser.line_rows = layout.line_rows;
+    app.browser.tab.scroll = app.browser.tab.scroll.min(max_scroll);
+    app.browser.tab.item_rows = layout.item_rows;
+    app.browser.tab.line_rows = layout.line_rows;
     app.regions.page_hits = layout.hits;
     // Plain text of every row as drawn (alignment applied), for copying.
     let width = page_area.width as usize;
@@ -120,18 +165,18 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
             format!("{}{text}", " ".repeat(pad))
         })
         .collect();
-    let visible: Vec<Line> = layout.lines.into_iter().skip(app.browser.scroll).take(height).collect();
+    let visible: Vec<Line> = layout.lines.into_iter().skip(app.browser.tab.scroll).take(height).collect();
     frame.render_widget(Paragraph::new(visible).style(page.base_style), page_area);
     draw_selection(frame, app, page_area);
-    let images = &app.browser.images;
-    draw_placements(&layout.placements, app.browser.scroll, page_area, frame.buffer_mut(), |url| images.get(url));
+    let images = &app.browser.tab.images;
+    draw_placements(&layout.placements, app.browser.tab.scroll, page_area, frame.buffer_mut(), |url| images.get(url));
     draw_find(frame, app, page_area);
 }
 
 /// Finding in the page: every match marked (the current one brighter), and
 /// what's looked for in a bar along the bottom.
 fn draw_find(frame: &mut Frame, app: &App, area: Rect) {
-    let Some(find) = &app.browser.find else { return };
+    let Some(find) = &app.browser.tab.find else { return };
     if area.height == 0 {
         return;
     }
@@ -139,7 +184,7 @@ fn draw_find(frame: &mut Frame, app: &App, area: Rect) {
     let current = find.current.min(found.len().saturating_sub(1));
     let buf = frame.buffer_mut();
     for (i, (row, start, end)) in found.iter().enumerate() {
-        let Some(y) = row.checked_sub(app.browser.scroll).filter(|y| *y < area.height as usize - 1) else { continue };
+        let Some(y) = row.checked_sub(app.browser.tab.scroll).filter(|y| *y < area.height as usize - 1) else { continue };
         let style = if i == current {
             Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)
         } else {
@@ -174,12 +219,12 @@ fn draw_find(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Reverse the text selected with the mouse.
 fn draw_selection(frame: &mut Frame, app: &App, area: Rect) {
-    let Some(selection) = app.browser.selection.filter(|s| !s.is_empty()) else {
+    let Some(selection) = app.browser.tab.selection.filter(|s| !s.is_empty()) else {
         return;
     };
     let buf = frame.buffer_mut();
     for y in 0..area.height {
-        let row = app.browser.scroll + y as usize;
+        let row = app.browser.tab.scroll + y as usize;
         for x in 0..area.width {
             if selection.contains(row, x as usize)
                 && let Some(cell) = buf.cell_mut((area.x + x, area.y + y))
@@ -212,7 +257,7 @@ pub(super) fn token_style(token: Token) -> Style {
 fn draw_source(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.page_hits.clear();
     app.regions.page_text.clear();
-    let Some(source) = &app.browser.source else { return };
+    let Some(source) = &app.browser.tab.source else { return };
     let lines = tokenize(source);
     let gutter_width = lines.len().to_string().len() as u16 + 2;
     if area.width <= gutter_width + 1 {
@@ -255,8 +300,8 @@ fn draw_source(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let height = text_area.height as usize;
-    app.browser.scroll = app.browser.scroll.min(rows.len().saturating_sub(height));
-    let scroll = app.browser.scroll;
+    app.browser.tab.scroll = app.browser.tab.scroll.min(rows.len().saturating_sub(height));
+    let scroll = app.browser.tab.scroll;
     let numbers: Vec<Line> = rows
         .iter()
         .skip(scroll)
@@ -317,7 +362,7 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         spans
     };
-    let current = app.browser.location.as_ref().map(|l| (l.url(), hex::encode(l.node)));
+    let current = app.browser.tab.location.as_ref().map(|l| (l.url(), hex::encode(l.node)));
     // A node is saved when its home page is.
     let saved_urls: HashSet<&str> = app.store.saved.iter().map(|b| b.url.as_str()).collect();
     let (items, empty_hint): (Vec<ListItem>, String) = match app.browser.pane {
@@ -457,7 +502,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
         app.tab = Tab::Browser;
-        app.browser.page = Some(crate::nomad::micron::parse("Welcome to the tower\nThe Tower is up"));
+        app.browser.tab.page = Some(crate::nomad::micron::parse("Welcome to the tower\nThe Tower is up"));
         app.browser.focus = crate::app::BrowserFocus::Page;
         screen(&mut app);
         app.on_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));

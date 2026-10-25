@@ -5509,6 +5509,16 @@ app.views.network = {
 
 // ---- Browser ----------------------------------------------------------------
 
+// The most Browser tabs open at once (as in the terminal UI).
+const MAX_TABS = 12;
+
+// A page's name for its tab: the node's, and the page's own unless it's
+// the node's home page.
+function pageName(page) {
+  const path = page.url.split(':').slice(1).join(':').replace(/^\/page\//, '').replace(/\.mu$/, '');
+  return path && path !== 'index' ? `${page.node_name} · ${path}` : page.node_name;
+}
+
 app.views.browser = {
   panes: true,
   // The list beside the page: saved pages or heard nodes.
@@ -5524,8 +5534,16 @@ app.views.browser = {
   // here, by name or address.
   query: '',
   request: 0,
+  // Tabs. The one on screen keeps its page in the view's own fields (page,
+  // history, viewSource, loading, error); each tab has a record in `tabs`,
+  // the on-screen one's filled in when it's left.
+  tabs: [],
+  tab: null,
 
   mount(root) {
+    this.tab = {};
+    this.tabs = [this.tab];
+    this.tabStrip = el('div', { class: 'page-tabs hidden', role: 'tablist' });
     this.paneList = el('div', { class: 'scroll' });
     this.paneTabs = el('div', { class: 'subtabs' });
     this.search = el('input', {
@@ -5568,13 +5586,15 @@ app.views.browser = {
         this.renderPage();
       } }),
       find: el('button', { text: 'Find', title: 'Find in the page (f)', onclick: () => this.openFind() }),
+      newTab: el('button', { text: '+', 'data-label': 'New tab', 'aria-label': 'New tab', title: 'A new tab (T); Ctrl+click or middle-click a link opens it in one',
+        onclick: () => this.newTab() }),
       clear: el('button', { text: 'Clear cache', onclick: async () => {
         const result = await attempt(() => api.post('/cache/clear'));
         if (result) toast(`Cleared ${result.removed} cached page(s) and image(s)`);
       } }),
     };
     this.status = el('div', { class: 'page-status' });
-    this.content = el('div', { class: 'scroll page', onclick: (e) => this.click(e) });
+    this.content = el('div', { class: 'scroll page', onclick: (e) => this.click(e), onauxclick: (e) => e.button === 1 && this.click(e) });
     // Finding in the page (f, or the Find button): every match marked.
     this.findInput = el('input', { type: 'search', placeholder: 'Find in the page', oninput: () => this.find(0),
       onkeydown: (e) => {
@@ -5591,21 +5611,22 @@ app.views.browser = {
       el('button', { text: '↑', title: 'Previous (Shift+Enter)', onclick: () => this.find(-1) }),
       el('button', { text: '↓', title: 'Next (Enter)', onclick: () => this.find(1) }),
       el('button', { text: '×', title: 'Done (Esc)', onclick: () => this.closeFind() }));
-    const tools = el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find, this.buttons.clear);
+    const tools = el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find,
+      this.buttons.newTab, this.buttons.clear);
     root.append(
       el('section', { class: 'panel side' }, el('header', {}, this.paneTabs,
         el('button', { class: 'phone-only', text: 'Address…', onclick: () => {
           setPane(this, 'detail');
           this.address.focus();
         } }), this.search), this.paneList),
-      el('section', { class: 'panel grow pane-main' },
+      el('section', { class: 'panel grow pane-main' }, this.tabStrip,
         el('div', { class: 'toolbar' }, this.buttons.back, this.address, el('button', { class: 'primary', text: 'Go', onclick: () => this.go(this.address.value) }),
           tools,
           // On a phone the page's buttons wait behind ⋯.
           el('button', { class: 'phone-only', text: '⋯', title: 'More', 'aria-label': 'More actions', onclick: (e) => {
             e.stopPropagation();
             openSheet(this.page?.title || this.page?.url || 'Page', [...tools.children].filter((b) => !b.disabled)
-              .map((b) => ({ text: b.textContent, action: () => b.click() })));
+              .map((b) => ({ text: b.dataset.label || b.textContent, action: () => b.click() })));
           } })),
         this.status, this.findBar, this.content));
     this.renderPane();
@@ -5656,7 +5677,8 @@ app.views.browser = {
       const byAddress = (s) => savedTerms.length && !savedTerms.some((t) => lower(s.name).includes(t));
       this.paneList.replaceChildren(...(saved.length ? saved.map((s) => el('div', {
         class: 'list-item' + (s.url === current ? ' selected' : ''),
-        onclick: () => this.go(s.url),
+        onclick: (e) => this.open(s.url, e),
+        onauxclick: (e) => e.button === 1 && this.open(s.url, e),
       }, el('span', { class: 'main' },
         el('div', { class: 'name' }, highlighted(s.name, savedTerms)),
         byAddress(s) ? el('div', { class: 'sub mono' }, highlighted(s.url, savedTerms)) : null),
@@ -5675,7 +5697,8 @@ app.views.browser = {
         const name = n.name || `<${n.hash.slice(0, 12)}>`;
         return el('div', {
           class: 'list-item' + (n.hash === currentNode ? ' selected' : ''),
-          onclick: () => this.go(n.hash),
+          onclick: (e) => this.open(n.hash, e),
+          onauxclick: (e) => e.button === 1 && this.open(n.hash, e),
         }, el('span', { class: 'main' },
           el('div', { class: 'name' }, n.name ? highlighted(n.name, nodeTerms) : name),
           el('div', { class: 'sub' }, highlighted(n.hash, nodeTerms), `  ·  ${ago(n.last_seen)} ago`)),
@@ -5714,6 +5737,7 @@ app.views.browser = {
 
   renderPage() {
     this.renderButtons();
+    this.renderTabs();
     const status = [];
     if (this.loading) {
       status.push(el('span', { class: 'state-warn', text: `Loading ${this.loading.url}…` }),
@@ -5914,6 +5938,8 @@ app.views.browser = {
     }
     setPane(this, 'detail');
     const loading = { url, cancelled: false };
+    // The tab it's for, which may not be on screen by the time it comes.
+    const tab = this.tab;
     this.loading = loading;
     this.error = null;
     this.address.value = url;
@@ -5922,7 +5948,8 @@ app.views.browser = {
       const page = fields
         ? await api.post('/page', { url, fields })
         : await api.get(`/page?url=${encodeURIComponent(url)}${refresh ? '&refresh=true' : ''}`);
-      if (loading.cancelled || this.loading !== loading) return;
+      if (loading.cancelled || (tab === this.tab ? this.loading : tab.loading) !== loading) return;
+      if (tab !== this.tab) return this.landInTab(tab, page, record);
       if (page.download) {
         this.loading = null;
         this.renderPage();
@@ -5935,6 +5962,10 @@ app.views.browser = {
       this.content.scrollTop = 0;
     } catch (e) {
       if (loading.cancelled) return;
+      if (tab !== this.tab) {
+        if (tab.loading === loading) Object.assign(tab, { loading: null, error: e.message });
+        return this.renderTabs();
+      }
       this.error = e.message;
     }
     this.loading = null;
@@ -5947,6 +5978,106 @@ app.views.browser = {
   back() {
     const previous = this.history.pop();
     if (previous) this.go(previous, { record: false });
+  },
+
+  // A list's page or node: here, or in a new tab with Ctrl (⌘) or the
+  // middle button.
+  open(url, e) {
+    if (e && (e.ctrlKey || e.metaKey || e.button === 1)) {
+      e.preventDefault();
+      this.newTab(url);
+    } else this.go(url);
+  },
+
+  // A page that came for a tab out of sight.
+  landInTab(tab, page, record) {
+    tab.loading = null;
+    if (page.download) {
+      this.renderTabs();
+      return this.go(page.download);
+    }
+    tab.history ||= [];
+    if (record && tab.page && tab.page.url !== page.url) tab.history.push(tab.page.url);
+    if (!tab.page || tab.page.url !== page.url) tab.viewSource = false;
+    Object.assign(tab, { page, error: null, address: page.url, scroll: 0 });
+    this.renderTabs();
+  },
+
+  saveTab() {
+    Object.assign(this.tab, { page: this.page, history: this.history, viewSource: this.viewSource, loading: this.loading,
+      error: this.error, scroll: this.content.scrollTop, address: this.address.value });
+  },
+
+  showTab(tab) {
+    if (tab === this.tab) return;
+    this.saveTab();
+    this.closeFind();
+    this.tab = tab;
+    this.page = tab.page || null;
+    this.history = tab.history || [];
+    this.viewSource = !!tab.viewSource;
+    this.loading = tab.loading || null;
+    this.error = tab.error || null;
+    this.address.value = tab.address || '';
+    if (this.page) this.page.saved = (this.saved || []).some((s) => s.url === this.page.url);
+    this.renderPage();
+    this.renderPane();
+    this.content.scrollTop = tab.scroll || 0;
+  },
+
+  // A new tab after this one: `url` in it, or an address to enter.
+  newTab(url = '', options = {}) {
+    if (this.tabs.length >= MAX_TABS) return toast(`${MAX_TABS} tabs are open already: close one first`, true);
+    const tab = {};
+    this.tabs.splice(this.tabs.indexOf(this.tab) + 1, 0, tab);
+    this.showTab(tab);
+    if (url) return this.go(url, options);
+    // On a phone, the list to pick from; else the address bar.
+    if (phone.matches) return setPane(this, 'list');
+    setPane(this, 'detail');
+    this.address.focus();
+  },
+
+  // Close a tab (what it was loading is let go); the only one is emptied.
+  closeTab(tab = this.tab) {
+    const loading = tab === this.tab ? this.loading : tab.loading;
+    if (loading) loading.cancelled = true;
+    if (this.tabs.length === 1) {
+      Object.assign(this, { page: null, history: [], viewSource: false, loading: null, error: null });
+      this.address.value = '';
+      return this.renderPage();
+    }
+    const index = this.tabs.indexOf(tab);
+    this.tabs.splice(index, 1);
+    if (tab !== this.tab) return this.renderTabs();
+    // Nothing to keep of the one closed.
+    this.tab = {};
+    this.showTab(this.tabs[Math.min(index, this.tabs.length - 1)]);
+  },
+
+  // The tab `step` places along, round the end.
+  stepTab(step) {
+    const count = this.tabs.length;
+    this.showTab(this.tabs[(this.tabs.indexOf(this.tab) + step + count) % count]);
+  },
+
+  renderTabs() {
+    const many = this.tabs.length > 1;
+    this.tabStrip.classList.toggle('hidden', !many);
+    if (!many) return this.tabStrip.replaceChildren();
+    this.tabStrip.replaceChildren(...this.tabs.map((tab) => {
+      const shown = tab === this.tab;
+      const page = shown ? this.page : tab.page;
+      const loading = shown ? this.loading : tab.loading;
+      const name = page ? pageName(page) : loading ? 'Loading…' : 'New tab';
+      return el('div', { class: 'page-tab' + (shown ? ' active' : ''), role: 'tab', 'aria-selected': String(shown), title: page?.url || '',
+        onclick: () => this.showTab(tab), onauxclick: (e) => e.button === 1 && this.closeTab(tab) },
+      el('span', { class: 'page-tab-name', text: (loading ? '⟳ ' : '') + name }),
+      el('button', { class: 'page-tab-close', text: '×', title: 'Close tab (W)', 'aria-label': `Close ${name}`, onclick: (e) => {
+        e.stopPropagation();
+        this.closeTab(tab);
+      } }));
+    }), el('button', { class: 'page-tab-new', text: '+', title: 'New tab (T)', 'aria-label': 'New tab', onclick: () => this.newTab() }));
   },
 
   // Links carry their target in data-url and the fields they submit in
@@ -5971,8 +6102,11 @@ app.views.browser = {
       return;
     }
     const spec = link.dataset.fields ? link.dataset.fields.split('|') : [];
-    if (!spec.length) return this.go(url);
-    this.go(url, { fields: this.formFields(spec) });
+    const options = spec.length ? { fields: this.formFields(spec) } : {};
+    // Ctrl (⌘) or the middle button: in a new tab.
+    const elsewhere = (e.ctrlKey || e.metaKey || e.button === 1) && !/^(lxmf|rrc)/.test(url);
+    if (elsewhere) this.newTab(url, options);
+    else this.go(url, options);
   },
 
   toggleSaved() {
@@ -7949,7 +8083,8 @@ const KEYS = [
   ['Channels', [['/', 'search what was said in every room']]],
   ['Network', [['/', 'search by name or address'], ['a', 'announces as they\'re heard, or the list']]],
   ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],
-    ['/', 'search the nodes and saved pages']]],
+    ['/', 'search the nodes and saved pages'], ['T', 'a new tab (Ctrl+click or middle-click a link for one)'], ['W', 'close the tab'],
+    ['[ ]', 'previous or next tab']]],
 ];
 
 function keysDialog() {
@@ -7976,6 +8111,9 @@ document.addEventListener('keydown', (e) => {
     setPane(app.views.browser, 'detail');
     app.views.browser.openFind();
   } else if (e.key === 'b' && app.tab === 'browser') app.views.browser.back();
+  else if (e.key === 'T' && app.tab === 'browser') app.views.browser.newTab();
+  else if (e.key === 'W' && app.tab === 'browser') app.views.browser.closeTab();
+  else if ((e.key === '[' || e.key === ']') && app.tab === 'browser') app.views.browser.stepTab(e.key === ']' ? 1 : -1);
   else if (e.key === 'g' && app.tab === 'browser') {
     e.preventDefault();
     setPane(app.views.browser, 'detail');

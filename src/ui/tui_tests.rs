@@ -408,11 +408,11 @@ fn browsing_this_clients_own_node() {
     // Scrolling, the source, copying.
     tui.key(KeyCode::Down).key(KeyCode::Up).key(KeyCode::PageDown).key(KeyCode::PageUp).key(KeyCode::Home);
     tui.key(KeyCode::Char('u'));
-    assert!(tui.app.browser.view_source);
+    assert!(tui.app.browser.tab.view_source);
     tui.key(KeyCode::Char('Y')).key(KeyCode::Esc);
     tui.key(KeyCode::Char('Y')).key(KeyCode::Char('y'));
     // Following a link, back, reloading, saving.
-    tui.app.browser.selected = Some(0);
+    tui.app.browser.tab.selected = Some(0);
     tui.key(KeyCode::Enter);
     assert!(tui.draw().contains("Next"));
     tui.key(KeyCode::Char(' ')).key(KeyCode::Char('b'));
@@ -1533,6 +1533,16 @@ fn the_browser_by_mouse() {
     tui.drag((page.x + 1, page.y + 1), (page.x + 10, page.y + page.height + 2));
     tui.drag((page.x + 1, page.y + 3), (page.x + 10, page.y.saturating_sub(1)));
     tui.click(page.x + 2, page.y + 1);
+    // A second tab: both named in the address bar's border, each a click
+    // away.
+    tui.settle().tab(Tab::Browser);
+    tui.app.open_address(&home);
+    tui.key(KeyCode::Char('T')).draw();
+    assert_eq!((tui.app.browser_tab_count(), tui.app.browser.current), (2, 1));
+    let tabs = tui.app.regions.page_tabs.clone();
+    assert_eq!(tabs.len(), 2);
+    tui.click_in(tabs[0].0);
+    assert_eq!(tui.app.browser.current, 0);
 }
 
 #[test]

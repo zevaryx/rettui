@@ -396,31 +396,31 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) if self.tab == Tab::Browser && self.regions.page.contains(at) => {
                 let (row, col) = self.page_cell(at);
                 self.browser.focus = BrowserFocus::Page;
-                self.browser.selection = Some(Selection::at(row, col));
+                self.browser.tab.selection = Some(Selection::at(row, col));
                 self.browser.dragging = true;
             }
             MouseEventKind::Drag(MouseButton::Left) if self.browser.dragging => {
                 // Dragging past the edges scrolls the page.
                 let page = self.regions.page;
                 if at.y < page.y {
-                    self.browser.scroll = self.browser.scroll.saturating_sub(1);
+                    self.browser.tab.scroll = self.browser.tab.scroll.saturating_sub(1);
                 } else if at.y >= page.bottom() {
-                    self.browser.scroll += 1;
+                    self.browser.tab.scroll += 1;
                 }
                 let head = self.page_cell(at);
-                if let Some(selection) = &mut self.browser.selection {
+                if let Some(selection) = &mut self.browser.tab.selection {
                     selection.head = head;
                 }
             }
             MouseEventKind::Up(MouseButton::Left) if self.browser.dragging => {
                 self.browser.dragging = false;
-                match self.browser.selection {
+                match self.browser.tab.selection {
                     Some(selection) if !selection.is_empty() => {
                         let text = selection.extract(&self.regions.page_text);
                         self.copy(&text, "selection");
                     }
                     Some(selection) => {
-                        self.browser.selection = None;
+                        self.browser.tab.selection = None;
                         let (row, col) = selection.anchor;
                         if let Some(item) = micron::hit_at(&self.regions.page_hits, row, col) {
                             self.activate(item);
@@ -538,7 +538,7 @@ impl App {
             Tab::Browser if self.regions.browser_list.contains(at) => {
                 self.move_pane_selection(delta.signum());
             }
-            Tab::Browser => self.browser.scroll = apply(self.browser.scroll),
+            Tab::Browser => self.browser.tab.scroll = apply(self.browser.tab.scroll),
             Tab::Node => self.scroll_node(at, delta),
             Tab::Status if self.regions.settings.contains(at) => self.move_setting(delta.signum()),
             Tab::Status => {}

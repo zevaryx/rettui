@@ -703,6 +703,16 @@ mark { background: var(--yellow-bg); color: #111; border-radius: 2px; }
 .list-item .sub.hit { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .subtabs button.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .toolbar { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
+/* The Browser's tabs, once there's more than one. */
+.page-tabs { display: flex; align-items: stretch; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: thin; }
+.page-tab {
+  display: flex; align-items: center; gap: 4px; flex: 0 1 180px; min-width: 70px; padding: 0 2px 0 10px;
+  border: 1px solid var(--border); border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--dim); cursor: pointer;
+}
+.page-tab.active { color: var(--text); background: var(--raised); border-color: var(--accent); }
+.page-tab-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 6px 0; }
+.page-tab-close, .page-tab-new { background: none; border: 0; padding: 2px 6px; min-height: 0; color: inherit; }
+.page-tab-new { font-size: 16px; }
 .toolbar input { flex: 1; min-width: 200px; font-family: var(--mono); }
 .page-status { padding: 4px 12px; font-size: 12.5px; color: var(--dim); display: flex; gap: 12px; border-bottom: 1px solid var(--border); }
 .page-status .identified { color: var(--yellow); }

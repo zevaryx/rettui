@@ -252,11 +252,12 @@ async fn amys_node_propagation_node_and_hub() {
     until(&mut amy, &mut ben, "Ben hearing Amy's node", |_, b| b.app.store.peers.contains_key(&node)).await;
     let index = crate::app::resolve_url(&format!("{node}:/page/index.mu"), None).unwrap();
     ben.app.navigate(index);
-    until(&mut amy, &mut ben, "Ben loading Amy's page", |_, b| b.app.browser.loading.is_none() && b.app.browser.source.is_some()).await;
-    assert!(ben.app.browser.source.as_deref().unwrap().contains("Amy's node"), "{:?}", ben.app.browser.source);
+    until(&mut amy, &mut ben, "Ben loading Amy's page", |_, b| b.app.browser.tab.loading.is_none() && b.app.browser.tab.source.is_some())
+        .await;
+    assert!(ben.app.browser.tab.source.as_deref().unwrap().contains("Amy's node"), "{:?}", ben.app.browser.tab.source);
     // A page that isn't there.
     ben.app.navigate(crate::app::resolve_url(&format!("{node}:/page/nope.mu"), None).unwrap());
-    until(&mut amy, &mut ben, "Ben told the page isn't there", |_, b| b.app.browser.loading.is_none()).await;
+    until(&mut amy, &mut ben, "Ben told the page isn't there", |_, b| b.app.browser.tab.loading.is_none()).await;
 
     // Amy blocks Ben (his identity known, so in Reticulum too), then lets
     // him back.

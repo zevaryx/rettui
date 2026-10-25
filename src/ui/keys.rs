@@ -280,7 +280,7 @@ pub fn keys(app: &App) -> Keys {
                 ("↑↓", "select"),
             ],
         ),
-        Tab::Browser if app.browser.find.is_some() => {
+        Tab::Browser if app.browser.tab.find.is_some() => {
             typing("Find in page", &[("Enter", "next"), ("↑↓", "previous/next"), ("Esc", "done"), ("^V", "paste")])
         }
         Tab::Browser if app.browser.search.typing => {
@@ -332,6 +332,9 @@ pub fn keys(app: &App) -> Keys {
                 ("b", "back"),
                 ("r", "refresh"),
                 ("H", "home"),
+                ("T", "in new tab"),
+                ("W", "close tab"),
+                ("[ ]", "tabs"),
                 ("R", "clear cache"),
                 ("↑↓", "select"),
             ],
@@ -349,11 +352,14 @@ pub fn keys(app: &App) -> Keys {
                 ("b", "back"),
                 ("r", "refresh"),
                 ("H", "home"),
+                ("T", "in new tab"),
+                ("W", "close tab"),
+                ("[ ]", "tabs"),
                 ("R", "clear cache"),
                 ("↑↓", "select"),
             ],
         ),
-        Tab::Browser if app.browser.view_source => mode(
+        Tab::Browser if app.browser.tab.view_source => mode(
             "Browser, source",
             &[
                 ("u", "page"),
@@ -362,6 +368,8 @@ pub fn keys(app: &App) -> Keys {
                 ("y", "copy"),
                 ("r", "refresh"),
                 ("b", "back"),
+                ("W", "close tab"),
+                ("[ ]", "tabs"),
                 ("←", "list"),
                 ("/", "search"),
                 ("drag", "copy text"),
@@ -384,6 +392,9 @@ pub fn keys(app: &App) -> Keys {
                 ("u", "source"),
                 ("I", "identify"),
                 ("H", "home"),
+                ("T", "link in new tab"),
+                ("W", "close tab"),
+                ("[ ]", "tabs"),
                 ("←", "list"),
                 ("/", "search"),
                 ("R", "clear cache"),
