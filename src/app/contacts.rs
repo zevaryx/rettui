@@ -15,6 +15,10 @@ pub enum CardAction {
     Notes,
     Copy,
     Ping,
+    /// Ask where they are (a Sideband telemetry request).
+    AskLocation,
+    /// Send a Sideband command.
+    Command,
     Trust,
     Untrust,
     /// Leave an unknown sender as they are (no more asking).
@@ -33,6 +37,8 @@ impl CardAction {
             CardAction::Notes => ("Notes", "e"),
             CardAction::Copy => ("Copy address", "y"),
             CardAction::Ping => ("Ping", "p"),
+            CardAction::AskLocation => ("Ask where they are", "w"),
+            CardAction::Command => ("Command", "k"),
             CardAction::Trust => ("Trust", "t"),
             CardAction::Untrust => ("Stop trusting", "t"),
             CardAction::LeaveAsIs => ("Leave as is", "l"),
@@ -221,6 +227,9 @@ impl App {
     pub fn card_actions(&self, key: &str) -> Vec<CardAction> {
         let trust = self.store.contact(key).trust;
         let mut actions = vec![CardAction::Rename, CardAction::Notes, CardAction::Copy, CardAction::Ping];
+        if trust != Trust::Blocked {
+            actions.extend([CardAction::AskLocation, CardAction::Command]);
+        }
         match trust {
             Trust::Blocked => actions.push(CardAction::Unblock),
             Trust::Trusted => actions.extend([CardAction::Untrust, CardAction::Block]),
@@ -332,6 +341,14 @@ impl App {
                     self.warn(e);
                 }
             }
+            CardAction::AskLocation => {
+                let name = self.store.display_name(&key);
+                match self.send_command(&key, crate::lxmf::fields::Command::TelemetryRequest) {
+                    Ok(_) => self.confirm(format!("Asked {name} where they are: their answer goes on the map (M)")),
+                    Err(e) => self.warn(e),
+                }
+            }
+            CardAction::Command => self.open_command_prompt(key),
             CardAction::Trust | CardAction::Untrust | CardAction::LeaveAsIs => {
                 let trust = match action {
                     CardAction::Trust => Trust::Trusted,
@@ -520,7 +537,7 @@ mod tests {
         };
         app.on_message(from(0xab, 1));
         assert!(!app.is_known(&alice), "never written to");
-        assert_eq!(app.card_actions(&alice)[4..7], [CardAction::Trust, CardAction::LeaveAsIs, CardAction::Block]);
+        assert_eq!(app.card_actions(&alice)[6..9], [CardAction::Trust, CardAction::LeaveAsIs, CardAction::Block]);
         while net.try_recv().is_ok() {}
         app.block_contact(&alice).unwrap();
         assert!(!app.store.conversations.contains_key(&alice));

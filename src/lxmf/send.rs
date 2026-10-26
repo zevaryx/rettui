@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use lxmf_core::constants::{
-    FIELD_CUSTOM_META, FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO,
-    FIELD_TELEMETRY, FIELD_TICKET, RENDERER_MARKDOWN, RENDERER_MICRON,
+    FIELD_COMMANDS, FIELD_CUSTOM_META, FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE,
+    FIELD_REPLY_TO, FIELD_TELEMETRY, FIELD_TICKET, RENDERER_MARKDOWN, RENDERER_MICRON,
 };
 use lxmf_core::handlers::{parse_pn_announce_data, stamp_cost_from_app_data};
 use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
@@ -76,6 +76,12 @@ pub(super) async fn build_message(
         for (id, value) in crate::games::fields(envelope) {
             message.set_msgpack_field(id, value).map_err(|e| e.to_string())?;
         }
+    }
+    // As Sideband sends them: native msgpack.
+    if !outgoing.commands.is_empty() {
+        message
+            .set_msgpack_field(FIELD_COMMANDS, super::fields::commands_field(&outgoing.commands, outgoing.timestamp))
+            .map_err(|e| e.to_string())?;
     }
     if let Some(appearance) = &outgoing.appearance {
         message.set_msgpack_field(FIELD_ICON_APPEARANCE, super::fields::appearance_field(appearance)).map_err(|e| e.to_string())?;

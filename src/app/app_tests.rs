@@ -342,6 +342,65 @@ fn sharing_locations_live_and_the_map_by_keys() {
     assert!(empty.app.map.is_none());
 }
 
+/// Sideband's commands sent: typed after `K`, and the contact card's "Ask
+/// where they are"; each goes as a message with no text, and says what it
+/// asked.
+#[test]
+fn sending_sideband_commands_by_keys_and_the_contact_card() {
+    use crate::app::PromptKind;
+    use crate::lxmf::DeliveryMode;
+    use crate::lxmf::fields::Command;
+    use crate::net::NetCommand;
+    let mut tui = Tui::new("send-commands");
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    tui.app.open_newest_conversation();
+    tui.sent();
+    tui.settle().key(KeyCode::Char('K'));
+    assert!(matches!(tui.app.prompt.as_ref().map(|p| &p.kind), Some(PromptKind::Command(_))));
+    tui.answer("dance");
+    assert!(tui.said().contains("ping, echo <text>, signal or location"), "{}", tui.said());
+    let sent = |tui: &mut Tui| -> Vec<(Vec<Command>, String)> {
+        tui.sent()
+            .into_iter()
+            .filter_map(|c| match c {
+                NetCommand::SendMessage { message, .. } => Some((message.commands.clone(), message.content.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(sent(&mut tui).is_empty());
+    // Paper carries text only, so a command goes the usual way.
+    tui.app.delivery_mode = DeliveryMode::Paper;
+    tui.ask(PromptKind::Command(BOB.into()), "echo are you there?");
+    assert_eq!(sent(&mut tui), [(vec![Command::Echo("are you there?".into())], String::new())]);
+    let last = tui.app.store.conversations[BOB].messages.last().unwrap().clone();
+    assert!(!last.incoming && last.content.is_empty());
+    assert_eq!(last.notes, ["Asked for an echo of “are you there?”"]);
+    assert!(tui.draw().contains("Asked for an echo"), "{}", tui.draw());
+    tui.app.delivery_mode = DeliveryMode::Auto;
+    tui.ask(PromptKind::Command(BOB.into()), "sig");
+    assert_eq!(sent(&mut tui)[0].0, [Command::SignalReport]);
+    // The contact card: a location request, and a command typed.
+    tui.settle().key(KeyCode::Char('c')).key(KeyCode::Char('w'));
+    assert_eq!(sent(&mut tui)[0].0, [Command::TelemetryRequest]);
+    let notice = tui.app.notice.as_ref().map(|n| n.text.clone()).unwrap_or_default();
+    assert!(notice.contains("their answer goes on the map"), "{notice}");
+    tui.key(KeyCode::Char('k'));
+    assert!(matches!(tui.app.prompt.as_ref().map(|p| &p.kind), Some(PromptKind::Command(_))));
+    tui.answer("ping");
+    assert_eq!(sent(&mut tui)[0].0, [Command::Ping]);
+    assert!(tui.app.send_command("nobody", Command::Ping).is_err());
+    // One that failed goes again, as it was.
+    let id = tui.app.store.conversations[BOB].messages.last().unwrap().id.clone();
+    tui.app.store.conversations.get_mut(BOB).unwrap().find_mut(&id).unwrap().state = crate::store::MessageState::Failed("no path".into());
+    tui.app.retry_message(BOB, &id, DeliveryMode::Paper).unwrap();
+    assert_eq!(sent(&mut tui), [(vec![Command::Ping], String::new())]);
+    // Through a propagation node, there must be one.
+    tui.app.delivery_mode = DeliveryMode::Propagated;
+    assert!(tui.app.send_command(BOB, Command::Ping).unwrap_err().contains("propagation node"));
+}
+
 #[test]
 fn every_setting_changed_here_and_from_the_web() {
     let mut tui = Tui::new("every-setting");

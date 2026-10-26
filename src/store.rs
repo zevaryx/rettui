@@ -157,6 +157,10 @@ pub struct Message {
     /// A game's move (LRGP), and which game.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game: Option<crate::games::GameRef>,
+    /// A Sideband command sent, as typed (`ping`, `echo <text>`, `signal`,
+    /// `location`), to send it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 impl Message {

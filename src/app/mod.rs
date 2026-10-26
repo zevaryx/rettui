@@ -212,6 +212,8 @@ pub enum PromptKind {
     Format(format::Action),
     /// A location to share with someone (by address).
     ShareLocation(String),
+    /// A Sideband command to send someone (by address).
+    Command(String),
     /// Install the newer release found, in this one's place.
     ConfirmInstallUpdate,
     /// Stop sharing a location live with someone (by address).
@@ -1278,6 +1280,7 @@ impl App {
                 }
             }
             PromptKind::ShareLocation(key) => self.submit_share_location(key, &text),
+            PromptKind::Command(key) => self.submit_command(key, &text),
             PromptKind::Game(prompt) => self.submit_game_prompt(prompt, &text),
             PromptKind::ConfirmStopLive(key) => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {

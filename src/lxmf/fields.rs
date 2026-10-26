@@ -379,17 +379,101 @@ impl Command {
         }
     }
 
+    /// What a command sent says, on the message in the conversation.
+    pub fn sent(&self) -> String {
+        match self {
+            Command::TelemetryRequest => "Asked for their location".into(),
+            Command::Ping => "Pinged them with a command".into(),
+            Command::Echo(text) => format!("Asked for an echo of “{}”", text.trim()),
+            Command::SignalReport => "Asked for a signal report".into(),
+            Command::Other(id) => format!("Sent command {id:#04x}"),
+        }
+    }
+
+    /// The command as [`Command::parse`] reads it.
+    pub fn typed(&self) -> String {
+        match self {
+            Command::TelemetryRequest => "location".into(),
+            Command::Ping => "ping".into(),
+            Command::Echo(text) => format!("echo {text}"),
+            Command::SignalReport => "signal".into(),
+            Command::Other(id) => format!("{id:#04x}"),
+        }
+    }
+
+    /// A command typed as in Sideband's command box: `ping`, `echo <text>`,
+    /// `sig` (a signal report), and `location` (or `where`) for a telemetry
+    /// request.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let text = text.trim();
+        let word = text.split_whitespace().next().unwrap_or_default().to_lowercase();
+        match word.as_str() {
+            "ping" => Ok(Command::Ping),
+            "echo" => {
+                let said = text[4..].trim();
+                if said.is_empty() {
+                    return Err("Echo what? Type echo and the text to send back".into());
+                }
+                if said.len() > MAX_ECHO {
+                    return Err(format!("An echo can be up to {MAX_ECHO} bytes"));
+                }
+                Ok(Command::Echo(said.to_string()))
+            }
+            w if w.starts_with("sig") => Ok(Command::SignalReport),
+            "location" | "where" | "telemetry" => Ok(Command::TelemetryRequest),
+            _ => Err("A command is ping, echo <text>, signal or location".into()),
+        }
+    }
+
     /// The answer Sideband gives, for those rettui answers: a ping's, an
-    /// echo's, and a signal report's (rettui isn't given the readings of a
-    /// message received, so it says so, as Sideband does without them).
-    pub fn answer(&self) -> Option<String> {
+    /// echo's, and a signal report's, from how the message asking was
+    /// heard (`signal`), as Sideband words it.
+    pub fn answer(&self, signal: Option<&crate::net::remote::Signal>) -> Option<String> {
         match self {
             Command::Ping => Some("Ping reply".into()),
             Command::Echo(text) => Some(format!("Echo reply: {text}")),
-            Command::SignalReport => Some("No reception info available".into()),
+            Command::SignalReport => {
+                let mut lines = Vec::new();
+                if let Some(signal) = signal {
+                    lines.extend(signal.q.map(|q| format!("Link Quality: {q}%")));
+                    lines.extend(signal.rssi.map(|rssi| format!("RSSI: {rssi} dBm")));
+                    lines.extend(signal.snr.map(|snr| format!("SNR: {snr} dB")));
+                }
+                Some(if lines.is_empty() { "No reception info available".into() } else { lines.join("\n") })
+            }
             Command::TelemetryRequest | Command::Other(_) => None,
         }
     }
+
+    /// The command in `FIELD_COMMANDS`, as Sideband sends it: `true` for a
+    /// ping and a signal report, an echo's text as bytes, and for a
+    /// telemetry request the time to send readings since (Unix seconds)
+    /// and `false` (not asking a collector for everyone's).
+    fn entry(&self, since: i64) -> Option<(Value, Value)> {
+        let (id, argument) = match self {
+            Command::TelemetryRequest => (0x01, Value::Array(vec![Value::from(since), Value::Boolean(false)])),
+            Command::Ping => (0x02, Value::Boolean(true)),
+            Command::Echo(text) => (0x03, Value::Binary(text.as_bytes().to_vec())),
+            Command::SignalReport => (0x04, Value::Boolean(true)),
+            Command::Other(_) => return None,
+        };
+        Some((Value::from(id), argument))
+    }
+}
+
+/// The longest echo sent (Sideband sets no limit; this keeps it one packet).
+pub const MAX_ECHO: usize = 256;
+
+/// How far back a telemetry request asks for readings, as Sideband asks
+/// someone it has none from yet (a week).
+const TELEMETRY_SINCE: i64 = 7 * 24 * 60 * 60;
+
+/// `FIELD_COMMANDS` for commands sent at `timestamp`: a list of one-entry
+/// maps, as Sideband sends them.
+pub fn commands_field(commands: &[Command], timestamp: f64) -> Vec<u8> {
+    let since = timestamp as i64 - TELEMETRY_SINCE;
+    let list = commands.iter().filter_map(|c| c.entry(since)).map(|entry| Value::Map(vec![entry])).collect();
+    super::encode(&Value::Array(list))
 }
 
 /// The commands a message carries.
@@ -510,7 +594,8 @@ const KNOWN_FIELDS: [u8; 16] = [
     FIELD_CUSTOM_META,
     FIELD_CUSTOM_TYPE,
     FIELD_COLUMBA_EXTENSIONS,
-    // Command results (Sideband's answers to commands rettui never sends).
+    // Command results (from Sideband's command plugins, which rettui
+    // doesn't send to).
     lxmf_core::constants::FIELD_RESULTS,
 ];
 
@@ -777,11 +862,49 @@ mod tests {
         assert_eq!(notes.len(), 5);
         assert!(notes[0].starts_with("Pinged you") && notes[2].contains("“anyone there?”") && notes[4].contains("0x33"), "{notes:?}");
         // Sideband's answers, for those rettui answers.
-        let answers: Vec<Option<String>> = extras.commands.iter().map(Command::answer).collect();
+        let answers: Vec<Option<String>> = extras.commands.iter().map(|c| c.answer(None)).collect();
         assert_eq!(
             answers,
             [Some("Ping reply".into()), None, Some("Echo reply: anyone there?".into()), Some("No reception info available".into()), None,]
         );
+        // A signal report says how the message asking for it was heard.
+        let heard = crate::net::remote::Signal { rssi: Some(-97.0), snr: Some(6.5), q: Some(88.0) };
+        assert_eq!(Command::SignalReport.answer(Some(&heard)).unwrap(), "Link Quality: 88%\nRSSI: -97 dBm\nSNR: 6.5 dB");
+    }
+
+    #[test]
+    fn commands_sent_as_sideband_sends_them() {
+        let typed: Vec<Result<Command, String>> = ["ping", " Echo  hello there ", "sig", "signal", "where", "location", "echo", "dance"]
+            .into_iter()
+            .map(Command::parse)
+            .collect();
+        assert_eq!(
+            typed[..6],
+            [
+                Ok(Command::Ping),
+                Ok(Command::Echo("hello there".into())),
+                Ok(Command::SignalReport),
+                Ok(Command::SignalReport),
+                Ok(Command::TelemetryRequest),
+                Ok(Command::TelemetryRequest)
+            ]
+        );
+        assert!(typed[6].as_ref().is_err_and(|e| e.starts_with("Echo what?")));
+        assert!(typed[7].as_ref().is_err_and(|e| e.contains("ping, echo <text>, signal or location")));
+        assert!(Command::parse(&format!("echo {}", "x".repeat(MAX_ECHO + 1))).is_err());
+        // What Sideband reads back, and so does rettui.
+        let sent = [Command::Ping, Command::Echo("hi".into()), Command::SignalReport, Command::TelemetryRequest];
+        let mut message = message();
+        message.set_msgpack_field(FIELD_COMMANDS, commands_field(&sent, 1_800_000_000.0)).unwrap();
+        assert_eq!(commands_of(&received(&message)), sent);
+        let Some(Value::Array(list)) = value(&received(&message), FIELD_COMMANDS) else { panic!("no commands") };
+        assert_eq!(list[1], Value::Map(vec![(Value::from(0x03), Value::Binary(b"hi".to_vec()))]));
+        assert_eq!(
+            list[3],
+            Value::Map(vec![(Value::from(0x01), Value::Array(vec![Value::from(1_800_000_000 - TELEMETRY_SINCE), Value::Boolean(false)]))])
+        );
+        assert_eq!(sent.clone().map(|c| c.sent())[3], "Asked for their location");
+        assert_eq!(sent.clone().map(|c| Command::parse(&c.typed())), sent.map(Ok));
     }
 
     #[test]

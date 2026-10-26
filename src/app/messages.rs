@@ -92,7 +92,7 @@ impl App {
             && sensors.is_empty();
         let mut notes = extras.notes(bare);
         // Sideband's commands: answered if set to, and said so either way.
-        let answers: Vec<String> = extras.commands.iter().filter_map(|c| c.answer()).collect();
+        let answers: Vec<String> = extras.commands.iter().filter_map(|c| c.answer(message.signal.as_ref())).collect();
         if !answers.is_empty() && !paper {
             notes.push(match self.answer_commands(&key, answers) {
                 Ok(()) => "Answered automatically (Answer commands)".into(),
@@ -308,6 +308,62 @@ impl App {
         };
         self.send(NetCommand::SendMessage { id, message: Box::new(message) });
         Ok(())
+    }
+
+    /// Send `key` a Sideband command (a ping, an echo, a signal report, or
+    /// a request for their location), the way their messages go; its local
+    /// id. Sideband answers the first three with a message, and a location
+    /// request with its telemetry (shown on the map), if it's set to.
+    pub fn send_command(&mut self, key: &str, command: lxmf::fields::Command) -> Result<u64, String> {
+        let to = parse_hash(key).ok_or("An LXMF address is 32 hex characters")?;
+        let key = hex::encode(to);
+        let chosen = if self.active_conversation.as_deref() == Some(key.as_str()) { self.delivery_mode } else { self.delivery_for(&key) };
+        // Paper carries text only: commands go the usual way.
+        let mode = match chosen {
+            DeliveryMode::Paper => DeliveryMode::Auto,
+            mode => mode,
+        };
+        if mode == DeliveryMode::Propagated && self.propagation_node().is_none() {
+            return Err("Select a propagation node first (Network tab, p)".into());
+        }
+        let id = self.store.next_local_id;
+        self.store.next_local_id += 1;
+        let timestamp = now();
+        self.store.conversations.entry(key.clone()).or_default().messages.push(Message {
+            id: format!("local-{id}"),
+            timestamp,
+            state: MessageState::Sending,
+            notes: vec![command.sent()],
+            command: Some(command.typed()),
+            ..Message::default()
+        });
+        self.store_dirty = true;
+        self.keep_conversation_selection();
+        let message = lxmf::Outgoing {
+            commands: vec![command],
+            appearance: self.own_appearance(),
+            ..lxmf::Outgoing::text(to, String::new(), Vec::new(), mode, timestamp)
+        };
+        self.send(NetCommand::SendMessage { id, message: Box::new(message) });
+        Ok(id)
+    }
+
+    /// Send the command typed (`K`, or the contact card's): see
+    /// [`lxmf::fields::Command::parse`].
+    pub(super) fn submit_command(&mut self, key: String, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let name = self.store.display_name(&key);
+        match lxmf::fields::Command::parse(text).and_then(|command| self.send_command(&key, command)) {
+            Ok(_) => self.confirm(format!("Sent the command to {name}")),
+            Err(e) => self.warn(e),
+        }
+    }
+
+    pub(super) fn open_command_prompt(&mut self, key: String) {
+        let title = format!("Send {} a command, as Sideband does: ping, echo <text>, signal or location", self.store.display_name(&key));
+        self.open_prompt(PromptKind::Command(key), &title, "");
     }
 
     /// Turn a conversation's notifications off or back on (`N`, or the web
@@ -972,6 +1028,10 @@ impl App {
         if mode == DeliveryMode::Paper && (!files.is_empty() || audio.is_some() || message.location.is_some()) {
             return Err("A paper message carries text only".into());
         }
+        // A command goes again as it was typed, the usual way.
+        let commands: Vec<lxmf::fields::Command> =
+            message.command.as_deref().map(lxmf::fields::Command::parse).transpose()?.into_iter().collect();
+        let mode = if !commands.is_empty() && mode == DeliveryMode::Paper { DeliveryMode::Auto } else { mode };
         // A game's move goes again as it was (the same move, the same nonce).
         let game = match message.game.as_ref().map(|g| g.envelope.as_deref().and_then(|e| hex::decode(e).ok())) {
             None => None,
@@ -1001,6 +1061,7 @@ impl App {
                 location,
                 sensors,
                 game,
+                commands,
                 ..lxmf::Outgoing::text(to, content, files, mode, timestamp)
             };
             self.send(NetCommand::SendMessage { id: number, message: Box::new(message) });
@@ -1404,6 +1465,11 @@ impl App {
             KeyCode::Char('/') => self.open_message_search(),
             KeyCode::Char('H') if self.active_conversation.is_some() => self.open_archive(),
             KeyCode::Char('L') if self.active_conversation.is_some() => self.open_share_location(),
+            KeyCode::Char('K') => {
+                if let Some(key) = self.active_conversation.clone() {
+                    self.open_command_prompt(key);
+                }
+            }
             KeyCode::Char('M') => self.open_map(),
             KeyCode::Char('*') => self.toggle_pinned(),
             KeyCode::Char('E') => {

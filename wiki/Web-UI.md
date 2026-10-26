@@ -130,7 +130,7 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   `Esc` leaves a text box. In
   Messages, `j`/`k` move to the next or previous conversation, `i` puts you
   in the message box, `r` replies to their newest message, `n` starts a new
-  conversation, `*` pins one, `g` goes to your [games](Games) with them (`n` in Games starts one, `f` filters them), `L` shares a location and `M` opens
+  conversation, `*` pins one, `g` goes to your [games](Games) with them (`n` in Games starts one, `f` filters them), `L` shares a location, `K` sends a [Sideband command](Messaging#reactions-locations-commands-and-voice-messages) and `M` opens
   [the map](Messaging#locations-and-the-map). In the Browser, `f` finds in the page, `b`
   goes back and `g` to an address. In the message box and the channel
   input, `Ctrl-E` opens the [emoji](Messaging#emoji) picker (not on a Mac

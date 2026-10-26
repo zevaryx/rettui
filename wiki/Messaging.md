@@ -362,14 +362,27 @@ rettui shows what each one is, rather than an empty message:
   or a ping, are shown in words, and don't notify you.
   - *Answer commands* (Status, `answer_commands`) answers pings, echoes and
     signal report requests as Sideband does: "Ping reply", "Echo reply:"
-    and the text, and, for a signal report, "No reception info available"
-    (rettui isn't told how well a message was heard). It's off by default;
+    and the text, and, for a signal report, how the message asking was
+    heard ("Link Quality", "RSSI" and "SNR", as many as the radio said), or
+    "No reception info available" when it came another way. It's off by default;
     *trusted* answers only contacts you trust, *contacts* any contact. The
     answers go as messages, shown in the conversation, at most once a
     minute to each sender; the command's line says whether, or why not.
   - Requests for your location are answered only if *Location requests*
     says so (see [below](#locations-and-the-map)). Plugin commands aren't
     run.
+  - **Sending them:** `K` in a conversation (or *Command* on the contact
+    card, `k` there) sends one, typed as in Sideband's command box: `ping`,
+    `echo` and some text, `signal` for a signal report, or `location` to
+    ask where they are. The contact card's *Ask where they are* (`w`) sends
+    that last one. In the web UI they're on the contact dialog: *📍 Ask
+    where they are* and *Command…* (or `K`). A command goes as a message
+    with no text, the way that conversation's messages go (by paper, it
+    goes the usual way), and its line says what was asked; one that failed
+    can be sent again. Sideband answers a ping, an echo or a signal report
+    with a message, and a location request with its location, which goes
+    on [the map](#locations-and-the-map), if it's set to answer you (for
+    most, only contacts it trusts).
 - **Voice messages** (field `0x07`) are saved with the attachments, and
   play in the web UI and in most players (`o` in the TUI opens them):
   - Opus recordings are saved as `.ogg` files, as they came.

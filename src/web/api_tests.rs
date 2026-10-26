@@ -1069,3 +1069,31 @@ async fn own_script_pages_run_as_visitors_get_them() {
     let html = page["html"].as_str().unwrap();
     assert!(html.contains("Visitors get nothing from this page") && html.contains("it broke"), "{html}");
 }
+
+/// Sideband commands sent from the web UI, typed as in Sideband's box.
+#[tokio::test]
+async fn sending_sideband_commands() {
+    use crate::lxmf::fields::Command;
+    let web = TestWeb::start("send-commands");
+    let url = format!("/api/conversations/{BOB}/command");
+    let wrong = web.post(&url, json!({ "command": "dance" })).await;
+    assert_eq!(wrong.status, StatusCode::BAD_REQUEST);
+    assert!(wrong.error().contains("ping, echo <text>, signal or location"), "{}", wrong.error());
+    assert_eq!(web.post("/api/conversations/nobody/command", json!({ "command": "ping" })).await.status, StatusCode::BAD_REQUEST);
+    for (typed, command) in [("location", Command::TelemetryRequest), ("echo hello", Command::Echo("hello".into()))] {
+        let sent = web.post(&url, json!({ "command": typed })).await;
+        assert_eq!(sent.status, StatusCode::OK, "{}", sent.text());
+        let commands: Vec<Vec<Command>> = web
+            .sent()
+            .into_iter()
+            .filter_map(|c| match c {
+                NetCommand::SendMessage { message, .. } => Some(message.commands),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(commands, [vec![command]]);
+    }
+    let conversation = web.get(&format!("/api/conversations/{BOB}")).await.json();
+    let text = conversation.to_string();
+    assert!(text.contains("Asked for their location") && text.contains("Asked for an echo of “hello”"), "{text}");
+}

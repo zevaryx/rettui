@@ -3937,6 +3937,10 @@ app.views.messages = {
       this.shareLocation();
       return true;
     }
+    if (e.key === 'K' && this.selected) {
+      this.sendCommand(this.selected);
+      return true;
+    }
     if (e.key === 'M') {
       mapDialog({ key: this.selected });
       return true;
@@ -4204,6 +4208,13 @@ app.views.messages = {
     }, { className: 'forward-dialog' });
   },
 
+  // A Sideband command, typed as in Sideband's command box.
+  async sendCommand(key) {
+    const sent = await askText('Send a command', { label: 'ping, echo <text>, signal or location, as in Sideband', ok: 'Send',
+      act: (command) => api.post(`/conversations/${key}/command`, { command }) });
+    if (sent) loadNow();
+  },
+
   // Your name for them, notes about them, and deleting the conversation.
   contactDialog(key, conversation) {
     const contact = conversation.contact || {};
@@ -4224,6 +4235,14 @@ app.views.messages = {
           pingText.textContent = result ? result.text : 'no answer';
           e.target.disabled = false;
         } })),
+      contact.trust === 'blocked' ? null : el('div', { class: 'row trust' },
+        el('span', { class: 'grow dim', text: 'Sideband commands:' }),
+        el('button', { text: '📍 Ask where they are', title: 'Ask for their location, as Sideband does: Sideband answers with it (if it\'s set to), and it goes on the map',
+          onclick: async () => {
+            if (await attempt(() => api.post(`/conversations/${key}/command`, { command: 'location' }), 'Asked where they are: their answer goes on the map')) loadNow();
+          } }),
+        el('button', { text: 'Command…', title: 'Send a ping, an echo or a signal report request, as Sideband does: Sideband answers with a message ( K )',
+          onclick: () => this.sendCommand(key) })),
       el('div', { class: 'row trust' },
         el('span', { class: 'grow' }, el('span', { class: 'dim', text: 'Trust: ' }), contact.trust_label || ''),
         el('button', { text: trusted ? 'Stop trusting' : 'Trust', onclick: () => this.setTrust(key, trusted ? 'unknown' : 'trusted', conversation, close) }),
@@ -8086,7 +8105,7 @@ const KEYS = [
   ['Anywhere', [['1–9', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open'],
     ['< / >', 'the section\'s list narrower or wider (or drag its edge)'], ['=', 'the list back to its usual width']]],
   ['Messages', [['j / k', 'next or previous conversation'], ['i', 'write (the message box)'], ['r', 'reply to their newest message'],
-    ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['g', 'games with them (the Games tab)'], ['/', 'search messages'], ['L', 'share a location'], ['M', 'map of locations shared'],
+    ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['g', 'games with them (the Games tab)'], ['/', 'search messages'], ['L', 'share a location'], ['K', 'send a Sideband command'], ['M', 'map of locations shared'],
     ['Ctrl+E', 'emoji, in the message box'],
     ['Enter / Shift+Enter', 'send, or a new line, in the message box']]],
   ['Games', [['j / k', 'next or previous game'], ['n', 'new game'], ['f', 'filter: all, active, pending, completed']]],

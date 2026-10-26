@@ -104,6 +104,7 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/read-all", post(read_all_conversations))
         .route("/conversations/{key}/send", post(send_message))
         .route("/conversations/{key}/react", post(react))
+        .route("/conversations/{key}/command", post(send_command))
         .route("/conversations/{key}/retry", post(retry))
         .route("/conversations/{key}/messages/delete", post(delete_message))
         .route("/conversations/{key}/delete", post(delete_conversation))
@@ -1171,6 +1172,21 @@ async fn react(State(state): State<WebState>, Path(key): Path<String>, axum::Jso
     let key = address(&key)?;
     state.write(move |o| o.app.send_reaction(&key, &body.id, &body.emoji)).await?.map_err(bad)?;
     ok()
+}
+
+#[derive(Deserialize)]
+struct CommandBody {
+    /// As typed in Sideband's command box: `ping`, `echo <text>`, `signal`
+    /// or `location`.
+    command: String,
+}
+
+/// Send a Sideband command (sent like a message, with no text).
+async fn send_command(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<CommandBody>) -> ApiResult {
+    let key = address(&key)?;
+    let command = crate::lxmf::fields::Command::parse(&body.command).map_err(bad)?;
+    let id = state.write(move |o| o.app.send_command(&key, command)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "id": format!("local-{id}") })))
 }
 
 #[derive(Deserialize)]

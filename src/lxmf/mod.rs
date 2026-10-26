@@ -156,6 +156,9 @@ pub struct Outgoing {
     pub cease: bool,
     /// A game's move (LRGP): its envelope, msgpack (see `crate::games`).
     pub game: Option<Vec<u8>>,
+    /// Sideband commands (pings, echoes, signal reports, telemetry
+    /// requests), sent with no text.
+    pub commands: Vec<fields::Command>,
 }
 
 impl Outgoing {
@@ -180,6 +183,7 @@ impl Outgoing {
             sensors: Vec::new(),
             cease: false,
             game: None,
+            commands: Vec::new(),
         }
     }
 }
