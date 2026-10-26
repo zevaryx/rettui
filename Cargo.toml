@@ -77,7 +77,8 @@ rqrr = { version = "0.11", default-features = false }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: times saved as seconds read back exactly as they were.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 flate2 = "1"
 hex = "0.4"
 directories = "6"
