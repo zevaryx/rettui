@@ -1,7 +1,9 @@
 //! Games over LXMF: LRGP (the Lightweight Reticulum Gaming Protocol), as
 //! Ratspeak's lrgp-rs and lrgp-py play it. Tic-Tac-Toe, Four in a Row,
-//! Dots and Boxes, Gomoku, Reversi, Mancala, Checkers, Chess and Hex, two
-//! players, each move one LXMF message.
+//! Dots and Boxes, Gomoku, Reversi, Mancala, Checkers, Chess, Hex, Ultimate
+//! Tic-Tac-Toe, Go, Battleship, Quoridor, Nine Men's Morris, Breakthrough,
+//! Amazons, Pente and Rock Paper Scissors, two players, each move one LXMF
+//! message.
 //!
 //! A game message is an ordinary LXMF message whose text says what it is
 //! for clients without games (`[LRGP Chess] e2e4`), with two fields:
@@ -41,7 +43,59 @@ use serde_json::Value as Json;
 pub const DRAW_CLAIM: &str = "draw_claim";
 
 /// The games there are, in the order they're offered.
-pub const GAMES: [&str; 9] = ["ttt", "four_in_a_row", "dots_and_boxes", "gomoku", "reversi", "mancala", "checkers", "chess", "hex"];
+pub const GAMES: [&str; 18] = [
+    "ttt",
+    "four_in_a_row",
+    "dots_and_boxes",
+    "gomoku",
+    "reversi",
+    "mancala",
+    "checkers",
+    "chess",
+    "hex",
+    "ultimate_ttt",
+    "go",
+    "battleship",
+    "quoridor",
+    "morris",
+    "breakthrough",
+    "amazons",
+    "pente",
+    "rps",
+];
+
+/// Go's komi: the half point White's score gets for moving second.
+pub const GO_KOMI: f64 = 7.5;
+
+/// Nine Men's Morris' points, in the order lrgp draws its board, and where
+/// each is on the 7 by 7 grid the board is drawn on (column, row from the
+/// top).
+pub const MORRIS_POINTS: [(&str, usize, usize); 24] = [
+    ("a1", 0, 6),
+    ("a4", 0, 3),
+    ("a7", 0, 0),
+    ("b2", 1, 5),
+    ("b4", 1, 3),
+    ("b6", 1, 1),
+    ("c3", 2, 4),
+    ("c4", 2, 3),
+    ("c5", 2, 2),
+    ("d1", 3, 6),
+    ("d2", 3, 5),
+    ("d3", 3, 4),
+    ("d5", 3, 2),
+    ("d6", 3, 1),
+    ("d7", 3, 0),
+    ("e3", 4, 4),
+    ("e4", 4, 3),
+    ("e5", 4, 2),
+    ("f2", 5, 5),
+    ("f4", 5, 3),
+    ("f6", 5, 1),
+    ("g1", 6, 6),
+    ("g4", 6, 3),
+    ("g7", 6, 0),
+];
 
 /// A game's name, as shown.
 pub fn game_name(app: &str) -> &str {
@@ -55,6 +109,15 @@ pub fn game_name(app: &str) -> &str {
         "reversi" => "Reversi",
         "dots_and_boxes" => "Dots and Boxes",
         "mancala" => "Mancala",
+        "ultimate_ttt" => "Ultimate Tic-Tac-Toe",
+        "go" => "Go",
+        "battleship" => "Battleship",
+        "quoridor" => "Quoridor",
+        "morris" => "Nine Men's Morris",
+        "breakthrough" => "Breakthrough",
+        "amazons" => "Amazons",
+        "pente" => "Pente",
+        "rps" => "Rock Paper Scissors",
         other => other,
     }
 }
@@ -104,6 +167,56 @@ pub fn game_rules(app: &str) -> &'static str {
             "Take turns putting a stone on an empty cell. Black wins by joining the top and bottom edges with an \
              unbroken chain of their stones, White by joining left and right. There are no draws. White's first move \
              may be a swap: taking Black's first stone as their own."
+        }
+        "ultimate_ttt" => {
+            "Nine small boards make one big one. Where you play in a small board sends them to the same place in the big \
+             one: put your mark in the top right corner of a small board and they must play in the top right small \
+             board (anywhere, if it's finished). Win three in a row in a small board to take it; take three small \
+             boards in a row to win."
+        }
+        "go" => {
+            "Take turns putting a stone on an empty point, or passing. Surround their stones to capture them: a stone \
+             or chain with no empty point next to it is taken. You can't play where you'd be captured at once, or \
+             repeat any earlier position. Two passes in a row end the game: each side scores its stones plus the \
+             empty points only it surrounds, and White adds 7.5 for moving second. Take dead stones off before you \
+             pass: everything left counts."
+        }
+        "battleship" => {
+            "Each of you has a hidden fleet of five ships (random ones, set when the game starts). Take turns firing at \
+             a square of theirs; each shot is answered by the next message (hit, miss or sunk). Sink all five of their \
+             ships to win. Neither of you can cheat: your fleet is locked in with a fingerprint at the start, and both \
+             are revealed at the end to check every answer."
+        }
+        "quoridor" => {
+            "Race your pawn to the far side. Each turn, either step it one square (or jump over their pawn next to \
+             you), or place one of your ten walls to slow them down. A wall is two squares long, can't cross another, \
+             and can't shut anyone off from their goal completely. The same position three times is a draw."
+        }
+        "morris" => {
+            "Each of you has nine pieces. First take turns putting them on the board's 24 points, then slide them along \
+             the lines to a next-door point (with three left, fly to any empty point). Three in a row along a line is a \
+             mill: take one of their pieces, if you can, from outside their mills first. You lose with only two pieces \
+             or no move. Repeating a position three times, or 100 moves with no mill, is a draw."
+        }
+        "breakthrough" => {
+            "Sixteen pieces each, on the first two rows. A piece steps one square forward, straight on or diagonally; \
+             diagonally it may take a piece of theirs. Straight on needs an empty square. The first to reach their far \
+             row wins, or take all their pieces."
+        }
+        "amazons" => {
+            "Four amazons each. A move has two parts: slide one of your amazons any distance in a straight or diagonal \
+             line over empty squares, like a queen, then fire an arrow the same way from where it lands. The arrow's \
+             square is burnt for good, and nothing passes over it. Whoever can't move loses."
+        }
+        "pente" => {
+            "Take turns putting a stone on an empty point. Five or more of yours in a row, across, down or diagonally, \
+             wins. Put your stone so that exactly two of theirs in a row sit between it and another of yours, and \
+             they're captured. Five captured pairs also wins."
+        }
+        "rps" => {
+            "Rock beats scissors, scissors beat paper, paper beats rock. Win three rounds to win. Whoever leads locks in \
+             a choice with a fingerprint first; the other picks in the open, and the leader then shows theirs, so \
+             neither can change their mind after seeing the other's."
         }
         _ => "",
     }
@@ -237,6 +350,85 @@ pub enum Board {
     /// (who moves first), the pits you can sow, the last, and whether it
     /// ended in its mover's store (so they move again).
     Mancala { holes: Vec<u64>, black: bool, legal: Vec<String>, last: Option<String>, extra_turn: bool },
+    /// 81 squares, a9 first: `b`, `w` or ` `; as Hex's otherwise. The nine
+    /// small boards, top row first: `b` or `w` won, `d` finished without a
+    /// winner, ` ` still open.
+    #[serde(rename = "ultimate_ttt")]
+    UltimateTicTacToe { cells: Vec<char>, boards: Vec<char>, black: bool, legal: Vec<String>, last: Option<String> },
+    /// 81 points, a9 first: `b`, `w` or ` `; as Hex's otherwise, with `pass`
+    /// among the moves, each side's area (stones, and empty points only it
+    /// surrounds; komi not counted), and the stones each has captured.
+    Go {
+        cells: Vec<char>,
+        black: bool,
+        legal: Vec<String>,
+        last: Option<String>,
+        black_count: u64,
+        white_count: u64,
+        black_captures: u64,
+        white_captures: u64,
+    },
+    /// 361 points, a19 first: `b`, `w` or ` `; as Hex's otherwise, with the
+    /// pairs each side has captured.
+    Pente { cells: Vec<char>, black: bool, legal: Vec<String>, last: Option<String>, black_captures: u64, white_captures: u64 },
+    /// 64 squares, a8 first: `b`, `w` or ` `. Whether you're Black (who
+    /// starts on the bottom two rows and moves up), the moves you can make
+    /// (`a2b3`), the last, and each side's pieces.
+    Breakthrough { cells: Vec<char>, black: bool, legal: Vec<String>, last: Option<String>, black_count: u64, white_count: u64 },
+    /// 100 squares, a10 first: `b`, `w` amazons, `x` burnt squares or ` `.
+    /// The moves you can make (`d1d7/g7`: where from, where to, and the
+    /// arrow's square) and the last.
+    Amazons { cells: Vec<char>, black: bool, legal: Vec<String>, last: Option<String> },
+    /// The 24 points in `MORRIS_POINTS`' order: `b`, `w` or ` `. The moves
+    /// you can make (`d2` to place, `d2-d3` to slide, `xg7` after a mill:
+    /// `d2xg7`, `d2-d3xg7`), the last, the pieces each side has yet to
+    /// place, and those on the board.
+    Morris {
+        cells: Vec<char>,
+        black: bool,
+        legal: Vec<String>,
+        last: Option<String>,
+        black_in_hand: u64,
+        white_in_hand: u64,
+        black_count: u64,
+        white_count: u64,
+    },
+    /// Seventeen rows of seventeen, top (rank 9) first: pawns `b` and `w`
+    /// on the squares (even rows and columns), `-` and `|` for walls in the
+    /// grooves between, spaces elsewhere. The moves you can make (a square
+    /// to step to, `c3h` or `c3v` for a wall), the last, and the walls each
+    /// side has left.
+    Quoridor { rows: Vec<String>, black: bool, legal: Vec<String>, last: Option<String>, black_walls: u64, white_walls: u64 },
+    /// Your fleet (100 cells, a10 first: `s` ship, `x` hit, `o` miss, ` `
+    /// water) and the shots you've fired (`x` hit, `o` miss, `?` not yet
+    /// answered; once their fleet's shown at the end it's drawn as yours).
+    /// Whether you shoot first, the squares you can fire at, what you must
+    /// do now (`shoot`, `concede` or `reveal`; empty when it's over), the
+    /// last shot, and the ships of each side sunk.
+    Battleship {
+        mine: Vec<char>,
+        theirs: Vec<char>,
+        black: bool,
+        legal: Vec<String>,
+        phase: String,
+        last: Option<String>,
+        my_sunk: u64,
+        their_sunk: u64,
+    },
+    /// Rounds played, each as (yours, theirs) (`r`, `p` or `s`), the rounds
+    /// each has won, whether you lead (lock in a choice first), what you
+    /// must do now (`commit`, `choose` or `reveal`; empty when it's over),
+    /// what you can pick (`r`, `p`, `s`), and their pick if made and not
+    /// yet shown.
+    Rps {
+        rounds: Vec<(char, char)>,
+        my_score: u64,
+        their_score: u64,
+        leader: bool,
+        phase: String,
+        legal: Vec<String>,
+        pending: Option<char>,
+    },
 }
 
 impl Board {
@@ -253,6 +445,14 @@ impl Board {
             Board::Gomoku { cells, .. } => chunk(cells, 15),
             Board::DotsAndBoxes { rows, .. } => rows.clone(),
             Board::Mancala { holes, .. } => vec![holes.iter().map(u64::to_string).collect::<Vec<_>>().join(",")],
+            Board::UltimateTicTacToe { cells, .. } | Board::Go { cells, .. } => chunk(cells, 9),
+            Board::Pente { cells, .. } => chunk(cells, 19),
+            Board::Breakthrough { cells, .. } => chunk(cells, 8),
+            Board::Amazons { cells, .. } => chunk(cells, 10),
+            Board::Morris { cells, .. } => vec![cells.iter().collect()],
+            Board::Quoridor { rows, .. } => rows.clone(),
+            Board::Battleship { theirs, .. } => chunk(theirs, 10),
+            Board::Rps { rounds, .. } => rounds.iter().map(|(mine, theirs)| format!("{mine}{theirs}")).collect(),
         }
     }
 }
@@ -328,6 +528,130 @@ pub fn dots_place(line: &str) -> Option<(usize, usize)> {
 /// from your left: and their holes in `Board::Mancala`'s `holes`.
 pub fn mancala_pits(black: bool) -> [(char, usize); 6] {
     std::array::from_fn(|i| if black { ((b'a' + i as u8) as char, i) } else { ((b'g' + i as u8) as char, i + 7) })
+}
+
+/// The index in `MORRIS_POINTS` of a point (`d2`).
+pub fn morris_index(name: &str) -> Option<usize> {
+    MORRIS_POINTS.iter().position(|(point, ..)| *point == name)
+}
+
+/// The squares a move goes by, in order: `a2b3` is a2 then b3, `d1d7/g7`
+/// is d1, d7 then g7, `d2-d3xg7` is d2, d3 then g7. For the games whose
+/// moves are picked square by square.
+pub fn move_squares(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut squares = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        let digits = bytes[at + 1..].iter().take_while(|b| b.is_ascii_digit()).count();
+        if bytes[at].is_ascii_lowercase() && digits > 0 {
+            squares.push(text[at..at + 1 + digits].to_string());
+            at += 1 + digits;
+        } else {
+            at += 1;
+        }
+    }
+    squares
+}
+
+/// The legal moves that go by `path` (squares picked so far): the one made
+/// by exactly these, and those that go on from them.
+pub fn steps_moves<'a>(legal: &'a [String], path: &[String]) -> (Option<&'a String>, Vec<&'a String>) {
+    let mut exact = None;
+    let mut going = Vec::new();
+    for m in legal {
+        let squares = move_squares(m);
+        if squares == path {
+            exact = Some(m);
+        } else if squares.len() > path.len() && squares[..path.len()] == *path {
+            going.push(m);
+        }
+    }
+    (exact, going)
+}
+
+/// The Quoridor move at a place in its picture (row and column of 17, the
+/// top left 0): stepping to the square there, or placing the wall in the
+/// groove or at the corner there, whichever way is legal (a wall is two
+/// squares long: a groove is in two walls' ways).
+pub fn quoridor_move(row: usize, col: usize, legal: &[String]) -> Option<String> {
+    if row > 16 || col > 16 {
+        return None;
+    }
+    let file = |f: usize| (b'a' + f as u8) as char;
+    // A wall named by the square below and left of its centre.
+    let walls: Vec<String> = match (row % 2, col % 2) {
+        (0, 0) => vec![format!("{}{}", file(col / 2), 9 - row / 2)],
+        (1, 0) => {
+            let rank = 9 - row.div_ceil(2);
+            [col / 2, (col / 2).wrapping_sub(1)].iter().filter(|f| **f < 8).map(|f| format!("{}{rank}h", file(*f))).collect()
+        }
+        (0, 1) => {
+            let rank = 9 - row / 2;
+            [rank, rank.wrapping_sub(1)].iter().filter(|r| (1..=8).contains(*r)).map(|r| format!("{}{r}v", file(col / 2))).collect()
+        }
+        _ => {
+            let (f, rank) = (file(col / 2), 9 - row.div_ceil(2));
+            vec![format!("{f}{rank}h"), format!("{f}{rank}v")]
+        }
+    };
+    walls.into_iter().find(|w| legal.contains(w))
+}
+
+/// A place in Quoridor's picture (row and column of 17) of a move's
+/// square or wall, to show the last: its first cell.
+pub fn quoridor_place(m: &str) -> Option<(usize, usize)> {
+    let (square, way) = match m.len() {
+        2 => (m, None),
+        3 => (&m[..2], m.chars().nth(2)),
+        _ => return None,
+    };
+    let at = grid_square_index(square, 9)?;
+    let (row, col) = ((at / 9) * 2, (at % 9) * 2);
+    match way {
+        None => Some((row, col)),
+        // Along the groove above the square, to its right.
+        Some('h') => Some((row.checked_sub(1)?, col)),
+        Some('v') => Some((row, col + 1)),
+        _ => None,
+    }
+}
+
+/// A square's name in a game whose moves are picked square by square
+/// (Breakthrough, Amazons, Nine Men's Morris), from its place on the board
+/// as the Games tab keeps it (a grid index, top left 0; a Morris point's
+/// index in `MORRIS_POINTS`).
+pub fn step_name(app: &str, index: usize) -> String {
+    match app {
+        "breakthrough" => grid_square_name(index, 8),
+        "amazons" => grid_square_name(index, 10),
+        _ => MORRIS_POINTS.get(index).map(|(name, ..)| name.to_string()).unwrap_or_default(),
+    }
+}
+
+/// The place of a square named by `step_name`.
+pub fn step_index(app: &str, name: &str) -> Option<usize> {
+    match app {
+        "breakthrough" => grid_square_index(name, 8),
+        "amazons" => grid_square_index(name, 10),
+        _ => morris_index(name),
+    }
+}
+
+/// Where the move picked so far (`path`, places) can go on to: the squares
+/// that are next in some legal move.
+pub fn step_marks(app: &str, legal: &[String], path: &[usize]) -> Vec<usize> {
+    let named: Vec<String> = path.iter().map(|i| step_name(app, *i)).collect();
+    let mut marks: Vec<usize> =
+        steps_moves(legal, &named).1.iter().filter_map(|m| step_index(app, move_squares(m).get(path.len())?)).collect();
+    marks.sort_unstable();
+    marks.dedup();
+    marks
+}
+
+/// Points as shown: whole, or with the half.
+pub fn points(n: f64) -> String {
+    if n.fract() == 0.0 { format!("{n:.0}") } else { format!("{n:.1}") }
 }
 
 pub struct Games {
@@ -549,15 +873,15 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
         STATUS_DECLINED => if started { "They declined" } else { "You declined" }.to_string(),
         STATUS_EXPIRED => "Expired".to_string(),
         STATUS_COMPLETED => match terminal.as_str() {
-            "draw" => format!("Draw{}", draw_reason(meta, score)),
+            "draw" => format!("Draw{}", draw_reason(app, meta, score)),
             "resign" if winner == me => "They resigned: you won".to_string(),
             "resign" => "You resigned".to_string(),
             // Checkers says a resignation is a win, for the other side.
             "win" if field("terminal_reason") == "rsn" && winner == me => "They resigned: you won".to_string(),
             "win" if field("terminal_reason") == "rsn" => "You resigned".to_string(),
             _ if winner.is_empty() => "Draw".to_string(),
-            _ if winner == me => format!("You won{}", win_reason(meta, "they", score)),
-            _ => format!("They won{}", win_reason(meta, "you", score.map(|(mine, theirs)| (theirs, mine)))),
+            _ if winner == me => format!("You won{}", win_reason(app, meta, "they", score)),
+            _ => format!("They won{}", win_reason(app, meta, "you", score.map(|(mine, theirs)| (theirs, mine)))),
         },
         STATUS_ACTIVE => match draw_offer {
             Some(true) => "They offered a draw".to_string(),
@@ -565,6 +889,15 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
             _ => format!("Their move{}", again(meta, "you")),
         },
         other => other.to_string(),
+    };
+    // What a game that has more to do than move asks of you.
+    let summary = match (app, field("phase").as_str(), status.as_str(), turn == me) {
+        ("battleship", "concede", STATUS_ACTIVE, true) => "Their shot sank your last ship: concede".to_string(),
+        ("battleship", "reveal", STATUS_ACTIVE, true) => "You've won: show your fleet to finish".to_string(),
+        ("rps", "reveal", STATUS_ACTIVE, true) if !again_pick(meta) => "Show your throw to end the match".to_string(),
+        ("rps", "commit" | "choose", STATUS_ACTIVE, true) => "Your throw".to_string(),
+        ("rps", "reveal", STATUS_ACTIVE, true) => "Show your throw, and pick the next".to_string(),
+        _ => summary,
     };
     let mut actions = Vec::new();
     match status.as_str() {
@@ -653,6 +986,106 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
             holes.resize(14, 0);
             Board::Mancala { holes, black, legal: legal(), last: last(), extra_turn: flag("extra_turn") }
         }
+        "ultimate_ttt" => {
+            let mut boards: Vec<char> = field("boards").chars().map(|c| if c == '_' { ' ' } else { c }).collect();
+            boards.resize(9, ' ');
+            Board::UltimateTicTacToe { cells: cells(field("board"), 81), boards, black, legal: legal(), last: last() }
+        }
+        "go" => Board::Go {
+            cells: cells(field("board"), 81),
+            black,
+            legal: legal(),
+            last: last(),
+            black_count: count("black_count"),
+            white_count: count("white_count"),
+            black_captures: count("black_captures"),
+            white_captures: count("white_captures"),
+        },
+        "pente" => Board::Pente {
+            cells: cells(field("board"), 361),
+            black,
+            legal: legal(),
+            last: last(),
+            black_captures: count("black_captures"),
+            white_captures: count("white_captures"),
+        },
+        "breakthrough" => Board::Breakthrough {
+            cells: cells(field("board"), 64),
+            black,
+            legal: legal(),
+            last: last(),
+            black_count: count("black_count"),
+            white_count: count("white_count"),
+        },
+        "amazons" => Board::Amazons { cells: cells(field("board"), 100), black, legal: legal(), last: last() },
+        "morris" => Board::Morris {
+            cells: cells(field("board"), 24),
+            black,
+            legal: legal(),
+            last: last(),
+            black_in_hand: count("black_in_hand"),
+            white_in_hand: count("white_in_hand"),
+            black_count: count("black_count"),
+            white_count: count("white_count"),
+        },
+        "quoridor" => {
+            let mut grid: Vec<char> = field("board").chars().map(|c| if c == '_' { ' ' } else { c }).collect();
+            grid.resize(289, ' ');
+            Board::Quoridor {
+                rows: grid.chunks(17).map(|row| row.iter().collect()).collect(),
+                black,
+                legal: legal(),
+                last: last(),
+                black_walls: count("black_walls"),
+                white_walls: count("white_walls"),
+            }
+        }
+        "battleship" => Board::Battleship {
+            mine: cells(field("my_board"), 100),
+            theirs: cells(field("their_board"), 100),
+            black,
+            legal: legal(),
+            phase: field("phase"),
+            last: last(),
+            my_sunk: count("my_sunk"),
+            their_sunk: count("their_sunk"),
+        },
+        "rps" => {
+            let throw = |value: Option<&Json>| value.and_then(Json::as_str).and_then(|c| c.chars().next()).unwrap_or(' ');
+            let rounds = meta
+                .get("rounds")
+                .and_then(Json::as_array)
+                .map(|rounds| {
+                    rounds
+                        .iter()
+                        .filter_map(Json::as_array)
+                        .map(|pair| {
+                            let (lead, follow) = (throw(pair.first()), throw(pair.get(1)));
+                            if black { (lead, follow) } else { (follow, lead) }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            // The follower's pick is in the open before the leader shows theirs.
+            let pending = meta
+                .get("plies")
+                .and_then(Json::as_array)
+                .and_then(|plies| plies.last())
+                .and_then(Json::as_object)
+                .filter(|ply| ply.get("k").and_then(Json::as_str).is_none_or(str::is_empty))
+                .map(|ply| throw(ply.get("c")))
+                .filter(|c| *c != ' ');
+            let (black_score, white_score) = (count("black_score"), count("white_score"));
+            Board::Rps {
+                rounds,
+                my_score: if black { black_score } else { white_score },
+                their_score: if black { white_score } else { black_score },
+                leader: black,
+                phase: field("phase"),
+                legal: legal(),
+                pending,
+            }
+        }
         _ => return None,
     };
     Some(GameView {
@@ -673,28 +1106,35 @@ fn view_of(app: &str, me: &str, state: &HashMap<String, Json>) -> Option<GameVie
 
 /// How a game was won, after "You won": `loser` is who lost (`they` or
 /// `you`), `score` the winner's and the loser's discs, boxes or seeds.
-fn win_reason(meta: &serde_json::Map<String, Json>, loser: &str, score: Option<(u64, u64)>) -> String {
+fn win_reason(app: &str, meta: &serde_json::Map<String, Json>, loser: &str, score: Option<(f64, f64)>) -> String {
     match meta.get("terminal_reason").and_then(Json::as_str) {
         Some("cm") => " by checkmate".into(),
+        Some("np") if app == "morris" => format!(": {loser} have fewer than three pieces"),
         Some("np") => format!(": {loser} have no pieces left"),
         Some("nm") => format!(": {loser} can't move"),
         Some("con") => format!(" by joining {} sides", if loser == "they" { "your" } else { "their" }),
         Some("5ir") => " with five in a row".into(),
-        Some("cnt") => score.map(|(won, lost)| format!(", {won}–{lost}")).unwrap_or_default(),
+        Some("cnt") => score.map(|(won, lost)| format!(", {}–{}", points(won), points(lost))).unwrap_or_default(),
+        Some("gol") => " by reaching the far side".into(),
+        Some("cap") => " with five captured pairs".into(),
+        Some("3ib") => " with three boards in a row".into(),
+        Some("snk") => format!(": {} fleet is sunk", if loser == "they" { "their" } else { "your" }),
+        Some("rnd") => " with three rounds".into(),
         _ => String::new(),
     }
 }
 
 /// How a game was drawn, after "Draw".
-fn draw_reason(meta: &serde_json::Map<String, Json>, score: Option<(u64, u64)>) -> String {
+fn draw_reason(app: &str, meta: &serde_json::Map<String, Json>, score: Option<(f64, f64)>) -> String {
     match meta.get("terminal_reason").and_then(Json::as_str) {
         Some("sm") => ": stalemate".into(),
         Some("ins") => ": not enough pieces to mate".into(),
         Some("3fr") => ": threefold repetition".into(),
+        Some("50m") if app == "morris" => ": 100 moves without a mill".into(),
         Some("50m") => ": fifty-move rule".into(),
         Some("40m") => ": forty-move rule".into(),
         Some("ful") => ": the board is full".into(),
-        Some("cnt") => score.map(|(mine, theirs)| format!(", {mine}–{theirs}")).unwrap_or_default(),
+        Some("cnt") => score.map(|(mine, theirs)| format!(", {}–{}", points(mine), points(theirs))).unwrap_or_default(),
         Some("agr") => " by agreement".into(),
         _ => String::new(),
     }
@@ -702,11 +1142,13 @@ fn draw_reason(meta: &serde_json::Map<String, Json>, score: Option<(u64, u64)>) 
 
 /// Your discs, boxes or seeds (in your store) and theirs, in a game that
 /// counts them.
-fn score(meta: &serde_json::Map<String, Json>) -> Option<(u64, u64)> {
+fn score(meta: &serde_json::Map<String, Json>) -> Option<(f64, f64)> {
     let pair = ["count", "boxes", "store"].iter().find_map(|what| {
         let get = |side: &str| meta.get(&format!("{side}_{what}")).and_then(Json::as_u64);
-        Some((get("black")?, get("white")?))
+        Some((get("black")? as f64, get("white")? as f64))
     })?;
+    // Go gives White its komi.
+    let pair = (pair.0, pair.1 + meta.get("komi").and_then(Json::as_f64).unwrap_or(0.0));
     let black = meta.get("my_color").and_then(Json::as_str) == Some("b");
     Some(if black { pair } else { (pair.1, pair.0) })
 }
@@ -724,6 +1166,12 @@ fn again(meta: &serde_json::Map<String, Json>, other: &str) -> String {
     }
 }
 
+/// Whether the throw a Rock Paper Scissors player must show is followed by
+/// another they pick (the match goes on): `legal_moves` lists the throws.
+fn again_pick(meta: &serde_json::Map<String, Json>) -> bool {
+    meta.get("legal_moves").and_then(Json::as_array).is_some_and(|legal| !legal.is_empty())
+}
+
 fn check_note(meta: &serde_json::Map<String, Json>) -> &'static str {
     if meta.get("in_check").and_then(Json::as_bool) == Some(true) { " (check)" } else { "" }
 }
@@ -734,7 +1182,13 @@ fn check_note(meta: &serde_json::Map<String, Json>) -> &'static str {
 /// a checkers move (its squares, `a3 b4` or `a5 c3 e1`; `a5-c3-e1` and
 /// `a5xc3xe1` are taken too), a square for Hex, Gomoku and Reversi (`h8`;
 /// Hex's `swap` too), a line for Dots and Boxes (`c3h`, `c3v`), or a pit
-/// for Mancala (`a`–`l`).
+/// for Mancala (`a`–`l`), a square (Ultimate Tic-Tac-Toe, Pente; Go's
+/// `pass` too), two squares (Breakthrough: `a2b3`), where from, where to and
+/// the arrow (Amazons: `d1d7/g7`), a point, a slide and what's taken (Nine
+/// Men's Morris: `d2`, `d2-d3`, `d2xg7`), a square or a wall (Quoridor: `e2`,
+/// `c3h`), a shot (Battleship: `e5`; nothing, to concede or show your fleet)
+/// or a throw (Rock Paper Scissors: `r`, `p` or `s`; nothing, to show the
+/// match's last).
 pub fn move_payload(app: &str, picked: &str) -> Result<HashMap<String, Value>, String> {
     let number = |key: &str, max: u64| -> Result<HashMap<String, Value>, String> {
         let n: u64 = picked.trim().parse().map_err(|_| format!("Pick 0–{max}"))?;
@@ -767,19 +1221,93 @@ pub fn move_payload(app: &str, picked: &str) -> Result<HashMap<String, Value>, S
             }
             Ok(HashMap::from([("m".to_string(), Value::from(path.join(" ")))]))
         }
-        "hex" | "gomoku" | "reversi" => {
+        "hex" | "gomoku" | "reversi" | "ultimate_ttt" | "go" | "pente" => {
             let size = match app {
                 "hex" => 11,
                 "gomoku" => 15,
+                "ultimate_ttt" | "go" => 9,
+                "pente" => 19,
                 _ => 8,
             };
             let square = picked.trim().to_ascii_lowercase();
-            if !(app == "hex" && square == "swap") && grid_square_index(&square, size).is_none() {
+            let special = (app == "hex" && square == "swap") || (app == "go" && square == "pass");
+            if !special && grid_square_index(&square, size).is_none() {
                 let last = grid_square_name(size - 1, size);
-                let swap = if app == "hex" { ", or swap" } else { "" };
-                return Err(format!("Write a square, a1 to {last}{swap}"));
+                let extra = match app {
+                    "hex" => ", or swap",
+                    "go" => ", or pass",
+                    _ => "",
+                };
+                return Err(format!("Write a square, a1 to {last}{extra}"));
             }
             Ok(HashMap::from([("m".to_string(), Value::from(square))]))
+        }
+        "breakthrough" => {
+            let m = picked.trim().to_ascii_lowercase();
+            let squares = move_squares(&m);
+            let fine = squares.len() == 2 && squares.concat() == m && squares.iter().all(|s| grid_square_index(s, 8).is_some());
+            if !fine {
+                return Err("Write a move as its two squares, e.g. a2b3".into());
+            }
+            Ok(HashMap::from([("m".to_string(), Value::from(m))]))
+        }
+        "amazons" => {
+            let m = picked.trim().to_ascii_lowercase();
+            let squares = move_squares(&m);
+            let fine = squares.len() == 3
+                && m == format!("{}{}/{}", squares[0], squares[1], squares[2])
+                && squares.iter().all(|s| grid_square_index(s, 10).is_some());
+            if !fine {
+                return Err("Write a move as where from, where to, and the arrow's square, e.g. d1d7/g7".into());
+            }
+            Ok(HashMap::from([("m".to_string(), Value::from(m))]))
+        }
+        "morris" => {
+            let m = picked.trim().to_ascii_lowercase();
+            let squares = move_squares(&m);
+            let shape = match squares.len() {
+                1 => m == squares[0],
+                2 => m == format!("{}-{}", squares[0], squares[1]) || m == format!("{}x{}", squares[0], squares[1]),
+                3 => m == format!("{}-{}x{}", squares[0], squares[1], squares[2]),
+                _ => false,
+            };
+            if !shape || !squares.iter().all(|s| morris_index(s).is_some()) {
+                return Err("Write a move as its points: d2 places, d2-d3 slides, d2xg7 or d2-d3xg7 also takes g7".into());
+            }
+            Ok(HashMap::from([("m".to_string(), Value::from(m))]))
+        }
+        "quoridor" => {
+            let m = picked.trim().to_ascii_lowercase();
+            let step = grid_square_index(&m, 9).is_some();
+            let wall = m.len() == 3 && m.is_ascii() && matches!(m.as_bytes()[2], b'h' | b'v') && grid_square_index(&m[..2], 8).is_some();
+            if !step && !wall {
+                return Err(
+                    "Write a square to step to (e2), or a wall by the square below and left of its middle (c3h across, c3v up)".into()
+                );
+            }
+            Ok(HashMap::from([("m".to_string(), Value::from(m))]))
+        }
+        "battleship" => {
+            let shot = picked.trim().to_ascii_lowercase();
+            // Nothing picked: the move that concedes, or shows the fleet.
+            if shot.is_empty() {
+                return Ok(HashMap::new());
+            }
+            if grid_square_index(&shot, 10).is_none() {
+                return Err("Write a square, a1 to j10".into());
+            }
+            Ok(HashMap::from([("s".to_string(), Value::from(shot))]))
+        }
+        "rps" => {
+            let throw = picked.trim().to_ascii_lowercase();
+            // Nothing picked: the last throw of the match, shown.
+            if throw.is_empty() {
+                return Ok(HashMap::new());
+            }
+            if !matches!(throw.as_str(), "r" | "p" | "s") {
+                return Err("Pick r (rock), p (paper) or s (scissors)".into());
+            }
+            Ok(HashMap::from([("c".to_string(), Value::from(throw))]))
         }
         "dots_and_boxes" => {
             let line = picked.trim().to_ascii_lowercase();
@@ -961,9 +1489,9 @@ mod tests {
         assert_eq!(move_payload("checkers", " A5xC3xE1 ").unwrap()["m"], Value::from("a5 c3 e1"));
         // How a checkers game ends, said of whoever lost.
         let meta = |reason: &str| serde_json::Map::from_iter([("terminal_reason".to_string(), Json::from(reason))]);
-        assert_eq!(win_reason(&meta("np"), "they", None), ": they have no pieces left");
-        assert_eq!(win_reason(&meta("nm"), "you", None), ": you can't move");
-        assert_eq!(draw_reason(&meta("40m"), None), ": forty-move rule");
+        assert_eq!(win_reason("checkers", &meta("np"), "they", None), ": they have no pieces left");
+        assert_eq!(win_reason("checkers", &meta("nm"), "you", None), ": you can't move");
+        assert_eq!(draw_reason("checkers", &meta("40m"), None), ": forty-move rule");
     }
 
     /// A game of `app` begun and accepted: its session, and who moves
@@ -1060,21 +1588,22 @@ mod tests {
         let meta = |pairs: &[(&str, Json)]| serde_json::Map::from_iter(pairs.iter().map(|(k, v)| (k.to_string(), v.clone())));
         let counted =
             meta(&[("my_color", "w".into()), ("black_count", 20.into()), ("white_count", 44.into()), ("terminal_reason", "cnt".into())]);
-        assert_eq!(score(&counted), Some((44, 20)));
-        assert_eq!(win_reason(&counted, "they", score(&counted)), ", 44–20");
+        assert_eq!(score(&counted), Some((44.0, 20.0)));
+        assert_eq!(win_reason("reversi", &counted, "they", score(&counted)), ", 44–20");
         assert_eq!(
             draw_reason(
+                "reversi",
                 &meta(&[
                     ("terminal_reason", "cnt".into()),
                     ("my_color", "b".into()),
                     ("black_count", 32.into()),
                     ("white_count", 32.into())
                 ]),
-                Some((32, 32))
+                Some((32.0, 32.0))
             ),
             ", 32–32"
         );
-        assert_eq!(draw_reason(&meta(&[("terminal_reason", "ful".into())]), None), ": the board is full");
+        assert_eq!(draw_reason("reversi", &meta(&[("terminal_reason", "ful".into())]), None), ": the board is full");
         assert_eq!(again(&meta(&[("skipped_turn", true.into())]), "they"), " again: they can't move");
     }
 
@@ -1134,8 +1663,171 @@ mod tests {
                 ("black_store".to_string(), Json::from(30)),
                 ("white_store".to_string(), Json::from(18)),
             ])),
-            Some((30, 18))
+            Some((30.0, 18.0))
         );
+    }
+
+    #[test]
+    fn the_single_token_games_of_lrgp_play_through() {
+        let (amy, ben) = (player(AMY), player(BEN));
+        // Go: a pass each ends it, and White's komi decides.
+        let (session, [black, white]) = begun(&amy, &ben, "go");
+        let Board::Go { legal, cells, .. } = black.0.view("go", &session).unwrap().board else { panic!() };
+        assert_eq!((legal.len(), cells.len(), legal.last().map(String::as_str)), (82, 81, Some("pass")));
+        play("go", &session, black, white, "e5");
+        play("go", &session, white, black, "pass");
+        play("go", &session, black, white, "pass");
+        // Black holds the whole board (81 to 0), but White has 7.5: no, Black wins.
+        assert_eq!(black.0.view("go", &session).unwrap().summary, "You won, 81–7.5");
+        assert_eq!(white.0.view("go", &session).unwrap().summary, "They won, 81–7.5");
+        assert!(move_payload("go", "pass").is_ok() && move_payload("go", "j1").is_err() && move_payload("go", "e0").is_err());
+        // Ultimate Tic-Tac-Toe: the cell taken sends them to that small board.
+        let (session, [black, white]) = begun(&amy, &ben, "ultimate_ttt");
+        play("ultimate_ttt", &session, black, white, "e5");
+        let Board::UltimateTicTacToe { legal, boards, cells, last, .. } = white.0.view("ultimate_ttt", &session).unwrap().board else {
+            panic!()
+        };
+        assert_eq!((legal.len(), boards.len(), cells.len(), last.as_deref()), (8, 9, 81, Some("e5")));
+        assert!(legal.iter().all(|m| ["d4", "e4", "f4", "d5", "f5", "d6", "e6", "f6"].contains(&m.as_str())), "{legal:?}");
+        // Pente.
+        let (session, [black, white]) = begun(&amy, &ben, "pente");
+        play("pente", &session, black, white, "j10");
+        let Board::Pente { legal, cells, .. } = white.0.view("pente", &session).unwrap().board else { panic!() };
+        assert_eq!((legal.len(), cells.len()), (360, 361));
+        assert!(move_payload("pente", "t1").is_err() && move_payload("pente", "s19").is_ok());
+        // Breakthrough: moved by two squares, and won by reaching the far row.
+        let (session, [black, white]) = begun(&amy, &ben, "breakthrough");
+        let Board::Breakthrough { legal, black_count, white_count, .. } = black.0.view("breakthrough", &session).unwrap().board else {
+            panic!()
+        };
+        assert_eq!((legal.len(), black_count, white_count), (22, 16, 16));
+        play("breakthrough", &session, black, white, "a2a3");
+        assert!(move_payload("breakthrough", "a2").is_err() && move_payload("breakthrough", "a2b9").is_err());
+        assert_eq!(move_payload("breakthrough", " A2B3 ").unwrap()["m"], Value::from("a2b3"));
+        // Amazons: a move and the arrow.
+        let (session, [black, white]) = begun(&amy, &ben, "amazons");
+        let Board::Amazons { legal, .. } = black.0.view("amazons", &session).unwrap().board else { panic!() };
+        assert_eq!(legal.len(), 2176);
+        play("amazons", &session, black, white, "d1d7/g7");
+        let Board::Amazons { cells, last, .. } = white.0.view("amazons", &session).unwrap().board else { panic!() };
+        assert_eq!((cells[grid_square_index("g7", 10).unwrap()], last.as_deref()), ('x', Some("d1d7/g7")));
+        assert!(move_payload("amazons", "d1d7").is_err() && move_payload("amazons", "d1d7/g11").is_err());
+        // Nine Men's Morris.
+        let (session, [black, white]) = begun(&amy, &ben, "morris");
+        let Board::Morris { legal, cells, black_in_hand, .. } = black.0.view("morris", &session).unwrap().board else { panic!() };
+        assert_eq!((legal.len(), cells.len(), black_in_hand), (24, 24, 9));
+        play("morris", &session, black, white, "d2");
+        let Board::Morris { cells, black_in_hand, black_count, .. } = white.0.view("morris", &session).unwrap().board else { panic!() };
+        assert_eq!((cells[morris_index("d2").unwrap()], black_in_hand, black_count), ('b', 8, 1));
+        assert!(
+            move_payload("morris", "d2-d3xg7").is_ok() && move_payload("morris", "d2xg7").is_ok() && move_payload("morris", "z9").is_err()
+        );
+        assert!(move_payload("morris", "d2-d3-d5").is_err() && move_payload("morris", "a2").is_err());
+        // Quoridor: a step, then a wall.
+        let (session, [black, white]) = begun(&amy, &ben, "quoridor");
+        let Board::Quoridor { legal, rows, black_walls, .. } = black.0.view("quoridor", &session).unwrap().board else { panic!() };
+        assert_eq!((legal.len(), rows.len(), black_walls), (3 + 128, 17, 10));
+        assert_eq!(rows[16].chars().nth(8), Some('b'));
+        play("quoridor", &session, black, white, "c3h");
+        let Board::Quoridor { rows, black_walls, .. } = white.0.view("quoridor", &session).unwrap().board else { panic!() };
+        assert_eq!((black_walls, rows[11].chars().skip(4).take(3).collect::<String>()), (9, "---".to_string()));
+        assert!(move_payload("quoridor", "e2").is_ok() && move_payload("quoridor", "c3v").is_ok());
+        assert!(
+            move_payload("quoridor", "i9h").is_err() && move_payload("quoridor", "j1").is_err() && move_payload("quoridor", "e10").is_err()
+        );
+        // Walls and steps by a place in the picture.
+        let legal: Vec<String> = ["e1", "e2", "c3h", "c3v", "b3h"].map(String::from).to_vec();
+        assert_eq!(quoridor_move(16, 8, &legal).as_deref(), Some("e1"));
+        assert_eq!(quoridor_move(14, 8, &legal).as_deref(), Some("e2"));
+        assert_eq!(quoridor_move(11, 4, &legal).as_deref(), Some("c3h"));
+        assert_eq!(quoridor_move(11, 2, &legal).as_deref(), Some("b3h"));
+        assert_eq!(quoridor_move(11, 5, &legal).as_deref(), Some("c3h"));
+        assert_eq!(quoridor_move(12, 5, &legal).as_deref(), Some("c3v"));
+        assert_eq!(quoridor_move(0, 0, &legal), None);
+        assert_eq!(quoridor_place("c3h"), Some((11, 4)));
+        assert_eq!(quoridor_place("c3v"), Some((12, 5)));
+        assert_eq!(quoridor_place("e2"), Some((14, 8)));
+    }
+
+    #[test]
+    fn steps_picked_square_by_square() {
+        let legal: Vec<String> = ["a2a3", "a2b3", "d2", "d2-d3", "d2xg7", "d2-d3xg7", "d1d7/g7"].map(String::from).to_vec();
+        let path = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(move_squares("d1d7/g7"), path(&["d1", "d7", "g7"]));
+        assert_eq!(move_squares("d2-d3xg7"), path(&["d2", "d3", "g7"]));
+        assert_eq!(move_squares("j10"), path(&["j10"]));
+        assert_eq!(move_squares("pass"), Vec::<String>::new());
+        assert_eq!(move_squares("é1ü"), path(&[]));
+        let (done, going) = steps_moves(&legal, &path(&["a2"]));
+        assert_eq!((done, going.len()), (None, 2));
+        let (done, going) = steps_moves(&legal, &path(&["a2", "b3"]));
+        assert_eq!((done.map(String::as_str), going.len()), (Some("a2b3"), 0));
+        let (done, going) = steps_moves(&legal, &path(&["d2"]));
+        assert_eq!((done.map(String::as_str), going.len()), (Some("d2"), 3));
+        assert_eq!(step_marks("morris", &["d2".to_string(), "d2-d3".to_string()], &[]), vec![10]);
+        assert_eq!(step_marks("morris", &["d2".to_string(), "d2-d3".to_string()], &[10]), vec![11]);
+        assert_eq!(step_name("breakthrough", 48), "a2");
+        assert_eq!(step_index("amazons", "j10"), Some(9));
+        assert_eq!(step_name("morris", 99), "");
+    }
+
+    #[test]
+    fn battleship_shots_a_concession_and_the_reveal() {
+        let (amy, ben) = (player(AMY), player(BEN));
+        let (session, [first, second]) = begun(&amy, &ben, "battleship");
+        let Board::Battleship { mine, theirs, legal, phase, black, .. } = first.0.view("battleship", &session).unwrap().board else {
+            panic!()
+        };
+        assert_eq!((mine.iter().filter(|c| **c == 's').count(), theirs.iter().filter(|c| **c == 's').count()), (17, 0));
+        assert_eq!((legal.len(), phase.as_str(), black), (100, "shoot", true));
+        assert_eq!(first.0.view("battleship", &session).unwrap().summary, "Your move");
+        let shot = play("battleship", &session, first, second, "a1");
+        assert_eq!(shot.text, "[LRGP Battleship] Fired at a1");
+        let Board::Battleship { theirs, legal, .. } = first.0.view("battleship", &session).unwrap().board else { panic!() };
+        assert_eq!((theirs[grid_square_index("a1", 10).unwrap()], legal.len()), ('?', 0));
+        // They answer by firing back: and a shot already taken isn't offered.
+        play("battleship", &session, second, first, "b2");
+        let Board::Battleship { theirs, legal, .. } = first.0.view("battleship", &session).unwrap().board else { panic!() };
+        assert_ne!(theirs[grid_square_index("a1", 10).unwrap()], '?');
+        assert_eq!(legal.len(), 99);
+        assert!(!legal.contains(&"a1".to_string()));
+        assert!(move_payload("battleship", "k1").is_err() && move_payload("battleship", "j10").is_ok());
+        assert!(move_payload("battleship", "").unwrap().is_empty());
+        // Resigned.
+        played(deliver(second.0, first.1, &first.0.act("battleship", &session, "resign", HashMap::new()).unwrap()));
+        assert_eq!(second.0.view("battleship", &session).unwrap().summary, "They resigned: you won");
+    }
+
+    #[test]
+    fn rock_paper_scissors_to_three_rounds() {
+        let (amy, ben) = (player(AMY), player(BEN));
+        let (session, [leader, follower]) = begun(&amy, &ben, "rps");
+        let view = leader.0.view("rps", &session).unwrap();
+        let Board::Rps { phase, legal, leader: leads, rounds, .. } = &view.board else { panic!() };
+        assert_eq!(
+            (phase.as_str(), legal.clone(), *leads, rounds.len(), view.summary.as_str()),
+            ("commit", vec!["p".to_string(), "r".into(), "s".into()], true, 0, "Your throw")
+        );
+        assert!(!follower.0.view("rps", &session).unwrap().yours);
+        // The leader locks in rock; the follower, who sees nothing of it, plays paper.
+        play("rps", &session, leader, follower, "r");
+        let Board::Rps { phase, pending, leader: leads, .. } = follower.0.view("rps", &session).unwrap().board else { panic!() };
+        assert_eq!((phase.as_str(), pending, leads), ("choose", None, false));
+        play("rps", &session, follower, leader, "p");
+        let view = leader.0.view("rps", &session).unwrap();
+        let Board::Rps { phase, pending, legal, .. } = &view.board else { panic!() };
+        assert_eq!(
+            (phase.as_str(), *pending, legal.len(), view.summary.as_str()),
+            ("reveal", Some('p'), 3, "Show your throw, and pick the next")
+        );
+        // The leader shows rock (lost) and locks in scissors.
+        play("rps", &session, leader, follower, "s");
+        let Board::Rps { rounds, my_score, their_score, .. } = follower.0.view("rps", &session).unwrap().board else { panic!() };
+        assert_eq!((rounds, my_score, their_score), (vec![('p', 'r')], 1, 0));
+        let Board::Rps { rounds, my_score, their_score, .. } = leader.0.view("rps", &session).unwrap().board else { panic!() };
+        assert_eq!((rounds, my_score, their_score), (vec![('r', 'p')], 0, 1));
+        assert!(move_payload("rps", "x").is_err() && move_payload("rps", "").unwrap().is_empty());
+        assert_eq!(move_payload("rps", " R ").unwrap()["c"], Value::from("r"));
     }
 
     #[test]

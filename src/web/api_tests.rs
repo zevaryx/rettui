@@ -320,7 +320,7 @@ async fn games_over_the_api() {
         StatusCode::BAD_REQUEST
     );
     assert_eq!(web.get("/api/games/ttt/nope").await.status, StatusCode::NOT_FOUND);
-    assert_eq!(web.post("/api/games", json!({ "peer": BOB, "app": "go" })).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.post("/api/games", json!({ "peer": BOB, "app": "zork" })).await.status, StatusCode::BAD_REQUEST);
     assert_eq!(web.delete(&format!("/api/games/ttt/{session}")).await.status, StatusCode::OK);
     assert_eq!(web.delete(&format!("/api/games/ttt/{session}")).await.status, StatusCode::BAD_REQUEST);
 }
@@ -551,9 +551,20 @@ async fn the_newer_games_over_the_api() {
         fields(&hex::decode(prepared.game.envelope.as_ref().unwrap()).unwrap()).into_iter().collect()
     };
     // Each game's board, its size, and a move of the first mover's.
-    for (app, size, first) in
-        [("hex", 121, "f6"), ("gomoku", 225, "h8"), ("reversi", 64, "d3"), ("dots_and_boxes", 11, "c3h"), ("mancala", 14, "c")]
-    {
+    for (app, size, first) in [
+        ("hex", 121, "f6"),
+        ("gomoku", 225, "h8"),
+        ("reversi", 64, "d3"),
+        ("dots_and_boxes", 11, "c3h"),
+        ("mancala", 14, "c"),
+        ("ultimate_ttt", 81, "e5"),
+        ("go", 81, "e5"),
+        ("pente", 361, "j10"),
+        ("breakthrough", 64, "a2b3"),
+        ("amazons", 100, "d1d7/g7"),
+        ("morris", 24, "d2"),
+        ("quoridor", 17, "e2"),
+    ] {
         let challenge = web.with(move |a| a.games.challenge(app, BOB)).await.unwrap();
         let session = challenge.game.session.clone();
         bob.receive(&hex::encode([0xa1; 16]), &wire(&challenge));

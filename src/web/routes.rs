@@ -1338,8 +1338,10 @@ async fn start_game(State(state): State<WebState>, axum::Json(body): axum::Json<
 struct GameAction {
     command: String,
     /// A move: a cell, a column, a chess move (`e2e4`), a checkers move
-    /// (`a5 c3 e1`), a square (`h8`, or Hex's `swap`), a line (`c3h`) or a
-    /// pit (`c`).
+    /// (`a5 c3 e1`), a square (`h8`, or Hex's `swap`, or Go's `pass`), a line
+    /// (`c3h`), a pit (`c`), a move by its squares (`a2b3`, `d1d7/g7`,
+    /// `d2-d3xg7`), a wall (`c3h`), a shot (`e5`) or a throw (`r`, `p`, `s`);
+    /// empty, to concede or show a Battleship fleet or a match's last throw.
     #[serde(default)]
     picked: Option<String>,
 }

@@ -79,8 +79,8 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     if games.is_empty() {
-        let hint = "No games yet.\n\nPress n to challenge someone to Tic-Tac-Toe, Four in a Row, Dots and Boxes, Gomoku, Reversi, \
-                    Mancala, Checkers, Chess or Hex (or g in a conversation). \
+        let hint = "No games yet.\n\nPress n to challenge someone to a game (or g in a conversation): Tic-Tac-Toe, Four in a Row, \
+                    Chess, Checkers, Go, Battleship and more. \
                     Each move goes as a message, so they can answer whenever they're next online.";
         frame.render_widget(Paragraph::new(hint).wrap(Wrap { trim: true }).style(Style::default().fg(dim())), inner);
         return;
@@ -152,6 +152,15 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         Board::Gomoku { .. } => (33, 16),
         Board::DotsAndBoxes { .. } => (23, 12),
         Board::Mancala { .. } => (36, 5),
+        Board::UltimateTicTacToe { .. } => (25, 12),
+        Board::Go { .. } => (23, 10),
+        Board::Pente { .. } => (41, 20),
+        Board::Breakthrough { .. } => (26, 9),
+        Board::Amazons { .. } => (33, 11),
+        Board::Morris { .. } => (40, 14),
+        Board::Quoridor { .. } => (37, 18),
+        Board::Battleship { .. } => (49, 12),
+        Board::Rps { .. } => (50, 9),
     };
     // The board in the middle, where it stands above it, what you are
     // below, and how your last move went (and what came with theirs).
@@ -161,9 +170,9 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     let rules = crate::games::game_rules(&game.app);
     let rules_width = inner.width.saturating_sub(4).min(80);
     let rules_h = wrapped_height(rules, rules_width) + 2;
-    let show_rules = !rules.is_empty() && inner.height > board_h + 4 + notes_h + rules_h;
+    let show_rules = !rules.is_empty() && inner.height > board_h + 5 + notes_h + rules_h;
     let top = if show_rules { Rect { height: inner.height - rules_h, ..inner } } else { inner };
-    let column = centered(top, top.width, board_h + 4 + notes_h);
+    let column = centered(top, top.width, board_h + 5 + notes_h);
     let status = if game.yours { Style::default().fg(accent()).bold() } else { Style::default().bold() };
     frame.render_widget(Paragraph::new(Span::styled(game.summary.clone(), status)).centered(), Rect { height: 1, ..column });
     let board_area =
@@ -180,16 +189,43 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
             draw_checkers(frame, board_area, cells, *black, last.as_deref(), cursor, &screen.path)
         }
         Board::Hex { cells, black, last, .. } => draw_hex(frame, board_area, cells, *black, last.as_deref(), cursor),
-        Board::Gomoku { cells, black, last, .. } => draw_gomoku(frame, board_area, cells, *black, last.as_deref(), cursor),
+        Board::Gomoku { cells, black, last, .. } => draw_points(frame, board_area, cells, 15, *black, last.as_deref(), cursor),
+        Board::Go { cells, black, last, .. } => draw_points(frame, board_area, cells, 9, *black, last.as_deref(), cursor),
+        Board::Pente { cells, black, last, .. } => draw_points(frame, board_area, cells, 19, *black, last.as_deref(), cursor),
+        Board::UltimateTicTacToe { cells, boards, black, legal, last } => {
+            draw_ultimate(frame, board_area, cells, boards, *black, legal, last.as_deref(), cursor)
+        }
+        Board::Breakthrough { cells, black, last, .. } => {
+            let marks = step_marks(&game, &screen);
+            draw_squares(frame, board_area, cells, 8, *black, &squares_of(last.as_deref(), 8), &marks, &screen.path, cursor)
+        }
+        Board::Amazons { cells, black, last, .. } => {
+            let marks = step_marks(&game, &screen);
+            draw_squares(frame, board_area, cells, 10, *black, &squares_of(last.as_deref(), 10), &marks, &screen.path, cursor)
+        }
+        Board::Morris { cells, black, last, .. } => {
+            let marks = step_marks(&game, &screen);
+            draw_morris(frame, board_area, cells, *black, last.as_deref(), &marks, &screen.path, cursor)
+        }
+        Board::Quoridor { rows, black, legal, last, .. } => draw_quoridor(frame, board_area, rows, *black, legal, last.as_deref(), cursor),
+        Board::Battleship { mine, theirs, black, last, .. } => {
+            draw_battleship(frame, board_area, mine, theirs, *black, last.as_deref(), cursor)
+        }
+        Board::Rps { rounds, my_score, their_score, leader, phase, legal, pending } => {
+            draw_rps(frame, board_area, rounds, (*my_score, *their_score), *leader, phase, legal, *pending, cursor, game.yours)
+        }
         Board::Reversi { cells, legal, last, .. } => draw_reversi(frame, board_area, cells, legal, last.as_deref(), cursor),
         Board::DotsAndBoxes { rows, black, last, .. } => draw_dots(frame, board_area, rows, *black, last.as_deref(), cursor),
         Board::Mancala { holes, black, legal, last, .. } => draw_mancala(frame, board_area, holes, *black, legal, last.as_deref(), cursor),
     };
     app.regions.game_board = BoardRegion { area: inner, ..region };
-    let below = Rect { y: board_area.y + board_area.height + 1, height: 1, ..column };
-    frame.render_widget(Paragraph::new(Span::styled(footnote(&game), Style::default().fg(dim()))).centered(), below);
+    let below = Rect { y: board_area.y + board_area.height + 1, height: 2, ..column };
+    frame.render_widget(
+        Paragraph::new(Span::styled(footnote(&game), Style::default().fg(dim()))).centered().wrap(Wrap { trim: true }),
+        below,
+    );
     if !notes.is_empty() {
-        let area = Rect { y: below.y + 2, height: top.bottom().saturating_sub(below.y + 2), ..column };
+        let area = Rect { y: below.y + 3, height: top.bottom().saturating_sub(below.y + 3), ..column };
         let lines: Vec<Line> = notes.into_iter().map(|note| Line::styled(note, Style::default().fg(THEIRS))).collect();
         frame.render_widget(Paragraph::new(lines).centered().wrap(Wrap { trim: true }), area);
     }
@@ -281,6 +317,15 @@ fn hints(game: &GameView, unsent: bool) -> String {
             "chess" | "checkers" => "Enter pick/move · t type",
             "hex" | "gomoku" | "reversi" | "dots_and_boxes" => "Enter play · t type",
             "mancala" => "Enter or 1–6 sow",
+            "go" => "Enter play · p pass · t type",
+            "breakthrough" | "amazons" | "morris" => "Enter pick/move · t type",
+            "ultimate_ttt" | "pente" | "quoridor" => "Enter play · t type",
+            "battleship" => match &game.board {
+                Board::Battleship { phase, .. } if phase == "concede" => "Enter concede",
+                Board::Battleship { phase, .. } if phase == "reveal" => "Enter show your fleet",
+                _ => "Enter fire · t type",
+            },
+            "rps" => "Enter or 1–3 throw",
             _ => "Enter play",
         });
         if matches!(&game.board, Board::Hex { legal, .. } if legal.iter().any(|m| m == "swap")) {
@@ -351,6 +396,61 @@ fn footnote(game: &GameView) -> String {
                 if *black { ("you went first", black_boxes, white_boxes) } else { ("they went first", white_boxes, black_boxes) };
             with_last(format!("Boxes: you {mine}, them {theirs} · {first}"), last)
         }
+        Board::UltimateTicTacToe { black, last, .. } => {
+            let side = if *black { "You're Black" } else { "You're White" };
+            with_last(format!("{side} · three small boards in a row wins"), last)
+        }
+        Board::Go { black, last, black_count, white_count, black_captures, white_captures, .. } => {
+            let (side, mine, theirs, taken) = if *black {
+                ("Black", *black_count as f64, *white_count as f64 + crate::games::GO_KOMI, black_captures)
+            } else {
+                ("White", *white_count as f64 + crate::games::GO_KOMI, *black_count as f64, white_captures)
+            };
+            let (mine, theirs) = (crate::games::points(mine), crate::games::points(theirs));
+            with_last(format!("You're {side} · area now: you {mine}, them {theirs} (with komi) · you've taken {taken}"), last)
+        }
+        Board::Pente { black, last, black_captures, white_captures, .. } => {
+            let (side, mine, theirs) =
+                if *black { ("Black", black_captures, white_captures) } else { ("White", white_captures, black_captures) };
+            with_last(format!("You're {side} · pairs taken: you {mine}, them {theirs}"), last)
+        }
+        Board::Breakthrough { black, last, black_count, white_count, .. } => {
+            let (side, goal, mine, theirs) = if *black {
+                ("Black, moving up", "the top", black_count, white_count)
+            } else {
+                ("White, moving down", "the bottom", white_count, black_count)
+            };
+            with_last(format!("You're {side} · reach {goal} · pieces: you {mine}, them {theirs}"), last)
+        }
+        Board::Amazons { black, last, .. } => with_last(format!("You're {} · ✕ is burnt", if *black { "Black" } else { "White" }), last),
+        Board::Morris { black, last, black_in_hand, white_in_hand, black_count, white_count, .. } => {
+            let (side, hand, mine, theirs) = if *black {
+                ("Black", black_in_hand, black_count, white_count)
+            } else {
+                ("White", white_in_hand, white_count, black_count)
+            };
+            let their_hand = if *black { white_in_hand } else { black_in_hand };
+            with_last(format!("You're {side} · on the board: you {mine}, them {theirs} · to place: you {hand}, them {their_hand}"), last)
+        }
+        Board::Quoridor { black, last, black_walls, white_walls, .. } => {
+            let (side, goal, mine, theirs) = if *black {
+                ("Black, from the bottom", "the top", black_walls, white_walls)
+            } else {
+                ("White, from the top", "the bottom", white_walls, black_walls)
+            };
+            with_last(format!("You're {side} · reach {goal} · walls left: you {mine}, them {theirs}"), last)
+        }
+        Board::Battleship { black, last, my_sunk, their_sunk, .. } => {
+            let first = if *black { "you shot first" } else { "they shot first" };
+            with_last(format!("Ships sunk: you {their_sunk}, them {my_sunk} · {first}"), last)
+        }
+        Board::Rps { leader, .. } => {
+            if *leader {
+                "You lead: you lock in each throw, then show it after theirs".to_string()
+            } else {
+                "They lead: they lock in each throw, you pick, they show theirs".to_string()
+            }
+        }
         Board::Mancala { black, last, holes, .. } => {
             let (mine, theirs) = if *black { (holes[6], holes[13]) } else { (holes[13], holes[6]) };
             let first = if *black { "you went first" } else { "they went first" };
@@ -409,14 +509,15 @@ fn draw_hex(frame: &mut Frame, area: Rect, cells: &[char], black: bool, last: Op
     BoardRegion { origin: Position::new(area.x + 3, area.y + 1), cell: (2, 1), across: 11, down: 11, skew: 1, area, ..Default::default() }
 }
 
-/// A Gomoku board: fifteen points by fifteen.
-fn draw_gomoku(frame: &mut Frame, area: Rect, cells: &[char], black: bool, last: Option<&str>, cursor: usize) -> BoardRegion {
-    let last = last.and_then(|m| crate::games::grid_square_index(m, 15));
+/// A board of points, `size` by `size` (Gomoku, Go, Pente): stones in
+/// each side's colour.
+fn draw_points(frame: &mut Frame, area: Rect, cells: &[char], size: usize, black: bool, last: Option<&str>, cursor: usize) -> BoardRegion {
+    let last = last.and_then(|m| crate::games::grid_square_index(m, size));
     let mut lines = Vec::new();
-    for row in 0..15 {
-        let mut spans = vec![Span::styled(format!("{:>2} ", 15 - row), Style::default().fg(dim()))];
-        for col in 0..15 {
-            let i = row * 15 + col;
+    for row in 0..size {
+        let mut spans = vec![Span::styled(format!("{:>2} ", size - row), Style::default().fg(dim()))];
+        for col in 0..size {
+            let i = row * size + col;
             let stone = cells.get(i).copied().unwrap_or(' ');
             let mut style = if stone == ' ' { Style::default().fg(dim()) } else { Style::default().fg(stone_colour(stone, black)).bold() };
             if last == Some(i) {
@@ -430,10 +531,17 @@ fn draw_gomoku(frame: &mut Frame, area: Rect, cells: &[char], black: bool, last:
         }
         lines.push(Line::from(spans));
     }
-    let letters: String = (0..15).map(|f| format!("{} ", (b'a' + f) as char)).collect();
+    let letters: String = (0..size).map(|f| format!("{} ", (b'a' + f as u8) as char)).collect();
     lines.push(Line::styled(format!("   {letters}"), Style::default().fg(dim())));
     frame.render_widget(Paragraph::new(lines), area);
-    BoardRegion { origin: Position::new(area.x + 3, area.y), cell: (2, 1), across: 15, down: 15, area, ..Default::default() }
+    BoardRegion {
+        origin: Position::new(area.x + 3, area.y),
+        cell: (2, 1),
+        across: size as u16,
+        down: size as u16,
+        area,
+        ..Default::default()
+    }
 }
 
 /// A Reversi board: black and white discs on green, and (your move) dots
@@ -765,6 +873,367 @@ fn draw_checkers(
     BoardRegion { origin: Position::new(area.x + 2, area.y), cell: (3, 1), across: 8, down: 8, area, ..Default::default() }
 }
 
+/// The squares a move names (its last, say), as places on a board `size`
+/// across.
+fn squares_of(m: Option<&str>, size: usize) -> Vec<usize> {
+    m.map(|m| crate::games::move_squares(m).iter().filter_map(|s| crate::games::grid_square_index(s, size)).collect()).unwrap_or_default()
+}
+
+/// Where the move being picked (Breakthrough, Amazons, Morris) can go on
+/// from: only on your turn.
+fn step_marks(game: &GameView, screen: &crate::app::games::GameScreen) -> Vec<usize> {
+    let legal = match &game.board {
+        Board::Breakthrough { legal, .. } | Board::Amazons { legal, .. } | Board::Morris { legal, .. } if game.yours => legal,
+        _ => return Vec::new(),
+    };
+    crate::games::step_marks(&game.app, legal, &screen.path)
+}
+
+const PICKED: Color = Color::Rgb(0x5a, 0x8a, 0x3a);
+const OPEN: Color = Color::Rgb(0x3a, 0x6a, 0x5a);
+
+/// Ultimate Tic-Tac-Toe: nine small boards, a gap between. Squares you can
+/// play are dotted in your colour; a small board someone's won is dotted in
+/// theirs.
+#[allow(clippy::too_many_arguments)]
+fn draw_ultimate(
+    frame: &mut Frame,
+    area: Rect,
+    cells: &[char],
+    boards: &[char],
+    black: bool,
+    legal: &[String],
+    last: Option<&str>,
+    cursor: usize,
+) -> BoardRegion {
+    let last = last.and_then(|m| crate::games::grid_square_index(m, 9));
+    let mut lines = Vec::new();
+    for row in 0..9 {
+        if row > 0 && row % 3 == 0 {
+            lines.push(Line::raw(""));
+        }
+        let mut spans = vec![Span::styled(format!("{} ", 9 - row), Style::default().fg(dim()))];
+        for col in 0..9 {
+            if col > 0 && col % 3 == 0 {
+                spans.push(Span::raw("  "));
+            }
+            let i = row * 9 + col;
+            let stone = cells.get(i).copied().unwrap_or(' ');
+            let owner = boards.get(row / 3 * 3 + col / 3).copied().unwrap_or(' ');
+            let open = legal.contains(&crate::games::grid_square_name(i, 9));
+            let (glyph, mut style) = match stone {
+                ' ' if open => ("·", Style::default().fg(accent()).bold()),
+                ' ' if owner == 'b' || owner == 'w' => ("·", Style::default().fg(stone_colour(owner, black))),
+                ' ' => ("·", Style::default().fg(dim())),
+                _ => ("●", Style::default().fg(stone_colour(stone, black)).bold()),
+            };
+            if last == Some(i) {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            if i == cursor {
+                style = style.bg(selected_bg());
+            }
+            spans.push(Span::styled(glyph, style));
+            spans.push(Span::raw(" "));
+        }
+        lines.push(Line::from(spans));
+    }
+    let files: Vec<String> = (0..3).map(|g| (0..3).map(|f| format!("{} ", (b'a' + (g * 3 + f) as u8) as char)).collect()).collect();
+    lines.push(Line::styled(format!("  {}", files.join("  ")), Style::default().fg(dim())));
+    frame.render_widget(Paragraph::new(lines), area);
+    BoardRegion { origin: Position::new(area.x + 2, area.y), cell: (2, 1), across: 9, down: 9, groups: true, area, ..Default::default() }
+}
+
+/// A board of squares, `size` across, for pieces that move (Breakthrough's
+/// men, Amazons' queens and burnt squares): the piece or square picked
+/// green, where it can go on teal.
+#[allow(clippy::too_many_arguments)]
+fn draw_squares(
+    frame: &mut Frame,
+    area: Rect,
+    cells: &[char],
+    size: usize,
+    _black: bool,
+    last: &[usize],
+    marks: &[usize],
+    path: &[usize],
+    cursor: usize,
+) -> BoardRegion {
+    let mut lines = Vec::new();
+    for row in 0..size {
+        let mut spans = vec![Span::styled(format!("{:>2} ", size - row), Style::default().fg(dim()))];
+        for col in 0..size {
+            let i = row * size + col;
+            let piece = cells.get(i).copied().unwrap_or(' ');
+            let mut bg = if (row + col) % 2 == 0 { LIGHT_SQUARE } else { DARK_SQUARE };
+            if last.contains(&i) {
+                bg = LAST_MOVE;
+            }
+            if marks.contains(&i) {
+                bg = OPEN;
+            }
+            if path.contains(&i) {
+                bg = PICKED;
+            }
+            if i == cursor {
+                bg = accent();
+            }
+            let (glyph, fg) = match piece {
+                'b' => (if size == 10 { '♛' } else { '●' }, BLACK_PIECE),
+                'w' => (if size == 10 { '♛' } else { '●' }, WHITE_PIECE),
+                'x' => ('✕', Color::Red),
+                _ => (' ', WHITE_PIECE),
+            };
+            spans.push(Span::styled(format!(" {glyph} "), Style::default().fg(fg).bg(bg).bold()));
+        }
+        lines.push(Line::from(spans));
+    }
+    let files: String = (0..size).map(|c| format!(" {} ", (b'a' + c as u8) as char)).collect();
+    lines.push(Line::styled(format!("   {files}"), Style::default().fg(dim())));
+    frame.render_widget(Paragraph::new(lines), area);
+    BoardRegion {
+        origin: Position::new(area.x + 3, area.y),
+        cell: (3, 1),
+        across: size as u16,
+        down: size as u16,
+        area,
+        ..Default::default()
+    }
+}
+
+/// Nine Men's Morris: 24 points joined by lines, in a square within a
+/// square within a square.
+#[allow(clippy::too_many_arguments)]
+fn draw_morris(
+    frame: &mut Frame,
+    area: Rect,
+    cells: &[char],
+    black: bool,
+    last: Option<&str>,
+    marks: &[usize],
+    path: &[usize],
+    cursor: usize,
+) -> BoardRegion {
+    use crate::games::MORRIS_POINTS;
+    let (width, height) = (37, 13);
+    let mut canvas = vec![vec![(' ', Style::default()); width]; height];
+    let line = Style::default().fg(dim());
+    // Points next to each other along a row or column are joined, but not
+    // across the middle of the board.
+    for (_, col, row) in MORRIS_POINTS.iter() {
+        for (_, col2, row2) in MORRIS_POINTS.iter() {
+            let across = row == row2 && col2 > col && !MORRIS_POINTS.iter().any(|(_, c, r)| r == row && c > col && c < col2);
+            let down = col == col2 && row2 > row && !MORRIS_POINTS.iter().any(|(_, c, r)| c == col && r > row && r < row2);
+            let centre = |a: &usize, b: &usize| *a < 3 && *b > 3;
+            if across && !centre(col, col2) {
+                for cell in &mut canvas[row * 2][col * 6 + 1..col2 * 6] {
+                    *cell = ('─', line);
+                }
+            }
+            if down && !centre(row, row2) {
+                for canvas_row in &mut canvas[row * 2 + 1..row2 * 2] {
+                    canvas_row[col * 6] = ('│', line);
+                }
+            }
+        }
+    }
+    let last: Vec<usize> =
+        last.map(|m| crate::games::move_squares(m).iter().filter_map(|s| crate::games::morris_index(s)).collect()).unwrap_or_default();
+    for (i, (_, col, row)) in MORRIS_POINTS.iter().enumerate() {
+        let stone = cells.get(i).copied().unwrap_or(' ');
+        let mut style = if stone == ' ' { line } else { Style::default().fg(stone_colour(stone, black)).bold() };
+        if last.contains(&i) {
+            style = style.add_modifier(Modifier::UNDERLINED);
+        }
+        if marks.contains(&i) {
+            style = style.bg(OPEN);
+        }
+        if path.contains(&i) {
+            style = style.bg(PICKED);
+        }
+        if i == cursor {
+            style = style.bg(accent());
+        }
+        canvas[row * 2][col * 6] = (if stone == ' ' { '○' } else { '●' }, style);
+    }
+    let mut lines = Vec::new();
+    for (y, row) in canvas.into_iter().enumerate() {
+        let label = if y % 2 == 0 { format!("{} ", 7 - y / 2) } else { "  ".to_string() };
+        let mut spans = vec![Span::styled(label, Style::default().fg(dim()))];
+        spans.extend(row.into_iter().map(|(c, style)| Span::styled(c.to_string(), style)));
+        lines.push(Line::from(spans));
+    }
+    let files: String = (0..7).map(|f| format!("{}     ", (b'a' + f) as char)).collect();
+    lines.push(Line::styled(format!("  {files}"), Style::default().fg(dim())));
+    frame.render_widget(Paragraph::new(lines), area);
+    BoardRegion { origin: Position::new(area.x + 2, area.y), cell: (6, 2), across: 7, down: 7, area, ..Default::default() }
+}
+
+/// Quoridor: the squares, with the grooves between them where the walls
+/// go. A pawn is a disc; a square you can step to, a ring; a wall, a bar.
+fn draw_quoridor(
+    frame: &mut Frame,
+    area: Rect,
+    rows: &[String],
+    black: bool,
+    legal: &[String],
+    last: Option<&str>,
+    cursor: usize,
+) -> BoardRegion {
+    let last = last.and_then(crate::games::quoridor_place);
+    let mut lines = Vec::new();
+    for (row, text) in rows.iter().enumerate().take(17) {
+        let label = if row % 2 == 0 { format!("{} ", 9 - row / 2) } else { "  ".to_string() };
+        let mut spans = vec![Span::styled(label, Style::default().fg(dim()))];
+        for (col, c) in text.chars().enumerate().take(17) {
+            let mut style = if last == Some((row, col)) { Style::default().fg(accent()).bold() } else { Style::default() };
+            let shown = match (row % 2, col % 2) {
+                (0, 0) => match c {
+                    'b' | 'w' => {
+                        style = Style::default().fg(stone_colour(c, black)).bold();
+                        "● "
+                    }
+                    _ if legal.contains(&format!("{}{}", (b'a' + (col / 2) as u8) as char, 9 - row / 2)) => {
+                        style = Style::default().fg(accent());
+                        "○ "
+                    }
+                    _ => {
+                        style = Style::default().fg(dim());
+                        "· "
+                    }
+                },
+                _ if c == '-' => "━━",
+                _ if c == '|' => "┃ ",
+                _ => "  ",
+            };
+            if row * 17 + col == cursor {
+                style = style.bg(selected_bg());
+            }
+            spans.push(Span::styled(shown, style));
+        }
+        lines.push(Line::from(spans));
+    }
+    let files: String = (0..9).map(|f| format!("{}   ", (b'a' + f) as char)).collect();
+    lines.push(Line::styled(format!("  {files}"), Style::default().fg(dim())));
+    frame.render_widget(Paragraph::new(lines), area);
+    BoardRegion { origin: Position::new(area.x + 2, area.y), cell: (2, 1), across: 17, down: 17, area, ..Default::default() }
+}
+
+/// Battleship: the waters you fire into on the left, your own fleet on the
+/// right.
+fn draw_battleship(
+    frame: &mut Frame,
+    area: Rect,
+    mine: &[char],
+    theirs: &[char],
+    black: bool,
+    last: Option<&str>,
+    cursor: usize,
+) -> BoardRegion {
+    let _ = (black, last);
+    let cell = |c: char, own: bool, here: bool| -> Span<'static> {
+        let (glyph, mut style) = match c {
+            'x' => ("✕ ", Style::default().fg(Color::Red).bold()),
+            'o' => ("• ", Style::default().fg(dim())),
+            '?' => ("? ", Style::default().fg(THEIRS).bold()),
+            's' => ("■ ", Style::default().fg(if own { accent() } else { THEIRS })),
+            _ => ("~ ", Style::default().fg(Color::Blue)),
+        };
+        if here {
+            style = style.bg(selected_bg());
+        }
+        Span::styled(glyph, style)
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("   {:<23}", "Their waters"), Style::default().fg(THEIRS).bold()),
+        Span::styled("   Your fleet", Style::default().fg(accent()).bold()),
+    ])];
+    for row in 0..10 {
+        let mut spans = vec![Span::styled(format!("{:>2} ", 10 - row), Style::default().fg(dim()))];
+        spans.extend((0..10).map(|col| cell(theirs.get(row * 10 + col).copied().unwrap_or(' '), false, row * 10 + col == cursor)));
+        spans.push(Span::styled(format!("  {:>2} ", 10 - row), Style::default().fg(dim())));
+        spans.extend((0..10).map(|col| cell(mine.get(row * 10 + col).copied().unwrap_or(' '), true, false)));
+        lines.push(Line::from(spans));
+    }
+    let files: String = (0..10).map(|f| format!("{} ", (b'a' + f) as char)).collect();
+    lines.push(Line::styled(format!("   {files}    {files}"), Style::default().fg(dim())));
+    frame.render_widget(Paragraph::new(lines), area);
+    BoardRegion { origin: Position::new(area.x + 3, area.y + 1), cell: (2, 1), across: 10, down: 10, area, ..Default::default() }
+}
+
+fn throw_name(throw: char) -> &'static str {
+    match throw {
+        'r' => "Rock",
+        'p' => "Paper",
+        's' => "Scissors",
+        _ => "?",
+    }
+}
+
+/// Rock Paper Scissors: the score, the three throws to pick from, and the
+/// rounds so far.
+#[allow(clippy::too_many_arguments)]
+fn draw_rps(
+    frame: &mut Frame,
+    area: Rect,
+    rounds: &[(char, char)],
+    score: (u64, u64),
+    leader: bool,
+    phase: &str,
+    legal: &[String],
+    pending: Option<char>,
+    cursor: usize,
+    yours: bool,
+) -> BoardRegion {
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(format!("You {}", score.0), Style::default().fg(accent()).bold()),
+            Span::styled(" – ", Style::default().fg(dim())),
+            Span::styled(format!("{} Them", score.1), Style::default().fg(THEIRS).bold()),
+            Span::styled("   (first to 3)", Style::default().fg(dim())),
+        ]),
+        Line::raw(""),
+    ];
+    let picking = yours && !phase.is_empty();
+    let mut options = Vec::new();
+    for (i, throw) in ['r', 'p', 's'].into_iter().enumerate() {
+        let pickable = picking && legal.contains(&throw.to_string());
+        let style = if i == cursor && picking {
+            Style::default().bg(selected_bg()).fg(if pickable { accent() } else { dim() })
+        } else if pickable {
+            Style::default().bold()
+        } else {
+            Style::default().fg(dim())
+        };
+        options.push(Span::styled(format!("[{} {}]", i + 1, throw_name(throw)).to_string(), style));
+        options.push(Span::raw("  "));
+    }
+    lines.push(Line::from(options));
+    lines.push(Line::raw(""));
+    let waiting = match (pending, leader) {
+        (Some(c), true) => Some(format!("They threw {}: show yours", throw_name(c))),
+        (Some(c), false) => Some(format!("You threw {}: they'll show theirs", throw_name(c))),
+        (None, _) if phase == "commit" => Some("Pick your first throw: it's locked in, hidden from them".to_string()),
+        (None, _) => None,
+    };
+    if let Some(waiting) = waiting.filter(|_| !rounds.is_empty() || phase == "commit" || pending.is_some()) {
+        lines.push(Line::styled(waiting, Style::default().fg(dim())));
+    }
+    for (n, (mine, theirs)) in rounds.iter().enumerate().rev().take(4).collect::<Vec<_>>().into_iter().rev() {
+        let result = match (mine, theirs) {
+            (a, b) if a == b => "tie",
+            ('r', 's') | ('s', 'p') | ('p', 'r') => "you win",
+            _ => "they win",
+        };
+        lines.push(Line::styled(
+            format!("Round {}: you {}, they {}: {result}", n + 1, throw_name(*mine), throw_name(*theirs)),
+            Style::default().fg(dim()),
+        ));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+    BoardRegion { origin: Position::new(area.x, area.y + 2), cell: (12, 1), across: 3, down: 1, area, ..Default::default() }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -931,6 +1400,43 @@ mod tests {
                 println!("{}", drawn(app, moves, "show").0);
             }
         }
+    }
+
+    #[test]
+    fn the_lrgp_boards_drawn() {
+        let stones = |shown: &str, glyph: char| shown.lines().map(|l| l.chars().skip(52).filter(|c| *c == glyph).count()).sum::<usize>();
+        let (shown, ..) = drawn("ultimate_ttt", &["e5", "d4"], "ultimate");
+        assert!(
+            shown.contains("Ultimate Tic-Tac-Toe with")
+                && shown.contains("a b c   d e f   g h i")
+                && shown.contains("three small boards in a row wins"),
+            "{shown}"
+        );
+        assert_eq!(stones(&shown, '●'), 2, "{shown}");
+        let (shown, ..) = drawn("go", &["e5", "d5"], "go");
+        assert!(shown.contains(" 9 ·") && shown.contains("with komi") && shown.contains("last d5"), "{shown}");
+        assert_eq!(stones(&shown, '●'), 2, "{shown}");
+        let (shown, ..) = drawn("pente", &["j10", "j11"], "pente");
+        assert!(shown.contains("19 ·") && shown.contains("pairs taken: you 0"), "{shown}");
+        assert_eq!(stones(&shown, '●'), 2, "{shown}");
+        let (shown, ..) = drawn("breakthrough", &["a2a3"], "breakthrough");
+        assert!(shown.contains("moving") && shown.contains("last a2a3"), "{shown}");
+        assert_eq!(stones(&shown, '●'), 32, "{shown}");
+        let (shown, ..) = drawn("amazons", &["d1d7/g7"], "amazons");
+        assert!(shown.contains("is burnt") && shown.contains('✕') && shown.contains("last d1d7/g7"), "{shown}");
+        assert_eq!(stones(&shown, '♛'), 8, "{shown}");
+        let (shown, ..) = drawn("morris", &["d2", "d6"], "morris");
+        assert!(shown.contains("on the board: you 1, them 1") && shown.contains("to place:"), "{shown}");
+        assert_eq!((stones(&shown, '●'), stones(&shown, '○')), (2, 22), "{shown}");
+        assert!(shown.contains("a     b     c     d     e     f     g"), "{shown}");
+        let (shown, ..) = drawn("quoridor", &["e2", "c3h"], "quoridor");
+        assert!(shown.contains("reach the") && shown.contains("last c3h") && shown.contains("━━━━━━"), "{shown}");
+        assert_eq!(stones(&shown, '●'), 2, "{shown}");
+        let (shown, ..) = drawn("battleship", &["a1"], "battleship");
+        assert!(shown.contains("Their waters") && shown.contains("Your fleet") && shown.contains("Ships sunk: you 0, them 0"), "{shown}");
+        assert_eq!(stones(&shown, '■'), 17, "{shown}");
+        let (shown, ..) = drawn("rps", &["r"], "rps");
+        assert!(shown.contains("[1 Rock]") && shown.contains("[3 Scissors]") && shown.contains("You 0 – 0 Them"), "{shown}");
     }
 
     #[test]
