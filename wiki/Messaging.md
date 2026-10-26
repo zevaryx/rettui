@@ -688,6 +688,19 @@ A message you send can be replied to once it's sent: replies name it by its
 hash, which it has from then on. What you're replying to stays with the
 conversation's draft.
 
+**Comments and continuations** (LXMF 1.2's fields `0x41` and `0x42`) are
+shown for what they are, in both UIs, when another client sends them:
+
+- A **comment** on a message shows *💬 comment on* and the first line of
+  that message, which a click scrolls to.
+- A **continuation** carries on from an earlier message. Straight after it,
+  from the same side, it's shown as part of it, with no name or time of
+  its own; anywhere else it shows *… carrying on from* and the start of
+  that message.
+
+Their text is the message's own, so clients that don't know them (and
+rettui before this) show an ordinary message. rettui doesn't send them.
+
 ## Emoji
 
 Both UIs have the same two ways to add an emoji to a message, and to what you

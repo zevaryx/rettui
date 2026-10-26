@@ -278,8 +278,16 @@ fn formatted(m: &Message) -> Option<String> {
     }))
 }
 
-fn message(m: &Message, conversation: &Conversation) -> Value {
+fn message(index: usize, conversation: &Conversation) -> Value {
+    let m = &conversation.messages[index];
     let state = message_state(&m.state);
+    let quote = |quoted: crate::store::Quoted| {
+        json!({
+            "id": quoted.index.map(|i| conversation.messages[i].id.clone()),
+            "incoming": quoted.incoming,
+            "text": quoted.text,
+        })
+    };
     json!({
         "id": m.id,
         "incoming": m.incoming,
@@ -314,14 +322,12 @@ fn message(m: &Message, conversation: &Conversation) -> Value {
         "can_reply": m.lxmf_hash().is_some(),
         // What it answers: that message's id if it's here, who wrote it
         // (`incoming`, if known) and the start of it.
-        "reply": m.reply.as_ref().map(|reply| {
-            let quoted = conversation.quoted(reply);
-            json!({
-                "id": quoted.index.map(|i| conversation.messages[i].id.clone()),
-                "incoming": quoted.incoming,
-                "text": quoted.text,
-            })
-        }),
+        "reply": m.reply.as_ref().map(|reply| quote(conversation.quoted(reply))),
+        // What it's a comment on, and what it carries on from (when that
+        // isn't just before it: `joined` shows the two as one).
+        "comment_on": conversation.commented(m).map(quote),
+        "continues": conversation.continued(index).map(quote),
+        "joined": conversation.joined(index),
     })
 }
 
@@ -329,7 +335,7 @@ fn message(m: &Message, conversation: &Conversation) -> Value {
 /// replies found among them.
 pub fn archived(messages: Vec<Message>) -> Value {
     let conversation = Conversation { messages, ..Conversation::default() };
-    let shown: Vec<Value> = conversation.messages.iter().map(|m| message(m, &conversation)).collect();
+    let shown: Vec<Value> = (0..conversation.messages.len()).map(|i| message(i, &conversation)).collect();
     json!({ "messages": shown })
 }
 
@@ -339,10 +345,11 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
     let empty = Conversation::default();
     let conversation = app.store.conversations.get(key).unwrap_or(&empty);
     let all = conversation.messages.as_slice();
-    let messages: Vec<Value> = newest(all, last)
-        .iter()
-        .map(|m| {
-            let mut shown = message(m, conversation);
+    let first = all.len() - newest(all, last).len();
+    let messages: Vec<Value> = (first..all.len())
+        .map(|index| {
+            let m = &all[index];
+            let mut shown = message(index, conversation);
             // How sending it is going: "finding a path", "42%".
             if let Some(progress) = app.send_progress_of(&m.id) {
                 shown["state"]["progress"] = json!(progress);

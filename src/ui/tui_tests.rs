@@ -801,6 +801,35 @@ fn sensor_readings_drawn_under_their_message() {
 }
 
 #[test]
+fn comments_and_continuations_shown_with_what_theyre_about() {
+    use crate::lxmf::{Extras, InboundMessage};
+    let mut tui = Tui::new("comments");
+    with_bob(&mut tui);
+    let from_bob = |n: u8, content: &str, extras: Extras| InboundMessage {
+        id: Some([n; 32]),
+        source: crate::net::parse_hash(BOB).unwrap(),
+        content: content.into(),
+        timestamp: 1_900_000_000.0 + f64::from(n),
+        extras,
+        ..Default::default()
+    };
+    tui.app.on_message(from_bob(1, "The plan for Saturday", Extras::default()));
+    tui.app.on_message(from_bob(2, "and bring a torch", Extras { continues: Some([1; 32]), ..Extras::default() }));
+    tui.app.on_message(from_bob(3, "Sounds good", Extras { comment_on: Some([1; 32]), ..Extras::default() }));
+    tui.app.on_message(from_bob(4, "more of something gone", Extras { continues: Some([9; 32]), ..Extras::default() }));
+    tui.tab(Tab::Messages);
+    tui.key(KeyCode::Down).key(KeyCode::Up);
+    let screen = tui.draw();
+    assert!(screen.contains("comment on Bob: The plan for Saturday"), "{screen}");
+    assert!(screen.contains("… carrying on from a message that isn't here"), "{screen}");
+    // Carrying straight on from the one before, it has no heading of its own.
+    let lines: Vec<&str> = screen.lines().collect();
+    let plan = lines.iter().position(|l| l.contains("The plan for Saturday")).unwrap();
+    assert!(lines[plan + 1].contains("and bring a torch"), "{screen}");
+    let _ = std::fs::remove_dir_all(&tui.dir);
+}
+
+#[test]
 fn voice_messages_played_as_they_come() {
     use crate::lxmf::fields::Audio;
     use crate::lxmf::{Extras, InboundMessage};

@@ -192,7 +192,14 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             break;
         }
         let message: Message = app.store.conversations[&key].messages[index].clone();
-        let quoted = message.reply.as_ref().map(|reply| app.store.conversations[&key].quoted(reply));
+        let conversation = &app.store.conversations[&key];
+        let quoted = message.reply.as_ref().map(|reply| conversation.quoted(reply));
+        // A comment, and a continuation (shown as one with the message it
+        // carries on from, when that's just before it).
+        let commented = conversation.commented(&message);
+        let continued = conversation.continued(index);
+        let joined = conversation.joined(index);
+        let next_joined = conversation.joined(index + 1);
         // Each history line carries the attachment it belongs to (for clicks).
         let mut lines: Vec<HistoryRow> = Vec::new();
         let mut placements: Vec<Placement<PathBuf>> = Vec::new();
@@ -229,7 +236,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         if picked == Some(index) {
             header = header.style(Style::default().bg(selected_bg()));
         }
-        lines.push((header, Some(HistoryHit::Pick(index))));
+        if !joined || picked == Some(index) || target == Some(index) {
+            lines.push((header, Some(HistoryHit::Pick(index))));
+        }
         // The picked message's buttons, under its name.
         if picked == Some(index) {
             let mut spans = Vec::new();
@@ -246,14 +255,16 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             spans.push(Span::styled("↑↓ another · Esc done", Style::default().fg(dim())));
             lines.push((Line::from(spans), None));
         }
-        // What it answers: a click shows that message.
-        if let Some(quoted) = quoted {
+        // What it answers, is a comment on, or carries on from: a click
+        // shows that message.
+        let about = [(quoted, ""), (commented, "💬 comment on "), (continued, "… carrying on from ")];
+        for (quoted, what) in about.into_iter().filter_map(|(q, what)| q.map(|q| (q, what))) {
             let author = match quoted.incoming {
                 Some(true) => format!("{name}: "),
                 Some(false) => "You: ".to_string(),
                 None => String::new(),
             };
-            let text = clipped(&format!("{author}{}", quoted.text), inner_width.saturating_sub(2));
+            let text = clipped(&format!("{what}{author}{}", quoted.text), inner_width.saturating_sub(2));
             lines.push((
                 Line::from(vec![
                     Span::styled("▎ ", Style::default().fg(accent())),
@@ -353,7 +364,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         if !message.reactions.is_empty() {
             lines.extend(reaction_rows(&message.reactions, &name, inner_width).into_iter().map(|row| (row, None)));
         }
-        lines.push((Line::raw(""), None));
+        if !next_joined {
+            lines.push((Line::raw(""), None));
+        }
         built += lines.len();
         groups.push((Some(index), lines, placements, buttons));
     }

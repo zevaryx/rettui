@@ -870,6 +870,23 @@ async fn notifications_a_browser_missed_while_away() {
 }
 
 #[tokio::test]
+async fn comments_and_continuations_over_the_api() {
+    let web = TestWeb::start("comments");
+    web.with(|app| {
+        app.on_message(from_bob(1, "The plan"));
+        app.on_message(InboundMessage { extras: Extras { continues: Some([1; 32]), ..Extras::default() }, ..from_bob(2, "and more") });
+        app.on_message(InboundMessage { extras: Extras { comment_on: Some([1; 32]), ..Extras::default() }, ..from_bob(3, "Nice") });
+    })
+    .await;
+    let conversation = web.get(&format!("/api/conversations/{BOB}")).await.json();
+    let messages = conversation["messages"].as_array().unwrap();
+    assert_eq!((messages[1]["joined"].as_bool(), messages[1]["continues"].is_null()), (Some(true), true), "{conversation}");
+    assert_eq!(messages[2]["comment_on"]["id"], "01".repeat(32));
+    assert_eq!(messages[2]["comment_on"]["text"], "The plan");
+    assert_eq!(messages[0]["joined"], false);
+}
+
+#[tokio::test]
 async fn voice_messages_played_as_they_come_over_the_api() {
     use crate::lxmf::fields::Audio;
     let web = TestWeb::start("autoplay");

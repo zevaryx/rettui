@@ -4157,10 +4157,10 @@ app.views.messages = {
     const actions = !archived;
     const reactButton = actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '🙂 React', title: 'React to this message' }) : null;
     reactButton?.addEventListener('click', () => emojiPicker.toggle(reactButton, reactButton, (e) => this.react(conversation.key, m.id, e)));
-    return el('div', { class: 'message ' + (m.incoming ? 'in' : 'out') + (archived ? ' archived' : ''), dataset: { id: m.id } },
+    return el('div', { class: 'message ' + (m.incoming ? 'in' : 'out') + (archived ? ' archived' : '') + (m.joined ? ' joined' : ''), dataset: { id: m.id } },
       el('div', { class: 'meta' },
         el('span', { class: 'author ' + (m.incoming ? 'in' : 'out'), text: author }),
-        el('span', { class: 'dim', text: '  ' + timeLabel(m.timestamp) }),
+        el('span', { class: 'dim time', text: '  ' + timeLabel(m.timestamp) }),
         state,
         m.signal ? el('span', { class: 'dim', text: `  📶 ${m.signal.short}`, title: `How it was heard: ${m.signal.label}` }) : null,
         actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
@@ -4173,6 +4173,8 @@ app.views.messages = {
             onclick: () => this.cancelSend(conversation.key, m.id) }) : null,
         actions ? el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) }) : null),
       m.reply ? this.quote(m.reply, conversation) : null,
+      m.comment_on ? this.quote(m.comment_on, conversation, '💬 Comment on ') : null,
+      m.continues ? this.quote(m.continues, conversation, '… Carrying on from ') : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
       m.html ? formattedContent(m.html) : m.content ? el('div', { class: 'content' }, ...linked(m.content)) : null,
       m.location ? el('div', { class: 'location' }, '📍 ',
@@ -4376,10 +4378,11 @@ app.views.messages = {
   },
 
   // What a reply answers, above its text: a click shows that message.
-  quote(reply, conversation) {
+  quote(reply, conversation, what) {
     const author = reply.incoming == null ? '' : `${reply.incoming ? conversation.name : 'You'}: `;
     return el('div', { class: 'reply-quote' + (reply.id ? ' clickable' : ''), title: reply.id ? 'Show this message' : null,
       onclick: () => reply.id && this.showMessage(reply.id) },
+    what ? el('span', { class: 'dim', text: what }) : null,
     author ? el('span', { class: 'quote-author', text: author }) : null, reply.text);
   },
 

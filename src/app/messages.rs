@@ -193,6 +193,8 @@ impl App {
             state: MessageState::Received { verified: message.verified },
             attachments,
             reply: message.reply.clone().map(|reply| ReplyTo { hash: hex::encode(reply.to), quote: reply.quote }),
+            comment_on: extras.comment_on.map(hex::encode),
+            continues: extras.continues.map(hex::encode),
             location,
             sensors,
             notes,

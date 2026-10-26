@@ -311,6 +311,9 @@ header .avatar.icon { font-size: 17px; }
 
 .history { padding: 10px 14px; }
 .message { margin-bottom: 12px; }
+/* Carrying on from the message before it: shown as one with it. */
+.message.joined { margin-top: -10px; }
+.message.joined .meta .author, .message.joined .meta .time { display: none; }
 .message .meta { font-size: 12.5px; }
 .message .author { font-weight: 700; }
 .message .author.in { color: var(--magenta); }

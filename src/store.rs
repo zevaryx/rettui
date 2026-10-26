@@ -132,6 +132,12 @@ pub struct Message {
     /// The message this one answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply: Option<ReplyTo>,
+    /// The message this one is a comment on (its LXMF hash, hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_on: Option<String>,
+    /// The message this one carries on from (its LXMF hash, hex).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continues: Option<String>,
     /// Reactions to it, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<Reaction>,
@@ -334,6 +340,28 @@ impl Conversation {
     /// The message with LXMF hash `hash`, and where it is.
     pub fn by_hash(&self, hash: &str) -> Option<(usize, &Message)> {
         self.messages.iter().enumerate().find(|(_, m)| m.lxmf_hash() == Some(hash))
+    }
+
+    /// What a comment shows of the message it's on.
+    pub fn commented(&self, message: &Message) -> Option<Quoted> {
+        let hash = message.comment_on.clone()?;
+        Some(self.quoted(&ReplyTo { hash, quote: None }))
+    }
+
+    /// Whether the message at `index` carries on from the one just before
+    /// it, from the same side: the two are shown as one.
+    pub fn joined(&self, index: usize) -> bool {
+        let Some(message) = self.messages.get(index) else { return false };
+        let Some(hash) = &message.continues else { return false };
+        let before = index.checked_sub(1).and_then(|i| self.messages.get(i));
+        before.is_some_and(|b| b.incoming == message.incoming && b.lxmf_hash() == Some(hash.as_str()))
+    }
+
+    /// What a continuation shows of the message it carries on from, when
+    /// that isn't just before it.
+    pub fn continued(&self, index: usize) -> Option<Quoted> {
+        let hash = self.messages.get(index)?.continues.clone()?;
+        (!self.joined(index)).then(|| self.quoted(&ReplyTo { hash, quote: None }))
     }
 
     /// What `reply` shows of the message it answers.

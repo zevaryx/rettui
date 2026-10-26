@@ -6,6 +6,10 @@
 //!   <UTF-8>}` on an otherwise empty message, as Columba and MeshChatX send
 //!   them. Older Columba put `{"reaction_to": <hex>, "emoji": <text>}` in
 //!   field 0x10, which is read too.
+//! - Comments (`FIELD_COMMENT`, 0x41) and continuations
+//!   (`FIELD_CONTINUATION`, 0x42), from LXMF 1.2: `{0x00: <message hash>}`,
+//!   the message it's a comment on, or carries on from. Its text is the
+//!   message's own, so clients without them show an ordinary message.
 //! - Telemetry (`FIELD_TELEMETRY`, 0x02): a msgpack map of sensor readings,
 //!   which is how Sideband and Columba send location updates. The time
 //!   (sensor 0x01) and location (sensor 0x02) are read here, the rest of
@@ -28,9 +32,9 @@
 //!   native msgpack values, not bytes.
 
 use lxmf_core::constants::{
-    FIELD_AUDIO, FIELD_COMMANDS, FIELD_CUSTOM_META, FIELD_CUSTOM_TYPE, FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_IMAGE,
-    FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO, FIELD_TELEMETRY, FIELD_TELEMETRY_STREAM, FIELD_TICKET,
-    REACTION_CONTENT, REACTION_TO,
+    COMMENT_FOR, CONTINUATION_OF, FIELD_AUDIO, FIELD_COMMANDS, FIELD_COMMENT, FIELD_CONTINUATION, FIELD_CUSTOM_META, FIELD_CUSTOM_TYPE,
+    FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_IMAGE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO,
+    FIELD_TELEMETRY, FIELD_TELEMETRY_STREAM, FIELD_TICKET, REACTION_CONTENT, REACTION_TO,
 };
 use lxmf_core::message_api::LxMessage;
 use std::collections::HashMap;
@@ -112,6 +116,13 @@ pub fn reaction_of(message: &LxMessage) -> Option<Reaction> {
         return None;
     };
     Some(Reaction { to, emoji: clean_reaction(&emoji)? })
+}
+
+/// The message a comment (`FIELD_COMMENT`) or continuation
+/// (`FIELD_CONTINUATION`) is about: `{0x00: <its hash>}`.
+fn about(message: &LxMessage, field: u8, key: u8) -> Option<[u8; 32]> {
+    let Some(Value::Map(entries)) = value(message, field) else { return None };
+    at(&entries, u64::from(key)).and_then(hash_of)
 }
 
 /// `FIELD_REACTION`'s value for a reaction (both as bytes, as Columba
@@ -680,7 +691,7 @@ pub fn audio_of(message: &LxMessage) -> Option<Audio> {
 /// Fields rettui reads, or knows to leave alone (an icon's appearance, a
 /// stamp ticket): anything else is mentioned when a message has nothing
 /// else to show.
-const KNOWN_FIELDS: [u8; 16] = [
+const KNOWN_FIELDS: [u8; 18] = [
     FIELD_TELEMETRY,
     FIELD_TELEMETRY_STREAM,
     FIELD_ICON_APPEARANCE,
@@ -693,6 +704,8 @@ const KNOWN_FIELDS: [u8; 16] = [
     FIELD_REPLY_TO,
     FIELD_REPLY_QUOTE,
     FIELD_REACTION,
+    FIELD_COMMENT,
+    FIELD_CONTINUATION,
     FIELD_CUSTOM_META,
     FIELD_CUSTOM_TYPE,
     FIELD_COLUMBA_EXTENSIONS,
@@ -734,6 +747,10 @@ pub struct Extras {
     pub format: Option<crate::markdown::TextFormat>,
     /// A game's move (LRGP): its two fields, as sent.
     pub game: Option<HashMap<u8, Vec<u8>>>,
+    /// The message it's a comment on (by its hash).
+    pub comment_on: Option<[u8; 32]>,
+    /// The message it carries on from (by its hash).
+    pub continues: Option<[u8; 32]>,
     /// Fields rettui doesn't know.
     pub unknown: Vec<u8>,
 }
@@ -753,6 +770,8 @@ impl Extras {
                 .and_then(|r| u8::try_from(r).ok())
                 .and_then(crate::markdown::TextFormat::from_renderer),
             game: game_of(message),
+            comment_on: about(message, FIELD_COMMENT, COMMENT_FOR),
+            continues: about(message, FIELD_CONTINUATION, CONTINUATION_OF),
             unknown: message.fields.keys().copied().filter(|id| !KNOWN_FIELDS.contains(id)).collect(),
         }
     }
@@ -828,6 +847,23 @@ mod tests {
         wrapped.set_field(FIELD_CUSTOM_TYPE, b"lrgp.v1".to_vec());
         wrapped.set_field(FIELD_CUSTOM_META, packed);
         assert_eq!(game_of(&received(&wrapped)), None);
+    }
+
+    #[test]
+    fn comments_and_continuations_as_lxmf_has_them() {
+        let map = |hash: Value| encode(&Value::Map(vec![(Value::from(0), hash)]));
+        let mut sent = message();
+        sent.set_msgpack_field(FIELD_COMMENT, map(Value::Binary(vec![3; 32]))).unwrap();
+        sent.set_msgpack_field(FIELD_CONTINUATION, map(Value::Binary(vec![4; 32]))).unwrap();
+        let extras = Extras::of(&received(&sent));
+        assert_eq!((extras.comment_on, extras.continues), (Some([3; 32]), Some([4; 32])));
+        assert!(extras.unknown.is_empty());
+        // A hash that isn't one, or not in a map, is left out.
+        let mut odd = message();
+        odd.set_msgpack_field(FIELD_COMMENT, map(Value::Binary(vec![3; 5]))).unwrap();
+        odd.set_msgpack_field(FIELD_CONTINUATION, encode(&Value::Binary(vec![4; 32]))).unwrap();
+        let extras = Extras::of(&received(&odd));
+        assert_eq!((extras.comment_on, extras.continues), (None, None));
     }
 
     #[test]
