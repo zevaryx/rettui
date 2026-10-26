@@ -27,6 +27,15 @@ use ratatui_image::sliced::{SignedPosition, SlicedImage, SlicedProtocol};
 const MAX_SOURCE_PX: u32 = 1024;
 /// Decoding is refused above this size to bound memory use.
 pub const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+/// Nor is a picture said to be wider or taller than this decoded: a small
+/// file can say it's millions of pixels across (a few kilobytes of PNG can
+/// be gigabytes decoded), and pages and messages are anyone's.
+const MAX_DECODE_PX: u32 = 16_384;
+/// The most memory one decode may take.
+const MAX_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
+/// Pictures decoded at once; the rest wait their turn, so a page or a
+/// conversation of them takes a few decodes' memory, not all of theirs.
+const DECODERS: usize = 2;
 /// Cell size when the terminal doesn't say (the usual 1:2 shape).
 const DEFAULT_CELL: FontSize = FontSize::new(10, 20);
 
@@ -175,7 +184,7 @@ pub struct Decoded {
 /// Decode on a worker thread and send the result, so large images never
 /// stall drawing or input.
 pub fn decode_in_background(what: DecodeFor, bytes: Option<Vec<u8>>, done: tokio::sync::mpsc::UnboundedSender<Decoded>) {
-    std::thread::spawn(move || {
+    in_turn(Box::new(move || {
         let bytes = match (bytes, &what) {
             (Some(bytes), _) => bytes,
             (None, DecodeFor::File(path)) => std::fs::read(path).unwrap_or_default(),
@@ -183,7 +192,32 @@ pub fn decode_in_background(what: DecodeFor, bytes: Option<Vec<u8>>, done: tokio
         };
         let picture = Picture::decode(&bytes);
         let _ = done.send(Decoded { what, picture });
+    }));
+}
+
+type Job = Box<dyn FnOnce() + Send>;
+
+/// Run `job` on one of the [`DECODERS`] threads, once one is free.
+fn in_turn(job: Job) {
+    static JOBS: LazyLock<std::sync::Mutex<std::sync::mpsc::Sender<Job>>> = LazyLock::new(|| {
+        let (jobs, waiting) = std::sync::mpsc::channel::<Job>();
+        let waiting = std::sync::Arc::new(std::sync::Mutex::new(waiting));
+        for _ in 0..DECODERS {
+            let waiting = waiting.clone();
+            std::thread::spawn(move || {
+                loop {
+                    // Held only while taking the next one, not while it runs.
+                    let next = waiting.lock().unwrap_or_else(std::sync::PoisonError::into_inner).recv();
+                    let Ok(job) = next else { return };
+                    // A picture that panics the decoder isn't shown; the
+                    // thread goes on to the next.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                }
+            });
+        }
+        std::sync::Mutex::new(jobs)
     });
+    let _ = JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).send(job);
 }
 
 pub struct Picture {
@@ -203,7 +237,13 @@ impl Picture {
         if bytes.len() > MAX_IMAGE_BYTES {
             return None;
         }
-        let image = image::load_from_memory(bytes).ok()?;
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_DECODE_PX);
+        limits.max_image_height = Some(MAX_DECODE_PX);
+        limits.max_alloc = Some(MAX_DECODE_ALLOC);
+        reader.limits(limits);
+        let image = reader.decode().ok()?;
         let image = if image.width() > MAX_SOURCE_PX || image.height() > MAX_SOURCE_PX {
             image.thumbnail(MAX_SOURCE_PX, MAX_SOURCE_PX)
         } else {
@@ -430,6 +470,33 @@ mod tests {
         let mut out = Vec::new();
         DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
         out
+    }
+
+    #[test]
+    fn pictures_too_big_to_decode_are_not() {
+        // A few hundred bytes, but wider than any picture is decoded.
+        let wide = png(MAX_DECODE_PX + 1, 1);
+        assert!(wide.len() < 4096, "{} bytes", wide.len());
+        assert!(Picture::decode(&wide).is_none());
+        let picture = Picture::decode(&png(MAX_DECODE_PX, 1)).expect("as wide as may be");
+        assert_eq!(picture.image.width(), MAX_SOURCE_PX);
+        assert!(Picture::decode(b"not a picture").is_none());
+    }
+
+    #[test]
+    fn decodes_in_turn_all_come_back() {
+        let (done, mut decoded) = tokio::sync::mpsc::unbounded_channel();
+        let n = DECODERS * 4;
+        for i in 0..n {
+            let bytes = if i % 3 == 0 { b"junk".to_vec() } else { png(4, 2) };
+            decode_in_background(DecodeFor::Page(i.to_string()), Some(bytes), done.clone());
+        }
+        let mut back: Vec<_> = (0..n).map(|_| decoded.blocking_recv().expect("each one is answered")).collect();
+        back.sort_by_key(|d| match &d.what {
+            DecodeFor::Page(i) => i.parse::<usize>().unwrap(),
+            DecodeFor::File(_) => usize::MAX,
+        });
+        assert!(back.iter().enumerate().all(|(i, d)| d.picture.is_some() == (i % 3 != 0)));
     }
 
     /// Lay out a 200x100 px picture in at most 10 columns and draw it one

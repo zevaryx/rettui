@@ -98,7 +98,8 @@ network.
     protocol the terminal has: Kitty graphics (Kitty, Ghostty and others),
     Sixel, iTerm2 inline images (iTerm2, WezTerm), or half blocks everywhere
     else. They scroll and clip like text, and are decoded in the background so
-    the UI never waits for them.
+    the UI never waits for them, two at a time. A picture larger than 16 MB,
+    or wider or taller than 16384 pixels, isn't shown.
   - **Windows Terminal** (detected by `WT_SESSION`, which is also set inside
     WSL) always gets Sixel. It may not report its cell size, which Sixel needs
     to size pictures: if they come out too big or small, set
