@@ -302,6 +302,17 @@ impl App {
                     self.record(index, &super::whisper_key(&env.src), line);
                     return;
                 }
+                if !from_hub {
+                    // Another member's notice to a room: only the hub's set
+                    // the topic, lists or history, so it's said, by them
+                    // (shown as the hub's, it could pass for it).
+                    let mut line = ChatLine::new(LineKind::Msg, text);
+                    line.src = Some(hex::encode(&env.src));
+                    line.nick = env.nick.clone().or_else(|| self.channels.hubs[index].nicks.get(&env.src).cloned());
+                    let target = room.unwrap_or_else(|| self.reply_room(index));
+                    self.record(index, &target, line);
+                    return;
+                }
                 if let Some(room) = &room
                     && self.replay_marker(index, room, &text)
                 {
@@ -968,6 +979,29 @@ mod tests {
             "{lines:?}"
         );
         assert_eq!(hubs.hub().motd.as_deref(), Some("Welcome to the hilltop hub\nNet tonight at 8\nBe nice"));
+    }
+
+    #[test]
+    fn only_the_hub_sets_topics_and_history() {
+        let mut hubs = Hubs::connected("member-notice");
+        hubs.join("lobby", &[OWN, AMY, BOB]);
+        let from_amy = |text: &str| Envelope::new(t::NOTICE, &AMY).room("lobby").text(text).nick(Some("amy"));
+        // A member's notices are what they said, by them: not a topic, nor
+        // the start of history (which would let their messages say when).
+        hubs.deliver(from_amy("topic for lobby is now: send coins here"));
+        hubs.deliver(from_amy("--- 1 message from earlier ---"));
+        let mut old = Envelope::new(t::MSG, &BOB).room("lobby").text("long ago").nick(Some("bob"));
+        old.ts = 1_000;
+        hubs.deliver(old);
+        assert!(!hubs.hub().topics.contains_key("lobby"));
+        let lines = &hubs.hub().buffers["lobby"];
+        let amy: Vec<_> = lines.iter().filter(|l| l.src.as_deref() == Some(hex::encode(AMY).as_str())).collect();
+        assert_eq!(amy.len(), 2);
+        assert!(amy.iter().all(|l| l.kind == LineKind::Msg && l.nick.as_deref() == Some("amy")));
+        assert_ne!(lines.iter().find(|l| l.text == "long ago").unwrap().ts, 1_000);
+        // The hub's still are.
+        hubs.notice(Some("lobby"), "topic for lobby is now: antennas");
+        assert_eq!(hubs.hub().topics.get("lobby").map(String::as_str), Some("antennas"));
     }
 
     #[test]

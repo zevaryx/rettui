@@ -12,7 +12,9 @@ host. rettui works with each of them, as they differ (see
 - **Views:** the hub view shows its status, limits, MOTD, and public rooms,
   which you can click to join. Rooms show the topic, members (on wide
   screens), `/me` actions and notices, with times to the second. Your own
-  messages show `…` until the hub echoes them back.
+  messages show `…` until the hub echoes them back. Only the hub's own
+  notices are shown as the hub's (`-hub-`) and set the topic or the room
+  list; another user's notice to a room shows as said by them.
 - **Whispers:** private notices ("whispers") with another user have their own
   conversation under the hub, marked `@` where rooms have `#`, instead of
   appearing in rooms. Writing there whispers to that user; incoming whispers
