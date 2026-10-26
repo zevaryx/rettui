@@ -16,6 +16,11 @@ use super::{FieldKind, Interactive, MLine, MSpan, Page, Table};
 /// browser window on an ultrawide or 8K screen.
 const DIVIDER_CHARS: usize = 1200;
 
+/// Dividers drawn with their character on one page. The rest are a line
+/// (`m-rule`), so that a page, or a message, of dividers isn't 1,200 times
+/// its size as HTML.
+const DIVIDERS_DRAWN: usize = 50;
+
 pub fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -138,6 +143,7 @@ impl Page {
         }
         // Open sections that fold: their heading's level.
         let mut folds: Vec<usize> = Vec::new();
+        let mut dividers = 0;
         for (index, line) in self.lines.iter().enumerate() {
             if let MLine::Text { section: Some(section), .. } = line {
                 while folds.last().is_some_and(|level| section.level <= *level) {
@@ -184,12 +190,14 @@ impl Page {
                     }
                 }
                 MLine::Divider { indent, ch, style } => {
-                    let rule: String = std::iter::repeat_n(*ch, DIVIDER_CHARS).collect();
-                    out.push_str(&format!(
-                        "<div class=\"m-divider\" style=\"padding-left:{indent}ch;{}\">{}</div>",
-                        css(*style),
-                        escape(&rule)
-                    ));
+                    let style = format!("padding-left:{indent}ch;{}", css(*style));
+                    dividers += 1;
+                    if dividers <= DIVIDERS_DRAWN {
+                        let rule: String = std::iter::repeat_n(*ch, DIVIDER_CHARS).collect();
+                        out.push_str(&format!("<div class=\"m-divider\" style=\"{style}\">{}</div>", escape(&rule)));
+                    } else {
+                        out.push_str(&format!("<div class=\"m-divider m-rule\" style=\"{style}\"></div>"));
+                    }
                 }
                 MLine::Image { indent, align, url, alt, width } => {
                     let place = format!("padding-left:{indent}ch;text-align:{}", align_css(*align));
@@ -362,6 +370,18 @@ mod tests {
         assert!(html.contains("style=\"max-width:min(100ch,100%);\""));
         // Without a width the stylesheet's 100% applies.
         assert!(html.contains("loading=\"lazy\" style=\"\""));
+    }
+
+    #[test]
+    fn dividers_past_the_first_are_lines_not_characters() {
+        // Two bytes of page were 1200 characters each: a page of dividers
+        // made gigabytes of HTML.
+        let n = 10_000;
+        let html = parse(&"-\n".repeat(n)).to_html(|url| url.to_string(), |_| None);
+        assert_eq!(html.matches("m-divider").count(), n);
+        assert_eq!(html.matches("m-rule").count(), n - DIVIDERS_DRAWN);
+        assert!(html.contains(&"─".repeat(DIVIDER_CHARS)));
+        assert!(html.len() < DIVIDERS_DRAWN * DIVIDER_CHARS * 3 + n * 100, "{} bytes", html.len());
     }
 
     #[test]

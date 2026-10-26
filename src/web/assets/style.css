@@ -735,6 +735,8 @@ textarea.m-field { resize: vertical; vertical-align: top; }
 a.chat-link { color: var(--cyan); text-decoration: underline; overflow-wrap: anywhere; word-break: break-all; }
 a.chat-link:hover { filter: brightness(1.25); }
 .m-divider { white-space: nowrap; overflow: hidden; }
+/* A divider past a page's first 50: a line rather than its character. */
+.m-rule::before { content: "\200b"; display: block; background: linear-gradient(currentColor, currentColor) no-repeat 0 50% / 100% 1px; }
 .m-image img { max-width: 100%; border-radius: 4px; }
 .m-field { background: var(--field-bg); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-family: var(--mono); font-size: 13px; max-width: 100%; }
 .m-choice input { vertical-align: middle; }
