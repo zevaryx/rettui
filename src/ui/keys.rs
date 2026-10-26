@@ -243,6 +243,9 @@ pub fn keys(app: &App) -> Keys {
         Tab::Network if app.net_search.typing => {
             typing("Network search", &[("Enter", "done"), ("Esc", "clear"), ("↑↓", "select"), ("^V", "paste")])
         }
+        Tab::Network if app.speed.open => {
+            typing("Speed test", &[("Enter", "send"), ("←→", "size"), ("e", "their address"), ("y", "copy yours"), ("Esc", "close")])
+        }
         Tab::Network if app.tables.open => mode(
             "Reticulum's tables",
             &[
@@ -310,6 +313,7 @@ pub fn keys(app: &App) -> Keys {
                 ("i", "interface"),
                 ("a", "announces"),
                 ("t", "tables"),
+                ("v", "speed test"),
                 ("D", "forget path"),
                 ("↑↓", "select"),
             ],

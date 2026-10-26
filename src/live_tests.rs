@@ -967,3 +967,32 @@ async fn a_file_sent_to_an_rncp_listener() {
     closed.shutdown().await;
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_speed_test_between_two_rettuis() {
+    let (mut amy, mut ben) = pair("speed", |_| {}).await;
+    let (amys, bens) = (amy.app.speed_address(), ben.app.speed_address());
+    // Ben takes tests from Amy only; Amy's is the one he entered.
+    ben.app.speed.open = true;
+    ben.app.speed_set_peer(&hex::encode(amys)).unwrap();
+    until(&mut amy, &mut ben, "Ben listening", |_, b| b.app.speed.listening == Some(amys)).await;
+    amy.app.speed_set_peer(&hex::encode(bens)).unwrap();
+    amy.app.speed_set_size(1).unwrap();
+    amy.app.speed_send().unwrap();
+    until(&mut amy, &mut ben, "the test arriving", |a, b| {
+        a.app.speed.sending.is_none() && b.app.speed.lines.iter().any(|l| l.starts_with("Download"))
+    })
+    .await;
+    assert!(amy.app.speed.lines.iter().any(|l| l.starts_with("Upload") && l.contains("8.2 KB")), "{:?}", amy.app.speed.lines);
+    assert!(ben.app.speed.lines.iter().any(|l| l.starts_with("Download") && l.contains("8.2 KB")), "{:?}", ben.app.speed.lines);
+
+    // Someone else's test is turned away: Ben now takes them from another.
+    ben.app.speed_set_peer(&"ab".repeat(16)).unwrap();
+    until(&mut amy, &mut ben, "Ben listening for someone else", |_, b| b.app.speed.listening.is_some_and(|l| l != amys)).await;
+    amy.app.speed_send().unwrap();
+    until(&mut amy, &mut ben, "Amy's test refused", |a, _| a.app.speed.sending.is_none()).await;
+    assert!(amy.app.speed.lines.back().is_some_and(|l| l.starts_with("Sending failed")), "{:?}", amy.app.speed.lines);
+    // Closed, it stops listening.
+    ben.app.speed.open = false;
+    until(&mut amy, &mut ben, "Ben no longer listening", |_, b| b.app.speed.listening.is_none()).await;
+}

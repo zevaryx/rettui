@@ -5369,6 +5369,7 @@ app.views.network = {
         el('button', { class: 'more', text: 'Tables', title: 'Reticulum\'s path table and announce rates  ( t )', 'data-label': 'Path table and announce rates', onclick: () => tablesDialog() }),
         el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+        el('button', { class: 'more', text: 'Speed test', title: 'Measure how fast data goes between you and someone else, with rettui or NomadNet  ( v )', onclick: () => speedDialog() }),
         el('button', { class: 'more', text: 'Send a file…', title: 'Send a file to someone running rncp -l  ( F )', onclick: () => rncpDialog(this.selected) }),
         el('button', { class: 'more', text: 'Find a path…', title: 'Find the path to any address', onclick: async () => {
           const address = await askText('Find a path', { label: 'To the address', value: this.selected || '', ok: 'Find', mono: true });
@@ -8140,6 +8141,49 @@ async function rnsHistory(changed) {
 // Reticulum's tables: every path known, or how often each destination
 // announces (as rnpath -t and -r list them), searched by rettui and read
 // again every few seconds while this is open. A row opens its path.
+// A speed test with someone, as NomadNet's: each enters the other's speed
+// test address; while this is open, tests are taken from theirs only.
+async function speedDialog() {
+  const first = await attempt(() => api.get('/speedtest'));
+  if (!first) return;
+  dialog('Speed test', (close) => {
+    const peer = el('input', { type: 'text', class: 'mono', value: first.peer || '', placeholder: 'their speed test address', spellcheck: false,
+      onchange: () => attempt(() => api.post('/speedtest', { peer: peer.value })).then(refresh) });
+    const size = el('select', { onchange: () => attempt(() => api.post('/speedtest', { size: Number(size.value) })) },
+      ...first.sizes.map((name, i) => el('option', { value: String(i), text: name, selected: i === first.size })));
+    const status = el('div', { class: 'dim' });
+    const lines = el('div', { class: 'speed-lines mono' });
+    const show = (t) => {
+      const parts = [t.listening ? '● Taking tests from them only' : '○ Not taking tests yet (enter their address)'];
+      if (t.sending !== null) parts.push(`Sending ${Math.round(t.sending * 100)}%`);
+      if (t.receiving !== null) parts.push(`Receiving ${Math.round(t.receiving * 100)}%`);
+      status.textContent = parts.join(' · ');
+      lines.replaceChildren(...t.lines.map((l) => el('div', { text: l })));
+    };
+    async function refresh() {
+      const now = await api.get('/speedtest').catch(() => null);
+      if (now) show(now);
+    }
+    show(first);
+    const timer = setInterval(() => (document.body.contains(lines) ? refresh() : clearInterval(timer)), 1000);
+    return [
+      el('p', { class: 'dim', text: 'Give them your speed test address, and enter theirs (from their speed test, in rettui or NomadNet). Either of you can then send a test; both see how fast it went.' }),
+      el('label', { class: 'field' }, el('span', { text: 'Yours' }), el('div', { class: 'row' }, el('span', { class: 'mono', text: first.address }),
+        el('button', { text: 'Copy', onclick: () => copy(first.address, 'your speed test address') }))),
+      el('label', { class: 'field' }, el('span', { text: 'Theirs' }), peer),
+      el('label', { class: 'field' }, el('span', { text: 'Size' }), size),
+      status, lines,
+      el('div', { class: 'row actions' }, el('span', { class: 'grow' }),
+        el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } }),
+        el('button', { class: 'primary', text: 'Send a test', onclick: async () => {
+          if (peer.value.trim() && peer.value.trim() !== (first.peer || '')) await attempt(() => api.post('/speedtest', { peer: peer.value }));
+          await attempt(() => api.post('/speedtest/send'));
+          refresh();
+        } })),
+    ];
+  });
+}
+
 // A file sent to an rncp listener, as `rncp FILE ADDRESS` does, and how
 // the ones sent lately went.
 async function rncpDialog(address) {
@@ -8385,6 +8429,8 @@ document.addEventListener('keydown', (e) => {
     app.views.network.toggleMode();
   } else if (e.key === 't' && app.tab === 'network') {
     tablesDialog();
+  } else if (e.key === 'v' && app.tab === 'network') {
+    speedDialog();
   } else if (e.key === 'F' && app.tab === 'network') {
     rncpDialog(app.views.network.selected);
   } else if (e.key === '/' && app.tab === 'messages') {

@@ -160,6 +160,8 @@ pub fn router(state: WebState) -> Router {
         .route("/node/allowed", get(node_allowed).post(set_node_allowed))
         .route("/node/stats/reset", post(reset_node_stats))
         .route("/rncp", get(rncp_sends))
+        .route("/speedtest", get(speed_test).post(set_speed_test))
+        .route("/speedtest/send", post(send_speed_test))
         .route("/rncp/send", post(rncp_send))
         .route("/hub", get(hosted_hub))
         .route("/hub/{action}", post(hosted_hub_action))
@@ -2294,6 +2296,56 @@ async fn set_node_allowed(State(state): State<WebState>, axum::Json(body): axum:
         Some(body.identities.iter().map(|i| parse_hash(i).ok_or_else(|| bad("Not an identity hash"))).collect::<Result<Vec<_>, _>>()?)
     };
     state.write(move |o| o.app.set_node_allowed(root, &body.path, only)).await??;
+    ok()
+}
+
+/// The speed test: both addresses, the size, how it's going and what
+/// happened. Asking keeps rettui taking tests from them a while.
+async fn speed_test(State(state): State<WebState>) -> ApiResult {
+    state
+        .write(|o| {
+            o.app.speed_wanted();
+            let test = &o.app.speed;
+            axum::Json(json!({
+                "address": hex::encode(o.app.speed_address()),
+                "peer": test.peer.map(hex::encode),
+                "listening": test.listening.is_some(),
+                "size": test.size,
+                "sizes": crate::app::speedtest::SIZES.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+                "sending": test.sending,
+                "receiving": test.receiving,
+                "lines": test.lines,
+            }))
+        })
+        .await
+        .map_err(ApiError::from)
+}
+
+#[derive(Deserialize)]
+struct SpeedBody {
+    #[serde(default)]
+    peer: Option<String>,
+    #[serde(default)]
+    size: Option<usize>,
+}
+
+async fn set_speed_test(State(state): State<WebState>, axum::Json(body): axum::Json<SpeedBody>) -> ApiResult {
+    state
+        .write(move |o| {
+            if let Some(peer) = &body.peer {
+                o.app.speed_set_peer(peer)?;
+            }
+            if let Some(size) = body.size {
+                o.app.speed_set_size(size)?;
+            }
+            Ok::<_, String>(())
+        })
+        .await??;
+    ok()
+}
+
+async fn send_speed_test(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.speed_send()).await??;
     ok()
 }
 

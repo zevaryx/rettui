@@ -7,7 +7,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
-use super::{ago, block, dim, highlighted, selected_bg};
+use super::{accent, ago, block, dim, highlighted, selected_bg};
 use crate::app::{App, NetFilter};
 use crate::net::PeerKind;
 use crate::net::heard::Kind;
@@ -41,6 +41,69 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
+    draw_lists(frame, app, area);
+    if app.speed.open {
+        draw_speed(frame, app, area);
+    }
+}
+
+/// The speed test (`v`): both addresses, the size, how it's going and what
+/// happened.
+fn draw_speed(frame: &mut Frame, app: &mut App, area: Rect) {
+    use crate::app::speedtest::SIZES;
+    let test = &app.speed;
+    let label = |s: &str| Span::styled(format!("{s:<16}"), Style::default().fg(dim()));
+    let bar = |done: f32| {
+        let filled = (done.clamp(0.0, 1.0) * 20.0) as usize;
+        format!("{}{} {:.0}%", "█".repeat(filled), "░".repeat(20 - filled), done * 100.0)
+    };
+    let sizes: Vec<Span> = SIZES
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| {
+            if i == test.size {
+                Span::styled(format!("[{name}]"), Style::default().fg(accent()).bold())
+            } else {
+                Span::raw(format!(" {name} "))
+            }
+        })
+        .collect();
+    let mut lines = vec![
+        Line::from(vec![label("Yours"), Span::styled(hex::encode(app.speed_address()), Style::default().fg(accent()))]),
+        Line::from(vec![
+            label("Theirs"),
+            match test.peer {
+                Some(peer) => Span::raw(hex::encode(peer)),
+                None => Span::styled("none yet (e to enter it)", Style::default().fg(dim())),
+            },
+        ]),
+        Line::from([vec![label("Size")], sizes].concat()),
+        Line::from(vec![
+            label("Taking tests"),
+            match test.listening {
+                Some(_) => Span::styled("● from them only", Style::default().fg(Color::Green)),
+                None => Span::styled("○ not yet", Style::default().fg(dim())),
+            },
+        ]),
+    ];
+    if let Some(done) = test.sending {
+        lines.push(Line::from(vec![label("Sending"), Span::raw(bar(done))]));
+    }
+    if let Some(done) = test.receiving {
+        lines.push(Line::from(vec![label("Receiving"), Span::raw(bar(done))]));
+    }
+    lines.push(Line::raw(""));
+    lines.extend(test.lines.iter().map(|l| Line::styled(format!(" {l}"), Style::default().fg(dim()))));
+    let hint = " Enter send · ←→ size · e their address · y copy yours · Esc close ";
+    let width = 80.min(area.width);
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let rect = Rect { x: area.x + area.width.saturating_sub(width) / 2, y: area.y + area.height.saturating_sub(height) / 3, width, height };
+    frame.render_widget(ratatui::widgets::Clear, rect);
+    let speed_block = block("Speed test", true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
+    frame.render_widget(Paragraph::new(lines).block(speed_block), rect);
+}
+
+fn draw_lists(frame: &mut Frame, app: &mut App, area: Rect) {
     let [search_area, area] = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).areas(area);
     draw_search(frame, app, search_area);
     if app.tables.open {

@@ -111,6 +111,15 @@ shows your identity, your interfaces and the log.
   your browser picks, never a file from the computer rettui runs on. How
   it's going shows as it goes, and the log says when it arrived or why it
   didn't.
+- **Speed test:** `v` in the Network tab, or **Speed test** in the web UI,
+  measures how fast data goes between you and someone else, as NomadNet
+  1.4's speed test does, so the other can use rettui or NomadNet
+  (Utilities, Speed Test). Each has a speed test address, shown there: give
+  them yours and enter theirs. Either of you can then send a test of
+  random bytes, from 2 KB to 16 MB (`←` `→` pick the size, `Enter` sends),
+  and both see how long it took, as a rate (*Upload: 1.2 Mbps*, *Download:
+  1.1 Mbps*). While it's open, rettui takes tests from the address you
+  entered and turns away anyone else's; closed, it takes none.
 - **Status:** the Status tab shows your identity and LXMF address, your
   first steps until they're taken (see
   [Running](Running#first-steps)), the network state, each interface with its traffic, the last sync, the

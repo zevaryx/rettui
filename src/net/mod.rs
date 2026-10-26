@@ -12,6 +12,7 @@ pub mod heard;
 pub mod iface_log;
 mod reannounce;
 pub mod remote;
+pub mod speedtest;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -125,6 +126,14 @@ pub enum NetCommand {
     /// Read the path table and the announce-rate table (answered with
     /// [`NetEvent::Tables`]).
     ReadTables,
+    /// Take speed tests from this speed test address only, or none
+    /// (answered with [`NetEvent::Speed`]).
+    SpeedListen(Option<Hash>),
+    /// Send a speed test of so many bytes to a speed test address.
+    SpeedSend {
+        to: Hash,
+        bytes: usize,
+    },
     /// Send a file to an `rncp` listener (answered with [`NetEvent::Rncp`]).
     RncpSend {
         to: Hash,
@@ -361,6 +370,8 @@ pub enum NetEvent {
     },
     /// The path table and the announce-rate table, as read.
     Tables(Result<Tables, String>),
+    /// How a speed test is going.
+    Speed(speedtest::SpeedEvent),
     /// How sending a file to an `rncp` listener is going.
     Rncp {
         to: Hash,
@@ -654,6 +665,8 @@ async fn run(
     let (host_tx, mut host_rx) = mpsc::unbounded_channel::<(u64, Result<nomad_core::NomadNode, String>)>();
     let mut host_generation = 0u64;
     let mut hosted: Option<nomad_core::NomadNode> = None;
+    // Taking speed tests from someone, while asked to.
+    let mut speed_listener: Option<speedtest::Listener> = None;
     let launch = |generation: u64, config: HostConfig| {
         let (runtime, identity, tx) = (runtime.clone(), identity.clone(), host_tx.clone());
         tokio::spawn(async move {
@@ -978,6 +991,25 @@ async fn run(
                             };
                             let _ = ev.send(NetEvent::Tables(tables.await));
                         });
+                    }
+                    NetCommand::SpeedListen(from) => {
+                        // The one before goes first.
+                        if let Some(listener) = speed_listener.take() {
+                            listener.stop().await;
+                        }
+                        match from {
+                            Some(from) => {
+                                let listener = speedtest::listen(&runtime, identity.clone(), from, ev.clone()).await;
+                                let _ = speed_listener.insert(listener);
+                            }
+                            None => {
+                                let _ = ev.send(NetEvent::Speed(speedtest::SpeedEvent::Listening(Ok(None))));
+                            }
+                        }
+                    }
+                    NetCommand::SpeedSend { to, bytes } => {
+                        let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
+                        tokio::spawn(async move { speedtest::send(&runtime, identity, to, bytes, ev).await });
                     }
                     NetCommand::RncpSend { to, name, data } => {
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());

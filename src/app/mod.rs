@@ -49,6 +49,7 @@ mod saver;
 pub mod search;
 mod settings;
 pub mod shrink;
+pub mod speedtest;
 pub mod tables;
 pub mod traffic;
 pub mod trails;
@@ -206,6 +207,8 @@ pub enum PromptKind {
     /// An `rncp` listener's address, then the file to send it.
     RncpTo,
     RncpFile(String),
+    /// The other's speed test address.
+    SpeedPeer,
     /// The folder to move something to (empty: the top).
     MoveNodeItem(crate::nomad::pages::Root, String),
     /// Open this page, dropping unsaved changes to the open one.
@@ -620,6 +623,8 @@ pub struct App {
     pub tables: tables::TablesView,
     /// Files sent to `rncp` listeners, the newest last.
     pub rncp: Vec<rncp::RncpSend>,
+    /// A speed test with someone (`v` in the Network tab).
+    pub speed: speedtest::SpeedTest,
     /// The interface each destination with a path goes through, by address.
     pub routes: HashMap<String, String>,
     pub net_search: NetSearch,
@@ -802,6 +807,7 @@ impl App {
             announce_log: announces::AnnounceLog::default(),
             tables: tables::TablesView::default(),
             rncp: Vec::new(),
+            speed: speedtest::SpeedTest::default(),
             routes: HashMap::new(),
             net_search: NetSearch::default(),
             browser: Browser::default(),
@@ -1156,6 +1162,7 @@ impl App {
             NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
             NetEvent::Tables(result) => self.on_tables(result),
             NetEvent::Rncp { to, name, state } => self.on_rncp(to, name, state),
+            NetEvent::Speed(event) => self.on_speed(event),
             NetEvent::Probed { to, result } => self.on_probed(to, result),
             NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
@@ -1432,6 +1439,7 @@ impl App {
             }
             // Empty moves it to the top.
             PromptKind::MoveNodeItem(root, path) => self.submit_move(root, &path, &text),
+            PromptKind::SpeedPeer => self.submit_speed_prompt(&text),
             kind @ (PromptKind::RncpTo | PromptKind::RncpFile(_)) => {
                 if !text.is_empty() {
                     self.submit_rncp_prompt(kind, &text);
@@ -1590,6 +1598,7 @@ impl App {
         self.recording_tick();
         self.live_tick();
         self.tables_tick();
+        self.speed_tick();
         self.channels_tick();
         self.watch_connection();
         self.refresh_partials();

@@ -1366,3 +1366,22 @@ async fn sending_a_file_with_rncp() {
     let big = web.post_bytes(&format!("/api/rncp/send?to={to}&name=big.bin"), "application/octet-stream", big).await;
     assert!(big.error().contains("at most"));
 }
+
+#[tokio::test]
+async fn a_speed_test_over_the_api() {
+    let web = TestWeb::start("speed");
+    let test = web.get("/api/speedtest").await.json();
+    assert_eq!((test["address"].as_str().map(str::len), test["size"].as_u64()), (Some(32), Some(5)));
+    assert!(test["peer"].is_null() && test["sizes"][0] == "2 KB");
+    assert!(web.post("/api/speedtest/send", json!({})).await.error().contains("their speed test address"));
+    let theirs = "cd".repeat(16);
+    assert_eq!(web.post("/api/speedtest", json!({ "peer": theirs, "size": 0 })).await.status, StatusCode::OK);
+    // Shown in a browser, it listens for theirs.
+    web.get("/api/speedtest").await;
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::SpeedListen(Some(_)))));
+    assert_eq!(web.post("/api/speedtest/send", json!({})).await.status, StatusCode::OK);
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::SpeedSend { bytes: 2048, .. })));
+    assert_eq!(web.get("/api/speedtest").await.json()["sending"], 0.0);
+    assert!(web.post("/api/speedtest", json!({ "peer": "nope" })).await.error().contains("32 hex"));
+    assert!(web.post("/api/speedtest", json!({ "size": 99 })).await.error().contains("sizes"));
+}

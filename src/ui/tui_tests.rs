@@ -1995,3 +1995,47 @@ fn sending_a_file_to_an_rncp_listener() {
     assert!(tui.said().contains("Could not send notes.txt"), "{}", tui.said());
     assert_eq!(tui.app.rncp.len(), 2);
 }
+
+#[test]
+fn a_speed_test_at_the_keyboard() {
+    use crate::net::speedtest::SpeedEvent;
+    let mut tui = Tui::new("speed");
+    tui.tab(Tab::Network);
+    // Opened, it asks for their address first.
+    tui.key(KeyCode::Char('v'));
+    assert!(tui.app.speed.open && tui.app.prompt.as_ref().is_some_and(|p| p.title.contains("speed test address")));
+    let mine = hex::encode(tui.app.speed_address());
+    tui.answer(&mine);
+    assert!(tui.said().contains("your own"), "{}", tui.said());
+    let theirs = "cd".repeat(16);
+    tui.key(KeyCode::Char('e')).answer(&format!("<{theirs}>"));
+    // It listens for theirs now, only while it's open.
+    let peer = crate::net::parse_hash(&theirs).unwrap();
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::SpeedListen(Some(p)) if *p == peer)));
+    tui.app.on_net(crate::net::NetEvent::Speed(SpeedEvent::Listening(Ok(Some(peer)))));
+    tui.key(KeyCode::Left).key(KeyCode::Left).key(KeyCode::Right);
+    let screen = tui.draw();
+    assert!(screen.contains(&mine) && screen.contains("[512 KB]") && screen.contains("from them only"), "{screen}");
+    tui.key(KeyCode::Enter);
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::SpeedSend { bytes, .. } if *bytes == 512 * 1024)));
+    tui.key(KeyCode::Enter);
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("already being sent")));
+    // How it goes, both ways.
+    tui.app.on_net(crate::net::NetEvent::Speed(SpeedEvent::Progress { sending: true, done: 0.5 }));
+    tui.app.on_net(crate::net::NetEvent::Speed(SpeedEvent::Progress { sending: false, done: 0.25 }));
+    let screen = tui.draw();
+    assert!(screen.contains("50%") && screen.contains("25%"), "{screen}");
+    tui.app.on_net(crate::net::NetEvent::Speed(SpeedEvent::Done { sending: true, bytes: 524_288, secs: 2.0 }));
+    tui.app.on_net(crate::net::NetEvent::Speed(SpeedEvent::Failed { sending: false, why: "the link closed".into() }));
+    tui.app.on_net(crate::net::NetEvent::Speed(SpeedEvent::Refused));
+    tui.app.on_net(crate::net::NetEvent::Speed(SpeedEvent::Note("Link up".into())));
+    let screen = tui.draw();
+    assert!(screen.contains("Upload: 2.1 Mbps") && screen.contains("Receiving failed"), "{screen}");
+    assert!(tui.app.log.iter().any(|l| l.contains("Speed test Upload: 2.1 Mbps")));
+    tui.key(KeyCode::Char('y'));
+    assert_eq!(tui.app.clipboard.last.as_deref(), Some(mine.as_str()));
+    // Closed, it stops listening.
+    tui.key(KeyCode::Esc);
+    assert!(!tui.app.speed.open);
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::SpeedListen(None))));
+}
