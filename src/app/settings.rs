@@ -432,6 +432,7 @@ mod tests {
                     "hub_greeting" => "Welcome\\nand hello".into(),
                     "quiet_hours" => "22:00-07:00".into(),
                     "voice_recorder" => "arecord -q -t raw -f S16_LE -c 1 -r 8000".into(),
+                    "print_command" => "lp -d office".into(),
                     other => panic!("give {other} a value to change it to here"),
                 },
             };

@@ -154,6 +154,11 @@ pub struct Settings {
     /// output: raw 16-bit mono 8 kHz sound); found by itself when unset
     /// (see `crate::app::recorder`).
     pub voice_recorder: Option<String>,
+    /// The program the terminal UI prints a paper message's QR code with
+    /// (given a PNG file); `lp` or `lpr` when unset (see
+    /// `crate::app::print`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_command: Option<String>,
     /// How much goes to `rettui.log`: one of [`crate::logging::LEVELS`].
     pub log_level: String,
     /// Ask GitHub once a day whether there's a newer release (see
@@ -268,6 +273,7 @@ impl Default for Settings {
             picture_size: "medium".into(),
             voice_mode: "3200".into(),
             voice_recorder: None,
+            print_command: None,
             log_level: "warn".into(),
             update_check: false,
             discovered_entry_points: 0,
@@ -521,7 +527,7 @@ impl Field {
             // commands Reticulum runs; the recorder is a command run;
             // another node folder could hold
             // executable pages, or share files that aren't meant to be.
-            "rns_config" | "node_dir" | "map_tiles_file" | "voice_recorder" => WebAccess::TerminalOnly,
+            "rns_config" | "node_dir" | "map_tiles_file" | "voice_recorder" | "print_command" => WebAccess::TerminalOnly,
             "node_executable_pages" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }
@@ -631,6 +637,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "picture_size",
             "voice_mode",
             "voice_recorder",
+            "print_command",
             "messages_kept",
             "message_storage_mb",
             "rrc_messages_kept",
@@ -908,6 +915,13 @@ pub const FIELDS: &[Field] = &[
         key: "voice_recorder",
         label: "Voice recorder",
         help: "The program the terminal UI records voice messages with (v in a conversation). Empty: the first of parecord, arecord, rec (SoX) and ffmpeg found. Your own must write raw 16-bit little-endian mono 8 kHz sound to its output until it's stopped, as `arecord -q -t raw -f S16_LE -c 1 -r 8000` does. Changed only in the terminal",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "print_command",
+        label: "Print command",
+        help: "The program the terminal UI prints a paper message's QR code with (p on the code), given a PNG picture of it: where {} is in the command, else at the end, as `lp -d office`. Empty: lp (CUPS), else lpr; on Windows, set one. The web UI prints with your browser instead. Changed only in the terminal",
         kind: FieldKind::Optional,
         effect: Effect::Now,
     },
@@ -1333,6 +1347,7 @@ impl Settings {
             "picture_size" => self.picture_size.clone(),
             "voice_mode" => self.voice_mode.clone(),
             "voice_recorder" => self.voice_recorder.clone().unwrap_or_default(),
+            "print_command" => self.print_command.clone().unwrap_or_default(),
             "log_level" => self.log_level.clone(),
             "update_check" => self.update_check.to_string(),
             "discovered_entry_points" => self.discovered_entry_points.to_string(),
@@ -1486,6 +1501,7 @@ impl Settings {
             "picture_size" => self.picture_size = choice(value, crate::app::shrink::PICTURE_SIZES).map_err(fail)?,
             "voice_mode" => self.voice_mode = choice(value, crate::lxmf::voice::SEND_MODES).map_err(fail)?,
             "voice_recorder" => self.voice_recorder = optional(value),
+            "print_command" => self.print_command = optional(value),
             "log_level" => self.log_level = choice(value, crate::logging::LEVELS).map_err(fail)?,
             "update_check" => self.update_check = toggle(value).map_err(fail)?,
             "clock" => self.clock = choice(value, crate::clock::CLOCKS).map_err(fail)?,

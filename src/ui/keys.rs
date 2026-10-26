@@ -52,6 +52,9 @@ pub fn keys(app: &App) -> Keys {
         return typing("Prompt", &[("Enter", "ok"), ("Esc", "cancel"), ("^V", "paste")]);
     }
     if app.paper_view.is_some() {
+        if app.paper_view.as_ref().is_some_and(|v| v.kind == crate::app::QrKind::Paper) {
+            return typing("QR code", &[("y", "copy link"), ("s", "save"), ("p", "print"), ("Esc", "close")]);
+        }
         return typing("QR code", &[("y", "copy link"), ("s", "save"), ("Esc", "close")]);
     }
     if app.guide.is_some() {

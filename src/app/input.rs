@@ -45,6 +45,7 @@ impl App {
                     self.copy(&link, what);
                 }
                 KeyCode::Char('s') => self.save_paper_qr(),
+                KeyCode::Char('p') if self.paper_view.as_ref().is_some_and(|v| v.kind == super::QrKind::Paper) => self.print_paper_qr(),
                 _ => self.paper_view = None,
             }
             return;

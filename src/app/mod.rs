@@ -41,6 +41,7 @@ pub mod node_stats;
 pub mod notify;
 pub mod panes;
 pub mod paths;
+pub mod print;
 pub mod reach;
 pub mod recorder;
 pub mod reticulum;

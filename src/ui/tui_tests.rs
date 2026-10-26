@@ -1377,6 +1377,11 @@ fn overlays_keys_and_the_wheel_everywhere() {
     tui.draw();
     tui.key(KeyCode::Char('y'));
     assert_eq!(tui.app.clipboard.last.as_deref(), Some("lxm://abc"));
+    // p prints it, with the Print command set (here, one that's missing).
+    tui.app.settings.print_command = Some("no-such-printer-program".into());
+    tui.key(KeyCode::Char('p'));
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("Couldn't run no-such-printer-program")));
+    assert!(tui.app.paths.root.join("print").join("qr-code.png").is_file());
     tui.key(KeyCode::Char('s')).key(KeyCode::Char('z'));
     assert!(tui.app.paper_view.is_none());
     tui.app.paper_view = Some(crate::app::PaperView::address("lxma://abc".into()));

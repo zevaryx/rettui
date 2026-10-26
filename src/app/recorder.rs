@@ -50,7 +50,7 @@ fn recorders() -> Vec<Vec<String>> {
 }
 
 /// A command's words: split at spaces, except in quotes.
-fn words(command: &str) -> Vec<String> {
+pub(super) fn words(command: &str) -> Vec<String> {
     let (mut words, mut word, mut quote, mut any) = (Vec::new(), String::new(), None, false);
     for c in command.chars() {
         match (quote, c) {

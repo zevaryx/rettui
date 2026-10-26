@@ -641,8 +641,11 @@ Sideband and NomadNet can read what rettui writes, and rettui can read theirs.
   - Paper messages carry text only, up to about 1,800 characters.
   - When the message is ready, its QR code opens:
     - **TUI:** `y` copies the link, and `s` saves the QR code as an SVG
-      image in the downloads folder, ready to print. If the window is too
-      small for the code, rettui says so, and you can still copy or save it.
+      image in the downloads folder, ready to print. `p` prints it: rettui
+      hands a PNG of the code to *Print command* (Settings, Messages,
+      `print_command`, with `{}` where the file goes), or else to `lp` or
+      `lpr`. On Windows, set the command first. If the window is too small
+      for the code, rettui says so, and you can still copy, save or print it.
     - **Web UI:** *Copy link*, *Share* (on phones), and *Print*, which
       prints the code alone.
   - The message then shows *✓ paper message*. `P` in the TUI, or its *QR

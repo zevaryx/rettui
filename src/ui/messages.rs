@@ -515,7 +515,11 @@ pub(super) fn draw_paper(frame: &mut Frame, app: &App) {
         QrKind::Paper => ("Paper message", "Scan it into the recipient's app (Sideband, rettui…)"),
         QrKind::Address => ("Your address", "Scan it in Columba or rettui to add you as a contact"),
     };
-    let paper_block = block(title, true).title_bottom(Line::styled(" y copy link · s save image · Esc close ", Style::default().fg(dim())));
+    let hint = match view.kind {
+        QrKind::Paper => " y copy link · s save image · p print · Esc close ",
+        QrKind::Address => " y copy link · s save image · Esc close ",
+    };
+    let paper_block = block(title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
     let inner = paper_block.inner(rect);
     frame.render_widget(paper_block, rect);
     match &view.qr {
