@@ -65,7 +65,7 @@ use crate::term::clipboard::Clipboard;
 use crate::term::images::{DecodeFor, Decoded, Graphics, Picture, decode_in_background};
 use crate::term::input::TextInput;
 
-pub use browser::{Browser, BrowserFocus, BrowserPane, Location, PageTab, resolve_url};
+pub use browser::{Browser, BrowserFocus, BrowserPane, Location, MAX_TABS, PageTab, resolve_url};
 
 /// An app for tests: its data in `dir` (settings saved there too), and no
 /// network.
@@ -273,8 +273,11 @@ pub struct Regions {
     pub version: Rect,
     /// Browser pane sub-tabs and list.
     pub browser_tabs: Vec<(Rect, BrowserPane)>,
-    /// The Browser's page tabs (when there's more than one), by place.
+    /// The Browser's page tabs (when they're shown), by place.
     pub page_tabs: Vec<(Rect, usize)>,
+    /// Each tab's ×, and the + after them.
+    pub page_tab_close: Vec<(Rect, usize)>,
+    pub new_page_tab: Rect,
     pub browser_search: Rect,
     /// The message search's results, and the first one shown.
     pub message_search: Rect,

@@ -69,6 +69,22 @@ fn accent() -> Color {
     }
 }
 
+/// `text` cut to `width` columns, with an ellipsis if it was longer.
+pub(super) fn clipped(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for c in text.chars() {
+        if out.width() + unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) + 1 > width {
+            break;
+        }
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
+
 /// What stays in the background: hints, times, addresses.
 fn dim() -> Color {
     Color::DarkGray

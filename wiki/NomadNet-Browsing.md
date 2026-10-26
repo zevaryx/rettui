@@ -66,16 +66,19 @@ network.
   the tab shown instead. With the setting **Open pages in new tabs**
   (Settings > Browsing) off, it's the other way round. On a page, `T` opens
   the selected link in a new tab (with nothing selected, the page shown
-  again), `W` closes the tab, and `[` and `]` go to the tab before or after.
-  The tabs are named across the top of the address bar (the node, and the
-  page unless it's the node's home page), and a click on one shows it; with
-  the setting off, only once there's more than one. In the web UI,
-  Ctrl+click (⌘+click on a Mac) or a middle-click on a link opens it in a
-  new tab, and on a saved page or node does the other way from a click;
-  **+** opens an empty tab (on a phone, **New tab** behind ⋯), and **×** on
-  a tab closes it. A page
+  again), `W` closes the tab, `[` and `]` go to the tab before or after,
+  and `Alt+1` to `Alt+9` to that tab. The tabs are named across the top of
+  the address bar (the node, and the page unless it's the node's home
+  page), and a click on one shows it; with the setting off, only once
+  there's more than one. Ctrl+click (⌘+click on a Mac, in the web UI) or a
+  middle-click on a link opens it in a new tab, and on a saved page or node
+  does the other way from a click; **+** after the tabs opens an empty tab
+  (on a phone, **New tab** behind ⋯), and **×** on a tab, or a
+  middle-click on it, closes it. Ctrl+click needs a terminal that passes it
+  on (most do; some keep it for their own links). A page
   loading in a tab out of sight goes on loading, and is there when you come
-  back. Up to 12 tabs can be open.
+  back. Up to 12 tabs can be open; with many, their names are cut short to
+  fit.
 - **A node that won't answer:** while a page loads in the TUI, the address
   bar says how finding a path goes ("path request 2 of 3"). A node not heard yet
   can take up to a minute. One whose path went stale (it moved, or a node

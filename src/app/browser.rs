@@ -415,6 +415,65 @@ impl App {
         browser.focus = if browser.tab.page.is_some() { BrowserFocus::Page } else { BrowserFocus::Pane };
     }
 
+    /// Close tab `index` (in tab order). The tab on screen stays, unless it
+    /// is the one closed.
+    pub fn close_browser_tab_at(&mut self, index: usize) {
+        let browser = &mut self.browser;
+        if index == browser.current {
+            return self.close_browser_tab();
+        }
+        if index > browser.parked.len() {
+            return;
+        }
+        if index < browser.current {
+            browser.parked.remove(index);
+            browser.current -= 1;
+        } else {
+            browser.parked.remove(index - 1);
+        }
+    }
+
+    /// A middle-click, or with `close` false a Ctrl+click: a link, saved
+    /// page or node opens in a new tab (in the list, the other way from a
+    /// click; see `browser_new_tabs`), and a tab middle-clicked closes.
+    pub(super) fn open_in_new_tab_at(&mut self, at: Position, close: bool) {
+        if let Some(&(_, index)) = self.regions.page_tabs.iter().find(|(r, _)| r.contains(at)) {
+            return if close { self.close_browser_tab_at(index) } else { self.switch_browser_tab(index) };
+        }
+        if self.regions.page.contains(at) {
+            let (row, col) = self.page_cell(at);
+            if let Some(item) = micron::hit_at(&self.regions.page_hits, row, col) {
+                self.open_item_in_new_tab(item);
+            }
+            return;
+        }
+        let list = self.regions.browser_list;
+        if list.contains(at) {
+            let index = self.pane_list().offset() + (at.y - list.y) as usize;
+            if index < self.pane_len() {
+                self.browser.focus = BrowserFocus::Pane;
+                self.browser.search.typing = false;
+                self.pane_list().select(Some(index));
+                if let Some(location) = self.pane_selection() {
+                    self.open_in_tab(location, !self.settings.browser_new_tabs);
+                }
+            }
+            return;
+        }
+        self.click_browser(at);
+    }
+
+    /// Page item `item` in a new tab if it's a link to a page; anything
+    /// else does what a click does.
+    pub(super) fn open_item_in_new_tab(&mut self, item: usize) {
+        self.browser.focus = BrowserFocus::Page;
+        self.browser.tab.selected = Some(item);
+        match self.selected_link_location() {
+            Some(location) => self.new_browser_tab(Some(location)),
+            None => self.activate(item),
+        }
+    }
+
     /// The tab out of sight (its place in tab order) waiting for request
     /// `id`.
     fn browser_tab_awaiting(&self, id: u64) -> Option<usize> {
@@ -932,6 +991,9 @@ impl App {
                 return;
             }
             KeyCode::Char('u') => return self.toggle_source(),
+            KeyCode::Char(c @ '1'..='9') if key.modifiers.contains(KeyModifiers::ALT) => {
+                return self.switch_browser_tab(c as usize - '1' as usize);
+            }
             KeyCode::Char('T') => return self.open_in_new_tab(),
             KeyCode::Char('W') => return self.close_browser_tab(),
             KeyCode::Char(']') => return self.switch_browser_tab((self.browser.current + 1) % self.browser_tab_count()),
@@ -1052,6 +1114,12 @@ impl App {
         if self.regions.source_button.contains(at) {
             self.toggle_source();
             return;
+        }
+        if let Some(&(_, index)) = self.regions.page_tab_close.iter().find(|(r, _)| r.contains(at)) {
+            return self.close_browser_tab_at(index);
+        }
+        if self.regions.new_page_tab.contains(at) {
+            return self.new_browser_tab(None);
         }
         if let Some(&(_, index)) = self.regions.page_tabs.iter().find(|(r, _)| r.contains(at)) {
             return self.switch_browser_tab(index);

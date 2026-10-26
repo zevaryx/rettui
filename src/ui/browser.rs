@@ -9,8 +9,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{accent, ago, ago_secs, block, dim, highlighted, selected_bg};
-use crate::app::{App, BrowserFocus, BrowserPane, PageTab, match_mask};
+use super::{accent, ago, ago_secs, block, clipped, dim, highlighted, selected_bg};
+use crate::app::{App, BrowserFocus, BrowserPane, MAX_TABS, PageTab, match_mask};
 use crate::net::PeerKind;
 use crate::nomad::micron::source::{Token, tokenize, visible};
 use crate::term::images::draw_placements;
@@ -78,22 +78,44 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let mut address_block = address_block.title_top(Line::from(badges).right_aligned());
     app.regions.page_tabs.clear();
+    app.regions.page_tab_close.clear();
+    app.regions.new_page_tab = Rect::default();
     if tabbed {
-        // The tabs take the title's place, each clickable.
-        let labels: Vec<String> =
-            app.browser_tabs().iter().enumerate().map(|(i, tab)| format!(" {} {} ", i + 1, tab_label(app, tab))).collect();
+        // The tabs take the title's place, each clickable, with a × to
+        // close it and a + after them for a new one.
+        let names: Vec<String> = app.browser_tabs().iter().map(|tab| tab_label(app, tab)).collect();
+        let count = names.len();
+        let plus = if count < MAX_TABS { 3 } else { 0 };
+        // Each tab's share of the border, less its × and the line after it,
+        // so that every tab and the + fit; names are cut to it.
+        let share = (address.width.saturating_sub(2 + plus) as usize / count.max(1)).saturating_sub(3);
+        let end = address.right().saturating_sub(1 + plus);
+        let room = |x: u16| end.saturating_sub(x);
         let mut x = address.x + 1;
         let mut spans = Vec::new();
-        for (i, label) in labels.into_iter().enumerate() {
-            let width = (label.width() as u16).min(address.right().saturating_sub(x + 1));
+        for (i, name) in names.iter().enumerate() {
+            let number = format!(" {} ", i + 1);
+            let label =
+                if share >= number.width() + 2 { format!("{number}{} ", clipped(name, share - number.width() - 1)) } else { number };
+            let width = (label.width() as u16).min(room(x));
             if width == 0 {
                 break;
             }
             app.regions.page_tabs.push((Rect::new(x, address.y, width, 1), i));
             let style = if i == app.browser.current { Style::default().fg(Color::Black).bg(accent()) } else { Style::default().fg(dim()) };
             spans.push(Span::styled(label, style));
-            x += width + 1;
+            x += width;
+            if room(x) >= 2 {
+                app.regions.page_tab_close.push((Rect::new(x, address.y, 2, 1), i));
+                spans.push(Span::styled("× ", style));
+                x += 2;
+            }
             spans.push(Span::raw("─"));
+            x += 1;
+        }
+        if plus > 0 && address.right().saturating_sub(x + 1) >= plus {
+            app.regions.new_page_tab = Rect::new(x, address.y, plus, 1);
+            spans.push(Span::styled(" + ", Style::default().fg(accent())));
         }
         address_block = address_block.title(Line::from(spans));
     }

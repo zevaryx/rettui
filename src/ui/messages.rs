@@ -11,7 +11,7 @@ use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 
 use unicode_width::UnicodeWidthStr;
 
-use super::{accent, block, dim, human_bytes, picked_style, selected_bg, time_label, wrap};
+use super::{accent, block, clipped, dim, human_bytes, picked_style, selected_bg, time_label, wrap};
 use crate::app::{App, HistoryHit, QrKind};
 use crate::lxmf::DeliveryMode;
 use crate::markdown::{self, TextFormat};
@@ -68,22 +68,6 @@ fn reaction_rows(reactions: &[Reaction], name: &str, width: usize) -> Vec<Line<'
         used += needed;
     }
     rows
-}
-
-/// `text` cut to `width` columns, with an ellipsis if it was longer.
-fn clipped(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return text.to_string();
-    }
-    let mut out = String::new();
-    for c in text.chars() {
-        if out.width() + unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) + 1 > width {
-            break;
-        }
-        out.push(c);
-    }
-    out.push('…');
-    out
 }
 
 pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {

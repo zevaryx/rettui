@@ -1552,6 +1552,80 @@ fn the_browser_by_mouse() {
 }
 
 #[test]
+fn browser_tabs_open_and_close_by_mouse() {
+    let mut tui = Tui::new("browser-tabs-mouse");
+    let pages = tui.dir.join("node/pages");
+    std::fs::create_dir_all(&pages).unwrap();
+    std::fs::write(pages.join("index.mu"), "`[About`:/page/about.mu]\n").unwrap();
+    std::fs::write(pages.join("about.mu"), "About").unwrap();
+    let home = format!("{}:/page/index.mu", hex::encode(tui.app.node.hash));
+    tui.app.store.saved.push(crate::store::Bookmark { name: "Home".into(), url: home.clone() });
+    tui.tab(Tab::Browser);
+    // + after the only tab opens another, and a saved page picked fills it.
+    let plus = tui.app.regions.new_page_tab;
+    assert!(!plus.is_empty());
+    tui.click_in(plus);
+    assert_eq!((tui.app.browser_tab_count(), tui.app.browser.current), (2, 1));
+    let list = tui.app.regions.browser_list;
+    tui.click(list.x + 1, list.y);
+    assert_eq!(tui.app.browser_tab_count(), 2);
+    // A middle-click on the link, and a Ctrl+click: each a new tab, on the
+    // page it goes to.
+    let link = |tui: &Tui| {
+        let page = tui.app.regions.page;
+        let &(row, x0, ..) = tui.app.regions.page_hits.first().unwrap();
+        (page.x + x0 as u16, page.y + (row - tui.app.browser.tab.scroll) as u16)
+    };
+    let (x, y) = link(&tui);
+    tui.mouse(MouseEventKind::Down(MouseButton::Middle), x, y);
+    tui.draw();
+    assert_eq!((tui.app.browser_tab_count(), tui.app.browser.current), (3, 2));
+    assert!(tui.app.browser.tab.location.as_ref().is_some_and(|l| l.path == "/page/about.mu"));
+    tui.key(KeyCode::Char('[')).draw();
+    let (x, y) = link(&tui);
+    for kind in [MouseEventKind::Down(MouseButton::Left), MouseEventKind::Up(MouseButton::Left)] {
+        tui.app.on_mouse(MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::CONTROL });
+    }
+    tui.draw();
+    assert_eq!((tui.app.browser_tab_count(), tui.app.browser.current), (4, 2));
+    // A middle-click on a saved page: in the tab shown (the other way from
+    // a click).
+    tui.mouse(MouseEventKind::Down(MouseButton::Middle), list.x + 1, list.y);
+    tui.draw();
+    assert_eq!(tui.app.browser_tab_count(), 4);
+    assert!(tui.app.browser.tab.location.as_ref().is_some_and(|l| l.path == "/page/index.mu"));
+    // Alt+1 shows the first; the last tab's × closes it, and the first
+    // stays on screen.
+    tui.alt('1');
+    assert_eq!((tui.app.tab, tui.app.browser.current), (Tab::Browser, 0));
+    let close = tui.app.regions.page_tab_close.clone();
+    assert_eq!(close.len(), 4);
+    tui.click_in(close[3].0);
+    assert_eq!((tui.app.browser_tab_count(), tui.app.browser.current), (3, 0));
+    // A middle-click on a tab closes it too, the one shown among them.
+    let tabs = tui.app.regions.page_tabs.clone();
+    tui.mouse(MouseEventKind::Down(MouseButton::Middle), tabs[1].0.x, tabs[1].0.y);
+    tui.draw();
+    assert_eq!((tui.app.browser_tab_count(), tui.app.browser.current), (2, 0));
+    tui.alt('2');
+    let tabs = tui.app.regions.page_tabs.clone();
+    tui.mouse(MouseEventKind::Down(MouseButton::Middle), tabs[1].0.x, tabs[1].0.y);
+    tui.draw();
+    assert_eq!((tui.app.browser_tab_count(), tui.app.browser.current), (1, 0));
+    // With every tab there may be, no +.
+    for _ in 1..crate::app::MAX_TABS {
+        tui.click_in(tui.app.regions.new_page_tab);
+    }
+    assert_eq!(tui.app.browser_tab_count(), crate::app::MAX_TABS);
+    assert!(tui.app.regions.new_page_tab.is_empty());
+    // Their names are cut short so that each, and its ×, still fits.
+    assert_eq!((tui.app.regions.page_tabs.len(), tui.app.regions.page_tab_close.len()), (crate::app::MAX_TABS, crate::app::MAX_TABS));
+    tui.click_in(tui.app.regions.page_tab_close[crate::app::MAX_TABS - 1].0);
+    assert_eq!(tui.app.browser_tab_count(), crate::app::MAX_TABS - 1);
+    assert!(!tui.app.regions.new_page_tab.is_empty());
+}
+
+#[test]
 fn every_user_menu_action_by_key_and_click() {
     let mut tui = Tui::new("user-menu");
     let hub = with_hilltop(&mut tui);

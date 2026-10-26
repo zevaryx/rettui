@@ -210,7 +210,8 @@ impl App {
                 self.keys_help = true;
                 return;
             }
-            KeyCode::Char(c @ '1'..='9') => {
+            // With Alt, the Browser's page tabs instead (see `browser_key`).
+            KeyCode::Char(c @ '1'..='9') if !key.modifiers.contains(KeyModifiers::ALT) => {
                 self.switch_tab(Tab::ALL[c as usize - '1' as usize]);
                 return;
             }
@@ -391,6 +392,14 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll(at, -3),
             MouseEventKind::ScrollDown => self.scroll(at, 3),
+            // A middle-click or Ctrl+click opens in a new tab (a page link's
+            // Ctrl+click on release, below); a middle-click on a tab closes it.
+            MouseEventKind::Down(MouseButton::Middle) if self.tab == Tab::Browser => self.open_in_new_tab_at(at, true),
+            MouseEventKind::Down(MouseButton::Left)
+                if self.tab == Tab::Browser && mouse.modifiers.contains(KeyModifiers::CONTROL) && !self.regions.page.contains(at) =>
+            {
+                self.open_in_new_tab_at(at, false)
+            }
             // On a page, press starts a text selection; a release without
             // dragging is a click (follow a link, edit a field).
             MouseEventKind::Down(MouseButton::Left) if self.tab == Tab::Browser && self.regions.page.contains(at) => {
@@ -422,8 +431,10 @@ impl App {
                     Some(selection) => {
                         self.browser.tab.selection = None;
                         let (row, col) = selection.anchor;
-                        if let Some(item) = micron::hit_at(&self.regions.page_hits, row, col) {
-                            self.activate(item);
+                        match micron::hit_at(&self.regions.page_hits, row, col) {
+                            Some(item) if mouse.modifiers.contains(KeyModifiers::CONTROL) => self.open_item_in_new_tab(item),
+                            Some(item) => self.activate(item),
+                            None => {}
                         }
                     }
                     None => {}
