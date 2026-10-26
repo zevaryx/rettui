@@ -421,10 +421,7 @@ fn android_start(settings: &Settings, paths: &Paths) -> Vec<String> {
 /// switching to.
 async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::identity::Identity) -> Result<Option<String>> {
     let identity_hash = identity.hash;
-    let store = Store::load(&paths.store).unwrap_or_else(|e| {
-        tracing::warn!("could not load store, starting empty: {e}");
-        Store::default()
-    });
+    let store = Store::load_or_empty(&paths.store);
     let (mut net_tx, mut net_rx) = net::spawn(net_options(&settings, &paths, identity.clone()));
     let mut terminal = ratatui::init();
     // Probe for Kitty graphics while in raw mode, before EventStream starts

@@ -34,7 +34,10 @@ rettui keeps its data in `~/.local/share/rettui/`:
   about five times larger. The first launch after upgrading converts it,
   checks that the new file reads back the same, and only then removes the
   old one. Changes are saved every 10 seconds on a background thread, so a
-  large store doesn't pause the UI, and once more when rettui exits.
+  large store doesn't pause the UI, and once more when rettui exits. If
+  it can't be read when rettui starts, rettui starts without your messages
+  and moves the file aside as `store-unreadable-<time>.json.gz`, rather
+  than saving over it, and the log says so.
 - `peers.json.gz`: the LXMF peers, NomadNet nodes and propagation nodes
   heard. Announces arrive several a second on a busy network, so they are
   saved apart from the store, which is then only written again when a

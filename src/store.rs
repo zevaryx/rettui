@@ -89,6 +89,7 @@ pub struct Reaction {
     /// Theirs, or yours.
     pub incoming: bool,
     /// Unix seconds.
+    #[serde(deserialize_with = "time_or_null")]
     pub timestamp: f64,
     /// A received one's LXMF hash (hex), or `local-N` for yours.
     pub id: String,
@@ -116,6 +117,7 @@ pub struct Message {
     pub title: String,
     pub content: String,
     /// Unix seconds.
+    #[serde(deserialize_with = "time_or_null")]
     pub timestamp: f64,
     pub state: MessageState,
     #[serde(default)]
@@ -431,12 +433,19 @@ pub struct Contact {
     /// was written.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<crate::lxmf::fields::Appearance>,
-    #[serde(skip_serializing_if = "is_never")]
+    #[serde(skip_serializing_if = "is_never", deserialize_with = "time_or_null")]
     pub icon_at: f64,
 }
 
 fn is_never(n: &f64) -> bool {
     *n == 0.0
+}
+
+/// A time, read as 0 where it was saved as `null`: what JSON writes for a
+/// number it can't hold (NaN), which earlier versions saved when a message
+/// said so. Without this the whole file can't be read.
+fn time_or_null<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 fn is_unknown(trust: &Trust) -> bool {
@@ -794,6 +803,29 @@ impl Store {
         Ok(store)
     }
 
+    /// [`Store::load`], or an empty store when the file can't be read. The
+    /// file is moved aside first, and a note says where, so the next save
+    /// doesn't write over the messages in it.
+    pub fn load_or_empty(path: &Path) -> Self {
+        let error = match Self::load(path) {
+            Ok(store) => return store,
+            Err(e) => e,
+        };
+        tracing::warn!("could not load store, starting empty: {error:#}");
+        let mut store = Self::default();
+        let unreadable = format!("Your messages couldn't be read ({error:#}), so rettui started without them");
+        if path.exists() {
+            let aside = path.with_file_name(format!("store-unreadable-{}.json.gz", chrono::Utc::now().timestamp()));
+            store.migration_notes.push(match crate::config::replace(path, &aside) {
+                Ok(()) => format!("{unreadable}. The file is kept as {}", aside.display()),
+                Err(e) => format!("{unreadable}, and it couldn't be moved aside ({e}): copy {} somewhere safe", path.display()),
+            });
+        } else {
+            store.migration_notes.push(format!("{unreadable}. {} is left as it was", legacy_path(path).display()));
+        }
+        store
+    }
+
     /// The peers, from their own file. A store of an earlier version holds
     /// them itself: they are written to their file now, before the store is
     /// written again without them (`holds_peers`), so they are never only
@@ -1047,6 +1079,46 @@ mod tests {
         assert!(bytes.starts_with(&GZIP_MAGIC));
         assert!(bytes.len() < serde_json::to_vec(&store).unwrap().len() / 2, "compressed well");
         assert!(same(&Store::load(&path).unwrap(), &store));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn times_saved_as_null_read_as_zero() {
+        // What earlier versions saved for a message whose time was NaN.
+        let dir = temp_dir("null");
+        let path = dir.join("store.json.gz");
+        let key = "ab".repeat(16);
+        let mut store = sample();
+        let reaction = Reaction { emoji: "👍".into(), incoming: true, timestamp: 1.0, id: "r".into(), state: MessageState::Delivered };
+        store.conversations.get_mut(&key).unwrap().messages[0].reactions.push(reaction);
+        store.contacts.insert(key.clone(), Contact { icon_at: 1.0, ..Contact::default() });
+        let mut value = serde_json::to_value(&store).unwrap();
+        let message = &mut value["conversations"][key.as_str()]["messages"][0];
+        message["timestamp"] = serde_json::Value::Null;
+        message["reactions"][0]["timestamp"] = serde_json::Value::Null;
+        value["contacts"][key.as_str()]["icon_at"] = serde_json::Value::Null;
+        std::fs::write(&path, gzip(&serde_json::to_vec(&value).unwrap()).unwrap()).unwrap();
+        let loaded = Store::load(&path).unwrap();
+        let message = &loaded.conversations[&key].messages[0];
+        assert_eq!((message.timestamp, message.reactions[0].timestamp, loaded.contacts[&key].icon_at), (0.0, 0.0, 0.0));
+        assert_eq!(message.content, "hello ".repeat(50), "the rest reads as it was");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_store_is_moved_aside_not_saved_over() {
+        let dir = temp_dir("unreadable");
+        let path = dir.join("store.json.gz");
+        sample().save(&path).unwrap();
+        assert!(same(&Store::load_or_empty(&path), &sample()), "a store that reads is just read");
+        std::fs::write(&path, b"{ not json").unwrap();
+        let store = Store::load_or_empty(&path);
+        assert!(store.conversations.is_empty());
+        assert!(!path.exists(), "the next save can't write over it");
+        let kept: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), b"{ not json");
+        assert!(store.migration_notes[0].ends_with(&format!("The file is kept as {}", kept[0].display())), "{:?}", store.migration_notes);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

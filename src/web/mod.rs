@@ -524,10 +524,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("could not listen on {address}"))?;
 
     let identity_hash = identity.hash;
-    let store = Store::load(&paths.store).unwrap_or_else(|e| {
-        tracing::warn!("could not load store, starting empty: {e}");
-        Store::default()
-    });
+    let store = Store::load_or_empty(&paths.store);
     let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone()));
     let mut app = App::new(settings, paths.clone(), store, net_tx.clone(), None, identity_hash);
     // No tab is "on screen" in the web UI: unread counts are cleared by

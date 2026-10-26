@@ -51,7 +51,8 @@ impl App {
         self.pictures.get(path).and_then(Option::as_ref)
     }
 
-    pub(crate) fn on_message(&mut self, message: crate::lxmf::InboundMessage) {
+    pub(crate) fn on_message(&mut self, mut message: crate::lxmf::InboundMessage) {
+        message.timestamp = lxmf::written_at(message.timestamp, super::now());
         let key = hex::encode(message.source);
         let id = message.id.map(hex::encode).unwrap_or_else(|| format!("in-{}", message.timestamp));
         if self.store.conversations.get(&key).is_some_and(|c| c.has(&id)) {
@@ -1872,6 +1873,40 @@ mod tests {
         app.settings.icon = Some("account".into());
         let ours = app.own_appearance().unwrap();
         assert_eq!((ours.icon.as_str(), ours.foreground, ours.background), ("account", [0x0b, 0x0b, 0x10], [0x4f, 0xd6, 0xe0]));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_time_that_cant_be_one_is_when_it_came_and_still_saves() {
+        use crate::lxmf::fields::Appearance;
+        use crate::lxmf::{Extras, Reaction as Wire};
+        let dir = temp_dir("nan");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        let at = |mut message: crate::lxmf::InboundMessage, timestamp: f64| {
+            message.timestamp = timestamp;
+            message
+        };
+        let icon = Appearance { icon: "radio-tower".into(), foreground: [255; 3], background: [0, 0, 128] };
+        let before = crate::app::now();
+        app.on_message(from_them(1, "an old friend's message", Extras::default()));
+        app.on_message(at(from_them(2, "not a number", Extras { appearance: Some(icon), ..Extras::default() }), f64::NAN));
+        let reaction = Extras { reaction: Some(Wire { to: [1; 32], emoji: "👍".into() }), ..Extras::default() };
+        app.on_message(at(from_them(3, "", reaction), f64::NAN));
+        // Past the dates a clock can show.
+        app.on_message(at(from_them(4, "from the far future", Extras::default()), 8_210_266_876_799.0));
+        let after = crate::app::now();
+        let paths = app.paths.clone();
+        app.finish_saves();
+        // JSON has no NaN: saved as one, the next start couldn't read any of it.
+        let saved = Store::load(&paths.store).unwrap();
+        let conversation = &saved.conversations[&key()];
+        let message = |content: &str| conversation.messages.iter().find(|m| m.content == content).unwrap();
+        assert_eq!(message("an old friend's message").timestamp, 1_800_000_001.0);
+        let came = before..=after;
+        assert!(came.contains(&message("not a number").timestamp));
+        assert!(came.contains(&message("from the far future").timestamp));
+        assert!(came.contains(&message("an old friend's message").reactions[0].timestamp));
+        assert!(came.contains(&saved.contacts[&key()].icon_at));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

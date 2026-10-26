@@ -215,6 +215,17 @@ pub struct InboundMessage {
     pub signal: Option<crate::net::remote::Signal>,
 }
 
+/// The latest a message can say it was written: the end of the year 9999.
+const LATEST: f64 = 253_402_300_799.0;
+
+/// When a message says it was written, or `now` when that can't be a time
+/// (not a number, before 1970 or after 9999). The sender's clock can say
+/// anything, and the time is saved, sorted by and shown: JSON has no NaN,
+/// so one would leave the saved messages unreadable.
+pub fn written_at(timestamp: f64, now: f64) -> f64 {
+    if (0.0..=LATEST).contains(&timestamp) { timestamp } else { now }
+}
+
 fn is_image_name(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(_, ext)| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
@@ -305,6 +316,17 @@ mod tests {
         assert_eq!(attachments[1].name, "notes.txt");
         assert_eq!(attachments[1].data, b"hello");
         assert_eq!(unpacked.content, "hi");
+    }
+
+    #[test]
+    fn a_time_that_cant_be_one_is_now() {
+        let now = 1_800_000_000.0;
+        for nonsense in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, LATEST + 1.0, 1e300] {
+            assert_eq!(written_at(nonsense, now), now, "{nonsense}");
+        }
+        for time in [0.0, 1_700_000_000.5, LATEST] {
+            assert_eq!(written_at(time, now), time);
+        }
     }
 
     #[test]
