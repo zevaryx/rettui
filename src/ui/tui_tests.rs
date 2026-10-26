@@ -233,6 +233,51 @@ fn the_reticulum_tab_option_by_option_and_as_text() {
 }
 
 #[test]
+fn interface_profiles_kept_switched_and_deleted() {
+    let mut tui = Tui::new("rns-profiles");
+    tui.tab(Tab::Reticulum);
+    let path = tui.app.rns_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let config = "[reticulum]\n  share_instance = Yes\n\n[interfaces]\n  [[Home]]\n    type = AutoInterface\n    enabled = Yes\n  [[Hill]]\n    type = TCPClientInterface\n    enabled = No\n    target_host = hill.example\n    target_port = 4242\n";
+    std::fs::write(&path, config).unwrap();
+    tui.key(KeyCode::Char('R'));
+    assert!(tui.draw().contains("profiles"));
+    // None yet: the list offers to keep the interfaces as they are.
+    tui.key(KeyCode::Char('P'));
+    let shown = tui.draw();
+    assert!(
+        shown.contains("Interface profiles") && shown.contains("Keep the interfaces as they are now") && shown.contains("switch to"),
+        "{shown}"
+    );
+    tui.key(KeyCode::Enter).answer("At home");
+    assert!(tui.app.log.back().unwrap().contains("Saved interface profile At home"));
+    // Hill on, kept as another.
+    tui.app.rns_set_options(&crate::reticulum::Section::Interface("Hill".into()), &[("enabled", "yes")], false).unwrap();
+    tui.key(KeyCode::Char('P')).key(KeyCode::Down).key(KeyCode::Enter).answer("Out");
+    let names: Vec<String> = tui.app.rns_profiles().list().into_iter().map(|p| p.name).collect();
+    assert_eq!(names, ["At home", "Out"]);
+    // Back to the first: Hill off again, kept in the history, and
+    // Reticulum restarted to apply it.
+    tui.key(KeyCode::Char('P'));
+    assert!(tui.draw().contains("● Out"));
+    tui.key(KeyCode::Up).key(KeyCode::Enter);
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(after.contains("[[Hill]]\n    type = TCPClientInterface\n    enabled = No\n"), "{after}");
+    assert!(tui.app.take_rns_restart());
+    assert_eq!(tui.app.rns_versions()[0].what, "Switched to profile At home: Hill off");
+    assert_eq!(tui.app.rns_profile_now().as_deref(), Some("At home"));
+    // Switching to the one in use changes nothing.
+    tui.key(KeyCode::Char('P')).key(KeyCode::Enter);
+    assert!(!tui.app.take_rns_restart());
+    // Deleting asks first; the new-profile row can't be deleted.
+    tui.key(KeyCode::Char('P')).key(KeyCode::Down).key(KeyCode::Down).key(KeyCode::Char('x'));
+    assert!(tui.app.prompt.is_none() && tui.app.rns.picker.is_some());
+    tui.key(KeyCode::Up).key(KeyCode::Char('x')).answer("y");
+    let names: Vec<String> = tui.app.rns_profiles().list().into_iter().map(|p| p.name).collect();
+    assert_eq!(names, ["At home"]);
+}
+
+#[test]
 fn the_reticulum_configs_earlier_versions_compared_and_put_back() {
     let mut tui = Tui::new("rns-history");
     tui.tab(Tab::Reticulum);

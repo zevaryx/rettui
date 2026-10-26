@@ -8,6 +8,7 @@
 
 pub mod doc;
 pub mod history;
+pub mod profiles;
 pub mod schema;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -441,7 +442,7 @@ pub fn remove_interface(text: &str, name: &str) -> Result<String, String> {
 
 /// Whether an interface is on: rsReticulum starts it unless `enabled` (or
 /// `interface_enabled`) says no.
-fn interface_on(doc: &Doc, name: &str) -> bool {
+pub(crate) fn interface_on(doc: &Doc, name: &str) -> bool {
     ["enabled", "interface_enabled"]
         .iter()
         .find_map(|key| doc.raw_value(&["interfaces", name], key))

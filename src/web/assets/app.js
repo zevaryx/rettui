@@ -7788,6 +7788,9 @@ app.views.reticulum = {
       el('div', { class: 'list-item' + (this.textMode ? ' selected' : ''), onclick: () => this.openText() },
         el('span', { class: 'main' }, el('div', { class: 'name', text: '✎ Edit as text' }),
           el('div', { class: 'sub', text: 'The whole file, comments included' }))),
+      el('div', { class: 'list-item', onclick: () => rnsProfiles(() => this.load(true)) },
+        el('span', { class: 'main' }, el('div', { class: 'name', text: '⇄ Profiles' }),
+          el('div', { class: 'sub', text: 'Named sets of interfaces on, to switch between' }))),
       el('div', { class: 'list-item', onclick: () => rnsHistory(() => this.load(true)) },
         el('span', { class: 'main' }, el('div', { class: 'name', text: '🕘 History' }),
           el('div', { class: 'sub', text: 'Earlier versions: what each changed, and putting one back' }))));
@@ -8058,6 +8061,51 @@ async function rnsHistory(changed) {
   };
   dialog('Reticulum config history', () => el('div', { class: 'rns-history' },
     list, el('div', { class: 'rns-version' }, modes, summary, diff, el('div', { class: 'row actions' }, restore))), { className: 'rns-history-dialog' });
+  show();
+}
+
+// Interface profiles: named sets of interfaces on and off, to switch
+// between. Switching one turns them on and off in the config (kept in its
+// history) and restarts Reticulum. `changed` runs once the file changes.
+async function rnsProfiles(changed) {
+  const body = el('div', { class: 'rns-profiles' });
+  const show = async () => {
+    const listed = await attempt(() => api.get('/reticulum/profiles'));
+    if (!listed) return;
+    const row = (p) => {
+      const on = Object.entries(p.interfaces).filter(([, on]) => on).map(([name]) => name);
+      const current = p.name === listed.now;
+      return el('div', { class: 'list-item' + (current ? ' selected' : '') },
+        el('span', { class: 'main' },
+          el('div', { class: 'name' }, current ? el('span', { class: 'online', text: '● ' }) : null, p.name),
+          el('div', { class: 'sub', text: on.length ? 'On: ' + on.join(', ') : 'Every interface off' })),
+        el('button', { text: current ? 'In use' : 'Switch', disabled: current, onclick: async () => {
+          if (!await ask(`Switch to ${p.name}?\nIts interfaces are turned on and off, and Reticulum restarts: links and transfers stop.`, { title: 'Switch profile', yes: 'Switch' })) return;
+          const result = await attempt(() => api.post(`/reticulum/profiles/${encodeURIComponent(p.name)}/switch`));
+          if (!result) return;
+          toast(result.changed.length ? `Switched to ${p.name} (${result.changed.join(', ')}); restarting Reticulum` : `The interfaces are already as ${p.name} has them`);
+          if (result.warnings.length) toast(result.warnings.join(' · '));
+          changed?.();
+          show();
+        } }),
+        el('button', { class: 'danger', text: 'Delete', onclick: async () => {
+          if (!await ask(`Delete profile ${p.name}?\nThe interfaces stay as they are.`, { title: 'Delete profile', yes: 'Delete', danger: true })) return;
+          if (await attempt(() => api.delete(`/reticulum/profiles/${encodeURIComponent(p.name)}`), `Deleted profile ${p.name}`)) show();
+        } }));
+    };
+    body.replaceChildren(
+      el('p', { class: 'dim', text: 'A profile keeps which interfaces are on. Switching to one turns them on and off as it has them, leaves interfaces added since as they are, and restarts Reticulum.' }),
+      ...(listed.profiles.length ? listed.profiles.map(row) : [el('div', { class: 'empty', text: 'No profiles yet.' })]),
+      el('div', { class: 'row actions' }, el('button', { class: 'primary', text: '+ Keep the interfaces as they are now', onclick: async () => {
+        const saved = await askText('New profile', { label: 'Its name (one of that name is replaced)', value: listed.now || '', ok: 'Save',
+          act: (name) => api.post('/reticulum/profiles', { name }) });
+        if (saved) {
+          toast(`Saved profile ${saved.profile.name}`);
+          show();
+        }
+      } })));
+  };
+  dialog('Interface profiles', () => body, { className: 'rns-profiles-dialog' });
   show();
 }
 

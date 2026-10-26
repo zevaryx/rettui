@@ -127,8 +127,8 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
         other => other.title(),
     });
     let hints = match state.section() {
-        Some(Section::Interface(_)) => " Enter edit · d default · Space on/off · r rename · x delete · t text · H history ",
-        _ => " Enter edit · d default · t edit as text · H history ",
+        Some(Section::Interface(_)) => " Enter edit · d default · Space on/off · r rename · x delete · t text · H history · P profiles ",
+        _ => " Enter edit · d default · t edit as text · H history · P profiles ",
     };
     let options_block = block(&title, focused).title_bottom(Line::styled(hints, Style::default().fg(dim())));
     let inner = options_block.inner(area);
@@ -179,9 +179,13 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_picker(frame: &mut Frame, app: &mut App, area: Rect) {
     let Some(picker) = &mut app.rns.picker else { return };
-    const HINT: &str = " Enter pick · Esc cancel ";
+    let hint = if picker.purpose == crate::app::reticulum::PickFor::Profile {
+        " Enter switch to · x delete · Esc cancel "
+    } else {
+        " Enter pick · Esc cancel "
+    };
     let width = picker.choices.iter().map(|(_, l)| l.chars().count()).max().unwrap_or(10).max(picker.title.chars().count()) as u16 + 8;
-    let width = width.max(HINT.chars().count() as u16 + 4);
+    let width = width.max(hint.chars().count() as u16 + 4);
     let height = picker.choices.len() as u16 + 2;
     let rect = Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
@@ -190,7 +194,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App, area: Rect) {
         height: height.min(area.height),
     };
     frame.render_widget(Clear, rect);
-    let picker_block = block(&picker.title, true).title_bottom(Line::styled(HINT, Style::default().fg(dim())));
+    let picker_block = block(&picker.title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
     app.regions.rns_picker = picker_block.inner(rect);
     let items: Vec<ListItem> = picker.choices.iter().map(|(_, label)| ListItem::new(format!(" {label}"))).collect();
     let list = List::new(items).block(picker_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));

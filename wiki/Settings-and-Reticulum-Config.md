@@ -82,6 +82,20 @@ of the Reticulum instance it uses. Where files are kept is in
     [data folder](Data-and-Storage). In the web UI, a version that would add
     or change a pipe interface's command, or turn one on, can't be put back
     (the terminal can).
+  - **Interface profiles:** named sets of interfaces to switch between,
+    as in NomadNet 1.4: at home with the Auto interface, say, and out with
+    a radio and an entry point. `P` in the Reticulum tab (**⇄ Profiles** in
+    the web UI) lists them, the one the file is as now marked ●. *Keep the
+    interfaces as they are now* saves which interfaces are on and off under
+    a name (one of that name is replaced). Switching to one (`Enter`, or
+    **Switch**) turns its interfaces on and off as it has them, leaves
+    interfaces added since as they are, and restarts Reticulum so they
+    apply. It's an edit like any other, kept in the history as "Switched to
+    profile Home: Hill off". `x` (**Delete**) deletes a profile; the
+    interfaces stay as they are. Profiles are kept in
+    `interface-profiles.json` in rettui's [data folder](Data-and-Storage),
+    shared by every identity. In the web UI, a profile that would turn on a
+    pipe interface can't be switched to (the terminal can).
   - **Applying:** Reticulum reads the file when it starts. Restart the
     Reticulum stack from inside rettui to apply changes (see below). If
     another program such as rnsd runs the shared instance, the interfaces are

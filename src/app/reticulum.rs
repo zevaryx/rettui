@@ -15,6 +15,7 @@ use ratatui::widgets::ListState;
 
 use super::{App, PromptKind};
 use crate::reticulum::history::{self, DiffLine, History, Version};
+use crate::reticulum::profiles::{self, Profile, Profiles};
 use crate::reticulum::schema::{self, Kind};
 use crate::reticulum::{self as rns, Check, OptionView, Section};
 
@@ -42,7 +43,12 @@ pub enum PickFor {
     NewInterface(String),
     /// A choice option of a section.
     Option(Section, String),
+    /// An interface profile to switch to, or [`NEW_PROFILE`].
+    Profile,
 }
+
+/// The pick, among the profiles, that saves a new one.
+pub const NEW_PROFILE: &str = "\u{0}new";
 
 pub struct Picker {
     pub title: String,
@@ -322,6 +328,74 @@ impl App {
         self.rns_edit(restricted, &what, move |_| Ok(text))
     }
 
+    // ---- Interface profiles --------------------------------------------------
+
+    pub fn rns_profiles(&self) -> Profiles {
+        Profiles::new(self.paths.interface_profiles.clone())
+    }
+
+    /// Keep the interfaces in the config file, on and off as they are now,
+    /// as a profile.
+    pub fn rns_save_profile(&mut self, name: &str) -> Result<Profile, String> {
+        let (text, _) = rns::load(&self.rns_path())?;
+        let profile = self.rns_profiles().save(name, &text)?;
+        self.log(format!("Saved interface profile {}", profile.name));
+        Ok(profile)
+    }
+
+    /// Switch to a profile: turn its interfaces on and off in the config
+    /// file (checked, saved and kept in its history as any edit is), then
+    /// restart Reticulum so they apply. Returns what it changed, and
+    /// warnings about interfaces that will not start.
+    pub fn rns_switch_profile(&mut self, name: &str, restricted: bool) -> Result<(Vec<String>, Vec<String>), String> {
+        let profile = self.rns_profiles().get(name).ok_or_else(|| format!("There's no profile named {}", name.trim()))?;
+        let (text, _) = rns::load(&self.rns_path())?;
+        let (_, changed) = profiles::apply(&text, &profile);
+        if changed.is_empty() {
+            return Ok((changed, Vec::new()));
+        }
+        let what = format!("Switched to profile {}: {}", profile.name, changed.join(", "));
+        let warnings = self.rns_edit(restricted, &what, |text| Ok(profiles::apply(text, &profile).0))?;
+        self.request_rns_restart();
+        Ok((changed, warnings))
+    }
+
+    /// The profile the config file is as now, if any.
+    pub fn rns_profile_now(&self) -> Option<String> {
+        let (text, _) = rns::load(&self.rns_path()).ok()?;
+        self.rns_profiles().list().into_iter().find(|p| p.matches(&text)).map(|p| p.name)
+    }
+
+    fn rns_open_profiles(&mut self) {
+        let now = self.rns_profile_now();
+        let mut choices: Vec<(String, String)> = self
+            .rns_profiles()
+            .list()
+            .into_iter()
+            .map(|p| {
+                let on = p.interfaces.iter().filter(|(_, on)| **on).map(|(name, _)| name.as_str()).collect::<Vec<_>>();
+                let on = if on.is_empty() { "nothing on".to_string() } else { on.join(", ") };
+                let mark = if now.as_deref() == Some(p.name.as_str()) { "● " } else { "  " };
+                (p.name.clone(), format!("{mark}{}  ({on})", p.name))
+            })
+            .collect();
+        choices.push((NEW_PROFILE.into(), "+ Keep the interfaces as they are now as a profile…".into()));
+        self.rns_pick("Interface profiles", choices, now.as_deref().unwrap_or(""), PickFor::Profile);
+    }
+
+    fn rns_report_switch(&mut self, name: &str, result: Result<(Vec<String>, Vec<String>), String>) {
+        match result {
+            Ok((changed, _)) if changed.is_empty() => self.confirm(format!("The interfaces are already as {name} has them")),
+            Ok((changed, warnings)) if warnings.is_empty() => {
+                self.confirm(format!("Switched to {name} ({}); restarting Reticulum", changed.join(", ")));
+            }
+            Ok((changed, warnings)) => {
+                self.warn(format!("Switched to {name} ({}), but: {}", changed.join(", "), warnings.join("; ")));
+            }
+            Err(e) => self.fail(e),
+        }
+    }
+
     // ---- TUI ---------------------------------------------------------------
 
     fn rns_select(&mut self, section: &Section) {
@@ -367,6 +441,7 @@ impl App {
             KeyCode::PageUp => self.rns_move(-10),
             KeyCode::Char('t') => self.rns_open_text(),
             KeyCode::Char('H') => self.rns_open_history(),
+            KeyCode::Char('P') => self.rns_open_profiles(),
             KeyCode::Char('R') => {
                 self.rns_reload();
                 self.confirm("Reloaded the Reticulum config");
@@ -499,6 +574,11 @@ impl App {
                 let (value, _) = picker.choices[i].clone();
                 self.rns_picked(picker.purpose, &value);
             }
+            KeyCode::Char('x') | KeyCode::Delete if picker.purpose == PickFor::Profile && picker.choices[i].0 != NEW_PROFILE => {
+                let name = picker.choices[i].0.clone();
+                self.rns.picker = None;
+                self.open_prompt(PromptKind::ConfirmDeleteProfile(name.clone()), &format!("Delete profile {name}? Type y"), "");
+            }
             _ => {}
         }
     }
@@ -531,6 +611,14 @@ impl App {
                 let result = self.rns_set_options(&section, &[(&key, value)], false);
                 self.rns_report(result, &format!("Set {key} to {value}"));
             }
+            PickFor::Profile if value == NEW_PROFILE => {
+                let name = self.rns_profile_now().unwrap_or_default();
+                self.open_prompt(PromptKind::NewProfile, "Name of the profile (one of that name is replaced)", &name);
+            }
+            PickFor::Profile => {
+                let result = self.rns_switch_profile(value, false);
+                self.rns_report_switch(value, result);
+            }
         }
     }
 
@@ -553,6 +641,19 @@ impl App {
             PromptKind::RnsOption(section, key) => {
                 let result = self.rns_set_options(&section, &[(&key, text)], false);
                 self.rns_report(result, &format!("Saved {key}"));
+            }
+            PromptKind::NewProfile if !text.trim().is_empty() => match self.rns_save_profile(text) {
+                Ok(profile) => {
+                    let on = profile.interfaces.values().filter(|on| **on).count();
+                    self.confirm(format!("Saved profile {} ({on} of {} interfaces on)", profile.name, profile.interfaces.len()));
+                }
+                Err(e) => self.fail(e),
+            },
+            PromptKind::ConfirmDeleteProfile(name) if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") => {
+                match self.rns_profiles().delete(&name) {
+                    Ok(()) => self.confirm(format!("Deleted profile {name}")),
+                    Err(e) => self.fail(e),
+                }
             }
             PromptKind::ConfirmDiscardRns if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") => {
                 self.rns.editor = None;

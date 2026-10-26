@@ -446,6 +446,9 @@ pub fn keys(app: &App) -> Keys {
                 ("↑↓", "select"),
             ],
         ),
+        Tab::Reticulum if app.rns.picker.as_ref().is_some_and(|p| p.purpose == crate::app::reticulum::PickFor::Profile) => {
+            typing("Interface profiles", &[("Enter", "switch to"), ("x", "delete"), ("↑↓", "select"), ("Esc", "cancel")])
+        }
         Tab::Reticulum if app.rns.picker.is_some() => typing("Choose", &[("Enter", "pick"), ("↑↓", "select"), ("Esc", "cancel")]),
         Tab::Reticulum if app.rns.editor.is_some() => {
             typing("Config as text", &[("^S", "save"), ("Esc", "close"), ("^Z/^Y", "undo/redo"), ("^V", "paste")])
@@ -466,6 +469,7 @@ pub fn keys(app: &App) -> Keys {
                 ("x", "delete"),
                 ("d", "default"),
                 ("t", "as text"),
+                ("P", "profiles"),
                 ("R", "reload"),
                 ("^R", "restart"),
                 ("↑↓", "select"),

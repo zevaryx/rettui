@@ -337,6 +337,9 @@ pub struct Paths {
     /// Earlier versions of the Reticulum config (see
     /// `crate::reticulum::history`).
     pub reticulum_history: PathBuf,
+    /// Named sets of interfaces to switch between (see
+    /// `crate::reticulum::profiles`).
+    pub interface_profiles: PathBuf,
 }
 
 impl Paths {
@@ -375,6 +378,7 @@ impl Paths {
             update_check: root.join("update-check.json"),
             games: base.join("games.json"),
             reticulum_history: root.join("reticulum-history"),
+            interface_profiles: root.join("interface-profiles.json"),
             root,
             base,
         })

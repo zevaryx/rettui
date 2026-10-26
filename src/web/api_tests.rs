@@ -393,6 +393,50 @@ async fn identities_over_the_api() {
 }
 
 #[tokio::test]
+async fn interface_profiles_over_the_api() {
+    let web = TestWeb::start("rns-profiles");
+    let listed = web.get("/api/reticulum/profiles").await.json();
+    assert!(listed["profiles"].as_array().unwrap().is_empty() && listed["now"].is_null(), "{listed}");
+    web.post("/api/reticulum/interfaces", json!({ "action": "add", "name": "Local", "type": "AutoInterface" })).await;
+    let saved = web.post("/api/reticulum/profiles", json!({ "name": "Home" })).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text());
+    assert_eq!(saved.json()["profile"]["interfaces"]["Local"], true);
+    assert_eq!(web.post("/api/reticulum/profiles", json!({ "name": " " })).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.get("/api/reticulum/profiles").await.json()["now"], "Home");
+
+    // A pipe interface, added in the terminal and kept on in a profile there.
+    web.with(|app| {
+        app.rns_add_interface("Pipe", "PipeInterface", false).unwrap();
+        app.rns_set_options(&crate::reticulum::Section::Interface("Pipe".into()), &[("command", "cat")], false).unwrap();
+        app.rns_save_profile("Piped").unwrap();
+    })
+    .await;
+    // Off, and Local off, from here.
+    for name in ["Pipe", "Local"] {
+        let off =
+            web.post("/api/reticulum/options", json!({ "section": format!("interface:{name}"), "values": { "enabled": "no" } })).await;
+        assert_eq!(off.status, StatusCode::OK, "{}", off.text());
+    }
+    // Switching to the profile with the pipe on isn't for the web UI: it
+    // would run its program.
+    let refused = web.post("/api/reticulum/profiles/Piped/switch", json!({})).await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.text());
+    assert!(!web.with(|app| app.take_rns_restart()).await);
+    // Home is fine: Local back on, and Reticulum restarted.
+    let home = web.post("/api/reticulum/profiles/Home/switch", json!({})).await;
+    assert_eq!(home.status, StatusCode::OK, "{}", home.text());
+    assert_eq!(home.json()["changed"], json!(["Local on"]));
+    assert!(web.with(|app| app.take_rns_restart()).await);
+    assert_eq!(web.post("/api/reticulum/profiles/Nowhere/switch", json!({})).await.status, StatusCode::BAD_REQUEST);
+    // Deleted.
+    assert_eq!(web.delete("/api/reticulum/profiles/Home").await.status, StatusCode::OK);
+    assert_eq!(web.delete("/api/reticulum/profiles/Home").await.status, StatusCode::BAD_REQUEST);
+    let names: Vec<serde_json::Value> =
+        web.get("/api/reticulum/profiles").await.json()["profiles"].as_array().unwrap().iter().map(|p| p["name"].clone()).collect();
+    assert_eq!(names, [json!("Piped")]);
+}
+
+#[tokio::test]
 async fn the_reticulum_configs_history_over_the_api() {
     let web = TestWeb::start("rns-history");
     assert!(web.get("/api/reticulum/history").await.json()["versions"].as_array().unwrap().is_empty());

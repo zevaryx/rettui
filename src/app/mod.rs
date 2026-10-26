@@ -207,6 +207,9 @@ pub enum PromptKind {
     ConfirmDeleteInterface(String),
     RnsOption(crate::reticulum::Section, String),
     ConfirmDiscardRns,
+    /// Name of a new interface profile, and one to delete.
+    NewProfile,
+    ConfirmDeleteProfile(String),
     /// Put back this version of the Reticulum config (its id).
     ConfirmRestoreRns(String),
     /// Restart the Reticulum stack.
@@ -1384,6 +1387,8 @@ impl App {
             | PromptKind::ConfirmDeleteInterface(_)
             | PromptKind::RnsOption(..)
             | PromptKind::ConfirmDiscardRns
+            | PromptKind::NewProfile
+            | PromptKind::ConfirmDeleteProfile(_)
             | PromptKind::ConfirmRestoreRns(_)) => {
                 let text = prompt.input.text().to_string();
                 self.submit_rns_prompt(kind, &text);

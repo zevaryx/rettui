@@ -166,6 +166,9 @@ pub fn router(state: WebState) -> Router {
         .route("/reticulum/history", get(reticulum_history))
         .route("/reticulum/history/{id}", get(reticulum_version))
         .route("/reticulum/history/{id}/restore", post(reticulum_restore))
+        .route("/reticulum/profiles", get(reticulum_profiles).post(reticulum_save_profile))
+        .route("/reticulum/profiles/{name}", axum::routing::delete(reticulum_delete_profile))
+        .route("/reticulum/profiles/{name}/switch", post(reticulum_switch_profile))
         .route("/identities", get(identities_list).post(identities_add))
         .route("/identities/{id}/switch", post(identities_switch))
         .route("/identities/{id}/rename", post(identities_rename))
@@ -2371,6 +2374,35 @@ async fn reticulum_version(State(state): State<WebState>, Path(id): Path<String>
     let lines = state.read(move |o| o.app.rns_compare(&id, current)).await?.map_err(bad)?;
     let (added, removed) = crate::reticulum::history::counts(&lines);
     Ok(axum::Json(json!({ "lines": lines, "added": added, "removed": removed })))
+}
+
+/// The interface profiles, and the one the config file is as now.
+async fn reticulum_profiles(State(state): State<WebState>) -> ApiResult {
+    let (profiles, now) = state.read(|o| (o.app.rns_profiles().list(), o.app.rns_profile_now())).await?;
+    Ok(axum::Json(json!({ "profiles": profiles, "now": now })))
+}
+
+#[derive(Deserialize)]
+struct ProfileBody {
+    name: String,
+}
+
+/// Keep the interfaces, on and off as they are now, as a profile.
+async fn reticulum_save_profile(State(state): State<WebState>, axum::Json(body): axum::Json<ProfileBody>) -> ApiResult {
+    let profile = state.write(move |o| o.app.rns_save_profile(&body.name)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "profile": profile })))
+}
+
+async fn reticulum_delete_profile(State(state): State<WebState>, Path(name): Path<String>) -> ApiResult {
+    state.write(move |o| o.app.rns_profiles().delete(&name)).await?.map_err(bad)?;
+    ok()
+}
+
+/// Switch to a profile and restart Reticulum (as an edit from here: a pipe
+/// interface it would turn on is refused).
+async fn reticulum_switch_profile(State(state): State<WebState>, Path(name): Path<String>) -> ApiResult {
+    let (changed, warnings) = state.write(move |o| o.app.rns_switch_profile(&name, true)).await??;
+    Ok(axum::Json(json!({ "changed": changed, "warnings": warnings })))
 }
 
 /// Put an earlier version back (as an edit from here: no new pipe

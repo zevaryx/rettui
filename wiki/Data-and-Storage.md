@@ -61,6 +61,9 @@ rettui keeps its data in `~/.local/share/rettui/`:
   saved them ([History](Settings-and-Reticulum-Config)), the newest 50 of
   each config file: one `.config` file each, listed in `index.json`. Not in
   backups: the config they're of is this computer's.
+- `interface-profiles.json`: [interface profiles](Settings-and-Reticulum-Config),
+  named sets of interfaces on and off to switch between. Shared by every
+  identity, and not in backups, as the history isn't.
 - `rrc-hub/` and `rrc-hub-identity`: the [RRC hub hosted
   here](Hosting-a-Node#rrc-hub), once it has started: rsRRCD's
   `config.yaml`, its registered rooms (`rooms.yaml`), and the hub's own
