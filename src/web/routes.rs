@@ -158,6 +158,7 @@ pub fn router(state: WebState) -> Router {
         .route("/node/media", get(node_media))
         .route("/node/announce", post(node_announce))
         .route("/node/allowed", get(node_allowed).post(set_node_allowed))
+        .route("/node/stats/reset", post(reset_node_stats))
         .route("/hub", get(hosted_hub))
         .route("/hub/{action}", post(hosted_hub_action))
         .route("/reticulum", get(reticulum))
@@ -2291,6 +2292,11 @@ async fn set_node_allowed(State(state): State<WebState>, axum::Json(body): axum:
         Some(body.identities.iter().map(|i| parse_hash(i).ok_or_else(|| bad("Not an identity hash"))).collect::<Result<Vec<_>, _>>()?)
     };
     state.write(move |o| o.app.set_node_allowed(root, &body.path, only)).await??;
+    ok()
+}
+
+async fn reset_node_stats(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.reset_node_stats()).await?;
     ok()
 }
 

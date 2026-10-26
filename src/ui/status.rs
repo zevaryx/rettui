@@ -138,7 +138,10 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     // The settings list scrolls, so it may give way on short terminals.
     let [info, settings, rest] = Layout::vertical([
         Constraint::Length(
-            12 + u16::from(!steps.is_empty()) + u16::from(app.update_available().is_some()) + u16::from(app.hub.status != NodeStatus::Off),
+            12 + u16::from(!steps.is_empty())
+                + u16::from(app.update_available().is_some())
+                + u16::from(app.hub.status != NodeStatus::Off)
+                + u16::from(app.node.status == NodeStatus::Running),
         ),
         Constraint::Max(settings_height),
         Constraint::Min(5),
@@ -190,6 +193,10 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![label("Known"), Span::raw(format!("{} destinations", app.store.peers.len()))]),
     ];
     let mut lines = lines;
+    if app.node.status == NodeStatus::Running {
+        let text = format!("{} served (Node tab)", app.node.served.label());
+        lines.insert(7, Line::from(vec![label("Hosting a node"), Span::styled("● ", Style::default().fg(Color::Green)), Span::raw(text)]));
+    }
     if let Some(spans) = hosting_hub(app) {
         lines.insert(7, Line::from([vec![label("Hosting a hub")], spans].concat()));
     }

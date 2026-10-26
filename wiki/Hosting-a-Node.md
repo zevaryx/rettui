@@ -69,6 +69,12 @@ or the folder set in `node_dir`.
   reads the list for each visit, so a change applies at once, and the list
   goes along when what it's for is renamed, moved or deleted. A list that's
   itself a program (executable) is left as it is: change it on the host.
+- **Statistics:** the Node tab says how many pages, files and pictures the
+  node has served, how many requests it had (and how many were for
+  something not there), when the last one came, and since when it has
+  counted, as NomadNet does. The counts are kept across restarts until you
+  reset them, with `R` in the TUI or **Reset** in the web UI. While the node
+  runs, Status shows them too.
 - **Selecting text in the editors:** Shift with the arrows, Home/End or
   PgUp/PgDn, `Ctrl-A` for everything, or drag with the mouse. Typing, pasting
   or deleting replaces the selection.

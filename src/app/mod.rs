@@ -37,6 +37,7 @@ pub mod map;
 mod messages;
 pub mod network;
 pub mod node;
+pub mod node_stats;
 pub mod notify;
 pub mod panes;
 pub mod paths;
@@ -200,6 +201,7 @@ pub enum PromptKind {
     NewPage,
     RenamePage(crate::nomad::pages::Root, String),
     ConfirmDeletePage(crate::nomad::pages::Root, String),
+    ConfirmResetNodeStats,
     /// The folder to move something to (empty: the top).
     MoveNodeItem(crate::nomad::pages::Root, String),
     /// Open this page, dropping unsaved changes to the open one.
@@ -700,7 +702,8 @@ impl App {
         // The node uses this client's identity, so its address is known now.
         let node_hash =
             rns_identity::destination::Destination::hash_from_name_and_identity(nomad_core::NOMAD_NODE_ASPECT, Some(&identity_hash));
-        let node = node::Node::new(node_hash, settings.node_enabled);
+        let mut node = node::Node::new(node_hash, settings.node_enabled);
+        node.served = node_stats::Served::load(&paths.node_stats);
         let pn_hash =
             rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::PROPAGATION_ASPECT, Some(&identity_hash));
         let pn = node::PnHost::new(pn_hash, crate::lxmf::pn::PnConfig::from_settings(&settings, &paths));
@@ -872,6 +875,7 @@ impl App {
     /// (only the snapshot is taken here, a millisecond or two).
     pub fn save_if_dirty(&mut self) {
         self.save_rrc_history();
+        self.save_node_stats();
         if self.games_dirty {
             match self.games.encode() {
                 Ok(bytes) => self.saver.write(self.paths.games.clone(), "games", move || Ok(bytes)),
@@ -1410,7 +1414,10 @@ impl App {
                 let text = prompt.input.text().to_string();
                 self.submit_rns_prompt(kind, &text);
             }
-            kind @ (PromptKind::NewPage | PromptKind::RenamePage(..) | PromptKind::ConfirmDeletePage(..)) => {
+            kind @ (PromptKind::NewPage
+            | PromptKind::RenamePage(..)
+            | PromptKind::ConfirmDeletePage(..)
+            | PromptKind::ConfirmResetNodeStats) => {
                 if !text.is_empty() {
                     self.submit_page_prompt(kind, &text);
                 }

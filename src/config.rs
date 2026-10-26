@@ -340,6 +340,8 @@ pub struct Paths {
     /// Named sets of interfaces to switch between (see
     /// `crate::reticulum::profiles`).
     pub interface_profiles: PathBuf,
+    /// What the node hosted here has served (see `crate::app::node_stats`).
+    pub node_stats: PathBuf,
 }
 
 impl Paths {
@@ -379,6 +381,7 @@ impl Paths {
             games: base.join("games.json"),
             reticulum_history: root.join("reticulum-history"),
             interface_profiles: root.join("interface-profiles.json"),
+            node_stats: base.join("node-stats.json"),
             root,
             base,
         })

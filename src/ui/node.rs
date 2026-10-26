@@ -23,7 +23,7 @@ use crate::nomad::pages::Root;
 pub(super) fn draw_node(frame: &mut Frame, app: &mut App, area: Rect) {
     // Wide enough for the 32-character node address.
     let [left, right] = Layout::horizontal([Constraint::Length(super::side_width(app, area, 43)), Constraint::Min(20)]).areas(area);
-    let [status_area, list_area] = Layout::vertical([Constraint::Length(7), Constraint::Min(3)]).areas(left);
+    let [status_area, list_area] = Layout::vertical([Constraint::Length(9), Constraint::Min(3)]).areas(left);
     draw_status(frame, app, status_area);
     draw_pages(frame, app, list_area);
     draw_editor(frame, app, right);
@@ -78,11 +78,14 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     };
     let running = app.node.status == NodeStatus::Running;
     let name = app.settings.node_name.clone().unwrap_or_else(|| app.settings.display_name.clone());
-    let requests = app
-        .node
-        .stats
-        .as_ref()
-        .map_or_else(|| "–".to_string(), |s| format!("{} ({} pages, {} files)", s.request_count, s.page_hits, s.file_hits));
+    let served = &app.node.served;
+    let mut requests = format!("{}", served.requests);
+    if served.not_found > 0 {
+        requests.push_str(&format!(" · {} not found", served.not_found));
+    }
+    if let Some(last) = served.last {
+        requests.push_str(&format!(" · last {}", crate::clock::when(last)));
+    }
     let dir = HostConfig::dir(&app.settings, &app.paths).display().to_string();
     let lines = vec![
         Line::from(vec![label("Node"), state]),
@@ -91,7 +94,12 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(hex::encode(app.node.hash), Style::default().fg(if running { accent() } else { dim() })),
         ]),
         Line::from(vec![label("Name"), Span::raw(name)]),
+        Line::from(vec![label("Served"), Span::raw(served.label())]),
         Line::from(vec![label("Requests"), Span::raw(requests)]),
+        Line::from(vec![
+            label("Since"),
+            Span::styled(format!("{} (R resets)", crate::clock::when(served.since)), Style::default().fg(dim())),
+        ]),
         Line::from(vec![label("Folder"), Span::styled(dir, Style::default().fg(dim()))]),
     ];
     frame.render_widget(Paragraph::new(lines).block(block("Hosting", false)), area);

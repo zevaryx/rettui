@@ -1322,3 +1322,21 @@ async fn who_may_see_something_on_the_node() {
     assert_eq!(web.get(&format!("{q}&root=attic")).await.status, StatusCode::BAD_REQUEST);
     assert_eq!(web.post("/api/node/allowed", json!({ "path": "../x", "everyone": true })).await.status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn the_nodes_statistics_and_resetting_them() {
+    let web = TestWeb::start("node-stats");
+    web.with(|app| {
+        app.node.served.pages = 5;
+        app.node.served.requests = 6;
+    })
+    .await;
+    let node = web.get("/api/node").await.json();
+    assert_eq!((node["served"]["pages"].as_u64(), node["served"]["label"].as_str()), (Some(5), Some("5 pages · 0 files")), "{node}");
+    assert_eq!(web.post("/api/node/stats/reset", json!({})).await.status, StatusCode::OK);
+    let node = web.get("/api/node").await.json();
+    assert_eq!((node["served"]["pages"].as_u64(), node["served"]["requests"].as_u64()), (Some(0), Some(0)));
+    assert!(node["served"]["since"].as_f64().unwrap() > 1.7e9);
+    // Status says what it served only while it's running.
+    assert!(web.get("/api/state").await.json()["node_served"].is_null());
+}

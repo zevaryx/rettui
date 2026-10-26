@@ -111,6 +111,8 @@ pub fn state(app: &App) -> Value {
         "welcome": !app.settings.welcomed,
         // The propagation node hosted here.
         "hosting": hosting,
+        // The NomadNet node hosted here, while it runs: what it has served.
+        "node_served": (app.node.status == crate::app::node::NodeStatus::Running).then(|| app.node.served.label()),
         "hub": hub,
         "rns_config": app.settings.rns_config,
         "data_dir": app.paths.store.parent().map(|p| p.display().to_string()),
@@ -835,6 +837,7 @@ pub fn node(app: &App) -> Value {
         NodeStatus::Running => ("running", None),
         NodeStatus::Failed(e) => ("failed", Some(e.clone())),
     };
+    let served = &app.node.served;
     json!({
         "status": status,
         "error": error,
@@ -845,6 +848,11 @@ pub fn node(app: &App) -> Value {
         "stats": app.node.stats.as_ref().map(|s| json!({
             "requests": s.request_count, "pages": s.page_hits, "files": s.file_hits, "not_found": s.not_found_count,
         })),
+        // Kept across restarts, until reset.
+        "served": {
+            "since": served.since, "requests": served.requests, "pages": served.pages, "files": served.files,
+            "media": served.media, "not_found": served.not_found, "last": served.last, "label": served.label(),
+        },
         "list_error": app.node.error,
         "files": app.node.files.iter().map(|f| json!({ "path": f.path, "size": f.size, "modified_ms": f.modified_ms })).collect::<Vec<_>>(),
         "pages": app.node.pages.iter().map(|p| json!({

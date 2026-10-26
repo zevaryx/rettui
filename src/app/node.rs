@@ -107,6 +107,9 @@ pub struct Node {
     pub preview: Option<Preview>,
     /// Who may see what's selected (`w`), while it's being changed.
     pub allowed: Option<super::allowed::AllowedView>,
+    /// What it has served, kept across restarts.
+    pub served: super::node_stats::Served,
+    pub served_dirty: bool,
 }
 
 impl Node {
@@ -126,6 +129,8 @@ impl Node {
             preview_scroll: 0,
             preview: None,
             allowed: None,
+            served: Default::default(),
+            served_dirty: false,
         }
     }
 }
@@ -331,7 +336,7 @@ impl App {
                 self.log(format!("Node: {e}"));
                 self.node.status = NodeStatus::Failed(e);
             }
-            HostEvent::Stats(stats) => self.node.stats = Some(stats),
+            HostEvent::Stats(stats) => self.on_host_stats(stats),
         }
     }
 
@@ -628,6 +633,7 @@ impl App {
                 }
                 Err(e) => self.fail(e),
             },
+            PromptKind::ConfirmResetNodeStats if text.eq_ignore_ascii_case("y") => self.reset_node_stats(),
             _ => {}
         }
     }
@@ -807,6 +813,11 @@ impl App {
                 }
             }
             KeyCode::Char('w') => self.open_allowed(),
+            KeyCode::Char('R') => {
+                let since = crate::clock::when(self.node.served.since);
+                let title = format!("Reset the node's statistics (counted since {since})? Type y");
+                self.open_prompt(PromptKind::ConfirmResetNodeStats, &title, "");
+            }
             KeyCode::Char('h') => {
                 let on = !self.settings.node_enabled;
                 self.update_setting("node_enabled", if on { "true" } else { "false" });

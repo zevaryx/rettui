@@ -466,6 +466,7 @@ pub fn keys(app: &App) -> Keys {
                 ("m", "move"),
                 ("x", "delete"),
                 ("w", "who may see"),
+                ("R", "reset stats"),
                 ("h", "host"),
                 ("a", "announce"),
                 ("b", "browse"),

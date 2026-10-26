@@ -6589,7 +6589,14 @@ app.views.node = {
       label('Address'), el('span', { class: 'row' }, el('span', { class: 'mono', text: node.address }),
         el('button', { text: 'Copy', onclick: () => copy(node.address, 'node address') })),
       label('Name'), el('span', { text: node.name }),
-      label('Requests'), el('span', { text: node.stats ? `${node.stats.requests} (${node.stats.pages} pages, ${node.stats.files} files)` : '–' }),
+      label('Served'), el('span', { text: node.served.label }),
+      label('Requests'), el('span', { text: [String(node.served.requests), node.served.not_found ? `${node.served.not_found} not found` : null,
+        node.served.last ? `last ${new Date(node.served.last * 1000).toLocaleString()}` : null].filter(Boolean).join(' · ') }),
+      label('Since'), el('span', { class: 'row' }, el('span', { class: 'dim', text: new Date(node.served.since * 1000).toLocaleString() }),
+        el('button', { text: 'Reset', title: 'Count what the node serves again from now', onclick: async () => {
+          if (!await ask('Reset the node\'s statistics?\nThe counts start again from now.', { title: 'Reset statistics', yes: 'Reset', danger: true })) return;
+          if (await attempt(() => api.post('/node/stats/reset'), 'The node\'s statistics were reset')) this.update();
+        } })),
       label('Folder'), el('span', { class: 'mono dim', text: node.dir }));
     if (node.list_error) {
       this.list.replaceChildren(el('div', { class: 'empty state-bad', text: node.list_error }));
@@ -7274,6 +7281,7 @@ app.views.status = {
         : s.auto_propagation || 'none (pick one in the Network tab)' }),
       label('Last sync'), el('span', { text: sync }),
       label('Hosting messages'), hosting,
+      ...(s.node_served ? [label('Hosting a node'), el('span', { text: `● ${s.node_served} served (Node)` })] : []),
       ...(s.hub.state === 'off' ? [] : [label('Hosting a hub'), s.hub.state === 'running'
         ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.hub.hash }),
           el('span', { class: 'dim', text: `  ${s.hub.people} ${s.hub.people === 1 ? 'person' : 'people'} · ${s.hub.rooms} room${s.hub.rooms === 1 ? '' : 's'} (Hub section)` }))

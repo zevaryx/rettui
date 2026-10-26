@@ -1913,3 +1913,48 @@ fn who_may_see_a_page_on_the_node() {
     tui.click(0, 0);
     assert!(tui.app.node.allowed.is_none() && !list.exists());
 }
+
+#[test]
+fn the_node_counts_what_it_serves_across_restarts_until_reset() {
+    use crate::net::{HostEvent, NetEvent};
+    let stats = |requests, pages, files, media| nomad_core::NomadServeStats {
+        request_count: requests,
+        page_hits: pages,
+        file_hits: files,
+        media_hits: media,
+        not_found_count: requests - pages - files - media,
+        last_request_ms: None,
+    };
+    let mut tui = Tui::new("node-stats");
+    tui.tab(Tab::Node);
+    tui.key(KeyCode::Char('h'));
+    let hash = tui.app.node.hash;
+    // Counts before it's running (an old node's) aren't counted.
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(9, 9, 0, 0))));
+    tui.app.on_net(NetEvent::Host(HostEvent::Started { hash }));
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(4, 2, 1, 0))));
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(7, 3, 1, 2))));
+    let screen = tui.draw();
+    assert!(screen.contains("3 pages · 1 file · 2 pic") && screen.contains("7 · 1 not found"), "{screen}");
+    tui.tab(Tab::Status);
+    assert!(tui.draw().contains("3 pages · 1 file · 2 pictures served"));
+
+    // Started again: its counts start from nothing, and go on from ours.
+    tui.app.on_net(NetEvent::Host(HostEvent::Started { hash }));
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(1, 1, 0, 0))));
+    tui.app.save_if_dirty();
+    tui.app.finish_saves();
+    let saved: crate::app::node_stats::Served = serde_json::from_slice(&std::fs::read(&tui.app.paths.node_stats).unwrap()).unwrap();
+    assert_eq!((saved.requests, saved.pages), (8, 4));
+    assert_eq!(crate::app::node_stats::Served::load(&tui.app.paths.node_stats), tui.app.node.served);
+
+    // Reset, after saying so.
+    tui.tab(Tab::Node);
+    tui.key(KeyCode::Char('R'));
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.contains("Reset the node's statistics")));
+    tui.answer("n");
+    assert_eq!(tui.app.node.served.requests, 8);
+    tui.key(KeyCode::Char('R')).answer("y");
+    assert_eq!((tui.app.node.served.requests, tui.app.node.served.pages), (0, 0));
+    assert!(tui.draw().contains("0 pages · 0 files"));
+}
