@@ -17,6 +17,9 @@ pub struct Placed {
     pub location: Location,
     /// When it came (Unix seconds); none for this station's.
     pub at: Option<f64>,
+    /// The collector that passed it on, by name, if it didn't come from
+    /// them.
+    pub via: Option<String>,
 }
 
 /// The map over the Messages tab: the place picked, and how far in it's
@@ -87,12 +90,35 @@ impl App {
                     name: self.store.display_name(key),
                     location: newest.location?,
                     at: Some(newest.timestamp),
+                    via: None,
                 })
             })
             .collect();
+        // What collectors passed on, unless they've said where they are
+        // since themselves.
+        for (key, relayed) in &self.store.relayed {
+            if self.store.contact(key).trust == Trust::Blocked {
+                continue;
+            }
+            match placed.iter_mut().find(|p| p.key.as_deref() == Some(key)) {
+                Some(place) if place.at.unwrap_or(0.0) >= relayed.at => {}
+                Some(place) => {
+                    place.location = relayed.location;
+                    place.at = Some(relayed.at);
+                    place.via = Some(self.store.display_name(&relayed.via));
+                }
+                None => placed.push(Placed {
+                    key: Some(key.clone()),
+                    name: self.store.display_name(key),
+                    location: relayed.location,
+                    at: Some(relayed.at),
+                    via: Some(self.store.display_name(&relayed.via)),
+                }),
+            }
+        }
         placed.sort_by(|a, b| b.at.unwrap_or(0.0).total_cmp(&a.at.unwrap_or(0.0)).then_with(|| a.name.cmp(&b.name)));
         if let Some(location) = self.settings.own_location() {
-            placed.insert(0, Placed { key: None, name: "This station".into(), location, at: None });
+            placed.insert(0, Placed { key: None, name: "This station".into(), location, at: None, via: None });
         }
         placed
     }
@@ -207,7 +233,7 @@ mod tests {
     use crate::store::{Conversation, Message, MessageState, Store};
 
     fn place(lat: f64, lon: f64) -> Placed {
-        Placed { key: None, name: String::new(), location: Location::at(lat, lon), at: None }
+        Placed { key: None, name: String::new(), location: Location::at(lat, lon), at: None, via: None }
     }
 
     #[test]

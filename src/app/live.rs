@@ -75,6 +75,11 @@ pub struct Live {
     position: Option<(Location, Instant)>,
     sent_trusted: Option<Instant>,
     pub tracks: BTreeMap<String, Track>,
+    /// The telemetry collector: when this station's location last went to
+    /// it, when it was last asked for everyone's, and the request going.
+    pub(super) collector_sent: Option<Instant>,
+    pub(super) collector_asked: Option<Instant>,
+    pub(super) collector_pending: Option<u64>,
 }
 
 impl App {
@@ -164,6 +169,7 @@ impl App {
         for track in self.live.tracks.values_mut() {
             track.pending = None;
         }
+        self.live.collector_pending = None;
     }
 
     /// Send what's due: a share that's ended stops; a station's location
@@ -173,6 +179,7 @@ impl App {
     pub(super) fn live_tick(&mut self) {
         self.trusted_tick();
         self.track_tick();
+        self.collector_tick();
         if self.live.shares.is_empty() {
             return;
         }
@@ -226,6 +233,8 @@ impl App {
             .contacts
             .iter()
             .filter(|(key, contact)| contact.trust == Trust::Trusted && !self.live.shares.contains_key(*key))
+            // The collector gets it on its own timer, if it has one.
+            .filter(|(key, _)| self.settings.collector_send_mins == 0 || self.settings.telemetry_collector.as_ref() != Some(*key))
             .map(|(key, _)| key.clone())
             .collect();
         for key in trusted {
@@ -257,7 +266,7 @@ impl App {
     }
 
     /// An update: shown in place of the one before it.
-    fn send_live(&mut self, key: &str, location: Location) {
+    pub(super) fn send_live(&mut self, key: &str, location: Location) {
         let mode = match self.delivery_for(key) {
             DeliveryMode::Paper => DeliveryMode::Auto,
             mode => mode,

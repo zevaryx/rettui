@@ -144,7 +144,12 @@ fn colour_of(value: &Value) -> Option<[u8; 3]> {
 /// The icon a message carries, if it's well formed: a name of letters,
 /// digits and dashes, and two colours.
 pub fn appearance_of(message: &LxMessage) -> Option<Appearance> {
-    let Value::Array(parts) = value(message, FIELD_ICON_APPEARANCE)? else { return None };
+    appearance_from(&value(message, FIELD_ICON_APPEARANCE)?)
+}
+
+/// An icon as `[name, foreground, background]`.
+fn appearance_from(value: &Value) -> Option<Appearance> {
+    let Value::Array(parts) = value else { return None };
     let [name, foreground, background, ..] = parts.as_slice() else { return None };
     let icon = String::from_utf8(bytes_of(name)?).ok()?.trim().to_lowercase();
     let fine = |c: char| c.is_ascii_alphanumeric() || c == '-';
@@ -335,7 +340,12 @@ pub fn telemetry_field(location: &Location, sensors: &[(Value, Value)], time: i6
 
 /// The telemetry a message carries, if any.
 pub fn telemetry_of(message: &LxMessage) -> Option<Telemetry> {
-    let Value::Map(sensors) = unwrapped(value(message, FIELD_TELEMETRY)?)? else {
+    telemetry_from(value(message, FIELD_TELEMETRY)?)
+}
+
+/// Telemetry: sensor readings in a map, maybe packed into bytes.
+fn telemetry_from(value: Value) -> Option<Telemetry> {
+    let Value::Map(sensors) = unwrapped(value)? else {
         return None;
     };
     Some(Telemetry {
@@ -352,10 +362,84 @@ pub const COMMANDS_READ: usize = 8;
 /// The most of an echo sent back: the rest of it is left out.
 pub const ECHO_CHARS: usize = 500;
 
+/// Someone's telemetry passed on by a collector (an entry of
+/// `FIELD_TELEMETRY_STREAM`, as Sideband sends them): whose it is (their
+/// LXMF address), when it was (Unix seconds), what it said, and their icon.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Relayed {
+    pub source: [u8; 16],
+    pub time: i64,
+    pub telemetry: Telemetry,
+    pub appearance: Option<Appearance>,
+}
+
+/// The most entries read from a telemetry stream (it comes from the
+/// network); the rest are left out.
+pub const MAX_STREAM: usize = 256;
+
+/// The telemetry a collector passed on: `[source, time, packed telemetry,
+/// appearance]` for each, as Sideband sends it. Entries that don't read are
+/// left out.
+pub fn stream_of(message: &LxMessage) -> Vec<Relayed> {
+    let Some(Value::Array(entries)) = value(message, FIELD_TELEMETRY_STREAM).and_then(unwrapped) else {
+        return Vec::new();
+    };
+    entries.into_iter().take(MAX_STREAM).filter_map(relayed_of).collect()
+}
+
+fn relayed_of(entry: Value) -> Option<Relayed> {
+    let Value::Array(parts) = entry else { return None };
+    let mut parts = parts.into_iter();
+    let source = bytes_of(&parts.next()?)?.try_into().ok()?;
+    let time = parts.next()?;
+    let time = time.as_i64().or_else(|| time.as_f64().filter(|t| t.is_finite()).map(|t| t as i64))?;
+    let telemetry = telemetry_from(parts.next()?)?;
+    let appearance = parts.next().and_then(unwrapped).as_ref().and_then(appearance_from);
+    Some(Relayed { source, time, telemetry, appearance })
+}
+
+/// One location a collector passes on: whose (their LXMF address), when
+/// (Unix seconds), where, and their icon if one's known.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PassedOn {
+    pub source: [u8; 16],
+    pub time: i64,
+    pub location: Location,
+    pub appearance: Option<Appearance>,
+}
+
+/// `FIELD_TELEMETRY_STREAM`'s value, as a collector sends it: each
+/// entry's telemetry packed as [`telemetry_field`] packs it, with its icon
+/// if there's one.
+pub fn stream_field(entries: &[PassedOn]) -> Vec<u8> {
+    let list = entries
+        .iter()
+        .map(|entry| {
+            let appearance = entry.appearance.as_ref().map_or(Value::Nil, |a| {
+                Value::Array(vec![
+                    Value::Binary(a.icon.as_bytes().to_vec()),
+                    Value::Binary(a.foreground.to_vec()),
+                    Value::Binary(a.background.to_vec()),
+                ])
+            });
+            Value::Array(vec![
+                Value::Binary(entry.source.to_vec()),
+                Value::from(entry.time),
+                Value::Binary(telemetry_field(&entry.location, &[], entry.time)),
+                appearance,
+            ])
+        })
+        .collect();
+    encode(&Value::Array(list))
+}
+
 /// A command another client asks for (Sideband's numbers).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     TelemetryRequest,
+    /// A telemetry request to a collector, for everyone's it has since
+    /// then (Unix seconds).
+    CollectorRequest(i64),
     Ping,
     /// What to send back.
     Echo(String),
@@ -367,7 +451,12 @@ pub enum Command {
 impl Command {
     fn from(id: u64, argument: &Value) -> Self {
         match id {
-            0x01 => Command::TelemetryRequest,
+            0x01 => match argument {
+                Value::Array(parts) if parts.get(1).and_then(Value::as_bool) == Some(true) => {
+                    Command::CollectorRequest(parts.first().and_then(|t| t.as_i64().or_else(|| t.as_f64().map(|t| t as i64))).unwrap_or(0))
+                }
+                _ => Command::TelemetryRequest,
+            },
             0x02 => Command::Ping,
             0x03 => Command::Echo(
                 bytes_of(argument).map(|b| String::from_utf8_lossy(&b).chars().take(ECHO_CHARS).collect()).unwrap_or_default(),
@@ -381,6 +470,7 @@ impl Command {
     pub fn describe(&self) -> String {
         match self {
             Command::TelemetryRequest => "Asked for your location".into(),
+            Command::CollectorRequest(_) => "Asked for everyone's locations you have".into(),
             Command::Ping => "Pinged you with a command".into(),
             Command::Echo(text) => format!("Asked for an echo of “{}”", text.trim()),
             Command::SignalReport => "Asked for a signal report".into(),
@@ -392,6 +482,7 @@ impl Command {
     pub fn sent(&self) -> String {
         match self {
             Command::TelemetryRequest => "Asked for their location".into(),
+            Command::CollectorRequest(_) => "Asked the collector for everyone's locations".into(),
             Command::Ping => "Pinged them with a command".into(),
             Command::Echo(text) => format!("Asked for an echo of “{}”", text.trim()),
             Command::SignalReport => "Asked for a signal report".into(),
@@ -402,7 +493,7 @@ impl Command {
     /// The command as [`Command::parse`] reads it.
     pub fn typed(&self) -> String {
         match self {
-            Command::TelemetryRequest => "location".into(),
+            Command::TelemetryRequest | Command::CollectorRequest(_) => "location".into(),
             Command::Ping => "ping".into(),
             Command::Echo(text) => format!("echo {text}"),
             Command::SignalReport => "signal".into(),
@@ -450,17 +541,18 @@ impl Command {
                 }
                 Some(if lines.is_empty() { "No reception info available".into() } else { lines.join("\n") })
             }
-            Command::TelemetryRequest | Command::Other(_) => None,
+            Command::TelemetryRequest | Command::CollectorRequest(_) | Command::Other(_) => None,
         }
     }
 
     /// The command in `FIELD_COMMANDS`, as Sideband sends it: `true` for a
     /// ping and a signal report, an echo's text as bytes, and for a
     /// telemetry request the time to send readings since (Unix seconds)
-    /// and `false` (not asking a collector for everyone's).
+    /// and whether it asks a collector for everyone's.
     fn entry(&self, since: i64) -> Option<(Value, Value)> {
         let (id, argument) = match self {
             Command::TelemetryRequest => (0x01, Value::Array(vec![Value::from(since), Value::Boolean(false)])),
+            Command::CollectorRequest(since) => (0x01, Value::Array(vec![Value::from(*since), Value::Boolean(true)])),
             Command::Ping => (0x02, Value::Boolean(true)),
             Command::Echo(text) => (0x03, Value::Binary(text.as_bytes().to_vec())),
             Command::SignalReport => (0x04, Value::Boolean(true)),
@@ -630,6 +722,8 @@ pub fn game_of(message: &LxMessage) -> Option<HashMap<u8, Vec<u8>>> {
 pub struct Extras {
     pub reaction: Option<Reaction>,
     pub telemetry: Option<Telemetry>,
+    /// Others' telemetry, passed on by a collector.
+    pub stream: Vec<Relayed>,
     pub commands: Vec<Command>,
     pub audio: Option<Audio>,
     /// Its sender stopped sharing their location.
@@ -649,6 +743,7 @@ impl Extras {
         Self {
             reaction: reaction_of(message),
             telemetry: telemetry_of(message),
+            stream: stream_of(message),
             commands: commands_of(message),
             audio: audio_of(message),
             ceased: ceased(message),
@@ -880,6 +975,49 @@ mod tests {
         // A signal report says how the message asking for it was heard.
         let heard = crate::net::remote::Signal { rssi: Some(-97.0), snr: Some(6.5), q: Some(88.0) };
         assert_eq!(Command::SignalReport.answer(Some(&heard)).unwrap(), "Link Quality: 88%\nRSSI: -97 dBm\nSNR: 6.5 dB");
+    }
+
+    #[test]
+    fn telemetry_streams_as_sideband_collectors_send_them() {
+        let icon = Appearance { icon: "account".into(), foreground: [1, 2, 3], background: [4, 5, 6] };
+        let entries = [
+            PassedOn { source: [7; 16], time: 1_800_000_000, location: Location::at(51.5, -0.12), appearance: Some(icon.clone()) },
+            PassedOn { source: [8; 16], time: 1_800_000_100, location: Location::at(-33.9, 151.2), appearance: None },
+        ];
+        let mut sent = message();
+        sent.set_msgpack_field(FIELD_TELEMETRY_STREAM, stream_field(&entries)).unwrap();
+        let stream = Extras::of(&received(&sent)).stream;
+        assert_eq!(stream.len(), 2);
+        assert_eq!((stream[0].source, stream[0].time, stream[0].appearance.as_ref()), ([7; 16], 1_800_000_000, Some(&icon)));
+        let at = |e: &Relayed| e.telemetry.location.map(|l| (l.latitude, l.longitude));
+        assert_eq!(at(&stream[0]), Some((51.5, -0.12)));
+        assert_eq!((stream[1].appearance.as_ref(), at(&stream[1])), (None, Some((-33.9, 151.2))));
+        // From the network: entries that don't read are left out, and a
+        // long one is cut short.
+        let good =
+            Value::Array(vec![Value::Binary(vec![9; 16]), Value::from(1), Value::Binary(telemetry_field(&Location::at(1.0, 2.0), &[], 1))]);
+        let bad = [Value::from(3), Value::Array(vec![Value::Binary(vec![1; 3]), Value::from(1), Value::Nil]), Value::Array(vec![])];
+        let list: Vec<Value> = bad.into_iter().chain(std::iter::repeat_n(good, MAX_STREAM + 10)).collect();
+        let mut odd = message();
+        odd.set_msgpack_field(FIELD_TELEMETRY_STREAM, encode(&Value::Array(list))).unwrap();
+        assert_eq!(Extras::of(&received(&odd)).stream.len(), MAX_STREAM - 3);
+        let mut not_a_list = message();
+        not_a_list.set_msgpack_field(FIELD_TELEMETRY_STREAM, encode(&Value::from("hi"))).unwrap();
+        assert!(Extras::of(&received(&not_a_list)).stream.is_empty());
+    }
+
+    #[test]
+    fn collector_requests_as_sideband_sends_them() {
+        let read = |commands: &[Command]| {
+            let mut sent = message();
+            sent.set_msgpack_field(FIELD_COMMANDS, commands_field(commands, 1_800_000_000.0)).unwrap();
+            Extras::of(&received(&sent)).commands
+        };
+        assert_eq!(read(&[Command::CollectorRequest(1_700_000_000)]), [Command::CollectorRequest(1_700_000_000)]);
+        assert_eq!(read(&[Command::TelemetryRequest]), [Command::TelemetryRequest]);
+        assert_eq!(Command::CollectorRequest(0).typed(), "location");
+        assert!(Command::CollectorRequest(0).answer(None).is_none());
+        assert!(Command::CollectorRequest(0).describe().contains("everyone"));
     }
 
     #[test]

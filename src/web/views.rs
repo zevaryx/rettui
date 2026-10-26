@@ -395,7 +395,7 @@ pub fn locations(app: &App) -> Value {
         .map(|p| {
             let l = &p.location;
             json!({
-                "key": p.key, "name": p.name, "at": p.at,
+                "key": p.key, "name": p.name, "at": p.at, "via": p.via,
                 "icon": p.key.as_deref().map_or_else(|| icon(app.own_appearance().as_ref()), |k| icon(app.store.contact(k).icon.as_ref())),
                 "latitude": l.latitude, "longitude": l.longitude, "accuracy": l.accuracy, "altitude": l.altitude,
                 "label": l.label(), "map": l.map_url(),

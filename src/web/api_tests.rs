@@ -1122,6 +1122,29 @@ async fn tracking_a_contact() {
     assert_eq!(web.post(&format!("{url}/stop"), json!({})).await.status, StatusCode::BAD_REQUEST);
 }
 
+/// A telemetry collector set from the web UI, and the locations it passes
+/// on shown on the map, marked with where they came from.
+#[tokio::test]
+async fn a_telemetry_collector_on_the_map() {
+    use crate::lxmf::Location;
+    use crate::lxmf::fields::{Relayed, Telemetry};
+    let web = TestWeb::start("collector");
+    let values = json!({ "values": { "telemetry_collector": BOB, "collector_ask_mins": "15", "collector_serve": "trusted" } });
+    let saved = web.post("/api/settings", values).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text());
+    let wrong = web.post("/api/settings", json!({ "values": { "telemetry_collector": "nobody" } })).await;
+    assert_eq!(wrong.status, StatusCode::BAD_REQUEST);
+    web.with(|app| {
+        let telemetry = Telemetry { location: Some(Location::at(51.5, -0.12)), ..Telemetry::default() };
+        let stream = vec![Relayed { source: [0xcd; 16], time: 1_800_000_000, telemetry, appearance: None }];
+        app.on_message(InboundMessage { extras: Extras { stream, ..Extras::default() }, ..from_bob(1, "") });
+    })
+    .await;
+    let places = web.get("/api/locations").await.json();
+    let text = places.to_string();
+    assert!(text.contains(&"cd".repeat(16)) && text.contains("\"via\":\"<abababababab>\""), "{text}");
+}
+
 /// A message being sent says how it goes, and can be cancelled; a sync
 /// says how many came.
 #[tokio::test]

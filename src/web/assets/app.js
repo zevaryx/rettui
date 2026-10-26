@@ -2164,7 +2164,7 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
   const station = data.here ? data.places[0] : null;
   const close = dialog('Map', (close) => {
     for (const p of places) {
-      const about = [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away].filter(Boolean).join(' · ');
+      const about = [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away, p.via ? `via ${p.via}` : ''].filter(Boolean).join(' · ');
       const row = el('div', { class: 'list-item', onclick: () => pick(p) },
         p.icon || p.key ? avatar(p.icon, p.name, p.key) : null,
         el('div', { class: 'main' },

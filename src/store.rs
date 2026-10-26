@@ -381,6 +381,15 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
+/// Where someone was, as a collector passed it on: when (Unix seconds),
+/// and which collector (its LXMF address, hex).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RelayedPlace {
+    pub location: crate::lxmf::Location,
+    pub at: f64,
+    pub via: String,
+}
+
 /// How far you trust someone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -475,6 +484,10 @@ pub struct Store {
     /// What you keep about people, by LXMF address (hex).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub contacts: BTreeMap<String, Contact>,
+    /// Others' newest locations, as a collector passed them on, by their
+    /// LXMF address (hex).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub relayed: BTreeMap<String, RelayedPlace>,
     pub next_local_id: u64,
     /// NomadNet nodes (hex) we identify ourselves to when browsing.
     pub identified_nodes: BTreeSet<String>,
@@ -896,6 +909,7 @@ impl Store {
             peers: HashMap::new(),
             conversations: self.conversations.clone(),
             contacts: self.contacts.clone(),
+            relayed: self.relayed.clone(),
             next_local_id: self.next_local_id,
             identified_nodes: self.identified_nodes.clone(),
             saved: self.saved.clone(),

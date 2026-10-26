@@ -18,6 +18,7 @@ pub mod archive;
 mod backup;
 mod browser;
 pub mod channels;
+pub mod collector;
 pub mod contacts;
 pub mod emoji;
 pub(crate) mod files;
@@ -1171,7 +1172,7 @@ impl App {
 
     /// A message (or a reaction) sent, or not.
     fn on_delivery(&mut self, id: u64, result: Result<crate::lxmf::Sent, String>) {
-        if self.on_track_delivery(id, &result) {
+        if self.on_track_delivery(id, &result) || self.on_collector_delivery(id, &result) {
             return;
         }
         let local = format!("local-{id}");

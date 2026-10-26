@@ -159,6 +159,9 @@ pub struct Outgoing {
     /// Sideband commands (pings, echoes, signal reports, telemetry
     /// requests), sent with no text.
     pub commands: Vec<fields::Command>,
+    /// Others' locations, as a collector passes them on
+    /// (`FIELD_TELEMETRY_STREAM`'s value, see [`fields::stream_field`]).
+    pub stream: Option<Vec<u8>>,
 }
 
 impl Outgoing {
@@ -184,6 +187,7 @@ impl Outgoing {
             cease: false,
             game: None,
             commands: Vec::new(),
+            stream: None,
         }
     }
 }

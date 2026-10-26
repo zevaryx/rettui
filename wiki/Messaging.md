@@ -510,6 +510,33 @@ one before it. They answer only if they're set to answer you (in Sideband,
 most answer only contacts they trust). One that couldn't be sent is said in
 the log.
 
+**A telemetry collector** is a station (a Sideband with its collector on,
+or a rettui with *Be a collector*) that keeps everyone's newest locations
+and passes them on when asked, so a group sees each other on the map
+without each asking each. The settings are in Status, Location:
+
+- *Telemetry collector* (`telemetry_collector`) is the collector's LXMF
+  address.
+- *Send to collector every* (`collector_send_mins`; 0, off, to start with)
+  sends this station's *Location* to it every so many minutes, with sensor
+  readings if they're sent. It goes as a live update does.
+- *Ask collector every* (`collector_ask_mins`; 0, off) asks it every so many
+  minutes for the locations it has that are newer than the last it passed
+  on (a week's, the first time). The requests aren't shown in the
+  conversation.
+- What a collector passes on is used only when it comes from your
+  collector or a contact you trust. Each place goes on the map, marked
+  *via* the collector, unless that person has since sent their own. The
+  message it came in says how many there were and how many were new. The
+  newest 1,000 places are kept.
+- *Be a collector* (`collector_serve`): *off* (the default), *trusted*
+  (only contacts you trust) or *contacts* (any contact). It answers
+  collector requests with the newest location of everyone who sent you
+  one, and this station's, at most once a minute to each. Places that came
+  through another collector aren't passed on, nor anyone's who is blocked.
+  While it's off, a collector request is answered as a location request
+  (as Sideband does), if *Location requests* says so.
+
 The **map** shows everyone's newest location, the newest first, and this
 station's if it's set. Someone who said they'd stopped sharing (as Columba
 does) isn't on it, nor is anyone blocked.

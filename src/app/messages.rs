@@ -34,7 +34,7 @@ struct Voice {
 }
 
 /// Commands from someone are answered at most this often.
-const ANSWER_EVERY: Duration = Duration::from_secs(60);
+pub(super) const ANSWER_EVERY: Duration = Duration::from_secs(60);
 
 impl App {
     /// An attachment image already loaded by [`App::picture`].
@@ -90,7 +90,8 @@ impl App {
             && message.attachments.is_empty()
             && extras.audio.is_none()
             && location.is_none()
-            && sensors.is_empty();
+            && sensors.is_empty()
+            && extras.stream.is_empty();
         let mut notes = extras.notes(bare);
         // Sideband's commands: answered if set to, and said so either way.
         let answers: Vec<String> = extras.commands.iter().filter_map(|c| c.answer(message.signal.as_ref())).collect();
@@ -100,11 +101,27 @@ impl App {
                 Err(why) => why,
             });
         }
-        if extras.commands.contains(&lxmf::fields::Command::TelemetryRequest) && !paper {
+        // A collector request is answered as one if this is a collector, and
+        // as a location request if not (as Sideband does).
+        let collector_request = extras.commands.iter().find_map(|c| match c {
+            lxmf::fields::Command::CollectorRequest(since) => Some(*since),
+            _ => None,
+        });
+        let serving = self.settings.collector_serve != "off";
+        if let (Some(since), true, false) = (collector_request, serving, paper) {
+            notes.push(match self.answer_collector_request(&key, since) {
+                Ok(note) => format!("Answered: {note}"),
+                Err(why) => why,
+            });
+        } else if (collector_request.is_some() || extras.commands.contains(&lxmf::fields::Command::TelemetryRequest)) && !paper {
             notes.push(match self.answer_location_request(&key) {
                 Ok(()) => "Answered with this station's location (Location requests)".into(),
                 Err(why) => why,
             });
+        }
+        // Others' locations, passed on by a collector.
+        if !extras.stream.is_empty() && !paper {
+            notes.push(self.take_stream(&key, &extras.stream));
         }
         // Their icon alone isn't a message either (it's kept, above).
         if bare && notes.is_empty() && extras.reaction.is_none() && extras.appearance.is_some() && extras.telemetry.is_none() {
@@ -609,7 +626,7 @@ impl App {
 
     /// This computer's sensor readings, as telemetry entries, to go with a
     /// location (`with_location`) if *Send sensor readings* is on.
-    fn own_sensors(&self, with_location: bool) -> Vec<(rmpv::Value, rmpv::Value)> {
+    pub(super) fn own_sensors(&self, with_location: bool) -> Vec<(rmpv::Value, rmpv::Value)> {
         if !with_location || !self.settings.telemetry_sensors {
             return Vec::new();
         }

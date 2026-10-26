@@ -106,6 +106,17 @@ pub struct Settings {
     /// they're sent) to every contact you trust, as Sideband sends its
     /// telemetry on a timer; 0 doesn't.
     pub telemetry_every_mins: u64,
+    /// A telemetry collector (Sideband's), by LXMF address: it keeps
+    /// everyone's newest locations, and passes them on when asked.
+    pub telemetry_collector: Option<String>,
+    /// Minutes between sending this station's location to the collector;
+    /// 0 doesn't.
+    pub collector_send_mins: u64,
+    /// Minutes between asking the collector for everyone's; 0 doesn't.
+    pub collector_ask_mins: u64,
+    /// Be a collector: answer collector requests with everyone's newest
+    /// locations. One of [`ANSWER_COMMANDS`] (whose are answered).
+    pub collector_serve: String,
     /// Where the web UI's map gets its tiles (`{z}`, `{x}` and `{y}` in
     /// it), fetched and kept by rettui; none draws the map without them.
     pub map_tiles: Option<String>,
@@ -227,6 +238,10 @@ impl Default for Settings {
             location_requests: "off".into(),
             telemetry_sensors: false,
             telemetry_every_mins: 0,
+            telemetry_collector: None,
+            collector_send_mins: 0,
+            collector_ask_mins: 0,
+            collector_serve: "off".into(),
             map_tiles: Some(OSM_TILES.into()),
             map_tiles_file: None,
             stamp_cost: 0,
@@ -590,7 +605,21 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "rrc_messages_kept",
         ],
     ),
-    (Section::Location, &["location", "location_requests", "telemetry_sensors", "telemetry_every_mins", "map_tiles", "map_tiles_file"]),
+    (
+        Section::Location,
+        &[
+            "location",
+            "location_requests",
+            "telemetry_sensors",
+            "telemetry_every_mins",
+            "telemetry_collector",
+            "collector_send_mins",
+            "collector_ask_mins",
+            "collector_serve",
+            "map_tiles",
+            "map_tiles_file",
+        ],
+    ),
     (Section::Browsing, &["home", "browser_new_tabs", "cache_hours"]),
     (
         Section::Hosting,
@@ -753,6 +782,34 @@ pub const FIELDS: &[Field] = &[
         label: "Send to trusted every",
         help: "Minutes between sending this station's Location (with sensor readings, if they're sent) to every contact you trust, so they can follow it on their map, as Sideband sends its telemetry on a timer. Each update replaces the one before it in the conversation. 0 (to start with) doesn't send it",
         kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "telemetry_collector",
+        label: "Telemetry collector",
+        help: "The LXMF address of a telemetry collector: a Sideband (or rettui) that keeps everyone's newest locations and passes them on when asked, so a group can see each other on the map. Send to collector and Ask collector say how often rettui does each. Empty for none",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "collector_send_mins",
+        label: "Send to collector every",
+        help: "Minutes between sending this station's Location (with sensor readings, if they're sent) to the Telemetry collector. 0 (to start with) doesn't send it",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "collector_ask_mins",
+        label: "Ask collector every",
+        help: "Minutes between asking the Telemetry collector for the locations it has that are new since it was last asked; they go on the map, marked with the collector they came through. 0 (to start with) doesn't ask",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "collector_serve",
+        label: "Be a collector",
+        help: "Answer collector requests (Sideband's, or another rettui's) with the newest location of everyone who has sent you one, and this station's: off; trusted (only contacts you trust); or contacts (any contact). Locations that came through another collector aren't passed on, nor anyone's who is blocked. Answers go as messages, at most one a minute to each",
+        kind: FieldKind::Choice(ANSWER_COMMANDS),
         effect: Effect::Now,
     },
     Field {
@@ -1192,6 +1249,10 @@ impl Settings {
             "location_requests" => self.location_requests.clone(),
             "telemetry_sensors" => self.telemetry_sensors.to_string(),
             "telemetry_every_mins" => self.telemetry_every_mins.to_string(),
+            "telemetry_collector" => self.telemetry_collector.clone().unwrap_or_default(),
+            "collector_send_mins" => self.collector_send_mins.to_string(),
+            "collector_ask_mins" => self.collector_ask_mins.to_string(),
+            "collector_serve" => self.collector_serve.clone(),
             "map_tiles" => self.map_tiles.clone().unwrap_or_default(),
             "map_tiles_file" => self.map_tiles_file.clone().unwrap_or_default(),
             "stamp_cost" => self.stamp_cost.to_string(),
@@ -1290,6 +1351,17 @@ impl Settings {
             "location_requests" => self.location_requests = choice(value, ANSWER_COMMANDS).map_err(fail)?,
             "telemetry_sensors" => self.telemetry_sensors = toggle(value).map_err(fail)?,
             "telemetry_every_mins" => self.telemetry_every_mins = number(value, MAX_MINUTES).map_err(fail)?,
+            "telemetry_collector" => {
+                self.telemetry_collector = match optional(value) {
+                    None => None,
+                    Some(text) => {
+                        Some(hex::encode(crate::net::parse_hash(&text).ok_or_else(|| fail("an address is 32 hex characters".into()))?))
+                    }
+                };
+            }
+            "collector_send_mins" => self.collector_send_mins = number(value, MAX_MINUTES).map_err(fail)?,
+            "collector_ask_mins" => self.collector_ask_mins = number(value, MAX_MINUTES).map_err(fail)?,
+            "collector_serve" => self.collector_serve = choice(value, ANSWER_COMMANDS).map_err(fail)?,
             "map_tiles" => {
                 if let Some(url) = optional(value) {
                     let web = url.starts_with("https://") || url.starts_with("http://");

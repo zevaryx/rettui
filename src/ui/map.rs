@@ -101,6 +101,9 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
         if let (Some(here), Some(_)) = (here, &place.key) {
             about.push_str(&format!(" · {}", here.away(&place.location)));
         }
+        if let Some(via) = &place.via {
+            about.push_str(&format!(" · via {via}"));
+        }
         lines.push(Line::styled(about, base.fg(dim())));
     }
     frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
