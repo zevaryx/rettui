@@ -744,6 +744,15 @@ async fn the_hub_hosted_here_and_reticulums_config() {
     assert_eq!(rns.status, StatusCode::OK, "{}", rns.text());
     assert!(rns.json().to_string().contains("reticulum"));
     assert_eq!(web.get("/api/reticulum?section=logging").await.status, StatusCode::OK);
+    // An RNode's settings worked out, saved and as they're typed.
+    assert!(web.get("/api/reticulum").await.json()["radio"].is_null());
+    let lora = web.get("/api/reticulum/lora?bandwidth=125000&spreadingfactor=8&codingrate=5&txpower=7&frequency=867200000").await.json();
+    assert!(lora["lines"][0].as_str().unwrap().contains("3.13 kbps"), "{lora}");
+    assert!(web.get("/api/reticulum/lora?bandwidth=125000&spreadingfactor=99&codingrate=5").await.json()["lines"].is_null());
+    web.post("/api/reticulum/interfaces", json!({ "action": "add", "name": "Radio", "type": "RNodeInterface" })).await;
+    let radio = web.get("/api/reticulum?section=interface:Radio").await.json();
+    assert!(radio["radio"][1].as_str().unwrap().contains("link budget"), "{radio}");
+    web.post("/api/reticulum/interfaces", json!({ "action": "delete", "name": "Radio" })).await;
     let set = web.post("/api/reticulum/options", json!({ "section": "logging", "values": { "loglevel": "5" } })).await;
     assert_eq!(set.status, StatusCode::OK, "{}", set.text());
     assert_eq!(web.post("/api/reticulum/options", json!({ "section": "attic", "values": {} })).await.status, StatusCode::BAD_REQUEST);

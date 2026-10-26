@@ -921,7 +921,9 @@ pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
             "enabled": values.map(|v| v.get("enabled").or_else(|| v.get("interface_enabled")).is_none_or(crate::app::reticulum::rns_truthy)),
         })
     };
-    let options: Vec<Value> = rns::options(config.as_ref(), &current)
+    let options = rns::options(config.as_ref(), &current);
+    let radio = rns::lora::for_options(&options).map(|e| e.lines());
+    let options: Vec<Value> = options
         .into_iter()
         .map(|o| {
             json!({
@@ -941,6 +943,7 @@ pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
         "sections": sections.iter().map(describe).collect::<Vec<_>>(),
         "section": current.id(),
         "options": options,
+        "radio": radio,
         "types": schema::INTERFACE_TYPES.iter().map(|t| json!({ "name": t.name, "label": t.label })).collect::<Vec<_>>(),
     }))
 }

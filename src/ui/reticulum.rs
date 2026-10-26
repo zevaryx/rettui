@@ -133,7 +133,17 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
     let options_block = block(&title, focused).title_bottom(Line::styled(hints, Style::default().fg(dim())));
     let inner = options_block.inner(area);
     frame.render_widget(options_block, area);
-    let [list_area, help_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
+    // An RNode's settings worked out, under its options.
+    let radio = rns::lora::for_options(&state.options).map(|e| e.lines()).unwrap_or_default();
+    let radio_height = if radio.is_empty() { 0 } else { radio.len() as u16 + 1 };
+    let [list_area, radio_area, help_area] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(radio_height), Constraint::Length(2)]).areas(inner);
+    let radio: Vec<Line> = std::iter::once(Line::styled(" What these settings come to", Style::default().fg(accent()).bold()))
+        .chain(radio.into_iter().map(|l| Line::styled(format!("  {l}"), Style::default().fg(dim()))))
+        .collect();
+    if radio_height > 0 {
+        frame.render_widget(Paragraph::new(radio), radio_area);
+    }
     app.regions.rns_options = list_area;
 
     // Labels get at most half the width, so the values always show.

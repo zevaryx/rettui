@@ -7061,6 +7061,7 @@ app.views.status = {
   markDirty() {
     const changes = this.changes();
     const dirty = Object.keys(changes).length > 0;
+    this.updateRadio();
     this.saveButton.disabled = !dirty;
     this.revertButton.disabled = !dirty;
     for (const field of this.fields || []) {
@@ -7910,8 +7911,32 @@ app.views.reticulum = {
       }
       rows.push(this.optionRow(option));
     }
+    // An RNode's settings worked out, again as they're typed.
+    this.radio = null;
+    if (this.data.radio) {
+      this.radio = el('div', { class: 'rns-radio' });
+      rows.push(el('div', { class: 'settings-group', text: 'What these settings come to' }), this.radio);
+      this.showRadio(this.data.radio);
+    }
     this.form.replaceChildren(...rows);
     this.markDirty();
+  },
+
+  showRadio(lines) {
+    this.radio.replaceChildren(...(lines || ['Not a radio setting rettui can work out: check the bandwidth, spreading factor (5 to 12) and coding rate (5 to 8).'])
+      .map((l) => el('div', { class: 'dim', text: l })));
+  },
+
+  async updateRadio() {
+    if (!this.radio || !Object.keys(this.inputs).length) return;
+    const keys = ['frequency', 'bandwidth', 'spreadingfactor', 'codingrate', 'txpower'];
+    const query = new URLSearchParams();
+    for (const key of keys) {
+      const value = this.inputs[key]?.input.value.trim() || this.data.options.find((o) => o.key === key)?.default || '';
+      if (value) query.set(key, value);
+    }
+    const result = await api.get('/reticulum/lora?' + query).catch(() => null);
+    if (result && this.radio) this.showRadio(result.lines);
   },
 
   // The text an option's input starts with ('' when unset).

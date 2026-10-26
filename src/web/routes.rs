@@ -172,6 +172,7 @@ pub fn router(state: WebState) -> Router {
         .route("/reticulum/interfaces", post(reticulum_interfaces))
         .route("/reticulum/text", post(reticulum_text))
         .route("/reticulum/check", post(reticulum_check))
+        .route("/reticulum/lora", get(reticulum_lora))
         .route("/reticulum/restart", post(reticulum_restart))
         .route("/reticulum/history", get(reticulum_history))
         .route("/reticulum/history/{id}", get(reticulum_version))
@@ -2551,6 +2552,12 @@ async fn reticulum_restart(State(state): State<WebState>) -> ApiResult {
 }
 
 /// Check text without saving it (the text editor's live status).
+/// What an RNode's radio settings (as being typed) come to.
+async fn reticulum_lora(Query(values): Query<BTreeMap<String, String>>) -> ApiResult {
+    let radio = crate::reticulum::lora::Radio::from_values(|key| values.get(key).map(String::as_str));
+    Ok(axum::Json(json!({ "lines": radio.map(|r| r.estimate().lines()) })))
+}
+
 async fn reticulum_check(axum::Json(body): axum::Json<RnsTextBody>) -> ApiResult {
     let (_, check) = crate::reticulum::check(&body.text);
     Ok(axum::Json(json!({ "error": check.error, "warnings": check.warnings })))

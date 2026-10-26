@@ -846,6 +846,7 @@ a.chat-link:hover { filter: brightness(1.25); }
 .settings-footer { padding: 8px 14px 14px; font-size: 12.5px; }
 .settings-group { color: var(--accent); font-weight: 600; padding: 14px 0 2px; border-bottom: 1px solid var(--border); }
 .settings-group:first-child { padding-top: 4px; }
+.rns-radio { padding: 6px 0 10px; line-height: 1.5; }
 .setting select { max-width: 520px; }
 .badge.quiet { background: var(--raised); color: var(--dim); }
 .list-heading { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding: 10px 12px 4px; }

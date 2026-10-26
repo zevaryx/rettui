@@ -90,6 +90,22 @@ an interface (`a` in the terminal) of type **RNode (LoRa)** and set:
 - **TX power:** in dBm. Stay within the frequency band and power your
   country allows, and within what the board can do.
 
+Under the options, **What these settings come to** works out what they
+mean, again each time one changes (in the web UI, as you type):
+
+- the data rate, and how long a full packet (500 bytes) is on air;
+- how faint a signal the radio can still hear (its sensitivity, in dBm);
+- the link budget (TX power less the sensitivity): how much loss between
+  two radios a link can take;
+- how far that budget reaches in free space, with a clear line of sight
+  and no antenna gain. Hills, buildings and trees make it much less; high
+  antennas and gain make it more.
+
+A higher spreading factor or a narrower bandwidth hears fainter signals,
+so reaches further, but sends more slowly and keeps the channel busy
+longer. These are estimates from Semtech's LoRa formulas (and Reticulum's
+for the rate), for a typical radio.
+
 Then restart Reticulum (`Ctrl-R`, or **Restart Reticulum** in the web UI)
 to bring it up; the Status tab's Interfaces list shows whether it's
 online, and the log says why if it isn't. If another

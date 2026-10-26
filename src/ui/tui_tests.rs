@@ -233,6 +233,34 @@ fn the_reticulum_tab_option_by_option_and_as_text() {
 }
 
 #[test]
+fn an_rnodes_settings_worked_out_beside_them() {
+    let mut tui = Tui::new("rnode-calc");
+    let radio = "[reticulum]\n[interfaces]\n  [[Radio]]\n    type = RNodeInterface\n    port = /dev/ttyUSB0\n    frequency = 867200000\n    \
+                 bandwidth = 125000\n    txpower = 7\n    spreadingfactor = 8\n    codingrate = 5\n";
+    std::fs::create_dir_all(tui.app.rns_path().parent().unwrap()).unwrap();
+    std::fs::write(tui.app.rns_path(), radio).unwrap();
+    tui.tab(Tab::Reticulum);
+    tui.key(KeyCode::Char('R'));
+    assert!(!tui.draw().contains("What these settings come to"));
+    while !matches!(tui.app.rns.section(), Some(crate::reticulum::Section::Interface(_))) {
+        tui.key(KeyCode::Down);
+    }
+    let screen = tui.draw();
+    assert!(screen.contains("What these settings come to") && screen.contains("About 3.13 kbps"), "{screen}");
+    assert!(screen.contains("link budget of 134.0 dB"), "{screen}");
+    // Changed, it's worked out again.
+    tui.key(KeyCode::Enter);
+    while tui.app.rns.selected_option().is_none_or(|o| o.key != "txpower") {
+        tui.key(KeyCode::Down);
+    }
+    tui.key(KeyCode::Enter);
+    tui.app.prompt.as_mut().unwrap().input = crate::term::input::TextInput::with_text("17");
+    tui.key(KeyCode::Enter);
+    let screen = tui.draw();
+    assert!(screen.contains("link budget of 144.0 dB"), "{screen}");
+}
+
+#[test]
 fn reticulums_path_and_announce_rate_tables() {
     use crate::net::{AnnounceRate, NetEvent, PathInfo, Tables};
     let mut tui = Tui::new("tables");

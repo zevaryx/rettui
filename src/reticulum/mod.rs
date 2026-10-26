@@ -8,6 +8,7 @@
 
 pub mod doc;
 pub mod history;
+pub mod lora;
 pub mod profiles;
 pub mod schema;
 
