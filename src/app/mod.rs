@@ -44,6 +44,7 @@ pub mod paths;
 pub mod reach;
 pub mod recorder;
 pub mod reticulum;
+pub mod rncp;
 mod saver;
 pub mod search;
 mod settings;
@@ -202,6 +203,9 @@ pub enum PromptKind {
     RenamePage(crate::nomad::pages::Root, String),
     ConfirmDeletePage(crate::nomad::pages::Root, String),
     ConfirmResetNodeStats,
+    /// An `rncp` listener's address, then the file to send it.
+    RncpTo,
+    RncpFile(String),
     /// The folder to move something to (empty: the top).
     MoveNodeItem(crate::nomad::pages::Root, String),
     /// Open this page, dropping unsaved changes to the open one.
@@ -614,6 +618,8 @@ pub struct App {
     pub announce_log: announces::AnnounceLog,
     /// Reticulum's path and announce-rate tables (`t` in the Network tab).
     pub tables: tables::TablesView,
+    /// Files sent to `rncp` listeners, the newest last.
+    pub rncp: Vec<rncp::RncpSend>,
     /// The interface each destination with a path goes through, by address.
     pub routes: HashMap<String, String>,
     pub net_search: NetSearch,
@@ -795,6 +801,7 @@ impl App {
             net_via: None,
             announce_log: announces::AnnounceLog::default(),
             tables: tables::TablesView::default(),
+            rncp: Vec::new(),
             routes: HashMap::new(),
             net_search: NetSearch::default(),
             browser: Browser::default(),
@@ -1148,6 +1155,7 @@ impl App {
             NetEvent::PathProgress { to, text } => self.on_path_progress(to, text),
             NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
             NetEvent::Tables(result) => self.on_tables(result),
+            NetEvent::Rncp { to, name, state } => self.on_rncp(to, name, state),
             NetEvent::Probed { to, result } => self.on_probed(to, result),
             NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
@@ -1424,6 +1432,11 @@ impl App {
             }
             // Empty moves it to the top.
             PromptKind::MoveNodeItem(root, path) => self.submit_move(root, &path, &text),
+            kind @ (PromptKind::RncpTo | PromptKind::RncpFile(_)) => {
+                if !text.is_empty() {
+                    self.submit_rncp_prompt(kind, &text);
+                }
+            }
         }
     }
 

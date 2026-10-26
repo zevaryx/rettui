@@ -547,3 +547,80 @@ mod tests {
         assert_eq!(known.entries[&hex::encode(dest)].app_data, None);
     }
 }
+
+/// How sending a file to an `rncp` listener is going.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RncpState {
+    /// How much of it has gone, 0 to 1.
+    Sending(f32),
+    Sent {
+        bytes: usize,
+        secs: f64,
+    },
+    Failed(String),
+}
+
+/// Longest a file may take to send, from finding the listener on.
+const RNCP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// Longest to wait for the listener's key, if it hasn't been heard.
+const RNCP_PATH_WAIT: Duration = Duration::from_secs(30);
+
+/// Send `data` as the file `name` to the `rncp` listener `to`, as `rncp`
+/// does, identified as `identity` (which the listener must allow, unless
+/// it lets anyone send). Says how it goes as [`super::NetEvent::Rncp`].
+pub async fn rncp_send(
+    runtime: &ReticulumHandle,
+    identity: Identity,
+    to: Hash,
+    name: String,
+    data: Vec<u8>,
+    ev: tokio::sync::mpsc::UnboundedSender<super::NetEvent>,
+) {
+    let say = |state| super::NetEvent::Rncp { to, name: name.clone(), state };
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<f32>(16);
+    let _ = ev.send(say(RncpState::Sending(0.0)));
+    // Every 5%, not every part.
+    let (events, called) = (ev.clone(), name.clone());
+    let watcher = tokio::spawn(async move {
+        let mut shown = 0;
+        while let Some(done) = progress_rx.recv().await {
+            let step = (done.clamp(0.0, 1.0) * 20.0) as u32;
+            if step > shown {
+                shown = step;
+                let _ = events.send(super::NetEvent::Rncp { to, name: called.clone(), state: RncpState::Sending(done) });
+            }
+        }
+    });
+    // rsReticulum's sender holds what isn't Send across its awaits, so it
+    // runs on a thread of its own, driven by this runtime.
+    let (transport_tx, handle, file_name) = (runtime.transport_tx.clone(), tokio::runtime::Handle::current(), name.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        handle.block_on(rns_runtime::rncp::rncp_send_file(rns_runtime::rncp::RncpSendRequest {
+            transport_tx,
+            identity,
+            dest_hash: to,
+            file_name: &file_name,
+            data,
+            auto_compress: true,
+            overall_timeout: RNCP_TIMEOUT,
+            path_wait: RNCP_PATH_WAIT,
+            progress_tx: Some(progress_tx),
+        }))
+    })
+    .await
+    .unwrap_or_else(|e| Err(rns_runtime::rncp::RncpError::Io(e.to_string())));
+    let _ = watcher.await;
+    let state = match result {
+        Ok(outcome) => RncpState::Sent { bytes: outcome.bytes, secs: outcome.duration.as_secs_f64() },
+        Err(rns_runtime::rncp::RncpError::Denied) => {
+            RncpState::Failed("the listener doesn't allow your identity (add it with rncp -a, or run rncp -l -n)".into())
+        }
+        // As a listener refuses one it doesn't allow: it closes the link.
+        Err(rns_runtime::rncp::RncpError::ResourceFailed(e)) if e.contains("link closed") => RncpState::Failed(
+            "the listener closed the link: it may not allow your identity (rncp -a adds it, rncp -l -n lets anyone send)".into(),
+        ),
+        Err(rns_runtime::rncp::RncpError::PathTimeout) => RncpState::Failed("no listener heard at that address".into()),
+        Err(e) => RncpState::Failed(e.to_string()),
+    };
+    let _ = ev.send(say(state));
+}

@@ -100,6 +100,17 @@ shows your identity, your interfaces and the log.
   shared instance (the first Reticulum program started with
   `share_instance` on), these use its paths, and Reticulum's own `rnpath`
   and `rnprobe` work against it too.
+- **Sending a file with rncp:** `F` in the Network tab (in the list, the
+  announces or the tables), or **Send a file…** in the web UI, sends a file
+  to someone running Reticulum's `rncp -l`, as `rncp FILE ADDRESS` does:
+  it lands in their folder. Give the address their `rncp -l` prints (the
+  selected one is filled in). Their listener lets in only the identities
+  it allows, so give them yours (rettui shows it there): they add it with
+  `rncp -a`, or start the listener with `-n` to let anyone send. A file is
+  up to 32 MB. In the terminal you type its path; the web UI sends one
+  your browser picks, never a file from the computer rettui runs on. How
+  it's going shows as it goes, and the log says when it arrived or why it
+  didn't.
 - **Status:** the Status tab shows your identity and LXMF address, your
   first steps until they're taken (see
   [Running](Running#first-steps)), the network state, each interface with its traffic, the last sync, the

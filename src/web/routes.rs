@@ -159,6 +159,8 @@ pub fn router(state: WebState) -> Router {
         .route("/node/announce", post(node_announce))
         .route("/node/allowed", get(node_allowed).post(set_node_allowed))
         .route("/node/stats/reset", post(reset_node_stats))
+        .route("/rncp", get(rncp_sends))
+        .route("/rncp/send", post(rncp_send))
         .route("/hub", get(hosted_hub))
         .route("/hub/{action}", post(hosted_hub_action))
         .route("/reticulum", get(reticulum))
@@ -2292,6 +2294,47 @@ async fn set_node_allowed(State(state): State<WebState>, axum::Json(body): axum:
         Some(body.identities.iter().map(|i| parse_hash(i).ok_or_else(|| bad("Not an identity hash"))).collect::<Result<Vec<_>, _>>()?)
     };
     state.write(move |o| o.app.set_node_allowed(root, &body.path, only)).await??;
+    ok()
+}
+
+/// Files sent to rncp listeners lately, the identity they must allow, and
+/// the largest that may be sent.
+async fn rncp_sends(State(state): State<WebState>) -> ApiResult {
+    use crate::net::RncpState;
+    state
+        .read(|o| {
+            let sends: Vec<Value> = o
+                .app
+                .rncp
+                .iter()
+                .map(|s| {
+                    let (state, progress, error) = match &s.state {
+                        RncpState::Sending(done) => ("sending", *done, None),
+                        RncpState::Sent { .. } => ("sent", 1.0, None),
+                        RncpState::Failed(e) => ("failed", 0.0, Some(e.clone())),
+                    };
+                    json!({
+                        "to": s.to, "to_name": o.app.store.display_name(&s.to), "name": s.name, "bytes": s.bytes, "at": s.at,
+                        "state": state, "progress": progress, "error": error,
+                    })
+                })
+                .collect();
+            axum::Json(json!({ "sends": sends, "identity": hex::encode(o.app.identity_hash), "max": crate::app::rncp::MAX_SEND }))
+        })
+        .await
+        .map_err(ApiError::from)
+}
+
+#[derive(Deserialize)]
+struct RncpQuery {
+    to: String,
+    name: String,
+}
+
+/// Send what the browser picked (never a file on this computer) to an
+/// rncp listener.
+async fn rncp_send(State(state): State<WebState>, Query(query): Query<RncpQuery>, body: axum::body::Bytes) -> ApiResult {
+    state.write(move |o| o.app.rncp_send(&query.to, &query.name, body.to_vec())).await??;
     ok()
 }
 

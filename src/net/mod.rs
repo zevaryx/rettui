@@ -33,8 +33,8 @@ use crate::rrc::host::{HostedHub, HubAction, HubEvent, HubHostConfig};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
 pub use remote::{
-    AnnounceRate, Known, KnownIdentities, PathInfo, Ping, Probe, Progress, connect, drop_path, ensure_path, find_path, link_options,
-    lookup, paths, probe, trace_path,
+    AnnounceRate, Known, KnownIdentities, PathInfo, Ping, Probe, Progress, RncpState, connect, drop_path, ensure_path, find_path,
+    link_options, lookup, paths, probe, trace_path,
 };
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
@@ -125,6 +125,12 @@ pub enum NetCommand {
     /// Read the path table and the announce-rate table (answered with
     /// [`NetEvent::Tables`]).
     ReadTables,
+    /// Send a file to an `rncp` listener (answered with [`NetEvent::Rncp`]).
+    RncpSend {
+        to: Hash,
+        name: String,
+        data: Vec<u8>,
+    },
     /// Forget the keys kept for peers the app forgot (not heard from in a
     /// while).
     ForgetKnown(Vec<Hash>),
@@ -355,6 +361,12 @@ pub enum NetEvent {
     },
     /// The path table and the announce-rate table, as read.
     Tables(Result<Tables, String>),
+    /// How sending a file to an `rncp` listener is going.
+    Rncp {
+        to: Hash,
+        name: String,
+        state: remote::RncpState,
+    },
     /// A path forgotten (`had`: there was one).
     PathForgotten {
         to: Hash,
@@ -966,6 +978,10 @@ async fn run(
                             };
                             let _ = ev.send(NetEvent::Tables(tables.await));
                         });
+                    }
+                    NetCommand::RncpSend { to, name, data } => {
+                        let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
+                        tokio::spawn(async move { remote::rncp_send(&runtime, identity, to, name, data, ev).await });
                     }
                     NetCommand::Blackhole { to, block, quiet } => {
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());

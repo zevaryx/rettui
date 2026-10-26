@@ -1958,3 +1958,40 @@ fn the_node_counts_what_it_serves_across_restarts_until_reset() {
     assert_eq!((tui.app.node.served.requests, tui.app.node.served.pages), (0, 0));
     assert!(tui.draw().contains("0 pages · 0 files"));
 }
+
+#[test]
+fn sending_a_file_to_an_rncp_listener() {
+    let mut tui = Tui::new("rncp");
+    tui.tab(Tab::Network);
+    let file = tui.dir.join("notes.txt");
+    std::fs::write(&file, "Meet at noon").unwrap();
+    let to = "ab".repeat(16);
+    // The listener's address, then the file; it says which identity to allow.
+    tui.key(KeyCode::Char('F'));
+    let mine = hex::encode(tui.app.identity_hash);
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.contains(&mine)));
+    tui.answer("nope");
+    assert!(tui.said().contains("32 hex"), "{}", tui.said());
+    tui.key(KeyCode::Char('F')).answer(&to);
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.contains("Send which file")));
+    tui.answer("/no/such/file");
+    assert!(tui.said().contains("Could not read"), "{}", tui.said());
+    tui.key(KeyCode::Char('F')).answer(&to).answer(&file.display().to_string());
+    let sent = tui.sent();
+    assert!(
+        sent.iter().any(|c| matches!(c, NetCommand::RncpSend { name, data, .. } if name == "notes.txt" && data == b"Meet at noon")),
+        "{sent:?}"
+    );
+    // How it goes, as the network says.
+    let hash = crate::net::parse_hash(&to).unwrap();
+    let say = |tui: &mut Tui, state| tui.app.on_net(crate::net::NetEvent::Rncp { to: hash, name: "notes.txt".into(), state });
+    say(&mut tui, crate::net::RncpState::Sending(0.5));
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("notes.txt") && n.text.contains("50%")));
+    say(&mut tui, crate::net::RncpState::Sent { bytes: 12, secs: 1.5 });
+    assert!(tui.app.log.iter().any(|l| l.contains("Sent notes.txt (12 B)")));
+    // Sent again; refused this time.
+    tui.key(KeyCode::Char('F')).answer(&to).answer(&file.display().to_string());
+    say(&mut tui, crate::net::RncpState::Failed("the listener closed the link".into()));
+    assert!(tui.said().contains("Could not send notes.txt"), "{}", tui.said());
+    assert_eq!(tui.app.rncp.len(), 2);
+}

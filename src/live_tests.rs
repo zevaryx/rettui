@@ -887,3 +887,83 @@ async fn discovered_entry_points_left_to_the_config() {
         until_one(&mut peer, "the setting said to wait", |p| p.app.log.iter().any(|l| l.contains("takes effect once"))).await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_sent_to_an_rncp_listener() {
+    use rns_runtime::rncp::{RncpListenerConfig, spawn_rncp_listener};
+    use rns_transport::messages::{OutboundRequest, TransportMessage};
+    let port = free_port();
+    let server = format!(
+        "  [[Server]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n{TAKE_ALL}"
+    );
+    let mut amy = Peer::start("rncp-amy", &server, |_| {});
+    until_one(&mut amy, "Amy starting", |a| a.app.lxmf_hash.is_some()).await;
+
+    // Someone running `rncp -l` on another Reticulum, connected to Amy's:
+    // one listener lets Amy send, the other lets no one.
+    let dir = std::env::temp_dir().join(format!("rettui-live-rncp-listener-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (rns, saved) = (dir.join("rns"), dir.join("received"));
+    std::fs::create_dir_all(&rns).unwrap();
+    std::fs::create_dir_all(&saved).unwrap();
+    std::fs::write(
+        rns.join("config"),
+        format!(
+            "[reticulum]\n  enable_transport = No\n  share_instance = No\n\n[interfaces]\n  [[To Amy]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n{TAKE_ALL}"
+        ),
+    )
+    .unwrap();
+    let runtime = net::start_runtime(Some(&rns.display().to_string())).await.unwrap();
+    let listen = |allowed: Vec<[u8; 16]>| {
+        let identity = Identity::new();
+        let config = RncpListenerConfig { identity: identity.clone(), save_dir: saved.clone(), allowed, ..RncpListenerConfig::default() };
+        let (events, _) = tokio::sync::mpsc::channel(64);
+        let transport_tx = runtime.transport_tx.clone();
+        async move { (spawn_rncp_listener(transport_tx, config, events).await.unwrap(), identity) }
+    };
+    let (open, open_identity) = listen(vec![amy.identity.hash]).await;
+    let (closed, closed_identity) = listen(Vec::new()).await;
+    // Each announces, as `rncp -l -b` does, until Amy has sent.
+    let announcing = {
+        let transport_tx = runtime.transport_tx.clone();
+        let listeners = [(open_identity, open.destination_hash()), (closed_identity, closed.destination_hash())];
+        tokio::spawn(async move {
+            loop {
+                for (identity, hash) in &listeners {
+                    let mut destination = rns_identity::destination::Destination::new(
+                        Some(identity),
+                        rns_identity::destination::Direction::In,
+                        rns_identity::destination::DestType::Single,
+                        rns_runtime::rncp::DEFAULT_RNCP_APP_NAME,
+                    )
+                    .unwrap();
+                    let raw = destination.announce_packet(identity, None, None, false, None, crate::app::now()).unwrap();
+                    let _ =
+                        transport_tx.send(TransportMessage::Outbound(OutboundRequest { raw: raw.into(), destination_hash: *hash })).await;
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        })
+    };
+
+    let to = hex::encode(open.destination_hash());
+    amy.app.rncp_send(&to, "notes.txt", b"Meet at the hill at noon".to_vec()).unwrap();
+    assert!(amy.app.rncp_send(&to, "notes.txt", b"again".to_vec()).unwrap_err().contains("already on its way"));
+    let refused = hex::encode(closed.destination_hash());
+    amy.app.rncp_send(&refused, "secret.txt", b"no".to_vec()).unwrap();
+    until_one(&mut amy, "both sends finishing", |a| a.app.rncp.iter().all(|s| !matches!(s.state, net::RncpState::Sending(_)))).await;
+    assert!(matches!(amy.app.rncp[0].state, net::RncpState::Sent { bytes: 24, .. }), "{:?}", amy.app.rncp[0].state);
+    assert_eq!(std::fs::read_to_string(saved.join("notes.txt")).unwrap(), "Meet at the hill at noon");
+    assert!(
+        matches!(&amy.app.rncp[1].state, net::RncpState::Failed(e) if e.contains("may not allow your identity")),
+        "{:?}",
+        amy.app.rncp[1].state
+    );
+    assert!(!saved.join("secret.txt").exists());
+    assert!(amy.app.log.iter().any(|l| l.contains("Sent notes.txt (24 B)")), "{:?}", amy.app.log);
+
+    announcing.abort();
+    open.shutdown().await;
+    closed.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}

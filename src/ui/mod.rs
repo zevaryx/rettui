@@ -166,7 +166,7 @@ fn highlighted(text: &str, limit: usize, terms: &[Vec<char>], style: Style) -> V
     spans
 }
 
-fn human_bytes(bytes: u64) -> String {
+pub(crate) fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
     let mut unit = 0;

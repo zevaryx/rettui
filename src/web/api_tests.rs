@@ -1340,3 +1340,29 @@ async fn the_nodes_statistics_and_resetting_them() {
     // Status says what it served only while it's running.
     assert!(web.get("/api/state").await.json()["node_served"].is_null());
 }
+
+#[tokio::test]
+async fn sending_a_file_with_rncp() {
+    let web = TestWeb::start("rncp");
+    let state = web.get("/api/rncp").await.json();
+    assert_eq!(state["sends"].as_array().map(Vec::len), Some(0));
+    assert_eq!(state["identity"].as_str().map(str::len), Some(32));
+    let to = "cd".repeat(16);
+    let sent = web.post_bytes(&format!("/api/rncp/send?to={to}&name=notes.txt"), "application/octet-stream", b"hello".to_vec()).await;
+    assert_eq!(sent.status, StatusCode::OK, "{}", sent.text());
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::RncpSend { name, .. } if name == "notes.txt")));
+    let state = web.get("/api/rncp").await.json();
+    assert_eq!((state["sends"][0]["state"].as_str(), state["sends"][0]["bytes"].as_u64()), (Some("sending"), Some(5)));
+    // A folder in the name is left out; a wrong address, no name, too big.
+    let folder =
+        web.post_bytes(&format!("/api/rncp/send?to={to}&name=..%2F..%2Fother.txt"), "application/octet-stream", b"x".to_vec()).await;
+    assert_eq!(folder.status, StatusCode::OK);
+    assert_eq!(web.get("/api/rncp").await.json()["sends"][1]["name"], "other.txt");
+    let wrong = web.post_bytes("/api/rncp/send?to=nope&name=a.txt", "application/octet-stream", b"x".to_vec()).await;
+    assert!(wrong.error().contains("32 hex"));
+    let unnamed = web.post_bytes(&format!("/api/rncp/send?to={to}&name=%20"), "application/octet-stream", b"x".to_vec()).await;
+    assert!(unnamed.error().contains("needs a name"));
+    let big = vec![0u8; crate::app::rncp::MAX_SEND + 1];
+    let big = web.post_bytes(&format!("/api/rncp/send?to={to}&name=big.bin"), "application/octet-stream", big).await;
+    assert!(big.error().contains("at most"));
+}

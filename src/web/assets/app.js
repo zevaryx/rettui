@@ -5369,6 +5369,7 @@ app.views.network = {
         el('button', { class: 'more', text: 'Tables', title: 'Reticulum\'s path table and announce rates  ( t )', 'data-label': 'Path table and announce rates', onclick: () => tablesDialog() }),
         el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+        el('button', { class: 'more', text: 'Send a file…', title: 'Send a file to someone running rncp -l  ( F )', onclick: () => rncpDialog(this.selected) }),
         el('button', { class: 'more', text: 'Find a path…', title: 'Find the path to any address', onclick: async () => {
           const address = await askText('Find a path', { label: 'To the address', value: this.selected || '', ok: 'Find', mono: true });
           if (address) pathDialog(address.replace(/^<|>$/g, ''));
@@ -8139,6 +8140,43 @@ async function rnsHistory(changed) {
 // Reticulum's tables: every path known, or how often each destination
 // announces (as rnpath -t and -r list them), searched by rettui and read
 // again every few seconds while this is open. A row opens its path.
+// A file sent to an rncp listener, as `rncp FILE ADDRESS` does, and how
+// the ones sent lately went.
+async function rncpDialog(address) {
+  const sends = await attempt(() => api.get('/rncp'));
+  if (!sends) return;
+  dialog('Send a file with rncp', (close) => {
+    const to = el('input', { type: 'text', class: 'mono', value: address || '', placeholder: 'the listener\'s address', spellcheck: false });
+    const file = el('input', { type: 'file' });
+    const list = el('div', { class: 'rncp-sends' });
+    const show = (sent) => list.replaceChildren(...sent.slice().reverse().map((s) => el('div', { class: 'row' },
+      el('span', { class: 'grow', text: `${s.name} (${humanBytes(s.bytes)}) to ${s.to_name}` }),
+      el('span', { class: s.state === 'failed' ? 'state-bad' : s.state === 'sent' ? 'online' : 'dim',
+        text: s.state === 'sending' ? `${Math.round(s.progress * 100)}%` : s.state === 'sent' ? 'sent' : s.error }))));
+    show(sends.sends);
+    // While it's open, how they're going.
+    const timer = setInterval(async () => {
+      if (!document.body.contains(list)) return clearInterval(timer);
+      const now = await api.get('/rncp').catch(() => null);
+      if (now) show(now.sends);
+    }, 1000);
+    const send = async () => {
+      const picked = file.files[0];
+      if (!picked) return toast('Pick a file to send');
+      const q = `?to=${encodeURIComponent(to.value.trim())}&name=${encodeURIComponent(picked.name)}`;
+      if (await attempt(() => upload('/rncp/send' + q, picked), `Sending ${picked.name}`)) file.value = '';
+    };
+    return [
+      el('p', { class: 'dim', text: `Someone running rncp -l gets it in their folder. Their listener must allow your identity, ${sends.identity} (rncp -a), or let anyone send (rncp -l -n). Up to ${humanBytes(sends.max)}.` }),
+      el('label', { class: 'field' }, el('span', { text: 'To' }), to),
+      el('label', { class: 'field' }, el('span', { text: 'File' }), file),
+      list,
+      el('div', { class: 'row actions' }, el('span', { class: 'grow' }),
+        el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } }), el('button', { class: 'primary', text: 'Send', onclick: send })),
+    ];
+  });
+}
+
 function tablesDialog() {
   let table = 'paths';
   let query = '';
@@ -8347,6 +8385,8 @@ document.addEventListener('keydown', (e) => {
     app.views.network.toggleMode();
   } else if (e.key === 't' && app.tab === 'network') {
     tablesDialog();
+  } else if (e.key === 'F' && app.tab === 'network') {
+    rncpDialog(app.views.network.selected);
   } else if (e.key === '/' && app.tab === 'messages') {
     e.preventDefault();
     setPane(app.views.messages, 'list');

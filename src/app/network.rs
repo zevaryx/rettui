@@ -366,6 +366,8 @@ impl App {
             ('y', Some(key)) => self.copy(&key, "address"),
             // A path to it (or any address typed), found or shown.
             ('P', current) => self.open_prompt(PromptKind::FindPath, "Find a path to (address)", &current.unwrap_or_default()),
+            // A file sent to it (or any address typed), as rncp does.
+            ('F', current) => self.ask_rncp(current),
             // Probed, as rnprobe does.
             ('T', Some(key)) => {
                 if let Err(e) = self.probe(&key) {
@@ -438,7 +440,7 @@ impl App {
                     self.set_propagation_node(&key);
                 }
             }
-            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D')) => self.address_action(c, selected.map(|(key, _)| key)),
+            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F')) => self.address_action(c, selected.map(|(key, _)| key)),
             // Block an LXMF peer, or unblock one.
             KeyCode::Char('b') => {
                 if let Some((key, PeerKind::Lxmf)) = selected {
