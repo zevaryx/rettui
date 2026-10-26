@@ -233,6 +233,70 @@ fn the_reticulum_tab_option_by_option_and_as_text() {
 }
 
 #[test]
+fn reticulums_path_and_announce_rate_tables() {
+    use crate::net::{AnnounceRate, NetEvent, PathInfo, Tables};
+    let mut tui = Tui::new("tables");
+    tui.tab(Tab::Network);
+    tui.key(KeyCode::Char('t'));
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::ReadTables)));
+    assert!(tui.draw().contains("Reading Reticulum's tables"));
+    // A name from the announce viewer, which hears every kind.
+    let now = crate::app::now();
+    let heard = crate::net::heard::Heard {
+        hash: [2; 16],
+        kind: crate::net::heard::Kind::Other,
+        aspect: None,
+        name: Some("Hilltop relay".into()),
+        hops: 1,
+    };
+    tui.app.announce_log.push(heard, now);
+    let paths = vec![
+        ([1; 16], PathInfo { hops: 3, via: Some([9; 16]), interface: "RMAP World".into(), expires: now as i64 + 3 * 86_400 + 60 }),
+        ([2; 16], PathInfo { hops: 1, via: None, interface: "Auto".into(), expires: now as i64 + 600 }),
+    ];
+    let rates = vec![
+        AnnounceRate { hash: [1; 16], last: now - 180.0, per_hour: Some(4.0), violations: 0, blocked_until: 0.0 },
+        AnnounceRate {
+            hash: [2; 16],
+            last: now - 30.0,
+            per_hour: crate::net::remote::per_hour(&[now - 7200.0, now - 3600.0, now]),
+            violations: 2,
+            blocked_until: now + 750.0,
+        },
+    ];
+    tui.app.on_net(NetEvent::Tables(Ok(Tables { paths, rates })));
+    let shown = tui.draw();
+    assert!(shown.contains("Path table · 2") && shown.contains("Hilltop relay") && shown.contains("heard directly on Auto"), "{shown}");
+    assert!(shown.contains("3 hops via <09090909…> on RMAP World, kept for 3 days") && shown.contains("(unnamed)"), "{shown}");
+    assert!(shown.contains("t back"), "{shown}");
+    // Searched, by interface too.
+    tui.key(KeyCode::Char('/')).keys("rmap").key(KeyCode::Enter);
+    assert!(tui.draw().contains("Path table · 1 matching"));
+    tui.key(KeyCode::Esc);
+    // Announce rates: one held back first.
+    tui.key(KeyCode::Char('f'));
+    let shown = tui.draw();
+    assert!(shown.contains("Announce rates · 2") && shown.contains("held back for 12 min · 2 times too often · 1.5 an hour"), "{shown}");
+    assert!(shown.contains("4.0 an hour · announced 3 min ago"), "{shown}");
+    // The row picked: its address for P, T and D, as in the list.
+    tui.key(KeyCode::Down).key(KeyCode::Up).key(KeyCode::End).key(KeyCode::Home).key(KeyCode::PageDown).key(KeyCode::PageUp);
+    tui.key(KeyCode::Char('T'));
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::Probe(hash) if *hash == [2; 16])));
+    let rows = tui.app.regions.peers;
+    tui.click(rows.x + 2, rows.y + 1);
+    assert_eq!(tui.app.tables.list.selected(), Some(1));
+    // Read again on asking (and every few seconds while shown); a reading
+    // that failed says so.
+    tui.key(KeyCode::Char('R'));
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::ReadTables)));
+    tui.app.on_net(NetEvent::Tables(Err("The announce-rate table couldn't be read".into())));
+    assert!(tui.draw().contains("couldn't be read. R tries again"));
+    // Back to the list.
+    tui.key(KeyCode::Char('t'));
+    assert!(!tui.app.tables.open && tui.draw().contains("Heard announces"));
+}
+
+#[test]
 fn interface_profiles_kept_switched_and_deleted() {
     let mut tui = Tui::new("rns-profiles");
     tui.tab(Tab::Reticulum);

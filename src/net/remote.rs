@@ -317,6 +317,53 @@ pub async fn paths(runtime: &ReticulumHandle) -> Result<Vec<(Hash, PathInfo)>, S
         .collect())
 }
 
+/// A destination's announces, as the announce-rate table has it: how often
+/// it announces, and whether it's held back for announcing too often (as
+/// `rnpath -r` lists).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AnnounceRate {
+    #[serde(serialize_with = "hex_hash")]
+    pub hash: Hash,
+    /// When it last announced (Unix seconds).
+    pub last: f64,
+    /// Announces an hour, over those kept (none from a single one).
+    pub per_hour: Option<f64>,
+    /// Times it announced faster than its interface allows.
+    pub violations: u32,
+    /// Its announces are dropped until then (Unix seconds), if later than now.
+    pub blocked_until: f64,
+}
+
+fn hex_hash<S: serde::Serializer>(hash: &Hash, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&hex::encode(hash))
+}
+
+/// Announces an hour, from the times they came (as `rnpath -r` works it out).
+pub fn per_hour(timestamps: &[f64]) -> Option<f64> {
+    let (first, last) = (timestamps.first()?, timestamps.last()?);
+    let window = last - first;
+    (timestamps.len() > 1 && window > 0.0).then(|| timestamps.len() as f64 / (window / 3600.0))
+}
+
+/// The announce-rate table: the shared instance's, when this is a client
+/// of one.
+pub async fn announce_rates(runtime: &ReticulumHandle) -> Result<Vec<AnnounceRate>, String> {
+    use rns_transport::messages::{TransportQuery, TransportQueryResponse};
+    match runtime.query_control(TransportQuery::GetRateTable).await {
+        Some(TransportQueryResponse::RateTable(entries)) => Ok(entries
+            .into_iter()
+            .map(|e| AnnounceRate {
+                hash: e.hash,
+                last: e.last,
+                per_hour: per_hour(&e.timestamps),
+                violations: e.rate_violations,
+                blocked_until: e.blocked_until,
+            })
+            .collect()),
+        _ => Err("The announce-rate table couldn't be read".into()),
+    }
+}
+
 /// The path to `destination`, if one is known.
 pub async fn path_info(runtime: &ReticulumHandle, destination: Hash) -> Option<PathInfo> {
     let paths = paths(runtime).await.ok()?;

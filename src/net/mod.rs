@@ -33,8 +33,8 @@ use crate::rrc::host::{HostedHub, HubAction, HubEvent, HubHostConfig};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
 pub use remote::{
-    Known, KnownIdentities, PathInfo, Ping, Probe, Progress, connect, drop_path, ensure_path, find_path, link_options, lookup, paths,
-    probe, trace_path,
+    AnnounceRate, Known, KnownIdentities, PathInfo, Ping, Probe, Progress, connect, drop_path, ensure_path, find_path, link_options,
+    lookup, paths, probe, trace_path,
 };
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
@@ -122,6 +122,9 @@ pub enum NetCommand {
     /// Forget the path to a destination (answered with
     /// [`NetEvent::PathForgotten`]).
     ForgetPath(Hash),
+    /// Read the path table and the announce-rate table (answered with
+    /// [`NetEvent::Tables`]).
+    ReadTables,
     /// Forget the keys kept for peers the app forgot (not heard from in a
     /// while).
     ForgetKnown(Vec<Hash>),
@@ -240,6 +243,13 @@ impl Stop {
     }
 }
 
+/// What Reticulum knows of paths and announce rates, read on request.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Tables {
+    pub paths: Vec<(Hash, PathInfo)>,
+    pub rates: Vec<AnnounceRate>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct InterfaceInfo {
     pub name: String,
@@ -343,6 +353,8 @@ pub enum NetEvent {
         to: Hash,
         text: String,
     },
+    /// The path table and the announce-rate table, as read.
+    Tables(Result<Tables, String>),
     /// A path forgotten (`had`: there was one).
     PathForgotten {
         to: Hash,
@@ -945,6 +957,15 @@ async fn run(
                     NetCommand::ForgetPath(to) => {
                         let had = remote::drop_path(&runtime, to).await;
                         let _ = ev.send(NetEvent::PathForgotten { to, had });
+                    }
+                    NetCommand::ReadTables => {
+                        let (runtime, ev) = (runtime.clone(), ev.clone());
+                        tokio::spawn(async move {
+                            let tables = async {
+                                Ok(Tables { paths: remote::paths(&runtime).await?, rates: remote::announce_rates(&runtime).await? })
+                            };
+                            let _ = ev.send(NetEvent::Tables(tables.await));
+                        });
                     }
                     NetCommand::Blackhole { to, block, quiet } => {
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());

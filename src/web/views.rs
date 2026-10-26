@@ -545,6 +545,52 @@ pub fn announces(app: &App, after: Option<u64>, filter: crate::app::announces::H
     })
 }
 
+/// Reticulum's path table or announce-rate table, searched: at most
+/// `limit` rows (a transport node can know thousands of paths), and how
+/// many there are.
+pub fn tables(app: &App, which: crate::app::tables::Table, query: &str, limit: usize) -> Value {
+    use crate::app::tables::{Table, rate_label};
+    let terms = network::search_terms(query);
+    let now = crate::app::now();
+    let (total, rows): (usize, Vec<Value>) = match which {
+        Table::Paths => {
+            let rows = app.path_rows(&terms);
+            let shown = rows
+                .iter()
+                .take(limit)
+                .map(|row| {
+                    json!({
+                        "hash": row.key, "name": row.name, "hops": row.info.hops, "via": row.info.via.map(hex::encode),
+                        "interface": row.info.interface, "expires": row.info.expires,
+                        "text": crate::app::paths::path_label(row.info, now as i64),
+                    })
+                })
+                .collect();
+            (rows.len(), shown)
+        }
+        Table::Rates => {
+            let rows = app.rate_rows(&terms);
+            let shown = rows
+                .iter()
+                .take(limit)
+                .map(|row| {
+                    json!({
+                        "hash": row.key, "name": row.name, "last": row.rate.last, "per_hour": row.rate.per_hour,
+                        "violations": row.rate.violations, "held": row.rate.blocked_until > now,
+                        "text": rate_label(row.rate, now),
+                    })
+                })
+                .collect();
+            (rows.len(), shown)
+        }
+    };
+    let error = match &app.tables.read {
+        Some(Err(e)) => Some(e.as_str()),
+        _ => None,
+    };
+    json!({ "table": which.key(), "read": app.tables.read.is_some(), "error": error, "total": total, "rows": rows })
+}
+
 fn hub_status(status: &HubStatus) -> Value {
     match status {
         HubStatus::Connected => json!({ "kind": "connected" }),

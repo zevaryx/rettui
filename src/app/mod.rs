@@ -46,6 +46,7 @@ mod saver;
 pub mod search;
 mod settings;
 pub mod shrink;
+pub mod tables;
 pub mod traffic;
 mod updates;
 
@@ -603,6 +604,8 @@ pub struct App {
     pub net_via: Option<String>,
     /// Every announce heard, for the announce viewer.
     pub announce_log: announces::AnnounceLog,
+    /// Reticulum's path and announce-rate tables (`t` in the Network tab).
+    pub tables: tables::TablesView,
     /// The interface each destination with a path goes through, by address.
     pub routes: HashMap<String, String>,
     pub net_search: NetSearch,
@@ -782,6 +785,7 @@ impl App {
             net_sort: network::NetSort::Heard,
             net_via: None,
             announce_log: announces::AnnounceLog::default(),
+            tables: tables::TablesView::default(),
             routes: HashMap::new(),
             net_search: NetSearch::default(),
             browser: Browser::default(),
@@ -1133,6 +1137,7 @@ impl App {
             NetEvent::Path { to, result } => self.on_path(to, result),
             NetEvent::PathProgress { to, text } => self.on_path_progress(to, text),
             NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
+            NetEvent::Tables(result) => self.on_tables(result),
             NetEvent::Probed { to, result } => self.on_probed(to, result),
             NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
@@ -1552,6 +1557,7 @@ impl App {
         self.updates_tick();
         self.recording_tick();
         self.live_tick();
+        self.tables_tick();
         self.channels_tick();
         self.watch_connection();
         self.refresh_partials();

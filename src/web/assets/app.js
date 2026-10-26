@@ -5339,6 +5339,7 @@ app.views.network = {
     this.table = el('div', { class: 'scroll' });
     root.append(el('div', { class: 'column grow' },
       el('section', { class: 'panel' }, el('header', { class: 'network-tools' }, this.search, filter, this.heardSelect, sort, this.viaSelect, this.modeButton,
+        el('button', { class: 'more', text: 'Tables', title: 'Reticulum\'s path table and announce rates  ( t )', 'data-label': 'Path table and announce rates', onclick: () => tablesDialog() }),
         el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
         el('button', { class: 'more', text: 'Find a path…', title: 'Find the path to any address', onclick: async () => {
@@ -8064,6 +8065,47 @@ async function rnsHistory(changed) {
   show();
 }
 
+// Reticulum's tables: every path known, or how often each destination
+// announces (as rnpath -t and -r list them), searched by rettui and read
+// again every few seconds while this is open. A row opens its path.
+function tablesDialog() {
+  let table = 'paths';
+  let query = '';
+  let timer = null;
+  let request = 0;
+  const tabs = el('div', { class: 'subtabs' });
+  const search = el('input', { type: 'search', placeholder: 'Find by name, address or interface', oninput: () => {
+    query = search.value;
+    clearTimeout(timer);
+    timer = setTimeout(show, 120);
+  } });
+  const summary = el('div', { class: 'dim' });
+  const list = el('div', { class: 'scroll tables-list' });
+  const show = async () => {
+    clearTimeout(timer);
+    const mine = ++request;
+    tabs.replaceChildren(...[['paths', 'Path table'], ['rates', 'Announce rates']].map(([key, text]) =>
+      el('button', { class: key === table ? 'active' : '', text, onclick: () => { table = key; show(); } })));
+    const params = new URLSearchParams({ table, q: query });
+    const data = await api.get('/tables?' + params).catch((e) => ({ error: e.message, rows: [], total: 0, read: true }));
+    if (mine !== request || !list.isConnected) return;
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    summary.textContent = data.error ? data.error : !data.read ? 'Reading Reticulum\'s tables…'
+      : `${data.total}${terms.length ? ' matching' : ''}${data.rows.length < data.total ? ` · the first ${data.rows.length} shown` : ''}`;
+    list.replaceChildren(...(data.rows.length ? data.rows.map((row) => el('button', {
+      class: 'list-item' + (row.held ? ' state-warn' : ''), onclick: () => pathDialog(row.hash),
+    }, el('span', { class: 'main' },
+      el('div', { class: 'name' }, ...(row.name ? highlighted(row.name, terms) : [el('span', { class: 'dim', text: '(unnamed)' })])),
+      el('div', { class: 'sub mono' }, ...highlighted(row.hash, terms)),
+      el('div', { class: 'sub', text: row.text })))) : data.read && !data.error ? [el('div', { class: 'empty', text: terms.length ? 'Nothing here matches.'
+      : table === 'paths' ? 'No paths known yet. Each destination heard announcing, or asked for, gets one.'
+        : 'No announce rates yet. Reticulum keeps them for destinations heard announcing, when it passes announces on (transport).' })] : []));
+    timer = setTimeout(show, data.read ? 5000 : 1000);
+  };
+  dialog('Reticulum\'s tables', () => el('div', { class: 'tables' }, tabs, search, summary, list), { className: 'tables-dialog', onclose: () => clearTimeout(timer) });
+  show();
+}
+
 // Interface profiles: named sets of interfaces on and off, to switch
 // between. Switching one turns them on and off in the config (kept in its
 // history) and restarts Reticulum. `changed` runs once the file changes.
@@ -8232,6 +8274,8 @@ document.addEventListener('keydown', (e) => {
     app.views.network.search.focus();
   } else if (e.key === 'a' && app.tab === 'network') {
     app.views.network.toggleMode();
+  } else if (e.key === 't' && app.tab === 'network') {
+    tablesDialog();
   } else if (e.key === '/' && app.tab === 'messages') {
     e.preventDefault();
     setPane(app.views.messages, 'list');

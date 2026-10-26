@@ -43,6 +43,9 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
 pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     let [search_area, area] = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).areas(area);
     draw_search(frame, app, search_area);
+    if app.tables.open {
+        return draw_tables(frame, app, area);
+    }
     if app.announce_log.open {
         return draw_announces(frame, app, area);
     }
@@ -237,6 +240,88 @@ fn draw_announces(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut window = ListState::default().with_selected(selected.map(|i| i - offset));
     let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold()).highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut window);
+}
+
+/// Reticulum's tables: every path known, or how often each destination
+/// announces.
+fn draw_tables(frame: &mut Frame, app: &mut App, area: Rect) {
+    use crate::app::tables::{Table, rate_label};
+    let terms = app.net_search.terms();
+    let now = crate::app::now();
+    let which = app.tables.which;
+    // Room for the address and what's known of it (a path is said in up
+    // to 60 characters or so).
+    let name_width = (area.width.saturating_sub(2) as usize).saturating_sub(ROW_WITHOUT_NAME + 60).clamp(MIN_NAME_WIDTH, 24);
+    let name_spans = |name: Option<&str>| {
+        let mut spans = match name {
+            Some(name) => highlighted(name, name_width, &terms, Style::default()),
+            None => vec![Span::styled("(unnamed)", Style::default().fg(dim()))],
+        };
+        let shown = name.map_or("(unnamed)".len(), |n| n.chars().count().min(name_width));
+        spans.push(Span::raw(" ".repeat(name_width.saturating_sub(shown) + 1)));
+        spans
+    };
+    let (items, total): (Vec<ListItem>, usize) = match which {
+        Table::Paths => {
+            let rows = app.path_rows(&terms);
+            let items = rows
+                .iter()
+                .map(|row| {
+                    let mut spans = name_spans(row.name);
+                    spans.extend(highlighted(&row.key, usize::MAX, &terms, Style::default().fg(dim())));
+                    let label = crate::app::paths::path_label(row.info, now as i64);
+                    spans.push(Span::raw(format!("  {label}")));
+                    ListItem::new(Line::from(spans))
+                })
+                .collect();
+            (items, rows.len())
+        }
+        Table::Rates => {
+            let rows = app.rate_rows(&terms);
+            let items = rows
+                .iter()
+                .map(|row| {
+                    let mut spans = name_spans(row.name);
+                    spans.extend(highlighted(&row.key, usize::MAX, &terms, Style::default().fg(dim())));
+                    let held = row.rate.blocked_until > now;
+                    let style = if held { Style::default().fg(Color::Yellow) } else { Style::default() };
+                    spans.push(Span::styled(format!("  {}", rate_label(row.rate, now)), style));
+                    ListItem::new(Line::from(spans))
+                })
+                .collect();
+            (items, rows.len())
+        }
+    };
+    let title = format!(
+        "{} · {total}{} · f {}",
+        which.label(),
+        if terms.is_empty() { "" } else { " matching" },
+        match which {
+            Table::Paths => "announce rates",
+            Table::Rates => "path table",
+        }
+    );
+    let list_block = block(&title, true);
+    app.regions.peers = list_block.inner(area);
+    if items.is_empty() {
+        let message = match &app.tables.read {
+            None => "Reading Reticulum's tables…".to_string(),
+            Some(Err(e)) => format!("{e}. R tries again."),
+            Some(Ok(_)) if !terms.is_empty() => format!("Nothing here matches “{}”. Esc clears the search.", app.net_search.input.text().trim()),
+            Some(Ok(_)) => match which {
+                Table::Paths => "No paths known yet. Each destination heard announcing, or asked for, gets one. t goes back to the list.".to_string(),
+                Table::Rates => "No announce rates yet. Reticulum keeps them for destinations heard announcing, when it passes announces on (transport). t goes back to the list.".to_string(),
+            },
+        };
+        frame.render_widget(Paragraph::new(message).style(Style::default().fg(dim())).wrap(Wrap { trim: true }).block(list_block), area);
+        return;
+    }
+    let view = &mut app.tables;
+    if view.list.selected().is_none_or(|i| i >= total) {
+        view.list.select(Some(total - 1));
+    }
+    let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold()).highlight_symbol("▌");
+    frame.render_stateful_widget(list, area, &mut view.list);
 }
 
 #[cfg(test)]

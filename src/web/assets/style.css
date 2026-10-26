@@ -1205,6 +1205,9 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .toast { max-width: none; }
 }
 .dialog.rns-history-dialog { width: min(1000px, 100%); }
+.dialog.tables-dialog { width: min(760px, 100%); }
+.tables { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.tables-list { max-height: 60vh; }
 /* A phone on its side: little height, plenty of width. The sections go in
    a rail down the left rather than a bar at the bottom, and the bars and
    headers are shorter, so most of the screen is the list or the page. */

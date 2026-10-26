@@ -416,6 +416,14 @@ async fn the_command_line_against_a_running_rettui() {
     let amy_address = hex::encode(amy.app.lxmf_hash.unwrap());
     while_running(&mut amy, crate::cli::path(&settings, &amy_address, false)).await.unwrap();
     while_running(&mut amy, crate::cli::path_table(&settings)).await.unwrap();
+    // The path and announce-rate tables, as the Network tab reads them.
+    amy.app.tables_wanted();
+    let started = Instant::now();
+    while !matches!(&amy.app.tables.read, Some(Ok(_))) {
+        amy.pump();
+        assert!(started.elapsed() < PATIENCE, "Amy's tables weren't read: {:?}", amy.app.tables.read);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let _ = while_running(&mut amy, crate::cli::path(&settings, &amy_address, true)).await;
     while_running(&mut amy, crate::cli::probe(&settings, &paths, &node, None)).await.unwrap();
     assert!(crate::cli::path(&settings, "nope", false).await.is_err());

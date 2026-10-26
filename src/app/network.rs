@@ -382,6 +382,9 @@ impl App {
     }
 
     pub(super) fn network_key(&mut self, key: KeyEvent) {
+        if self.tables.open {
+            return self.tables_key(key);
+        }
         if self.announce_log.open {
             return self.announces_key(key);
         }
@@ -407,6 +410,7 @@ impl App {
             }
             KeyCode::Char('i') => self.cycle_net_via(),
             KeyCode::Char('a') => self.toggle_announce_viewer(),
+            KeyCode::Char('t') => self.toggle_tables(),
             KeyCode::Char('f') => {
                 self.net_filter = match self.net_filter {
                     NetFilter::All => NetFilter::Peers,
@@ -456,6 +460,9 @@ impl App {
         if self.regions.net_search.contains(at) {
             self.net_search.typing = true;
             return;
+        }
+        if self.tables.open {
+            return self.click_tables(at);
         }
         if self.announce_log.open {
             return self.click_announces(at, double);

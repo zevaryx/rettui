@@ -90,6 +90,7 @@ pub fn router(state: WebState) -> Router {
         .route("/update/check", post(check_update))
         .route("/backup", get(download_backup))
         .route("/announces", get(announces))
+        .route("/tables", get(tables))
         .route("/map/tiles/{z}/{x}/{y}", get(map_tile))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/archive", get(conversation_archive))
@@ -1643,6 +1644,35 @@ async fn announces(State(state): State<WebState>, Query(query): Query<AnnouncesQ
     };
     let via = query.via.filter(|v| !v.is_empty());
     Ok(axum::Json(state.read(move |o| views::announces(&o.app, query.after, filter, &query.q, via.as_deref())).await?))
+}
+
+#[derive(Deserialize)]
+struct TablesQuery {
+    /// `paths` (the default) or `rates`.
+    table: Option<String>,
+    #[serde(default)]
+    q: String,
+    limit: Option<usize>,
+}
+
+/// Most rows of a table sent at once.
+const MAX_TABLE_ROWS: usize = 2000;
+
+/// Reticulum's path table or announce-rate table, searched. Asking keeps
+/// them read every few seconds for a while.
+async fn tables(State(state): State<WebState>, Query(query): Query<TablesQuery>) -> ApiResult {
+    let which = match query.table.as_deref().filter(|t| !t.is_empty()) {
+        None => crate::app::tables::Table::Paths,
+        Some(table) => crate::app::tables::Table::parse(table).ok_or_else(|| bad(format!("unknown table {table}")))?,
+    };
+    let limit = query.limit.unwrap_or(500).min(MAX_TABLE_ROWS);
+    let view = state
+        .write(move |o| {
+            o.app.tables_wanted();
+            views::tables(&o.app, which, &query.q, limit)
+        })
+        .await?;
+    Ok(axum::Json(view))
 }
 
 #[derive(Deserialize)]

@@ -46,6 +46,23 @@ shows your identity, your interfaces and the log.
   keeps the newest 1000 heard since it started. A burst of announces on
   an interface that just came up is held back by Reticulum (as it is for
   every program on it), so some may show up later, or not at all.
+- **Reticulum's tables:** `t` (or **Tables** in the web UI) shows, in
+  place of the list, what Reticulum knows, as `rnpath -t` and `rnpath -r`
+  list it. The *path table* has every path known, nearest first: where
+  each goes, its hops, the transport node it goes through, the interface,
+  and how long it's kept ("3 hops via <09090909…> on RMAP World, kept for
+  3 days"). *Announce rates* (`f` switches) has how often each
+  destination announces, those held back first: a destination that
+  announces faster than its interface allows has its announces dropped
+  for a while ("held back for 12 min · 2 times too often · 4.2 an hour ·
+  announced 3 min ago"). Reticulum keeps rates when it passes announces
+  on (transport). Names come from contacts, the list and the announces
+  heard. Search (`/`) finds rows by name, address, the transport node or
+  the interface; `P`, `T`, `D` and `y` act on the row picked as in the
+  list (in the web UI, a row opens its path). The tables are read again
+  every 5 seconds while shown (`R` reads them now), the shared instance's
+  when rettui is a client of one. The web UI shows the first 500 rows
+  found.
 - **Paths:** to reach a destination, rettui needs a path to it: which
   interface it goes out on, and through which transport node. Announces
   bring paths; for one not heard yet, rettui asks for a path, up to three

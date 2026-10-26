@@ -393,6 +393,43 @@ async fn identities_over_the_api() {
 }
 
 #[tokio::test]
+async fn reticulums_tables_over_the_api() {
+    use crate::net::{AnnounceRate, PathInfo, Tables};
+    let web = TestWeb::start("tables");
+    let first = web.get("/api/tables").await.json();
+    assert_eq!((first["table"].as_str(), first["read"].as_bool()), (Some("paths"), Some(false)), "{first}");
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::ReadTables)));
+    assert_eq!(web.get("/api/tables?table=nope").await.status, StatusCode::BAD_REQUEST);
+    let now = crate::app::now();
+    let paths = (0..30u8)
+        .map(|i| {
+            (
+                [i; 16],
+                PathInfo {
+                    hops: i % 5,
+                    via: None,
+                    interface: if i == 7 { "LoRa".into() } else { "TCP".into() },
+                    expires: now as i64 + 600,
+                },
+            )
+        })
+        .collect();
+    let rates = vec![AnnounceRate { hash: [7; 16], last: now - 60.0, per_hour: Some(2.0), violations: 1, blocked_until: now + 150.0 }];
+    web.with_owner(move |o| o.apply(NetEvent::Tables(Ok(Tables { paths, rates })))).await;
+    let read = web.get("/api/tables?limit=10").await.json();
+    assert_eq!((read["total"].as_u64(), read["rows"].as_array().unwrap().len()), (Some(30), 10), "{read}");
+    assert_eq!(read["rows"][0]["hops"], 0);
+    let lora = web.get("/api/tables?q=lora").await.json();
+    assert_eq!(lora["rows"][0]["hash"], hex::encode([7u8; 16]));
+    assert!(lora["rows"][0]["text"].as_str().unwrap().contains("on LoRa"));
+    let rates = web.get("/api/tables?table=rates").await.json();
+    assert_eq!(rates["rows"][0]["held"], true);
+    assert!(rates["rows"][0]["text"].as_str().unwrap().contains("held back for 2 min"), "{rates}");
+    web.with_owner(|o| o.apply(NetEvent::Tables(Err("The path table couldn't be read".into())))).await;
+    assert_eq!(web.get("/api/tables").await.json()["error"], "The path table couldn't be read");
+}
+
+#[tokio::test]
 async fn interface_profiles_over_the_api() {
     let web = TestWeb::start("rns-profiles");
     let listed = web.get("/api/reticulum/profiles").await.json();
