@@ -55,7 +55,8 @@ the web UI's Status page, opens it again):
   *Discovered entry points* to 2: rettui connects to two entry points
   others announce, and swaps one that stays down for another (see
   [Settings and Reticulum Config](Settings-and-Reticulum-Config)). You'll
-  connect to hosts you didn't choose. Discovery hears of entry points
+  connect to hosts you didn't choose, though never one that is this
+  computer itself (however it's written) or a Tor address. Discovery hears of entry points
   through a connection you already have, so it needs one to start. Like
   the entry points, it's ticked only for a config with nothing besides the
   Auto interface: a config you've set up yourself is changed only as you

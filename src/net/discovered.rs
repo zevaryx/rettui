@@ -259,14 +259,23 @@ pub fn candidates(found: &[DiscoveredInterface]) -> Vec<Candidate> {
 }
 
 /// Not an address Python leaves alone: this device itself, anywhere, a
-/// Yggdrasil address (unless Yggdrasil runs here), a Tor one.
+/// Yggdrasil address (unless Yggdrasil runs here), a Tor one. Read as an
+/// address, not as text: anyone can announce an interface, and
+/// `127.1.2.3`, `[::ffff:127.0.0.1]` or `LocalHost.` would otherwise point
+/// rettui at what listens on this device. Other networks' addresses (a LAN)
+/// stay: interfaces there are found this way too.
 fn reachable(host: &str) -> bool {
-    if matches!(host, "127.0.0.1" | "0.0.0.0" | "::1" | "::") || host.ends_with(".onion") || host.is_empty() {
+    let host = host.trim_matches(['[', ']']).trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") || host.ends_with(".onion") {
         return false;
     }
-    match host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V6(v6)) => !matches!(v6.octets()[0], 0x02 | 0x03),
-        _ => true,
+    let here = |ip: std::net::IpAddr| ip.is_loopback() || ip.is_unspecified();
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(v6)) => {
+            !here(v6.into()) && !v6.to_ipv4_mapped().is_some_and(|v4| here(v4.into())) && !matches!(v6.octets()[0], 0x02 | 0x03)
+        }
+        Ok(ip) => !here(ip),
+        Err(_) => true,
     }
 }
 
@@ -534,7 +543,10 @@ mod tests {
     #[test]
     fn what_may_be_connected_to_and_what_the_config_has() {
         assert!(reachable("rns.example.org") && reachable("203.0.113.5") && reachable("2001:db8::1"));
-        for host in ["127.0.0.1", "0.0.0.0", "200:1234::1", "300:1::2", "abc.onion", ""] {
+        assert!(reachable("192.168.1.20") && reachable("[fd00::5]"), "another computer on the LAN");
+        let here =
+            ["127.0.0.1", "127.1.2.3", "0.0.0.0", "::1", "[::1]", "::", "::ffff:127.0.0.1", "[::ffff:0.0.0.0]", "localhost", "LocalHost."];
+        for host in here.into_iter().chain(["a.localhost", "200:1234::1", "300:1::2", "abc.onion", "ABC.ONION.", ""]) {
             assert!(!reachable(host), "{host}");
         }
         let text = "[reticulum]\n  discover_interfaces = Yes\n[interfaces]\n  [[Hub]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = hub.example\n    target_port = 4242\n    bootstrap_only = Yes\n    network_name = mesh\n  [[Mine]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = mine.example\n    target_port = 4243\n  [[Radio]]\n    type = RNodeInterface\n    enabled = No\n    bootstrap_only = Yes\n  [[Back]]\n    type = BackboneInterface\n    enabled = Yes\n    target_host = back.example\n    target_port = 4244\n    bootstrap_only = Yes\n";
