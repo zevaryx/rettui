@@ -1997,6 +1997,48 @@ fn sending_a_file_to_an_rncp_listener() {
 }
 
 #[test]
+fn whose_an_address_is_at_the_keyboard() {
+    use crate::net::Identified;
+    let mut tui = Tui::new("whois");
+    tui.tab(Tab::Network);
+    // Opened with nothing to look up, it shows yours.
+    tui.key(KeyCode::Char('I'));
+    assert!(tui.app.whois.open && tui.app.prompt.as_ref().is_some_and(|p| p.title.contains("Whose address")));
+    tui.answer("");
+    let mine = hex::encode(tui.app.identity_hash);
+    let speed = hex::encode(tui.app.speed_address());
+    let screen = tui.draw();
+    assert!(screen.contains("Yours") && screen.contains(&mine) && screen.contains(&speed), "{screen}");
+    tui.key(KeyCode::Char('y'));
+    assert_eq!(tui.app.clipboard.last.as_deref(), Some(mine.as_str()));
+    // Another looked up: asked of the network, then shown.
+    tui.key(KeyCode::Char('e')).answer("nope");
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("32 hex")));
+    let theirs = [0xab; 16];
+    tui.key(KeyCode::Char('e')).answer(&format!("<{}>", hex::encode(theirs)));
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::Identify(to) if *to == theirs)));
+    assert!(tui.draw().contains("asking the network"));
+    let identity = [0x11; 16];
+    let lxmf = [0x22; 16];
+    let found = Identified { identity, kind: Some("NomadNet node"), others: vec![("LXMF address", lxmf)] };
+    // What's found for another address than the one asked isn't shown.
+    tui.app.on_net(crate::net::NetEvent::Identified { to: [0xcd; 16], result: Err("nope".into()) });
+    tui.app.on_net(crate::net::NetEvent::Identified { to: theirs, result: Ok(found) });
+    let screen = tui.draw();
+    assert!(screen.contains("identity (NomadNet node)") && screen.contains("its LXMF address") && !screen.contains("asking"), "{screen}");
+    tui.key(KeyCode::End);
+    for _ in 0..20 {
+        tui.key(KeyCode::Down);
+    }
+    tui.key(KeyCode::Enter);
+    assert_eq!(tui.app.clipboard.last.as_deref(), Some(hex::encode(lxmf).as_str()));
+    tui.app.on_net(crate::net::NetEvent::Identified { to: theirs, result: Err("No one has announced it".into()) });
+    assert!(tui.draw().contains("No one has announced it"));
+    tui.key(KeyCode::Esc);
+    assert!(!tui.app.whois.open);
+}
+
+#[test]
 fn a_speed_test_at_the_keyboard() {
     use crate::net::speedtest::SpeedEvent;
     let mut tui = Tui::new("speed");

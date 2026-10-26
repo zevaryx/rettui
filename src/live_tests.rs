@@ -222,6 +222,12 @@ async fn two_rettuis_message_each_other_and_find_their_way() {
         matches!(a.app.probes.get(&to_ben), Some(crate::app::paths::ProbeState::Done(_)))
     })
     .await;
+    // Whose Ben's address is: his identity, and his other addresses.
+    amy.app.whois(&to_ben).unwrap();
+    until(&mut amy, &mut ben, "Amy finding whose it is", |a, _| matches!(a.app.whois.looked_up, Some((_, Some(_))))).await;
+    let Some((_, Some(Ok(found)))) = &amy.app.whois.looked_up else { panic!("{:?}", amy.app.whois.looked_up) };
+    assert_eq!((found.identity, found.kind), (ben.app.identity_hash, Some("LXMF address")));
+    assert!(found.others.iter().any(|(kind, hash)| *kind == "speed test" && *hash == ben.app.speed_address()));
     amy.app.forget_path(&to_ben).unwrap();
     until(&mut amy, &mut ben, "the path forgotten", |a, _| !a.app.path_lookups.contains_key(&to_ben)).await;
     // Both see their interface up.

@@ -243,6 +243,9 @@ pub fn keys(app: &App) -> Keys {
         Tab::Network if app.net_search.typing => {
             typing("Network search", &[("Enter", "done"), ("Esc", "clear"), ("↑↓", "select"), ("^V", "paste")])
         }
+        Tab::Network if app.whois.open => {
+            typing("Identities", &[("↑↓", "select"), ("y", "copy"), ("e", "look up another"), ("Esc", "close")])
+        }
         Tab::Network if app.speed.open => {
             typing("Speed test", &[("Enter", "send"), ("←→", "size"), ("e", "their address"), ("y", "copy yours"), ("Esc", "close")])
         }
@@ -255,6 +258,7 @@ pub fn keys(app: &App) -> Keys {
                 ("P", "path"),
                 ("T", "probe"),
                 ("F", "send file"),
+                ("I", "whose"),
                 ("y", "copy"),
                 ("D", "forget path"),
                 ("t", "back"),
@@ -272,6 +276,7 @@ pub fn keys(app: &App) -> Keys {
                 ("P", "path"),
                 ("T", "probe"),
                 ("F", "send file"),
+                ("I", "whose"),
                 ("y", "copy"),
                 ("i", "interface"),
                 ("Esc", "back"),
@@ -285,6 +290,7 @@ pub fn keys(app: &App) -> Keys {
                 ("P", "path"),
                 ("T", "probe"),
                 ("F", "send file"),
+                ("I", "whose"),
                 ("Esc", "clear"),
                 ("/", "edit"),
                 ("y", "copy"),
@@ -305,6 +311,7 @@ pub fn keys(app: &App) -> Keys {
                 ("P", "path"),
                 ("T", "probe"),
                 ("F", "send file"),
+                ("I", "whose"),
                 ("y", "copy"),
                 ("p", "sync via"),
                 ("b", "block"),

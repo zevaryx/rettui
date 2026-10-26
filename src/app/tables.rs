@@ -266,7 +266,7 @@ impl App {
                 self.confirm("Reading the tables again");
             }
             // As in the Network list.
-            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F')) => self.address_action(c, selected),
+            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F' | 'I')) => self.address_action(c, selected),
             _ => {}
         }
     }

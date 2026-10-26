@@ -54,6 +54,7 @@ pub mod tables;
 pub mod traffic;
 pub mod trails;
 mod updates;
+pub mod whois;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -209,6 +210,8 @@ pub enum PromptKind {
     RncpFile(String),
     /// The other's speed test address.
     SpeedPeer,
+    /// An address to find whose it is.
+    Whois,
     /// The folder to move something to (empty: the top).
     MoveNodeItem(crate::nomad::pages::Root, String),
     /// Open this page, dropping unsaved changes to the open one.
@@ -625,6 +628,8 @@ pub struct App {
     pub rncp: Vec<rncp::RncpSend>,
     /// A speed test with someone (`v` in the Network tab).
     pub speed: speedtest::SpeedTest,
+    /// Your addresses, and whose another is (`I` in the Network tab).
+    pub whois: whois::Whois,
     /// The interface each destination with a path goes through, by address.
     pub routes: HashMap<String, String>,
     pub net_search: NetSearch,
@@ -808,6 +813,7 @@ impl App {
             tables: tables::TablesView::default(),
             rncp: Vec::new(),
             speed: speedtest::SpeedTest::default(),
+            whois: whois::Whois::default(),
             routes: HashMap::new(),
             net_search: NetSearch::default(),
             browser: Browser::default(),
@@ -1163,6 +1169,7 @@ impl App {
             NetEvent::Tables(result) => self.on_tables(result),
             NetEvent::Rncp { to, name, state } => self.on_rncp(to, name, state),
             NetEvent::Speed(event) => self.on_speed(event),
+            NetEvent::Identified { to, result } => self.on_identified(to, result),
             NetEvent::Probed { to, result } => self.on_probed(to, result),
             NetEvent::PropagationPicked(result) => self.on_propagation_picked(result),
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
@@ -1440,6 +1447,7 @@ impl App {
             // Empty moves it to the top.
             PromptKind::MoveNodeItem(root, path) => self.submit_move(root, &path, &text),
             PromptKind::SpeedPeer => self.submit_speed_prompt(&text),
+            PromptKind::Whois => self.submit_whois_prompt(&text),
             kind @ (PromptKind::RncpTo | PromptKind::RncpFile(_)) => {
                 if !text.is_empty() {
                     self.submit_rncp_prompt(kind, &text);

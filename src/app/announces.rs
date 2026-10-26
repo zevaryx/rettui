@@ -214,7 +214,7 @@ impl App {
                 None => {}
             },
             // As in the Network list.
-            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F')) => self.address_action(c, selected.map(|(key, _)| key)),
+            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F' | 'I')) => self.address_action(c, selected.map(|(key, _)| key)),
             KeyCode::Char('/') => self.net_search.typing = true,
             KeyCode::Esc => self.clear_network_search(),
             KeyCode::Char('i') => self.cycle_net_via(),

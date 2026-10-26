@@ -624,3 +624,32 @@ pub async fn rncp_send(
     };
     let _ = ev.send(say(state));
 }
+
+/// Whose a destination is: its identity, what it is (if its key says), and
+/// that identity's other destinations of the kinds rettui knows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Identified {
+    pub identity: Hash,
+    pub kind: Option<&'static str>,
+    /// Each kind and the address it would have (whether or not it's used).
+    pub others: Vec<(&'static str, Hash)>,
+}
+
+/// The destinations an identity has, or would have, of each kind rettui
+/// knows, as NomadNet's Identity utility and `rnid` work them out.
+pub fn destinations_of(identity: Hash) -> Vec<(&'static str, Hash)> {
+    let of = |name: &str| rns_identity::destination::Destination::hash_from_name_and_identity(name, Some(&identity));
+    let mut all: Vec<(&'static str, Hash)> = KINDS.iter().map(|(name, kind)| (*kind, of(name))).collect();
+    all.push(("speed test", of(super::speedtest::ASPECT)));
+    all.push(("rncp listener", of(rns_runtime::rncp::DEFAULT_RNCP_APP_NAME)));
+    all
+}
+
+/// Recall the identity behind `to`, asking the network for it (a path
+/// request, which its announce answers) if it hasn't been heard.
+pub async fn identify(runtime: &ReticulumHandle, known: &Known, to: Hash) -> Result<Identified, String> {
+    let identity = lookup(runtime, known, to).await?.identity.hash;
+    let others = destinations_of(identity);
+    let kind = others.iter().find(|(_, address)| *address == to).map(|(kind, _)| *kind);
+    Ok(Identified { identity, kind, others: others.into_iter().filter(|(_, address)| *address != to).collect() })
+}

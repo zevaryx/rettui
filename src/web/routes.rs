@@ -162,6 +162,8 @@ pub fn router(state: WebState) -> Router {
         .route("/rncp", get(rncp_sends))
         .route("/speedtest", get(speed_test).post(set_speed_test))
         .route("/speedtest/send", post(send_speed_test))
+        .route("/identity", get(identities))
+        .route("/identity/lookup", post(look_up_identity))
         .route("/rncp/send", post(rncp_send))
         .route("/hub", get(hosted_hub))
         .route("/hub/{action}", post(hosted_hub_action))
@@ -2346,6 +2348,21 @@ async fn set_speed_test(State(state): State<WebState>, axum::Json(body): axum::J
 
 async fn send_speed_test(State(state): State<WebState>) -> ApiResult {
     state.write(|o| o.app.speed_send()).await??;
+    ok()
+}
+
+/// Your addresses, and whose the address looked up last is, as rows.
+async fn identities(State(state): State<WebState>) -> ApiResult {
+    state.read(|o| axum::Json(json!({ "rows": o.app.whois_rows() }))).await.map_err(ApiError::from)
+}
+
+#[derive(Deserialize)]
+struct LookupBody {
+    address: String,
+}
+
+async fn look_up_identity(State(state): State<WebState>, axum::Json(body): axum::Json<LookupBody>) -> ApiResult {
+    state.write(move |o| o.app.whois(&body.address)).await??;
     ok()
 }
 

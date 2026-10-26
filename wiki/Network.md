@@ -120,6 +120,15 @@ shows your identity, your interfaces and the log.
   and both see how long it took, as a rate (*Upload: 1.2 Mbps*, *Download:
   1.1 Mbps*). While it's open, rettui takes tests from the address you
   entered and turns away anyone else's; closed, it takes none.
+- **Identities:** `I` in the Network tab (in the list, the announces or
+  the tables), or **Identities…** in the web UI, shows your addresses
+  (your identity, LXMF address, node, propagation node, RRC hub and speed
+  test address), and whose another address is, as NomadNet 1.4's Identity
+  utility does: the identity behind it, what it is (an LXMF address, a
+  node, a propagation node and so on), and the other addresses that
+  identity has. An address that hasn't been heard is asked of the network,
+  which can take a while. The selected address is looked up; type any
+  other. `y` (or **Copy**) copies a row's address.
 - **Status:** the Status tab shows your identity and LXMF address, your
   first steps until they're taken (see
   [Running](Running#first-steps)), the network state, each interface with its traffic, the last sync, the

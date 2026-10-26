@@ -45,6 +45,33 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.speed.open {
         draw_speed(frame, app, area);
     }
+    if app.whois.open {
+        draw_whois(frame, app, area);
+    }
+}
+
+/// Your addresses, and whose another is (`I`).
+fn draw_whois(frame: &mut Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .whois_rows()
+        .into_iter()
+        .map(|row| match (row.heading, row.address) {
+            (true, _) => ListItem::new(Line::styled(row.label, Style::default().fg(accent()).bold())),
+            (false, Some(address)) => ListItem::new(Line::from(vec![
+                Span::styled(format!("  {:<28}", row.label), Style::default().fg(dim())),
+                Span::raw(address),
+            ])),
+            (false, None) => ListItem::new(Line::styled(format!("  {}", row.label), Style::default().fg(dim()))),
+        })
+        .collect();
+    let hint = " y copy · e look up another · Esc close ";
+    let width = 80.min(area.width);
+    let height = (items.len() as u16 + 2).min(area.height);
+    let rect = Rect { x: area.x + area.width.saturating_sub(width) / 2, y: area.y + area.height.saturating_sub(height) / 3, width, height };
+    frame.render_widget(ratatui::widgets::Clear, rect);
+    let whois_block = block("Identities", true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
+    let list = List::new(items).block(whois_block).highlight_style(Style::default().bg(selected_bg()));
+    frame.render_stateful_widget(list, rect, &mut app.whois.list);
 }
 
 /// The speed test (`v`): both addresses, the size, how it's going and what

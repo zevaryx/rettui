@@ -1368,6 +1368,21 @@ async fn sending_a_file_with_rncp() {
 }
 
 #[tokio::test]
+async fn whose_an_address_is_over_the_api() {
+    let web = TestWeb::start("whois");
+    let rows = web.get("/api/identity").await.json();
+    let mine = web.with(|app| hex::encode(app.identity_hash)).await;
+    assert_eq!(rows["rows"][0]["heading"], true);
+    assert_eq!(rows["rows"][1]["address"], mine.as_str());
+    assert!(web.post("/api/identity/lookup", json!({ "address": "nope" })).await.error().contains("32 hex"));
+    let theirs = "ab".repeat(16);
+    assert_eq!(web.post("/api/identity/lookup", json!({ "address": theirs })).await.status, StatusCode::OK);
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::Identify(_))));
+    let rows = web.get("/api/identity").await.json();
+    assert!(rows["rows"].as_array().unwrap().iter().any(|r| r["label"] == "asking the network…"), "{rows}");
+}
+
+#[tokio::test]
 async fn a_speed_test_over_the_api() {
     let web = TestWeb::start("speed");
     let test = web.get("/api/speedtest").await.json();

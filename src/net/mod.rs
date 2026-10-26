@@ -34,8 +34,8 @@ use crate::rrc::host::{HostedHub, HubAction, HubEvent, HubHostConfig};
 use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
 pub use remote::{
-    AnnounceRate, Known, KnownIdentities, PathInfo, Ping, Probe, Progress, RncpState, connect, drop_path, ensure_path, find_path,
-    link_options, lookup, paths, probe, trace_path,
+    AnnounceRate, Identified, Known, KnownIdentities, PathInfo, Ping, Probe, Progress, RncpState, connect, drop_path, ensure_path,
+    find_path, link_options, lookup, paths, probe, trace_path,
 };
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
@@ -129,6 +129,8 @@ pub enum NetCommand {
     /// Take speed tests from this speed test address only, or none
     /// (answered with [`NetEvent::Speed`]).
     SpeedListen(Option<Hash>),
+    /// Find whose a destination is (answered with [`NetEvent::Identified`]).
+    Identify(Hash),
     /// Send a speed test of so many bytes to a speed test address.
     SpeedSend {
         to: Hash,
@@ -372,6 +374,11 @@ pub enum NetEvent {
     Tables(Result<Tables, String>),
     /// How a speed test is going.
     Speed(speedtest::SpeedEvent),
+    /// Whose a destination is, as found.
+    Identified {
+        to: Hash,
+        result: Result<remote::Identified, String>,
+    },
     /// How sending a file to an `rncp` listener is going.
     Rncp {
         to: Hash,
@@ -1006,6 +1013,13 @@ async fn run(
                                 let _ = ev.send(NetEvent::Speed(speedtest::SpeedEvent::Listening(Ok(None))));
                             }
                         }
+                    }
+                    NetCommand::Identify(to) => {
+                        let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
+                        tokio::spawn(async move {
+                            let result = remote::identify(&runtime, &known, to).await;
+                            let _ = ev.send(NetEvent::Identified { to, result });
+                        });
                     }
                     NetCommand::SpeedSend { to, bytes } => {
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());

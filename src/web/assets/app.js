@@ -5370,6 +5370,7 @@ app.views.network = {
         el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
         el('button', { class: 'more', text: 'Speed test', title: 'Measure how fast data goes between you and someone else, with rettui or NomadNet  ( v )', onclick: () => speedDialog() }),
+        el('button', { class: 'more', text: 'Identities…', title: 'Your addresses, and whose an address is  ( I )', onclick: () => identityDialog(this.selected) }),
         el('button', { class: 'more', text: 'Send a file…', title: 'Send a file to someone running rncp -l  ( F )', onclick: () => rncpDialog(this.selected) }),
         el('button', { class: 'more', text: 'Find a path…', title: 'Find the path to any address', onclick: async () => {
           const address = await askText('Find a path', { label: 'To the address', value: this.selected || '', ok: 'Find', mono: true });
@@ -8184,6 +8185,38 @@ async function speedDialog() {
   });
 }
 
+// Your addresses, and whose another is (its identity, what it is, and
+// that identity's other addresses), as NomadNet's Identity utility shows.
+async function identityDialog(address) {
+  if (address) await attempt(() => api.post('/identity/lookup', { address }));
+  const first = await attempt(() => api.get('/identity'));
+  if (!first) return;
+  dialog('Identities', (close) => {
+    const asked = el('input', { type: 'text', class: 'mono', value: address || '', placeholder: 'an address to look up', spellcheck: false });
+    const rows = el('div', { class: 'identity-rows' });
+    const show = (found) => rows.replaceChildren(...found.rows.map((r) => r.heading
+      ? el('h4', { text: r.label })
+      : el('div', { class: 'row' }, el('span', { class: 'dim grow', text: r.label }),
+        ...(r.address ? [el('span', { class: 'mono', text: r.address }), el('button', { text: 'Copy', onclick: () => copy(r.address, r.label) })] : []))));
+    show(first);
+    const refresh = async () => {
+      const now = await api.get('/identity').catch(() => null);
+      if (now) show(now);
+    };
+    const timer = setInterval(() => (document.body.contains(rows) ? refresh() : clearInterval(timer)), 1500);
+    const look = async () => {
+      if (asked.value.trim()) await attempt(() => api.post('/identity/lookup', { address: asked.value }));
+      refresh();
+    };
+    asked.addEventListener('keydown', (e) => { if (e.key === 'Enter') look(); });
+    return [
+      el('div', { class: 'row' }, asked, el('button', { class: 'primary', text: 'Look up', onclick: look })),
+      rows,
+      el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } })),
+    ];
+  });
+}
+
 // A file sent to an rncp listener, as `rncp FILE ADDRESS` does, and how
 // the ones sent lately went.
 async function rncpDialog(address) {
@@ -8431,6 +8464,8 @@ document.addEventListener('keydown', (e) => {
     tablesDialog();
   } else if (e.key === 'v' && app.tab === 'network') {
     speedDialog();
+  } else if (e.key === 'I' && app.tab === 'network') {
+    identityDialog(app.views.network.selected);
   } else if (e.key === 'F' && app.tab === 'network') {
     rncpDialog(app.views.network.selected);
   } else if (e.key === '/' && app.tab === 'messages') {

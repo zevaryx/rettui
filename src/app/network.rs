@@ -368,6 +368,8 @@ impl App {
             ('P', current) => self.open_prompt(PromptKind::FindPath, "Find a path to (address)", &current.unwrap_or_default()),
             // A file sent to it (or any address typed), as rncp does.
             ('F', current) => self.ask_rncp(current),
+            // Whose it is (or any address typed's), and your addresses.
+            ('I', current) => self.open_whois(current),
             // Probed, as rnprobe does.
             ('T', Some(key)) => {
                 if let Err(e) = self.probe(&key) {
@@ -384,6 +386,9 @@ impl App {
     }
 
     pub(super) fn network_key(&mut self, key: KeyEvent) {
+        if self.whois.open {
+            return self.whois_key(key);
+        }
         if self.speed.open {
             return self.speed_key(key);
         }
@@ -444,7 +449,7 @@ impl App {
                     self.set_propagation_node(&key);
                 }
             }
-            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F')) => self.address_action(c, selected.map(|(key, _)| key)),
+            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F' | 'I')) => self.address_action(c, selected.map(|(key, _)| key)),
             // Block an LXMF peer, or unblock one.
             KeyCode::Char('b') => {
                 if let Some((key, PeerKind::Lxmf)) = selected {
