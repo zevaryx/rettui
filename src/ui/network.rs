@@ -190,8 +190,7 @@ fn draw_announces(frame: &mut Frame, app: &mut App, area: Rect) {
                 Kind::Phone => Color::LightBlue,
                 Kind::Other => Color::Gray,
             };
-            let at = chrono::DateTime::from_timestamp(entry.at as i64, 0).map(|t| t.with_timezone(&chrono::Local));
-            let time = at.map(|t| crate::clock::time(&t, true)).unwrap_or_default();
+            let time = crate::clock::local(entry.at).map(|t| crate::clock::time(&t, true)).unwrap_or_default();
             let mut spans = vec![
                 Span::styled(format!("{time} "), Style::default().fg(dim())),
                 Span::styled(format!(" {:<5} ", heard.kind.tag()), Style::default().fg(Color::Black).bg(color)),

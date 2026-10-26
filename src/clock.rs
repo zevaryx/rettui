@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use chrono::{DateTime, Datelike, Local, TimeZone};
+use chrono::{DateTime, Datelike, Local, Offset, TimeZone};
 
 pub const CLOCKS: &[&str] = &["24-hour", "12-hour"];
 pub const DATE_STYLES: &[&str] = &["month-day", "day-month", "year-month-day"];
@@ -69,8 +69,19 @@ pub fn dated(t: &DateTime<Local>, seconds: bool) -> String {
     format!("{day} {}", time(t, seconds))
 }
 
-fn local(timestamp: f64) -> Option<DateTime<Local>> {
-    Local.timestamp_opt(timestamp as i64, 0).single()
+/// A time as it reads here, if it can be one: see [`in_zone`].
+pub fn local(timestamp: f64) -> Option<DateTime<Local>> {
+    in_zone(&Local, timestamp)
+}
+
+/// A time in `zone`, if it can be one there. chrono holds times up to the
+/// year 262142 (and back to 262143 BC), and near either end the time in a
+/// zone ahead of UTC (or behind it) is past that, which panics when it's
+/// read. A message can say any time.
+fn in_zone<Tz: TimeZone>(zone: &Tz, timestamp: f64) -> Option<DateTime<Tz>> {
+    let t = zone.timestamp_opt(timestamp as i64, 0).single()?;
+    t.naive_utc().checked_add_offset(t.offset().fix())?;
+    Some(t)
 }
 
 /// When a message was, as lists show it: the time today, else the day (or
@@ -121,6 +132,21 @@ mod tests {
         assert_eq!(styles(1), ("07 Oct".into(), "07 Oct 2025".into()));
         assert_eq!(styles(2), ("10-07".into(), "2025-10-07".into()));
         assert_eq!(DATE_STYLES.iter().position(|s| *s == "year-month-day"), Some(2));
+    }
+
+    #[test]
+    fn times_past_what_chrono_holds_are_none() {
+        use chrono::{FixedOffset, NaiveDateTime};
+        // The last second chrono holds, in UTC, is past it in a zone ahead
+        // of UTC (the first second, behind it): read there, it panicked.
+        let (last, first) = (NaiveDateTime::MAX.and_utc().timestamp() as f64, NaiveDateTime::MIN.and_utc().timestamp() as f64);
+        let (ahead, behind) = (FixedOffset::east_opt(9 * 3600).unwrap(), FixedOffset::west_opt(5 * 3600).unwrap());
+        assert!(in_zone(&ahead, last).is_none());
+        assert!(in_zone(&behind, first).is_none());
+        assert_eq!(in_zone(&behind, last).map(|t| t.year()), Some(262_142));
+        assert_eq!(in_zone(&ahead, 1_800_000_000.0).map(|t| t.naive_local().to_string()), Some("2027-01-15 17:00:00".into()));
+        // Here, whatever the zone: past the end shows no time.
+        assert_eq!((when(f64::MAX), short(f64::INFINITY), full(-f64::MAX)), (String::new(), String::new(), String::new()));
     }
 
     #[test]

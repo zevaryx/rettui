@@ -1,6 +1,5 @@
 //! Channels tab: hubs and rooms, chat history, members and the input line.
 
-use chrono::{Local, TimeZone};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -72,9 +71,7 @@ fn chat_lines(
     (whisper, dates): (bool, bool),
 ) -> ChatRows {
     let (own_nick, own_id) = own;
-    let time = Local
-        .timestamp_millis_opt(line.ts as i64)
-        .single()
+    let time = crate::clock::local(line.ts as f64 / 1000.0)
         .map(|t| format!("{} ", if dates { crate::clock::dated(&t, true) } else { crate::clock::time(&t, true) }))
         .unwrap_or_default();
     let name = line
