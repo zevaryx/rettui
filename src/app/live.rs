@@ -228,6 +228,9 @@ impl App {
         }
         let Some(location) = self.settings.own_location() else { return };
         self.live.sent_trusted = Some(Instant::now());
+        if let Some(own) = self.lxmf_hash {
+            self.export_telemetry(&hex::encode(own), &location, super::now());
+        }
         let trusted: Vec<String> = self
             .store
             .contacts

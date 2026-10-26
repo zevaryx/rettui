@@ -546,6 +546,21 @@ without each asking each. The settings are in Status, Location:
   While it's off, a collector request is answered as a location request
   (as Sideband does), if *Location requests* says so.
 
+**Telemetry to MQTT** (`telemetry_mqtt`, in Status, Location) passes places
+on to an MQTT server, as Sideband's setting of the same name does, for home
+automation or a dashboard. Give the server as `mqtt://host`,
+`mqtt://host:1883` or `mqtt://user:password@host` (the password is kept in
+the settings file as written); empty, to start with, sends nothing. Every
+place rettui hears (in a message, a live update or from a collector), and
+this station's when *Send to trusted every* sends it, is published under
+the sender's LXMF address, as Sideband lays it out:
+`lxmf/telemetry/<address>/location/latitude`, `…/longitude`, `…/altitude`,
+`…/speed`, `…/heading`, `…/accuracy` and `…/updated`, and
+`lxmf/telemetry/<address>/time/utc`, each value as text (empty when it
+isn't known). rettui connects for each place and leaves once the server has
+taken it (MQTT 3.1.1, QoS 1, without TLS); the log says when it can't.
+Places from anyone blocked aren't passed on. Other sensors aren't sent.
+
 The **map** shows everyone's newest location, the newest first, and this
 station's if it's set. Someone who said they'd stopped sharing (as Columba
 does) isn't on it, nor is anyone blocked.

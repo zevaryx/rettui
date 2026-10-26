@@ -10,6 +10,7 @@ pub mod autopn;
 pub mod discovered;
 pub mod heard;
 pub mod iface_log;
+pub mod mqtt;
 mod reannounce;
 pub mod remote;
 pub mod speedtest;
@@ -141,6 +142,11 @@ pub enum NetCommand {
         to: Hash,
         name: String,
         data: Vec<u8>,
+    },
+    /// Publish telemetry to an MQTT server (failures are logged).
+    Mqtt {
+        server: mqtt::Server,
+        topics: Vec<(String, String)>,
     },
     /// Forget the keys kept for peers the app forgot (not heard from in a
     /// while).
@@ -1024,6 +1030,14 @@ async fn run(
                     NetCommand::SpeedSend { to, bytes } => {
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
                         tokio::spawn(async move { speedtest::send(&runtime, identity, to, bytes, ev).await });
+                    }
+                    NetCommand::Mqtt { server, topics } => {
+                        let ev = ev.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = mqtt::send_topics(&server, &topics).await {
+                                let _ = ev.send(NetEvent::Log(format!("Couldn't pass telemetry on to MQTT: {e}")));
+                            }
+                        });
                     }
                     NetCommand::RncpSend { to, name, data } => {
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());

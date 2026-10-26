@@ -48,6 +48,7 @@ impl App {
                 continue;
             }
             self.keep_trail(&source, &location, at);
+            self.export_telemetry(&source, &location, at);
             self.store.relayed.insert(source, RelayedPlace { location, at, via: key.to_string() });
             taken += 1;
         }

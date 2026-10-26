@@ -52,6 +52,17 @@ impl App {
         self.store_dirty = true;
     }
 
+    /// Pass a place on to the MQTT server, if there is one (as Sideband's
+    /// *Telemetry to MQTT*). Not anyone's who is blocked.
+    pub(super) fn export_telemetry(&mut self, key: &str, location: &Location, at: f64) {
+        let Some(server) = self.settings.telemetry_mqtt.as_deref().and_then(|s| crate::net::mqtt::Server::parse(s).ok()) else { return };
+        if self.store.contact(key).trust == Trust::Blocked {
+            return;
+        }
+        let topics = crate::net::mqtt::topics(key, location, at);
+        self.send(crate::net::NetCommand::Mqtt { server, topics });
+    }
+
     /// Where `key` has been, oldest first.
     pub fn trail(&self, key: &str) -> &[TrailPoint] {
         self.store.trails.get(key).map_or(&[], Vec::as_slice)
@@ -144,6 +155,39 @@ mod tests {
         app.store.contacts.insert(bob.into(), Contact { trust: Trust::Blocked, ..Contact::default() });
         app.keep_trail(bob, &Location::at(1.0, 1.0), now);
         assert!(app.trail(bob).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn places_passed_on_to_mqtt_as_sideband_does() {
+        use crate::net::NetCommand;
+        let dir = std::env::temp_dir().join(format!("rettui-mqtt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let settings = crate::config::Settings { telemetry_mqtt: Some("mqtt://ann:pw@broker.local:1884".into()), ..Default::default() };
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, settings, Store::default());
+        let mut published = || {
+            let mut topics = Vec::new();
+            while let Ok(command) = net.try_recv() {
+                if let NetCommand::Mqtt { server, topics: these } = command {
+                    assert_eq!((server.host.as_str(), server.port, server.user.as_deref()), ("broker.local", 1884, Some("ann")));
+                    topics.extend(these);
+                }
+            }
+            topics
+        };
+        app.on_message(from_alice(now() - 5.0, 51.5));
+        let topics = published();
+        let latitude = format!("lxmf/telemetry/{ALICE}/location/latitude");
+        assert!(topics.iter().any(|(t, v)| *t == latitude && v == "51.5"), "{topics:?}");
+        // Not anyone's who is blocked, nor with no server.
+        app.store.contacts.insert(ALICE.into(), Contact { trust: Trust::Blocked, ..Contact::default() });
+        app.on_message(from_alice(now() - 4.0, 52.0));
+        assert!(published().is_empty());
+        app.store.contacts.clear();
+        app.update_settings(&[("telemetry_mqtt", "")]).unwrap();
+        app.on_message(from_alice(now() - 3.0, 53.0));
+        assert!(published().is_empty());
+        assert!(app.update_settings(&[("telemetry_mqtt", "mqtt://host:port")]).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

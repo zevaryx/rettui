@@ -419,6 +419,7 @@ mod tests {
                     "icon" => "account".into(),
                     "propagation_node" => address.clone(),
                     "telemetry_collector" => address.clone(),
+                    "telemetry_mqtt" => "mqtt://broker.local".into(),
                     "pn_static_peers" => address.clone(),
                     "location" => "1.5, 2.5".into(),
                     "map_tiles" => String::new(),

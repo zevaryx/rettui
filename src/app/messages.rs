@@ -205,6 +205,7 @@ impl App {
         };
         if let (Some(location), false) = (&stored.location, paper) {
             self.keep_trail(&key, location, stored.timestamp);
+            self.export_telemetry(&key, location, stored.timestamp);
         }
         // A game's move: kept apart, and shown in the Games tab.
         if let Some(game) = stored.game.clone() {

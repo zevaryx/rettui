@@ -117,6 +117,10 @@ pub struct Settings {
     /// Be a collector: answer collector requests with everyone's newest
     /// locations. One of [`ANSWER_COMMANDS`] (whose are answered).
     pub collector_serve: String,
+    /// An MQTT server places heard are passed on to, as Sideband does
+    /// (`mqtt://[user[:password]@]host[:port]`); none doesn't.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry_mqtt: Option<String>,
     /// Where the web UI's map gets its tiles (`{z}`, `{x}` and `{y}` in
     /// it), fetched and kept by rettui; none draws the map without them.
     pub map_tiles: Option<String>,
@@ -251,6 +255,7 @@ impl Default for Settings {
             collector_send_mins: 0,
             collector_ask_mins: 0,
             collector_serve: "off".into(),
+            telemetry_mqtt: None,
             map_tiles: Some(OSM_TILES.into()),
             map_tiles_file: None,
             stamp_cost: 0,
@@ -642,6 +647,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "collector_send_mins",
             "collector_ask_mins",
             "collector_serve",
+            "telemetry_mqtt",
             "map_tiles",
             "map_tiles_file",
         ],
@@ -840,6 +846,13 @@ pub const FIELDS: &[Field] = &[
         label: "Be a collector",
         help: "Answer collector requests (Sideband's, or another rettui's) with the newest location of everyone who has sent you one, and this station's: off; trusted (only contacts you trust); or contacts (any contact). Locations that came through another collector aren't passed on, nor anyone's who is blocked. Answers go as messages, at most one a minute to each",
         kind: FieldKind::Choice(ANSWER_COMMANDS),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "telemetry_mqtt",
+        label: "Telemetry to MQTT",
+        help: "An MQTT server to pass places on to, as Sideband does: everyone's rettui hears (not anyone's blocked), and this station's when it's sent on the timer, under lxmf/telemetry/<their address>/location/latitude and so on, for home automation or a dashboard. Written as mqtt://host, mqtt://host:1883 or mqtt://user:password@host (the password is kept in the settings file as written). Empty (to start with) for none",
+        kind: FieldKind::Optional,
         effect: Effect::Now,
     },
     Field {
@@ -1311,6 +1324,7 @@ impl Settings {
             "collector_send_mins" => self.collector_send_mins.to_string(),
             "collector_ask_mins" => self.collector_ask_mins.to_string(),
             "collector_serve" => self.collector_serve.clone(),
+            "telemetry_mqtt" => self.telemetry_mqtt.clone().unwrap_or_default(),
             "map_tiles" => self.map_tiles.clone().unwrap_or_default(),
             "map_tiles_file" => self.map_tiles_file.clone().unwrap_or_default(),
             "stamp_cost" => self.stamp_cost.to_string(),
@@ -1424,6 +1438,12 @@ impl Settings {
             "collector_send_mins" => self.collector_send_mins = number(value, MAX_MINUTES).map_err(fail)?,
             "collector_ask_mins" => self.collector_ask_mins = number(value, MAX_MINUTES).map_err(fail)?,
             "collector_serve" => self.collector_serve = choice(value, ANSWER_COMMANDS).map_err(fail)?,
+            "telemetry_mqtt" => {
+                if let Some(text) = optional(value) {
+                    crate::net::mqtt::Server::parse(&text).map_err(fail)?;
+                }
+                self.telemetry_mqtt = optional(value);
+            }
             "map_tiles" => {
                 if let Some(url) = optional(value) {
                     let web = url.starts_with("https://") || url.starts_with("http://");

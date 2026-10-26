@@ -1298,6 +1298,10 @@ async fn a_telemetry_collector_on_the_map() {
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.text());
     let wrong = web.post("/api/settings", json!({ "values": { "telemetry_collector": "nobody" } })).await;
     assert_eq!(wrong.status, StatusCode::BAD_REQUEST);
+    // What it passes on goes to an MQTT server too.
+    let mqtt = web.post("/api/settings", json!({ "values": { "telemetry_mqtt": "mqtt://broker.local" } })).await;
+    assert_eq!(mqtt.status, StatusCode::OK, "{}", mqtt.text());
+    assert!(web.post("/api/settings", json!({ "values": { "telemetry_mqtt": "mqtt://a b" } })).await.error().contains("MQTT server"));
     web.with(|app| {
         let telemetry = Telemetry { location: Some(Location::at(51.5, -0.12)), ..Telemetry::default() };
         let stream = vec![Relayed { source: [0xcd; 16], time: 1_800_000_000, telemetry, appearance: None }];
@@ -1307,6 +1311,8 @@ async fn a_telemetry_collector_on_the_map() {
     let places = web.get("/api/locations").await.json();
     let text = places.to_string();
     assert!(text.contains(&"cd".repeat(16)) && text.contains("\"via\":\"<abababababab>\""), "{text}");
+    let topic = format!("lxmf/telemetry/{}/location/latitude", "cd".repeat(16));
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::Mqtt { topics, .. } if topics.iter().any(|(t, _)| *t == topic))));
 }
 
 /// A message being sent says how it goes, and can be cancelled; a sync
