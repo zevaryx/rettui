@@ -131,6 +131,11 @@ impl Page {
     /// for the script to load.
     pub fn to_html(&self, link: impl Fn(&str) -> String, media: impl Fn(&str) -> Option<String>) -> String {
         let mut out = format!("<div class=\"micron\" style=\"{}\">", css(self.base_style));
+        // The anchors on each line, first declared first.
+        let mut anchors: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
+        for (name, at) in &self.anchors {
+            anchors.entry(*at).or_default().push(name);
+        }
         // Open sections that fold: their heading's level.
         let mut folds: Vec<usize> = Vec::new();
         for (index, line) in self.lines.iter().enumerate() {
@@ -145,7 +150,7 @@ impl Page {
                     out.push_str("</div>");
                 }
             }
-            for (name, _) in self.anchors.iter().filter(|(_, at)| *at == index) {
+            for name in anchors.get(&index).into_iter().flatten() {
                 out.push_str(&format!("<span class=\"m-anchor\" data-anchor=\"{}\"></span>", escape(name)));
             }
             match line {

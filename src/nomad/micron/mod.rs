@@ -41,7 +41,7 @@ pub enum Interactive {
     Fold(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FieldKind {
     Text { masked: bool },
     Checkbox,
@@ -195,25 +195,50 @@ impl Format {
     }
 }
 
-/// Length of an inline image body (`alt`opts`url`, up to its closing `)`).
+/// Where the inline images on a line end (`alt`opts`url`, up to the
+/// closing `)`), for each place one can start.
 ///
-/// Alt text may itself contain parentheses (`photo (by Jo)`), so the body
+/// Alt text may itself contain parentheses (`photo (by Jo)`), so a body
 /// ends at the first `)` that follows a backtick-separated URL, falling back
-/// to the first `)` for malformed markup.
-fn image_body_len(chars: &[char]) -> Option<usize> {
-    let closes = chars.iter().enumerate().filter(|(_, c)| **c == ')').map(|(i, _)| i);
-    let mut first = None;
-    for end in closes {
-        first.get_or_insert(end);
-        let body = &chars[..end];
-        if let Some(tick) = body.iter().rposition(|&c| c == '`') {
-            let url = &body[tick + 1..];
-            if url.iter().any(|&c| c == ':' || c == '/') {
-                return Some(end);
+/// to the first `)` for malformed markup. That can mean looking to the end
+/// of the line, so it's worked out once a line rather than once an image:
+/// a line of many images was read again for each.
+pub(super) struct ImageEnds {
+    /// Each `)` on the line.
+    closes: Vec<usize>,
+    /// Each `)` that follows a URL, and the backtick before that URL.
+    after_urls: Vec<(usize, usize)>,
+}
+
+impl ImageEnds {
+    pub(super) fn new(chars: &[char]) -> Self {
+        let (mut closes, mut after_urls) = (Vec::new(), Vec::new());
+        // The last backtick, and whether a `:` or `/` came after it.
+        let (mut tick, mut url) = (None, false);
+        for (i, &c) in chars.iter().enumerate() {
+            match c {
+                ')' => {
+                    closes.push(i);
+                    if let Some(tick) = tick.filter(|_| url) {
+                        after_urls.push((i, tick));
+                    }
+                }
+                '`' => (tick, url) = (Some(i), false),
+                ':' | '/' => url = true,
+                _ => {}
             }
         }
+        Self { closes, after_urls }
     }
-    first
+
+    /// The length of a body that starts at `start`.
+    pub(super) fn body_len(&self, start: usize) -> Option<usize> {
+        // Its URL's backtick is in the body; they come in order, as the
+        // `)` after them do.
+        let after_url = self.after_urls.get(self.after_urls.partition_point(|&(_, tick)| tick < start)).map(|&(close, _)| close);
+        let end = after_url.or_else(|| self.closes.get(self.closes.partition_point(|&close| close < start)).copied())?;
+        Some(end - start)
+    }
 }
 
 /// NomadNet's heading colours (its dark theme), which pages are made for.
@@ -349,6 +374,8 @@ struct Parser<'a> {
     partials_due: Vec<usize>,
     /// Reading a partial's content: partials in it aren't loaded.
     nested: bool,
+    /// The names of [`Page::anchors`], to find one already declared.
+    anchor_names: std::collections::HashSet<String>,
 }
 
 /// Parse a page whose partials haven't loaded.
@@ -370,6 +397,7 @@ pub fn parse_with(source: &str, loaded: &[Option<String>]) -> Page {
         loaded,
         partials_due: Vec::new(),
         nested: false,
+        anchor_names: Default::default(),
     };
     for raw in source.lines() {
         parser.line(raw.trim_end_matches('\r'));
@@ -393,6 +421,7 @@ pub fn parse_partial(source: &str) -> Page {
             loaded: &[],
             partials_due: Vec::new(),
             nested: true,
+            anchor_names: Default::default(),
         };
         for raw in source.lines() {
             parser.line(raw.trim_end_matches('\r'));
@@ -668,7 +697,7 @@ impl Parser<'_> {
 
     /// Declare an anchor at `line` (the first of a name wins).
     fn anchor(&mut self, name: String, line: usize) {
-        if !name.is_empty() && !self.page.anchors.iter().any(|(n, _)| *n == name) {
+        if !name.is_empty() && self.anchor_names.insert(name.clone()) {
             self.page.anchors.push((name, line));
         }
     }
@@ -679,6 +708,7 @@ impl Parser<'_> {
         let mut spans = Vec::new();
         let mut buf = String::new();
         let mut i = 0;
+        let mut image_ends = None;
 
         macro_rules! flush {
             () => {
@@ -792,7 +822,7 @@ impl Parser<'_> {
                 // NomadNet 1.4 inline image: `(alt`w=60`a=c`:/media/x.webp)
                 '(' => {
                     flush!();
-                    let Some(len) = image_body_len(&chars[i..]) else {
+                    let Some(len) = image_ends.get_or_insert_with(|| ImageEnds::new(&chars)).body_len(i) else {
                         break;
                     };
                     let body: String = chars[i..i + len].iter().collect();
@@ -959,25 +989,26 @@ impl Page {
     /// (the same page read again with a partial loaded): fields by name and
     /// kind, folds by heading, in order.
     pub fn keep_state(&mut self, old: &Page) {
-        let mut used = vec![false; old.fields.len()];
+        use std::collections::{HashMap, VecDeque};
+        // The old ones by what makes one the same, each taken once, in
+        // order: choices of one name differ by value; text fields by order.
+        let same = |f: &Field| (f.name.clone(), f.kind.clone(), (!matches!(f.kind, FieldKind::Text { .. })).then(|| f.value.clone()));
+        let mut fields: HashMap<_, VecDeque<&Field>> = HashMap::new();
+        for field in &old.fields {
+            fields.entry(same(field)).or_default().push_back(field);
+        }
         for field in &mut self.fields {
-            // Choices of one name differ by value; text fields by order.
-            let same = old.fields.iter().enumerate().find(|(i, f)| {
-                !used[*i]
-                    && f.name == field.name
-                    && f.kind == field.kind
-                    && (matches!(f.kind, FieldKind::Text { .. }) || f.value == field.value)
-            });
-            if let Some((i, old)) = same {
-                used[i] = true;
+            if let Some(old) = fields.get_mut(&same(field)).and_then(VecDeque::pop_front) {
                 field.value = old.value.clone();
                 field.checked = old.checked;
             }
         }
-        let mut used = vec![false; old.folds.len()];
+        let mut folds: HashMap<&str, VecDeque<&Fold>> = HashMap::new();
+        for fold in &old.folds {
+            folds.entry(fold.title.as_str()).or_default().push_back(fold);
+        }
         for fold in &mut self.folds {
-            if let Some((i, old)) = old.folds.iter().enumerate().find(|(i, f)| !used[*i] && f.title == fold.title) {
-                used[i] = true;
+            if let Some(old) = folds.get_mut(fold.title.as_str()).and_then(VecDeque::pop_front) {
                 fold.open = old.open;
             }
         }
@@ -1195,6 +1226,70 @@ mod tests {
         let out = text(&page.layout(80, None, &HashMap::new(), None));
         assert!(out.iter().any(|l| l.contains("[image: Swapfest, Aug 23 (photo: JohnC)]")));
         assert!(out.iter().any(|l| l.contains("after")));
+    }
+
+    /// Where an image that starts at the start of `chars` ends, read on its
+    /// own, as each image was before [`ImageEnds`].
+    fn body_len_alone(chars: &[char]) -> Option<usize> {
+        let mut first = None;
+        for end in chars.iter().enumerate().filter(|(_, c)| **c == ')').map(|(i, _)| i) {
+            first.get_or_insert(end);
+            if let Some(tick) = chars[..end].iter().rposition(|&c| c == '`')
+                && chars[tick + 1..end].iter().any(|&c| c == ':' || c == '/')
+            {
+                return Some(end);
+            }
+        }
+        first
+    }
+
+    #[test]
+    fn images_end_where_they_did_read_one_by_one() {
+        const ALPHABET: &[char] = &['`', '(', ')', ':', '/', 'a', ' '];
+        let mut seed: u64 = 0x1a9e5;
+        for _ in 0..2000 {
+            let mut chars = Vec::new();
+            for _ in 0..(seed % 40) {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                chars.push(ALPHABET[(seed % ALPHABET.len() as u64) as usize]);
+            }
+            let ends = ImageEnds::new(&chars);
+            for start in 0..=chars.len() {
+                let line: String = chars.iter().collect();
+                assert_eq!(ends.body_len(start), body_len_alone(&chars[start..]), "{line:?} from {start}");
+            }
+        }
+    }
+
+    /// Markup that was read again for each image, anchor or field, so a
+    /// message of it (one can be a megabyte) took minutes, and again each
+    /// time it was drawn. Each is read once now.
+    #[test]
+    fn many_images_anchors_and_fields_are_read_once() {
+        let n = 50_000;
+        let images = |page: &Page| page.lines.iter().filter(|l| matches!(l, MLine::Image { .. })).count();
+        assert_eq!(images(&parse(&format!("`({}", ")".repeat(n)))), 1);
+        assert_eq!(images(&parse(&"`()".repeat(n))), n);
+        let headings: String = (0..n).map(|i| format!(">h{i}\n")).collect();
+        assert_eq!(parse(&headings).anchors.len(), n);
+        let tags: String = (0..n).map(|i| format!("`:a{i}")).collect();
+        assert_eq!(parse(&tags).anchors.len(), n);
+        // What was typed stays when the page is read again.
+        let fields = "`<|f`>".repeat(n);
+        let (mut page, mut again) = (parse(&fields), parse(&fields));
+        page.fields[n - 1].value = "typed".into();
+        again.keep_state(&page);
+        assert_eq!((again.fields.len(), again.fields[n - 1].value.as_str()), (n, "typed"));
+        // Written as HTML, laid out and shown as source, at once too.
+        let html = |source: &str| parse(source).to_html(|u| u.to_string(), |_| None);
+        assert_eq!(html(&headings).matches("m-anchor").count(), n);
+        assert_eq!(html(&fields).matches("<input").count(), n);
+        for source in [&headings, &tags, &fields] {
+            assert!(parse(source).layout(80, None, &HashMap::new(), None).lines.len() < 2 * n);
+            assert!(!source::tokenize(source).is_empty());
+        }
     }
 
     /// Malformed markup must never panic: parse and lay out random mixes

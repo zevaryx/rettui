@@ -1,7 +1,7 @@
 //! Micron source split into tokens, for the page source view. Follows the
 //! same rules as the parser so the colours match what the markup does.
 
-use super::{image_body_len, table_options};
+use super::{ImageEnds, table_options};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {
@@ -82,6 +82,7 @@ fn tokenize_line(line: &str) -> Vec<(Token, String)> {
         return out;
     }
     let mut i = 0;
+    let mut image_ends = None;
     if chars.first() == Some(&'<') {
         push(Token::Structure, &chars[..1]);
         i = 1;
@@ -128,7 +129,7 @@ fn tokenize_line(line: &str) -> Vec<(Token, String)> {
                 Some(end) => (Token::Field, end + 1),
                 None => (Token::Field, rest.len()),
             },
-            '(' => match image_body_len(rest) {
+            '(' => match image_ends.get_or_insert_with(|| ImageEnds::new(&chars)).body_len(i + 2) {
                 Some(end) => (Token::Image, end + 1),
                 None => (Token::Image, rest.len()),
             },

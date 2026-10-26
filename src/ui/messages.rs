@@ -254,13 +254,15 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         if !message.content.is_empty() {
             match message.format {
-                Some(TextFormat::Markdown) => {
-                    lines.extend(markdown::lines(&message.content, inner_width).into_iter().map(|line| (line, None)));
-                }
-                Some(TextFormat::Micron) => {
-                    let page = crate::nomad::micron::parse(&message.content);
-                    let layout = page.layout(inner_width, None, &std::collections::HashMap::new(), None);
-                    lines.extend(layout.lines.into_iter().map(|line| (line, None)));
+                Some(format) => {
+                    let content = &message.content;
+                    let rows = app.formatted.get(format, content, inner_width, || match format {
+                        TextFormat::Markdown => markdown::lines(content, inner_width),
+                        TextFormat::Micron => {
+                            crate::nomad::micron::parse(content).layout(inner_width, None, &std::collections::HashMap::new(), None).lines
+                        }
+                    });
+                    lines.extend(rows.into_iter().map(|line| (line, None)));
                 }
                 None => {
                     // Links written in it: on every row they're on.

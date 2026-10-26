@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::nomad::micron::html::escape;
 
 /// How a message's text is written, from its renderer field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextFormat {
     Markdown,
@@ -32,6 +32,45 @@ impl TextFormat {
             lxmf_core::constants::RENDERER_MICRON => Some(TextFormat::Micron),
             _ => None,
         }
+    }
+}
+
+/// The most text that what [`Formatted`] keeps was made from.
+const KEPT_BYTES: usize = 2_000_000;
+
+/// Formatted messages, kept by their text (and the width, for the
+/// terminal): a long one takes a while to format, and is shown again every
+/// frame, or each time the web UI asks for its conversation. When what's
+/// kept was made from more than [`KEPT_BYTES`] of text, it starts over.
+pub struct Formatted<T> {
+    made: std::collections::HashMap<(u64, usize), T>,
+    bytes: usize,
+}
+
+impl<T> Default for Formatted<T> {
+    fn default() -> Self {
+        Self { made: std::collections::HashMap::new(), bytes: 0 }
+    }
+}
+
+impl<T: Clone> Formatted<T> {
+    /// `text` in `format` at `width`, made with `make` if it isn't kept.
+    pub fn get(&mut self, format: TextFormat, text: &str, width: usize, make: impl FnOnce() -> T) -> T {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        (format, text).hash(&mut hasher);
+        let key = (hasher.finish(), width);
+        if let Some(made) = self.made.get(&key) {
+            return made.clone();
+        }
+        let made = make();
+        if self.bytes + text.len() > KEPT_BYTES {
+            self.made.clear();
+            self.bytes = 0;
+        }
+        self.bytes += text.len();
+        self.made.insert(key, made.clone());
+        made
     }
 }
 
@@ -340,6 +379,28 @@ pub fn html(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formatted_text_is_made_once_until_too_much_is_kept() {
+        let made = std::cell::Cell::new(0);
+        let mut kept = Formatted::default();
+        let mut get = |format, text: &str, width| {
+            kept.get(format, text, width, || {
+                made.set(made.get() + 1);
+                format!("{text} at {width}")
+            })
+        };
+        assert_eq!(get(TextFormat::Micron, "hello", 80), "hello at 80");
+        assert_eq!(get(TextFormat::Micron, "hello", 80), "hello at 80");
+        assert_eq!(made.get(), 1, "kept");
+        get(TextFormat::Micron, "hello", 60);
+        get(TextFormat::Markdown, "hello", 80);
+        assert_eq!(made.get(), 3, "another width or format is made again");
+        // Past what's kept, it starts over.
+        get(TextFormat::Micron, &"x".repeat(KEPT_BYTES), 80);
+        get(TextFormat::Micron, "hello", 80);
+        assert_eq!(made.get(), 5);
+    }
 
     fn shown(text: &str, width: usize) -> Vec<String> {
         lines(text, width).iter().map(|l| l.to_string().trim_end().to_string()).collect()

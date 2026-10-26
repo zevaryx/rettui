@@ -261,14 +261,17 @@ fn message_state(state: &MessageState) -> Value {
 }
 
 /// A formatted message's text as HTML (escaped: no HTML of the sender's
-/// gets through), or `None` for plain text.
+/// gets through), or `None` for plain text. Kept once made, as the
+/// terminal's rows are.
 fn formatted(m: &Message) -> Option<String> {
-    match m.format? {
-        crate::markdown::TextFormat::Markdown => Some(crate::markdown::html(&m.content)),
-        crate::markdown::TextFormat::Micron => {
-            Some(crate::nomad::micron::parse(&m.content).to_html(|url| url.trim().to_string(), |_| None))
-        }
-    }
+    use crate::markdown::{Formatted, TextFormat};
+    static MADE: std::sync::LazyLock<std::sync::Mutex<Formatted<String>>> = std::sync::LazyLock::new(Default::default);
+    let format = m.format?;
+    let mut made = MADE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    Some(made.get(format, &m.content, 0, || match format {
+        TextFormat::Markdown => crate::markdown::html(&m.content),
+        TextFormat::Micron => crate::nomad::micron::parse(&m.content).to_html(|url| url.trim().to_string(), |_| None),
+    }))
 }
 
 fn message(m: &Message, conversation: &Conversation) -> Value {

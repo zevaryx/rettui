@@ -564,6 +564,8 @@ pub struct App {
     auto_resent: HashMap<String, Instant>,
     /// Decoded image attachments by file path (`None` if undecodable).
     pictures: HashMap<PathBuf, Option<Picture>>,
+    /// Formatted messages, as the terminal draws them.
+    pub(crate) formatted: crate::markdown::Formatted<Vec<ratatui::text::Line<'static>>>,
     /// Images being decoded in the background, and where results arrive
     /// (the event loop takes the receiver with [`App::take_decoded`]).
     decoding: std::collections::HashSet<PathBuf>,
@@ -749,6 +751,7 @@ impl App {
             delivery_mode: DeliveryMode::Auto,
             auto_resent: HashMap::new(),
             pictures: HashMap::new(),
+            formatted: Default::default(),
             decoding: std::collections::HashSet::new(),
             decoded_tx,
             decoded_rx: Some(decoded_rx),
