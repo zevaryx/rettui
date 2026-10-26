@@ -368,6 +368,8 @@ rettui shows what each one is, rather than an empty message:
     *trusted* answers only contacts you trust, *contacts* any contact. The
     answers go as messages, shown in the conversation, at most once a
     minute to each sender; the command's line says whether, or why not.
+    Only a message's first 8 commands are read, and only an echo's first
+    500 characters are sent back.
   - Requests for your location are answered only if *Location requests*
     says so (see [below](#locations-and-the-map)). Plugin commands aren't
     run.

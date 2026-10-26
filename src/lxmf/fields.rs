@@ -345,6 +345,13 @@ pub fn telemetry_of(message: &LxMessage) -> Option<Telemetry> {
     })
 }
 
+/// The most commands read from one message. Each one answered is a
+/// message sent back, so a message of thousands would have rettui send
+/// thousands (Sideband sends one at a time).
+pub const COMMANDS_READ: usize = 8;
+/// The most of an echo sent back: the rest of it is left out.
+pub const ECHO_CHARS: usize = 500;
+
 /// A command another client asks for (Sideband's numbers).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -362,7 +369,9 @@ impl Command {
         match id {
             0x01 => Command::TelemetryRequest,
             0x02 => Command::Ping,
-            0x03 => Command::Echo(bytes_of(argument).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()),
+            0x03 => Command::Echo(
+                bytes_of(argument).map(|b| String::from_utf8_lossy(&b).chars().take(ECHO_CHARS).collect()).unwrap_or_default(),
+            ),
             0x04 => Command::SignalReport,
             other => Command::Other(other),
         }
@@ -488,6 +497,7 @@ pub fn commands_of(message: &LxMessage) -> Vec<Command> {
         })
         .flatten()
         .filter_map(|(id, argument)| id.as_u64().map(|id| Command::from(id, argument)))
+        .take(COMMANDS_READ)
         .collect()
 }
 
@@ -870,6 +880,18 @@ mod tests {
         // A signal report says how the message asking for it was heard.
         let heard = crate::net::remote::Signal { rssi: Some(-97.0), snr: Some(6.5), q: Some(88.0) };
         assert_eq!(Command::SignalReport.answer(Some(&heard)).unwrap(), "Link Quality: 88%\nRSSI: -97 dBm\nSNR: 6.5 dB");
+    }
+
+    #[test]
+    fn a_message_of_many_commands_asks_a_few() {
+        // Each answered is a message sent back: thousands in one message
+        // would be thousands sent, each echo as long as asked.
+        let mut many = message();
+        let echo = Value::Map(vec![(Value::from(0x03), Value::Binary("é".repeat(1_000).into_bytes()))]);
+        many.set_msgpack_field(FIELD_COMMANDS, encode(&Value::Array(vec![echo; 1_000]))).unwrap();
+        let commands = Extras::of(&received(&many)).commands;
+        assert_eq!(commands.len(), COMMANDS_READ);
+        assert_eq!(commands[0], Command::Echo("é".repeat(ECHO_CHARS)));
     }
 
     #[test]
