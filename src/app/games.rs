@@ -104,6 +104,9 @@ pub struct BoardRegion {
     /// Every other column one wide, from the first (Dots and Boxes' dots
     /// and the lines up from them), between those `cell` wide.
     pub narrow_even: bool,
+    /// A gap of one after every three columns and rows (Ultimate
+    /// Tic-Tac-Toe's small boards).
+    pub groups: bool,
     /// The whole box.
     pub area: Rect,
 }
@@ -115,9 +118,25 @@ impl BoardRegion {
         if w == 0 || h == 0 || at.y < self.origin.y {
             return None;
         }
-        let row = (at.y - self.origin.y) / h;
+        let mut row = (at.y - self.origin.y) / h;
+        if self.groups {
+            // Three rows, then a gap.
+            if row % 4 == 3 {
+                return None;
+            }
+            row = row / 4 * 3 + row % 4;
+        }
         let x = at.x.checked_sub(self.origin.x + row * self.skew)?;
-        let col = if self.narrow_even { x / (w + 1) * 2 + u16::from(x % (w + 1) != 0) } else { x / w };
+        let col = if self.narrow_even {
+            x / (w + 1) * 2 + u16::from(x % (w + 1) != 0)
+        } else if self.groups {
+            if x / w % 4 == 3 {
+                return None;
+            }
+            x / w / 4 * 3 + x / w % 4
+        } else {
+            x / w
+        };
         (col < self.across && row < self.down).then_some((row * self.across + col) as usize)
     }
 }
@@ -536,6 +555,14 @@ impl App {
                 self.play_at_cursor(&game)
             }
             KeyCode::Char('s') if typed_moves(&game) && game.app == "hex" => self.game_action(app, session, "move", Some("swap")),
+            KeyCode::Char('p') if game.app == "go" => self.game_action(app, session, "move", Some("pass")),
+            // A throw by number: rock, paper, scissors.
+            KeyCode::Char(c @ '1'..='3') if game.app == "rps" => {
+                if let Some(screen) = self.game_view.as_mut() {
+                    screen.cursor = c as usize - '1' as usize;
+                }
+                self.play_at_cursor(&game)
+            }
             KeyCode::Char('a') if can("accept") => self.game_action(app, session, "accept", None),
             KeyCode::Char('d') if can("decline") => self.game_action(app, session, "decline", None),
             KeyCode::Char('D') if can("draw_offer") => self.game_action(app, session, "draw_offer", None),
@@ -554,6 +581,12 @@ impl App {
                     "checkers" => "Your move, by its squares (a3 b4; a5 c3 e1 jumps twice)",
                     "dots_and_boxes" => "Your line, by a dot and which way (c3h to the right of c3, c3v up from it)",
                     "hex" => "Your move, by its cell (f6; swap, as White's first move, takes Black's)",
+                    "go" => "Your move, by its point (e5; pass)",
+                    "breakthrough" => "Your move, by its squares (a2b3)",
+                    "amazons" => "Your move, by where from, where to and the arrow (d1d7/g7)",
+                    "morris" => "Your move, by its points (d2 places; d2-d3 slides; d2xg7 also takes g7)",
+                    "quoridor" => "Your move, by a square to step to (e2) or a wall (c3h across, c3v up from c3)",
+                    "battleship" => "Your shot, by its square (e5)",
                     _ => "Your move, by its square (d3)",
                 };
                 self.open_prompt(PromptKind::Game(prompt), ask, "");
@@ -590,6 +623,16 @@ impl App {
             Board::Hex { .. } => (11, 11, false),
             Board::Gomoku { .. } => (15, 15, false),
             Board::Mancala { .. } => (6, 1, false),
+            Board::UltimateTicTacToe { .. } | Board::Go { .. } => (9, 9, false),
+            Board::Pente { .. } => (19, 19, false),
+            Board::Breakthrough { .. } => (8, 8, false),
+            Board::Amazons { .. } | Board::Battleship { .. } => (10, 10, false),
+            Board::Quoridor { .. } => (17, 17, false),
+            Board::Rps { .. } => (3, 1, false),
+            Board::Morris { .. } => {
+                screen.cursor = morris_step(screen.cursor, dx, dy);
+                return;
+            }
             Board::DotsAndBoxes { .. } => {
                 screen.cursor = dots_step(screen.cursor, dx, dy);
                 return;
@@ -611,8 +654,47 @@ impl App {
         if let Board::Checkers { cells, black, legal, must_capture, .. } = &game.board {
             return self.play_checkers(game, &screen, cells, *black, legal, *must_capture);
         }
+        match &game.board {
+            Board::Breakthrough { legal, .. } | Board::Amazons { legal, .. } | Board::Morris { legal, .. } => {
+                return self.play_steps(game, &screen, legal);
+            }
+            Board::Rps { legal, phase, .. } => {
+                if !game.yours || game.status != "active" || game.draw_offer == Some(true) {
+                    return Err("It isn't your move".into());
+                }
+                // The match's last throw is only shown.
+                let throw =
+                    if phase == "reveal" && legal.is_empty() { String::new() } else { ["r", "p", "s"][screen.cursor.min(2)].to_string() };
+                if !throw.is_empty() && !legal.contains(&throw) {
+                    return Err("You can't throw that now".into());
+                }
+                return self.game_action(&screen.app, &screen.session, "move", Some(&throw));
+            }
+            Board::Battleship { phase, .. } if phase != "shoot" && !phase.is_empty() => {
+                if !game.yours || game.status != "active" || game.draw_offer == Some(true) {
+                    return Err("It isn't your move".into());
+                }
+                return self.game_action(&screen.app, &screen.session, "move", Some(""));
+            }
+            _ => {}
+        }
         // One square, line or pit: played if it's a move you can make.
         let named = match &game.board {
+            Board::UltimateTicTacToe { legal, .. } => {
+                Some((crate::games::grid_square_name(screen.cursor, 9), legal, "You can't play there"))
+            }
+            Board::Go { legal, .. } => {
+                Some((crate::games::grid_square_name(screen.cursor, 9), legal, "You can't play there: it's taken, or a capture or repeat"))
+            }
+            Board::Pente { legal, .. } => Some((crate::games::grid_square_name(screen.cursor, 19), legal, "That point is taken")),
+            Board::Battleship { legal, .. } => {
+                Some((crate::games::grid_square_name(screen.cursor, 10), legal, "You've fired there already"))
+            }
+            Board::Quoridor { legal, .. } => {
+                let m = crate::games::quoridor_move(screen.cursor / 17, screen.cursor % 17, legal)
+                    .ok_or("Put the cursor on a square you can step to, or between squares for a wall")?;
+                Some((m, legal, "That isn't a legal move"))
+            }
             Board::Hex { legal, .. } => Some((crate::games::grid_square_name(screen.cursor, 11), legal, "That cell is taken")),
             Board::Gomoku { legal, .. } => Some((crate::games::grid_square_name(screen.cursor, 15), legal, "That point is taken")),
             Board::Reversi { legal, .. } => {
@@ -710,6 +792,44 @@ impl App {
         }
     }
 
+    /// Breakthrough, Amazons and Nine Men's Morris: the squares of a move
+    /// are picked one by one (a piece, where it goes, an arrow's square or
+    /// a piece taken), and it's made once they name a legal one.
+    fn play_steps(&mut self, game: &GameView, screen: &GameScreen, legal: &[String]) -> Result<(), String> {
+        if !game.yours || game.status != "active" || game.draw_offer == Some(true) {
+            return Err("It isn't your move".into());
+        }
+        let app = screen.app.as_str();
+        let at = crate::games::step_name(app, screen.cursor);
+        if at.is_empty() {
+            return Err("Put the cursor on a point".into());
+        }
+        let named: Vec<String> = screen.path.iter().map(|i| crate::games::step_name(app, *i)).collect();
+        // The piece picked, again: put down.
+        if named.len() == 1 && named[0] == at {
+            self.set_checkers_path(Vec::new());
+            return Ok(());
+        }
+        let next = [named.as_slice(), std::slice::from_ref(&at)].concat();
+        let (done, going) = crate::games::steps_moves(legal, &next);
+        if let Some(whole) = done {
+            let whole = whole.clone();
+            self.game_action(app, &screen.session, "move", Some(&whole))?;
+            self.set_checkers_path(Vec::new());
+        } else if !going.is_empty() {
+            self.set_checkers_path([screen.path.as_slice(), &[screen.cursor]].concat());
+        } else if !screen.path.is_empty() && {
+            // Another piece of yours to move instead.
+            let (done, going) = crate::games::steps_moves(legal, std::slice::from_ref(&at));
+            done.is_some() || !going.is_empty()
+        } {
+            self.set_checkers_path(vec![screen.cursor]);
+        } else {
+            return Err(if screen.path.is_empty() { "Nothing to move from there" } else { "That isn't a legal move" }.into());
+        }
+        Ok(())
+    }
+
     fn set_checkers_path(&mut self, path: Vec<usize>) {
         if let Some(screen) = self.game_view.as_mut() {
             screen.path = path;
@@ -731,6 +851,11 @@ impl App {
         // Black sees either board turned round.
         let index = match &game.board {
             Board::Chess { white: false, .. } | Board::Checkers { black: true, .. } => 63 - shown,
+            // Morris' points are scattered over its 7 by 7 grid.
+            Board::Morris { .. } => {
+                let Some(point) = crate::games::MORRIS_POINTS.iter().position(|(_, col, row)| row * 7 + col == shown) else { return };
+                point
+            }
             _ => shown,
         };
         if let Some(screen) = self.game_view.as_mut() {
@@ -799,6 +924,15 @@ impl App {
             "reversi" => 27,
             "hex" => 60,
             "gomoku" => 112,
+            "ultimate_ttt" | "go" => 40,
+            "pente" => 180,
+            // d2, a point to start from.
+            "morris" => 10,
+            "battleship" => 44,
+            // e5, the middle square.
+            "quoridor" => 144,
+            // Paper.
+            "rps" => 1,
             // c3v, the middle of the grid.
             "dots_and_boxes" => 59,
             _ => 52,
@@ -841,7 +975,44 @@ impl App {
 /// Whether a game's moves can be typed (`t`): those with squares or lines
 /// to name.
 fn typed_moves(game: &GameView) -> bool {
-    matches!(game.app.as_str(), "chess" | "checkers" | "hex" | "gomoku" | "reversi" | "dots_and_boxes")
+    matches!(
+        game.app.as_str(),
+        "chess"
+            | "checkers"
+            | "hex"
+            | "gomoku"
+            | "reversi"
+            | "dots_and_boxes"
+            | "ultimate_ttt"
+            | "go"
+            | "pente"
+            | "breakthrough"
+            | "amazons"
+            | "morris"
+            | "quoridor"
+            | "battleship"
+    )
+}
+
+/// The Nine Men's Morris cursor (a point's index in `MORRIS_POINTS`) moved
+/// one way: to the nearest point that way, keeping to its row or column
+/// as far as it goes.
+fn morris_step(cursor: usize, dx: i32, dy: i32) -> usize {
+    let points = &crate::games::MORRIS_POINTS;
+    let Some(&(_, col, row)) = points.get(cursor) else { return 0 };
+    let (col, row) = (col as i32, row as i32);
+    points
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, c, r))| {
+            let (c, r) = (*c as i32, *r as i32);
+            if dx != 0 { (c - col).signum() == dx } else { (r - row).signum() == dy }
+        })
+        .min_by_key(|(_, (_, c, r))| {
+            let (c, r) = (*c as i32, *r as i32);
+            if dx != 0 { ((r - row).abs(), (c - col).abs()) } else { ((c - col).abs(), (r - row).abs()) }
+        })
+        .map_or(cursor, |(i, _)| i)
 }
 
 /// The Dots and Boxes cursor (a place in the grid of eleven, row by row)
@@ -1323,6 +1494,182 @@ mod tests {
         for p in [amy, ben] {
             let _ = std::fs::remove_dir_all(p.dir);
         }
+    }
+
+    #[test]
+    fn the_lrgp_games_at_the_keyboard_and_by_clicks() {
+        let (mut amy, mut ben) = (player("lrgp-amy", AMY), player("lrgp-ben", BEN));
+        let warned = |player: &Player| player.app.log.back().cloned().unwrap_or_default();
+        let at = |p: &mut Player, cursor: usize| p.app.game_view.as_mut().unwrap().cursor = cursor;
+        macro_rules! sides {
+            ($app:expr, $session:expr) => {{
+                let amy_first = amy.app.games.view($app, $session).unwrap().yours;
+                if amy_first { ((&mut amy, AMY), (&mut ben, BEN)) } else { ((&mut ben, BEN), (&mut amy, AMY)) }
+            }};
+        }
+        let last_of = |p: &Player, app: &str, session: &str| match p.app.games.view(app, session).unwrap().board {
+            Board::UltimateTicTacToe { last, .. }
+            | Board::Go { last, .. }
+            | Board::Pente { last, .. }
+            | Board::Breakthrough { last, .. }
+            | Board::Amazons { last, .. }
+            | Board::Morris { last, .. }
+            | Board::Quoridor { last, .. } => last,
+            other => panic!("{other:?}"),
+        };
+
+        // Games played by a point under the cursor: its own colour, and one
+        // taken can't be played again.
+        for (app, point, taken) in
+            [("ultimate_ttt", 40, "You can't play there"), ("go", 40, "You can't play there"), ("pente", 180, "That point is taken")]
+        {
+            let session = begun(&mut amy, &mut ben, app);
+            let ((first, first_key), (second, second_key)) = sides!(app, &session);
+            at(first, point);
+            press(first, KeyCode::Enter);
+            second.app.on_message(arrives(first, first_key));
+            let name = crate::games::grid_square_name(point, if app == "pente" { 19 } else { 9 });
+            assert_eq!(last_of(second, app, &session).as_deref(), Some(name.as_str()), "{app}");
+            at(second, point);
+            press(second, KeyCode::Enter);
+            assert!(warned(second).contains(taken), "{app}: {}", warned(second));
+            if app == "go" {
+                // Two passes end it.
+                press(second, KeyCode::Char('p'));
+                first.app.on_message(arrives(second, second_key));
+                press(first, KeyCode::Char('p'));
+                second.app.on_message(arrives(first, first_key));
+                assert!(
+                    second.app.games.view(app, &session).unwrap().summary.starts_with("You won")
+                        || second.app.games.view(app, &session).unwrap().summary.starts_with("They won")
+                );
+            }
+        }
+
+        // Breakthrough: a piece, then where it goes; the piece again puts it down.
+        let session = begun(&mut amy, &mut ben, "breakthrough");
+        let ((first, first_key), (second, _)) = sides!("breakthrough", &session);
+        press(first, KeyCode::Enter);
+        assert_eq!(first.app.game_view.as_ref().unwrap().path, vec![52]);
+        press(first, KeyCode::Enter);
+        assert!(first.app.game_view.as_ref().unwrap().path.is_empty());
+        press(first, KeyCode::Enter);
+        // Not a way to go: nothing sent.
+        at(first, 4);
+        press(first, KeyCode::Enter);
+        assert!(warned(first).contains("isn't a legal move"), "{}", warned(first));
+        // Another piece instead, then up from it.
+        at(first, 51);
+        press(first, KeyCode::Enter);
+        assert_eq!(first.app.game_view.as_ref().unwrap().path, vec![51]);
+        press(first, KeyCode::Up);
+        press(first, KeyCode::Enter);
+        second.app.on_message(arrives(first, first_key));
+        assert_eq!(last_of(second, "breakthrough", &session).as_deref(), Some("d2d3"));
+        // Nothing to move from an empty square.
+        at(second, 28);
+        press(second, KeyCode::Enter);
+        assert!(warned(second).contains("Nothing to move from there"), "{}", warned(second));
+
+        // Amazons: where from, where to, and the arrow.
+        let session = begun(&mut amy, &mut ben, "amazons");
+        let ((first, first_key), (second, _)) = sides!("amazons", &session);
+        for point in [93, 33, 36] {
+            at(first, point);
+            press(first, KeyCode::Enter);
+        }
+        second.app.on_message(arrives(first, first_key));
+        assert_eq!(last_of(second, "amazons", &session).as_deref(), Some("d1d7/g7"));
+
+        // Nine Men's Morris: the cursor goes along the lines; a point is placed.
+        assert_eq!((morris_step(10, 0, -1), morris_step(10, -1, 0), morris_step(10, 1, 0), morris_step(10, 0, 1)), (11, 3, 18, 9));
+        assert_eq!((morris_step(7, 1, 0), morris_step(16, -1, 0), morris_step(0, -1, 0), morris_step(99, 1, 0)), (16, 7, 0, 0));
+        let session = begun(&mut amy, &mut ben, "morris");
+        let ((first, first_key), (second, _)) = sides!("morris", &session);
+        press(first, KeyCode::Left);
+        assert_eq!(first.app.game_view.as_ref().unwrap().cursor, 3);
+        press(first, KeyCode::Enter);
+        second.app.on_message(arrives(first, first_key));
+        assert_eq!(last_of(second, "morris", &session).as_deref(), Some("b2"));
+        // A click on a point (its 7 by 7 grid): d2 is column 3, row 5.
+        second.app.regions.game_board = BoardRegion {
+            origin: Position::new(4, 2),
+            cell: (6, 2),
+            across: 7,
+            down: 7,
+            area: Rect::new(0, 0, 60, 30),
+            ..Default::default()
+        };
+        second.app.click_games(Position::new(4 + 18, 2 + 10));
+        assert_eq!(last(second, first_key).game.unwrap().command, "move");
+        // Between points: nothing.
+        let sent = second.net.try_recv().is_ok();
+        second.app.click_games(Position::new(4 + 6, 2));
+        assert!(sent && second.net.try_recv().is_err());
+
+        // Quoridor: a step, then a wall in a groove.
+        let session = begun(&mut amy, &mut ben, "quoridor");
+        let ((first, first_key), (second, second_key)) = sides!("quoridor", &session);
+        at(first, 14 * 17 + 8);
+        press(first, KeyCode::Enter);
+        second.app.on_message(arrives(first, first_key));
+        assert_eq!(last_of(second, "quoridor", &session).as_deref(), Some("e2"));
+        at(second, 11 * 17 + 4);
+        press(second, KeyCode::Enter);
+        first.app.on_message(arrives(second, second_key));
+        assert_eq!(last_of(first, "quoridor", &session).as_deref(), Some("c3h"));
+        // Not a square or groove to play from here.
+        at(first, 0);
+        press(first, KeyCode::Enter);
+        assert!(warned(first).contains("Put the cursor on a square"), "{}", warned(first));
+
+        // Battleship: a shot at the square under the cursor.
+        let session = begun(&mut amy, &mut ben, "battleship");
+        let ((first, first_key), (second, second_key)) = sides!("battleship", &session);
+        press(first, KeyCode::Enter);
+        second.app.on_message(arrives(first, first_key));
+        let Board::Battleship { theirs, .. } = first.app.games.view("battleship", &session).unwrap().board else { panic!() };
+        assert_eq!(theirs[44], '?');
+        // Their shot answers it; the cursor can't fire where you have.
+        at(second, 0);
+        press(second, KeyCode::Enter);
+        first.app.on_message(arrives(second, second_key));
+        at(first, 44);
+        press(first, KeyCode::Enter);
+        assert!(warned(first).contains("fired there already"), "{}", warned(first));
+        let Board::Battleship { theirs, .. } = first.app.games.view("battleship", &session).unwrap().board else { panic!() };
+        assert_ne!(theirs[44], '?');
+
+        // Rock Paper Scissors: a throw by number.
+        let session = begun(&mut amy, &mut ben, "rps");
+        let ((first, first_key), (second, second_key)) = sides!("rps", &session);
+        press(second, KeyCode::Char('1'));
+        assert!(warned(second).contains("It isn't your move"), "{}", warned(second));
+        press(first, KeyCode::Char('1'));
+        second.app.on_message(arrives(first, first_key));
+        press(second, KeyCode::Char('2'));
+        first.app.on_message(arrives(second, second_key));
+        // Rock locked in, paper played: shown with the next throw.
+        press(first, KeyCode::Char('3'));
+        second.app.on_message(arrives(first, first_key));
+        let Board::Rps { rounds, my_score, .. } = second.app.games.view("rps", &session).unwrap().board else { panic!() };
+        assert_eq!((rounds, my_score), (vec![('p', 'r')], 1));
+        for p in [amy, ben] {
+            let _ = std::fs::remove_dir_all(p.dir);
+        }
+    }
+
+    #[test]
+    fn clicks_in_a_board_of_small_boards_skip_the_gaps() {
+        // Ultimate Tic-Tac-Toe: cells two wide, a gap of two and a row after every three.
+        let grid = BoardRegion { origin: Position::new(2, 0), cell: (2, 1), across: 9, down: 9, groups: true, ..Default::default() };
+        assert_eq!(grid.square(Position::new(2, 0)), Some(0));
+        assert_eq!(grid.square(Position::new(7, 0)), Some(2));
+        assert_eq!(grid.square(Position::new(8, 0)), None);
+        assert_eq!(grid.square(Position::new(10, 0)), Some(3));
+        assert_eq!(grid.square(Position::new(2, 3)), None);
+        assert_eq!(grid.square(Position::new(2, 4)), Some(27));
+        assert_eq!(grid.square(Position::new(2 + 21, 10)), Some(8 * 9 + 8));
     }
 
     #[test]

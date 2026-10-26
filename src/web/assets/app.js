@@ -2374,8 +2374,21 @@ function askText(title, { label = '', value = '', placeholder = '', ok = 'OK', a
 
 const GAME_NAMES = {
   ttt: 'Tic-Tac-Toe', four_in_a_row: 'Four in a Row', dots_and_boxes: 'Dots and Boxes', gomoku: 'Gomoku', reversi: 'Reversi',
-  mancala: 'Mancala', checkers: 'Checkers', chess: 'Chess', hex: 'Hex',
+  mancala: 'Mancala', checkers: 'Checkers', chess: 'Chess', hex: 'Hex', ultimate_ttt: 'Ultimate Tic-Tac-Toe', go: 'Go',
+  battleship: 'Battleship', quoridor: 'Quoridor', morris: 'Nine Men\'s Morris', breakthrough: 'Breakthrough', amazons: 'Amazons',
+  pente: 'Pente', rps: 'Rock Paper Scissors',
 };
+// Nine Men's Morris' points, as lrgp orders its board: name, column and row
+// (from the top) on a 7 by 7 grid.
+const MORRIS_POINTS = [
+  ['a1', 0, 6], ['a4', 0, 3], ['a7', 0, 0], ['b2', 1, 5], ['b4', 1, 3], ['b6', 1, 1], ['c3', 2, 4], ['c4', 2, 3], ['c5', 2, 2],
+  ['d1', 3, 6], ['d2', 3, 5], ['d3', 3, 4], ['d5', 3, 2], ['d6', 3, 1], ['d7', 3, 0], ['e3', 4, 4], ['e4', 4, 3], ['e5', 4, 2],
+  ['f2', 5, 5], ['f4', 5, 3], ['f6', 5, 1], ['g1', 6, 6], ['g4', 6, 3], ['g7', 6, 0],
+];
+const THROWS = { r: ['✊', 'Rock'], p: ['✋', 'Paper'], s: ['✌\uFE0F', 'Scissors'] };
+// The squares a move goes by: `a2b3` is a2, b3; `d1d7/g7` is d1, d7, g7;
+// `d2-d3xg7` is d2, d3, g7.
+const moveSquares = (move) => String(move).match(/[a-z]\d+/g) || [];
 // The pawn (U+265F) is an emoji too: asked for as text (U+FE0E), so it's
 // drawn in its side's colour, not an emoji font's.
 const CHESS_GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟\uFE0E' };
@@ -2509,6 +2522,13 @@ function gameBoard(app, session, onForget) {
       // Hex: White's first move may take Black's stone instead.
       playing && game.board.kind === 'hex' && game.board.legal.includes('swap')
         ? el('button', { text: 'Swap', title: 'Take their stone as yours, mirrored, instead of placing one', onclick: () => act('move', 'swap') }) : null,
+      playing && game.board.kind === 'go' ? el('button', { text: 'Pass', title: 'Two passes in a row end the game', onclick: () => act('move', 'pass') }) : null,
+      playing && game.board.kind === 'battleship' && game.board.phase === 'concede'
+        ? el('button', { class: 'primary', text: 'Concede', title: 'Their shot sank your last ship', onclick: () => act('move', '') }) : null,
+      playing && game.board.kind === 'battleship' && game.board.phase === 'reveal'
+        ? el('button', { class: 'primary', text: 'Show your fleet', title: 'So they can check your answers', onclick: () => act('move', '') }) : null,
+      playing && game.board.kind === 'rps' && game.board.phase === 'reveal' && !game.board.legal.length
+        ? el('button', { class: 'primary', text: 'Show your throw', title: 'The last throw of the match', onclick: () => act('move', '') }) : null,
       can('resign') ? button('Resign', 'resign', `Resign this game of ${game.name}?`) : null,
       game.unsent ? button('↻ Send again', 'resend') : null,
       el('button', { class: 'danger', text: 'Forget', title: 'Remove it from your games (they aren\'t told)', onclick: async () => {
@@ -2549,6 +2569,31 @@ function gameBoard(app, session, onForget) {
       const [mine, theirs] = b.black ? [b.holes[6], b.holes[13]] : [b.holes[13], b.holes[6]];
       return lastly(`Your pits below, your store on the right: ${mine} to ${theirs}`);
     }
+    const side = b.black ? 'Black' : 'White';
+    if (b.kind === 'ultimate_ttt') return lastly(`You're ${side} · three small boards in a row wins`);
+    if (b.kind === 'go') {
+      const [mine, theirs] = b.black ? [b.black_count, b.white_count + 7.5] : [b.white_count + 7.5, b.black_count];
+      return lastly(`You're ${side} · area now: you ${mine}, them ${theirs} (with komi) · you've taken ${b.black ? b.black_captures : b.white_captures}`);
+    }
+    if (b.kind === 'pente') {
+      const [mine, theirs] = b.black ? [b.black_captures, b.white_captures] : [b.white_captures, b.black_captures];
+      return lastly(`You're ${side} · pairs taken: you ${mine}, them ${theirs}`);
+    }
+    if (b.kind === 'breakthrough') {
+      const [mine, theirs] = b.black ? [b.black_count, b.white_count] : [b.white_count, b.black_count];
+      return lastly(`You're ${side}, moving ${b.black ? 'up' : 'down'} · pieces: you ${mine}, them ${theirs}`);
+    }
+    if (b.kind === 'amazons') return lastly(`You're ${side} · burnt squares are crossed`);
+    if (b.kind === 'morris') {
+      const [mine, theirs, hand, theirHand] = b.black ? [b.black_count, b.white_count, b.black_in_hand, b.white_in_hand] : [b.white_count, b.black_count, b.white_in_hand, b.black_in_hand];
+      return lastly(`You're ${side} · on the board: you ${mine}, them ${theirs} · to place: you ${hand}, them ${theirHand}`);
+    }
+    if (b.kind === 'quoridor') {
+      const [mine, theirs] = b.black ? [b.black_walls, b.white_walls] : [b.white_walls, b.black_walls];
+      return lastly(`You're ${side}, from the ${b.black ? 'bottom' : 'top'} · walls left: you ${mine}, them ${theirs}`);
+    }
+    if (b.kind === 'battleship') return lastly(`Ships sunk: you ${b.their_sunk}, them ${b.my_sunk} · ${b.black ? 'you' : 'they'} shot first`);
+    if (b.kind === 'rps') return b.leader ? 'You lead: you lock in each throw, then show it after theirs' : 'They lead: they lock in each throw, you pick, they show theirs';
     if (b.kind === 'checkers') {
       const said = [b.black ? 'You\'re Black (dark pieces)' : 'You\'re White (light pieces)'];
       if (b.must_capture && b.legal.length) said.push('you must jump');
@@ -2582,7 +2627,13 @@ function gameBoard(app, session, onForget) {
     }
     if (b.kind === 'checkers') return checkersBoard(b, playing);
     if (b.kind === 'hex') return hexBoard(b, playing);
-    if (b.kind === 'gomoku' || b.kind === 'reversi') return stonesBoard(b, playing);
+    if (['gomoku', 'reversi', 'go', 'pente'].includes(b.kind)) return stonesBoard(b, playing);
+    if (b.kind === 'ultimate_ttt') return ultimateBoard(b, playing);
+    if (b.kind === 'breakthrough' || b.kind === 'amazons') return stepsBoard(b, playing);
+    if (b.kind === 'morris') return morrisBoard(b, playing);
+    if (b.kind === 'quoridor') return quoridorBoard(b, playing);
+    if (b.kind === 'battleship') return battleshipBoard(b, playing);
+    if (b.kind === 'rps') return rpsBoard(b, playing);
     if (b.kind === 'dots_and_boxes') return dotsBoard(b, playing);
     if (b.kind === 'mancala') return mancalaBoard(b, playing);
     // Chess: Black sees the board turned round. A piece of yours, then a
@@ -2660,7 +2711,7 @@ function gameBoard(app, session, onForget) {
   };
   // A square's name on a board `size` across, from its index (the top left
   // is 0).
-  const squareOn = (i, size) => 'abcdefghijklmno'[i % size] + (size - Math.floor(i / size));
+  const squareOn = (i, size) => 'abcdefghijklmnopqrs'[i % size] + (size - Math.floor(i / size));
   // Black's colour and White's: yours, or theirs.
   const sides = (b) => b.black ? ['mine', 'theirs'] : ['theirs', 'mine'];
   // Hex: a rhombus, each row set right of the one above. Black joins the
@@ -2688,10 +2739,11 @@ function gameBoard(app, session, onForget) {
   // Gomoku (15 by 15, on the points) and Reversi (8 by 8, on green): black
   // and white stones, and (your move) where one can go.
   const stonesBoard = (b, playing) => {
-    const size = b.kind === 'gomoku' ? 15 : 8;
+    const size = { gomoku: 15, reversi: 8, go: 9, pente: 19 }[b.kind];
+    const legal = new Set(b.legal);
     return el('div', { class: `board stones ${b.kind}` }, b.cells.map((stone, i) => {
       const name = squareOn(i, size);
-      const open = playing && b.legal.includes(name);
+      const open = playing && legal.has(name);
       return el('button', {
         class: 'point' + (b.last === name ? ' last' : '') + (open && b.kind === 'reversi' ? ' open' : ''),
         'aria-label': name + (stone === ' ' ? '' : stone === 'b' ? ' Black' : ' White'),
@@ -2737,6 +2789,169 @@ function gameBoard(app, session, onForget) {
       pits(!b.black).reverse().map((p) => pit(p, false)),
       pits(b.black).map((p) => pit(p, true)),
       el('div', { class: 'store mine', 'aria-label': `Your store: ${b.holes[myStore]}`, text: String(b.holes[myStore]) }));
+  };
+  // Ultimate Tic-Tac-Toe: nine small boards in a three by three. The cell
+  // you take sends them to the same place in the big board; the squares you
+  // can play are ringed. A small board won takes its winner's colour.
+  const ultimateBoard = (b, playing) => {
+    const [first, second] = sides(b);
+    const legal = new Set(b.legal);
+    return el('div', { class: 'board ultimate' }, [...Array(9).keys()].map((board) => {
+      const won = b.boards[board];
+      return el('div', { class: 'small' + (won === 'b' ? ' won ' + first : won === 'w' ? ' won ' + second : won === 'd' ? ' dead' : '') },
+        [...Array(9).keys()].map((cell) => {
+          const i = (Math.floor(board / 3) * 3 + Math.floor(cell / 3)) * 9 + (board % 3) * 3 + cell % 3;
+          const name = squareOn(i, 9);
+          const stone = b.cells[i];
+          return el('button', {
+            class: 'cell' + (stone === ' ' ? '' : ' ' + (stone === 'b' ? first : second)) + (b.last === name ? ' last' : '') + (legal.has(name) ? ' open' : ''),
+            text: stone === 'b' ? '●' : stone === 'w' ? '●' : '',
+            'aria-label': name + (stone === ' ' ? '' : stone === 'b' ? ' Black' : ' White'),
+            disabled: !playing || !legal.has(name),
+            onclick: () => act('move', name),
+          });
+        }));
+    }));
+  };
+  // A move picked square by square (Breakthrough, Amazons, Nine Men's
+  // Morris): a piece, where it goes, an arrow's square or a piece taken,
+  // until they name a legal move. `path` holds the places picked so far.
+  const pickStep = (legal, nameOf, i) => {
+    const at = nameOf(i);
+    const names = path.map(nameOf);
+    if (names.length === 1 && names[0] === at) {
+      path = [];
+      return draw();
+    }
+    const next = [...names, at];
+    const same = (squares) => next.every((n, k) => squares[k] === n);
+    const exact = legal.find((m) => { const squares = moveSquares(m); return squares.length === next.length && same(squares); });
+    if (exact) return act('move', exact);
+    if (legal.some((m) => { const squares = moveSquares(m); return squares.length > next.length && same(squares); })) {
+      path = [...path, i];
+      return draw();
+    }
+    if (path.length && legal.some((m) => moveSquares(m)[0] === at)) {
+      path = [i];
+      return draw();
+    }
+    toast(path.length ? 'That isn\'t a legal move' : 'Nothing to move from there');
+  };
+  // Where the move being picked can go on from.
+  const stepTargets = (legal, nameOf) => {
+    const names = path.map(nameOf);
+    return new Set(legal.map(moveSquares).filter((squares) => squares.length > names.length && names.every((n, k) => squares[k] === n)).map((squares) => squares[names.length]));
+  };
+  // Breakthrough (8 by 8) and Amazons (10 by 10, with burnt squares).
+  const stepsBoard = (b, playing) => {
+    const size = b.kind === 'amazons' ? 10 : 8;
+    const nameOf = (i) => squareOn(i, size);
+    const targets = playing ? stepTargets(b.legal, nameOf) : new Set();
+    const last = b.last ? moveSquares(b.last) : [];
+    return el('div', { class: `board squares ${b.kind}`, style: `--n: ${size}` }, b.cells.map((piece, i) => {
+      const name = nameOf(i);
+      const light = (Math.floor(i / size) + i % size) % 2 === 0;
+      return el('button', {
+        class: 'square ' + (light ? 'light' : 'dark') + (last.includes(name) ? ' last' : '') + (path.includes(i) ? ' from' : '') + (targets.has(name) ? ' target' : ''),
+        'aria-label': name + (piece === ' ' ? '' : piece === 'x' ? ' burnt' : piece === 'b' ? ' Black' : ' White'),
+        disabled: !playing,
+        onclick: () => pickStep(b.legal, nameOf, i),
+      }, piece === ' ' ? '' : piece === 'x' ? el('span', { class: 'burnt', text: '✕' })
+        : el('span', { class: (b.kind === 'amazons' ? 'queen ' : 'disc ') + (piece === 'w' ? 'white' : 'black'), text: b.kind === 'amazons' ? '♛' : '' }));
+    }));
+  };
+  // Nine Men's Morris: 24 points on three squares joined across the middle.
+  const morrisBoard = (b, playing) => {
+    const [first, second] = sides(b);
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = (tag, attrs = {}) => {
+      const node = document.createElementNS(NS, tag);
+      for (const [key, value] of Object.entries(attrs)) key.startsWith('on') ? (node[key] = value) : node.setAttribute(key, value);
+      return node;
+    };
+    const at = (n) => n * 80 + 40;
+    const nameOf = (i) => MORRIS_POINTS[i][0];
+    const targets = playing ? stepTargets(b.legal, nameOf) : new Set();
+    const last = b.last ? moveSquares(b.last) : [];
+    const board = svg('svg', { viewBox: '0 0 560 560', class: 'board morris', role: 'group', 'aria-label': 'Board' });
+    for (const [x1, y1, x2, y2] of [[0, 0, 6, 0], [6, 0, 6, 6], [6, 6, 0, 6], [0, 6, 0, 0], [1, 1, 5, 1], [5, 1, 5, 5], [5, 5, 1, 5], [1, 5, 1, 1],
+      [2, 2, 4, 2], [4, 2, 4, 4], [4, 4, 2, 4], [2, 4, 2, 2], [3, 0, 3, 2], [3, 4, 3, 6], [0, 3, 2, 3], [4, 3, 6, 3]]) {
+      board.append(svg('line', { x1: at(x1), y1: at(y1), x2: at(x2), y2: at(y2), class: 'rail' }));
+    }
+    MORRIS_POINTS.forEach(([name, col, row], i) => {
+      const stone = b.cells[i];
+      const group = svg('g', {
+        class: 'point' + (stone === ' ' ? '' : ' ' + (stone === 'b' ? first : second)) + (path.includes(i) ? ' from' : '') + (targets.has(name) ? ' target' : '') + (last.includes(name) ? ' last' : ''),
+        role: 'button', 'aria-label': name + (stone === ' ' ? '' : stone === 'b' ? ' Black' : ' White'),
+      });
+      group.append(svg('circle', { cx: at(col), cy: at(row), r: 17, class: 'disc' }), svg('circle', { cx: at(col), cy: at(row), r: 30, class: 'hit' }));
+      if (playing) group.onclick = () => pickStep(b.legal, nameOf, i);
+      board.append(group);
+    });
+    return el('div', { class: 'morris-wrap' }, board);
+  };
+  // Quoridor: nine by nine squares with grooves between, a wall filling two
+  // squares' worth of groove. A click on a square steps there; on a groove,
+  // or the corner between four squares, places a wall.
+  const quoridorBoard = (b, playing) => {
+    const legal = new Set(b.legal);
+    const file = (c) => 'abcdefghi'[c];
+    // The move at a place in the picture: a step, or the wall that goes
+    // there (a groove is in two walls' ways) if one is legal.
+    const moveAt = (row, col) => {
+      let walls;
+      if (row % 2 === 0 && col % 2 === 0) walls = [`${file(col / 2)}${9 - row / 2}`];
+      else if (row % 2 === 1 && col % 2 === 0) walls = [col / 2, col / 2 - 1].filter((f) => f >= 0 && f < 8).map((f) => `${file(f)}${9 - (row + 1) / 2}h`);
+      else if (row % 2 === 0) walls = [9 - row / 2, 8 - row / 2].filter((r) => r >= 1 && r <= 8).map((r) => `${file((col - 1) / 2)}${r}v`);
+      else walls = ['h', 'v'].map((way) => `${file((col - 1) / 2)}${9 - (row + 1) / 2}${way}`);
+      return walls.find((w) => legal.has(w));
+    };
+    const cells = [];
+    b.rows.forEach((text, row) => [...text].forEach((c, col) => {
+      const move = moveAt(row, col);
+      const square = row % 2 === 0 && col % 2 === 0;
+      cells.push(el('button', {
+        class: (square ? 'square' : 'groove ' + (row % 2 === 1 ? (col % 2 === 1 ? 'corner' : 'across') : 'down')) + (c === '-' || c === '|' ? ' wall' : '') + (square && move ? ' step' : ''),
+        'aria-label': square ? `${file(col / 2)}${9 - row / 2}${c === 'b' ? ' Black pawn' : c === 'w' ? ' White pawn' : ''}` : (c === '-' || c === '|' ? 'Wall' : 'Groove'),
+        disabled: !playing || !move,
+        title: move && !square ? `Wall ${move}` : undefined,
+        onclick: () => act('move', move),
+      }, square && (c === 'b' || c === 'w') ? el('span', { class: 'pawn ' + ((c === 'b') === b.black ? 'mine' : 'theirs') }) : null));
+    }));
+    return el('div', { class: 'board quoridor' + (playing ? ' playing' : '') }, cells);
+  };
+  // Battleship: the waters you fire into, and your own fleet.
+  const battleshipBoard = (b, playing) => {
+    const legal = new Set(b.legal);
+    const grid = (cells, own) => el('div', { class: 'ocean' + (own ? ' own' : '') }, cells.map((c, i) => {
+      const name = squareOn(i, 10);
+      const state = { x: 'hit', o: 'miss', '?': 'pending', s: 'ship' }[c] || 'water';
+      return el('button', {
+        class: 'sea ' + state,
+        'aria-label': `${name}: ${{ hit: 'hit', miss: 'miss', pending: 'fired, not answered yet', ship: own ? 'your ship' : 'their ship', water: 'water' }[state]}`,
+        text: { hit: '✕', miss: '•', pending: '?', ship: '', water: '' }[state],
+        disabled: own || !playing || !legal.has(name),
+        onclick: () => act('move', name),
+      });
+    }));
+    return el('div', { class: 'board battleship' },
+      el('div', {}, el('h4', { class: 'theirs', text: 'Their waters' }), grid(b.theirs, false)),
+      el('div', {}, el('h4', { class: 'mine', text: 'Your fleet' }), grid(b.mine, true)));
+  };
+  // Rock Paper Scissors: the score, your three throws, and the rounds so far.
+  const rpsBoard = (b, playing) => {
+    const legal = new Set(b.legal);
+    const beats = { r: 's', s: 'p', p: 'r' };
+    const result = ([mine, theirs]) => mine === theirs ? 'a tie' : beats[mine] === theirs ? 'you win' : 'they win';
+    const waiting = b.pending ? (b.leader ? `They threw ${THROWS[b.pending][1]}: show yours` : `You threw ${THROWS[b.pending][1]}: they\'ll show theirs`)
+      : b.phase === 'commit' ? 'Pick your first throw: it\'s locked in, hidden from them' : '';
+    return el('div', { class: 'board rps' },
+      el('div', { class: 'rps-score' }, el('span', { class: 'mine', text: `You ${b.my_score}` }), ' – ', el('span', { class: 'theirs', text: `${b.their_score} Them` }), el('span', { class: 'dim', text: '  first to 3' })),
+      el('div', { class: 'rps-throws' }, ['r', 'p', 's'].map((t) => el('button', {
+        class: 'throw', disabled: !playing || !legal.has(t), 'aria-label': THROWS[t][1], onclick: () => act('move', t),
+      }, el('span', { class: 'glyph', text: THROWS[t][0] }), el('span', { text: THROWS[t][1] })))),
+      waiting ? el('div', { class: 'dim', text: waiting }) : null,
+      el('ol', { class: 'rps-rounds' }, b.rounds.map(([mine, theirs]) => el('li', { text: `You ${THROWS[mine][1]}, they ${THROWS[theirs][1]}: ${result([mine, theirs])}` }))));
   };
   return { node: body, draw };
 }
