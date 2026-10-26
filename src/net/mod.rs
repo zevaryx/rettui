@@ -166,6 +166,9 @@ pub enum NetCommand {
         id: u64,
         message: Box<lxmf::Outgoing>,
     },
+    /// Stop sending a message, if it can still be stopped: it fails with
+    /// [`lxmf::CANCELLED`].
+    CancelSend(u64),
     Fetch {
         id: u64,
         node: Hash,
@@ -365,7 +368,15 @@ pub enum NetEvent {
         id: u64,
         text: String,
     },
+    /// How sending a message is going: finding a path, connecting, how
+    /// much is sent ("42%").
+    SendProgress {
+        id: u64,
+        text: String,
+    },
     SyncStarted,
+    /// How a sync is going: connecting, how many of those waiting came.
+    SyncProgress(String),
     Synced(Result<usize, String>),
     Interfaces(Vec<InterfaceInfo>),
     /// The interface each destination with a path goes through, from the
@@ -722,6 +733,8 @@ async fn run(
     let unix_now = || chrono::Utc::now().timestamp();
     // Syncing from the node hosted here: its messages for us were delivered
     // as they came in.
+    // Messages being sent, each with the switch that stops it.
+    let sending: Arc<std::sync::Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>> = Arc::default();
     let sync = |node: Option<Hash>, local: &Option<LocalNode>| match local {
         Some(local) if node == Some(local.hash) => {
             let _ = ev.send(NetEvent::Synced(Ok(0)));
@@ -981,13 +994,26 @@ async fn run(
                         let local_node = pn_local.clone();
                         let outgoing = lxmf::Outgoing { propagation_node, stamp_ticket, ticket, local_node, ..*message };
                         let (to, gives_ticket) = (outgoing.to, outgoing.ticket.is_some());
+                        let (stop, cancel) = tokio::sync::watch::channel(false);
+                        sending.lock().unwrap().insert(id, stop);
+                        let sending = sending.clone();
                         tokio::spawn(async move {
-                            let result = lxmf::send(&runtime, &known, &identity, lxmf_hash, outgoing).await;
+                            let progress = |text: String| {
+                                let _ = ev.send(NetEvent::SendProgress { id, text });
+                            };
+                            let watch = lxmf::Sending { progress: &progress, cancel };
+                            let result = lxmf::send(&runtime, &known, &identity, lxmf_hash, outgoing, &watch).await;
+                            sending.lock().unwrap().remove(&id);
                             if gives_ticket && result.is_ok() {
                                 policy.lock().unwrap().ticket_delivered(to);
                             }
                             let _ = ev.send(NetEvent::Delivery { id, result });
                         });
+                    }
+                    NetCommand::CancelSend(id) => {
+                        if let Some(stop) = sending.lock().unwrap().get(&id) {
+                            let _ = stop.send(true);
+                        }
                     }
                     NetCommand::RrcConnect { hub, aspect, nick, key } => {
                         let config = rrc_session::SessionConfig { hub, aspect, nick, key };

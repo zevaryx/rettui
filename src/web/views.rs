@@ -29,7 +29,7 @@ pub fn state(app: &App) -> Value {
     };
     let sync = match &app.sync {
         SyncState::Idle => json!({ "state": "idle" }),
-        SyncState::Running(started) => json!({ "state": "running", "secs": started.elapsed().as_secs() }),
+        SyncState::Running(started) => json!({ "state": "running", "secs": started.elapsed().as_secs(), "progress": app.sync_progress }),
         SyncState::Done(at, Ok(n)) => json!({ "state": "done", "at": crate::clock::time(at, false), "count": n }),
         SyncState::Done(at, Err(e)) => json!({ "state": "failed", "at": crate::clock::time(at, false), "error": e }),
     };
@@ -256,6 +256,7 @@ fn message_state(state: &MessageState) -> Value {
         MessageState::Sending => json!({ "kind": "sending" }),
         MessageState::Delivered => json!({ "kind": "delivered" }),
         MessageState::Propagated => json!({ "kind": "propagated" }),
+        MessageState::Failed(e) if e == crate::lxmf::CANCELLED => json!({ "kind": "cancelled" }),
         MessageState::Failed(e) => json!({ "kind": "failed", "error": e }),
     }
 }
@@ -332,7 +333,17 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
     let empty = Conversation::default();
     let conversation = app.store.conversations.get(key).unwrap_or(&empty);
     let all = conversation.messages.as_slice();
-    let messages: Vec<Value> = newest(all, last).iter().map(|m| message(m, conversation)).collect();
+    let messages: Vec<Value> = newest(all, last)
+        .iter()
+        .map(|m| {
+            let mut shown = message(m, conversation);
+            // How sending it is going: "finding a path", "42%".
+            if let Some(progress) = app.send_progress_of(&m.id) {
+                shown["state"]["progress"] = json!(progress);
+            }
+            shown
+        })
+        .collect();
     json!({
         "key": key,
         // Their address to give out, with their key once heard.

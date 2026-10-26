@@ -16,7 +16,15 @@ MeshChat, NomadNet and other LXMF clients).
   pages left in the background) and restarting rettui: their text, and
   what they reply to, are kept in that browser. Files attached aren't.
 - **Message states:** your messages show *sending…*, ✓ (delivered), *✓ via
-  propagation node*, or *failed* with the reason.
+  propagation node*, *cancelled*, or *failed* with the reason. While one is
+  being sent, *sending…* says how it's going: finding a path, working out
+  its stamp, connecting, how much of a large one has gone (*42%*), or, for
+  one small enough for a single packet, waiting for delivery.
+- **Cancelling a send:** `c` on a picked message in the TUI, or **■ Cancel**
+  beside it in the web UI, stops sending it, as NomadNet and Sideband let
+  you. It shows as *cancelled*, isn't sent again when they announce, and
+  can be sent again by hand. A message that went in one packet is on its
+  way and can't be called back, so it can't be cancelled then.
 - **Delivery modes:**
   - **Auto** (default): tries direct delivery first. If that fails, it hands
     the message to your propagation node.
@@ -45,7 +53,9 @@ MeshChat, NomadNet and other LXMF clients).
   at a time, as many times as it takes, each lot cleared from the node as
   it arrives, so a slow link isn't held for long by one transfer. A
   message bigger than that (a node can be set to take them), within your
-  *Largest message* limit, comes in a transfer of its own.
+  *Largest message* limit, comes in a transfer of its own. While it runs,
+  the Status tab (either UI) says how many of the messages waiting have
+  come (*3 of 10 downloaded*).
 - **Attachments:**
   - The first image goes in the LXMF image field, which Sideband and MeshChat
     show inline. Other files are sent as file attachments.
@@ -210,8 +220,9 @@ all of it. In the web UI, select text as on any page.
   conversation).
 
 In the TUI, pick a message (`m`, or click its name line) and press `t` to
-retry or `x` to delete; `X` deletes the open conversation. In the web UI,
-**↻ Retry** shows on a message that failed, and the **⋯** beside a message's
+retry, `c` to cancel sending it, or `x` to delete; `X` deletes the open
+conversation. In the web UI, **↻ Retry** shows on a message that failed or
+was cancelled, **■ Cancel** on one being sent, and the **⋯** beside a message's
 buttons has *Delete*. *Delete conversation* is in the **Contact** dialog.
 Both UIs ask before deleting.
 

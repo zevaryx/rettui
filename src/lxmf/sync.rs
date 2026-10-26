@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use super::inbound::deliver_inbound;
 use super::policy::SharedPolicy;
 use super::{bytes_of, encode};
-use crate::net::{Hash, Known, NetEvent, link_options};
+use crate::net::{Hash, Known, NetEvent, Progress, link_options};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// How much one download from a propagation node brings at most (KB): a
@@ -75,7 +75,10 @@ impl Syncer {
             bytes => bytes as f64 / 1000.0,
         };
         tokio::spawn(async move {
-            let result = match sync(&runtime, &identity, lxmf_hash, &ring, node, largest_kb).await {
+            let progress = |text: String| {
+                let _ = ev.send(NetEvent::SyncProgress(text));
+            };
+            let result = match sync(&runtime, &identity, lxmf_hash, &ring, node, largest_kb, &progress).await {
                 Ok(messages) => {
                     let count = messages.len();
                     // Parse concurrently: verifying an unknown sender can wait
@@ -119,7 +122,8 @@ async fn get(handle: &LinkSessionHandle, request: Value) -> Result<Value, String
     }
 }
 
-/// Download (and remove from the node) every message waiting for us.
+/// Download (and remove from the node) every message waiting for us,
+/// saying how it goes (connecting, then how many of those waiting came).
 /// Returns complete LXMF messages ready for [`parse_inbound`].
 pub async fn sync(
     runtime: &ReticulumHandle,
@@ -128,12 +132,14 @@ pub async fn sync(
     ring: &Path,
     node: Hash,
     largest_kb: f64,
+    progress: Progress<'_>,
 ) -> Result<Vec<Vec<u8>>, String> {
+    progress("connecting".into());
     // The node finds our messages from the identity we present on the Link.
-    let LinkSession { handle, .. } = crate::net::connect(runtime, node, identity.clone(), link_options("rettui.sync", true), &|_| {})
+    let LinkSession { handle, .. } = crate::net::connect(runtime, node, identity.clone(), link_options("rettui.sync", true), progress)
         .await
         .map_err(|e| format!("Link to propagation node failed: {e}"))?;
-    let result = sync_on(&handle, identity, lxmf_hash, ring, largest_kb).await;
+    let result = sync_on(&handle, identity, lxmf_hash, ring, largest_kb, progress).await;
     handle.close().await;
     result
 }
@@ -144,10 +150,17 @@ async fn sync_on(
     lxmf_hash: Hash,
     ring: &Path,
     largest_kb: f64,
+    progress: Progress<'_>,
 ) -> Result<Vec<Vec<u8>>, String> {
+    progress("asking what's waiting".into());
     let Value::Array(mut waiting) = get(handle, Value::Array(vec![Value::Nil, Value::Nil])).await? else {
         return Err("Unexpected message list from propagation node".to_string());
     };
+    let total = waiting.len();
+    let tell = |waiting: &[Value]| progress(format!("{} of {total} downloaded", total - waiting.len()));
+    if total > 0 {
+        tell(&waiting);
+    }
     let mut messages = Vec::new();
     // Downloads of up to SYNC_LIMIT_KB, until the node sends nothing more
     // (it leaves out what doesn't fit)...
@@ -157,13 +170,19 @@ async fn sync_on(
         }
         let before = waiting.len();
         download(handle, identity, lxmf_hash, ring, &mut waiting, SYNC_LIMIT_KB, &mut messages).await?;
+        tell(&waiting);
         if waiting.len() == before {
             break;
         }
     }
     // ...then, on its own, any message too big for one of those.
     for id in waiting.clone().into_iter().take(MAX_ROUNDS) {
-        download(handle, identity, lxmf_hash, ring, &mut vec![id], largest_kb, &mut messages).await?;
+        let mut one = vec![id.clone()];
+        download(handle, identity, lxmf_hash, ring, &mut one, largest_kb, &mut messages).await?;
+        if one.is_empty() {
+            waiting.retain(|wanted| *wanted != id);
+            tell(&waiting);
+        }
     }
     Ok(messages)
 }

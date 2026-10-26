@@ -106,6 +106,7 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/react", post(react))
         .route("/conversations/{key}/command", post(send_command))
         .route("/conversations/{key}/retry", post(retry))
+        .route("/conversations/{key}/cancel", post(cancel_send))
         .route("/conversations/{key}/messages/delete", post(delete_message))
         .route("/conversations/{key}/delete", post(delete_conversation))
         .route("/conversations/{key}/contact", post(save_contact))
@@ -1303,6 +1304,13 @@ async fn retry(State(state): State<WebState>, Path(key): Path<String>, axum::Jso
 #[derive(Deserialize)]
 struct MessageId {
     id: String,
+}
+
+/// Stop sending a message.
+async fn cancel_send(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<MessageId>) -> ApiResult {
+    let key = address(&key)?;
+    state.write(move |o| o.app.cancel_send(&key, &body.id)).await?.map_err(bad)?;
+    ok()
 }
 
 /// Delete a message (and the files rettui saved for it).

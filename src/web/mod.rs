@@ -246,6 +246,7 @@ impl Scope {
             NetEvent::Hub(HubEvent::State(_) | HubEvent::Reply { .. }) => Scope::HUB,
             // Only the terminal UI's browser shows it.
             NetEvent::FetchProgress { .. } => Scope::NONE,
+            NetEvent::SyncProgress(_) => Scope::STATUS,
             // The announce viewer asks for those after the last it has
             // (they come several a second on a busy network); the Network
             // list hears the same announce as an Announce.

@@ -401,6 +401,64 @@ fn sending_sideband_commands_by_keys_and_the_contact_card() {
     assert!(tui.app.send_command(BOB, Command::Ping).unwrap_err().contains("propagation node"));
 }
 
+/// A message being sent says how it goes, and can be cancelled (`c` on a
+/// picked one); cancelled, it isn't sent again by itself, but can be by
+/// hand. A sync says how many of those waiting came.
+#[test]
+fn send_progress_cancelling_and_sync_progress() {
+    use crate::app::SyncState;
+    use crate::lxmf::{CANCELLED, DeliveryMode, WAITING_FOR_DELIVERY};
+    use crate::net::{NetCommand, NetEvent};
+    use crate::store::MessageState;
+    let mut tui = Tui::new("cancel");
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    tui.app.open_newest_conversation();
+    tui.sent();
+    let id = tui.app.send_message(BOB.into(), "a long one".into(), Vec::new(), DeliveryMode::Auto, None).unwrap();
+    let local = format!("local-{id}");
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::SendMessage { id: sent, .. } if *sent == id)));
+    tui.app.on_net(NetEvent::SendProgress { id, text: "42%".into() });
+    assert_eq!(tui.app.send_progress_of(&local), Some("42%"));
+    assert!(tui.draw().contains("sending… 42%"), "{}", tui.draw());
+    // Picked, then cancelled.
+    tui.settle().key(KeyCode::Char('m'));
+    while tui.app.picked_message().is_some_and(|(_, m)| m.id != local) {
+        tui.key(KeyCode::Down);
+    }
+    tui.key(KeyCode::Char('c'));
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::CancelSend(sent) if *sent == id)));
+    // It says it's being cancelled until the send ends, whatever else it hears.
+    tui.app.on_net(NetEvent::SendProgress { id, text: "43%".into() });
+    assert_eq!(tui.app.send_progress_of(&local), Some("cancelling"));
+    assert!(tui.app.cancel_send(BOB, &local).unwrap_err().contains("being cancelled already"));
+    tui.app.on_net(NetEvent::Delivery { id, result: Err(CANCELLED.into()) });
+    assert_eq!(tui.app.send_progress_of(&local), None);
+    assert!(tui.draw().contains(" cancelled"), "{}", tui.draw());
+    assert!(tui.app.cancel_send(BOB, &local).unwrap_err().contains("Only a message being sent"));
+    assert!(tui.app.cancel_send(BOB, "aa").is_err());
+    // Not sent again when they announce, but by hand, yes.
+    tui.app.settings.resend_on_announce = true;
+    tui.app.resend_on_announce(BOB);
+    assert!(!tui.sent().iter().any(|c| matches!(c, NetCommand::SendMessage { id: sent, .. } if *sent == id)));
+    tui.app.retry_message(BOB, &local, DeliveryMode::Auto).unwrap();
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::SendMessage { id: sent, .. } if *sent == id)));
+    // One packet on its way can't be called back.
+    tui.app.on_net(NetEvent::SendProgress { id, text: WAITING_FOR_DELIVERY.into() });
+    assert!(tui.app.cancel_send(BOB, &local).unwrap_err().contains("can't be called back"));
+    tui.app.on_net(NetEvent::Delivery { id, result: Err("no path".into()) });
+    let message = tui.app.store.conversations[BOB].messages.iter().find(|m| m.id == local).unwrap();
+    assert_eq!(message.state, MessageState::Failed("no path".into()));
+
+    // A sync says how it's going, in Status.
+    tui.app.on_net(NetEvent::SyncStarted);
+    tui.app.on_net(NetEvent::SyncProgress("3 of 10 downloaded".into()));
+    tui.settle().tab(Tab::Status);
+    assert!(tui.draw().contains("3 of 10 downloaded"), "{}", tui.draw());
+    tui.app.on_net(NetEvent::Synced(Ok(10)));
+    assert!(matches!(tui.app.sync, SyncState::Done(..)) && tui.app.sync_progress.is_none());
+}
+
 #[test]
 fn every_setting_changed_here_and_from_the_web() {
     let mut tui = Tui::new("every-setting");

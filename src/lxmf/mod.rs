@@ -31,7 +31,7 @@ use rmpv::Value;
 pub use fields::{Extras, Location, Reaction};
 pub use inbound::{Heard, spawn_inbound, with_destination};
 pub use policy::Policy;
-pub use send::send;
+pub use send::{CANCELLED, Sending, WAITING_FOR_DELIVERY, send};
 pub use sync::Syncer;
 
 use crate::net::Hash;

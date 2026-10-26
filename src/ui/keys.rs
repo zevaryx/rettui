@@ -193,6 +193,7 @@ pub fn keys(app: &App) -> Keys {
                 ("f", "forward"),
                 ("o", "open"),
                 ("t", "retry"),
+                ("c", "cancel"),
                 ("x", "delete"),
                 ("↑↓", "other"),
                 ("Esc", "done"),

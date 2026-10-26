@@ -4065,13 +4065,14 @@ app.views.messages = {
   message(m, conversation, archived = false) {
     const state = {
       received: m.state.verified ? null : el('span', { class: 'state-warn', text: ' unverified' }),
-      sending: el('span', { class: 'dim', text: this.paperWaiting?.id === m.id ? ' writing the paper message…' : ' sending…' }),
+      sending: el('span', { class: 'dim', text: this.paperWaiting?.id === m.id ? ' writing the paper message…' : ` sending…${m.state.progress ? ' ' + m.state.progress : ''}` }),
       delivered: m.paper
         ? el('span', { class: 'state-ok' }, ' ✓ paper message ',
           el('button', { class: 'inline', text: 'QR code', onclick: () => showPaper(m.paper) }))
         : el('span', { class: 'state-ok', text: ' ✓' }),
       propagated: el('span', { class: 'state-ok', text: ' ✓ via propagation node' }),
       failed: el('span', { class: 'state-bad', text: ` failed: ${m.state.error}` }),
+      cancelled: el('span', { class: 'state-warn', text: ' cancelled' }),
     }[m.state.kind];
     const base = `api/conversations/${conversation.key}/attachments/${encodeURIComponent(m.id)}/`;
     const author = m.incoming ? conversation.name : 'You';
@@ -4087,8 +4088,11 @@ app.views.messages = {
         actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
           onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null,
         reactButton,
-        actions && m.state.kind === 'failed' ? el('button', { class: 'inline', text: '↻ Retry', title: 'Send it again',
+        actions && ['failed', 'cancelled'].includes(m.state.kind) ? el('button', { class: 'inline', text: '↻ Retry', title: 'Send it again',
           onclick: () => this.retry(conversation.key, m.id) }) : null,
+        actions && !m.incoming && m.state.kind === 'sending' && this.paperWaiting?.id !== m.id
+          ? el('button', { class: 'inline', text: '■ Cancel', title: 'Stop sending it (one already on its way in a single packet can\'t be called back)',
+            onclick: () => this.cancelSend(conversation.key, m.id) }) : null,
         actions ? el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) }) : null),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
@@ -4158,6 +4162,10 @@ app.views.messages = {
     return true;
   },
 
+  async cancelSend(key, id) {
+    if (await attempt(() => api.post(`/conversations/${key}/cancel`, { id }), 'Cancelling it')) this.update();
+  },
+
   async retry(key, id) {
     if (await attempt(() => api.post(`/conversations/${key}/retry`, { id, mode: this.mode }), 'Sending it again')) this.update();
   },
@@ -4166,7 +4174,7 @@ app.views.messages = {
   messageMenu(m, conversation, anchor) {
     const items = [{ text: 'Copy text', action: () => copy(m.content || this.opening(m), 'the message') }];
     if (m.content?.trim() || m.attachments.length) items.push({ text: 'Forward…', action: () => this.forwardDialog(conversation.key, m) });
-    if (m.state.kind === 'failed') items.push({ text: 'Send again', action: () => this.retry(conversation.key, m.id) });
+    if (['failed', 'cancelled'].includes(m.state.kind)) items.push({ text: 'Send again', action: () => this.retry(conversation.key, m.id) });
     items.push({ text: m.attachments.length ? 'Delete (and its files)' : 'Delete', danger: true, action: async () => {
       if (!await ask(m.attachments.length ? 'Delete this message and the files it brought?' : 'Delete this message?', { title: 'Delete the message', yes: 'Delete', danger: true })) return;
       if (await attempt(() => api.post(`/conversations/${conversation.key}/messages/delete`, { id: m.id }), 'Deleted the message')) this.update();
@@ -7112,7 +7120,7 @@ app.views.status = {
     const net = { starting: 'starting', online: 'online', failed: `failed: ${s.net.error}` }[s.net.state];
     const sync = {
       idle: 'never',
-      running: `running (${s.sync.secs}s)`,
+      running: `running (${s.sync.secs}s)${s.sync.progress ? ': ' + s.sync.progress : ''}`,
       done: `${s.sync.at} · ${s.sync.count} new`,
       failed: `${s.sync.at} · failed: ${s.sync.error}`,
     }[s.sync.state];

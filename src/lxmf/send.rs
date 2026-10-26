@@ -11,13 +11,49 @@ use lxmf_core::handlers::{parse_pn_announce_data, stamp_cost_from_app_data};
 use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
 use rmpv::Value;
 use rns_runtime::prelude::*;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use super::{Delivered, DeliveryMode, Outgoing, Sent, encode, is_image_name};
-use crate::net::{Hash, Known, ensure_path, link_options, lookup};
+use crate::net::{Hash, Known, Progress, ensure_path, find_path, link_options, lookup};
 
 /// How long to wait for a delivery proof after a message is on the Link.
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Why a send its sender stopped failed.
+pub const CANCELLED: &str = "Cancelled";
+
+/// What a send says once its one packet is on its way (it can't be
+/// stopped then).
+pub const WAITING_FOR_DELIVERY: &str = "waiting for delivery";
+
+/// What a send says as it goes (finding a path, how much is sent), and
+/// the switch that stops it. Once a message has gone in one packet it
+/// can't be called back, so it isn't stopped then.
+pub struct Sending<'a> {
+    pub progress: Progress<'a>,
+    pub cancel: watch::Receiver<bool>,
+}
+
+impl Sending<'_> {
+    /// `work`, unless the send is cancelled first.
+    async fn unless_cancelled<T>(&self, work: impl Future<Output = Result<T, String>>) -> Result<T, String> {
+        // Thrown already: nothing more starts.
+        if *self.cancel.borrow() {
+            return Err(CANCELLED.into());
+        }
+        let mut cancel = self.cancel.clone();
+        tokio::select! {
+            result = work => result,
+            true = stopped(&mut cancel) => Err(CANCELLED.into()),
+        }
+    }
+}
+
+/// Whether the switch was thrown (false at once if it's gone: nobody can
+/// cancel then).
+async fn stopped(cancel: &mut watch::Receiver<bool>) -> bool {
+    cancel.wait_for(|stop| *stop).await.is_ok()
+}
 
 pub(super) async fn build_message(
     identity: &Identity,
@@ -107,19 +143,29 @@ pub(super) async fn build_message(
     Ok(message)
 }
 
-pub async fn send(runtime: &ReticulumHandle, known: &Known, identity: &Identity, source: Hash, outgoing: Outgoing) -> Result<Sent, String> {
+pub async fn send(
+    runtime: &ReticulumHandle,
+    known: &Known,
+    identity: &Identity,
+    source: Hash,
+    outgoing: Outgoing,
+    sending: &Sending<'_>,
+) -> Result<Sent, String> {
     if outgoing.mode == DeliveryMode::Paper {
         return Err("A paper message isn't sent: it's written as a link (see lxmf::paper)".into());
     }
     if outgoing.mode == DeliveryMode::Propagated {
-        return propagate(runtime, known, identity, source, &outgoing).await;
+        return propagate(runtime, known, identity, source, &outgoing, sending).await;
     }
-    let direct = send_direct(runtime, known, identity, source, &outgoing).await;
+    let direct = send_direct(runtime, known, identity, source, &outgoing, sending).await;
     match (direct, outgoing.mode, outgoing.propagation_node) {
         (Ok(hash), ..) => Ok(Sent { delivered: Delivered::Direct, hash }),
-        (Err(e), DeliveryMode::Auto, Some(_)) => {
+        (Err(e), DeliveryMode::Auto, Some(_)) if e != CANCELLED => {
             tracing::info!("direct delivery failed ({e}); using propagation node");
-            propagate(runtime, known, identity, source, &outgoing).await.map_err(|pe| format!("direct: {e}; propagation: {pe}"))
+            (sending.progress)("trying the propagation node".into());
+            propagate(runtime, known, identity, source, &outgoing, sending)
+                .await
+                .map_err(|pe| if pe == CANCELLED { pe } else { format!("direct: {e}; propagation: {pe}") })
         }
         (Err(e), ..) => Err(e),
     }
@@ -136,33 +182,47 @@ async fn send_direct(
     identity: &Identity,
     source: Hash,
     outgoing: &Outgoing,
+    sending: &Sending<'_>,
 ) -> Result<[u8; 32], String> {
     // A Link needs a path, not just a known key.
-    ensure_path(runtime, outgoing.to).await?;
+    (sending.progress)("finding a path".into());
+    sending.unless_cancelled(find_path(runtime, outgoing.to, sending.progress)).await?;
     let recipient = lookup(runtime, known, outgoing.to).await?;
     let mut message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
     let hash = hash_of(&message)?;
     // Proof-of-work stamps can take a while at higher costs.
-    let packed = tokio::task::spawn_blocking(move || {
-        message.get_stamp();
-        message.pack()
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
-
-    let LinkSession { handle, mut events, .. } =
-        crate::net::connect(runtime, outgoing.to, Identity::new(), link_options("rettui.lxmf", false), &|_| {})
+    if message.stamp_cost.is_some_and(|cost| cost > 0) {
+        (sending.progress)("working out the stamp".into());
+    }
+    let packed = sending
+        .unless_cancelled(async {
+            tokio::task::spawn_blocking(move || {
+                message.get_stamp();
+                message.pack()
+            })
             .await
-            .map_err(|e| format!("Link failed: {e}"))?;
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())
+        })
+        .await?;
+
+    (sending.progress)("connecting".into());
+    let LinkSession { handle, mut events, .. } = sending
+        .unless_cancelled(async {
+            crate::net::connect(runtime, outgoing.to, Identity::new(), link_options("rettui.lxmf", false), sending.progress)
+                .await
+                .map_err(|e| format!("Link failed: {e}"))
+        })
+        .await?;
 
     let result = if packed.len() <= handle.mdu() {
+        (sending.progress)(WAITING_FOR_DELIVERY.into());
         match handle.send_packet(packed).await {
             Ok(receipt) => wait_for_proof(&mut events, receipt.packet_hash).await,
             Err(e) => Err(e.to_string()),
         }
     } else {
-        send_resource(&handle, packed).await
+        send_resource(&handle, packed, sending).await
     };
     handle.close().await;
     result.map(|()| hash)
@@ -174,6 +234,7 @@ async fn propagate(
     identity: &Identity,
     source: Hash,
     outgoing: &Outgoing,
+    sending: &Sending<'_>,
 ) -> Result<Sent, String> {
     let node = outgoing.propagation_node.ok_or("No propagation node selected (pick one in the Network tab)")?;
     // The recipient may be offline: only its key is needed, not a path.
@@ -183,7 +244,8 @@ async fn propagate(
     let stamp_cost = match &local {
         Some(local) => local.stamp_cost(),
         None => {
-            ensure_path(runtime, node).await?;
+            (sending.progress)("finding a path to the propagation node".into());
+            sending.unless_cancelled(ensure_path(runtime, node)).await?;
             let node_info = lookup(runtime, known, node).await?;
             node_info.app_data.as_deref().and_then(parse_pn_announce_data).map_or(0, |d| d.stamp_cost)
         }
@@ -192,38 +254,73 @@ async fn propagate(
     let mut message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
     let hash = hash_of(&message)?;
     let (recipient_identity, ratchet) = (recipient.identity, recipient.ratchet);
-    let packed = tokio::task::spawn_blocking(move || {
-        message.get_stamp();
-        message.pack_propagated_encrypted_with_stamp(
-            |plaintext| recipient_identity.encrypt(plaintext, ratchet.as_ref()).map_err(|e| MessageError::PackFailed(e.to_string())),
-            stamp_cost,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?
-    .0;
+    if stamp_cost > 0 || message.stamp_cost.is_some_and(|cost| cost > 0) {
+        (sending.progress)("working out the stamp".into());
+    }
+    let packed = sending
+        .unless_cancelled(async {
+            tokio::task::spawn_blocking(move || {
+                message.get_stamp();
+                message.pack_propagated_encrypted_with_stamp(
+                    |plaintext| {
+                        recipient_identity.encrypt(plaintext, ratchet.as_ref()).map_err(|e| MessageError::PackFailed(e.to_string()))
+                    },
+                    stamp_cost,
+                )
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())
+        })
+        .await?
+        .0;
 
     if let Some(local) = local {
         tokio::task::spawn_blocking(move || local.submit(&packed)).await.map_err(|e| e.to_string())??;
         return Ok(Sent { delivered: Delivered::Propagated, hash });
     }
-    let LinkSession { handle, .. } =
-        crate::net::connect(runtime, node, identity.clone(), link_options("rettui.propagation", true), &|_| {})
-            .await
-            .map_err(|e| format!("Link to propagation node failed: {e}"))?;
-    let result = send_resource(&handle, packed).await;
+    (sending.progress)("connecting to the propagation node".into());
+    let LinkSession { handle, .. } = sending
+        .unless_cancelled(async {
+            crate::net::connect(runtime, node, identity.clone(), link_options("rettui.propagation", true), sending.progress)
+                .await
+                .map_err(|e| format!("Link to propagation node failed: {e}"))
+        })
+        .await?;
+    let result = send_resource(&handle, packed, sending).await;
     handle.close().await;
     result.map(|()| Sent { delivered: Delivered::Propagated, hash })
 }
 
-async fn send_resource(handle: &LinkSessionHandle, data: Vec<u8>) -> Result<(), String> {
+/// Send `data` as a Resource, saying how much of it is sent, in whole
+/// percent. Cancelled, the Link is closed, which stops the transfer.
+async fn send_resource(handle: &LinkSessionHandle, data: Vec<u8>, sending: &Sending<'_>) -> Result<(), String> {
     let transfer =
         handle.send_resource_bytes(data, ResourceOptions { auto_compress: true, metadata: None }).await.map_err(|e| e.to_string())?;
-    match tokio::time::timeout(DELIVERY_TIMEOUT, transfer.concluded()).await {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => Err(format!("Transfer failed: {e}")),
-        Err(_) => Err("Timed out waiting for transfer".to_string()),
+    let mut progress = transfer.progress();
+    let mut cancel = sending.cancel.clone();
+    let concluded = transfer.concluded();
+    let deadline = tokio::time::sleep(DELIVERY_TIMEOUT);
+    tokio::pin!(concluded, deadline);
+    (sending.progress)("0%".into());
+    // At most once a second: each one redraws every web UI open.
+    let (mut said, mut said_at) = (0, tokio::time::Instant::now());
+    loop {
+        tokio::select! {
+            result = &mut concluded => return result.map(|_| ()).map_err(|e| format!("Transfer failed: {e}")),
+            Ok(()) = progress.changed() => {
+                let percent = (*progress.borrow_and_update() * 100.0).floor() as u32;
+                if percent != said && said_at.elapsed() >= Duration::from_secs(1) {
+                    (said, said_at) = (percent, tokio::time::Instant::now());
+                    (sending.progress)(format!("{percent}%"));
+                }
+            }
+            true = stopped(&mut cancel) => {
+                handle.close().await;
+                return Err(CANCELLED.into());
+            }
+            () = &mut deadline => return Err("Timed out waiting for transfer".to_string()),
+        }
     }
 }
 
@@ -243,4 +340,36 @@ async fn wait_for_proof(events: &mut mpsc::Receiver<LinkSessionEvent>, packet_ha
         Err("Link closed before delivery".to_string())
     };
     tokio::time::timeout(DELIVERY_TIMEOUT, wait).await.unwrap_or_else(|_| Err("Timed out waiting for delivery proof".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_send_stops_when_cancelled_and_not_when_nobody_can_cancel() {
+        let (stop, cancel) = watch::channel(false);
+        let sending = Sending { progress: &|_| {}, cancel };
+        // Work that finishes is let finish.
+        assert_eq!(sending.unless_cancelled(async { Ok::<_, String>(7) }).await, Ok(7));
+        // Work that waits is stopped by the switch.
+        let waiting = sending.unless_cancelled(std::future::pending::<Result<(), String>>());
+        let thrown = async {
+            tokio::task::yield_now().await;
+            stop.send(true).unwrap();
+        };
+        let (result, ()) = tokio::join!(waiting, thrown);
+        assert_eq!(result, Err(CANCELLED.to_string()));
+        // Once thrown, nothing more starts.
+        assert_eq!(sending.unless_cancelled(async { Ok::<_, String>(7) }).await, Err(CANCELLED.to_string()));
+        // With the switch gone, work goes on.
+        let (gone, cancel) = watch::channel(false);
+        drop(gone);
+        let sending = Sending { progress: &|_| {}, cancel };
+        let slow = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok::<_, String>("done")
+        };
+        assert_eq!(sending.unless_cancelled(slow).await, Ok("done"));
+    }
 }
