@@ -80,14 +80,15 @@ of the Reticulum instance it uses. Where files are kept is in
     in its turn, so it can be undone the same way. The newest 50 versions of
     each config file are kept, in `reticulum-history/` in rettui's
     [data folder](Data-and-Storage). In the web UI, a version that would add
-    or change a pipe interface's command can't be put back (the terminal
-    can).
+    or change a pipe interface's command, or turn one on, can't be put back
+    (the terminal can).
   - **Applying:** Reticulum reads the file when it starts. Restart the
     Reticulum stack from inside rettui to apply changes (see below). If
     another program such as rnsd runs the shared instance, the interfaces are
     that program's, and they change when it restarts; rettui says so.
   - **Web UI:** the same editor, except that pipe interface commands (which
-    run programs) can only be added or changed from the terminal.
+    run programs) can only be added, changed or turned on from the terminal,
+    and a pipe interface can't be copied there. Turning one off is fine.
 - **Restarting Reticulum:** `Ctrl-R` in the Status or Reticulum tab (after a
   confirmation), or **Restart Reticulum** in the web UI, stops rettui's
   Reticulum stack and starts it again with the same identity, without

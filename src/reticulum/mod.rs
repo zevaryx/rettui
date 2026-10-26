@@ -10,7 +10,7 @@ pub mod doc;
 pub mod history;
 pub mod schema;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use rns_runtime::config::{Config, ConfigSection, ConfigValue};
@@ -345,27 +345,38 @@ fn encode(view: &OptionView, value: &str, existing: Option<&str>) -> Result<Opti
     Ok(Some(text))
 }
 
-/// Commands of the pipe interfaces (programs Reticulum runs).
-fn pipe_commands(config: Option<&Config>) -> BTreeSet<String> {
-    let Some(config) = config else { return BTreeSet::new() };
-    config
-        .subsections("interfaces")
-        .into_iter()
-        .filter(|(_, s)| s.get("type") == Some("PipeInterface"))
-        .filter_map(|(_, s)| s.get("command").map(str::to_string))
-        .collect()
+/// Commands of the pipe interfaces (programs Reticulum runs), with how
+/// many interfaces that are on run each.
+fn pipe_commands(config: Option<&Config>) -> BTreeMap<String, usize> {
+    let mut commands = BTreeMap::new();
+    let Some(config) = config else { return commands };
+    for (_, section) in config.subsections("interfaces") {
+        if section.get("type") != Some("PipeInterface") {
+            continue;
+        }
+        let Some(command) = section.get("command") else { continue };
+        // On unless it says otherwise, as Reticulum reads it.
+        let on = section.get_bool("enabled").or_else(|| section.get_bool("interface_enabled")).unwrap_or(true);
+        *commands.entry(command.to_string()).or_default() += usize::from(on);
+    }
+    commands
 }
 
 /// Check an edited config before saving: it must load, and with
 /// `restricted` (the web UI) it may not add or change programs that
-/// Reticulum runs (pipe interface commands).
+/// Reticulum runs (pipe interface commands), nor run them more: turning
+/// an interface that runs one on, or copying it, starts the program too.
 pub fn validate(before: &str, after: &str, restricted: bool) -> Result<Check, String> {
     let (config, check) = check(after);
     if let Some(error) = &check.error {
         return Err(format!("Not saved: {error}"));
     }
-    if restricted && !pipe_commands(config.as_ref()).is_subset(&pipe_commands(check_config(before).as_ref())) {
-        return Err("Pipe interface commands run programs, so they can only be changed from the terminal".into());
+    if restricted {
+        let had = pipe_commands(check_config(before).as_ref());
+        let runs_more = pipe_commands(config.as_ref()).into_iter().any(|(command, on)| had.get(&command).is_none_or(|was| on > *was));
+        if runs_more {
+            return Err("Pipe interface commands run programs, so they can only be changed or turned on from the terminal".into());
+        }
     }
     Ok(check)
 }
@@ -692,6 +703,18 @@ mod tests {
         let sneaky = format!("{DEFAULT}    command = /bin/evil\n");
         let switched = set_options(&sneaky, &Section::Interface("Default Interface".into()), &[("type", "PipeInterface")]).unwrap();
         assert!(validate(&sneaky, &switched, true).is_err());
+        // Nor can it start one that's there but off, or run it twice.
+        let off = set_options(&with_command, &Section::Interface("Pipe".into()), &[("enabled", "no")]).unwrap();
+        assert!(validate(&with_command, &off, true).is_ok(), "turning one off is fine");
+        assert!(validate(&off, &with_command, true).is_err());
+        let (pipe_off, pipe_on) = ("PipeInterface\n    enabled = No", "PipeInterface\n    enabled = Yes");
+        assert!(off.contains(pipe_off) && with_command.contains(pipe_on), "{off}{with_command}");
+        let python = |text: &str| text.replace("PipeInterface\n    enabled", "PipeInterface\n    interface_enabled");
+        assert!(validate(&python(&off), &python(&with_command), true).is_err(), "Python's own name for it");
+        let copied = add_interface(&with_command, "Pipe 2", "PipeInterface").unwrap();
+        let copied = set_options(&copied, &Section::Interface("Pipe 2".into()), &[("command", "/bin/evil")]).unwrap();
+        assert!(validate(&with_command, &copied, true).is_err());
+        assert!(validate(&off, &with_command, false).is_ok());
     }
 
     #[test]

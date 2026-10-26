@@ -7241,7 +7241,7 @@ app.views.status = {
 
 // The Reticulum config file, option by option or as text. Changes are saved
 // to the file and apply when Reticulum restarts. Pipe interface commands
-// (programs Reticulum runs) can only be changed from the terminal.
+// (programs Reticulum runs) can only be changed or turned on from the terminal.
 // ---- Hub: the RRC hub hosted here ------------------------------------------
 //
 // rsRRCD's hub, run by rettui (Host an RRC hub, in the settings): who's on
