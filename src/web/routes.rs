@@ -99,6 +99,7 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/forward", post(forward_message))
         .route("/conversations/{key}/read", post(read_conversation))
         .route("/conversations/{key}/notify", post(mute_conversation))
+        .route("/conversations/{key}/autoplay", post(autoplay_conversation))
         .route("/conversations/{key}/pin", post(pin_conversation))
         .route("/conversations/{key}/live", post(start_live))
         .route("/conversations/{key}/live/stop", post(stop_live))
@@ -863,6 +864,12 @@ async fn events(State(state): State<WebState>, Query(query): Query<EventsQuery>,
                         Ok(event) => break event,
                         Err(_) => continue,
                     },
+                    Ok(Notice::Play(voice)) => {
+                        match Event::default().event("play").json_data(json!({ "key": voice.key, "id": voice.id, "index": voice.index })) {
+                            Ok(event) => break event,
+                            Err(_) => continue,
+                        }
+                    }
                     // Old news by now (a reconnect catches up on the unread).
                     Err(RecvError::Lagged(_)) => continue,
                     Err(RecvError::Closed) => return None,
@@ -1096,6 +1103,20 @@ struct MuteBody {
 async fn mute_conversation(State(state): State<WebState>, Path(key): Path<String>, body: axum::Json<MuteBody>) -> ApiResult {
     let muted = body.muted;
     if !state.write(move |o| o.app.set_conversation_muted(&key, muted)).await? {
+        return Err(not_found("conversation"));
+    }
+    ok()
+}
+
+#[derive(Deserialize)]
+struct AutoplayBody {
+    on: bool,
+}
+
+/// Play a conversation's voice messages as they come, or not.
+async fn autoplay_conversation(State(state): State<WebState>, Path(key): Path<String>, body: axum::Json<AutoplayBody>) -> ApiResult {
+    let on = body.on;
+    if !state.write(move |o| o.app.set_conversation_autoplay(&key, on)).await? {
         return Err(not_found("conversation"));
     }
     ok()

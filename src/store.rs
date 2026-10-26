@@ -364,6 +364,10 @@ pub struct Conversation {
     /// Kept at the top of the list.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
+    /// Their voice messages played as they come, as with Sideband's
+    /// push-to-talk.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub autoplay: bool,
     /// How many older messages have been moved to the archive.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub archived: usize,

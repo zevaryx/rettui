@@ -105,6 +105,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 if conversation.muted {
                     spans.push(Span::styled(" muted", Style::default().fg(dim())));
                 }
+                if conversation.autoplay {
+                    spans.push(Span::styled(" ▶ voice", Style::default().fg(dim())));
+                }
                 if conversation.pinned {
                     spans.push(Span::styled(" pinned", Style::default().fg(accent())));
                 }
@@ -164,6 +167,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             .title_bottom(Line::styled(" not one of your contacts · c to trust or block them ", Style::default().fg(Color::Yellow)));
     } else if app.store.conversations.get(&key).is_some_and(|c| c.muted) {
         history_block = history_block.title_bottom(Line::styled(" notifications off · N turns them on ", Style::default().fg(dim())));
+    } else if app.store.conversations.get(&key).is_some_and(|c| c.autoplay) {
+        history_block =
+            history_block.title_bottom(Line::styled(" voice messages play as they come · V stops it ", Style::default().fg(dim())));
     }
     let history_inner = history_block.inner(history_area);
     let inner_width = history_inner.width as usize;

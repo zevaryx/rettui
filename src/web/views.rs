@@ -238,6 +238,7 @@ pub fn conversations(app: &App) -> Value {
                 "named": app.store.peers.get(&key).is_some_and(|p| p.name.is_some()),
                 "unread": conversation.unread,
                 "muted": conversation.muted,
+                "autoplay": conversation.autoplay,
                 "pinned": conversation.pinned,
                 // Not a contact: not trusted, nor ever written to.
                 "unknown": !app.is_known(&key),
@@ -357,6 +358,7 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
         "name": app.store.display_name(key),
         "unread": app.store.conversations.get(key).map_or(0, |c| c.unread),
         "muted": app.store.conversations.get(key).is_some_and(|c| c.muted),
+        "autoplay": app.store.conversations.get(key).is_some_and(|c| c.autoplay),
         "pinned": app.store.conversations.get(key).is_some_and(|c| c.pinned),
         // Games with them waiting on you.
         "games_waiting": app.games.waiting(Some(key)),

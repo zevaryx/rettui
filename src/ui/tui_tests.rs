@@ -801,6 +801,45 @@ fn sensor_readings_drawn_under_their_message() {
 }
 
 #[test]
+fn voice_messages_played_as_they_come() {
+    use crate::lxmf::fields::Audio;
+    use crate::lxmf::{Extras, InboundMessage};
+    let mut tui = Tui::new("autoplay");
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    tui.key(KeyCode::Down).key(KeyCode::Up);
+    let voice = |n: u8| InboundMessage {
+        id: Some([n; 32]),
+        source: crate::net::parse_hash(BOB).unwrap(),
+        timestamp: 1_900_000_000.0 + f64::from(n),
+        extras: Extras { audio: Some(Audio::new(0x04, vec![0; 60]).decoded()), ..Extras::default() },
+        ..Default::default()
+    };
+    // Off, it waits to be played.
+    tui.app.on_message(voice(1));
+    assert!(tui.app.take_autoplays().is_empty());
+    tui.key(KeyCode::Char('V'));
+    assert!(tui.app.store.conversations[BOB].autoplay);
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("play as they come")));
+    let screen = tui.draw();
+    assert!(screen.contains("▶ voice") && screen.contains("V stops it"), "{screen}");
+    // On, the next is played (by the web UI's browsers, or here in a terminal).
+    tui.app.on_message(voice(2));
+    let played = tui.app.take_autoplays();
+    assert_eq!(played.len(), 1);
+    assert_eq!((played[0].key.as_str(), played[0].index), (BOB, 0));
+    assert!(played[0].path.extension().is_some_and(|e| e == "wav") && played[0].path.is_file(), "{played:?}");
+    // Text isn't.
+    tui.app.on_message(InboundMessage { content: "hi".into(), extras: Extras::default(), ..voice(3) });
+    assert!(tui.app.take_autoplays().is_empty());
+    tui.key(KeyCode::Char('V'));
+    assert!(!tui.app.store.conversations[BOB].autoplay);
+    tui.app.on_message(voice(4));
+    assert!(tui.app.take_autoplays().is_empty());
+    let _ = std::fs::remove_dir_all(&tui.dir);
+}
+
+#[test]
 fn messages_at_the_keyboard_and_with_the_mouse() {
     let mut tui = Tui::new("messages");
     with_bob(&mut tui);

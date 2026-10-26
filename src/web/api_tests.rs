@@ -870,6 +870,33 @@ async fn notifications_a_browser_missed_while_away() {
 }
 
 #[tokio::test]
+async fn voice_messages_played_as_they_come_over_the_api() {
+    use crate::lxmf::fields::Audio;
+    let web = TestWeb::start("autoplay");
+    web.with(|app| app.on_message(from_bob(1, "hello"))).await;
+    assert_eq!(web.post(&format!("/api/conversations/{BOB}/autoplay"), json!({ "on": true })).await.status, StatusCode::OK);
+    assert_eq!(
+        web.post("/api/conversations/cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd/autoplay", json!({ "on": true })).await.status,
+        StatusCode::NOT_FOUND
+    );
+    let conversation = web.get(&format!("/api/conversations/{BOB}")).await.json();
+    assert_eq!(conversation["autoplay"], true, "{conversation}");
+    let list = web.get("/api/conversations").await.json().to_string();
+    assert!(list.contains("\"autoplay\":true"), "{list}");
+    let played = web
+        .with(|app| {
+            let audio = Some(Audio::new(0x04, vec![0; 60]).decoded());
+            app.on_message(InboundMessage { extras: Extras { audio, ..Extras::default() }, ..from_bob(2, "") });
+            app.take_autoplays()
+        })
+        .await;
+    assert_eq!(played.len(), 1);
+    let voice = web.send(Method::GET, &format!("/api/conversations/{BOB}/attachments/{}/0", played[0].id), None, false).await;
+    assert_eq!(voice.status, StatusCode::OK);
+    assert_eq!(web.post(&format!("/api/conversations/{BOB}/autoplay"), json!({ "on": false })).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn live_updates_notifications_and_signing_out() {
     use futures_util::StreamExt;
 
@@ -917,6 +944,15 @@ async fn live_updates_notifications_and_signing_out() {
     let _ = state.notices.send(Notice::Read(format!("conversation:{BOB}")));
     let next = tokio::time::timeout(std::time::Duration::from_secs(5), quiet.next()).await.unwrap().unwrap();
     assert!(next.contains("event: read") && !next.contains("8 all"), "{next}");
+
+    // A voice message to play as it comes.
+    let voice = crate::app::Autoplay { key: BOB.into(), id: "m1".into(), index: 0, path: "v.wav".into() };
+    let _ = state.notices.send(Notice::Play(voice));
+    let mut said = String::new();
+    while !said.contains("event: play") {
+        said += &tokio::time::timeout(std::time::Duration::from_secs(5), events.next()).await.unwrap().unwrap();
+    }
+    assert!(said.contains(&format!("\"key\":\"{BOB}\"")) && said.contains("\"index\":0"), "{said}");
 
     // Signing every browser out ends the stream.
     let fresh = Box::pin(web.events("/api/events?since=0", None).await);

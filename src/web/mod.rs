@@ -81,6 +81,8 @@ pub enum Notice {
     Show(u64, Notification),
     /// What this tag is about was read: close notifications about it.
     Read(String),
+    /// A voice message to play as it comes.
+    Play(crate::app::Autoplay),
 }
 
 impl Owner {
@@ -635,6 +637,9 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         }
         for tag in owner.app.take_reads() {
             let _ = notices.send(Notice::Read(tag));
+        }
+        for voice in owner.app.take_autoplays() {
+            let _ = notices.send(Notice::Play(voice));
         }
         // The browser that read a paper message in opens its conversation.
         owner.app.paper_read = None;

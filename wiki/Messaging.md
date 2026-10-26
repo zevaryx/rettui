@@ -431,6 +431,15 @@ rettui shows what each one is, rather than an empty message:
     what they will. Up to five minutes. A message that failed goes again
     in the mode it was recorded in. rettui doesn't send 450: Codec2 only
     decodes that one well.
+  - **Played as they come:** `V` in a conversation, or **▶ Voice** in its
+    ⋯ menu in the web UI, plays their voice messages as soon as they
+    arrive, like push-to-talk in Sideband (the list marks it *▶ voice*).
+    In the terminal, rettui opens each with the program your desktop plays
+    sound with, as `o` does. In the web UI, every browser showing rettui
+    plays it, one after another; a browser that won't play sound before
+    the page has been touched says so, and the message waits to be played
+    as usual. Text messages, and voice messages from anyone else, don't
+    play.
   - **Voice calls** (Sideband's, over LXST) aren't something rettui can
     make or answer. LXST, the library they use, is published under
     CC BY-NC-ND 4.0, which doesn't allow adaptations of it to be shared,

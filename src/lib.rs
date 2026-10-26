@@ -428,6 +428,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     // reading stdin (it would swallow the terminal's replies).
     let graphics = term::images::Graphics::detect();
     let mut app = App::new(settings, paths, store, net_tx.clone(), Some(graphics), identity_hash);
+    app.in_terminal = true;
     app.open_newest_conversation();
     // Focus reports (where the terminal sends them) tell notifications
     // whether the user is looking.

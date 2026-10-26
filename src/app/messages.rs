@@ -33,6 +33,17 @@ struct Voice {
     wav: PathBuf,
 }
 
+/// A voice message come in a conversation that plays them as they come:
+/// where, and its file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Autoplay {
+    pub key: String,
+    pub id: String,
+    /// Which of the message's attachments.
+    pub index: usize,
+    pub path: PathBuf,
+}
+
 /// Commands from someone are answered at most this often.
 pub(super) const ANSWER_EVERY: Duration = Duration::from_secs(60);
 
@@ -222,6 +233,10 @@ impl App {
         if quiet && conversation.messages.last().is_some_and(|last| last.same_quiet_kind(&stored) && last.timestamp <= stored.timestamp) {
             conversation.messages.pop();
         }
+        let voice = conversation.autoplay.then(|| stored.attachments.iter().position(|a| a.playable())).flatten().map(|index| {
+            let attachment = &stored.attachments[index];
+            Autoplay { key: key.clone(), id: stored.id.clone(), index, path: attachment.path.clone() }
+        });
         conversation.messages.push(stored);
         // Messages downloaded later may be older than ones already shown.
         conversation.messages.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
@@ -247,6 +262,9 @@ impl App {
             return;
         }
         self.log(format!("Message from {name}"));
+        if let Some(voice) = voice {
+            self.autoplay(voice);
+        }
         if self.settings.notify_messages && !muted {
             let target = Target::Conversation { key };
             self.push_notification(is_active, Notification { title: name, body: preview, target });
@@ -429,6 +447,43 @@ impl App {
         conversation.muted = muted;
         self.store_dirty = true;
         true
+    }
+
+    /// Play their voice messages as they come, or not (`V`, or the web
+    /// UI's ⋯ menu). False if there is no such conversation.
+    pub fn set_conversation_autoplay(&mut self, key: &str, on: bool) -> bool {
+        let Some(conversation) = self.store.conversations.get_mut(key) else { return false };
+        conversation.autoplay = on;
+        self.store_dirty = true;
+        true
+    }
+
+    fn toggle_active_autoplay(&mut self) {
+        let Some(key) = self.active_conversation.clone() else { return };
+        let on = !self.store.conversations.get(&key).is_some_and(|c| c.autoplay);
+        if self.set_conversation_autoplay(&key, on) {
+            let name = self.store.display_name(&key);
+            self.notify(if on {
+                format!("{name}'s voice messages play as they come")
+            } else {
+                format!("{name}'s voice messages wait to be played")
+            });
+        }
+    }
+
+    /// A voice message to play now: in the terminal, with the program the
+    /// desktop opens it with; in the web UI, in the browsers showing it.
+    fn autoplay(&mut self, voice: Autoplay) {
+        if self.in_terminal {
+            self.open_file(&voice.path);
+        } else {
+            self.autoplays.push(voice);
+        }
+    }
+
+    /// The voice messages to play, for the web UI.
+    pub fn take_autoplays(&mut self) -> Vec<Autoplay> {
+        std::mem::take(&mut self.autoplays)
     }
 
     fn toggle_active_muted(&mut self) {
@@ -1570,6 +1625,7 @@ impl App {
             }
             KeyCode::Char('P') => self.show_newest_paper(),
             KeyCode::Char('N') => self.toggle_active_muted(),
+            KeyCode::Char('V') => self.toggle_active_autoplay(),
             KeyCode::Char('g') => {
                 if let Some(peer) = self.active_conversation.clone() {
                     self.games_with(&peer);

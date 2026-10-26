@@ -227,6 +227,7 @@ pub fn keys(app: &App) -> Keys {
                 ("p", "read paper"),
                 ("P", "show paper"),
                 ("N", "notify"),
+                ("V", "play voice as it comes"),
                 ("H", "archive"),
                 ("L", "share location"),
                 ("K", "command"),

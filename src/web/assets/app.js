@@ -1691,6 +1691,31 @@ let lastNotice = (() => {
     return '';
   }
 })();
+// Voice messages played as they come (push-to-talk, as in Sideband), one
+// after another. A browser that won't play before it's been touched gets
+// a notice to tap.
+const autoplay = {
+  queue: [],
+  playing: false,
+  add(voice) {
+    this.queue.push(voice);
+    if (!this.playing) this.next();
+  },
+  async next() {
+    const voice = this.queue.shift();
+    if (!voice) return void (this.playing = false);
+    this.playing = true;
+    const audio = new Audio(`api/conversations/${voice.key}/attachments/${encodeURIComponent(voice.id)}/${voice.index}`);
+    audio.onended = audio.onerror = () => this.next();
+    try {
+      await audio.play();
+    } catch {
+      toast('A voice message came: tap anywhere on the page, then rettui can play them as they come');
+      this.next();
+    }
+  },
+};
+
 function listen() {
   events?.close();
   events = new EventSource('api/events' + (lastNotice ? `?since=${lastNotice}` : ''));
@@ -1722,6 +1747,14 @@ function listen() {
       // Missed while away, and the page shows now: its unread counts say so.
       if (notification.replay && document.visibilityState === 'visible') return;
       notifications.show(notification);
+    } catch (error) {
+      console.warn(error);
+    }
+  });
+  // A voice message from a conversation that plays them as they come.
+  events.addEventListener('play', (e) => {
+    try {
+      autoplay.add(JSON.parse(e.data));
     } catch (error) {
       console.warn(error);
     }
@@ -3846,6 +3879,9 @@ app.views.messages = {
         bell.dataset.label = conversation.muted ? '🔕 Notifications: off (turn on)' : '🔔 Notifications: on (turn off)';
         return bell;
       })(bellButton(conversation.muted ? 'off' : 'on', 'Notifications from this conversation', () => this.setMuted(key, !conversation.muted))),
+      el('button', { class: 'more autoplay-button', text: conversation.autoplay ? '▶ Voice: plays as it comes' : '▶ Voice: waits to be played',
+        'data-label': conversation.autoplay ? '▶ Play voice as it comes: on (turn off)' : '▶ Play voice as it comes: off (turn on)',
+        title: 'Play their voice messages as they come, as with push-to-talk  ( V )', onclick: () => this.setAutoplay(key, !conversation.autoplay) }),
       // A game waiting on you stays in sight on a phone.
       el('button', { class: 'games-button' + (conversation.games_waiting ? ' waiting' : ' more'),
         text: conversation.games_waiting ? `🎲 Games · ${conversation.games_waiting}` : '🎲 Games',
@@ -3928,6 +3964,12 @@ app.views.messages = {
     }
   },
 
+  async setAutoplay(key, on) {
+    const done = await attempt(() => api.post(`/conversations/${key}/autoplay`, { on }),
+      on ? 'Their voice messages play as they come' : 'Their voice messages wait to be played');
+    if (done) this.update();
+  },
+
   async setMuted(key, muted) {
     const done = await attempt(() => api.post(`/conversations/${key}/notify`, { muted }),
       muted ? 'No notifications from this conversation' : 'Notifications from this conversation are on');
@@ -3971,6 +4013,10 @@ app.views.messages = {
     }
     if (e.key === 'K' && this.selected) {
       this.sendCommand(this.selected);
+      return true;
+    }
+    if (e.key === 'V' && this.selected) {
+      this.header.querySelector('.autoplay-button')?.click();
       return true;
     }
     if (e.key === 'M') {

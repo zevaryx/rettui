@@ -100,6 +100,7 @@ pub(crate) fn test_app_with_net(
     app.updates.fetch = || Err("no update checks in tests".into());
     (app, commands)
 }
+pub use messages::Autoplay;
 pub use network::{NetFilter, NetSearch, match_mask};
 
 const LOG_LINES: usize = 500;
@@ -683,6 +684,11 @@ pub struct App {
     /// Whether the window has the focus (as far as the terminal says; the
     /// web UI's browsers each know their own).
     pub focused: bool,
+    /// Run in a terminal (not as the web UI's): plays voice messages that
+    /// play as they come itself.
+    pub in_terminal: bool,
+    /// Voice messages to play, for the web UI's browsers.
+    pub autoplays: Vec<Autoplay>,
     /// Games played with contacts (LRGP).
     pub games: crate::games::Games,
     pub(crate) games_dirty: bool,
@@ -841,6 +847,8 @@ impl App {
             switching: None,
             paper_read: None,
             focused: true,
+            in_terminal: false,
+            autoplays: Vec::new(),
             games,
             // Saved once at the start: games expire as they're read.
             games_dirty: true,
