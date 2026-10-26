@@ -390,6 +390,15 @@ pub struct RelayedPlace {
     pub via: String,
 }
 
+/// A place someone was, on their trail: where, and when they last said
+/// so (Unix seconds).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TrailPoint {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub at: f64,
+}
+
 /// How far you trust someone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -488,6 +497,14 @@ pub struct Store {
     /// LXMF address (hex).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub relayed: BTreeMap<String, RelayedPlace>,
+    /// Where each person has been, oldest first (their trail on the map),
+    /// by LXMF address (hex).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub trails: BTreeMap<String, Vec<TrailPoint>>,
+    /// When you deleted someone's locations (Unix seconds): those from
+    /// before stay off the map.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub locations_forgotten: BTreeMap<String, f64>,
     pub next_local_id: u64,
     /// NomadNet nodes (hex) we identify ourselves to when browsing.
     pub identified_nodes: BTreeSet<String>,
@@ -910,6 +927,8 @@ impl Store {
             conversations: self.conversations.clone(),
             contacts: self.contacts.clone(),
             relayed: self.relayed.clone(),
+            trails: self.trails.clone(),
+            locations_forgotten: self.locations_forgotten.clone(),
             next_local_id: self.next_local_id,
             identified_nodes: self.identified_nodes.clone(),
             saved: self.saved.clone(),

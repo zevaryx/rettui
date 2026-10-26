@@ -547,12 +547,23 @@ does) isn't on it, nor is anyone blocked.
   long ago and how far from this station. `↑↓` pick a place, `+`/`-` (or
   the mouse wheel) zoom in on it and out, `0` shows them all again,
   `Enter` opens the conversation, `o` opens the place on OpenStreetMap,
-  `Esc` closes it.
+  `x` deletes their locations, `Esc` closes it.
 - **In the web UI:** 🗺 beside **+ New** (or `M`), or **Map** beside a
   location in a conversation. Drag it, zoom with the wheel, a double click,
   two fingers or `+`/`−`, and `⤢` shows them all. A click on a place or in
   the list shows it; the list also opens the conversation, or the place on
   OpenStreetMap. How far each may be off shows as a circle around it.
+- **Trails:** each place someone sends (a location, a live update, an
+  answer when tracked) and each a collector passes on is kept on their
+  *trail*, even though each update replaces the one before in the
+  conversation. The map draws it as a line to where they are now, the
+  place picked brighter, and the list says *trail of 12*. Each trail keeps
+  the newest 100 places from the last 30 days, a place they stay at once,
+  for up to 200 people.
+- **Deleting someone's locations:** `x` on the map (**Delete locations** in
+  the web UI's list), after asking, takes their place and trail off the
+  map, and what collectors passed on about them. Their messages stay in
+  the conversation. Locations they send after that show again.
 
 The web map's pictures (tiles) come from *Map tiles* (Status, `map_tiles`):
 OpenStreetMap's by default, or any other address with `{z}`, `{x}` and

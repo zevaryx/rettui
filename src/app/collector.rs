@@ -44,9 +44,10 @@ impl App {
             }
             // Not one from the future, which no later update would replace.
             let at = (entry.time as f64).min(now());
-            if self.store.relayed.get(&source).is_some_and(|r| r.at >= at) {
+            if self.store.relayed.get(&source).is_some_and(|r| r.at >= at) || self.location_forgotten(&source, at) {
                 continue;
             }
+            self.keep_trail(&source, &location, at);
             self.store.relayed.insert(source, RelayedPlace { location, at, via: key.to_string() });
             taken += 1;
         }

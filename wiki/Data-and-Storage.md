@@ -29,7 +29,8 @@ rettui keeps its data in `~/.local/share/rettui/`:
   rettui starts.
 - `store.json.gz`: conversations, contacts (your names for people, notes,
   who you trust or blocked), saved pages, RRC hubs, nodes you
-  identify to, and the emoji you used lately, as gzip-compressed JSON (read it with
+  identify to, the emoji you used lately, and where people have been (their
+  [trails on the map](Messaging#locations-and-the-map)), as gzip-compressed JSON (read it with
   `zcat store.json.gz | jq`). Earlier versions kept it as plain `store.json`,
   about five times larger. The first launch after upgrading converts it,
   checks that the new file reads back the same, and only then removes the

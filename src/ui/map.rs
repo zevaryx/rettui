@@ -7,7 +7,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::canvas::{Canvas, Map, MapResolution};
+use ratatui::widgets::canvas::{Canvas, Line as CanvasLine, Map, MapResolution};
 use ratatui::widgets::{Clear, Paragraph};
 
 use super::{accent, ago, block, dim, selected_bg};
@@ -50,6 +50,11 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
     let across = (lons[1] - lons[0]) * middle.to_radians().cos().abs() * 111.32;
     let across = if across < 10.0 { format!("{:.1} km across", across) } else { format!("{across:.0} km across") };
     let title = format!("Map · {} · {across}", places[selected].name);
+    // Where each has been, oldest first, as map points.
+    let trails: Vec<Vec<(f64, f64)>> = places
+        .iter()
+        .map(|p| p.key.as_deref().map(|k| app.trail(k).iter().map(|t| (t.longitude, t.latitude)).collect()).unwrap_or_default())
+        .collect();
     let hints = if view.span.is_some() { " +/- zoom · 0 all " } else { " + zoom in " };
     let outer = block(&title, true).title_bottom(Line::styled(hints, Style::default().fg(dim())));
     let canvas = Canvas::default().block(outer).marker(Marker::Braille).x_bounds(lons).y_bounds(lats).paint(|ctx| {
@@ -59,6 +64,18 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
             ctx.draw(&Map { color: dim(), resolution: MapResolution::High });
             ctx.layer();
         }
+        // Trails, to where each is now: the one picked brighter, and over
+        // the others.
+        for i in (0..places.len()).filter(|&i| i != selected).chain([selected]) {
+            let colour = if i == selected { accent() } else { Color::Magenta };
+            let now = (places[i].location.longitude, places[i].location.latitude);
+            let points: Vec<(f64, f64)> = trails[i].iter().copied().chain([now]).collect();
+            for pair in points.windows(2) {
+                let ((x1, y1), (x2, y2)) = (pair[0], pair[1]);
+                ctx.draw(&CanvasLine { x1, y1, x2, y2, color: colour });
+            }
+        }
+        ctx.layer();
         // The one picked last, so it's on top.
         let order = (0..places.len()).filter(|&i| i != selected).chain([selected]);
         for i in order {
@@ -81,7 +98,7 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
 
     // The places: name, then when and how far.
     let here = app.settings.own_location();
-    let list_block = block("Places", false).title_bottom(Line::styled(" ↑↓ · Enter open · o map · Esc ", Style::default().fg(dim())));
+    let list_block = block("Places", false).title_bottom(Line::styled(" Enter open · o map · x delete ", Style::default().fg(dim())));
     let list_inner = list_block.inner(list_area);
     let rows = usize::from(list_inner.height / 2).max(1);
     let first = selected.saturating_sub(rows - 1);
@@ -103,6 +120,9 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
         }
         if let Some(via) = &place.via {
             about.push_str(&format!(" · via {via}"));
+        }
+        if trails[i].len() > 1 {
+            about.push_str(&format!(" · trail of {}", trails[i].len()));
         }
         lines.push(Line::styled(about, base.fg(dim())));
     }
@@ -165,6 +185,25 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(app.map.as_ref().unwrap().selected, 1);
+        // Where she's been: a trail to where she is.
+        let now = crate::app::now();
+        for (i, lat) in [48.0, 48.5].into_iter().enumerate() {
+            app.store.trails.entry(key.clone()).or_default().push(crate::store::TrailPoint {
+                latitude: lat,
+                longitude: 2.0,
+                at: now - 900.0 + i as f64,
+            });
+        }
+        let shown = screen(&mut app, 100, 30);
+        assert!(shown.contains("trail of") && shown.contains("x delete"), "{shown}");
+        // Her locations deleted, asked first: off the map, and with no one
+        // left but this station, the list says only that.
+        app.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(app.prompt.as_ref().unwrap().title.contains("Delete Alice's locations"));
+        app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.locations().iter().any(|p| p.key.as_deref() == Some(key.as_str())));
+        assert!(app.store.trails.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

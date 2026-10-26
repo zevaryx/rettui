@@ -48,6 +48,7 @@ mod settings;
 pub mod shrink;
 pub mod tables;
 pub mod traffic;
+pub mod trails;
 mod updates;
 
 use std::collections::{HashMap, VecDeque};
@@ -228,6 +229,8 @@ pub enum PromptKind {
     ConfirmInstallUpdate,
     /// Stop sharing a location live with someone (by address).
     ConfirmStopLive(String),
+    /// Delete what's known of where someone (by address) has been.
+    ConfirmForgetLocations(String),
     /// The Hub panel's prompts.
     Hub(hub::HubPrompt),
     /// A game's: a chess move typed, resigning, forgetting one.
@@ -1337,6 +1340,12 @@ impl App {
                         Ok(()) => self.confirm("Stopped sharing your location live"),
                         Err(e) => self.warn(e),
                     }
+                }
+            }
+            PromptKind::ConfirmForgetLocations(key) => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    self.forget_locations(&key);
+                    self.confirm(format!("Deleted {}'s locations", self.store.display_name(&key)));
                 }
             }
             PromptKind::Hub(prompt) => self.hub_prompt(prompt, &text),

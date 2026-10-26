@@ -401,6 +401,8 @@ pub fn locations(app: &App) -> Value {
                 "label": l.label(), "map": l.map_url(),
                 // How far and which way from this station.
                 "away": here.filter(|_| p.key.is_some()).map(|h| h.away(l)),
+                // Where they've been, oldest first: [latitude, longitude, when].
+                "trail": p.key.as_deref().map(|k| app.trail(k).iter().map(|t| [t.latitude, t.longitude, t.at]).collect::<Vec<_>>()).unwrap_or_default(),
             })
         })
         .collect();

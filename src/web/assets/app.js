@@ -1994,6 +1994,15 @@ function slippyMap(data, places, onPick) {
       ? el('a', { class: 'map-credit', href: 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener noreferrer', text: data.credit })
       : el('span', { class: 'map-credit', text: data.tiles ? data.credit || '' : 'No map tiles (the Map tiles setting is empty)' }));
   const shown = new Map();
+  // Where each has been, as lines to where they are now.
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'map-trails');
+  marks.append(svg);
+  for (const p of places) {
+    if (!p.trail?.length) continue;
+    p.line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    svg.append(p.line);
+  }
   for (const p of places) {
     p.circle = el('div', { class: 'map-circle', hidden: true });
     p.marker = el('button', { type: 'button', class: 'map-marker' + (p.key ? '' : ' station'), title: p.label, onclick: () => onPick(p) },
@@ -2034,6 +2043,15 @@ function slippyMap(data, places, onPick) {
       }
     } else {
       tiles.style.backgroundPosition = `${-left}px ${-top}px`;
+    }
+    const [w2, h2] = size();
+    svg.setAttribute('width', w2);
+    svg.setAttribute('height', h2);
+    for (const p of places) {
+      if (!p.line) continue;
+      const points = [...p.trail.map(([lat, lon]) => [lat, lon]), [p.latitude, p.longitude]]
+        .map(([lat, lon]) => project(lat, lon, zoom)).map(([x, y]) => `${Math.round(x - left)},${Math.round(y - top)}`);
+      p.line.setAttribute('points', points.join(' '));
     }
     for (const p of places) {
       const [x, y] = project(p.latitude, p.longitude, zoom);
@@ -2153,6 +2171,7 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
   const rows = new Map();
   const pick = (p) => {
     for (const q of places) {
+      q.line?.classList.toggle('picked', q === p);
       q.marker.classList.toggle('picked', q === p);
       rows.get(q)?.classList.toggle('selected', q === p);
     }
@@ -2164,7 +2183,8 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
   const station = data.here ? data.places[0] : null;
   const close = dialog('Map', (close) => {
     for (const p of places) {
-      const about = [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away, p.via ? `via ${p.via}` : ''].filter(Boolean).join(' · ');
+      const about = [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away, p.via ? `via ${p.via}` : '',
+        p.trail?.length > 1 ? `trail of ${p.trail.length}` : ''].filter(Boolean).join(' · ');
       const row = el('div', { class: 'list-item', onclick: () => pick(p) },
         p.icon || p.key ? avatar(p.icon, p.name, p.key) : null,
         el('div', { class: 'main' },
@@ -2178,7 +2198,14 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
               switchTab('messages', { focus: true });
               setPane(app.views.messages, 'detail');
             } }) : null,
-            el('a', { href: p.map, target: '_blank', rel: 'noopener noreferrer', text: 'OpenStreetMap ↗', onclick: (e) => e.stopPropagation() }))));
+            el('a', { href: p.map, target: '_blank', rel: 'noopener noreferrer', text: 'OpenStreetMap ↗', onclick: (e) => e.stopPropagation() }),
+            p.key && p.at ? el('button', { class: 'inline danger', text: 'Delete locations', title: 'Take their place and trail off the map (their messages stay)', onclick: async (e) => {
+              e.stopPropagation();
+              if (!await ask(`Delete ${p.name}'s locations?\nTheir place and trail go from the map. Their messages stay.`, { title: 'Delete locations', yes: 'Delete', danger: true })) return;
+              if (!await attempt(() => api.delete(`/locations/${p.key}`), `Deleted ${p.name}'s locations`)) return;
+              close();
+              mapDialog();
+            } }) : null)));
       rows.set(p, row);
       list.append(row);
     }

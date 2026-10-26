@@ -393,6 +393,27 @@ async fn identities_over_the_api() {
 }
 
 #[tokio::test]
+async fn trails_on_the_map_and_deleting_someones_locations() {
+    use crate::lxmf::fields::Telemetry;
+    let web = TestWeb::start("trails");
+    let now = crate::app::now();
+    for (n, lat) in [(1u8, 51.0), (2, 51.1)] {
+        let telemetry = Telemetry { location: Some(crate::lxmf::Location::at(lat, 0.0)), ..Telemetry::default() };
+        let mut message = InboundMessage { extras: Extras { telemetry: Some(telemetry), ..Extras::default() }, ..from_bob(n, "") };
+        message.timestamp = now - 100.0 + f64::from(n);
+        web.with(move |app| app.on_message(message)).await;
+    }
+    let places = web.get("/api/locations").await.json();
+    let bob = places["places"].as_array().unwrap().iter().find(|p| p["key"] == BOB).cloned().unwrap();
+    assert_eq!(bob["trail"].as_array().unwrap().len(), 2, "{bob}");
+    assert_eq!(bob["trail"][0][0], 51.0);
+    assert_eq!(web.delete("/api/locations/nope").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.delete(&format!("/api/locations/{BOB}")).await.status, StatusCode::OK);
+    let places = web.get("/api/locations").await.json();
+    assert!(!places["places"].as_array().unwrap().iter().any(|p| p["key"] == BOB), "{places}");
+}
+
+#[tokio::test]
 async fn reticulums_tables_over_the_api() {
     use crate::net::{AnnounceRate, PathInfo, Tables};
     let web = TestWeb::start("tables");

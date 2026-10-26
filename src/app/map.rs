@@ -84,7 +84,12 @@ impl App {
             .iter()
             .filter(|(key, _)| self.store.contact(key).trust != Trust::Blocked)
             .filter_map(|(key, conversation)| {
-                let newest = conversation.messages.iter().rev().filter(|m| m.incoming).find(|m| m.location.is_some() || stopped(m))?;
+                let newest = conversation
+                    .messages
+                    .iter()
+                    .rev()
+                    .filter(|m| m.incoming && !self.location_forgotten(key, m.timestamp))
+                    .find(|m| m.location.is_some() || stopped(m))?;
                 Some(Placed {
                     key: Some(key.clone()),
                     name: self.store.display_name(key),
@@ -97,7 +102,7 @@ impl App {
         // What collectors passed on, unless they've said where they are
         // since themselves.
         for (key, relayed) in &self.store.relayed {
-            if self.store.contact(key).trust == Trust::Blocked {
+            if self.store.contact(key).trust == Trust::Blocked || self.location_forgotten(key, relayed.at) {
                 continue;
             }
             match placed.iter_mut().find(|p| p.key.as_deref() == Some(key)) {
@@ -160,6 +165,15 @@ impl App {
                 if let Some(key) = places[map.selected].key.clone() {
                     self.map = None;
                     self.open_conversation(key);
+                }
+            }
+            KeyCode::Char('x') => {
+                if let Some(key) = places[map.selected].key.clone() {
+                    let question = format!(
+                        "Delete {}'s locations? Their place and trail go from the map; their messages stay. Type y",
+                        places[map.selected].name
+                    );
+                    self.open_prompt(PromptKind::ConfirmForgetLocations(key), &question, "");
                 }
             }
             _ => {}

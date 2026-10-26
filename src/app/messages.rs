@@ -190,6 +190,9 @@ impl App {
             game,
             ..Message::default()
         };
+        if let (Some(location), false) = (&stored.location, paper) {
+            self.keep_trail(&key, location, stored.timestamp);
+        }
         // A game's move: kept apart, and shown in the Games tab.
         if let Some(game) = stored.game.clone() {
             return self.keep_received_move(&key, stored, &game);

@@ -86,6 +86,7 @@ pub fn router(state: WebState) -> Router {
         .route("/sign-out-others", post(sign_out_others))
         .route("/icons", get(icons))
         .route("/locations", get(locations))
+        .route("/locations/{key}", axum::routing::delete(forget_locations))
         .route("/update/install", post(install_update))
         .route("/update/check", post(check_update))
         .route("/backup", get(download_backup))
@@ -652,6 +653,14 @@ async fn live_position(State(state): State<WebState>, axum::Json(body): axum::Js
 /// Everyone's newest location, for the map.
 async fn locations(State(state): State<WebState>) -> ApiResult {
     Ok(axum::Json(state.read(|o| views::locations(&o.app)).await?))
+}
+
+/// Delete what's known of where someone has been: their place and trail
+/// go from the map (their messages stay).
+async fn forget_locations(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
+    let key = crate::net::parse_hash(&key).map(hex::encode).ok_or_else(|| bad("An address is 32 hex characters"))?;
+    state.write(move |o| o.app.forget_locations(&key)).await?;
+    ok()
 }
 
 /// A few map tiles fetched at once, at most (the rest wait their turn):
