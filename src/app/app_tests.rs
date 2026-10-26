@@ -401,6 +401,40 @@ fn sending_sideband_commands_by_keys_and_the_contact_card() {
     assert!(tui.app.send_command(BOB, Command::Ping).unwrap_err().contains("propagation node"));
 }
 
+/// Tracking someone from their contact card (`f`): asked every so many
+/// minutes, said in the conversation's header, and stopped the same way.
+#[test]
+fn tracking_a_contact_from_the_card() {
+    use crate::app::PromptKind;
+    use crate::app::contacts::CardAction;
+    use crate::lxmf::fields::Command;
+    use crate::net::NetCommand;
+    let mut tui = Tui::new("track");
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    tui.app.open_newest_conversation();
+    tui.sent();
+    tui.settle().key(KeyCode::Char('c'));
+    assert!(tui.app.card_actions(BOB).contains(&CardAction::Track));
+    tui.key(KeyCode::Char('f'));
+    assert!(matches!(tui.app.prompt.as_ref().map(|p| &p.kind), Some(PromptKind::Track(_))));
+    tui.answer("often");
+    assert!(tui.said().contains("number of minutes"), "{}", tui.said());
+    let shown = tui.app.store.conversations[BOB].messages.len();
+    tui.ask(PromptKind::Track(BOB.into()), "10");
+    let notice = tui.app.notice.as_ref().map(|n| n.text.clone()).unwrap_or_default();
+    assert!(notice.contains("every 10 min"), "{notice}");
+    let asked: Vec<NetCommand> = tui.sent();
+    assert!(asked.iter().any(|c| matches!(c, NetCommand::SendMessage { message, .. } if message.commands == [Command::TelemetryRequest])));
+    assert_eq!(tui.app.store.conversations[BOB].messages.len(), shown, "requests aren't shown");
+    tui.app.contact_card = None;
+    assert!(tui.draw().contains("asking every 10 min"), "{}", tui.draw());
+    tui.settle().key(KeyCode::Char('c'));
+    assert!(tui.app.card_actions(BOB).contains(&CardAction::StopTracking));
+    tui.key(KeyCode::Char('f'));
+    assert!(tui.app.track(BOB).is_none());
+}
+
 /// A message being sent says how it goes, and can be cancelled (`c` on a
 /// picked one); cancelled, it isn't sent again by itself, but can be by
 /// hand. A sync says how many of those waiting came.

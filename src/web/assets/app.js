@@ -3809,6 +3809,11 @@ app.views.messages = {
         el('button', { class: 'inline', text: 'Stop', onclick: async () => {
           if (await attempt(() => api.post(`/conversations/${key}/live/stop`), 'Stopped sharing your location live')) loadNow();
         } })) : null,
+      conversation.track ? el('span', { class: 'live-chip', title: 'Asking where they are every few minutes, while rettui runs' },
+        `📡 every ${conversation.track.every} min`,
+        el('button', { class: 'inline', text: 'Stop', onclick: async () => {
+          if (await attempt(() => api.post(`/conversations/${key}/track/stop`), 'Stopped tracking them')) loadNow();
+        } })) : null,
       ((bell) => {
         bell.classList.add('more');
         bell.dataset.label = conversation.muted ? '🔕 Notifications: off (turn on)' : '🔔 Notifications: on (turn off)';
@@ -4223,6 +4228,17 @@ app.views.messages = {
     if (sent) loadNow();
   },
 
+  // Ask where they are every few minutes.
+  async track(key, closeContact) {
+    const started = await askText('Track where they are', { label: 'Ask every how many minutes (1 to 1440)?', value: '5', ok: 'Track',
+      act: (minutes) => api.post(`/conversations/${key}/track`, { minutes: Number(minutes) }) });
+    if (started) {
+      toast(started.doing);
+      closeContact();
+      loadNow();
+    }
+  },
+
   // Your name for them, notes about them, and deleting the conversation.
   contactDialog(key, conversation) {
     const contact = conversation.contact || {};
@@ -4249,6 +4265,12 @@ app.views.messages = {
           onclick: async () => {
             if (await attempt(() => api.post(`/conversations/${key}/command`, { command: 'location' }), 'Asked where they are: their answer goes on the map')) loadNow();
           } }),
+        conversation.track
+          ? el('button', { text: '📡 Stop tracking', title: `Stop asking where they are every ${conversation.track.every} min`, onclick: async () => {
+            if (await attempt(() => api.post(`/conversations/${key}/track/stop`), 'Stopped tracking them')) { close(); loadNow(); }
+          } })
+          : el('button', { text: '📡 Track…', title: 'Ask where they are every few minutes, while rettui runs: each answer replaces the one before it, and goes on the map',
+            onclick: () => this.track(key, close) }),
         el('button', { text: 'Command…', title: 'Send a ping, an echo or a signal report request, as Sideband does: Sideband answers with a message ( K )',
           onclick: () => this.sendCommand(key) })),
       el('div', { class: 'row trust' },

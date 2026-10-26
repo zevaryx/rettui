@@ -489,6 +489,25 @@ averages (Linux and macOS), memory used (Linux), and the storage rettui
 keeps its data on (Linux and macOS). Your message shows what was sent.
 Windows sends none of them.
 
+*Send to trusted every* (Status, Location, `telemetry_every_mins`; 0, off,
+to start with) sends this station's *Location* to every contact you trust
+every so many minutes, with sensor readings if *Send sensor readings* is on,
+so they can follow it on their map, as Sideband sends its telemetry on a
+timer. It goes as a live update does: each one replaces the one before it
+in the conversation. Someone you're already sharing it with live gets the
+live updates instead. With no *Location* set, nothing is sent.
+
+**Tracking someone** asks where they are every so many minutes, while
+rettui runs, as Sideband's location requests do, so the map follows them.
+*Track* on the contact card (`f`, then the minutes: 1 to 1440) starts it,
+and `f` again stops it; in the web UI it's *📡 Track…* on the contact
+dialog. The conversation's header says *📡 asking every 10 min* (with
+**Stop** in the web UI). The requests aren't shown in the conversation, and
+the next isn't sent until the one before has gone; each answer replaces the
+one before it. They answer only if they're set to answer you (in Sideband,
+most answer only contacts they trust). One that couldn't be sent is said in
+the log.
+
 The **map** shows everyone's newest location, the newest first, and this
 station's if it's set. Someone who said they'd stopped sharing (as Columba
 does) isn't on it, nor is anyone blocked.

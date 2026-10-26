@@ -342,6 +342,12 @@ impl App {
     /// id. Sideband answers the first three with a message, and a location
     /// request with its telemetry (shown on the map), if it's set to.
     pub fn send_command(&mut self, key: &str, command: lxmf::fields::Command) -> Result<u64, String> {
+        self.send_command_shown(key, command, true)
+    }
+
+    /// Send a command, shown in the conversation or (a tracked contact's
+    /// requests, every few minutes) only sent.
+    pub(super) fn send_command_shown(&mut self, key: &str, command: lxmf::fields::Command, shown: bool) -> Result<u64, String> {
         let to = parse_hash(key).ok_or("An LXMF address is 32 hex characters")?;
         let key = hex::encode(to);
         let chosen = if self.active_conversation.as_deref() == Some(key.as_str()) { self.delivery_mode } else { self.delivery_for(&key) };
@@ -356,16 +362,18 @@ impl App {
         let id = self.store.next_local_id;
         self.store.next_local_id += 1;
         let timestamp = now();
-        self.store.conversations.entry(key.clone()).or_default().messages.push(Message {
-            id: format!("local-{id}"),
-            timestamp,
-            state: MessageState::Sending,
-            notes: vec![command.sent()],
-            command: Some(command.typed()),
-            ..Message::default()
-        });
-        self.store_dirty = true;
-        self.keep_conversation_selection();
+        if shown {
+            self.store.conversations.entry(key.clone()).or_default().messages.push(Message {
+                id: format!("local-{id}"),
+                timestamp,
+                state: MessageState::Sending,
+                notes: vec![command.sent()],
+                command: Some(command.typed()),
+                ..Message::default()
+            });
+            self.store_dirty = true;
+            self.keep_conversation_selection();
+        }
         let message = lxmf::Outgoing {
             commands: vec![command],
             appearance: self.own_appearance(),

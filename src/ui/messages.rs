@@ -149,6 +149,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(share) => format!("{name}  {key}  {}", crate::app::live::label(share)),
         None => format!("{name}  {key}"),
     };
+    if let Some(track) = app.track(&key) {
+        title.push_str(&format!("  {}", crate::app::live::track_label(track)));
+    }
     // Games of yours with them waiting on you: g opens them.
     match app.games.waiting(Some(&key)) {
         0 => {}

@@ -178,6 +178,7 @@ pub fn keys(app: &App) -> Keys {
                 ("y", "copy"),
                 ("p", "ping"),
                 ("w", "ask where"),
+                ("f", "track"),
                 ("k", "command"),
                 ("l", "leave as is"),
                 ("X", "delete"),

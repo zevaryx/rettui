@@ -375,6 +375,8 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
         "archive": app.paths.archive.display().to_string(),
         // Your location, shared with them live.
         "live": app.live_share(key).map(|share| crate::app::live::describe(key, share)),
+        // Asking them where they are every few minutes.
+        "track": app.track(key).map(|track| json!({ "every": track.every })),
         "messages": messages,
     })
 }

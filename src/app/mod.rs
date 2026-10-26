@@ -217,6 +217,8 @@ pub enum PromptKind {
     ShareLocation(String),
     /// A Sideband command to send someone (by address).
     Command(String),
+    /// How many minutes between asking someone (by address) where they are.
+    Track(String),
     /// Install the newer release found, in this one's place.
     ConfirmInstallUpdate,
     /// Stop sharing a location live with someone (by address).
@@ -1166,6 +1168,9 @@ impl App {
 
     /// A message (or a reaction) sent, or not.
     fn on_delivery(&mut self, id: u64, result: Result<crate::lxmf::Sent, String>) {
+        if self.on_track_delivery(id, &result) {
+            return;
+        }
         let local = format!("local-{id}");
         let state = match &result {
             Ok(sent) if sent.delivered == Delivered::Direct => MessageState::Delivered,
@@ -1307,6 +1312,12 @@ impl App {
             }
             PromptKind::ShareLocation(key) => self.submit_share_location(key, &text),
             PromptKind::Command(key) => self.submit_command(key, &text),
+            PromptKind::Track(key) => {
+                match text.parse().map_err(|_| "Give a number of minutes".to_string()).and_then(|m| self.start_track(&key, m)) {
+                    Ok(doing) => self.confirm(doing),
+                    Err(e) => self.warn(e),
+                }
+            }
             PromptKind::Game(prompt) => self.submit_game_prompt(prompt, &text),
             PromptKind::ConfirmStopLive(key) => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
@@ -1431,6 +1442,7 @@ impl App {
         self.hub.restarting(crate::rrc::host::HubHostConfig::from_settings(&self.settings, &self.paths, self.identity_hash));
         self.browser.restarted();
         // Deliveries in progress belong to the old stack.
+        self.tracks_restarting();
         for conversation in self.store.conversations.values_mut() {
             for message in &mut conversation.messages {
                 if message.state == MessageState::Sending {

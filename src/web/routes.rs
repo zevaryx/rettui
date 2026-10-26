@@ -100,6 +100,8 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/pin", post(pin_conversation))
         .route("/conversations/{key}/live", post(start_live))
         .route("/conversations/{key}/live/stop", post(stop_live))
+        .route("/conversations/{key}/track", post(start_track))
+        .route("/conversations/{key}/track/stop", post(stop_track))
         .route("/live/position", post(live_position))
         .route("/conversations/read-all", post(read_all_conversations))
         .route("/conversations/{key}/send", post(send_message))
@@ -613,6 +615,26 @@ async fn start_live(State(state): State<WebState>, Path(key): Path<String>, axum
 async fn stop_live(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
     let key = address(&key)?;
     state.write(move |o| o.app.stop_live(&key)).await?.map_err(bad)?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct TrackBody {
+    /// Minutes between asking where they are.
+    minutes: u64,
+}
+
+/// Track them: ask where they are every few minutes.
+async fn start_track(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<TrackBody>) -> ApiResult {
+    let key = address(&key)?;
+    let doing = state.write(move |o| o.app.start_track(&key, body.minutes)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "ok": true, "doing": doing })))
+}
+
+/// Stop tracking them.
+async fn stop_track(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
+    let key = address(&key)?;
+    state.write(move |o| o.app.stop_track(&key)).await?.map_err(bad)?;
     ok()
 }
 

@@ -1098,6 +1098,30 @@ async fn sending_sideband_commands() {
     assert!(text.contains("Asked for their location") && text.contains("Asked for an echo of “hello”"), "{text}");
 }
 
+/// Tracking someone: asked where they are every few minutes, said in the
+/// conversation, and stopped.
+#[tokio::test]
+async fn tracking_a_contact() {
+    use crate::lxmf::fields::Command;
+    let web = TestWeb::start("track");
+    let url = format!("/api/conversations/{BOB}/track");
+    assert_eq!(web.post(&url, json!({ "minutes": 0 })).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.post("/api/conversations/nobody/track", json!({ "minutes": 5 })).await.status, StatusCode::BAD_REQUEST);
+    let started = web.post(&url, json!({ "minutes": 15 })).await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.text());
+    assert!(started.json()["doing"].as_str().unwrap_or_default().contains("every 15 min"), "{}", started.text());
+    let asked = web
+        .sent()
+        .into_iter()
+        .any(|c| matches!(c, NetCommand::SendMessage { message, .. } if message.commands == [Command::TelemetryRequest]));
+    assert!(asked);
+    let conversation = web.get(&format!("/api/conversations/{BOB}")).await.json();
+    assert_eq!(conversation["track"]["every"], 15);
+    assert_eq!(web.post(&format!("{url}/stop"), json!({})).await.status, StatusCode::OK);
+    assert!(web.get(&format!("/api/conversations/{BOB}")).await.json()["track"].is_null());
+    assert_eq!(web.post(&format!("{url}/stop"), json!({})).await.status, StatusCode::BAD_REQUEST);
+}
+
 /// A message being sent says how it goes, and can be cancelled; a sync
 /// says how many came.
 #[tokio::test]
