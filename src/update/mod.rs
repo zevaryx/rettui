@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The newest release (GitHub leaves out drafts and prereleases).
 const LATEST: &str = "https://api.github.com/repos/zevaryx/rettui/releases/latest";
+/// The newest releases and prereleases, newest first (GitHub leaves out
+/// drafts).
+const RECENT: &str = "https://api.github.com/repos/zevaryx/rettui/releases?per_page=30";
 /// How often it asks, and how soon it asks again after it couldn't.
 pub const EVERY: Duration = Duration::from_secs(24 * 3600);
 pub const RETRY: Duration = Duration::from_secs(3600);
@@ -78,40 +81,70 @@ pub fn newer(current: &str, candidate: &str) -> bool {
     }
 }
 
+/// Whether `version` is a prerelease (`1.7.0-rc.1`).
+pub fn is_prerelease(version: &str) -> bool {
+    parts(version).is_some_and(|(_, pre)| pre.is_some())
+}
+
 /// What asks GitHub: saying it's rettui and which version, through the
 /// proxy set in the environment if any, trusting what `crate::https` does.
 fn agent(timeout: Duration) -> ureq::Agent {
     crate::https::agent(timeout).user_agent(&format!("rettui/{VERSION} (+https://github.com/zevaryx/rettui)")).build()
 }
 
-/// The newest release, from GitHub. Blocking: for a thread of its own.
-pub fn fetch() -> Result<Release, String> {
+/// The newest release, from GitHub, or with `prereleases` the newest of
+/// the releases and prereleases. Blocking: for a thread of its own.
+pub fn fetch(prereleases: bool) -> Result<Release, String> {
     let agent = agent(Duration::from_secs(20));
     let fail = |e: String| format!("Couldn't check for updates: {e}");
-    let response = agent.get(LATEST).set("Accept", "application/vnd.github+json").call().map_err(|e| fail(e.to_string()))?;
+    let url = if prereleases { RECENT } else { LATEST };
+    let response = agent.get(url).set("Accept", "application/vnd.github+json").call().map_err(|e| fail(e.to_string()))?;
     let body = response.into_string().map_err(|e| fail(e.to_string()))?;
-    latest_of(&body).map_err(fail)
+    if prereleases { newest_of(&body) } else { latest_of(&body) }.map_err(fail)
+}
+
+/// What GitHub says of a release: the fields that matter.
+#[derive(Deserialize)]
+struct Listed {
+    tag_name: String,
+    html_url: String,
+    #[serde(default)]
+    draft: bool,
+}
+
+impl Listed {
+    fn release(self) -> Result<Release, String> {
+        let version = self.tag_name.trim_start_matches('v').to_string();
+        if parts(&version).is_none() {
+            return Err(format!("the newest release is called {:?}", self.tag_name));
+        }
+        // Only GitHub's own pages are linked to.
+        let url = if self.html_url.starts_with("https://github.com/zevaryx/rettui/") {
+            self.html_url
+        } else {
+            format!("https://github.com/zevaryx/rettui/releases/tag/{}", self.tag_name)
+        };
+        Ok(Release { version, url })
+    }
 }
 
 /// The release in GitHub's answer for the latest one.
 fn latest_of(body: &str) -> Result<Release, String> {
-    #[derive(Deserialize)]
-    struct Latest {
-        tag_name: String,
-        html_url: String,
+    serde_json::from_str::<Listed>(body).map_err(|e| e.to_string())?.release()
+}
+
+/// The newest release or prerelease in GitHub's list of them: by version,
+/// not by date, since a prerelease of the next version can come before a
+/// fix to the last one. Tags that aren't versions are passed over.
+fn newest_of(body: &str) -> Result<Release, String> {
+    let listed: Vec<Listed> = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    let mut newest: Option<Release> = None;
+    for release in listed.into_iter().filter(|r| !r.draft).filter_map(|r| r.release().ok()) {
+        if newest.as_ref().is_none_or(|best| newer(&best.version, &release.version)) {
+            newest = Some(release);
+        }
     }
-    let latest: Latest = serde_json::from_str(body).map_err(|e| e.to_string())?;
-    let version = latest.tag_name.trim_start_matches('v').to_string();
-    if parts(&version).is_none() {
-        return Err(format!("the newest release is called {:?}", latest.tag_name));
-    }
-    // Only GitHub's own pages are linked to.
-    let url = if latest.html_url.starts_with("https://github.com/zevaryx/rettui/") {
-        latest.html_url
-    } else {
-        format!("https://github.com/zevaryx/rettui/releases/tag/{}", latest.tag_name)
-    };
-    Ok(Release { version, url })
+    newest.ok_or_else(|| "there are no releases".to_string())
 }
 
 #[cfg(test)]
@@ -154,6 +187,33 @@ mod tests {
         assert_eq!(latest_of(&elsewhere).unwrap().url, "https://github.com/zevaryx/rettui/releases/tag/v1.5.1");
         assert!(latest_of(&body.replace("\"v1.5.1\"", "\"nightly\"")).is_err());
         assert!(latest_of(r#"{"message": "API rate limit exceeded"}"#).is_err());
+    }
+
+    #[test]
+    fn the_newest_of_releases_and_prereleases() {
+        let list = |tags: &[(&str, bool)]| {
+            let items: Vec<String> = tags
+                .iter()
+                .map(|(tag, draft)| {
+                    format!(
+                        r#"{{"tag_name": "{tag}", "html_url": "https://github.com/zevaryx/rettui/releases/tag/{tag}", "draft": {draft}}}"#
+                    )
+                })
+                .collect();
+            format!("[{}]", items.join(","))
+        };
+        // A prerelease of the next version beats the release before it,
+        // and the release beats its own prereleases.
+        let body = list(&[("v1.10.0-dev.2", false), ("v1.10.0-dev.1", false), ("v1.9.0", false)]);
+        assert_eq!(newest_of(&body).unwrap().version, "1.10.0-dev.2");
+        assert_eq!(newest_of(&list(&[("v1.9.1", false), ("v1.10.0-dev.1", false), ("v1.9.0", false)])).unwrap().version, "1.10.0-dev.1");
+        assert_eq!(newest_of(&list(&[("v1.10.0-dev.1", false), ("v1.10.0", false)])).unwrap().version, "1.10.0");
+        // Drafts and tags that aren't versions are passed over.
+        assert_eq!(newest_of(&list(&[("v2.0.0", true), ("nightly", false), ("v1.9.0", false)])).unwrap().version, "1.9.0");
+        assert!(newest_of("[]").is_err());
+        assert!(newest_of(&list(&[("nightly", false)])).is_err());
+        assert!(newest_of(r#"{"message": "API rate limit exceeded"}"#).is_err());
+        assert!(is_prerelease("1.10.0-dev.1") && !is_prerelease("1.10.0") && !is_prerelease("nightly"));
     }
 
     #[test]

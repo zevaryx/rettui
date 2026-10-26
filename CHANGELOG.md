@@ -53,7 +53,7 @@ Changes since v1.9.0: a first version of an Android app, attached to the release
 - **Pictures can no longer run the terminal UI out of memory:** a picture of a few kilobytes can say it's millions of pixels across, and was decoded however large it said it was, each on a thread of its own, so a page or conversation of them could take gigabytes. A picture wider or taller than 16384 pixels isn't shown now, one decode takes at most 256 MB, and pictures are decoded two at a time. See [NomadNet Browsing](https://github.com/zevaryx/rettui/wiki/NomadNet-Browsing).
 
 ### Docs and development
-- **Development prereleases:** *Actions > Prerelease > Run workflow* (on `dev`) publishes a prerelease of `dev`'s newest commit, `v1.10.0-dev.1` and so on, built and attached like a release, with a link to what changed since the last release. `dev` isn't changed: the tag holds a commit with the prerelease's version. Self-update leaves prereleases out. See [Development](https://github.com/zevaryx/rettui/wiki/Development).
+- **Development prereleases:** *Actions > Prerelease > Run workflow* (on `dev`) publishes a prerelease of `dev`'s newest commit, `v1.10.0-dev.1` and so on, built and attached like a release, with a link to what changed since the last release. `dev` isn't changed: the tag holds a commit with the prerelease's version. Update checks leave prereleases out unless *Include prereleases in update checks* is on. See [Development](https://github.com/zevaryx/rettui/wiki/Development).
 
 ## v1.9.0
 

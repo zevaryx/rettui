@@ -165,6 +165,9 @@ pub struct Settings {
     /// `crate::update`). Off unless turned on (the getting-started guide
     /// recommends it).
     pub update_check: bool,
+    /// Update checks count prereleases (a release candidate, a development
+    /// build) as well as releases.
+    pub update_prereleases: bool,
     /// How many entry points interface discovery finds rettui connects to
     /// itself, Bootstrap only interfaces going once that many are up and
     /// coming back when none is (see `crate::net::discovered`). 0: none,
@@ -276,6 +279,7 @@ impl Default for Settings {
             print_command: None,
             log_level: "warn".into(),
             update_check: false,
+            update_prereleases: false,
             discovered_entry_points: 0,
             clock: "24-hour".into(),
             tui_theme: "dark".into(),
@@ -686,7 +690,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
     ),
     (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins", "chat_dates"]),
     (Section::Notifications, &["notify_messages", "notify_rrc", "quiet_hours", "quiet_hours_trusted"]),
-    (Section::System, &["log_level", "update_check", "discovered_entry_points", "keep_awake", "rns_config"]),
+    (Section::System, &["log_level", "update_check", "update_prereleases", "discovered_entry_points", "keep_awake", "rns_config"]),
 ];
 
 impl Field {
@@ -1192,6 +1196,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "update_prereleases",
+        label: "Include prereleases in update checks",
+        help: "Count prereleases (release candidates and development builds, which may be rough) as well as releases when checking for updates, so a newer prerelease is offered too. A release is still newer than its own prereleases. Needs Check for updates, or a check asked for by hand. Off by default",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "discovered_entry_points",
         label: "Discovered entry points",
         help: "How many entry points found by interface discovery rettui connects to (2 is what Reticulum's manual suggests; 0, the default: none). Interfaces marked Bootstrap only are disconnected once that many are up, and connect again when none is; one that stays down is swapped for another. Needs discovery on in the Reticulum config, with its own auto-connect (autoconnect_discovered_interfaces) at 0: rsReticulum's drops Bootstrap only interfaces before the others are up, and never brings them back. The getting-started guide sets this up",
@@ -1350,6 +1361,7 @@ impl Settings {
             "print_command" => self.print_command.clone().unwrap_or_default(),
             "log_level" => self.log_level.clone(),
             "update_check" => self.update_check.to_string(),
+            "update_prereleases" => self.update_prereleases.to_string(),
             "discovered_entry_points" => self.discovered_entry_points.to_string(),
             "clock" => self.clock.clone(),
             "tui_theme" => self.tui_theme.clone(),
@@ -1504,6 +1516,7 @@ impl Settings {
             "print_command" => self.print_command = optional(value),
             "log_level" => self.log_level = choice(value, crate::logging::LEVELS).map_err(fail)?,
             "update_check" => self.update_check = toggle(value).map_err(fail)?,
+            "update_prereleases" => self.update_prereleases = toggle(value).map_err(fail)?,
             "clock" => self.clock = choice(value, crate::clock::CLOCKS).map_err(fail)?,
             "tui_theme" => self.tui_theme = choice(value, crate::ui::THEMES).map_err(fail)?,
             "date_style" => self.date_style = choice(value, crate::clock::DATE_STYLES).map_err(fail)?,

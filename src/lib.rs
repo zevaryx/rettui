@@ -338,7 +338,7 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Path { table: true, .. }) => cli::path_table(&settings).await,
         Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
-        Some(Command::Update { yes }) => cli::update(yes).await,
+        Some(Command::Update { yes }) => cli::update(&settings, yes).await,
         Some(Command::Backup { .. } | Command::Restore { .. } | Command::Identity { .. }) => unreachable!("handled before loading"),
         None => {
             let (mut settings, mut paths, mut identity) = (settings, paths, identity);

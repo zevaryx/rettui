@@ -360,9 +360,14 @@ pub async fn fetch(settings: &Settings, url: &str, raw: bool, identity: Option<I
 
 /// `rettui update`: the newest release, and installing it in this one's
 /// place if it's newer and this copy can be (asking first, unless `yes`).
-pub async fn update(yes: bool) -> Result<()> {
+pub async fn update(settings: &Settings, yes: bool) -> Result<()> {
     use crate::update::install::{self, Install};
-    let release = tokio::task::spawn_blocking(crate::update::fetch).await?.map_err(|e| anyhow::anyhow!(e))?;
+    let release = tokio::task::spawn_blocking({
+        let prereleases = settings.update_prereleases;
+        move || crate::update::fetch(prereleases)
+    })
+    .await?
+    .map_err(|e| anyhow::anyhow!(e))?;
     if !crate::update::newer(crate::update::VERSION, &release.version) {
         println!("rettui {} is the newest release (this is {}).", release.version, crate::update::VERSION);
         return Ok(());

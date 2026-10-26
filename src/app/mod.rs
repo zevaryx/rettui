@@ -98,7 +98,7 @@ pub(crate) fn test_app_with_net(
     let (net, commands) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(settings, paths, store, net, None, [0; 16]);
     // Never online: a test that wants an answer gives its own.
-    app.updates.fetch = || Err("no update checks in tests".into());
+    app.updates.fetch = |_| Err("no update checks in tests".into());
     (app, commands)
 }
 pub use messages::Autoplay;

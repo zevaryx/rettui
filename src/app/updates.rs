@@ -30,7 +30,7 @@ pub struct Updates {
     /// The version the user was told of, this run.
     told: Option<String>,
     /// How it asks (tests don't go online).
-    pub(crate) fetch: fn() -> Result<Release, String>,
+    pub(crate) fetch: fn(bool) -> Result<Release, String>,
     /// How this copy is updated: in place, or how instead (looked at once).
     pub install: Install,
     /// The version being installed, and where the answer comes.
@@ -83,11 +83,11 @@ impl Updates {
     }
 
     /// Ask for the newest release, in a thread of its own.
-    fn ask(&mut self) {
+    fn ask(&mut self, prereleases: bool) {
         let (tx, rx) = std::sync::mpsc::channel();
         let fetch = self.fetch;
         std::thread::spawn(move || {
-            let _ = tx.send(fetch());
+            let _ = tx.send(fetch(prereleases));
         });
         self.asking = Some(rx);
     }
@@ -97,7 +97,11 @@ impl App {
     /// A newer release, if one was found and update checks are on (or one
     /// was asked for this run).
     pub fn update_available(&self) -> Option<&Release> {
-        (self.settings.update_check || self.updates.asked).then(|| self.updates.checked.newer_than(update::VERSION)).flatten()
+        // A prerelease found while they were on is left out once they're off.
+        (self.settings.update_check || self.updates.asked)
+            .then(|| self.updates.checked.newer_than(update::VERSION))
+            .flatten()
+            .filter(|release| self.settings.update_prereleases || !update::is_prerelease(&release.version))
     }
 
     /// Check for a newer release now (`u` in Status, Check now in the web
@@ -105,7 +109,7 @@ impl App {
     pub fn check_for_updates(&mut self) -> String {
         // One on its way already (the daily one) is said when it's in.
         if !self.updates.checking() {
-            self.updates.ask();
+            self.updates.ask(self.settings.update_prereleases);
         }
         self.updates.by_hand = true;
         self.updates.error = None;
@@ -223,7 +227,7 @@ impl App {
         let since = Duration::from_secs((now() as i64 - self.updates.checked.at).unsigned_abs());
         let retry = self.updates.failed.is_none_or(|at| at.elapsed() >= update::RETRY);
         if since >= update::EVERY && retry {
-            self.updates.ask();
+            self.updates.ask(self.settings.update_prereleases);
         }
     }
 
@@ -278,7 +282,7 @@ impl App {
 mod tests {
     use crate::update::{Checked, Release};
 
-    fn release() -> Result<Release, String> {
+    fn release(_: bool) -> Result<Release, String> {
         Ok(Release { version: "99.0.0".into(), url: "https://github.com/zevaryx/rettui/releases/tag/v99.0.0".into() })
     }
 
@@ -318,7 +322,7 @@ mod tests {
         app.on_tick();
         assert!(app.updates.asking.is_none());
         let mut again = crate::app::test_app(&dir, on(), crate::store::Store::default());
-        again.updates.fetch = || panic!("asked again within a day");
+        again.updates.fetch = |_| panic!("asked again within a day");
         again.on_tick();
         assert_eq!(again.update_available(), Some(&found));
         // Off, as it is to start with: nothing shown, nothing asked.
@@ -326,10 +330,35 @@ mod tests {
         assert!(!off.update_check);
         let _ = std::fs::remove_dir_all(&dir);
         let mut quiet = crate::app::test_app(&dir, off, crate::store::Store::default());
-        quiet.updates.fetch = || panic!("asked with update checks off");
+        quiet.updates.fetch = |_| panic!("asked with update checks off");
         quiet.on_tick();
         assert!(quiet.update_available().is_none() && quiet.updates.asking.is_none());
         assert_eq!(quiet.version_url(), crate::config::PROJECT_URL);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prereleases_are_asked_for_and_shown_only_when_included() {
+        let dir = std::env::temp_dir().join(format!("rettui-updates-pre-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, on(), crate::store::Store::default());
+        // The fetch is told whether prereleases count.
+        app.updates.fetch = |prereleases| {
+            let version = if prereleases { "99.0.0-rc.1" } else { "98.0.0" };
+            Ok(Release { version: version.into(), url: format!("https://github.com/zevaryx/rettui/releases/tag/v{version}") })
+        };
+        app.on_tick();
+        settle(&mut app);
+        assert_eq!(app.update_available().map(|r| r.version.as_str()), Some("98.0.0"));
+        app.update_settings(&[("update_prereleases", "true")]).unwrap();
+        assert!(app.settings.update_prereleases);
+        app.check_for_updates();
+        settle(&mut app);
+        assert_eq!(app.update_available().map(|r| r.version.as_str()), Some("99.0.0-rc.1"));
+        // Turned off again, a prerelease found earlier isn't offered.
+        app.update_settings(&[("update_prereleases", "false")]).unwrap();
+        assert!(app.update_available().is_none());
+        assert!(!app.settings_file.update_prereleases);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -341,7 +370,7 @@ mod tests {
         assert!(!app.settings.update_check);
         assert_eq!(app.version_status(), "Check for updates is off");
         // This version is the newest.
-        app.updates.fetch = || Ok(Release { version: crate::update::VERSION.into(), url: crate::config::PROJECT_URL.into() });
+        app.updates.fetch = |_| Ok(Release { version: crate::update::VERSION.into(), url: crate::config::PROJECT_URL.into() });
         app.check_for_updates();
         assert_eq!(app.version_status(), "checking for updates…");
         settle(&mut app);
@@ -349,12 +378,12 @@ mod tests {
         assert!(app.version_status().starts_with("up to date (checked "));
         assert!(app.update_available().is_none());
         // A build newer than the latest release (as one from dev is).
-        app.updates.fetch = || Ok(Release { version: "0.1.0".into(), url: crate::config::PROJECT_URL.into() });
+        app.updates.fetch = |_| Ok(Release { version: "0.1.0".into(), url: crate::config::PROJECT_URL.into() });
         app.check_for_updates();
         settle(&mut app);
         assert!(app.notice.as_ref().unwrap().text.contains("is newer than the latest release (0.1.0)"));
         // One that can't be made says why, as the daily one doesn't.
-        app.updates.fetch = || Err("Couldn't reach GitHub: offline".into());
+        app.updates.fetch = |_| Err("Couldn't reach GitHub: offline".into());
         app.check_for_updates();
         settle(&mut app);
         assert!(app.notice.as_ref().unwrap().text.starts_with("Couldn't check for updates: Couldn't reach GitHub"));
@@ -378,16 +407,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rettui-updates-failed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut app = crate::app::test_app(&dir, on(), crate::store::Store::default());
-        app.updates.fetch = || Err("Couldn't check for updates: offline".into());
+        app.updates.fetch = |_| Err("Couldn't check for updates: offline".into());
         app.on_tick();
         settle(&mut app);
         // Not again at once: an hour on.
-        app.updates.fetch = || panic!("asked again at once");
+        app.updates.fetch = |_| panic!("asked again at once");
         app.on_tick();
         assert!(app.updates.asking.is_none() && app.update_available().is_none());
         // This version, or an older one: nothing to say.
         app.updates.failed = None;
-        app.updates.fetch = || Ok(Release { version: "0.1.0".into(), url: "https://github.com/zevaryx/rettui/releases/tag/v0.1.0".into() });
+        app.updates.fetch =
+            |_| Ok(Release { version: "0.1.0".into(), url: "https://github.com/zevaryx/rettui/releases/tag/v0.1.0".into() });
         app.on_tick();
         settle(&mut app);
         assert!(app.update_available().is_none());

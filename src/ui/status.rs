@@ -464,7 +464,7 @@ mod tests {
         assert!(line.contains(crate::update::VERSION) && line.contains("(built from source)"), "{line}");
         assert!(line.contains("Check for updates is off") && line.contains("u checks now"), "{line}");
         // u checks; while it does, it says so.
-        app.updates.fetch = || {
+        app.updates.fetch = |_| {
             std::thread::sleep(std::time::Duration::from_millis(200));
             Err("offline".into())
         };

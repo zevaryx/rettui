@@ -80,6 +80,13 @@ check), and a newer one found this way shows as above, ready to install.
 With *Check for updates* off and nothing checked by hand since rettui
 started, *Version* says so rather than show an older check's answer.
 
+Checks count releases only. To be offered prereleases too (release
+candidates and development builds, which may be rough), turn on
+*Include prereleases in update checks* (Status, `update_prereleases`):
+the newest of the releases and prereleases is the one found, and a
+release is still newer than its own prereleases. It applies to `rettui
+update` as well. Turned off again, a prerelease found earlier isn't shown.
+
 Checking downloads and installs nothing. To update:
 
 - **A binary from the releases page** can install the new release itself,

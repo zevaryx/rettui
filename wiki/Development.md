@@ -97,8 +97,8 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   5. starts the Release workflow on the tag, which builds and publishes
      it as a prerelease (no Homebrew or AUR, no `latest` image).
 
-  Self-update leaves prereleases out, so they're only for those who
-  download one.
+  Update checks leave prereleases out unless *Include prereleases in
+  update checks* is on, so they're mostly for those who download one.
 - **Branch image** ([docker-branch.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/docker-branch.yml))
   runs on every push to a branch other than `main`. It builds the Linux
   binaries and pushes an image tagged with the branch name: pushing to
