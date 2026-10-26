@@ -138,11 +138,26 @@ peer protocol).
   download.
 - **Peers:** other propagation nodes that peer with yours (proving the work
   of LXMF's peering key, cost 18) offer it the messages it doesn't have, and
-  send them several at a time. Yours doesn't peer with other nodes itself,
-  as `lxmd` with `autopeer` off: messages sent through it stay here until
-  their recipients collect them, and other nodes only get them by peering
-  with it. Tested against Python LXMF 1.2: its clients send through and
-  collect from rettui's node, and its propagation nodes peer with it.
+  send them several at a time.
+- **Passing messages on (peering):** yours peers with other propagation
+  nodes too, as `lxmd` does, so a message sent through it reaches its
+  recipient whichever node they collect from. With *Auto-peer*
+  (`pn_autopeer`, on) it peers with each propagation node it hears
+  announcing within *Auto-peer depth* (`pn_autopeer_depth`, 4 hops), up to
+  *Most peers* (`pn_max_peers`, 20). One that moves further away, or stops
+  being a propagation node, is no longer peered with, and one asking for
+  more work than LXMF allows (a peering cost over 26) isn't peered with at
+  all. *Static peers* (`pn_static_peers`, addresses separated by commas)
+  are always peered with, however far, once their announce has been heard.
+  Every 24 seconds, one peer with messages it hasn't had is offered them,
+  and sent those it wants; what each has had is kept with the node, so
+  after a restart only new ones are offered. Turning *Auto-peer* off keeps
+  messages here, and with static peers only. The *Peered with* line in
+  Status (and the web UI's) says how many nodes it peers with and how many
+  messages it has passed on.
+
+Tested against Python LXMF 1.2: its clients send through and collect from
+rettui's node, and its propagation nodes peer with it.
 
 ## RRC hub
 

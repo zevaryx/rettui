@@ -400,3 +400,92 @@ fn the_terminal_ui_starts_and_quits() {
     assert!(status.success(), "{status:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A POST of `body` (JSON, with the token), its status line and body.
+fn post_json(port: u16, path: &str, token: &str, body: &serde_json::Value) -> (String, String) {
+    let body = body.to_string();
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).unwrap();
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
+    (head.lines().next().unwrap_or_default().to_string(), body.to_string())
+}
+
+/// What `get` finds at `path`, as JSON, once `ready` says it's there.
+fn wait_json(port: u16, path: &str, token: &str, what: &str, ready: impl Fn(&serde_json::Value) -> bool) -> serde_json::Value {
+    let started = Instant::now();
+    loop {
+        let (_, body) = get(port, path, token);
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body)
+            && ready(&value)
+        {
+            return value;
+        }
+        assert!(started.elapsed() < Duration::from_secs(150), "{what}: {body}");
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
+/// Two propagation nodes that peer: a message for one rettui, kept by the
+/// other's node, reaches it by the nodes syncing (it never asks that node
+/// for its messages).
+#[cfg(unix)]
+#[test]
+fn propagation_nodes_pass_messages_on_to_their_peers() {
+    let rns_port = free_port();
+    let server = format!("  [[Here]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {rns_port}\n");
+    let client = format!("  [[There]]\n    type = TCPClientInterface\n    target_host = 127.0.0.1\n    target_port = {rns_port}\n");
+    let (a, b) = (folder("peer-a", &server), folder("peer-b", &client));
+    for (dir, name) in [(&a, "Alice"), (&b, "Bob")] {
+        let settings = serde_json::json!({ "update_check": false, "welcomed": true, "display_name": name, "pn_enabled": true });
+        std::fs::write(dir.join("data/settings.json"), settings.to_string()).unwrap();
+    }
+    let address = |dir: &Path| String::from_utf8_lossy(&run(dir, &["address"]).stdout).trim().to_string();
+    let (alice, bob) = (address(&a), address(&b));
+    let start = |dir: &Path| {
+        let port = free_port();
+        let web = Web::start(dir, &["--web", &format!("127.0.0.1:{port}")]);
+        let token = std::fs::read_to_string(dir.join("data/web_token")).unwrap().trim().to_string();
+        (web, port, token)
+    };
+    let running = |state: &serde_json::Value| state["hosting"]["state"] == "running" && state["net"]["state"] == "online";
+    let (_alice_web, a_port, a_token) = start(&a);
+    let state = wait_json(a_port, "/api/state", &a_token, "Alice's node didn't start", running);
+    let alice_node = state["hosting"]["hash"].as_str().unwrap().to_string();
+    // Bob starts once Alice is listening, so Alice hears his announces.
+    let (_bob_web, b_port, b_token) = start(&b);
+    wait_json(b_port, "/api/state", &b_token, "Bob's node didn't start", running);
+    // Alice peers with Bob's node, heard nearby.
+    wait_json(a_port, "/api/state", &a_token, "Alice didn't peer with Bob's node", |s| s["hosting"]["stats"]["peered"] == 1);
+
+    // Alice sends Bob a message through her own node, which keeps it...
+    let (status, body) = post_json(a_port, "/api/settings", &a_token, &serde_json::json!({ "values": { "propagation_node": alice_node } }));
+    assert!(status.contains("200"), "{status} {body}");
+    let send = serde_json::json!({ "content": "passed on by peers", "mode": "propagated" });
+    let started = Instant::now();
+    loop {
+        // Until she has heard Bob's address announced.
+        let (status, body) = post_json(a_port, &format!("/api/conversations/{bob}/send"), &a_token, &send);
+        if status.contains("200") {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(60), "Alice couldn't send: {status} {body}");
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    wait_json(a_port, "/api/state", &a_token, "Alice's node didn't keep it", |s| s["hosting"]["stats"]["received"] == 1);
+    // ...and passes it on to Bob's, which delivers it to Bob.
+    wait_json(b_port, &format!("/api/conversations/{alice}"), &b_token, "Bob didn't get it", |c| {
+        c.to_string().contains("passed on by peers")
+    });
+    let state = wait_json(a_port, "/api/state", &a_token, "Alice's node didn't count it", |s| s["hosting"]["stats"]["sent_to_peers"] == 1);
+    assert_eq!(state["hosting"]["stats"]["peered"], 1);
+    let _ = std::fs::remove_dir_all(&a);
+    let _ = std::fs::remove_dir_all(&b);
+}

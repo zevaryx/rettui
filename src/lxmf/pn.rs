@@ -12,9 +12,8 @@
 //! - **Giving them out:** `/get` lists, sends and deletes the messages for
 //!   the client that identified on the Link.
 //! - **Peers:** nodes that peer with this one (`/offer`, with a peering key
-//!   proving their work) send it the messages it doesn't have. It doesn't
-//!   peer with other nodes itself, as Python's `lxmd` with `autopeer` off:
-//!   what's sent through it waits here until its recipient collects it.
+//!   proving their work) send it the messages it doesn't have, and it sends
+//!   them its own (see [`super::peering`]), as Python's `lxmd` does.
 //! - It announces itself (`lxmf.propagation`) with its name, stamp cost and
 //!   limits, and culls old messages (after LXMF's 30 days) to stay within its
 //!   storage limit.
@@ -35,6 +34,7 @@ use rns_runtime::prelude::*;
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
+use super::peering::{HeardNode, PeeringConfig, PeeringStats, Peers};
 use super::{LXMF_ASPECT, PROPAGATION_ASPECT, encode};
 use crate::config::{Paths, Settings};
 use crate::net::Hash;
@@ -54,6 +54,8 @@ pub struct PnConfig {
     pub dir: PathBuf,
     /// Time between announces (`None`: only when it starts).
     pub announce_interval: Option<Duration>,
+    /// Which other nodes it sends messages on to.
+    pub peering: PeeringConfig,
 }
 
 impl PnConfig {
@@ -66,6 +68,12 @@ impl PnConfig {
             transfer_kb: settings.pn_transfer_kb.clamp(1, SYNC_LIMIT as u64),
             dir: paths.propagation.clone(),
             announce_interval: (settings.announce_interval_mins > 0).then(|| Duration::from_secs(settings.announce_interval_mins * 60)),
+            peering: PeeringConfig {
+                autopeer: settings.pn_autopeer,
+                max_depth: settings.pn_autopeer_depth.min(u64::from(u8::MAX)) as u8,
+                max_peers: usize::try_from(settings.pn_max_peers).unwrap_or(usize::MAX),
+                static_peers: settings.static_peers(),
+            },
         })
     }
 }
@@ -85,6 +93,9 @@ pub struct PnStats {
     pub rejected: u64,
     /// Peers connected now (that proved their peering key).
     pub peers: usize,
+    /// Nodes it sends messages on to, and how many it has sent them.
+    pub peered: usize,
+    pub sent_to_peers: u64,
 }
 
 #[derive(Default)]
@@ -184,6 +195,8 @@ impl Ingest {
 pub struct LocalNode {
     pub hash: Hash,
     ingest: Arc<Ingest>,
+    /// Propagation nodes' announces, for peering.
+    heard: mpsc::UnboundedSender<HeardNode>,
 }
 
 impl std::fmt::Debug for LocalNode {
@@ -205,6 +218,11 @@ impl LocalNode {
     pub fn stamp_cost(&self) -> u8 {
         self.ingest.min_stamp + PROPAGATION_COST_FLEX
     }
+
+    /// A propagation node announced: perhaps one to peer with.
+    pub fn heard(&self, node: HeardNode) {
+        let _ = self.heard.send(node);
+    }
 }
 
 /// A running node: dropping it stops it, [`HostedPn::stop`] waits until
@@ -214,6 +232,9 @@ pub struct HostedPn {
     pub hash: Hash,
     ingest: Arc<Ingest>,
     peers: Arc<Mutex<HashSet<[u8; 16]>>>,
+    heard: mpsc::UnboundedSender<HeardNode>,
+    peering: Arc<Mutex<PeeringStats>>,
+    peering_task: tokio::task::JoinHandle<()>,
     /// Dropped to stop the event task, which then closes the destination.
     stop: Option<oneshot::Sender<()>>,
     events: Option<tokio::task::JoinHandle<()>>,
@@ -223,8 +244,14 @@ pub struct HostedPn {
 impl Drop for HostedPn {
     fn drop(&mut self) {
         self.announcer.abort();
+        self.peering_task.abort();
     }
 }
+
+/// What the implementation is called, in its announce (as `lxmd` names
+/// itself), beside the LXMF version it follows.
+const PN_META_IMPL_NAME: u8 = 0xFE;
+const LXMF_VERSION: &str = "1.2.0";
 
 /// Its announce data: name, stamp cost and limits.
 fn announce_data(config: &PnConfig) -> Vec<u8> {
@@ -241,6 +268,8 @@ fn announce_data(config: &PnConfig) -> Vec<u8> {
     if let Some(name) = crate::names::clean(&config.name) {
         data.metadata.insert(lxmf_core::constants::PN_META_NAME, name.into_bytes());
     }
+    data.metadata.insert(PN_META_IMPL_NAME, b"rettui".to_vec());
+    data.metadata.insert(lxmf_core::constants::PN_META_VERSION, LXMF_VERSION.as_bytes().to_vec());
     get_propagation_node_app_data(&data)
 }
 
@@ -252,13 +281,15 @@ fn error_reply(error: PeerError) -> RequestOutcome {
 impl HostedPn {
     /// Start the node on the running Reticulum instance, with this client's
     /// identity (its LXMF address is `lxmf_hash`, its ratchets in `ring`).
-    /// Messages for this client go to `deliver`.
+    /// Messages for this client go to `deliver`; `known` has the keys heard
+    /// before (static peers' among them).
     pub async fn start(
         runtime: &ReticulumHandle,
         identity: &Identity,
         lxmf_hash: Hash,
         ring: &Path,
         config: &PnConfig,
+        known: &crate::net::Known,
         deliver: mpsc::UnboundedSender<Vec<u8>>,
     ) -> Result<Self, String> {
         let hash = Destination::hash_from_name_and_identity(PROPAGATION_ASPECT, Some(&identity.hash));
@@ -389,8 +420,9 @@ impl HostedPn {
         });
         // Announce (after interfaces have had a moment), then every so often;
         // cull old messages now and then.
-        let (handle, config, cull_node) = (announcer, config.clone(), node.clone());
+        let (handle, announcing, cull_node) = (announcer, config.clone(), node.clone());
         let announcer = tokio::spawn(async move {
+            let config = announcing;
             let announce = async || {
                 let options =
                     DestinationAnnounceOptions { app_data: Some(announce_data(&config)), ..DestinationAnnounceOptions::default() };
@@ -414,12 +446,41 @@ impl HostedPn {
                 }
             }
         });
-        Ok(Self { hash, ingest, peers, stop: Some(stop), events: Some(events), announcer })
+        // Peering out, with the peers saved last time.
+        let saved = {
+            let node = node.clone();
+            tokio::task::spawn_blocking(move || node.lock().unwrap().load_peers()).await.unwrap_or_default()
+        };
+        let mut peering_peers = Peers::new(config.peering.clone(), hash, saved);
+        for peer in &config.peering.static_peers {
+            let key = known.lock().unwrap().public_key_of(*peer);
+            if let Some(identity) = key.and_then(|key| Identity::from_public_key(&key).ok()) {
+                peering_peers.know(*peer, identity.hash);
+            }
+        }
+        let static_heard: Vec<HeardNode> = config
+            .peering
+            .static_peers
+            .iter()
+            .filter_map(|peer| {
+                let app_data = known.lock().unwrap().app_data_of(*peer)?;
+                Some(HeardNode { hash: *peer, identity: None, hops: 0, path_response: true, app_data })
+            })
+            .collect();
+        for heard in &static_heard {
+            peering_peers.heard(heard);
+        }
+        let (heard, heard_rx) = mpsc::unbounded_channel();
+        let peering = Arc::new(Mutex::new(PeeringStats::default()));
+        let peering_task =
+            tokio::spawn(super::peering::run(runtime.clone(), identity.clone(), node.clone(), peering_peers, heard_rx, peering.clone()));
+        Ok(Self { hash, ingest, peers, heard, peering, peering_task, stop: Some(stop), events: Some(events), announcer })
     }
 
     /// Stop the node, and wait (a little) until its destination is gone.
     pub async fn stop(mut self) {
         self.announcer.abort();
+        self.peering_task.abort();
         drop(self.stop.take());
         if let Some(events) = self.events.take() {
             let _ = tokio::time::timeout(Duration::from_secs(3), events).await;
@@ -432,6 +493,10 @@ impl HostedPn {
             let node = self.ingest.node.lock().unwrap();
             (node.message_count(), node.total_size())
         };
+        let (peered, sent_to_peers) = {
+            let peering = self.peering.lock().unwrap();
+            (peering.peered, peering.sent)
+        };
         let counters = &self.ingest.counters;
         PnStats {
             messages,
@@ -441,12 +506,14 @@ impl HostedPn {
             served: counters.served.load(Ordering::Relaxed),
             rejected: counters.rejected.load(Ordering::Relaxed),
             peers: self.peers.lock().unwrap().len(),
+            peered,
+            sent_to_peers,
         }
     }
 
     /// For this client's own sends to its node.
     pub fn local(&self) -> LocalNode {
-        LocalNode { hash: self.hash, ingest: self.ingest.clone() }
+        LocalNode { hash: self.hash, ingest: self.ingest.clone(), heard: self.heard.clone() }
     }
 }
 
@@ -465,6 +532,7 @@ mod tests {
             transfer_kb: 256,
             dir: PathBuf::new(),
             announce_interval: None,
+            peering: PeeringConfig::default(),
         };
         let name_of = |name: &str| {
             let data = lxmf_core::handlers::parse_pn_announce_data(&announce_data(&config(name))).unwrap();
@@ -521,7 +589,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rettui-pn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (ingest, mut delivered, ours) = ingest(&dir, 13);
-        let local = LocalNode { hash: [9; 16], ingest: Arc::new(ingest) };
+        let local = LocalNode { hash: [9; 16], ingest: Arc::new(ingest), heard: mpsc::unbounded_channel().0 };
         assert_eq!(local.stamp_cost(), 13);
         // For someone else: kept (once, however often it's sent), and listed
         // for them.

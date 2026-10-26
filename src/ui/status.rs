@@ -193,6 +193,14 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     if let Some(spans) = hosting_hub(app) {
         lines.insert(7, Line::from([vec![label("Hosting a hub")], spans].concat()));
     }
+    // Other nodes it passes messages on to, under the node.
+    if let (NodeStatus::Running, Some(s)) = (&app.pn.status, &app.pn.stats) {
+        let mut text = format!("{} node{}", s.peered, if s.peered == 1 { "" } else { "s" });
+        if s.sent_to_peers > 0 {
+            text.push_str(&format!(" · {} passed on", s.sent_to_peers));
+        }
+        lines.insert(7, Line::from(vec![label("Peered with"), Span::raw(text)]));
+    }
     // A newer release: under the version.
     if let Some(release) = app.update_available() {
         let mut spans = vec![label("Update")];

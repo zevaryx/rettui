@@ -650,8 +650,16 @@ async fn run(
     let mut pn_local: Option<LocalNode> = None;
     let launch_pn = |config: Option<PnConfig>| {
         let generation = pn_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let (runtime, identity, ring, slot, current, tx, deliver) =
-            (runtime.clone(), identity.clone(), ring.clone(), pn_slot.clone(), pn_generation.clone(), pn_tx.clone(), pn_deliver_tx.clone());
+        let (runtime, identity, ring, slot, current, tx, deliver, known) = (
+            runtime.clone(),
+            identity.clone(),
+            ring.clone(),
+            pn_slot.clone(),
+            pn_generation.clone(),
+            pn_tx.clone(),
+            pn_deliver_tx.clone(),
+            known.clone(),
+        );
         tokio::spawn(async move {
             let mut slot = slot.lock().await;
             if let Some(old) = slot.take() {
@@ -663,7 +671,7 @@ async fn run(
             }
             let result = match config {
                 None => Ok(None),
-                Some(config) => HostedPn::start(&runtime, &identity, lxmf_hash, &ring, &config, deliver).await.map(|node| {
+                Some(config) => HostedPn::start(&runtime, &identity, lxmf_hash, &ring, &config, &known, deliver).await.map(|node| {
                     let local = node.local();
                     *slot = Some(node);
                     Some(local)
@@ -1130,6 +1138,16 @@ async fn run(
                 });
             }
             Some(announce) = pn_announces.recv() => {
+                // The node hosted here may peer with it (or stop).
+                if let (Some(local), Some(app_data)) = (&pn_local, &announce.app_data) {
+                    local.heard(lxmf::peering::HeardNode {
+                        hash: announce.destination_hash,
+                        identity: announce.identity_hash,
+                        hops: announce.hops,
+                        path_response: announce.is_path_response,
+                        app_data: app_data.clone(),
+                    });
+                }
                 // Only list nodes that are actually serving.
                 let Some(data) = announce.app_data.as_deref().and_then(parse_pn_announce_data) else {
                     continue;

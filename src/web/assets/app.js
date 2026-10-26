@@ -7153,6 +7153,7 @@ app.views.status = {
           `${h.stats.messages} kept (${humanBytes(h.stats.bytes)})`, `${h.stats.received} in`, `${h.stats.served} collected`,
           h.stats.delivered_here ? `${h.stats.delivered_here} for you` : null, h.stats.rejected ? `${h.stats.rejected} refused` : null,
           `${h.stats.peers} peer${h.stats.peers === 1 ? '' : 's'}`,
+          `peered with ${h.stats.peered} node${h.stats.peered === 1 ? '' : 's'}`, h.stats.sent_to_peers ? `${h.stats.sent_to_peers} passed on` : null,
         ].filter(Boolean).join(' · ') }) : null)
       : el('span', { class: h.state === 'off' ? 'dim' : '', text: {
         off: 'no (Host a propagation node, in Settings › Hosting)', starting: 'starting', failed: `failed: ${h.error}`,

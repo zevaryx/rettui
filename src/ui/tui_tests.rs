@@ -1727,7 +1727,17 @@ fn the_status_tab_in_every_state() {
     tui.app.updates.checked.latest = Some(crate::update::Release { version: "99.0.0".into(), url: "https://example.org/r".into() });
     tui.app.identity_pending = Some([7; 16]);
     tui.app.settings.propagation_node = Some("ab".repeat(16));
-    let stats = crate::lxmf::pn::PnStats { messages: 3, bytes: 2048, received: 4, delivered_here: 1, served: 2, rejected: 1, peers: 1 };
+    let stats = crate::lxmf::pn::PnStats {
+        messages: 3,
+        bytes: 2048,
+        received: 4,
+        delivered_here: 1,
+        served: 2,
+        rejected: 1,
+        peers: 1,
+        peered: 3,
+        sent_to_peers: 5,
+    };
     let states = [
         (NetState::Starting, SyncState::Idle, NodeStatus::Starting),
         (NetState::Failed("no config".into()), SyncState::Running(std::time::Instant::now()), NodeStatus::Failed("full".into())),
@@ -1743,6 +1753,9 @@ fn the_status_tab_in_every_state() {
         tui.app.hub.address = Some(([9; 16], [1; 64]));
         tui.draw();
     }
+    tui.app.pn.status = NodeStatus::Running;
+    let drawn = tui.draw();
+    assert!(drawn.contains("Peered with") && drawn.contains("3 nodes · 5 passed on"), "{drawn}");
     tui.app.updates.installed = Some("99.0.0".into());
     assert!(tui.draw().contains("99.0.0"));
 }

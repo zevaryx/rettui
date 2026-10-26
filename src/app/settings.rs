@@ -419,6 +419,7 @@ mod tests {
                     "icon" => "account".into(),
                     "propagation_node" => address.clone(),
                     "telemetry_collector" => address.clone(),
+                    "pn_static_peers" => address.clone(),
                     "location" => "1.5, 2.5".into(),
                     "map_tiles" => String::new(),
                     "map_tiles_file" => offline_map.clone(),

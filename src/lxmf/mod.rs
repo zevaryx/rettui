@@ -16,6 +16,7 @@
 pub mod fields;
 mod inbound;
 pub mod paper;
+pub mod peering;
 pub mod pn;
 pub mod policy;
 pub mod ratchets;

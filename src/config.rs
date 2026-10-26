@@ -182,6 +182,15 @@ pub struct Settings {
     pub pn_storage_mb: u64,
     /// Largest message a client may send it, in kilobytes.
     pub pn_transfer_kb: u64,
+    /// Send messages on to propagation nodes heard announcing within
+    /// `pn_autopeer_depth` hops, as `lxmd` does.
+    pub pn_autopeer: bool,
+    pub pn_autopeer_depth: u64,
+    /// Most propagation nodes peered with.
+    pub pn_max_peers: u64,
+    /// Propagation nodes always peered with: addresses, separated by
+    /// commas or spaces.
+    pub pn_static_peers: Option<String>,
     /// Host an RRC hub (rsRRCD's, in `rrc-hub/`).
     pub hub_enabled: bool,
     /// Name the hub announces and welcomes people with; the display name
@@ -267,6 +276,10 @@ impl Default for Settings {
             pn_stamp_cost: u64::from(lxmf_core::constants::PROPAGATION_COST),
             pn_storage_mb: 500,
             pn_transfer_kb: lxmf_core::constants::PROPAGATION_LIMIT as u64,
+            pn_autopeer: lxmf_core::constants::AUTOPEER,
+            pn_autopeer_depth: lxmf_core::constants::AUTOPEER_MAXDEPTH as u64,
+            pn_max_peers: lxmf_core::constants::MAX_PEERS as u64,
+            pn_static_peers: None,
             hub_enabled: false,
             hub_name: None,
             hub_greeting: None,
@@ -369,6 +382,12 @@ impl Paths {
 }
 
 impl Settings {
+    /// The propagation nodes always peered with ([`Settings::pn_static_peers`]).
+    pub fn static_peers(&self) -> Vec<crate::net::Hash> {
+        let text = self.pn_static_peers.as_deref().unwrap_or_default();
+        text.split(|c: char| c == ',' || c.is_whitespace()).filter_map(crate::net::parse_hash).collect()
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
             // A new install: the getting-started guide is shown, and the
@@ -634,6 +653,10 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "pn_stamp_cost",
             "pn_storage_mb",
             "pn_transfer_kb",
+            "pn_autopeer",
+            "pn_autopeer_depth",
+            "pn_max_peers",
+            "pn_static_peers",
             "hub_enabled",
             "hub_name",
             "hub_greeting",
@@ -948,7 +971,7 @@ pub const FIELDS: &[Field] = &[
     Field {
         key: "pn_enabled",
         label: "Host a propagation node",
-        help: "Keep messages for people who are offline until they collect them, as lxmd does (it takes messages from peers, but doesn't sync to other nodes itself)",
+        help: "Keep messages for people who are offline until they collect them, and pass them on to other propagation nodes (Auto-peer, Static peers), as lxmd does",
         kind: FieldKind::Toggle,
         effect: Effect::Now,
     },
@@ -978,6 +1001,34 @@ pub const FIELDS: &[Field] = &[
         label: "Propagation message (KB)",
         help: "Largest message a client may send through your propagation node (256 is usual)",
         kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "pn_autopeer",
+        label: "Auto-peer",
+        help: "Pass the messages your propagation node keeps on to other propagation nodes heard announcing nearby (within Auto-peer depth), as lxmd does, so they reach their recipient through whichever node they collect from. Off keeps them here, and with Static peers only",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "pn_autopeer_depth",
+        label: "Auto-peer depth",
+        help: "How many hops away a propagation node may be to auto-peer with (4, as lxmd, to start with). One that moves further away is no longer peered with",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "pn_max_peers",
+        label: "Most peers",
+        help: "Most propagation nodes yours passes messages on to (20, as lxmd, to start with), static peers among them",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "pn_static_peers",
+        label: "Static peers",
+        help: "Propagation nodes always peered with, however far: their addresses (32 hex characters), separated by commas or spaces. They're synced once their announce has been heard. Empty for none",
+        kind: FieldKind::Optional,
         effect: Effect::Now,
     },
     Field {
@@ -1272,6 +1323,10 @@ impl Settings {
             "pn_stamp_cost" => self.pn_stamp_cost.to_string(),
             "pn_storage_mb" => self.pn_storage_mb.to_string(),
             "pn_transfer_kb" => self.pn_transfer_kb.to_string(),
+            "pn_autopeer" => self.pn_autopeer.to_string(),
+            "pn_autopeer_depth" => self.pn_autopeer_depth.to_string(),
+            "pn_max_peers" => self.pn_max_peers.to_string(),
+            "pn_static_peers" => self.pn_static_peers.clone().unwrap_or_default(),
             "hub_enabled" => self.hub_enabled.to_string(),
             "hub_name" => self.hub_name.clone().unwrap_or_default(),
             "hub_greeting" => self.hub_greeting.clone().unwrap_or_default(),
@@ -1429,6 +1484,23 @@ impl Settings {
                     return Err(fail("at least 1".into()));
                 }
                 self.pn_storage_mb = mb;
+            }
+            "pn_autopeer" => self.pn_autopeer = toggle(value).map_err(fail)?,
+            "pn_autopeer_depth" => self.pn_autopeer_depth = number(value, 128).map_err(fail)?,
+            "pn_max_peers" => self.pn_max_peers = number(value, 1000).map_err(fail)?,
+            "pn_static_peers" => {
+                self.pn_static_peers = match optional(value) {
+                    None => None,
+                    Some(text) => {
+                        let mut peers = Vec::new();
+                        for address in text.split(|c: char| c == ',' || c.is_whitespace()).filter(|a| !a.is_empty()) {
+                            let hash = crate::net::parse_hash(address)
+                                .ok_or_else(|| fail(format!("{address} isn't an address (32 hex characters)")))?;
+                            peers.push(hex::encode(hash));
+                        }
+                        (!peers.is_empty()).then(|| peers.join(", "))
+                    }
+                };
             }
             "pn_transfer_kb" => {
                 // Peers send at most a sync's worth at once.
