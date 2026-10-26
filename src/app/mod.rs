@@ -95,6 +95,9 @@ pub(crate) fn test_app_with_net(
 pub use network::{NetFilter, NetSearch, match_mask};
 
 const LOG_LINES: usize = 500;
+
+/// What a message being cancelled says, until its send ends.
+pub(crate) const CANCELLING: &str = "cancelling";
 /// How often peers are saved when all that changed is when they were heard.
 const PEERS_SEEN_EVERY: Duration = Duration::from_secs(5 * 60);
 /// How often peers not heard from in a while are forgotten.
@@ -214,6 +217,8 @@ pub enum PromptKind {
     ShareLocation(String),
     /// A Sideband command to send someone (by address).
     Command(String),
+    /// How many minutes between asking someone (by address) where they are.
+    Track(String),
     /// Install the newer release found, in this one's place.
     ConfirmInstallUpdate,
     /// Stop sharing a location live with someone (by address).
@@ -412,6 +417,8 @@ pub enum MessageAction {
     Forward,
     /// Send a message that failed again.
     Retry,
+    /// Stop sending it.
+    Cancel,
     Delete,
 }
 
@@ -424,6 +431,7 @@ impl MessageAction {
             MessageAction::Copy => ("⧉ Copy", 'y'),
             MessageAction::Forward => ("➦ Forward", 'f'),
             MessageAction::Retry => ("↻ Retry", 't'),
+            MessageAction::Cancel => ("■ Cancel", 'c'),
             MessageAction::Delete => ("✕ Delete", 'x'),
         }
     }
@@ -501,6 +509,8 @@ pub struct App {
     /// What the screen was showing at the last draw (see [`App::view_key`]).
     shown_view: u64,
     pub sync: SyncState,
+    /// How the sync running is going ("3 of 10 downloaded").
+    pub sync_progress: Option<String>,
 
     pub conversations: ListState,
     pub active_conversation: Option<String>,
@@ -540,6 +550,9 @@ pub struct App {
     /// When commands from each sender were last answered (see
     /// `answer_commands`), to answer at most one a minute.
     pub(crate) answered: HashMap<String, Instant>,
+    /// How sending each message (by local id number) is going, while it
+    /// goes: "finding a path", "42%", "cancelling".
+    pub(crate) send_progress: HashMap<u64, String>,
     /// A conversation's archived messages, open to read (`H`).
     pub archive_reader: Option<archive::ArchiveReader>,
     /// Where to forward a picked message to (`f`).
@@ -719,6 +732,7 @@ impl App {
             keys_help: false,
             shown_view: 0,
             sync: SyncState::Idle,
+            sync_progress: None,
             conversations: ListState::default(),
             active_conversation: None,
             compose: TextInput::default(),
@@ -739,6 +753,7 @@ impl App {
             channel_search: None,
             archive_reader: None,
             answered: HashMap::new(),
+            send_progress: HashMap::new(),
             forward: None,
             map: None,
             emoji: None,
@@ -1095,7 +1110,14 @@ impl App {
                 self.log("Announced LXMF destination");
             }
             NetEvent::Message(message) => self.on_message(*message),
+            NetEvent::SendProgress { id, text } => {
+                // A cancel asked for says so until the send ends.
+                if self.send_progress.get(&id).is_none_or(|said| said != CANCELLING) {
+                    self.send_progress.insert(id, text);
+                }
+            }
             NetEvent::Delivery { id, result } => {
+                self.send_progress.remove(&id);
                 // Handing a message to a node picked automatically failed:
                 // it may have gone.
                 if self.settings.auto_propagation_node && result.as_ref().is_err_and(|e| e.contains("propagation")) {
@@ -1112,8 +1134,13 @@ impl App {
             NetEvent::Fetched { id, result } => self.on_fetched(id, result),
             NetEvent::FetchProgress { id, text } => self.on_fetch_progress(id, text),
             NetEvent::Paper { id, result } => self.on_paper(id, result),
-            NetEvent::SyncStarted => self.sync = SyncState::Running(Instant::now()),
+            NetEvent::SyncStarted => {
+                self.sync = SyncState::Running(Instant::now());
+                self.sync_progress = None;
+            }
+            NetEvent::SyncProgress(text) => self.sync_progress = Some(text),
             NetEvent::Synced(result) => {
+                self.sync_progress = None;
                 match &result {
                     Ok(0) => {}
                     Ok(n) => self.log(format!("Downloaded {n} message(s) from propagation node")),
@@ -1144,6 +1171,9 @@ impl App {
 
     /// A message (or a reaction) sent, or not.
     fn on_delivery(&mut self, id: u64, result: Result<crate::lxmf::Sent, String>) {
+        if self.on_track_delivery(id, &result) {
+            return;
+        }
         let local = format!("local-{id}");
         let state = match &result {
             Ok(sent) if sent.delivered == Delivered::Direct => MessageState::Delivered,
@@ -1174,6 +1204,7 @@ impl App {
         match result {
             Ok(sent) if sent.delivered == Delivered::Propagated => self.log("Message handed to propagation node"),
             Ok(_) => {}
+            Err(e) if e == crate::lxmf::CANCELLED => self.log("Stopped sending a message"),
             Err(e) => self.log(format!("Delivery failed: {e}")),
         }
     }
@@ -1284,6 +1315,12 @@ impl App {
             }
             PromptKind::ShareLocation(key) => self.submit_share_location(key, &text),
             PromptKind::Command(key) => self.submit_command(key, &text),
+            PromptKind::Track(key) => {
+                match text.parse().map_err(|_| "Give a number of minutes".to_string()).and_then(|m| self.start_track(&key, m)) {
+                    Ok(doing) => self.confirm(doing),
+                    Err(e) => self.warn(e),
+                }
+            }
             PromptKind::Game(prompt) => self.submit_game_prompt(prompt, &text),
             PromptKind::ConfirmStopLive(key) => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
@@ -1408,6 +1445,7 @@ impl App {
         self.hub.restarting(crate::rrc::host::HubHostConfig::from_settings(&self.settings, &self.paths, self.identity_hash));
         self.browser.restarted();
         // Deliveries in progress belong to the old stack.
+        self.tracks_restarting();
         for conversation in self.store.conversations.values_mut() {
             for message in &mut conversation.messages {
                 if message.state == MessageState::Sending {

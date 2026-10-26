@@ -3809,6 +3809,11 @@ app.views.messages = {
         el('button', { class: 'inline', text: 'Stop', onclick: async () => {
           if (await attempt(() => api.post(`/conversations/${key}/live/stop`), 'Stopped sharing your location live')) loadNow();
         } })) : null,
+      conversation.track ? el('span', { class: 'live-chip', title: 'Asking where they are every few minutes, while rettui runs' },
+        `📡 every ${conversation.track.every} min`,
+        el('button', { class: 'inline', text: 'Stop', onclick: async () => {
+          if (await attempt(() => api.post(`/conversations/${key}/track/stop`), 'Stopped tracking them')) loadNow();
+        } })) : null,
       ((bell) => {
         bell.classList.add('more');
         bell.dataset.label = conversation.muted ? '🔕 Notifications: off (turn on)' : '🔔 Notifications: on (turn off)';
@@ -4065,13 +4070,14 @@ app.views.messages = {
   message(m, conversation, archived = false) {
     const state = {
       received: m.state.verified ? null : el('span', { class: 'state-warn', text: ' unverified' }),
-      sending: el('span', { class: 'dim', text: this.paperWaiting?.id === m.id ? ' writing the paper message…' : ' sending…' }),
+      sending: el('span', { class: 'dim', text: this.paperWaiting?.id === m.id ? ' writing the paper message…' : ` sending…${m.state.progress ? ' ' + m.state.progress : ''}` }),
       delivered: m.paper
         ? el('span', { class: 'state-ok' }, ' ✓ paper message ',
           el('button', { class: 'inline', text: 'QR code', onclick: () => showPaper(m.paper) }))
         : el('span', { class: 'state-ok', text: ' ✓' }),
       propagated: el('span', { class: 'state-ok', text: ' ✓ via propagation node' }),
       failed: el('span', { class: 'state-bad', text: ` failed: ${m.state.error}` }),
+      cancelled: el('span', { class: 'state-warn', text: ' cancelled' }),
     }[m.state.kind];
     const base = `api/conversations/${conversation.key}/attachments/${encodeURIComponent(m.id)}/`;
     const author = m.incoming ? conversation.name : 'You';
@@ -4087,8 +4093,11 @@ app.views.messages = {
         actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
           onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null,
         reactButton,
-        actions && m.state.kind === 'failed' ? el('button', { class: 'inline', text: '↻ Retry', title: 'Send it again',
+        actions && ['failed', 'cancelled'].includes(m.state.kind) ? el('button', { class: 'inline', text: '↻ Retry', title: 'Send it again',
           onclick: () => this.retry(conversation.key, m.id) }) : null,
+        actions && !m.incoming && m.state.kind === 'sending' && this.paperWaiting?.id !== m.id
+          ? el('button', { class: 'inline', text: '■ Cancel', title: 'Stop sending it (one already on its way in a single packet can\'t be called back)',
+            onclick: () => this.cancelSend(conversation.key, m.id) }) : null,
         actions ? el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) }) : null),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.title ? el('div', { class: 'title', text: m.title }) : null,
@@ -4158,6 +4167,10 @@ app.views.messages = {
     return true;
   },
 
+  async cancelSend(key, id) {
+    if (await attempt(() => api.post(`/conversations/${key}/cancel`, { id }), 'Cancelling it')) this.update();
+  },
+
   async retry(key, id) {
     if (await attempt(() => api.post(`/conversations/${key}/retry`, { id, mode: this.mode }), 'Sending it again')) this.update();
   },
@@ -4166,7 +4179,7 @@ app.views.messages = {
   messageMenu(m, conversation, anchor) {
     const items = [{ text: 'Copy text', action: () => copy(m.content || this.opening(m), 'the message') }];
     if (m.content?.trim() || m.attachments.length) items.push({ text: 'Forward…', action: () => this.forwardDialog(conversation.key, m) });
-    if (m.state.kind === 'failed') items.push({ text: 'Send again', action: () => this.retry(conversation.key, m.id) });
+    if (['failed', 'cancelled'].includes(m.state.kind)) items.push({ text: 'Send again', action: () => this.retry(conversation.key, m.id) });
     items.push({ text: m.attachments.length ? 'Delete (and its files)' : 'Delete', danger: true, action: async () => {
       if (!await ask(m.attachments.length ? 'Delete this message and the files it brought?' : 'Delete this message?', { title: 'Delete the message', yes: 'Delete', danger: true })) return;
       if (await attempt(() => api.post(`/conversations/${conversation.key}/messages/delete`, { id: m.id }), 'Deleted the message')) this.update();
@@ -4215,6 +4228,17 @@ app.views.messages = {
     if (sent) loadNow();
   },
 
+  // Ask where they are every few minutes.
+  async track(key, closeContact) {
+    const started = await askText('Track where they are', { label: 'Ask every how many minutes (1 to 1440)?', value: '5', ok: 'Track',
+      act: (minutes) => api.post(`/conversations/${key}/track`, { minutes: Number(minutes) }) });
+    if (started) {
+      toast(started.doing);
+      closeContact();
+      loadNow();
+    }
+  },
+
   // Your name for them, notes about them, and deleting the conversation.
   contactDialog(key, conversation) {
     const contact = conversation.contact || {};
@@ -4241,6 +4265,12 @@ app.views.messages = {
           onclick: async () => {
             if (await attempt(() => api.post(`/conversations/${key}/command`, { command: 'location' }), 'Asked where they are: their answer goes on the map')) loadNow();
           } }),
+        conversation.track
+          ? el('button', { text: '📡 Stop tracking', title: `Stop asking where they are every ${conversation.track.every} min`, onclick: async () => {
+            if (await attempt(() => api.post(`/conversations/${key}/track/stop`), 'Stopped tracking them')) { close(); loadNow(); }
+          } })
+          : el('button', { text: '📡 Track…', title: 'Ask where they are every few minutes, while rettui runs: each answer replaces the one before it, and goes on the map',
+            onclick: () => this.track(key, close) }),
         el('button', { text: 'Command…', title: 'Send a ping, an echo or a signal report request, as Sideband does: Sideband answers with a message ( K )',
           onclick: () => this.sendCommand(key) })),
       el('div', { class: 'row trust' },
@@ -7112,7 +7142,7 @@ app.views.status = {
     const net = { starting: 'starting', online: 'online', failed: `failed: ${s.net.error}` }[s.net.state];
     const sync = {
       idle: 'never',
-      running: `running (${s.sync.secs}s)`,
+      running: `running (${s.sync.secs}s)${s.sync.progress ? ': ' + s.sync.progress : ''}`,
       done: `${s.sync.at} · ${s.sync.count} new`,
       failed: `${s.sync.at} · failed: ${s.sync.error}`,
     }[s.sync.state];

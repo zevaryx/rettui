@@ -19,6 +19,9 @@ pub enum CardAction {
     AskLocation,
     /// Send a Sideband command.
     Command,
+    /// Ask where they are every few minutes, or stop.
+    Track,
+    StopTracking,
     Trust,
     Untrust,
     /// Leave an unknown sender as they are (no more asking).
@@ -39,6 +42,8 @@ impl CardAction {
             CardAction::Ping => ("Ping", "p"),
             CardAction::AskLocation => ("Ask where they are", "w"),
             CardAction::Command => ("Command", "k"),
+            CardAction::Track => ("Track", "f"),
+            CardAction::StopTracking => ("Stop tracking", "f"),
             CardAction::Trust => ("Trust", "t"),
             CardAction::Untrust => ("Stop trusting", "t"),
             CardAction::LeaveAsIs => ("Leave as is", "l"),
@@ -228,7 +233,8 @@ impl App {
         let trust = self.store.contact(key).trust;
         let mut actions = vec![CardAction::Rename, CardAction::Notes, CardAction::Copy, CardAction::Ping];
         if trust != Trust::Blocked {
-            actions.extend([CardAction::AskLocation, CardAction::Command]);
+            let track = if self.track(key).is_some() { CardAction::StopTracking } else { CardAction::Track };
+            actions.extend([CardAction::AskLocation, track, CardAction::Command]);
         }
         match trust {
             Trust::Blocked => actions.push(CardAction::Unblock),
@@ -349,6 +355,14 @@ impl App {
                 }
             }
             CardAction::Command => self.open_command_prompt(key),
+            CardAction::Track => {
+                let title = format!("Ask {} where they are every how many minutes?", self.store.display_name(&key));
+                self.open_prompt(PromptKind::Track(key), &title, "5");
+            }
+            CardAction::StopTracking => match self.stop_track(&key) {
+                Ok(()) => self.confirm(format!("Stopped tracking {}", self.store.display_name(&key))),
+                Err(e) => self.warn(e),
+            },
             CardAction::Trust | CardAction::Untrust | CardAction::LeaveAsIs => {
                 let trust = match action {
                     CardAction::Trust => Trust::Trusted,
@@ -537,7 +551,7 @@ mod tests {
         };
         app.on_message(from(0xab, 1));
         assert!(!app.is_known(&alice), "never written to");
-        assert_eq!(app.card_actions(&alice)[6..9], [CardAction::Trust, CardAction::LeaveAsIs, CardAction::Block]);
+        assert_eq!(app.card_actions(&alice)[7..10], [CardAction::Trust, CardAction::LeaveAsIs, CardAction::Block]);
         while net.try_recv().is_ok() {}
         app.block_contact(&alice).unwrap();
         assert!(!app.store.conversations.contains_key(&alice));

@@ -4,13 +4,20 @@
 //! terminal UI shares this station's Location. Each update replaces the
 //! one before it in the conversation, so a live share is one message there.
 //! Shares last only while rettui runs.
+//!
+//! Also here, as Sideband does them: this station's location sent to
+//! everyone trusted every few minutes (the `telemetry_every_mins` setting),
+//! and tracking someone, by asking where they are every few minutes. Their
+//! answers replace each other in the conversation, as location updates do.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use super::{App, now};
+use crate::lxmf::fields::Command;
 use crate::lxmf::{self, DeliveryMode, Location};
 use crate::net::{NetCommand, parse_hash};
+use crate::store::Trust;
 
 /// The least time between two updates of a moving device's position.
 const EVERY: Duration = Duration::from_secs(60);
@@ -20,6 +27,8 @@ const STALE: Duration = Duration::from_secs(300);
 const STATION_EVERY: Duration = Duration::from_secs(300);
 /// The longest share asked for, in minutes (a week); 0 is until stopped.
 const MAX_MINUTES: u64 = 7 * 24 * 60;
+/// The most minutes between a tracked contact's requests (a day).
+const MAX_TRACK_MINUTES: u64 = 24 * 60;
 
 /// Where a live share's location comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,11 +57,24 @@ pub struct Share {
     sent: Option<Instant>,
 }
 
-/// Live shares by conversation, and the newest device position posted.
+/// Someone tracked: asked where they are every `every` minutes, and the
+/// request still going, if one is (no more go until it has).
+#[derive(Debug, Clone)]
+pub struct Track {
+    pub every: u64,
+    asked: Option<Instant>,
+    pending: Option<u64>,
+}
+
+/// Live shares by conversation, the newest device position posted, when
+/// this station's location last went to everyone trusted, and who's
+/// tracked.
 #[derive(Debug, Default)]
 pub struct Live {
     pub shares: BTreeMap<String, Share>,
     position: Option<(Location, Instant)>,
+    sent_trusted: Option<Instant>,
+    pub tracks: BTreeMap<String, Track>,
 }
 
 impl App {
@@ -97,10 +119,60 @@ impl App {
         self.live.shares.get(key)
     }
 
+    /// Track `key`: ask where they are every `minutes`; what's happening,
+    /// to say.
+    pub fn start_track(&mut self, key: &str, minutes: u64) -> Result<String, String> {
+        let key = hex::encode(parse_hash(key).ok_or("An LXMF address is 32 hex characters")?);
+        if !(1..=MAX_TRACK_MINUTES).contains(&minutes) {
+            return Err(format!("Ask every 1 to {MAX_TRACK_MINUTES} minutes (a day)"));
+        }
+        if self.store.contact(&key).trust == Trust::Blocked {
+            return Err("They're blocked: unblock them to track them".into());
+        }
+        let track = self.live.tracks.entry(key.clone()).or_insert(Track { every: minutes, asked: None, pending: None });
+        track.every = minutes;
+        self.live_tick();
+        let name = self.store.display_name(&key);
+        Ok(format!("Asking {name} where they are every {minutes} min, while rettui runs: their answers go on the map"))
+    }
+
+    /// Stop tracking `key`.
+    pub fn stop_track(&mut self, key: &str) -> Result<(), String> {
+        let key = hex::encode(parse_hash(key).ok_or("An LXMF address is 32 hex characters")?);
+        self.live.tracks.remove(&key).map(|_| ()).ok_or_else(|| "You aren't tracking them".into())
+    }
+
+    /// Whether `key` is tracked, and how often.
+    pub fn track(&self, key: &str) -> Option<&Track> {
+        self.live.tracks.get(key)
+    }
+
+    /// A tracked contact's request sent, or not: true if `id` was one.
+    pub(super) fn on_track_delivery(&mut self, id: u64, result: &Result<lxmf::Sent, String>) -> bool {
+        let Some((key, track)) = self.live.tracks.iter_mut().find(|(_, t)| t.pending == Some(id)) else { return false };
+        track.pending = None;
+        let key = key.clone();
+        if let Err(e) = result {
+            let name = self.store.display_name(&key);
+            self.log(format!("Couldn't ask {name} where they are: {e}"));
+        }
+        true
+    }
+
+    /// Requests in progress belong to the old stack: the next goes when due.
+    pub(super) fn tracks_restarting(&mut self) {
+        for track in self.live.tracks.values_mut() {
+            track.pending = None;
+        }
+    }
+
     /// Send what's due: a share that's ended stops; a station's location
     /// goes every few minutes; a device's as it moves, at most once a
-    /// minute.
+    /// minute. Then this station's location to everyone trusted, and
+    /// tracked contacts' requests.
     pub(super) fn live_tick(&mut self) {
+        self.trusted_tick();
+        self.track_tick();
         if self.live.shares.is_empty() {
             return;
         }
@@ -137,6 +209,50 @@ impl App {
                 share.sent = Some(Instant::now());
             }
             self.send_live(&key, location);
+        }
+    }
+
+    /// This station's location to every contact trusted (but those it's
+    /// shared with live already), every `telemetry_every_mins`.
+    fn trusted_tick(&mut self) {
+        let minutes = self.settings.telemetry_every_mins;
+        if minutes == 0 || self.live.sent_trusted.is_some_and(|t| t.elapsed() < Duration::from_secs(minutes * 60)) {
+            return;
+        }
+        let Some(location) = self.settings.own_location() else { return };
+        self.live.sent_trusted = Some(Instant::now());
+        let trusted: Vec<String> = self
+            .store
+            .contacts
+            .iter()
+            .filter(|(key, contact)| contact.trust == Trust::Trusted && !self.live.shares.contains_key(*key))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in trusted {
+            self.send_live(&key, location);
+        }
+    }
+
+    /// Ask tracked contacts where they are, when it's time and the last
+    /// request has gone.
+    fn track_tick(&mut self) {
+        let due: Vec<String> = self
+            .live
+            .tracks
+            .iter()
+            .filter(|(_, t)| t.pending.is_none() && t.asked.is_none_or(|a| a.elapsed() >= Duration::from_secs(t.every * 60)))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in due {
+            let sent = self.send_command_shown(&key, Command::TelemetryRequest, false);
+            if let Err(e) = &sent {
+                let name = self.store.display_name(&key);
+                self.log(format!("Couldn't ask {name} where they are: {e}"));
+            }
+            if let Some(track) = self.live.tracks.get_mut(&key) {
+                track.asked = Some(Instant::now());
+                track.pending = sent.ok();
+            }
         }
     }
 
@@ -193,6 +309,11 @@ impl App {
 /// A share as the web UI shows it.
 pub fn describe(key: &str, share: &Share) -> serde_json::Value {
     serde_json::json!({ "key": key, "until": share.until, "source": share.source.key() })
+}
+
+/// What's said of tracking someone in a conversation's header.
+pub fn track_label(track: &Track) -> String {
+    format!("📡 asking every {} min", track.every)
 }
 
 /// What's said of a live share in a conversation's header.
@@ -273,6 +394,88 @@ mod tests {
         assert!(sent(&mut commands).iter().any(|m| m.cease));
         assert!(app.live_share(&key).is_none());
         assert_eq!(app.store.conversations[&key].messages[0].notes, ["Live sharing ended"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn location_sent_to_everyone_trusted_on_a_timer() {
+        use crate::store::Contact;
+        let dir = std::env::temp_dir().join(format!("rettui-live-trusted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (trusted, other, shared) = ("ab".repeat(16), "cd".repeat(16), "ef".repeat(16));
+        let mut store = crate::store::Store::default();
+        for (key, trust) in [(&trusted, Trust::Trusted), (&other, Trust::Untrusted), (&shared, Trust::Trusted)] {
+            store.contacts.insert(key.clone(), Contact { trust, ..Contact::default() });
+        }
+        let settings = crate::config::Settings { telemetry_every_mins: 10, ..crate::config::Settings::default() };
+        let (mut app, mut commands) = crate::app::test_app_with_net(&dir, settings, store);
+        // No Location: nothing to send.
+        app.live_tick();
+        assert!(sent(&mut commands).is_empty());
+        app.settings.location = Some("10, 20".into());
+        // Only to those trusted, and once to one it's shared with live.
+        app.start_live(&shared, 0, Source::Station).unwrap();
+        let first: Vec<(String, Option<Location>)> = sent(&mut commands).iter().map(|m| (hex::encode(m.to), m.location)).collect();
+        let at = Some(Location::at(10.0, 20.0));
+        assert_eq!(first, [(trusted.clone(), at), (shared.clone(), at)]);
+        app.live_tick();
+        assert!(sent(&mut commands).is_empty(), "not again for ten minutes");
+        // Ten minutes on: again, in place of the one before.
+        app.live.sent_trusted = Some(Instant::now() - Duration::from_secs(601));
+        app.live_tick();
+        assert_eq!(sent(&mut commands).len(), 1);
+        let messages = &app.store.conversations[&trusted].messages;
+        assert!(messages.len() == 1 && messages[0].live);
+        // Off: no more.
+        app.settings.telemetry_every_mins = 0;
+        app.live.sent_trusted = None;
+        app.live_tick();
+        assert!(sent(&mut commands).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tracking_someone_asks_where_they_are_every_few_minutes() {
+        use crate::lxmf::{Delivered, Sent};
+        use crate::net::NetEvent;
+        let dir = std::env::temp_dir().join(format!("rettui-live-track-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, mut commands) =
+            crate::app::test_app_with_net(&dir, crate::config::Settings::default(), crate::store::Store::default());
+        let key = "ab".repeat(16);
+        assert!(app.start_track(&key, 0).is_err());
+        assert!(app.start_track(&key, MAX_TRACK_MINUTES + 1).is_err());
+        assert!(app.start_track("nobody", 5).is_err());
+        assert!(app.start_track(&key, 5).unwrap().contains("every 5 min"));
+        let asked = sent(&mut commands);
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].commands, [Command::TelemetryRequest]);
+        // Requests aren't shown: only the answers are.
+        assert!(app.store.conversations.get(&key).is_none_or(|c| c.messages.is_empty()));
+        assert_eq!(track_label(app.track(&key).unwrap()), "📡 asking every 5 min");
+        // Not again while that one is going, even when it's time.
+        let id = app.live.tracks[&key].pending.unwrap();
+        app.live.tracks.get_mut(&key).unwrap().asked = Some(Instant::now() - Duration::from_secs(301));
+        app.live_tick();
+        assert!(sent(&mut commands).is_empty());
+        // It failed (said in the log); the next goes when it's time.
+        app.on_net(NetEvent::Delivery { id, result: Err("no path".into()) });
+        assert!(app.log.iter().any(|l| l.contains("Couldn't ask") && l.contains("no path")));
+        app.live_tick();
+        let again = sent(&mut commands);
+        assert_eq!(again.len(), 1);
+        let id = app.live.tracks[&key].pending.unwrap();
+        app.on_net(NetEvent::Delivery { id, result: Ok(Sent { delivered: Delivered::Direct, hash: [1; 32] }) });
+        assert!(app.live.tracks[&key].pending.is_none());
+        app.live_tick();
+        assert!(sent(&mut commands).is_empty(), "not for five minutes");
+        // A restart: what was going is forgotten, so tracking goes on.
+        app.live.tracks.get_mut(&key).unwrap().pending = Some(99);
+        app.tracks_restarting();
+        assert!(app.live.tracks[&key].pending.is_none());
+        app.stop_track(&key).unwrap();
+        assert!(app.stop_track(&key).is_err());
+        assert!(app.track(&key).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

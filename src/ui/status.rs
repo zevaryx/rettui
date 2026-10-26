@@ -162,7 +162,10 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let sync = match &app.sync {
         SyncState::Idle => "never".to_string(),
-        SyncState::Running(started) => format!("running ({}s)", started.elapsed().as_secs()),
+        SyncState::Running(started) => match &app.sync_progress {
+            Some(progress) => format!("running ({}s): {progress}", started.elapsed().as_secs()),
+            None => format!("running ({}s)", started.elapsed().as_secs()),
+        },
         SyncState::Done(at, Ok(n)) => format!("{} · {n} new", crate::clock::time(at, false)),
         SyncState::Done(at, Err(e)) => format!("{} · failed: {e}", crate::clock::time(at, false)),
     };

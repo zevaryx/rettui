@@ -149,6 +149,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(share) => format!("{name}  {key}  {}", crate::app::live::label(share)),
         None => format!("{name}  {key}"),
     };
+    if let Some(track) = app.track(&key) {
+        title.push_str(&format!("  {}", crate::app::live::track_label(track)));
+    }
     // Games of yours with them waiting on you: g opens them.
     match app.games.waiting(Some(&key)) {
         0 => {}
@@ -192,12 +195,16 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         let status = match &message.state {
             MessageState::Received { verified: true } => Span::raw(""),
             MessageState::Received { verified: false } => Span::styled(" unverified", Style::default().fg(Color::Yellow)),
-            MessageState::Sending => Span::styled(" sending…", Style::default().fg(dim())),
+            MessageState::Sending => match app.send_progress_of(&message.id) {
+                Some(progress) => Span::styled(format!(" sending… {progress}"), Style::default().fg(dim())),
+                None => Span::styled(" sending…", Style::default().fg(dim())),
+            },
             MessageState::Delivered if message.paper.is_some() => {
                 Span::styled(" ✓ paper message · P shows its QR code", Style::default().fg(Color::Green))
             }
             MessageState::Delivered => Span::styled(" ✓", Style::default().fg(Color::Green)),
             MessageState::Propagated => Span::styled(" ✓ via propagation node", Style::default().fg(Color::Green)),
+            MessageState::Failed(e) if e == crate::lxmf::CANCELLED => Span::styled(" cancelled", Style::default().fg(Color::Yellow)),
             MessageState::Failed(e) => Span::styled(format!(" failed: {e}"), Style::default().fg(Color::Red)),
         };
         let mut header = Line::from(vec![

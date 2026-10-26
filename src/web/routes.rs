@@ -100,12 +100,15 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/pin", post(pin_conversation))
         .route("/conversations/{key}/live", post(start_live))
         .route("/conversations/{key}/live/stop", post(stop_live))
+        .route("/conversations/{key}/track", post(start_track))
+        .route("/conversations/{key}/track/stop", post(stop_track))
         .route("/live/position", post(live_position))
         .route("/conversations/read-all", post(read_all_conversations))
         .route("/conversations/{key}/send", post(send_message))
         .route("/conversations/{key}/react", post(react))
         .route("/conversations/{key}/command", post(send_command))
         .route("/conversations/{key}/retry", post(retry))
+        .route("/conversations/{key}/cancel", post(cancel_send))
         .route("/conversations/{key}/messages/delete", post(delete_message))
         .route("/conversations/{key}/delete", post(delete_conversation))
         .route("/conversations/{key}/contact", post(save_contact))
@@ -612,6 +615,26 @@ async fn start_live(State(state): State<WebState>, Path(key): Path<String>, axum
 async fn stop_live(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
     let key = address(&key)?;
     state.write(move |o| o.app.stop_live(&key)).await?.map_err(bad)?;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct TrackBody {
+    /// Minutes between asking where they are.
+    minutes: u64,
+}
+
+/// Track them: ask where they are every few minutes.
+async fn start_track(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<TrackBody>) -> ApiResult {
+    let key = address(&key)?;
+    let doing = state.write(move |o| o.app.start_track(&key, body.minutes)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "ok": true, "doing": doing })))
+}
+
+/// Stop tracking them.
+async fn stop_track(State(state): State<WebState>, Path(key): Path<String>) -> ApiResult {
+    let key = address(&key)?;
+    state.write(move |o| o.app.stop_track(&key)).await?.map_err(bad)?;
     ok()
 }
 
@@ -1303,6 +1326,13 @@ async fn retry(State(state): State<WebState>, Path(key): Path<String>, axum::Jso
 #[derive(Deserialize)]
 struct MessageId {
     id: String,
+}
+
+/// Stop sending a message.
+async fn cancel_send(State(state): State<WebState>, Path(key): Path<String>, axum::Json(body): axum::Json<MessageId>) -> ApiResult {
+    let key = address(&key)?;
+    state.write(move |o| o.app.cancel_send(&key, &body.id)).await?.map_err(bad)?;
+    ok()
 }
 
 /// Delete a message (and the files rettui saved for it).

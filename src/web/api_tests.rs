@@ -1097,3 +1097,62 @@ async fn sending_sideband_commands() {
     let text = conversation.to_string();
     assert!(text.contains("Asked for their location") && text.contains("Asked for an echo of “hello”"), "{text}");
 }
+
+/// Tracking someone: asked where they are every few minutes, said in the
+/// conversation, and stopped.
+#[tokio::test]
+async fn tracking_a_contact() {
+    use crate::lxmf::fields::Command;
+    let web = TestWeb::start("track");
+    let url = format!("/api/conversations/{BOB}/track");
+    assert_eq!(web.post(&url, json!({ "minutes": 0 })).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.post("/api/conversations/nobody/track", json!({ "minutes": 5 })).await.status, StatusCode::BAD_REQUEST);
+    let started = web.post(&url, json!({ "minutes": 15 })).await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.text());
+    assert!(started.json()["doing"].as_str().unwrap_or_default().contains("every 15 min"), "{}", started.text());
+    let asked = web
+        .sent()
+        .into_iter()
+        .any(|c| matches!(c, NetCommand::SendMessage { message, .. } if message.commands == [Command::TelemetryRequest]));
+    assert!(asked);
+    let conversation = web.get(&format!("/api/conversations/{BOB}")).await.json();
+    assert_eq!(conversation["track"]["every"], 15);
+    assert_eq!(web.post(&format!("{url}/stop"), json!({})).await.status, StatusCode::OK);
+    assert!(web.get(&format!("/api/conversations/{BOB}")).await.json()["track"].is_null());
+    assert_eq!(web.post(&format!("{url}/stop"), json!({})).await.status, StatusCode::BAD_REQUEST);
+}
+
+/// A message being sent says how it goes, and can be cancelled; a sync
+/// says how many came.
+#[tokio::test]
+async fn send_progress_and_cancelling_a_send() {
+    let web = TestWeb::start("cancel");
+    let sent = web.post(&format!("/api/conversations/{BOB}/send"), json!({ "content": "a long one", "mode": "auto" })).await;
+    assert_eq!(sent.status, StatusCode::OK, "{}", sent.text());
+    let id = web
+        .sent()
+        .into_iter()
+        .find_map(|c| match c {
+            NetCommand::SendMessage { id, .. } => Some(id),
+            _ => None,
+        })
+        .unwrap();
+    web.with_owner(move |o| o.apply(NetEvent::SendProgress { id, text: "42%".into() })).await;
+    let state = |conversation: serde_json::Value| conversation["messages"].as_array().unwrap().last().unwrap()["state"].clone();
+    let shown = state(web.get(&format!("/api/conversations/{BOB}")).await.json());
+    assert_eq!((shown["kind"].as_str(), shown["progress"].as_str()), (Some("sending"), Some("42%")));
+    let url = format!("/api/conversations/{BOB}/cancel");
+    assert_eq!(web.post(&url, json!({ "id": format!("local-{id}") })).await.status, StatusCode::OK);
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::CancelSend(sent) if *sent == id)));
+    web.with_owner(move |o| o.apply(NetEvent::Delivery { id, result: Err(crate::lxmf::CANCELLED.into()) })).await;
+    assert_eq!(state(web.get(&format!("/api/conversations/{BOB}")).await.json())["kind"], "cancelled");
+    let again = web.post(&url, json!({ "id": format!("local-{id}") })).await;
+    assert_eq!(again.status, StatusCode::BAD_REQUEST);
+    // A sync, as it goes.
+    web.with_owner(|o| {
+        o.apply(NetEvent::SyncStarted);
+        o.apply(NetEvent::SyncProgress("1 of 2 downloaded".into()));
+    })
+    .await;
+    assert_eq!(web.get("/api/state").await.json()["sync"]["progress"], "1 of 2 downloaded");
+}

@@ -102,6 +102,10 @@ pub struct Settings {
     /// Send this computer's sensor readings (battery, processor, memory,
     /// storage) with its location, as Sideband sends its own.
     pub telemetry_sensors: bool,
+    /// Minutes between sending this station's location (and sensors, if
+    /// they're sent) to every contact you trust, as Sideband sends its
+    /// telemetry on a timer; 0 doesn't.
+    pub telemetry_every_mins: u64,
     /// Where the web UI's map gets its tiles (`{z}`, `{x}` and `{y}` in
     /// it), fetched and kept by rettui; none draws the map without them.
     pub map_tiles: Option<String>,
@@ -222,6 +226,7 @@ impl Default for Settings {
             location: None,
             location_requests: "off".into(),
             telemetry_sensors: false,
+            telemetry_every_mins: 0,
             map_tiles: Some(OSM_TILES.into()),
             map_tiles_file: None,
             stamp_cost: 0,
@@ -585,7 +590,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "rrc_messages_kept",
         ],
     ),
-    (Section::Location, &["location", "location_requests", "telemetry_sensors", "map_tiles", "map_tiles_file"]),
+    (Section::Location, &["location", "location_requests", "telemetry_sensors", "telemetry_every_mins", "map_tiles", "map_tiles_file"]),
     (Section::Browsing, &["home", "browser_new_tabs", "cache_hours"]),
     (
         Section::Hosting,
@@ -741,6 +746,13 @@ pub const FIELDS: &[Field] = &[
         label: "Location requests",
         help: "Answer the location requests (telemetry requests) Sideband sends with this station's Location: off; trusted (only from contacts you trust); or contacts (any contact). Answers are shown in the conversation, at most one a minute to each sender",
         kind: FieldKind::Choice(ANSWER_COMMANDS),
+        effect: Effect::Now,
+    },
+    Field {
+        key: "telemetry_every_mins",
+        label: "Send to trusted every",
+        help: "Minutes between sending this station's Location (with sensor readings, if they're sent) to every contact you trust, so they can follow it on their map, as Sideband sends its telemetry on a timer. Each update replaces the one before it in the conversation. 0 (to start with) doesn't send it",
+        kind: FieldKind::Number,
         effect: Effect::Now,
     },
     Field {
@@ -1179,6 +1191,7 @@ impl Settings {
             "location" => self.location.clone().unwrap_or_default(),
             "location_requests" => self.location_requests.clone(),
             "telemetry_sensors" => self.telemetry_sensors.to_string(),
+            "telemetry_every_mins" => self.telemetry_every_mins.to_string(),
             "map_tiles" => self.map_tiles.clone().unwrap_or_default(),
             "map_tiles_file" => self.map_tiles_file.clone().unwrap_or_default(),
             "stamp_cost" => self.stamp_cost.to_string(),
@@ -1276,6 +1289,7 @@ impl Settings {
             }
             "location_requests" => self.location_requests = choice(value, ANSWER_COMMANDS).map_err(fail)?,
             "telemetry_sensors" => self.telemetry_sensors = toggle(value).map_err(fail)?,
+            "telemetry_every_mins" => self.telemetry_every_mins = number(value, MAX_MINUTES).map_err(fail)?,
             "map_tiles" => {
                 if let Some(url) = optional(value) {
                     let web = url.starts_with("https://") || url.starts_with("http://");

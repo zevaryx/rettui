@@ -311,11 +311,44 @@ impl App {
         Ok(())
     }
 
+    /// Stop sending a message (`c` on a picked one, or the web UI's
+    /// Cancel): it fails as cancelled, unless it went already (a message
+    /// in one packet can't be called back once it's on its way).
+    pub fn cancel_send(&mut self, key: &str, id: &str) -> Result<(), String> {
+        let number: u64 = id.strip_prefix("local-").and_then(|n| n.parse().ok()).ok_or("Only your own messages can be cancelled")?;
+        let message = self.store.conversations.get(key).and_then(|c| c.messages.iter().find(|m| m.id == id));
+        let message = message.ok_or("That message isn't in this conversation")?;
+        if message.state != MessageState::Sending {
+            return Err("Only a message being sent can be cancelled".into());
+        }
+        if self.send_progress.get(&number).is_some_and(|said| said == super::CANCELLING) {
+            return Err("It's being cancelled already".into());
+        }
+        if self.send_progress.get(&number).is_some_and(|said| said == lxmf::WAITING_FOR_DELIVERY) {
+            return Err("It's on its way already, in one packet: that can't be called back".into());
+        }
+        self.send_progress.insert(number, super::CANCELLING.into());
+        self.send(NetCommand::CancelSend(number));
+        Ok(())
+    }
+
+    /// How sending a message (by id) is going, while it's being sent.
+    pub fn send_progress_of(&self, id: &str) -> Option<&str> {
+        let number: u64 = id.strip_prefix("local-")?.parse().ok()?;
+        self.send_progress.get(&number).map(String::as_str)
+    }
+
     /// Send `key` a Sideband command (a ping, an echo, a signal report, or
     /// a request for their location), the way their messages go; its local
     /// id. Sideband answers the first three with a message, and a location
     /// request with its telemetry (shown on the map), if it's set to.
     pub fn send_command(&mut self, key: &str, command: lxmf::fields::Command) -> Result<u64, String> {
+        self.send_command_shown(key, command, true)
+    }
+
+    /// Send a command, shown in the conversation or (a tracked contact's
+    /// requests, every few minutes) only sent.
+    pub(super) fn send_command_shown(&mut self, key: &str, command: lxmf::fields::Command, shown: bool) -> Result<u64, String> {
         let to = parse_hash(key).ok_or("An LXMF address is 32 hex characters")?;
         let key = hex::encode(to);
         let chosen = if self.active_conversation.as_deref() == Some(key.as_str()) { self.delivery_mode } else { self.delivery_for(&key) };
@@ -330,16 +363,18 @@ impl App {
         let id = self.store.next_local_id;
         self.store.next_local_id += 1;
         let timestamp = now();
-        self.store.conversations.entry(key.clone()).or_default().messages.push(Message {
-            id: format!("local-{id}"),
-            timestamp,
-            state: MessageState::Sending,
-            notes: vec![command.sent()],
-            command: Some(command.typed()),
-            ..Message::default()
-        });
-        self.store_dirty = true;
-        self.keep_conversation_selection();
+        if shown {
+            self.store.conversations.entry(key.clone()).or_default().messages.push(Message {
+                id: format!("local-{id}"),
+                timestamp,
+                state: MessageState::Sending,
+                notes: vec![command.sent()],
+                command: Some(command.typed()),
+                ..Message::default()
+            });
+            self.store_dirty = true;
+            self.keep_conversation_selection();
+        }
         let message = lxmf::Outgoing {
             commands: vec![command],
             appearance: self.own_appearance(),
@@ -944,6 +979,13 @@ impl App {
                     Err(e) => self.warn(e),
                 }
             }
+            MessageAction::Cancel => {
+                let Some(key) = self.active_conversation.clone() else { return };
+                match self.cancel_send(&key, &id) {
+                    Ok(()) => self.confirm("Cancelling it"),
+                    Err(e) => self.warn(e),
+                }
+            }
             MessageAction::Delete => {
                 let Some(key) = self.active_conversation.clone() else { return };
                 let what = if message.attachments.is_empty() { "this message" } else { "this message and its files" };
@@ -965,6 +1007,10 @@ impl App {
         if !message.incoming && matches!(message.state, MessageState::Failed(_)) {
             actions.push(MessageAction::Retry);
         }
+        // Paper messages are written, not sent.
+        if !message.incoming && message.state == MessageState::Sending && message.paper.is_none() {
+            actions.push(MessageAction::Cancel);
+        }
         actions.push(MessageAction::Delete);
         actions
     }
@@ -972,8 +1018,9 @@ impl App {
     /// Send again, as MeshChat does, the messages to `key` that failed,
     /// now that they announced (so they can be reached): text ones only (a
     /// file can be large), not paper ones (they'd go over the network
-    /// instead), and not ones sent again on their own a moment ago, should
-    /// they announce often. By how messages to them go.
+    /// instead), not ones you cancelled, and not ones sent again on their
+    /// own a moment ago, should they announce often. By how messages to
+    /// them go.
     pub(super) fn resend_on_announce(&mut self, key: &str) {
         if !self.settings.resend_on_announce {
             return;
@@ -985,7 +1032,7 @@ impl App {
             .iter()
             .chain(&conversation.game_moves)
             .filter(|m| !m.incoming && m.attachments.is_empty() && m.id.starts_with("local-"))
-            .filter(|m| matches!(&m.state, MessageState::Failed(why) if !why.starts_with(PAPER_FAILED)))
+            .filter(|m| matches!(&m.state, MessageState::Failed(why) if !why.starts_with(PAPER_FAILED) && why != lxmf::CANCELLED))
             .filter(|m| self.auto_resent.get(&m.id).is_none_or(|at| now.duration_since(*at) >= RESEND_GAP))
             .map(|m| m.id.clone())
             .collect();
@@ -1152,6 +1199,7 @@ impl App {
             KeyCode::Char('f') => self.message_action(index, MessageAction::Forward),
             KeyCode::Char('o') => self.open_picked(index),
             KeyCode::Char('t') => self.message_action(index, MessageAction::Retry),
+            KeyCode::Char('c') => self.message_action(index, MessageAction::Cancel),
             KeyCode::Char('x') | KeyCode::Delete => self.message_action(index, MessageAction::Delete),
             KeyCode::Esc => self.picked = None,
             _ => return false,
@@ -1207,6 +1255,7 @@ impl App {
     /// A paper message written (or not): it's kept with its link, and shown
     /// as a QR code in the terminal UI when its conversation is open.
     pub(super) fn on_paper(&mut self, id: u64, result: Result<(String, [u8; 32]), String>) {
+        self.send_progress.remove(&id);
         let local = format!("local-{id}");
         let Some(message) = self.store.find_message_mut(&local) else { return };
         match result {
