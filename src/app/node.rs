@@ -14,6 +14,7 @@ use nomad_core::NomadServeStats;
 use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 
+use super::browser::Location;
 use super::{App, PromptKind, format};
 use crate::lxmf::pn::{PnConfig, PnStats};
 use crate::net::{Hash, HostEvent, NetCommand, PnEvent};
@@ -907,10 +908,27 @@ impl App {
     }
 
     /// A path on this client's own node, read from the node folder: a client
-    /// cannot open a Link to a destination it hosts itself.
-    pub fn own_node_content(&self, path: &str) -> Result<crate::nomad::FetchedContent, String> {
-        let data = self.node_store()?.serve(path)?;
-        Ok(crate::nomad::FetchedContent { data, metadata: None })
+    /// cannot open a Link to a destination it hosts itself. A script page
+    /// runs instead, as it would for a visitor, when scripts are on: in the
+    /// network task, since it may take seconds. Its page comes later, as
+    /// `Fetched` with this `id`, and this gives `None`.
+    pub fn own_node_content(
+        &mut self,
+        id: u64,
+        location: &Location,
+        identify: bool,
+    ) -> Option<Result<crate::nomad::FetchedContent, String>> {
+        let store = match self.node_store() {
+            Ok(store) => store,
+            Err(e) => return Some(Err(e)),
+        };
+        if self.settings.node_executable_pages
+            && let Some(script) = store.script(&location.path)
+        {
+            let command = NetCommand::RunScript { id, script, fields: location.fields.clone(), identify };
+            return self.net.send(command).is_err().then(|| Err("The network task isn't running, so the script can't run".to_string()));
+        }
+        Some(store.serve(&location.path).map(|data| crate::nomad::FetchedContent { data, metadata: None }))
     }
 }
 

@@ -64,11 +64,42 @@ or the folder set in `node_dir`.
 - **Starter page:** a new node gets an index page with a short Micron guide.
 - **Your own node in the Browser:** a client can't reach a node it hosts over
   Reticulum, so rettui reads your own pages straight from the folder (never
-  from the cache).
+  from the cache), and runs your script pages itself (see below).
 - **Scripts:** executable pages run as programs for visitors only when "Run
   page scripts" is on. The web UI can't change, rename or create scripts,
   turn "Run page scripts" on or move the node folder, so the web login can't
   be used to run programs on the host. The TUI can do all of these.
+
+### Script pages
+
+A script page is a program in `pages/` that prints the page, as on
+NomadNet: any file with its execute bit set (`chmod +x page.mu`), usually
+starting with a line such as `#!/usr/bin/env python3`. Each visitor who
+opens it runs it, and gets what it prints. Scripts run only on Linux, macOS
+and other Unix systems, and only while "Run page scripts" is on: while it's
+off, visitors get the script's own text, so keep secrets out of it.
+
+- **What a script gets:** no shell and nothing to read on its input. Its
+  environment holds only, as NomadNet gives it, `link_id` (the visitor's
+  link), `remote_identity` (the identity hash of a visitor who identified),
+  each `field_…` a form sent and each `var_…` a link sent, and `PATH`, which
+  is just `/usr/bin:/bin`. So `#!/usr/bin/env python3` finds Python only if
+  it's in `/usr/bin` or `/bin`. Where it isn't (Homebrew, `/usr/local`, pyenv
+  or a virtual environment), start the page with Python's full path instead,
+  such as `#!/opt/homebrew/bin/python3`.
+- **Limits:** a script has 10 seconds to finish and may print up to 512 KB.
+  Past either, the visitor gets nothing. What it writes to its error output
+  never reaches visitors; a script that fails but printed something still
+  sends that.
+- **Trying one:** open it on your own node in the Browser (`b` in the Node
+  tab). It runs as it would for a visitor, with what a form sends, and as you
+  if you identify to your node. When a visitor would get nothing, the page
+  says why, shows what the script wrote to its error output, and, for a first
+  line naming a program that scripts can't find, says where that program is
+  on your computer. In the web UI, this runs scripts already on the node, as
+  any visitor could; the web UI still can't write them or turn them on.
+- **Docker:** rettui's image has no Python. A script in it needs a program
+  that's there (`/bin/sh`), or an image built on rettui's with Python added.
 
 ## Propagation node
 

@@ -1041,3 +1041,31 @@ async fn the_guide_pages_partials_and_previews() {
     let preview = preview["html"].as_str().unwrap();
     assert!(preview.contains("api/node/media?path=own.png") && preview.contains("api/media?url=cdcd"), "{preview}");
 }
+
+/// A script page of the node hosted here runs for the web UI's Browser as
+/// it would for a visitor, form fields and all.
+#[cfg(unix)]
+#[tokio::test]
+async fn own_script_pages_run_as_visitors_get_them() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::config::Settings;
+    use crate::store::Store;
+
+    let web = TestWeb::start_with("scripts", Settings { node_executable_pages: true, ..Settings::default() }, Store::default());
+    let (node, pages) = web.with(|app| (hex::encode(app.node.hash), app.paths.node.join("pages"))).await;
+    std::fs::create_dir_all(&pages).unwrap();
+    let script = pages.join("hello.mu");
+    std::fs::write(&script, "#!/bin/sh\necho \">Hello\"\necho \"Hi ${field_name:-stranger}\"\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let url = format!("{node}:/page/hello.mu");
+    let page = web.get(&format!("/api/page?url={url}")).await.json();
+    assert!(page["html"].as_str().unwrap().contains("Hi stranger"), "{page}");
+    let sent = web.post("/api/page", json!({ "url": url, "fields": { "field_name": "Bob" } })).await.json();
+    assert!(sent["html"].as_str().unwrap().contains("Hi Bob"), "{sent}");
+    // One that prints nothing says why, with its errors.
+    std::fs::write(&script, "#!/bin/sh\necho 'it broke' >&2\n").unwrap();
+    let page = web.get(&format!("/api/page?url={url}")).await.json();
+    let html = page["html"].as_str().unwrap();
+    assert!(html.contains("Visitors get nothing from this page") && html.contains("it broke"), "{html}");
+}

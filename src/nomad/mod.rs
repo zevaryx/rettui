@@ -6,5 +6,6 @@ mod fetch;
 pub mod host;
 pub mod micron;
 pub mod pages;
+pub mod script;
 
 pub use fetch::{FetchedContent, LinkCache, fetch, fetch_once};

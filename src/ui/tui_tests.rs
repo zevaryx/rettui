@@ -447,6 +447,54 @@ fn browsing_this_clients_own_node() {
     tui.scroll(regions.2.x + 1, regions.2.y + 1, true).scroll(regions.2.x + 1, regions.2.y + 1, false);
 }
 
+/// A script page of this client's own node runs as it would for a visitor
+/// (with what a form sends), when scripts are on; when they're off, a note
+/// says visitors get its text.
+#[cfg(unix)]
+#[test]
+fn browsing_this_clients_own_script_pages() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::net::NetEvent;
+    use crate::nomad::FetchedContent;
+
+    let mut tui = Tui::with("scripts", |s| s.node_executable_pages = true);
+    let pages = tui.dir.join("node/pages");
+    std::fs::create_dir_all(&pages).unwrap();
+    std::fs::write(pages.join("index.mu"), ">Home\nName: `<name`Bob>\n`[Greet`:/page/hello.mu`name]\n").unwrap();
+    let script = pages.join("hello.mu");
+    std::fs::write(&script, "#!/bin/sh\necho \">Hello\"\necho \"Hi $field_name\"\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let node = hex::encode(tui.app.node.hash);
+    tui.tab(Tab::Browser);
+    tui.key(KeyCode::Char('g'));
+    tui.app.prompt.as_mut().unwrap().input = crate::term::input::TextInput::with_text(&format!("{node}:/page/index.mu"));
+    tui.key(KeyCode::Enter);
+    assert!(tui.draw().contains("Home"));
+    // The Greet link sends the name field; the script runs in the network task.
+    tui.app.browser.tab.selected = Some(1);
+    tui.key(KeyCode::Enter);
+    let mut ran = None;
+    while let Ok(command) = tui.net.try_recv() {
+        if let NetCommand::RunScript { id, script, fields, identify } = command {
+            assert_eq!(fields.get("field_name").map(String::as_str), Some("Bob"));
+            assert!(!identify);
+            ran = Some((id, crate::nomad::script::preview(&script, None, &fields)));
+        }
+    }
+    let (id, data) = ran.expect("the script was asked to run");
+    tui.app.on_net(NetEvent::Fetched { id, result: Ok(FetchedContent { data, metadata: None }) });
+    let shown = tui.draw();
+    assert!(shown.contains("Hello") && shown.contains("Hi Bob"), "{shown}");
+
+    // With scripts off, visitors would get the text: the page says so.
+    tui.app.update_settings(&[("node_executable_pages", "false")]).unwrap();
+    tui.key(KeyCode::Char('r'));
+    let shown = tui.draw();
+    assert!(shown.contains("Script page") && shown.contains("Run page scripts"), "{shown}");
+    assert!(!shown.contains("Hi Bob"), "{shown}");
+}
+
 /// Bob, who writes.
 pub(crate) const BOB: &str = "abababababababababababababababab";
 

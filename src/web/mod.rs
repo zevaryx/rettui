@@ -110,14 +110,20 @@ impl Owner {
     /// `refresh`). Form submissions and `/file/` downloads always go to the
     /// network, as in the terminal browser.
     pub fn fetch(&mut self, location: Location, refresh: bool, reply: oneshot::Sender<Result<Fetched, String>>) {
+        let identified = self.app.identifies_to(location.node);
         // This client's own node is read from its folder (see `own_node_content`).
         if self.app.is_own_node(location.node) {
-            let result =
-                self.app.own_node_content(&location.path).map(|content| Fetched { data: content.data, metadata: None, cached_age: None });
-            let _ = reply.send(result);
+            let id = self.next_request;
+            self.next_request += 1;
+            match self.app.own_node_content(id, &location, identified) {
+                Some(result) => {
+                    let _ = reply.send(result.map(|content| Fetched { data: content.data, metadata: None, cached_age: None }));
+                }
+                // A script page, running: its page comes as a fetch's would.
+                None => _ = self.fetches.insert(id, PendingFetch { location, identified, cacheable: false, reply }),
+            }
             return;
         }
-        let identified = self.app.identifies_to(location.node);
         let cacheable =
             location.fields.is_empty() && !location.path.starts_with(nomad_core::FILE_PREFIX) && !self.app.is_own_node(location.node);
         if cacheable
@@ -756,6 +762,11 @@ pub(crate) mod testing {
                         {
                             let result = page.map(|data| FetchedContent { data, metadata: None });
                             owner.apply(NetEvent::Fetched { id: *id, result });
+                        }
+                        // Script pages of its own node run, as in the network task.
+                        if let NetCommand::RunScript { id, script, fields, .. } = &command {
+                            let data = crate::nomad::script::preview(script, None, fields);
+                            owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None }) });
                         }
                         kept.lock().unwrap().push(command);
                     }

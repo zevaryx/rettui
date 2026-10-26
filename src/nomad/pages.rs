@@ -25,8 +25,6 @@ pub struct Pages {
     store: NomadContentStore,
 }
 
-/// Shown when browsing your own node's script pages, which only run for
-/// visitors.
 /// The page for a path that isn't there. (nomad-core's own wording quotes
 /// the path with backticks, which Micron reads as formatting codes.)
 fn not_found(path: &str) -> String {
@@ -34,7 +32,9 @@ fn not_found(path: &str) -> String {
     format!("#!c=0\n>Not found\n\nThe page {path} is not available on this node.\n")
 }
 
-const SCRIPT_NOTICE: &str = ">Script page\n\nThis page runs as a program when visitors open it. Its output is not shown when you browse your own node from rettui.\n";
+/// Shown when browsing your own node's script pages while scripts are off:
+/// rsNomad then sends visitors the script's text instead of running it.
+const SCRIPT_NOTICE: &str = "#!c=0\n>Script page\n\nThis page is a program, but \"Run page scripts\" is off, so visitors get its text instead of what it prints. Turn the setting on in the terminal (Status tab) to run it.\n";
 
 fn starter_index(name: &str) -> String {
     let name = nomad_core::sanitize_micron_text(name.trim());
@@ -289,7 +289,8 @@ impl Pages {
 
     /// What the node sends for a `/page/…`, `/file/…` or `/media/…` path,
     /// read from the folder (used to browse your own node, which this client
-    /// cannot reach over Reticulum). Scripts are not run.
+    /// cannot reach over Reticulum). Scripts are not run here: see
+    /// [`Pages::script`].
     pub fn serve(&self, path: &str) -> Result<Vec<u8>, String> {
         if let Some(rel) = path.strip_prefix("/media/") {
             return self.read_media(rel);
@@ -306,6 +307,12 @@ impl Pages {
             Err(nomad_core::NomadError::NotFound(_) | nomad_core::NomadError::PathTraversal) => Ok(not_found(path).into_bytes()),
             Err(e) => Err(format!("{path}: {e}")),
         }
+    }
+
+    /// The script a `/page/…` path runs, if it is one.
+    pub fn script(&self, path: &str) -> Option<PathBuf> {
+        let rel = nomad_core::strip_page_prefix(path).ok()?;
+        self.resolve(rel).ok().filter(|p| is_executable(p))
     }
 
     pub fn pages_dir(&self) -> &Path {

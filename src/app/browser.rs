@@ -267,11 +267,13 @@ impl App {
         self.browser.tab.partials[index].loading = true;
         let id = self.request_id();
         self.browser.tab.partial_requests.insert(id, (index, page_url));
-        if self.is_own_node(location.node) {
-            let result = self.own_node_content(&location.path);
-            return self.on_fetched(id, result);
-        }
         let identify = self.identifies_to(location.node);
+        if self.is_own_node(location.node) {
+            if let Some(result) = self.own_node_content(id, &location, identify) {
+                self.on_fetched(id, result);
+            }
+            return;
+        }
         self.send(NetCommand::Fetch { id, node: location.node, path: location.path, fields: location.fields, identify });
     }
 
@@ -521,9 +523,12 @@ impl App {
         }
         let id = self.request_id();
         if self.is_own_node(location.node) {
-            let result = self.own_node_content(&location.path);
+            let result = self.own_node_content(id, &location, identified);
             self.browser.tab.media_requests.insert(id, (url, location, identified));
-            return self.on_fetched(id, result);
+            if let Some(result) = result {
+                self.on_fetched(id, result);
+            }
+            return;
         }
         self.send(NetCommand::Fetch {
             id,
@@ -605,9 +610,12 @@ impl App {
         }
         self.browser.tab.error = None;
         if self.is_own_node(pending.location.node) {
-            let result = self.own_node_content(&pending.location.path);
+            let result = self.own_node_content(id, &pending.location, identified);
             self.browser.tab.loading = Some(pending);
-            return self.on_fetched(id, result);
+            if let Some(result) = result {
+                self.on_fetched(id, result);
+            }
+            return;
         }
         self.send(NetCommand::Fetch {
             id,

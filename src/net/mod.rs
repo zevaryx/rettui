@@ -173,6 +173,14 @@ pub enum NetCommand {
         fields: BTreeMap<String, String>,
         identify: bool,
     },
+    /// Run a script page of the node hosted here, as visitors get it (a
+    /// client can't fetch from its own node); answered with `Fetched`.
+    RunScript {
+        id: u64,
+        script: PathBuf,
+        fields: BTreeMap<String, String>,
+        identify: bool,
+    },
     /// Connect to an RRC hub (no-op if a session is already running).
     /// `key`: the hub's public key, for the hub hosted here.
     RrcConnect {
@@ -1055,6 +1063,14 @@ async fn run(
                             };
                             let result = nomad::fetch(&runtime, &links, node, &path, &fields, identity, &progress).await;
                             let _ = ev.send(NetEvent::Fetched { id, result });
+                        });
+                    }
+                    NetCommand::RunScript { id, script, fields, identify } => {
+                        let ev = ev.clone();
+                        let remote_identity = identify.then_some(identity.hash);
+                        tokio::task::spawn_blocking(move || {
+                            let data = nomad::script::preview(&script, remote_identity, &fields);
+                            let _ = ev.send(NetEvent::Fetched { id, result: Ok(FetchedContent { data, metadata: None }) });
                         });
                     }
                 }
