@@ -6697,10 +6697,46 @@ app.views.node = {
       !page && writable ? { text: picture ? 'Show it in the open page' : 'Link to it in the open page', action: () => this.insertAddress(this.address(root, entry), picture) } : null,
       page && writable && this.open.path !== entry.path ? { text: 'Link to it in the open page', action: () => this.insertAddress(this.address(root, entry), false) } : null,
       { text: 'Copy its address', action: () => copy(this.address(root, entry), 'its address') },
+      { text: 'Who may see it…', action: () => this.whoMaySee(root, entry.path) },
       entry.executable ? null : { text: 'Rename…', action: () => this.renameItem(root, entry) },
       entry.executable ? null : { text: 'Move…', action: () => this.askMove(root, entry.path) },
       entry.executable ? null : { text: 'Delete', danger: true, action: () => this.removeItem(root, entry.path, name) },
     ].filter(Boolean), anchor);
+  },
+
+  // Anyone, or only those ticked: its .allowed list, as NomadNet keeps it.
+  // The node reads it for each visit, so a change applies at once.
+  async whoMaySee(root, path) {
+    const q = `?root=${root}&path=${encodeURIComponent(path)}`;
+    const now = await attempt(() => api.get('/node/allowed' + q));
+    if (!now) return;
+    if (now.who === 'script') return toast(`${path}'s list of who may see it is a program: change it on the host`);
+    dialog(`Who may see ${path.split('/').pop()}`, (close) => {
+      const anyone = el('input', { type: 'checkbox', checked: now.who === 'everyone' });
+      const boxes = now.people.map((p) => {
+        const box = el('input', { type: 'checkbox', checked: p.on, onchange: () => { if (box.checked) anyone.checked = false; dim(); } });
+        return { p, box, node: el('label', { class: 'guide-option' }, box,
+          el('span', {}, el('span', { text: p.name }), ' ', el('span', { class: 'dim mono', text: p.key ? '' : 'not known here' }))) };
+      });
+      const dim = () => boxes.forEach((b) => b.node.classList.toggle('dim', anyone.checked));
+      anyone.addEventListener('change', dim);
+      dim();
+      const save = async () => {
+        const body = { root, path, everyone: anyone.checked, identities: boxes.filter((b) => b.box.checked).map((b) => b.p.identity) };
+        const said = anyone.checked ? `Anyone may see ${path} now`
+          : body.identities.length ? `Only ${body.identities.length} ${body.identities.length === 1 ? 'person' : 'people'} may see ${path} now`
+          : `No one may see ${path} now`;
+        if (await attempt(() => api.post('/node/allowed', body), said)) close();
+      };
+      return [
+        el('p', { class: 'dim', text: 'Visitors not ticked, or who haven\'t identified themselves to your node, are refused.' }),
+        el('label', { class: 'guide-option' }, anyone, el('span', {}, el('span', { text: 'Anyone' }), ' ', el('span', { class: 'dim', text: '(no list)' }))),
+        ...boxes.map((b) => b.node),
+        boxes.length ? null : el('p', { class: 'dim', text: 'No one else yet: contacts whose keys are known show here.' }),
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }),
+          el('button', { text: 'Cancel', onclick: close }), el('button', { class: 'primary', text: 'Save', onclick: save })),
+      ].filter(Boolean);
+    });
   },
 
   showPicture(entry) {

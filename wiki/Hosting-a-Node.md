@@ -58,6 +58,17 @@ or the folder set in `node_dir`.
   name) are changed in every page, except the one open with changes not saved (the TUI says so;
   the web UI changes them in the editor, for you to save). Scripts are never
   changed or moved this way, and the web UI can't rename or move them.
+- **Who may see it:** anyone, at first. To keep a page, picture or file to
+  some people, press `w` in the TUI (or pick **Who may see it…** in its `⋯`
+  menu in the web UI) and tick them: your contacts and those you've talked
+  with show there once their key has been heard. rettui keeps the list
+  beside it as `name.allowed`, a line for each identity, as NomadNet does,
+  so lists made for NomadNet work too. Visitors who aren't on it, or who
+  haven't identified themselves to your node, are refused. A list with no
+  one on it lets no one see it (you still can, in the Browser). The node
+  reads the list for each visit, so a change applies at once, and the list
+  goes along when what it's for is renamed, moved or deleted. A list that's
+  itself a program (executable) is left as it is: change it on the host.
 - **Selecting text in the editors:** Shift with the arrows, Home/End or
   PgUp/PgDn, `Ctrl-A` for everything, or drag with the mouse. Typing, pasting
   or deleting replaces the selection.

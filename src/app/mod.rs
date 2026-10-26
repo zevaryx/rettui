@@ -13,6 +13,7 @@
 //! - [`notify`]: notifications for what arrives while the user looks
 //!   elsewhere.
 
+pub mod allowed;
 pub mod announces;
 pub mod archive;
 mod backup;
@@ -349,6 +350,8 @@ pub struct Regions {
     pub node_pages: Rect,
     pub node_editor: Rect,
     pub node_preview: Rect,
+    /// Who may see what's selected (`w`).
+    pub node_allowed: Rect,
     /// The page editor's formatting ribbon: each button and its action.
     pub node_ribbon: Vec<(Rect, format::Action)>,
     /// Reticulum tab: sections, options, the text editor and the picker.

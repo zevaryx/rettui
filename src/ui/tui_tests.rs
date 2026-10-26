@@ -1868,3 +1868,48 @@ fn the_status_tab_in_every_state() {
     tui.app.updates.installed = Some("99.0.0".into());
     assert!(tui.draw().contains("99.0.0"));
 }
+
+#[test]
+fn who_may_see_a_page_on_the_node() {
+    let mut tui = Tui::new("allowed");
+    let them = rns_identity::identity::Identity::new();
+    let address = rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&them.hash));
+    let key = hex::encode(address);
+    tui.app.store.contacts.insert(key.clone(), Default::default());
+    tui.app.store.contacts.get_mut(&key).unwrap().alias = Some("Alice".into());
+    let known = crate::net::remote::KnownIdentities::none();
+    known.lock().unwrap().remember(address, &them.get_public_key(), None);
+    tui.app.on_net(crate::net::NetEvent::Started { lxmf_hash: [9; 16], public_key: [1; 64], known });
+    tui.tab(Tab::Node);
+    tui.key(KeyCode::Char('n')).answer("club");
+    tui.keys(">Members only").ctrl('s').key(KeyCode::Esc);
+    let rows = tui.app.node_rows();
+    let club = rows.iter().position(|row| tui.app.node_entry(row).is_some_and(|e| e.path == "club.mu")).unwrap();
+    tui.app.node.list.select(Some(club));
+
+    // Anyone may, at first; then only Alice, ticked.
+    tui.key(KeyCode::Char('w'));
+    let screen = tui.draw();
+    assert!(screen.contains("Who may see club.mu") && screen.contains("[x] Anyone") && screen.contains("[ ] Alice"), "{screen}");
+    tui.key(KeyCode::Down).key(KeyCode::Char(' '));
+    assert!(tui.draw().contains("[ ] Anyone"));
+    tui.key(KeyCode::Enter);
+    assert!(tui.app.node.allowed.is_none());
+    assert!(tui.said().contains("Only 1 person may see club.mu"), "{}", tui.said());
+    let list = tui.dir.join("node/pages/club.mu.allowed");
+    assert_eq!(std::fs::read_to_string(&list).unwrap(), format!("{}\n", hex::encode(them.hash)));
+
+    // Opened again, she's ticked; clicking Anyone and saving removes it.
+    tui.key(KeyCode::Char('w'));
+    assert!(tui.draw().contains("[x] Alice"));
+    let area = tui.app.regions.node_allowed;
+    tui.click(area.x + 2, area.y);
+    tui.key(KeyCode::Enter);
+    assert!(!list.exists(), "{}", tui.said());
+    // Esc and a click outside leave it as it is.
+    tui.key(KeyCode::Char('w')).key(KeyCode::End).key(KeyCode::Home).key(KeyCode::Up).key(KeyCode::Esc);
+    assert!(tui.app.node.allowed.is_none());
+    tui.key(KeyCode::Char('w'));
+    tui.click(0, 0);
+    assert!(tui.app.node.allowed.is_none() && !list.exists());
+}

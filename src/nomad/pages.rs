@@ -25,6 +25,33 @@ pub struct Pages {
     store: NomadContentStore,
 }
 
+/// Who may see something on the node, as its `.allowed` list says (as
+/// NomadNet reads it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Allowed {
+    /// No list: anyone.
+    Everyone,
+    /// Only those identified as these identities (none: no one).
+    Only(Vec<[u8; 16]>),
+    /// The list is a program that prints it, run for each request: edited
+    /// on the host.
+    Script,
+}
+
+/// Longest `.allowed` list read, in bytes (32 hex characters a line).
+const MAX_ALLOWED: u64 = 64 * 1024;
+
+/// The identities in an `.allowed` list: lines of 32 hex characters.
+fn allowed_hashes(text: &str) -> Vec<[u8; 16]> {
+    let mut hashes: Vec<[u8; 16]> = Vec::new();
+    for hash in text.lines().filter_map(|line| crate::net::parse_hash(line.trim())) {
+        if !hashes.contains(&hash) {
+            hashes.push(hash);
+        }
+    }
+    hashes
+}
+
 /// The page for a path that isn't there. (nomad-core's own wording quotes
 /// the path with backticks, which Micron reads as formatting codes.)
 fn not_found(path: &str) -> String {
@@ -397,6 +424,7 @@ impl Pages {
     /// Rename a page or picture, leaving no empty folder behind.
     fn rename_page(&self, from: &str, to: &str, scripts: bool) -> Result<(), String> {
         self.rename(from, to, scripts)?;
+        self.carry_allowed(Root::Pages, from, Some(to))?;
         self.prune(Root::Pages, from);
         Ok(())
     }
@@ -446,6 +474,7 @@ impl Pages {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::rename(&source, &target).map_err(|e| format!("Could not move {from}: {e}"))?;
+        self.carry_allowed(root, from, Some(to))?;
         self.prune(root, from);
         Ok(())
     }
@@ -456,8 +485,67 @@ impl Pages {
             Root::Pages => self.delete(path),
             Root::Files => self.store.delete_file_rel(path).map_err(|e| format!("Could not delete {path}: {e}")),
         }?;
+        self.carry_allowed(root, path, None)?;
         self.prune(root, path);
         Ok(())
+    }
+
+    /// The `.allowed` list beside something on the node.
+    fn allowed_path(&self, root: Root, path: &str) -> Result<PathBuf, String> {
+        let target = self.resolve_in(root, path)?;
+        let mut name = target.into_os_string();
+        name.push(".allowed");
+        Ok(PathBuf::from(name))
+    }
+
+    /// Who may see `path` (a page, picture or file).
+    pub fn allowed(&self, root: Root, path: &str) -> Result<Allowed, String> {
+        if !self.resolve_in(root, path)?.is_file() {
+            return Err(format!("{path} isn't on the node"));
+        }
+        let list = self.allowed_path(root, path)?;
+        let Ok(metadata) = std::fs::symlink_metadata(&list) else { return Ok(Allowed::Everyone) };
+        if !metadata.is_file() || is_executable(&list) {
+            return Ok(Allowed::Script);
+        }
+        if metadata.len() > MAX_ALLOWED {
+            return Err(format!("{path}'s list of who may see it is too long to read here"));
+        }
+        let text = std::fs::read_to_string(&list).map_err(|e| format!("Could not read {path}'s list of who may see it: {e}"))?;
+        Ok(Allowed::Only(allowed_hashes(&text)))
+    }
+
+    /// Say who may see `path`: anyone (`None`, no list), or only these
+    /// identities. A list that's a program isn't changed.
+    pub fn set_allowed(&self, root: Root, path: &str, only: Option<&[[u8; 16]]>) -> Result<(), String> {
+        if self.allowed(root, path)? == Allowed::Script {
+            return Err(format!("{path}'s list of who may see it is a program; change it on the host"));
+        }
+        let list = self.allowed_path(root, path)?;
+        match only {
+            None => match std::fs::remove_file(&list) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("Could not remove {path}'s list: {e}")),
+                _ => Ok(()),
+            },
+            Some(hashes) => {
+                let text: String = hashes.iter().map(|h| hex::encode(h) + "\n").collect();
+                crate::config::write_atomic(&list, text.as_bytes()).map_err(|e| format!("Could not save {path}'s list: {e}"))
+            }
+        }
+    }
+
+    /// Move `from`'s `.allowed` list along with it to `to` (or, with no
+    /// `to`, delete it), so what was kept to some stays so.
+    fn carry_allowed(&self, root: Root, from: &str, to: Option<&str>) -> Result<(), String> {
+        let list = self.allowed_path(root, from)?;
+        if std::fs::symlink_metadata(&list).is_err() {
+            return Ok(());
+        }
+        match to {
+            Some(to) => crate::config::replace(&list, &self.allowed_path(root, to)?),
+            None => std::fs::remove_file(&list),
+        }
+        .map_err(|e| format!("Could not move {from}'s list of who may see it: {e}"))
     }
 
     /// Remove folders left empty by moving or deleting `path` (not the
@@ -690,6 +778,59 @@ mod tests {
         pages.save("dyn.mu", "#!/bin/sh\necho bye\n", true).unwrap();
         assert!(pages.is_executable("dyn.mu"), "saving must keep the execute bit");
         assert_eq!(pages.read("dyn.mu").unwrap(), "#!/bin/sh\necho bye\n");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn who_may_see_follows_a_page_moved_and_goes_with_it_deleted() {
+        let (pages, dir) = temp_node("allowed");
+        pages.create("club.mu", ">Members").unwrap();
+        assert!(pages.allowed(Root::Pages, "gone.mu").is_err());
+        assert_eq!(pages.allowed(Root::Pages, "club.mu").unwrap(), Allowed::Everyone);
+        let (a, b) = ([1u8; 16], [2u8; 16]);
+        pages.set_allowed(Root::Pages, "club.mu", Some(&[a, b])).unwrap();
+        let list = pages.pages_dir().join("club.mu.allowed");
+        assert_eq!(std::fs::read_to_string(&list).unwrap(), format!("{}\n{}\n", hex::encode(a), hex::encode(b)));
+        // As NomadNet writes them too: other lines, spaces and repeats.
+        std::fs::write(&list, format!("# members\n  {}  \nnot a hash\n{}\n", hex::encode(b), hex::encode(b))).unwrap();
+        assert_eq!(pages.allowed(Root::Pages, "club.mu").unwrap(), Allowed::Only(vec![b]));
+        // The list never shows as a page of its own.
+        let listed: Vec<String> = pages.list().unwrap().into_iter().map(|p| p.path).collect();
+        assert_eq!(listed, ["club.mu"]);
+
+        pages.rename_in(Root::Pages, "club.mu", "members/club.mu", false).unwrap();
+        assert!(!list.exists());
+        assert_eq!(pages.allowed(Root::Pages, "members/club.mu").unwrap(), Allowed::Only(vec![b]));
+        pages.set_allowed(Root::Pages, "members/club.mu", Some(&[])).unwrap();
+        assert_eq!(pages.allowed(Root::Pages, "members/club.mu").unwrap(), Allowed::Only(vec![]));
+        pages.set_allowed(Root::Pages, "members/club.mu", None).unwrap();
+        assert_eq!(pages.allowed(Root::Pages, "members/club.mu").unwrap(), Allowed::Everyone);
+        pages.set_allowed(Root::Pages, "members/club.mu", Some(&[a])).unwrap();
+        pages.delete_in(Root::Pages, "members/club.mu").unwrap();
+        assert!(!pages.pages_dir().join("members/club.mu.allowed").exists());
+
+        // Files to download have lists too.
+        let file = pages.add_file("guide.pdf", b"pdf").unwrap();
+        pages.set_allowed(Root::Files, &file, Some(&[a])).unwrap();
+        pages.rename_in(Root::Files, &file, "manual.pdf", false).unwrap();
+        assert_eq!(pages.allowed(Root::Files, "manual.pdf").unwrap(), Allowed::Only(vec![a]));
+        pages.delete_in(Root::Files, "manual.pdf").unwrap();
+        assert!(std::fs::read_dir(dir.join("files")).unwrap().next().is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_list_that_is_a_program_is_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let (pages, dir) = temp_node("allowed-script");
+        pages.create("club.mu", ">Members").unwrap();
+        let list = pages.pages_dir().join("club.mu.allowed");
+        std::fs::write(&list, "#!/bin/sh\necho 01010101010101010101010101010101\n").unwrap();
+        std::fs::set_permissions(&list, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(pages.allowed(Root::Pages, "club.mu").unwrap(), Allowed::Script);
+        assert!(pages.set_allowed(Root::Pages, "club.mu", None).is_err());
+        assert!(list.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

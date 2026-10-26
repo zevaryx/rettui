@@ -1281,3 +1281,44 @@ async fn send_progress_and_cancelling_a_send() {
     .await;
     assert_eq!(web.get("/api/state").await.json()["sync"]["progress"], "1 of 2 downloaded");
 }
+
+#[tokio::test]
+async fn who_may_see_something_on_the_node() {
+    let web = TestWeb::start("node-allowed");
+    let them = rns_identity::identity::Identity::new();
+    let address = rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&them.hash));
+    let key = hex::encode(address);
+    let known = crate::net::remote::KnownIdentities::none();
+    known.lock().unwrap().remember(address, &them.get_public_key(), None);
+    let contact = key.clone();
+    web.with(move |app| {
+        app.store.contacts.entry(contact).or_default().alias = Some("Alice".into());
+        app.on_net(crate::net::NetEvent::Started { lxmf_hash: [9; 16], public_key: [1; 64], known });
+    })
+    .await;
+    let path = web.post("/api/node/pages", json!({ "name": "club" })).await.json()["path"].as_str().unwrap().to_string();
+    let q = format!("/api/node/allowed?path={path}");
+    let now = web.get(&q).await.json();
+    assert_eq!(now["who"], "everyone");
+    assert_eq!((now["people"][0]["name"].as_str(), now["people"][0]["on"].as_bool()), (Some("Alice"), Some(false)), "{now}");
+    let identity = now["people"][0]["identity"].as_str().unwrap().to_string();
+    assert_eq!(identity, hex::encode(them.hash));
+
+    // Only Alice; then no one; then anyone again.
+    let set = web.post("/api/node/allowed", json!({ "path": path, "identities": [identity] })).await;
+    assert_eq!(set.status, StatusCode::OK, "{}", set.text());
+    let now = web.get(&q).await.json();
+    assert_eq!((now["who"].as_str(), now["people"][0]["on"].as_bool()), (Some("only"), Some(true)));
+    assert_eq!(web.post("/api/node/allowed", json!({ "path": path })).await.status, StatusCode::OK);
+    assert_eq!(web.get(&q).await.json()["who"], "only");
+    assert_eq!(web.post("/api/node/allowed", json!({ "path": path, "everyone": true })).await.status, StatusCode::OK);
+    assert_eq!(web.get(&q).await.json()["who"], "everyone");
+
+    // Not identities, too many, not there, nowhere.
+    assert!(web.post("/api/node/allowed", json!({ "path": path, "identities": ["nope"] })).await.error().contains("identity"));
+    let many = vec![identity.clone(); crate::app::allowed::MAX_LISTED + 1];
+    assert!(web.post("/api/node/allowed", json!({ "path": path, "identities": many })).await.error().contains("at most"));
+    assert_eq!(web.get("/api/node/allowed?path=gone.mu").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.get(&format!("{q}&root=attic")).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.post("/api/node/allowed", json!({ "path": "../x", "everyone": true })).await.status, StatusCode::BAD_REQUEST);
+}

@@ -32,7 +32,7 @@ use crate::app::{Location, resolve_url};
 use crate::lxmf::DeliveryMode;
 use crate::net::{Hash, NetCommand, parse_hash};
 use crate::nomad::micron::{self, html};
-use crate::nomad::pages::Root;
+use crate::nomad::pages::{Allowed, Root};
 use crate::rrc;
 use crate::store::{Bookmark, NotifyLevel};
 
@@ -157,6 +157,7 @@ pub fn router(state: WebState) -> Router {
         .route("/node/preview", post(node_preview))
         .route("/node/media", get(node_media))
         .route("/node/announce", post(node_announce))
+        .route("/node/allowed", get(node_allowed).post(set_node_allowed))
         .route("/hub", get(hosted_hub))
         .route("/hub/{action}", post(hosted_hub_action))
         .route("/reticulum", get(reticulum))
@@ -2240,6 +2241,57 @@ async fn node_media(State(state): State<WebState>, Query(query): Query<PathQuery
     let name = path.rsplit('/').next().unwrap_or("image").to_string();
     let data = state.read(move |o| o.app.node_media(&path)).await?.map_err(|_| not_found("image"))?;
     Ok(file_response(data, &name, true))
+}
+
+#[derive(Deserialize)]
+struct AllowedQuery {
+    path: String,
+    #[serde(default)]
+    root: Option<String>,
+}
+
+/// Who may see something on the node: `everyone` (no list), `only` those
+/// ticked in `people`, or `script` (a list that's a program, changed on the
+/// host). `people` are contacts and those talked with, and anyone else on
+/// the list.
+async fn node_allowed(State(state): State<WebState>, Query(query): Query<AllowedQuery>) -> ApiResult {
+    let root = node_root(query.root.as_deref())?;
+    let (allowed, people) = state.read(move |o| o.app.node_allowed(root, &query.path)).await??;
+    let who = match allowed {
+        Allowed::Everyone => "everyone",
+        Allowed::Only(_) => "only",
+        Allowed::Script => "script",
+    };
+    let people: Vec<Value> =
+        people.iter().map(|p| json!({ "identity": hex::encode(p.identity), "name": p.name, "key": p.key, "on": p.on })).collect();
+    Ok(axum::Json(json!({ "who": who, "people": people })))
+}
+
+#[derive(Deserialize)]
+struct SetAllowedBody {
+    path: String,
+    #[serde(default)]
+    root: Option<String>,
+    /// Anyone may: the list is removed.
+    #[serde(default)]
+    everyone: bool,
+    /// Otherwise only these identities (hex).
+    #[serde(default)]
+    identities: Vec<String>,
+}
+
+async fn set_node_allowed(State(state): State<WebState>, axum::Json(body): axum::Json<SetAllowedBody>) -> ApiResult {
+    let root = node_root(body.root.as_deref())?;
+    let only = if body.everyone {
+        None
+    } else {
+        if body.identities.len() > crate::app::allowed::MAX_LISTED {
+            return Err(bad(format!("A list has at most {} people", crate::app::allowed::MAX_LISTED)));
+        }
+        Some(body.identities.iter().map(|i| parse_hash(i).ok_or_else(|| bad("Not an identity hash"))).collect::<Result<Vec<_>, _>>()?)
+    };
+    state.write(move |o| o.app.set_node_allowed(root, &body.path, only)).await??;
+    ok()
 }
 
 async fn node_announce(State(state): State<WebState>) -> ApiResult {

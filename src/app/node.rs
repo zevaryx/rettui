@@ -105,6 +105,8 @@ pub struct Node {
     /// First row shown by the preview when it is shown alone.
     pub preview_scroll: usize,
     pub preview: Option<Preview>,
+    /// Who may see what's selected (`w`), while it's being changed.
+    pub allowed: Option<super::allowed::AllowedView>,
 }
 
 impl Node {
@@ -123,6 +125,7 @@ impl Node {
             view: PageView::Split,
             preview_scroll: 0,
             preview: None,
+            allowed: None,
         }
     }
 }
@@ -288,7 +291,7 @@ impl App {
         }
     }
 
-    fn node_store(&self) -> Result<Pages, String> {
+    pub(super) fn node_store(&self) -> Result<Pages, String> {
         Pages::open(&HostConfig::dir(&self.settings, &self.paths))
     }
 
@@ -549,7 +552,7 @@ impl App {
     }
 
     /// What's selected: its root and path (a folder's, for a folder).
-    fn selected_item(&self) -> Option<(Root, String, bool)> {
+    pub(super) fn selected_item(&self) -> Option<(Root, String, bool)> {
         let row = self.selected_row()?;
         match &row {
             NodeRow::Folder { root, path, .. } => Some((*root, path.clone(), true)),
@@ -743,6 +746,9 @@ impl App {
     }
 
     pub(super) fn node_key(&mut self, key: KeyEvent) {
+        if self.node.allowed.is_some() {
+            return self.allowed_key(key);
+        }
         let count = self.node_rows().len();
         match key.code {
             KeyCode::Down | KeyCode::Char('j') if count > 0 => {
@@ -800,6 +806,7 @@ impl App {
                     self.open_prompt(PromptKind::ConfirmDeletePage(root, path), &title, "");
                 }
             }
+            KeyCode::Char('w') => self.open_allowed(),
             KeyCode::Char('h') => {
                 let on = !self.settings.node_enabled;
                 self.update_setting("node_enabled", if on { "true" } else { "false" });
@@ -842,6 +849,9 @@ impl App {
     }
 
     pub(super) fn click_node(&mut self, at: Position, double: bool) {
+        if self.node.allowed.is_some() {
+            return self.click_allowed(at);
+        }
         let list = self.regions.node_pages;
         let editor = self.regions.node_editor;
         if let Some(&(_, action)) = self.regions.node_ribbon.iter().find(|(area, _)| area.contains(at)) {

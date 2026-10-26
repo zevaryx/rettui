@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 
 use super::browser::token_style;
 use super::editor::draw_text_editor;
@@ -27,6 +27,44 @@ pub(super) fn draw_node(frame: &mut Frame, app: &mut App, area: Rect) {
     draw_status(frame, app, status_area);
     draw_pages(frame, app, list_area);
     draw_editor(frame, app, right);
+    draw_allowed(frame, app, area);
+}
+
+/// Who may see what's selected (`w`): anyone, or only those ticked.
+fn draw_allowed(frame: &mut Frame, app: &mut App, area: Rect) {
+    let Some(view) = &mut app.node.allowed else { return };
+    let tick = |on: bool| if on { "[x] " } else { "[ ] " };
+    let mut items = vec![ListItem::new(Line::from(vec![
+        Span::raw(format!(" {}", tick(view.everyone))),
+        Span::styled("Anyone", Style::default().bold()),
+        Span::styled("  (no list)", Style::default().fg(dim())),
+    ]))];
+    for person in &view.people {
+        let style = if view.everyone { Style::default().fg(dim()) } else { Style::default() };
+        let mut spans = vec![Span::styled(format!(" {}", tick(person.on)), style), Span::styled(person.name.clone(), style)];
+        if person.key.is_none() {
+            spans.push(Span::styled("  not known here", Style::default().fg(dim())));
+        }
+        items.push(ListItem::new(Line::from(spans)));
+    }
+    if view.people.is_empty() {
+        items.push(ListItem::new(Line::styled(" No one else yet: contacts whose keys are known show here", Style::default().fg(dim()))));
+    }
+    let hint = " Space tick · Enter save · Esc cancel ";
+    let title = format!("Who may see {}", view.path);
+    let width = (title.chars().count().max(hint.chars().count()).max(48) as u16 + 4).min(area.width);
+    let height = (items.len() as u16 + 2).min(area.height.saturating_sub(2)).max(3);
+    let rect = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 3,
+        width,
+        height: height.min(area.height),
+    };
+    frame.render_widget(Clear, rect);
+    let list_block = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
+    app.regions.node_allowed = list_block.inner(rect);
+    let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
+    frame.render_stateful_widget(list, rect, &mut view.list);
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {

@@ -454,6 +454,9 @@ pub fn keys(app: &App) -> Keys {
                 ("^V", "paste"),
             ],
         ),
+        Tab::Node if app.node.allowed.is_some() => {
+            typing("Who may see it", &[("Space", "tick"), ("Enter", "save"), ("↑↓", "select"), ("Esc", "cancel")])
+        }
         Tab::Node => mode(
             "Node",
             &[
@@ -462,6 +465,7 @@ pub fn keys(app: &App) -> Keys {
                 ("r", "rename"),
                 ("m", "move"),
                 ("x", "delete"),
+                ("w", "who may see"),
                 ("h", "host"),
                 ("a", "announce"),
                 ("b", "browse"),
