@@ -1434,7 +1434,8 @@ mod tests {
         assert_eq!(stones(&shown, '●'), 2, "{shown}");
         let (shown, ..) = drawn("battleship", &["a1"], "battleship");
         assert!(shown.contains("Their waters") && shown.contains("Your fleet") && shown.contains("Ships sunk: you 0, them 0"), "{shown}");
-        assert_eq!(stones(&shown, '■'), 17, "{shown}");
+        // The fleet is random, so their opening shot at a1 may land on a ship and turn one square into a hit.
+        assert_eq!(stones(&shown, '■') + stones(&shown, '✕'), 17, "{shown}");
         let (shown, ..) = drawn("rps", &["r"], "rps");
         assert!(shown.contains("[1 Rock]") && shown.contains("[3 Scissors]") && shown.contains("You 0 – 0 Them"), "{shown}");
     }
