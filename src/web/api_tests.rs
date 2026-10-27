@@ -1658,3 +1658,63 @@ async fn a_copy_is_sent_on_to_another_repository_from_the_web_ui() {
     let refused = post(json!({ "url": url, "to": to })).await;
     assert_eq!(refused.status, StatusCode::BAD_GATEWAY);
 }
+
+#[tokio::test]
+async fn the_copy_of_a_repository_is_read_in_the_web_ui_without_the_node() {
+    use crate::net::git::tests::Source;
+    let web = TestWeb::start("repos-read-copy");
+    let url = format!("rns://{NODE}/public/demo");
+    let enc = |text: &str| text.replace('/', "%2F");
+    let source = Source::new(&web.dir.join("source"));
+    std::fs::create_dir_all(source.0.join("docs")).unwrap();
+    std::fs::write(source.0.join("docs/guide.md"), "# Guide\n\x1b[31mred\n").unwrap();
+    std::fs::write(source.0.join("blob.bin"), [0u8, 1]).unwrap();
+    source.git(&["add", "."]);
+    source.git(&["commit", "-q", "-m", "files\x1b[0m"]);
+    source.git(&["tag", "v1"]);
+    async fn read(web: &TestWeb, url: &str, query: &str) -> super::testing::Answer {
+        web.get(&format!("/api/repos/copy/files?url={}&{query}", url.replace('/', "%2F"))).await
+    }
+
+    // Nothing to read before there is a copy.
+    let none = read(&web, &url, "ref=refs%2Fheads%2Fmain").await;
+    assert_eq!(none.status, StatusCode::BAD_REQUEST);
+    assert!(none.error().contains("no copy"), "{}", none.error());
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::new(source.node()));
+    assert_eq!(web.post("/api/repos/mirror", json!({ "url": url })).await.status, StatusCode::OK);
+
+    // Then the node can be gone: the copy answers.
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::default());
+    let top = read(&web, &url, "ref=refs%2Fheads%2Fmain").await.json();
+    let names: Vec<&str> = top["folder"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert_eq!(names[0], "docs");
+    assert!(names.contains(&"blob.bin"));
+    assert_eq!(top["folder"][0]["kind"], "dir");
+    let file = read(&web, &url, "ref=refs%2Fheads%2Fmain&path=docs%2Fguide.md&show=file").await.json();
+    assert_eq!(file["file"]["text"], "# Guide\n[31mred\n");
+    let binary = read(&web, &url, "ref=refs%2Fheads%2Fmain&path=blob.bin&show=file").await.json();
+    assert!(binary["file"]["text"].is_null() && binary["file"]["size"] == 2);
+    let log = read(&web, &url, "ref=refs%2Ftags%2Fv1&show=log").await.json();
+    assert_eq!(log["log"][0]["subject"], "files[0m");
+    assert_eq!(log["log"].as_array().unwrap().len(), 2);
+    // The branches and tags come from the copy when the node doesn't answer.
+    let refs = web.get(&format!("/api/repos/refs?url={}", enc(&url))).await.json();
+    assert_eq!(refs["from_copy"], true);
+    assert!(refs["refs"].as_array().unwrap().iter().any(|r| r["name"] == "refs/tags/v1"));
+
+    // Paths that leave the tree, unknown things and the wrong kind are refused.
+    for query in [
+        "ref=refs%2Fheads%2Fmain&path=..",
+        "ref=refs%2Fheads%2Fmain&path=docs%2F..%2F..",
+        "ref=main",
+        "ref=refs%2Fheads%2Fnope",
+        "ref=refs%2Fheads%2Fmain&path=docs&show=file",
+        "ref=refs%2Fheads%2Fmain&path=blob.bin",
+        "ref=refs%2Fheads%2Fmain&show=everything",
+    ] {
+        assert_eq!(read(&web, &url, query).await.status, StatusCode::BAD_REQUEST, "{query}");
+    }
+    // And a repository that is not a copy of anything.
+    let other = web.get(&format!("/api/repos/copy/files?url={}&ref=refs%2Fheads%2Fmain", enc(&format!("rns://{NODE}/public/other")))).await;
+    assert_eq!(other.status, StatusCode::BAD_REQUEST);
+}

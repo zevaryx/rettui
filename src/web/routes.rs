@@ -172,6 +172,7 @@ pub fn router(state: WebState) -> Router {
         .route("/repos/mirror/delete", post(repo_delete_mirror))
         .route("/repos/push", post(repo_push))
         .route("/repos/refs", get(repo_refs))
+        .route("/repos/copy/files", get(repo_copy_files))
         .route("/repos/perms", get(repo_perms))
         .route("/repos/releases", get(repo_releases))
         .route("/repos/release", get(repo_release))
@@ -2558,8 +2559,59 @@ async fn ask_repo(state: &WebState, url: &str, request: crate::net::git::GitRequ
     Ok(axum::Json(state.read(move |o| views::git_reply(&o.app, &reply)).await?))
 }
 
+/// The branches and tags. A node that can't be asked leaves the copy on this
+/// computer, if there is one, to answer.
 async fn repo_refs(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> ApiResult {
-    ask_repo(&state, &query.url, crate::net::git::GitRequest::Refs).await
+    let repo = repo_url(&query.url)?;
+    match state.git(repo.clone(), crate::net::git::GitRequest::Refs).await {
+        Ok(reply) => Ok(axum::Json(state.read(move |o| views::git_reply(&o.app, &reply)).await?)),
+        Err(e) => {
+            let from_copy = state.read(move |o| o.app.copy_refs(&repo)).await?;
+            match from_copy {
+                Some(refs) => {
+                    let reply = crate::net::git::GitReply::Refs(refs);
+                    let mut shown = state.read(move |o| views::git_reply(&o.app, &reply)).await?;
+                    shown["from_copy"] = true.into();
+                    Ok(axum::Json(shown))
+                }
+                None => Err(ApiError(StatusCode::BAD_GATEWAY, e)),
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CopyQuery {
+    url: String,
+    /// The branch or tag, by its full name.
+    r#ref: String,
+    #[serde(default)]
+    path: String,
+    /// `folder` (the default), `file` or `log`.
+    #[serde(default)]
+    show: String,
+}
+
+/// Read the copy of a repository on this computer: a folder, a file or the log
+/// of a branch or tag. The browser names the repository, the ref and a path
+/// inside it; the folder of the copy is rettui's.
+async fn repo_copy_files(State(state): State<WebState>, Query(query): Query<CopyQuery>) -> ApiResult {
+    let repo = repo_url(&query.url)?;
+    let dir = state.read(move |o| o.app.copy_dir(&repo)).await?.map_err(bad)?;
+    let (refname, path) = (query.r#ref, query.path);
+    let (file, log) = match query.show.as_str() {
+        "" | "folder" => (false, false),
+        "file" => (true, false),
+        "log" => (false, true),
+        _ => return Err(bad("Show a folder, a file or the log")),
+    };
+    let view = tokio::task::spawn_blocking(move || crate::app::repo_files::read(&dir, &refname, &path, file, log))
+        .await
+        .map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "Reading the copy stopped unexpectedly".into()))?;
+    match view {
+        crate::app::repo_files::BrowseView::Failed(e) => Err(ApiError(StatusCode::BAD_REQUEST, e)),
+        view => Ok(axum::Json(views::browse_json(&view))),
+    }
 }
 
 async fn repo_perms(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> ApiResult {

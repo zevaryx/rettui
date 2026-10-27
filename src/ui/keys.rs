@@ -58,6 +58,10 @@ fn repos_keys(app: &App) -> Keys {
             "Repos: release",
             &[("Enter", "download"), ("Esc", "back"), ("X", "delete release"), ("r", "reload"), ("y", "copy URL"), ("↑↓", "select")],
         ),
+        (_, Some(Detail::Browse(_)), _) => mode(
+            "Repos: copy",
+            &[("Enter", "open"), ("L", "log"), ("Esc", "back"), ("PgUp/PgDn", "scroll"), ("y", "copy URL"), ("↑↓", "select")],
+        ),
         (_, Some(Detail::Doc { .. }), _) => mode(
             "Repos: document",
             &[("c", "comment"), ("e", "edit"), ("x", "done/active"), ("Esc", "back"), ("X", "delete"), ("r", "reload"), ("↑↓", "scroll")],
@@ -82,6 +86,7 @@ fn repos_keys(app: &App) -> Keys {
         (_, None, RepoPane::Branches) => mode(
             "Repos: branches",
             &[
+                ("Enter", "look inside"),
                 ("m", "copy here"),
                 ("M", "delete copy"),
                 ("u", "send copy on"),

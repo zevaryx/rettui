@@ -44,6 +44,7 @@ pub mod paths;
 pub mod print;
 pub mod reach;
 pub mod recorder;
+pub mod repo_files;
 pub mod repos;
 pub mod reticulum;
 pub mod rncp;

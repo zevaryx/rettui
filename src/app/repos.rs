@@ -20,6 +20,7 @@ use rngit::client::{ReleaseDetail, ReleaseList, WorkKind, WorkList, WorkScope, W
 
 use super::{App, PromptKind, Tab, now};
 use crate::app::browser::Location;
+use crate::app::repo_files::{Browse, BrowseView};
 use crate::net::git::{Doc, GitReply, GitRequest, Mirrored, Pushed};
 use crate::net::heard::{Heard, Kind};
 use crate::net::{Hash, NetCommand};
@@ -99,8 +100,17 @@ pub struct GitNode {
 /// One thing of the open repository, opened.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Detail {
-    Release { tag: String, load: Load<ReleaseDetail> },
-    Doc { id: u64, scope: WorkScope, load: Load<Doc> },
+    Release {
+        tag: String,
+        load: Load<ReleaseDetail>,
+    },
+    Doc {
+        id: u64,
+        scope: WorkScope,
+        load: Load<Doc>,
+    },
+    /// A branch or tag of the copy on this computer.
+    Browse(Browse),
 }
 
 /// The repository open on the right.
@@ -114,6 +124,8 @@ pub struct OpenRepo {
     /// Which work documents the Work pane lists.
     pub scope: WorkScope,
     pub detail: Option<Detail>,
+    /// Whether the branches and tags are the copy's, because the node didn't answer.
+    pub from_copy: bool,
 }
 
 impl OpenRepo {
@@ -126,6 +138,7 @@ impl OpenRepo {
             perms: Load::Idle,
             scope: WorkScope::Active,
             detail: None,
+            from_copy: false,
         }
     }
 
@@ -483,7 +496,7 @@ impl App {
     /// The folder for a repository's copy, if another kept repository's copy
     /// isn't in the same one (on a system that doesn't tell capitals apart
     /// `Demo` and `demo` are).
-    fn mirror_dir_for(&self, url: &RepoUrl) -> Result<PathBuf, String> {
+    pub(super) fn mirror_dir_for(&self, url: &RepoUrl) -> Result<PathBuf, String> {
         let dir = mirror_dir(&self.paths.repos, url)?;
         let same = |other: &Path| other.to_string_lossy().to_lowercase() == dir.to_string_lossy().to_lowercase();
         let wanted = url.to_string();
@@ -497,6 +510,13 @@ impl App {
             Some(other) => Err(format!("{} has its copy in the same folder, as capitals don't count in a folder's name", other.url)),
             None => Ok(dir),
         }
+    }
+
+    /// The branches and tags of a repository's copy, if it has one that can be read.
+    pub fn copy_refs(&self, url: &RepoUrl) -> Option<rngit::RemoteRefs> {
+        let kept = url.to_string();
+        self.store.repos.iter().find(|r| r.url == kept)?.mirror.as_ref()?;
+        rngit::local::refs(&self.mirror_dir_for(url).ok()?).ok()
     }
 
     /// The request that makes (or updates) a repository's copy. The folder
@@ -641,7 +661,8 @@ impl App {
         match detail {
             Some(Detail::Release { tag, .. }) => self.open_release(&tag),
             Some(Detail::Doc { id, scope, .. }) => self.open_doc(id, scope),
-            None => {}
+            // The copy is on this computer: asking the node again changes nothing in it.
+            Some(Detail::Browse(_)) | None => {}
         }
     }
 
@@ -758,12 +779,21 @@ impl App {
             self.record_mirror(copy);
         }
         let Some(asked) = self.repos.asked.remove(&id) else { return };
+        // The node can't be asked: the copy on this computer still has the branches and tags.
+        let from_copy = match (&asked, &result) {
+            (Asked::Refs(repo), Err(_)) => self.copy_refs(repo),
+            _ => None,
+        };
         let open = self.repos.open.as_mut();
         let is_open = |repo: &RepoUrl, open: &Option<&mut OpenRepo>| open.as_ref().is_some_and(|o| o.url == *repo);
         match (asked, result) {
             (Asked::Refs(repo), result) if is_open(&repo, &open) => {
                 let open = open.expect("checked");
-                open.refs = into_load(result, |r| if let GitReply::Refs(refs) = r { Some(refs) } else { None });
+                open.from_copy = from_copy.is_some();
+                open.refs = match from_copy {
+                    Some(refs) => Load::Ready(refs),
+                    None => into_load(result, |r| if let GitReply::Refs(refs) = r { Some(refs) } else { None }),
+                };
             }
             (Asked::Releases(repo), result) if is_open(&repo, &open) => {
                 let open = open.expect("checked");
@@ -856,6 +886,11 @@ impl App {
         match (&open.detail, self.repos.pane) {
             (Some(Detail::Release { load, .. }), _) => load.ready().map_or(0, |d| d.artifacts.len()),
             (Some(Detail::Doc { .. }), _) => 0,
+            (Some(Detail::Browse(browse)), _) => match &browse.view {
+                BrowseView::Folder(entries) => entries.len(),
+                BrowseView::Log(commits) => commits.len(),
+                BrowseView::File(_) | BrowseView::Failed(_) => 0,
+            },
             (None, RepoPane::Branches) => open.refs.ready().map_or(0, |r| r.refs.len()),
             (None, RepoPane::Releases) => open.releases.ready().map_or(0, |r| r.releases.len()),
             (None, RepoPane::Work) => open.documents().len(),
@@ -864,9 +899,11 @@ impl App {
     }
 
     fn move_repo_items(&mut self, delta: isize) {
-        if matches!(self.repos.open.as_ref().and_then(|o| o.detail.as_ref()), Some(Detail::Doc { .. }))
-            || (self.repos.pane == RepoPane::Permissions && self.repos.open.as_ref().is_some_and(|o| o.detail.is_none()))
-        {
+        let reading = matches!(
+            self.repos.open.as_ref().and_then(|o| o.detail.as_ref()),
+            Some(Detail::Doc { .. } | Detail::Browse(Browse { view: BrowseView::File(_) | BrowseView::Failed(_), .. }))
+        );
+        if reading || (self.repos.pane == RepoPane::Permissions && self.repos.open.as_ref().is_some_and(|o| o.detail.is_none())) {
             self.repos.scroll = self.repos.scroll.saturating_add_signed(delta as i16);
             return;
         }
@@ -961,6 +998,7 @@ impl App {
             return;
         };
         match code {
+            KeyCode::Esc | KeyCode::Backspace if matches!(open.detail, Some(Detail::Browse(_))) => self.browse_up(),
             KeyCode::Esc | KeyCode::Backspace if open.detail.is_some() => {
                 if let Some(open) = &mut self.repos.open {
                     open.detail = None;
@@ -1021,6 +1059,16 @@ impl App {
                 self.open_prompt(PromptKind::Repo(RepoPrompt::ConfirmDeleteRelease(tag.clone())), &title, "");
                 Ok(())
             }
+            (Some(Detail::Browse(_)), _, KeyCode::Enter) => self.browse_enter(selected),
+            (Some(Detail::Browse(_)), _, KeyCode::Char('L')) => {
+                self.browse_log();
+                Ok(())
+            }
+            (Some(Detail::Browse(_)), _, _) => Ok(()),
+            (None, RepoPane::Branches, KeyCode::Enter) => match open.refs.ready().and_then(|r| r.refs.get(selected)) {
+                Some((_, name)) => self.browse_ref(&name.clone()),
+                None => Ok(()),
+            },
             (Some(Detail::Doc { id, scope, load }), _, code) => {
                 let (id, scope) = (*id, *scope);
                 match code {
@@ -1633,6 +1681,96 @@ mod tests {
         // And a link that isn't one says so, without asking anything.
         tui.app.open_address("rns://nothex/a/b");
         assert!(!tui.draw().contains("Copy it to this computer"));
+    }
+
+    /// A repository with a folder, a text file, a binary one and a file with control characters, copied.
+    fn copied_with_files(name: &str) -> (Tui, Source) {
+        let mut tui = Tui::new(name);
+        let source = Source::new(&tui.dir.join("source"));
+        std::fs::create_dir_all(source.0.join("docs/deep")).unwrap();
+        std::fs::write(source.0.join("docs/guide.md"), "# Guide\nline two\n").unwrap();
+        std::fs::write(source.0.join("docs/deep/x.txt"), "deep \x1b[31mred\x1b[0m\n").unwrap();
+        std::fs::write(source.0.join("blob.bin"), [0u8, 1, 2]).unwrap();
+        source.git(&["add", "."]);
+        source.git(&["commit", "-q", "-m", "files and folders"]);
+        source.git(&["tag", "v1"]);
+        open_demo(&mut tui);
+        tui.key(KeyCode::Char('m'));
+        copy_from(&mut tui, &source);
+        assert!(tui.app.store.repos[0].mirror.is_some());
+        (tui, source)
+    }
+
+    #[test]
+    fn the_copy_is_read_folder_by_folder_without_the_node() {
+        let (mut tui, _source) = copied_with_files("repos-browse");
+        // The node can't be asked, so the copy's branches show; Enter on one opens the top folder of
+        // the copy: folders first, then files with sizes.
+        tui.key(KeyCode::Char('r'));
+        answer_all(&mut tui, &Arc::new(Canned::default()));
+        tui.key(KeyCode::Enter);
+        let screen = tui.draw();
+        assert!(screen.contains("main · /") && screen.contains("▸ docs") && screen.contains("blob.bin  3 B"), "{screen}");
+        assert!(screen.find("▸ docs").unwrap() < screen.find("blob.bin").unwrap());
+        assert!(tui.sent().is_empty(), "nothing was asked of the node");
+
+        // Into a folder, into another, and a file's text with the escape codes taken out.
+        tui.key(KeyCode::Enter);
+        assert!(tui.draw().contains("main · /docs"));
+        tui.key(KeyCode::Enter);
+        tui.key(KeyCode::Enter);
+        let screen = tui.draw();
+        assert!(screen.contains("main · /docs/deep/x.txt") && screen.contains("deep [31mred[0m") && !screen.contains('\u{1b}'), "{screen}");
+        // Esc goes up one step at a time, then to the branches.
+        tui.key(KeyCode::Esc);
+        assert!(tui.draw().contains("main · /docs/deep") && tui.draw().contains("x.txt  "));
+        tui.key(KeyCode::Backspace);
+        tui.key(KeyCode::Esc);
+        assert!(tui.draw().contains("main · /"));
+        tui.key(KeyCode::Esc);
+        let screen = tui.draw();
+        assert!(screen.contains("branch main") && !screen.contains("▸ docs"), "{screen}");
+
+        // The log of a tag.
+        tui.key(KeyCode::Down).key(KeyCode::Down).key(KeyCode::Enter).key(KeyCode::Char('L'));
+        let screen = tui.draw();
+        assert!(screen.contains("v1 · newest commits") && screen.contains("files and folders") && screen.contains("one"), "{screen}");
+        tui.key(KeyCode::Esc);
+        assert!(tui.draw().contains("v1 · /"));
+        // A binary file says so.
+        tui.key(KeyCode::Down).key(KeyCode::Enter);
+        let screen = tui.draw();
+        assert!(screen.contains("Not text"), "{screen}");
+    }
+
+    #[test]
+    fn looking_inside_needs_a_copy_and_a_node_that_does_not_answer_shows_the_copy() {
+        let mut tui = Tui::new("repos-offline");
+        open_demo(&mut tui);
+        // No copy: nothing to look inside, and the node's refs are the only ones.
+        let node = Arc::new(demo_node(&Identity::new()));
+        tui.key(KeyCode::Char('r'));
+        answer_all(&mut tui, &node);
+        tui.key(KeyCode::Enter);
+        let screen = tui.draw();
+        assert!(tui.said().contains("no copy"), "{} {screen}", tui.said());
+
+        // A copy, and a node that can't be reached: the copy's branches and tags show instead.
+        let source = Source::new(&tui.dir.join("source"));
+        source.git(&["tag", "v1"]);
+        tui.key(KeyCode::Char('m'));
+        copy_from(&mut tui, &source);
+        tui.key(KeyCode::Char('r'));
+        answer_all(&mut tui, &Arc::new(Canned::default()));
+        let screen = tui.draw();
+        assert!(screen.contains("The node didn't answer: these are the copy's"), "{screen}");
+        assert!(screen.contains("branch main") && screen.contains("tag    v1") && screen.contains("HEAD"), "{screen}");
+        tui.key(KeyCode::Enter);
+        assert!(tui.draw().contains("main · /"));
+        // A node that answers again replaces them.
+        tui.key(KeyCode::Esc).key(KeyCode::Char('r'));
+        answer_all(&mut tui, &Arc::new(demo_node(&Identity::new())));
+        assert!(!tui.draw().contains("The node didn't answer"));
     }
 
     #[test]
