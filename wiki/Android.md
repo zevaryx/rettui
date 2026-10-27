@@ -55,7 +55,10 @@ repository.
   **Mark read** marks it read without opening rettui.
 - Recording voice messages and sharing your location ask for the
   microphone or location the first time.
-- Downloads (exports, backups, files from messages) go in Downloads.
+- Downloads (exports, backups, files from messages and NomadNet pages) go in
+  Downloads. **Where files are saved** (Status, under Backup) changes that:
+  pick a folder once with Android's own folder picker, or turn on **Ask each
+  time** to get its *Save as* screen for every file.
 - The back button closes what's open on top (a ⋯ sheet, a dialog), then
   goes back from a conversation, room or page to its list.
 - Joins and leaves in RRC rooms start hidden on the phone. **Show joins and

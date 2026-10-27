@@ -15,6 +15,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.view.Gravity
@@ -53,7 +54,7 @@ class MainActivity : Activity() {
         const val AGENT = "rettui-android/1"
 
         /** The web UI's links to the app's own screens. */
-        private val SCREENS = mapOf("rettui-app:backups" to BackupsActivity::class.java, "rettui-app:rnodes" to RNodesActivity::class.java)
+        private val SCREENS = mapOf("rettui-app:backups" to BackupsActivity::class.java, "rettui-app:rnodes" to RNodesActivity::class.java, "rettui-app:downloads" to DownloadsActivity::class.java)
 
         /** What a notification tapped is about (JSON, as the web UI has it). */
         const val EXTRA_TARGET = "target"
@@ -61,6 +62,7 @@ class MainActivity : Activity() {
         private const val ASK_MICROPHONE = 2
         private const val ASK_LOCATION = 3
         private const val PICK_FILES = 4
+        private const val SAVE_FILE = 5
 
         /** Links other apps may open with rettui (see AndroidManifest.xml). */
         private val SCHEMES = setOf("lxma", "lxmf", "nomadnetwork", "rrc")
@@ -378,15 +380,37 @@ class MainActivity : Activity() {
         web.setDownloadListener { url, _, disposition, mime, _ -> download(url, disposition, mime) }
     }
 
+    /** A download waiting for the "save as" screen: its address, name and type. */
+    private var pendingSave: Triple<String, String, String>? = null
+
     /**
      * Save what the web UI offers to download (an export, a backup, a file
-     * from a message) in Downloads. rettui's own pages only: the request
-     * carries the login.
+     * from a message) where Settings, Where files are saved, says: asked
+     * for each time, in the folder picked, or in Downloads. rettui's own
+     * pages only: the request carries the login.
      */
     private fun download(url: String, disposition: String?, mime: String?) {
         val uri = Uri.parse(url)
         if (!local(uri)) return
         val name = URLUtil.guessFileName(url, disposition, mime)
+        val type = mime ?: "application/octet-stream"
+        if (DownloadsActivity.asks(this)) {
+            pendingSave = Triple(url, name, type)
+            try {
+                startActivityForResult(
+                    Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(type).putExtra(Intent.EXTRA_TITLE, name),
+                    SAVE_FILE,
+                )
+                return
+            } catch (e: Exception) {
+                pendingSave = null
+            }
+        }
+        save(url, name, type, null)
+    }
+
+    /** Fetch `url` and write it to `target` (the file asked for), else the folder picked, else Downloads. */
+    private fun save(url: String, name: String, type: String, target: Uri?) {
         val cookie = CookieManager.getInstance().getCookie(url)
         Toast.makeText(this, "Downloading $name", Toast.LENGTH_SHORT).show()
         Thread {
@@ -395,10 +419,19 @@ class MainActivity : Activity() {
                 cookie?.let { connection.setRequestProperty("Cookie", it) }
                 RettuiService.token(this)?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
                 connection.inputStream.use { input ->
-                    if (Build.VERSION.SDK_INT >= 29) {
+                    val folder = DownloadsActivity.folder(this)
+                    if (target != null) {
+                        contentResolver.openOutputStream(target)!!.use { input.copyTo(it) }
+                        getString(R.string.downloads_saved, name)
+                    } else if (folder != null) {
+                        val parent = DocumentsContract.buildDocumentUriUsingTree(folder, DocumentsContract.getTreeDocumentId(folder))
+                        val saved = DocumentsContract.createDocument(contentResolver, parent, type, name) ?: error("couldn't make the file in that folder")
+                        contentResolver.openOutputStream(saved)!!.use { input.copyTo(it) }
+                        getString(R.string.downloads_saved, name)
+                    } else if (Build.VERSION.SDK_INT >= 29) {
                         val values = ContentValues().apply {
                             put(MediaStore.Downloads.DISPLAY_NAME, name)
-                            put(MediaStore.Downloads.MIME_TYPE, mime ?: "application/octet-stream")
+                            put(MediaStore.Downloads.MIME_TYPE, type)
                         }
                         val saved = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                             ?: error("no room in Downloads")
@@ -433,6 +466,13 @@ class MainActivity : Activity() {
         if (requestCode == PICK_FILES) {
             pendingFiles?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
             pendingFiles = null
+            return
+        }
+        if (requestCode == SAVE_FILE) {
+            val (url, name, type) = pendingSave ?: return
+            pendingSave = null
+            val target = data?.data
+            if (resultCode == RESULT_OK && target != null) save(url, name, type, target) else Toast.makeText(this, "Not saved", Toast.LENGTH_SHORT).show()
             return
         }
         super.onActivityResult(requestCode, resultCode, data)

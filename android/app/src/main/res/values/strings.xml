@@ -30,6 +30,14 @@
     <string name="working">Working…</string>
     <string name="done">Done</string>
     <string name="failed">That didn\'t work</string>
+    <string name="downloads">Where files are saved</string>
+    <string name="downloads_note">Files the web UI offers to download (from NomadNet, exports, backups) are saved in Downloads, in a folder you pick, or wherever you say each time.</string>
+    <string name="downloads_ask">Ask each time</string>
+    <string name="downloads_in_downloads">Saved in: Downloads</string>
+    <string name="downloads_in_folder">Saved in: %1$s</string>
+    <string name="downloads_choose">Choose a folder…</string>
+    <string name="downloads_default">Use Downloads</string>
+    <string name="downloads_saved">Saved %1$s</string>
     <string name="rnodes">RNodes</string>
     <string name="usb">Over USB</string>
     <string name="usb_note">Plugged in with a USB-C cable or an OTG adapter. Tap one to let rettui use it and add it to the Reticulum config.</string>
