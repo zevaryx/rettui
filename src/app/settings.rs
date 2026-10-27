@@ -94,6 +94,7 @@ impl App {
                     intervals = true;
                 }
                 "home" => self.settings.home = after.home.clone(),
+                "nomad_files_dir" => self.settings.nomad_files_dir = after.nomad_files_dir.clone(),
                 "discovered_entry_points" => {
                     self.settings.discovered_entry_points = after.discovered_entry_points;
                     self.send(NetCommand::SetDiscoveredEntryPoints(after.discovered_entry_points));
@@ -427,6 +428,7 @@ mod tests {
                     "home" => home.clone(),
                     "node_name" => "Hilltop".into(),
                     "node_dir" => node_dir.clone(),
+                    "nomad_files_dir" => dir.join("saved").display().to_string(),
                     "pn_name" => "Hilltop messages".into(),
                     "hub_name" => "Hilltop chat".into(),
                     "hub_greeting" => "Welcome\\nand hello".into(),
@@ -462,6 +464,7 @@ mod tests {
         refused(&mut app, "rns_config", &elsewhere);
         refused(&mut app, "rns_config", "");
         refused(&mut app, "node_dir", &elsewhere);
+        refused(&mut app, "nomad_files_dir", &elsewhere);
         // Nor a file to read map tiles from.
         let offline_map = dir.join("region.mbtiles");
         crate::web::mbtiles::sample(&offline_map, "png");
