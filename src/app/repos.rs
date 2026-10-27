@@ -23,7 +23,7 @@ use crate::app::browser::Location;
 use crate::app::repo_files::{Browse, BrowseView};
 use crate::net::git::{Doc, GitReply, GitRequest, Mirrored, Pushed};
 use crate::net::heard::{Heard, Kind};
-use crate::net::{Hash, NetCommand};
+use crate::net::{self, Hash, NetCommand, PeerKind};
 use crate::store::{SavedMirror, SavedRepo};
 
 /// Most repositories kept.
@@ -414,6 +414,8 @@ pub fn release_request(tag: &str, notes: &str, files: Vec<(String, Vec<u8>)>) ->
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoPrompt {
     Add,
+    /// The node with an rngit node's pages.
+    PageNode(Hash),
     ConfirmRemove(String),
     NewTitle(bool),
     NewText {
@@ -935,6 +937,13 @@ impl App {
                 let start = node.map_or_else(|| "rns://".to_string(), |n| format!("rns://{}/", hex::encode(n.hash)));
                 self.open_prompt(PromptKind::Repo(RepoPrompt::Add), "Add a repository (rns://node/group/repo)", &start)
             }
+            (ReposFocus::List, KeyCode::Char('b')) => {
+                let selected = self.repos.side.selected().unwrap_or(0);
+                match selected.checked_sub(self.store.repos.len()).and_then(|i| self.repos.nodes.get(i)).map(|n| n.hash) {
+                    Some(hash) => self.browse_git_node(hash, true),
+                    None => self.warn("b is for a node: select one below the repositories"),
+                }
+            }
             (ReposFocus::List, KeyCode::Down | KeyCode::Char('j')) => self.move_repos_side(1),
             (ReposFocus::List, KeyCode::Up | KeyCode::Char('k')) => self.move_repos_side(-1),
             (ReposFocus::List, KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')) => self.open_side(),
@@ -988,8 +997,107 @@ impl App {
                 self.warn(e);
             }
         } else if let Some(node) = self.repos.nodes.get(selected - self.store.repos.len()).cloned() {
-            self.navigate(Location { node: node.hash, path: "/page/index.mu".into(), fields: Default::default() });
+            self.browse_git_node(node.hash, false);
         }
+    }
+
+    /// The node with an rngit node's pages, if one is kept and still known.
+    pub fn page_node_for(&self, git: Hash) -> Option<Hash> {
+        let kept = self.store.git_pages.get(&hex::encode(git))?;
+        net::parse_hash(kept)
+    }
+
+    /// Nomad nodes that look like the pages of an rngit node: the same name
+    /// (capitals and spaces don't count), nearest first.
+    pub fn page_node_suggestions(&self, git: Hash) -> Vec<(Hash, String)> {
+        let plain = |name: &str| name.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+        let Some(wanted) = self.repos.nodes.iter().find(|n| n.hash == git).and_then(|n| n.name.as_deref()).map(plain) else {
+            return Vec::new();
+        };
+        if wanted.is_empty() {
+            return Vec::new();
+        }
+        let mut found: Vec<_> = self
+            .store
+            .peers
+            .iter()
+            .filter(|(_, p)| p.kind == PeerKind::Nomad)
+            .filter_map(|(hash, p)| {
+                let name = p.name.as_deref()?;
+                let plain = plain(name);
+                let near = !plain.is_empty() && (plain.contains(&wanted) || wanted.contains(&plain));
+                near.then_some(()).and(net::parse_hash(hash)).map(|hash| (hash, name.to_string(), p.hops))
+            })
+            .collect();
+        found.sort_by_key(|(_, _, hops)| *hops);
+        found.truncate(5);
+        found.into_iter().map(|(hash, name, _)| (hash, name)).collect()
+    }
+
+    /// Open the pages of an rngit node. A node that serves them from another
+    /// identity is asked for once, with a guess by name; after that the
+    /// choice is kept. `change` asks again.
+    pub fn browse_git_node(&mut self, git: Hash, change: bool) {
+        if let Some(pages) = self.page_node_for(git).filter(|_| !change) {
+            return self.navigate(Location { node: pages, path: "/page/index.mu".into(), fields: Default::default() });
+        }
+        let suggestions = self.page_node_suggestions(git);
+        let start = self.page_node_for(git).or(suggestions.first().map(|(hash, _)| *hash)).map(hex::encode).unwrap_or_default();
+        let mut title = "Which NomadNet node has its pages? Its address; empty to try this node".to_string();
+        if !suggestions.is_empty() {
+            let names: Vec<_> = suggestions.iter().map(|(hash, name)| format!("{name} {}", &hex::encode(hash)[..8])).collect();
+            title = format!("{title} (like: {})", names.join(", "));
+        }
+        self.open_prompt(PromptKind::Repo(RepoPrompt::PageNode(git)), &title, &start);
+    }
+
+    /// Keep (or, with `None`, forget) the node with an rngit node's pages.
+    pub fn set_page_node(&mut self, git: Hash, pages: Option<Hash>) {
+        let key = hex::encode(git);
+        let changed = match pages {
+            Some(pages) => self.store.git_pages.insert(key, hex::encode(pages)) != Some(hex::encode(pages)),
+            None => self.store.git_pages.remove(&key).is_some(),
+        };
+        if changed {
+            self.store_dirty = true;
+        }
+    }
+
+    /// The repositories a page's Micron source links to, in order, each once.
+    pub fn repos_linked(source: &str) -> Vec<RepoUrl> {
+        let mut seen = Vec::new();
+        for link in crate::links::find(source).into_iter().filter(|l| l.kind == crate::links::LinkKind::Git) {
+            if let Ok(repo) = parse_repo(&link.url)
+                && !seen.contains(&repo)
+            {
+                seen.push(repo);
+            }
+        }
+        seen
+    }
+
+    /// Keep every repository a page links to. How many were new.
+    pub fn add_repos_linked(&mut self, source: &str) -> Result<usize, String> {
+        let repos = Self::repos_linked(source);
+        if repos.is_empty() {
+            return Err("This page has no links to repositories (rns://<node>/<group>/<repo>)".into());
+        }
+        let mut added = 0;
+        for repo in repos {
+            let url = repo.to_string();
+            if self.store.repos.iter().any(|r| r.url == url) {
+                continue;
+            }
+            self.add_repo(&url)?;
+            added += 1;
+        }
+        Ok(added)
+    }
+
+    /// Keep every repository the shown page links to.
+    pub fn add_page_repos(&mut self) -> Result<usize, String> {
+        let source = self.browser.tab.source.clone().unwrap_or_default();
+        self.add_repos_linked(&source)
     }
 
     fn repo_key(&mut self, code: KeyCode) {
@@ -1139,6 +1247,20 @@ impl App {
         let yes = text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes");
         let result = match prompt {
             RepoPrompt::Add => self.open_repo(text),
+            RepoPrompt::PageNode(git) => {
+                let text = text.trim().trim_matches(['<', '>']);
+                if text.is_empty() {
+                    self.set_page_node(git, None);
+                    self.navigate(Location { node: git, path: "/page/index.mu".into(), fields: Default::default() });
+                    Ok(())
+                } else if let Some(pages) = net::parse_hash(text) {
+                    self.set_page_node(git, Some(pages));
+                    self.navigate(Location { node: pages, path: "/page/index.mu".into(), fields: Default::default() });
+                    Ok(())
+                } else {
+                    Err("An address is 32 hex characters".into())
+                }
+            }
             RepoPrompt::ConfirmRemove(url) if yes => {
                 self.remove_repo(&url);
                 Ok(())
@@ -1460,7 +1582,8 @@ mod tests {
         let heard = Heard { hash, kind: Kind::Git, aspect: Some(crate::net::git::GIT_ASPECT), name: None, hops: 2 };
         tui.app.on_net(NetEvent::Heard(heard));
         assert!(tui.draw().contains("node 07070707"));
-        tui.key(KeyCode::Enter);
+        // With no other node to guess, the prompt starts empty; empty tries the node itself.
+        tui.key(KeyCode::Enter).answer("");
         assert_eq!(tui.app.tab, Tab::Browser);
         let asked = tui.sent();
         assert!(
@@ -1502,6 +1625,80 @@ mod tests {
         tui.key(KeyCode::Char('D')).answer("y");
         assert!(tui.app.store.repos.is_empty() && tui.app.repos.open.is_none());
         assert!(tui.draw().contains("Pick a repository"));
+    }
+
+    #[test]
+    fn a_node_with_its_pages_on_another_identity() {
+        use crate::net::PeerKind;
+        use crate::store::Peer;
+        let mut tui = Tui::with("repos-pages", |_| {});
+        tui.tab(Tab::Repos);
+        let (git, pages, other) = ([7; 16], [9; 16], [8; 16]);
+        let heard =
+            Heard { hash: git, kind: Kind::Git, aspect: Some(crate::net::git::GIT_ASPECT), name: Some("Moon Forge".into()), hops: 2 };
+        tui.app.on_net(NetEvent::Heard(heard));
+        let nomad = |name: &str, hops| Peer { kind: PeerKind::Nomad, name: Some(name.into()), hops, last_seen: 1 };
+        tui.app.store.peers.insert(hex::encode(pages), nomad("moon forge pages", 3));
+        tui.app.store.peers.insert(hex::encode(other), nomad("Somewhere else", 1));
+        // Only the node that has the name is guessed.
+        let guessed = tui.app.page_node_suggestions(git);
+        assert_eq!(guessed.len(), 1);
+        assert_eq!(guessed[0].0, pages);
+
+        // The prompt starts with the guess; the choice is kept and the pages open.
+        tui.draw();
+        tui.key(KeyCode::Enter);
+        let screen = tui.draw();
+        assert!(screen.contains(&hex::encode(pages)), "{screen}");
+        tui.key(KeyCode::Enter);
+        assert_eq!(tui.app.tab, Tab::Browser);
+        assert_eq!(tui.app.page_node_for(git), Some(pages));
+        assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::Fetch { node, .. } if *node == pages)));
+
+        // Next time it opens without asking; `b` asks again, and a mistake is refused.
+        tui.tab(Tab::Repos);
+        tui.key(KeyCode::Enter);
+        assert_eq!(tui.app.tab, Tab::Browser);
+        assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::Fetch { node, .. } if *node == pages)));
+        tui.tab(Tab::Repos);
+        tui.key(KeyCode::Char('b')).answer("nonsense");
+        assert!(tui.said().contains("32 hex"), "{}", tui.said());
+        assert_eq!(tui.app.page_node_for(git), Some(pages));
+        let clear = |tui: &mut Tui| {
+            for _ in 0..40 {
+                tui.key(KeyCode::Backspace);
+            }
+        };
+        tui.key(KeyCode::Char('b'));
+        clear(&mut tui);
+        tui.answer(&hex::encode(other));
+        assert_eq!(tui.app.page_node_for(git), Some(other));
+        // Empty forgets it.
+        tui.tab(Tab::Repos);
+        tui.key(KeyCode::Char('b'));
+        clear(&mut tui);
+        tui.key(KeyCode::Enter);
+        assert_eq!(tui.app.page_node_for(git), None);
+        // It's saved with the rest.
+        tui.app.set_page_node(git, Some(pages));
+        assert_eq!(tui.app.store.snapshot().git_pages.len(), 1);
+    }
+
+    #[test]
+    fn every_repository_on_a_page_is_kept() {
+        let mut tui = Tui::with("repos-page", |_| {});
+        tui.tab(Tab::Browser);
+        assert!(tui.app.add_page_repos().is_err());
+        let a = format!("rns://{NODE}/public/a");
+        let b = format!("rns://{NODE}/public/b.git");
+        tui.app.browser.tab.source = Some(format!("`[clone]`{a}\nSee {a} and {b}, or `[x`{NODE}:/page/index.mu]\nnot rns://nowhere/x/y"));
+        assert_eq!(tui.app.add_page_repos(), Ok(2));
+        let kept: Vec<_> = tui.app.store.repos.iter().map(|r| r.url.clone()).collect();
+        assert_eq!(kept, [a, format!("rns://{NODE}/public/b")]);
+        // Again: nothing new.
+        tui.key(KeyCode::Char('a'));
+        assert!(tui.said().contains("kept already"), "{}", tui.said());
+        assert_eq!(tui.app.store.repos.len(), 2);
     }
 
     #[test]

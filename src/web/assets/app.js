@@ -2350,7 +2350,7 @@ function choose(title, choices, { text } = {}) {
 // A line of text asked for: null when it's cancelled. With `act`, OK runs
 // it on the (trimmed) text while the dialog stays open, and what it throws
 // is shown there to put right; then it's what `act` returned.
-function askText(title, { label = '', value = '', placeholder = '', ok = 'OK', act, mono = false } = {}) {
+function askText(title, { label = '', value = '', placeholder = '', ok = 'OK', act, mono = false, empty = false } = {}) {
   return new Promise((resolve) => {
     let answer = null;
     dialog(title, (close) => {
@@ -2359,7 +2359,7 @@ function askText(title, { label = '', value = '', placeholder = '', ok = 'OK', a
       const button = el('button', { class: 'primary', text: ok });
       const submit = async () => {
         const text = input.value.trim();
-        if (!text) return input.focus();
+        if (!text && !empty) return input.focus();
         if (!act) {
           answer = text;
           return close();
@@ -5966,6 +5966,8 @@ app.views.browser = {
         this.renderPage();
       } }),
       find: el('button', { text: 'Find', title: 'Find in the page (f)', onclick: () => this.openFind() }),
+      repos: el('button', { text: 'Keep repos', title: 'Keep every repository this page links to, in the Repos section',
+        onclick: () => this.page && app.views.repos.keepLinked(this.page.source) }),
       newTab: el('button', { text: '+', 'data-label': 'New tab', 'aria-label': 'New tab', title: 'A new tab (T); Ctrl+click or middle-click a link opens it in one',
         onclick: () => this.newTab() }),
       clear: el('button', { text: 'Clear cache', onclick: async () => {
@@ -5992,7 +5994,7 @@ app.views.browser = {
       el('button', { text: '↑', title: 'Previous (Shift+Enter)', onclick: () => this.find(-1) }),
       el('button', { text: '↓', title: 'Next (Enter)', onclick: () => this.find(1) }),
       el('button', { text: '×', title: 'Done (Esc)', onclick: () => this.closeFind() }));
-    const tools = el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find,
+    const tools = el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find, this.buttons.repos,
       this.buttons.newTab, this.buttons.clear);
     root.append(
       el('section', { class: 'panel side' }, el('header', {}, this.paneTabs,
@@ -6106,7 +6108,7 @@ app.views.browser = {
 
   renderButtons() {
     const page = this.page;
-    for (const name of ['reload', 'save', 'identify', 'source']) this.buttons[name].disabled = !page;
+    for (const name of ['reload', 'save', 'identify', 'source', 'repos']) this.buttons[name].disabled = !page;
     this.buttons.back.disabled = !this.history.length;
     this.buttons.save.textContent = page?.saved ? '★ Saved' : '☆ Save';
     this.buttons.save.classList.toggle('on', !!page?.saved);
@@ -8181,9 +8183,13 @@ app.views.repos = {
       if (state.nodes.length) {
         items.push(el('div', { class: 'list-heading dim', text: 'rngit nodes heard' }));
         for (const node of state.nodes) {
-          items.push(el('div', { class: 'list-item', title: 'Open the node in the Browser', onclick: () => browse(`${node.address}:/page/index.mu`) },
+          items.push(el('div', { class: 'list-item', title: 'Open the node\'s pages in the Browser', onclick: () => this.pages(node, false) },
             el('span', { class: 'main' }, el('div', { class: 'name' }, el('span', { class: 'tag git', text: 'GIT' }), ' ', node.name || `node ${node.address.slice(0, 8)}`),
               el('div', { class: 'sub', text: `${node.hops} ${node.hops === 1 ? 'hop' : 'hops'}, ${ago(node.at)} ago` })),
+            el('button', { text: '⌂', title: 'Choose which NomadNet node has this node\'s pages', onclick: (e) => {
+              e.stopPropagation();
+              this.pages(node, true);
+            } }),
             el('button', { text: '+', title: 'Add a repository on this node (a node doesn\'t list them: add one by name)', onclick: (e) => {
               e.stopPropagation();
               this.add(`rns://${node.address}/`);
@@ -8194,6 +8200,29 @@ app.views.repos = {
         : [el('div', { class: 'empty', text: 'No repositories yet. Add one by its rns:// URL; a link to one in a message or page opens it. rngit nodes show here when they announce.' })]));
     }
     this.render();
+  },
+
+  // Open an rngit node's pages. Most nodes serve them from an identity of
+  // their own: it is asked for once (with guesses by name) and kept.
+  async pages(node, change) {
+    if (node.pages && !change) return browse(`${node.pages}:/page/index.mu`);
+    const names = node.suggestions.map((s) => `${s.name} ${s.address.slice(0, 8)}`).join(', ');
+    const label = `The NomadNet node with its pages: its address. Leave it empty to try the node itself.${names ? ` Like: ${names}` : ''}`;
+    const text = await askText('Pages of this node', { label, value: node.pages || node.suggestions[0]?.address || '', ok: 'Open', mono: true, empty: true,
+      act: async (text) => {
+        await api.post('/repos/pages', { node: node.address, pages: text });
+        return text;
+      } });
+    if (text === null) return;
+    this.update();
+    browse(`${text || node.address}:/page/index.mu`);
+  },
+
+  // Keep every repository the page in the Browser links to.
+  async keepLinked(source) {
+    const done = await attempt(() => api.post('/repos/page', { source }));
+    if (!done) return;
+    toast(done.added ? `Kept ${done.added} ${done.added === 1 ? 'repository' : 'repositories'} from this page, in Repos` : 'Every repository on this page is kept already');
   },
 
   async remove(repo) {

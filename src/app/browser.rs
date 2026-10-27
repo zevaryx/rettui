@@ -1044,6 +1044,16 @@ impl App {
                 return self.copy(&text, "page text");
             }
             KeyCode::Char('L') => return self.copy_selected_link(),
+            KeyCode::Char('a') => {
+                match self.add_page_repos() {
+                    Ok(0) => self.notify("Every repository on this page is kept already"),
+                    Ok(n) => {
+                        self.notify(format!("Kept {n} repositor{} from this page, in the Repos tab", if n == 1 { "y" } else { "ies" }))
+                    }
+                    Err(e) => self.warn(e),
+                }
+                return;
+            }
             KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return self.paste_from_clipboard();
             }

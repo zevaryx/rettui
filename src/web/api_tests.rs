@@ -1485,6 +1485,41 @@ async fn a_speed_test_over_the_api() {
 }
 
 #[tokio::test]
+async fn an_rngit_nodes_pages_and_repositories_linked_from_a_page() {
+    use crate::net::git::GIT_ASPECT;
+    use crate::net::heard::{Heard, Kind};
+    let web = TestWeb::start("repos-pages");
+    let (git, pages) = ([7u8; 16], [9u8; 16]);
+    web.with_owner(move |o| {
+        o.apply(NetEvent::Heard(Heard { hash: git, kind: Kind::Git, aspect: Some(GIT_ASPECT), name: Some("Moon Forge".into()), hops: 1 }));
+        o.app.store.peers.insert(
+            hex::encode(pages),
+            crate::store::Peer { kind: PeerKind::Nomad, name: Some("Moon Forge pages".into()), hops: 2, last_seen: 1 },
+        );
+    })
+    .await;
+    let node = web.get("/api/repos").await.json()["nodes"][0].clone();
+    assert!(node["pages"].is_null());
+    assert_eq!(node["suggestions"][0]["address"], hex::encode(pages));
+
+    // Kept, shown, changed and forgotten; a mistake is refused.
+    let (git, pages) = (hex::encode(git), hex::encode(pages));
+    assert_eq!(web.post("/api/repos/pages", json!({ "node": git, "pages": pages })).await.status, StatusCode::OK);
+    assert_eq!(web.get("/api/repos").await.json()["nodes"][0]["pages"], pages);
+    assert_eq!(web.post("/api/repos/pages", json!({ "node": git, "pages": "nope" })).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.post("/api/repos/pages", json!({ "node": "nope" })).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(web.post("/api/repos/pages", json!({ "node": git })).await.status, StatusCode::OK);
+    assert!(web.get("/api/repos").await.json()["nodes"][0]["pages"].is_null());
+
+    // Every repository a page links to.
+    let source = format!("`[clone]`rns://{NODE}/public/a and rns://{NODE}/public/b");
+    assert_eq!(web.post("/api/repos/page", json!({ "source": source })).await.json()["added"], 2);
+    assert_eq!(web.post("/api/repos/page", json!({ "source": source })).await.json()["added"], 0);
+    assert_eq!(web.get("/api/repos").await.json()["repos"].as_array().unwrap().len(), 2);
+    assert_eq!(web.post("/api/repos/page", json!({ "source": "no links" })).await.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn rngit_repositories_over_the_api() {
     use base64::Engine;
     use rns_identity::identity::Identity;

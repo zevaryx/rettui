@@ -168,6 +168,8 @@ pub fn router(state: WebState) -> Router {
         .route("/rncp/send", post(rncp_send))
         .route("/repos", get(repos).post(add_repo))
         .route("/repos/remove", post(remove_repo))
+        .route("/repos/page", post(repos_on_page))
+        .route("/repos/pages", post(set_repo_pages))
         .route("/repos/mirror", post(repo_mirror))
         .route("/repos/mirror/delete", post(repo_delete_mirror))
         .route("/repos/push", post(repo_push))
@@ -2471,6 +2473,37 @@ async fn repos(State(state): State<WebState>) -> ApiResult {
 async fn add_repo(State(state): State<WebState>, axum::Json(body): axum::Json<UrlBody>) -> ApiResult {
     let url = state.write(move |o| o.app.add_repo(&body.url)).await??;
     Ok(axum::Json(json!({ "url": url })))
+}
+
+#[derive(Deserialize)]
+struct PageSource {
+    source: String,
+}
+
+/// Keep every repository a page links to. The browser sends the page's
+/// source; what's kept is only what `rns://` links in it say.
+async fn repos_on_page(State(state): State<WebState>, axum::Json(body): axum::Json<PageSource>) -> ApiResult {
+    let added = state.write(move |o| o.app.add_repos_linked(&body.source)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "added": added })))
+}
+
+#[derive(Deserialize)]
+struct RepoPages {
+    node: String,
+    /// The NomadNet node with its pages; left out to forget it.
+    #[serde(default)]
+    pages: Option<String>,
+}
+
+/// Keep which NomadNet node has an rngit node's pages.
+async fn set_repo_pages(State(state): State<WebState>, axum::Json(body): axum::Json<RepoPages>) -> ApiResult {
+    let node = crate::net::parse_hash(&body.node).ok_or_else(|| bad("A node is 32 hex characters"))?;
+    let pages = match body.pages.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(text) => Some(crate::net::parse_hash(text.trim_matches(['<', '>'])).ok_or_else(|| bad("An address is 32 hex characters"))?),
+        None => None,
+    };
+    state.write(move |o| o.app.set_page_node(node, pages)).await?;
+    ok()
 }
 
 async fn remove_repo(State(state): State<WebState>, axum::Json(body): axum::Json<UrlBody>) -> ApiResult {

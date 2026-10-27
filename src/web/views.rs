@@ -815,8 +815,17 @@ pub fn repos(app: &App) -> Value {
                 "mirror": r.mirror.as_ref().map(mirror_json) }))
         })
         .collect();
-    let nodes: Vec<Value> =
-        app.repos.nodes.iter().map(|n| json!({ "address": hex::encode(n.hash), "name": n.name, "hops": n.hops, "at": n.at })).collect();
+    let nodes: Vec<Value> = app
+        .repos
+        .nodes
+        .iter()
+        .map(|n| {
+            let suggestions: Vec<Value> =
+                app.page_node_suggestions(n.hash).into_iter().map(|(h, name)| json!({ "address": hex::encode(h), "name": name })).collect();
+            json!({ "address": hex::encode(n.hash), "name": n.name, "hops": n.hops, "at": n.at,
+                "pages": app.page_node_for(n.hash).map(hex::encode), "suggestions": suggestions })
+        })
+        .collect();
     let rngit = app.rngit_identity_file();
     json!({
         "repos": repos,

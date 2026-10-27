@@ -28,10 +28,32 @@ end is optional).
   **⌂ node** and its address, nearest first (in the web UI, under
   *rngit nodes heard*). A node can't list what it hosts, so opening one
   (`Enter`, or a click in the web UI) shows the node's pages in the
-  [Browser](NomadNet-Browsing). To add a repository on it, press `n` with the
-  node picked (**+** beside it in the web UI): the address starts with the node's.
+  [Browser](NomadNet-Browsing); see [A node's pages](#a-nodes-pages). To add a
+  repository on it, press `n` with the node picked (**+** beside it in the
+  web UI): the address starts with the node's.
 - `D` (**×** in the web UI) removes a repository from the list (on the
   node, nothing changes), and `y` copies its URL.
+
+### A node's pages
+
+Most rngit nodes serve their pages (the list of what they host, and how to
+reach it) from a NomadNet identity of their own, so the page isn't at the
+rngit node's address and opening that does nothing. The first time you open a
+node, rettui asks which NomadNet node has its pages. It starts with a guess:
+nodes heard whose name matches the rngit node's (capitals and spaces don't
+count), nearest first, the best in the box and the rest named in the question.
+Type or paste the address of the one you want and press Enter. Leaving it
+empty tries the rngit node itself and forgets any choice.
+
+The choice is kept, so the next time the node opens its pages straight away.
+`b` in the list (**⌂** beside the node in the web UI) asks again, to change it.
+
+### Adding the repositories on a page
+
+A node's page usually links to its repositories as `rns://` links. `a` in the
+Browser (**Keep repos** in the web UI) keeps every repository the page links to
+in the Repos tab at once, those not kept yet, and says how many were new. It
+doesn't copy them to this computer; open one to do that.
 
 ## Reading a repository
 

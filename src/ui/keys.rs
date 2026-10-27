@@ -51,9 +51,18 @@ fn typing(title: &'static str, keys: KeyList) -> Keys {
 fn repos_keys(app: &App) -> Keys {
     let detail = app.repos.open.as_ref().and_then(|o| o.detail.as_ref());
     match (app.repos.focus, detail, app.repos.pane) {
-        (ReposFocus::List, ..) => {
-            mode("Repos", &[("Enter", "open"), ("n", "add"), ("D", "remove"), ("y", "copy URL"), ("Tab", "repository"), ("↑↓", "select")])
-        }
+        (ReposFocus::List, ..) => mode(
+            "Repos",
+            &[
+                ("Enter", "open"),
+                ("n", "add"),
+                ("b", "node's pages"),
+                ("D", "remove"),
+                ("y", "copy URL"),
+                ("Tab", "repository"),
+                ("↑↓", "select"),
+            ],
+        ),
         (_, Some(Detail::Release { .. }), _) => mode(
             "Repos: release",
             &[("Enter", "download"), ("Esc", "back"), ("X", "delete release"), ("r", "reload"), ("y", "copy URL"), ("↑↓", "select")],
@@ -508,6 +517,7 @@ pub fn keys(app: &App) -> Keys {
                 ("y", "copy"),
                 ("Y", "copy page"),
                 ("L", "copy link"),
+                ("a", "keep repositories"),
                 ("u", "source"),
                 ("I", "identify"),
                 ("H", "home"),

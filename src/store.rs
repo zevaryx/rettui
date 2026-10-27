@@ -548,6 +548,10 @@ pub struct Store {
     /// added.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub repos: Vec<SavedRepo>,
+    /// For an rngit node (hex), the NomadNet node (hex) that has its pages:
+    /// most rngit nodes serve them from an identity of their own.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub git_pages: BTreeMap<String, String>,
     /// Emoji picked lately, newest first (for the pickers).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recent_emoji: Vec<String>,
@@ -995,6 +999,7 @@ impl Store {
             saved: self.saved.clone(),
             rrc_hubs: self.rrc_hubs.clone(),
             repos: self.repos.clone(),
+            git_pages: self.git_pages.clone(),
             recent_emoji: self.recent_emoji.clone(),
             migration_notes: Vec::new(),
             rewrite_store: false,

@@ -58,6 +58,8 @@ network.
   the source view, and `Y` copies the source exactly as the node sent it.
 - **Copying:** drag across page text to copy it, `Y` copies the whole page,
   and `L` copies the selected link.
+- **Repositories on a page:** `a` (**Keep repos** in the web UI) keeps every
+  `rns://` repository the page links to in the [Repos](Repos#adding-the-repositories-on-a-page) tab.
 - **Finding in a page:** `f` (or Ctrl-F in the TUI, or **Find** in the web
   UI) finds text in the page shown, or in its source: every match is
   marked, and `Enter` (or `↓`) goes to the next, `↑` (or `Shift+Enter` in
