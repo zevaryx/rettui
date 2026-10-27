@@ -181,7 +181,9 @@ impl App {
                     self.settings.pn_transfer_kb = after.pn_transfer_kb;
                     pn = true;
                 }
-                "git_host_enabled" | "git_host_name" | "git_host_dir" | "git_host_access" => {
+                "git_host_enabled" | "git_host_name" | "git_host_dir" | "git_host_access" | "git_host_push_mb" | "git_host_repo_mb" => {
+                    self.settings.git_host_push_mb = after.git_host_push_mb;
+                    self.settings.git_host_repo_mb = after.git_host_repo_mb;
                     self.settings.git_host_enabled = after.git_host_enabled;
                     self.settings.git_host_name = after.git_host_name.clone();
                     self.settings.git_host_dir = after.git_host_dir.clone();

@@ -27,6 +27,9 @@ pub struct GitHostConfig {
     pub name: Option<String>,
     /// Rules for every group, as in a `.allowed` file.
     pub access: String,
+    /// Largest push taken or clone sent, and what a repository may come to, in bytes.
+    pub push_bytes: usize,
+    pub repo_bytes: u64,
 }
 
 impl GitHostConfig {
@@ -36,6 +39,8 @@ impl GitHostConfig {
             identity: paths.git_host_identity.clone(),
             name: settings.git_host_name.clone().filter(|n| !n.trim().is_empty()),
             access: settings.git_host_access.clone().unwrap_or_default(),
+            push_bytes: usize::try_from(settings.git_host_push_mb.saturating_mul(1_000_000)).unwrap_or(usize::MAX),
+            repo_bytes: settings.git_host_repo_mb.saturating_mul(1_000_000),
         })
     }
 }
@@ -95,6 +100,9 @@ impl HostedGit {
         .map_err(|e| e.to_string())??;
         let mut node = Node::new(config.dir.clone());
         node.default_rules = Rule::parse(&config.access);
+        node.max_bundle_bytes = config.push_bytes;
+        node.quotas.max_push_bytes = config.push_bytes;
+        node.quotas.max_repo_bytes = config.repo_bytes;
         let activity: rngit::serve::Activity = {
             let ev = ev.clone();
             Arc::new(move |path, peer, status| {
@@ -137,6 +145,7 @@ mod tests {
         settings.git_host_enabled = true;
         let config = GitHostConfig::from_settings(&settings, &paths).unwrap();
         assert_eq!((config.dir.as_path(), config.name.as_deref(), config.access.as_str()), (paths.git_host.as_path(), None, ""));
+        assert_eq!((config.push_bytes, config.repo_bytes), (256_000_000, 1_024_000_000));
         settings.git_host_name = Some("  ".into());
         settings.git_host_access = Some("r:all".into());
         settings.git_host_dir = Some(dir.join("repos").display().to_string());

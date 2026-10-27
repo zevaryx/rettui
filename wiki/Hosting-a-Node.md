@@ -249,9 +249,9 @@ and the other RRC clients can join it as they join rrcd.
 rettui can serve git repositories to [rngit](https://github.com/zevaryx/rngit-rs)
 clients, so people clone them over Reticulum with `git clone rns://<address>/<group>/<name>.git`
 (the stock `rngit` helper, `git-remote-rns` and rettui's [Repos tab](Repos) all
-work). This part only reads: cloning and fetching. Pushing, creating
-repositories, releases and work documents are answered "not allowed" for now;
-use stock rngit for those.
+work), and push to it. Cloning, fetching, pushing, creating repositories and
+deleting branches and tags work. Releases, work documents, fork, mirror and
+sync are answered "not allowed" for now; use stock rngit for those.
 
 - **Switching it on:** set "Host rngit repositories" in Settings › Hosting
   (`git_host_enabled`). It announces itself (`git.repositories`) a few seconds
@@ -272,11 +272,23 @@ use stock rngit for those.
   `adm:<32 hex>`, one on each line or separated by commas. "rngit access"
   (`git_host_access`, terminal only) gives the same rules to every repository.
   A repository someone may not read looks like one that isn't there. A line
-  that isn't a rule is skipped, so a typo can only take access away. Anyone
+  that isn't a rule is skipped, so a typo can only take access away.
+  `r` reads, `w` pushes and deletes branches and tags, `rw` both, and `c` in a
+  group's rules (a `group.allowed`, or "rngit access") lets someone make
+  repositories there, if they identify themselves; the group's folder has to
+  exist already. Whoever makes a repository is its admin (`adm:` in its
+  `.allowed`). `adm` includes everything. Anyone
   who doesn't identify themselves is `d7db22f63b453c23bb0688dde565b7c1`, as in
   rngit.
-- **Limits:** a clone's bundle is built in memory and sent in one piece, up to
-  256 MB, and building one stops after two minutes. A request over 1 MB is
+- **Limits:** a clone's bundle or a push is held in memory and handled in one
+  piece, up to *rngit push limit* (256 MB), and building or unpacking one
+  stops after two minutes. A repository may come to *rngit repository limit*
+  (1 GB) on disk, and a push that would go over is refused. A pushed pack is
+  read before it is kept: it may hold 2 million objects, none over 128 MB
+  once unpacked (a small delta that would grow into a huge file counts as the
+  huge file), and 2 GB together. A group holds 1,000 repositories. Only
+  branches and tags can be pushed; a branch moves forward unless the push is
+  forced, and a tag stays where it is. A request over 1 MB is
   refused. Recent bundles are kept for ten minutes (64 MB in all), so the next
   clone of the same thing is quick; a branch that moves is a new bundle.
   rettui serves one request at a time, so a big clone makes the next client

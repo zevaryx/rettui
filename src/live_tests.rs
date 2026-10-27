@@ -414,6 +414,77 @@ async fn amys_repositories_read_by_ben() {
     let _ = std::fs::remove_dir_all(&repos);
 }
 
+/// Ben sends a copy of one of Amy's repositories to a new one on her node,
+/// which his identity may make, and it holds the history.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ben_pushes_to_amys_repositories() {
+    use crate::app::node::NodeStatus;
+    let repos = std::env::temp_dir().join(format!("rettui-live-gitpush-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repos);
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let work = repos.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q", "-b", "main"]);
+    for n in 0..2 {
+        std::fs::write(work.join(format!("f{n}")), format!("file {n}\n")).unwrap();
+        git(&work, &["add", "."]);
+        git(&work, &["commit", "-q", "-m", &format!("commit {n}")]);
+    }
+    git(&work, &["tag", "v1"]);
+    let source = repos.join("served/public/source.git");
+    std::fs::create_dir_all(&source).unwrap();
+    git(&source, &["init", "-q", "--bare", "-b", "main"]);
+    git(&work, &["push", "-q", source.to_str().unwrap(), "main", "--tags"]);
+    let served = repos.join("served").display().to_string();
+    let (mut amy, mut ben) = pair("gitpush", |s| {
+        s.git_host_enabled = true;
+        s.git_host_dir = Some(served);
+        // Anyone may read, write and make repositories.
+        s.git_host_access = Some("rw:all, c:all".into());
+    })
+    .await;
+    until(&mut amy, &mut ben, "Amy's repositories hosted", |a, _| a.app.git_host.status == NodeStatus::Running).await;
+    let node = hex::encode(amy.app.git_host.address.expect("the node's address"));
+    // Ben's copy of the source (waiting for the announce that gives him a path).
+    ben.app.open_repo(&format!("rns://{node}/public/source")).unwrap();
+    let from = ben.app.repos.open.as_ref().unwrap().url.clone();
+    let wait = Instant::now();
+    loop {
+        // Asked again until the path is known (an answer comes, or two seconds pass).
+        ben.app.mirror_repo().ok();
+        let asked = Instant::now();
+        until(&mut amy, &mut ben, "Ben's copy", |_, b| b.app.copy_refs(&from).is_some() || asked.elapsed() > Duration::from_secs(4)).await;
+        if ben.app.copy_refs(&from).is_some() {
+            break;
+        }
+        assert!(wait.elapsed() < PATIENCE, "Ben couldn't copy the repository");
+    }
+    // Sent on to a repository that isn't there yet.
+    let to = crate::app::repos::parse_repo(&format!("rns://{node}/public/made")).unwrap();
+    ben.app.push_copy(&to, crate::app::repos::PushHow::parse("add").unwrap()).unwrap();
+    let made = repos.join("served/public/made.git");
+    until(&mut amy, &mut ben, "the new repository holding the history", |_, _| made.join("refs/heads/main").exists()).await;
+    assert_eq!(git(&made, &["rev-parse", "main"]), git(&work, &["rev-parse", "main"]));
+    assert_eq!(git(&made, &["rev-parse", "v1^{commit}"]), git(&work, &["rev-parse", "v1^{commit}"]));
+    git(&made, &["fsck", "--strict"]);
+    assert!(amy.app.git_host.requests >= 5, "{}", amy.app.git_host.requests);
+    let _ = std::fs::remove_dir_all(&repos);
+}
+
 /// Run `work`, taking in what Amy's network says meanwhile (as her rettui
 /// would, running).
 async fn while_running<T>(amy: &mut Peer, work: impl std::future::Future<Output = T>) -> T {

@@ -224,6 +224,10 @@ pub struct Settings {
     /// Who may read every repository it serves, as in a `.allowed` file
     /// (`r:all`); nobody beyond what the repositories' own `.allowed` files say.
     pub git_host_access: Option<String>,
+    /// Largest push it takes, in megabytes, and what one repository may come
+    /// to on disk.
+    pub git_host_push_mb: u64,
+    pub git_host_repo_mb: u64,
     /// Host an RRC hub (rsRRCD's, in `rrc-hub/`).
     pub hub_enabled: bool,
     /// Name the hub announces and welcomes people with; the display name
@@ -323,6 +327,8 @@ impl Default for Settings {
             git_host_name: None,
             git_host_dir: None,
             git_host_access: None,
+            git_host_push_mb: 256,
+            git_host_repo_mb: 1024,
             hub_enabled: false,
             hub_name: None,
             hub_greeting: None,
@@ -732,6 +738,8 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "git_host_name",
             "git_host_dir",
             "git_host_access",
+            "git_host_push_mb",
+            "git_host_repo_mb",
             "hub_open_rooms",
         ],
     ),
@@ -1201,6 +1209,20 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "git_host_push_mb",
+        label: "rngit push limit (MB)",
+        help: "Largest push or clone the node takes or sends in one piece (it is held in memory; at most 2048)",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "git_host_repo_mb",
+        label: "rngit repository limit (MB)",
+        help: "Most one repository may come to on disk; a push that would go over it is refused",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
         key: "tui_theme",
         label: "Terminal colours",
         help: "The terminal UI's colours: dark (for a dark terminal), light (for a light one), or basic (16 colours, for terminals without full colour). The web UI picks its own, in its Status page",
@@ -1481,6 +1503,8 @@ impl Settings {
             "git_host_name" => self.git_host_name.clone().unwrap_or_default(),
             "git_host_dir" => self.git_host_dir.clone().unwrap_or_default(),
             "git_host_access" => self.git_host_access.clone().unwrap_or_default(),
+            "git_host_push_mb" => self.git_host_push_mb.to_string(),
+            "git_host_repo_mb" => self.git_host_repo_mb.to_string(),
             "hub_enabled" => self.hub_enabled.to_string(),
             "hub_name" => self.hub_name.clone().unwrap_or_default(),
             "hub_greeting" => self.hub_greeting.clone().unwrap_or_default(),
@@ -1618,6 +1642,13 @@ impl Settings {
                     return Err(fail(format!("no such parent directory for {text}")));
                 }
                 self.git_host_dir = optional(value);
+            }
+            "git_host_push_mb" | "git_host_repo_mb" => {
+                let mb = number(value, if key == "git_host_push_mb" { 2048 } else { MAX_STORAGE_MB }).map_err(fail)?;
+                if mb == 0 {
+                    return Err(fail("at least 1".into()));
+                }
+                if key == "git_host_push_mb" { self.git_host_push_mb = mb } else { self.git_host_repo_mb = mb }
             }
             "git_host_access" => {
                 let rules = optional(value);
