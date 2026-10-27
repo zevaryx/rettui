@@ -82,6 +82,8 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `rrc/`: RRC chat history, one file per hub (the newest messages of each room and whisper conversation, 500 unless "Chat messages kept", `rrc_messages_kept`, says otherwise)
 - `rettui.log`: logging, as detailed as *Log level* says (Status, `log_level`: error, warn by default, info, debug or trace; it changes at once). `RETTUI_LOG=debug`, set when rettui starts, decides instead
 - `downloads/`: received attachments (one folder per sender) and NomadNet files
+- `repos/`: copies of [rngit repositories](Repos#a-copy-on-this-computer), by
+  node, group and name; deleting one is harmless (copy it again)
 - `uploads/`: files attached to messages sent from the web UI, and the
   smaller copies of pictures sent (see
   [Messaging](Messaging))
@@ -157,7 +159,7 @@ hubs), `peers.json.gz`, the `archive/` of older messages,
 `known_identities.json`, `tickets.json`, your [games](Games) (`games.json`), RRC history (`rrc/`), your node's
 pages and files (`node/`), your hub's settings and rooms (`rrc-hub/`) and,
 unless left out, the `identity` (and the hub's, `rrc-hub-identity`). Caches,
-the log, ratchets, the propagation node's messages and the web UI's login,
+the log, ratchets, copies of repositories (`repos/`), the propagation node's messages and the web UI's login,
 certificates and push keys aren't kept: rettui makes them again.
 Attachments (`downloads/`, `uploads/`) are left out unless asked for.
 

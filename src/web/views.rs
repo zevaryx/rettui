@@ -10,7 +10,7 @@ use crate::app::{App, NetState, SyncState, network};
 use crate::config::{Effect, FIELDS, FieldKind, Section, Settings, WebAccess};
 use crate::net::PeerKind;
 use crate::rrc;
-use crate::store::{Conversation, Message, MessageState, NotifyLevel};
+use crate::store::{Conversation, Message, MessageState, NotifyLevel, SavedMirror};
 
 fn kind_name(kind: PeerKind) -> &'static str {
     match kind {
@@ -803,7 +803,8 @@ pub fn repos(app: &App) -> Value {
         .filter_map(|r| {
             let url = crate::app::repos::parse_repo(&r.url).ok()?;
             let node = hex::encode(url.destination);
-            Some(json!({ "url": r.url, "node": node, "node_name": app.store.display_name(&node), "group": url.group, "repo": url.repo }))
+            Some(json!({ "url": r.url, "node": node, "node_name": app.store.display_name(&node), "group": url.group, "repo": url.repo,
+                "mirror": r.mirror.as_ref().map(mirror_json) }))
         })
         .collect();
     let nodes: Vec<Value> =
@@ -863,7 +864,15 @@ pub fn git_reply(app: &App, reply: &crate::net::git::GitReply) -> Value {
         }),
         GitReply::Artifact { name, signer, .. } => json!({ "name": name, "signer": who(app, signer) }),
         GitReply::Done(said) => json!({ "said": said }),
+        GitReply::Mirrored(copy) => json!({ "said": crate::app::repos::mirror_said(copy), "mirror": mirror_json(&SavedMirror {
+            updated: copy.at, branches: copy.branches, tags: copy.tags, bytes: copy.bytes, head: copy.head.clone(),
+        }) }),
     }
+}
+
+/// A repository's local copy, as the Repos section shows it.
+fn mirror_json(m: &SavedMirror) -> Value {
+    json!({ "updated": m.updated, "branches": m.branches, "tags": m.tags, "bytes": m.bytes, "head": m.head })
 }
 
 /// `settings.json` for the settings editor, with what each field is.

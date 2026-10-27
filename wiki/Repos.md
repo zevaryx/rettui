@@ -5,7 +5,8 @@ attached to them, and work documents (issues and proposals) with their
 comments. It talks to the node the way the `rngit` command does, so
 repositories, releases and documents made with one show in the other.
 
-Cloning and pushing aren't in rettui yet: use `git` with rngit's
+rettui can keep a [copy of a repository on this computer](#a-copy-on-this-computer).
+Committing and pushing aren't in rettui: use `git` with rngit's
 `git-remote-rns` helper for that.
 
 ## Adding a repository
@@ -33,7 +34,8 @@ shown as tabs across the top (`←` `→` or `Tab` switch between them, and
 `r` asks again):
 
 - **Branches and tags:** every branch and tag, the commit it points at,
-  and the branch `HEAD` is on.
+  and the branch `HEAD` is on; above them, whether you have a
+  [copy](#a-copy-on-this-computer) and how old it is.
 - **Releases:** each release, with its tag, when it was
   made, by whom, and how many files it has. `Enter` opens one with its
   notes and files; `Enter` (or `g`) on a file downloads it. Each file is
@@ -52,6 +54,41 @@ shown as tabs across the top (`←` `→` or `Tab` switch between them, and
 
 A node that can't be reached, that refuses, or doesn't have what was
 asked says so where the list would be.
+
+## A copy on this computer
+
+`m` on an open repository (**Copy to this computer** in the web UI) makes
+a copy of it here: every branch and tag the node has, with their history.
+It is a bare repository, so it has the history and no working files, and
+you can clone from it or read it with `git` (`git clone <folder> work`).
+Afterwards `m` (**Update the copy**) brings the copy up to date, taking
+only what's new, and removes the branches and tags the node no longer has,
+so the copy matches the node. A repository with a copy is marked **⇩** in
+the list, and the Branches and tags pane says what the copy holds and
+when it was updated. In the web UI, `m` does the same.
+
+`M` (**Delete the copy**) deletes the copy from this computer, after you
+type `y`; nothing on the node changes. Taking a repository off the list
+deletes its copy too.
+
+- The copies are in the `repos/` folder of the [data folder](Data-and-Storage),
+  by node, group and name (`repos/<node>/<group>/<name>.git`). rettui picks
+  the folder; neither UI can choose another, and the web UI never reads or
+  writes files elsewhere.
+- A copy changes nothing outside that folder: rettui reads a repository
+  from a node as data and runs no program from it. A node that sends a
+  branch or tag with a name git wouldn't allow is refused, and nothing of
+  that copy is kept.
+- A copy may come to 256 MB in one go. A bigger repository isn't copied, and
+  says so. How long a copy may take is **rngit timeout** (below). A copy that
+  fails to be made leaves nothing behind, and one that fails to be updated
+  stays as it was. rettui can't say how far a copy has got, only that it
+  is going.
+- Two copies of one repository at once aren't made; the second is refused.
+- Names Windows can't have as a folder (`con`, `nul`, a name ending in a
+  dot) can't be copied. Two repositories whose names differ only in capitals
+  can't both be copied, as they would share a folder on some systems.
+- Backups don't include `repos/`: copy again from the node after a restore.
 
 ## Writing
 

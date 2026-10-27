@@ -6,9 +6,9 @@
 //! The protocol is the `rngit` crate's; this carries it over rettui's links
 //! and runs each request as a task of its own.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rngit::client::{ReleaseDetail, ReleaseList, WorkKind, WorkList, WorkScope};
@@ -28,6 +28,9 @@ pub const GIT_ASPECT: &str = "git.repositories";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// Largest release file taken (it's held in memory).
 pub const MAX_ARTIFACT: usize = 64 * 1024 * 1024;
+/// Largest copy of a repository taken in one go: its bundle is held in
+/// memory while it's unpacked.
+pub const MAX_MIRROR: usize = 256 * 1024 * 1024;
 /// Longest document, comment or release notes kept, in characters.
 pub const MAX_TEXT: usize = 100_000;
 /// Most comments kept of a document.
@@ -83,6 +86,29 @@ pub enum GitRequest {
         files: Vec<(String, Vec<u8>)>,
     },
     ReleaseDelete(String),
+    /// Make `dir` a copy of the repository, or bring the copy there up to
+    /// date. The folder is the app's to choose, never a UI's.
+    Mirror {
+        dir: PathBuf,
+    },
+}
+
+/// What making a local copy of a repository did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mirrored {
+    pub repo: RepoUrl,
+    pub branches: usize,
+    pub tags: usize,
+    /// Branches and tags the node no longer has, taken from the copy.
+    pub removed: usize,
+    /// What the copy takes on disk.
+    pub bytes: u64,
+    /// The branch the node's HEAD is on.
+    pub head: Option<String>,
+    /// Whether this made the copy, rather than updating one.
+    pub first: bool,
+    /// When (Unix seconds).
+    pub at: f64,
 }
 
 /// A comment on a work document, as the node keeps it.
@@ -129,6 +155,7 @@ pub enum GitReply {
     Doc(Doc),
     /// A change made: what to say of it.
     Done(String),
+    Mirrored(Mirrored),
 }
 
 /// Text from a node, safe to draw: no control characters but line breaks
@@ -193,8 +220,93 @@ pub async fn run<T: Transport>(client: &Client<T>, repo: &RepoUrl, signer: &dyn 
             client.delete_release(repo, &tag).await.map_err(describe)?;
             GitReply::Done(format!("Deleted the release {tag}"))
         }
+        GitRequest::Mirror { dir } => GitReply::Mirrored(mirror(client, repo, &dir).await?),
     };
     Ok(reply)
+}
+
+/// Folders being copied into now: a second copy into one waits for nobody,
+/// it's refused.
+fn copying() -> &'static StdMutex<HashSet<PathBuf>> {
+    static COPYING: OnceLock<StdMutex<HashSet<PathBuf>>> = OnceLock::new();
+    COPYING.get_or_init(Default::default)
+}
+
+/// Holds a folder while it's being copied into.
+#[derive(Debug)]
+struct Copying(PathBuf);
+
+impl Copying {
+    fn take(dir: &Path) -> Result<Copying, String> {
+        if copying().lock().map_err(|_| "A copy is stuck".to_string())?.insert(dir.to_path_buf()) {
+            Ok(Copying(dir.to_path_buf()))
+        } else {
+            Err("This repository is being copied already".to_string())
+        }
+    }
+}
+
+impl Drop for Copying {
+    fn drop(&mut self) {
+        if let Ok(mut held) = copying().lock() {
+            held.remove(&self.0);
+        }
+    }
+}
+
+/// Entries looked at, and levels gone down, when adding up a folder.
+const SIZE_ENTRIES: usize = 200_000;
+const SIZE_DEPTH: usize = 16;
+
+/// What the files under `dir` take, in bytes. Links aren't followed.
+pub fn dir_size(dir: &Path) -> u64 {
+    let (mut bytes, mut seen) = (0, 0);
+    let mut pending = vec![(dir.to_path_buf(), 0)];
+    while let Some((folder, depth)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > SIZE_ENTRIES {
+                return bytes;
+            }
+            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue };
+            if meta.is_dir() && depth < SIZE_DEPTH {
+                pending.push((entry.path(), depth + 1));
+            } else if meta.is_file() {
+                bytes += meta.len();
+            }
+        }
+    }
+    bytes
+}
+
+/// Make `dir` a copy of `repo`, as `rngit`'s mirror does. A copy that fails
+/// to be made leaves nothing behind; one that fails to be updated stays as
+/// it was.
+async fn mirror<T: Transport>(client: &Client<T>, repo: &RepoUrl, dir: &Path) -> Result<Mirrored, String> {
+    let _held = Copying::take(dir)?;
+    let first = !dir.exists();
+    let (remote, removed) = match client.mirror_into(repo, dir).await {
+        Ok(done) => done,
+        Err(e) => {
+            if first {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            return Err(describe(e));
+        }
+    };
+    let count = |prefix: &str| remote.refs.iter().filter(|(_, name)| name.starts_with(prefix)).count();
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    Ok(Mirrored {
+        repo: repo.clone(),
+        branches: count("refs/heads/"),
+        tags: count("refs/tags/"),
+        removed,
+        bytes: dir_size(dir),
+        head: remote.head.as_deref().map(|head| clean_text(head.trim_start_matches("refs/heads/"), 200)),
+        first,
+        at,
+    })
 }
 
 /// One release file, with its signature checked against the release's
@@ -246,7 +358,13 @@ fn doc(doc: rngit::client::WorkDoc) -> Doc {
 
 /// What a node may send, kept to what rettui holds in memory.
 fn limits() -> Limits {
-    Limits { max_artifact_bytes: MAX_ARTIFACT, max_refs: 10_000, max_list_entries: 2_000, ..Limits::default() }
+    Limits {
+        max_artifact_bytes: MAX_ARTIFACT,
+        max_bundle_bytes: MAX_MIRROR,
+        max_refs: 10_000,
+        max_list_entries: 2_000,
+        ..Limits::default()
+    }
 }
 
 /// rngit over a link of rettui's: a path found first, a stale one dropped
@@ -377,6 +495,7 @@ pub fn spawn(
 pub(crate) mod tests {
     use super::*;
     use rmpv::Value;
+    use std::path::{Path, PathBuf};
 
     /// A node that answers from a table: by path and `operation`, a reply
     /// (status byte then MessagePack or text) or a file. What it was asked
@@ -646,6 +765,180 @@ pub(crate) mod tests {
         let client = Client::new(Shared(node.clone()));
         let identity = Identity::new();
         block_on(run(&client, repo, &IdentitySigner(&identity), request))
+    }
+
+    /// A repository made with git, and a node that answers for it: its ref
+    /// list, and one bundle of every branch and tag.
+    pub struct Source(pub PathBuf);
+
+    impl Source {
+        pub fn new(dir: &Path) -> Source {
+            std::fs::create_dir_all(dir).unwrap();
+            let source = Source(dir.to_path_buf());
+            source.git(&["init", "-q", "-b", "main"]);
+            source.commit("one");
+            source
+        }
+
+        pub fn git(&self, args: &[&str]) -> String {
+            let out = std::process::Command::new("git")
+                .current_dir(&self.0)
+                // Whatever the machine's git is set up with stays out of it.
+                .env("GIT_CONFIG_GLOBAL", self.0.join("no-global-config"))
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+
+        pub fn commit(&self, name: &str) {
+            std::fs::write(self.0.join(format!("{name}.txt")), format!("{name}\n").repeat(20)).unwrap();
+            self.git(&["add", "."]);
+            self.git(&["commit", "-q", "-m", name]);
+        }
+
+        /// The node, as it is now.
+        pub fn node(&self) -> Canned {
+            let refs = self.git(&["for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/tags"]);
+            let head = self.git(&["symbolic-ref", "HEAD"]);
+            let names: Vec<String> = refs.lines().filter_map(|l| l.split_once(' ')).map(|(_, name)| name.to_string()).collect();
+            let mut list = vec![0];
+            list.extend(format!("{refs}\n@{head} HEAD\n").into_bytes());
+            let mut node = Canned::default().reply("/git/list", "", Response::Packet(list));
+            if !names.is_empty() {
+                let mut args = vec!["bundle", "create", "-"];
+                args.extend(names.iter().map(String::as_str));
+                let out = std::process::Command::new("git").current_dir(&self.0).args(&args).output().unwrap();
+                assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+                node = node.reply("/git/fetch", "", Response::File { data: out.stdout, metadata: Some(vec![0x81, 0x01, 0x00]) });
+            }
+            node
+        }
+    }
+
+    /// Copy `source`'s repository into `dir` as the app does.
+    pub fn mirror_of(source: &Source, dir: &Path) -> Result<Mirrored, String> {
+        let node = Arc::new(source.node());
+        match answer(&node, &repo(), GitRequest::Mirror { dir: dir.to_path_buf() })? {
+            GitReply::Mirrored(copy) => Ok(copy),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rettui-mirror-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn refs_of(dir: &Path) -> Vec<String> {
+        let out = std::process::Command::new("git").current_dir(dir).args(["for-each-ref", "--format=%(refname)"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn a_repository_is_copied_whole_then_brought_up_to_date() {
+        let root = scratch("copy");
+        let source = Source::new(&root.join("source"));
+        source.git(&["tag", "v1"]);
+        source.git(&["checkout", "-q", "-b", "topic"]);
+        source.commit("topic");
+        source.git(&["checkout", "-q", "main"]);
+        let dir = root.join("repos").join("node").join("public").join("demo.git");
+
+        let first = mirror_of(&source, &dir).unwrap();
+        assert!(first.first && first.removed == 0);
+        assert_eq!((first.branches, first.tags, first.head.as_deref()), (2, 1, Some("main")));
+        assert!(first.bytes > 0 && first.at > 0.0 && first.repo == repo());
+        let mut refs = refs_of(&dir);
+        refs.sort();
+        assert_eq!(refs, ["refs/heads/main", "refs/heads/topic", "refs/tags/v1"]);
+        let fsck = std::process::Command::new("git").current_dir(&dir).args(["fsck", "--strict"]).output().unwrap();
+        assert!(fsck.status.success(), "{}", String::from_utf8_lossy(&fsck.stderr));
+
+        // The node moves on: a new commit, a branch gone and a tag gone.
+        source.commit("two");
+        source.git(&["branch", "-D", "topic"]);
+        source.git(&["tag", "-d", "v1"]);
+        let again = mirror_of(&source, &dir).unwrap();
+        assert!(!again.first);
+        assert_eq!((again.branches, again.tags, again.removed), (1, 0, 2));
+        assert_eq!(refs_of(&dir), ["refs/heads/main"]);
+        let count = std::process::Command::new("git").current_dir(&dir).args(["rev-list", "--count", "main"]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&count.stdout).trim(), "2");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_copy_that_fails_leaves_nothing_and_an_update_that_fails_leaves_the_copy() {
+        let root = scratch("fails");
+        let source = Source::new(&root.join("source"));
+        let dir = root.join("repos").join("node").join("public").join("demo.git");
+        let refused = Arc::new(Canned::default().reply("/git/list", "", Response::Packet(b"\x01Not allowed".to_vec())));
+
+        // Never copied: nothing is left of the try.
+        let err = answer(&refused, &repo(), GitRequest::Mirror { dir: dir.clone() }).unwrap_err();
+        assert!(err.contains("doesn't allow you that"), "{err}");
+        assert!(!dir.exists());
+
+        // Copied; then the node refuses: the copy is as it was.
+        mirror_of(&source, &dir).unwrap();
+        let before = refs_of(&dir);
+        assert!(answer(&refused, &repo(), GitRequest::Mirror { dir: dir.clone() }).is_err());
+        assert_eq!((refs_of(&dir), dir.exists()), (before, true));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_node_with_nothing_pushed_makes_an_empty_copy() {
+        let root = scratch("empty");
+        let source = Source(root.join("source"));
+        std::fs::create_dir_all(&source.0).unwrap();
+        source.git(&["init", "-q", "-b", "main"]);
+        let dir = root.join("repos").join("copy.git");
+        let copy = mirror_of(&source, &dir).unwrap();
+        assert_eq!((copy.branches, copy.tags), (0, 0));
+        assert!(dir.join("HEAD").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn one_folder_is_not_copied_into_twice_at_once() {
+        let dir = PathBuf::from("/some/folder/demo.git");
+        let held = Copying::take(&dir).unwrap();
+        assert!(Copying::take(&dir).unwrap_err().contains("being copied already"));
+        // Another folder is no matter; and it's free again after.
+        let other = Copying::take(Path::new("/some/folder/other.git")).unwrap();
+        drop(held);
+        drop(other);
+        assert!(Copying::take(&dir).is_ok());
+    }
+
+    #[test]
+    fn a_folder_is_added_up_without_following_links() {
+        let root = scratch("size");
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join("one"), vec![0; 100]).unwrap();
+        std::fs::write(root.join("a/two"), vec![0; 50]).unwrap();
+        std::fs::write(root.join("a/b/three"), vec![0; 25]).unwrap();
+        assert_eq!(dir_size(&root), 175);
+        assert_eq!(dir_size(&root.join("nothing")), 0);
+        #[cfg(unix)]
+        {
+            // A link back to the folder doesn't loop, or count twice.
+            std::os::unix::fs::symlink(&root, root.join("a/loop")).unwrap();
+            assert_eq!(dir_size(&root), 175);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn what_a_node_sends_for_a_copy_is_capped() {
+        // The bundle is held in memory while it's unpacked.
+        assert_eq!(limits().max_bundle_bytes, MAX_MIRROR);
     }
 
     #[test]

@@ -42,7 +42,11 @@ fn draw_side(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             let style = if open.as_deref() == Some(repo.url.as_str()) { Style::default().fg(accent()).bold() } else { Style::default() };
             let node_name = app.store.peers.get(&node).and_then(|p| p.name.clone()).unwrap_or_else(|| short(&node).to_string());
-            ListItem::new(Line::from(vec![Span::styled(name, style), Span::styled(format!("  {node_name}"), Style::default().fg(dim()))]))
+            let mut spans = vec![Span::styled(name, style), Span::styled(format!("  {node_name}"), Style::default().fg(dim()))];
+            if repo.mirror.is_some() {
+                spans.push(Span::styled(" ⇩", Style::default().fg(Color::Green)));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
     items.extend(app.repos.nodes.iter().map(|node| {
@@ -157,7 +161,29 @@ fn draw_list(frame: &mut Frame, app: &mut App, items: Vec<ListItem>, empty: &str
     frame.render_stateful_widget(list, area, &mut app.repos.items);
 }
 
+/// What the copy on this computer is, above the branches and tags.
+fn copy_line(app: &App, open: &OpenRepo) -> Line<'static> {
+    let url = open.url.to_string();
+    match app.store.repos.iter().find(|r| r.url == url).and_then(|r| r.mirror.as_ref()) {
+        Some(m) => Line::from(vec![
+            Span::styled("⇩ Copy here: ", Style::default().fg(Color::Green)),
+            Span::raw(format!(
+                "{} branches and {} tags, {}, updated {} ago",
+                m.branches,
+                m.tags,
+                human_bytes(m.bytes),
+                super::ago(m.updated as i64)
+            )),
+            Span::styled("  m updates it, M deletes it", Style::default().fg(dim())),
+        ]),
+        None => Line::from(Span::styled("No copy on this computer: m makes one", Style::default().fg(dim()))),
+    }
+}
+
 fn draw_refs(frame: &mut Frame, app: &mut App, open: &OpenRepo, area: Rect) {
+    let [copy, area] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    frame.render_widget(Paragraph::new(copy_line(app, open)), copy);
+    app.regions.repo_list = area;
     if not_ready(frame, &open.refs, area) {
         return;
     }

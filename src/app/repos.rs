@@ -10,7 +10,7 @@
 //! message, a chat or a page).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
@@ -19,10 +19,10 @@ use rngit::RepoUrl;
 use rngit::client::{ReleaseDetail, ReleaseList, WorkKind, WorkList, WorkScope, WorkSummary};
 
 use super::{App, PromptKind, Tab, now};
-use crate::net::git::{Doc, GitReply, GitRequest};
+use crate::net::git::{Doc, GitReply, GitRequest, Mirrored};
 use crate::net::heard::{Heard, Kind};
 use crate::net::{Hash, NetCommand};
-use crate::store::SavedRepo;
+use crate::store::{SavedMirror, SavedRepo};
 
 /// Most repositories kept.
 pub const MAX_REPOS: usize = 200;
@@ -151,6 +151,8 @@ enum Asked {
     Artifact,
     /// A change, and what it is (said while it goes).
     Write(RepoUrl, String),
+    /// A local copy being made or brought up to date.
+    Mirror(RepoUrl),
 }
 
 #[derive(Debug, Default)]
@@ -172,7 +174,14 @@ pub struct Repos {
 impl Repos {
     /// Changes being made, and what each is.
     pub fn writing(&self) -> Vec<String> {
-        self.asked.values().filter_map(|a| if let Asked::Write(_, what) = a { Some(what.clone()) } else { None }).collect()
+        self.asked
+            .values()
+            .filter_map(|a| match a {
+                Asked::Write(_, what) => Some(what.clone()),
+                Asked::Mirror(repo) => Some(format!("Copying {}/{}", repo.group, repo.repo)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// A release file being downloaded.
@@ -220,6 +229,60 @@ pub fn rngit_identity_path() -> Option<PathBuf> {
     match std::env::var_os("RNGIT_CONFIG") {
         Some(dir) => Some(PathBuf::from(dir).join("client_identity")),
         None => directories::BaseDirs::new().map(|d| d.home_dir().join(".rngit").join("client_identity")),
+    }
+}
+
+/// A name Windows won't make a file or folder of, whatever follows its dot.
+fn reserved_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit())
+}
+
+/// The folder a repository's copy lives in, `<repos>/<node>/<group>/<name>.git`.
+/// Its names come from a URL and may come from the network, so they're
+/// checked to be names a folder can have on every system.
+pub fn mirror_dir(repos: &Path, url: &RepoUrl) -> Result<PathBuf, String> {
+    for part in [&url.group, &url.repo] {
+        if part.ends_with('.') || reserved_name(part) {
+            return Err(format!("{part:?} can't be the name of a folder here"));
+        }
+    }
+    let dir = repos.join(hex::encode(url.destination)).join(&url.group).join(format!("{}.git", url.repo));
+    if !dir.starts_with(repos) {
+        return Err("That repository's name leads out of the folder for copies".into());
+    }
+    Ok(dir)
+}
+
+/// Delete a copy's folder, and the folders around it that are empty then.
+fn remove_mirror_dir(repos: &Path, dir: &Path) -> std::io::Result<()> {
+    if !dir.starts_with(repos) || dir == repos {
+        return Ok(());
+    }
+    match std::fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    // The group's folder, then the node's, when nothing else is in them.
+    for parent in dir.ancestors().skip(1).take(2) {
+        if parent == repos || std::fs::remove_dir(parent).is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// What a copy made or updated is told as.
+pub fn mirror_said(m: &Mirrored) -> String {
+    let what = format!("{} branches and {} tags, {}", m.branches, m.tags, crate::ui::human_bytes(m.bytes));
+    let name = format!("{}/{}", m.repo.group, m.repo.repo);
+    if m.first {
+        format!("Copied {name}: {what}")
+    } else if m.removed > 0 {
+        format!("Updated the copy of {name}: {what}; {} gone from the node removed", m.removed)
+    } else {
+        format!("Updated the copy of {name}: {what}")
     }
 }
 
@@ -299,6 +362,7 @@ pub enum RepoPrompt {
     ReleaseNotes(String),
     ReleaseFiles { tag: String, notes: String },
     ConfirmDeleteRelease(String),
+    ConfirmRemoveMirror(String),
 }
 
 /// A work list by name.
@@ -335,13 +399,89 @@ impl App {
             if self.store.repos.len() >= MAX_REPOS {
                 return Err(format!("At most {MAX_REPOS} repositories are kept: remove one first"));
             }
-            self.store.repos.push(SavedRepo { url: url.clone() });
+            self.store.repos.push(SavedRepo { url: url.clone(), mirror: None });
             self.store_dirty = true;
         }
         Ok(url)
     }
 
+    /// The folder for a repository's copy, if another kept repository's copy
+    /// isn't in the same one (on a system that doesn't tell capitals apart
+    /// `Demo` and `demo` are).
+    fn mirror_dir_for(&self, url: &RepoUrl) -> Result<PathBuf, String> {
+        let dir = mirror_dir(&self.paths.repos, url)?;
+        let same = |other: &Path| other.to_string_lossy().to_lowercase() == dir.to_string_lossy().to_lowercase();
+        let wanted = url.to_string();
+        let clash = self
+            .store
+            .repos
+            .iter()
+            .filter(|r| r.url != wanted && r.mirror.is_some())
+            .find(|r| parse_repo(&r.url).ok().and_then(|u| mirror_dir(&self.paths.repos, &u).ok()).is_some_and(|other| same(&other)));
+        match clash {
+            Some(other) => Err(format!("{} has its copy in the same folder, as capitals don't count in a folder's name", other.url)),
+            None => Ok(dir),
+        }
+    }
+
+    /// The request that makes (or updates) a repository's copy. The folder
+    /// is rettui's choice; no UI picks one.
+    pub fn mirror_request(&self, url: &RepoUrl) -> Result<GitRequest, String> {
+        Ok(GitRequest::Mirror { dir: self.mirror_dir_for(url)? })
+    }
+
+    /// Make the open repository's copy, or bring it up to date.
+    pub fn mirror_repo(&mut self) -> Result<u64, String> {
+        let repo = self.repos.open.as_ref().map(|o| o.url.clone()).ok_or("No repository is open")?;
+        if self.repos.asked.values().any(|a| matches!(a, Asked::Mirror(r) if *r == repo)) {
+            return Err("It is being copied already".into());
+        }
+        let request = self.mirror_request(&repo)?;
+        let id = self.git(&repo, request);
+        self.repos.asked.insert(id, Asked::Mirror(repo.clone()));
+        self.notify(format!("Copying {}/{}…", repo.group, repo.repo));
+        Ok(id)
+    }
+
+    /// Note a copy made: kept with the repository. One for a repository no
+    /// longer kept is deleted again.
+    pub fn record_mirror(&mut self, m: &Mirrored) {
+        let url = m.repo.to_string();
+        match self.store.repos.iter_mut().find(|r| r.url == url) {
+            Some(kept) => {
+                kept.mirror = Some(SavedMirror { updated: m.at, branches: m.branches, tags: m.tags, bytes: m.bytes, head: m.head.clone() });
+                self.store_dirty = true;
+            }
+            None => {
+                if let Ok(dir) = mirror_dir(&self.paths.repos, &m.repo) {
+                    let _ = remove_mirror_dir(&self.paths.repos, &dir);
+                }
+            }
+        }
+    }
+
+    /// Delete a repository's copy from this computer. Nothing on the node
+    /// changes.
+    pub fn remove_mirror(&mut self, url: &str) -> Result<(), String> {
+        let repo = parse_repo(url)?;
+        if !self.store.repos.iter().any(|r| r.url == url && r.mirror.is_some()) {
+            return Err("There is no copy of it on this computer".into());
+        }
+        let dir = mirror_dir(&self.paths.repos, &repo)?;
+        remove_mirror_dir(&self.paths.repos, &dir).map_err(|e| format!("Could not delete {}: {e}", dir.display()))?;
+        if let Some(kept) = self.store.repos.iter_mut().find(|r| r.url == url) {
+            kept.mirror = None;
+            self.store_dirty = true;
+        }
+        Ok(())
+    }
+
     pub fn remove_repo(&mut self, url: &str) {
+        if self.store.repos.iter().any(|r| r.url == url && r.mirror.is_some())
+            && let Err(e) = self.remove_mirror(url)
+        {
+            self.warn(e);
+        }
         let before = self.store.repos.len();
         self.store.repos.retain(|r| r.url != url);
         if self.store.repos.len() != before {
@@ -512,6 +652,9 @@ impl App {
     }
 
     pub(super) fn on_git(&mut self, id: u64, result: Result<GitReply, String>) {
+        if let Ok(GitReply::Mirrored(copy)) = &result {
+            self.record_mirror(copy);
+        }
         let Some(asked) = self.repos.asked.remove(&id) else { return };
         let open = self.repos.open.as_mut();
         let is_open = |repo: &RepoUrl, open: &Option<&mut OpenRepo>| open.as_ref().is_some_and(|o| o.url == *repo);
@@ -557,6 +700,8 @@ impl App {
                 }
             }
             (Asked::Write(_, what), Err(e)) => self.fail(format!("{what} failed: {e}")),
+            (Asked::Mirror(_), Ok(GitReply::Mirrored(copy))) => self.notify(mirror_said(&copy)),
+            (Asked::Mirror(repo), Err(e)) => self.fail(format!("Copying {}/{} failed: {e}", repo.group, repo.repo)),
             // For a repository no longer open, or an answer of another kind.
             _ => {}
         }
@@ -706,6 +851,20 @@ impl App {
             KeyCode::PageDown => self.move_repo_items(10),
             KeyCode::PageUp => self.move_repo_items(-10),
             KeyCode::Char('r') => self.reload_repo(),
+            KeyCode::Char('m') => {
+                if let Err(e) = self.mirror_repo() {
+                    self.warn(e);
+                }
+            }
+            KeyCode::Char('M') => {
+                let url = open.url.to_string();
+                if self.store.repos.iter().any(|r| r.url == url && r.mirror.is_some()) {
+                    let title = format!("Delete the copy of {url} on this computer? Nothing on the node changes. Type y");
+                    self.open_prompt(PromptKind::Repo(RepoPrompt::ConfirmRemoveMirror(url)), &title, "");
+                } else {
+                    self.warn("There is no copy of it on this computer: m makes one");
+                }
+            }
             KeyCode::Char('y') => self.copy(&open.url.to_string(), "the repository's URL"),
             _ => self.repo_pane_key(&open, code),
         }
@@ -849,6 +1008,7 @@ impl App {
                 }
                 self.delete_release(&tag).map(drop)
             }
+            RepoPrompt::ConfirmRemoveMirror(url) if yes => self.remove_mirror(&url).map(|()| self.notify("Deleted the copy")),
             _ => Ok(()),
         };
         if let Err(e) = result {
@@ -975,7 +1135,7 @@ mod tests {
 
         // Added by its URL: kept, and everything asked for.
         tui.key(KeyCode::Char('n')).answer(&format!("{NODE}/public/demo.git"));
-        assert_eq!(tui.app.store.repos, [SavedRepo { url: format!("rns://{NODE}/public/demo") }]);
+        assert_eq!(tui.app.store.repos, [SavedRepo { url: format!("rns://{NODE}/public/demo"), mirror: None }]);
         let asked = answer_all(&mut tui, &node);
         assert_eq!(asked.len(), 4, "{asked:?}");
         let screen = tui.draw();
@@ -1153,5 +1313,192 @@ mod tests {
         unsafe { std::env::set_var("RNGIT_CONFIG", "/tmp/rngit-here") };
         assert_eq!(rngit_identity_path(), Some(PathBuf::from("/tmp/rngit-here/client_identity")));
         unsafe { std::env::remove_var("RNGIT_CONFIG") };
+    }
+
+    use crate::net::git::tests::Source;
+
+    /// The app asked to copy: answer as the node holding `source` would.
+    fn copy_from(tui: &mut Tui, source: &Source) {
+        let node = Arc::new(source.node());
+        answer_all(tui, &node);
+    }
+
+    /// A repository kept, opened, and everything it asked for answered by nobody.
+    fn open_demo(tui: &mut Tui) {
+        tui.tab(Tab::Repos);
+        tui.key(KeyCode::Char('n')).answer(&format!("{NODE}/public/demo"));
+        tui.sent();
+    }
+
+    fn demo_url() -> RepoUrl {
+        parse_repo(&format!("{NODE}/public/demo")).unwrap()
+    }
+
+    #[test]
+    fn a_repository_is_copied_to_this_computer_and_the_copy_is_kept_track_of() {
+        let mut tui = Tui::new("repos-copy");
+        let source = Source::new(&tui.dir.join("source"));
+        source.git(&["tag", "v1"]);
+        open_demo(&mut tui);
+        assert!(tui.draw().contains("No copy on this computer"));
+
+        tui.key(KeyCode::Char('m'));
+        let screen = tui.draw();
+        assert!(screen.contains("Copying public/demo"), "{screen}");
+        // The folder is the app's choice, under its data folder.
+        let sent = tui.sent();
+        let [NetCommand::Git { request: GitRequest::Mirror { dir }, .. }] = &sent[..] else { panic!("{sent:?}") };
+        let dir = dir.clone();
+        assert_eq!(dir, tui.app.paths.repos.join(NODE).join("public").join("demo.git"));
+        // Asked again while it goes: refused, not sent twice.
+        tui.key(KeyCode::Char('m'));
+        assert!(tui.sent().is_empty());
+        assert!(tui.said().contains("being copied already"), "{}", tui.said());
+
+        // Answered: kept with the repository, and shown.
+        let NetCommand::Git { id, repo, request, .. } = sent.into_iter().next().unwrap() else { unreachable!() };
+        let result = answer(&Arc::new(source.node()), &repo, request);
+        tui.app.on_net(NetEvent::Git { id, result });
+        let kept = tui.app.store.repos[0].mirror.clone().expect("recorded");
+        assert_eq!((kept.branches, kept.tags, kept.head.as_deref()), (1, 1, Some("main")));
+        assert!(kept.bytes > 0 && kept.updated > 0.0);
+        assert!(dir.join("HEAD").exists());
+        let screen = tui.draw();
+        assert!(screen.contains("Copy here: 1 branches and 1 tags") && screen.contains("⇩"), "{screen}");
+        assert!(
+            tui.app.notice.as_ref().is_some_and(|n| n.text.starts_with("Copied public/demo")),
+            "{:?}",
+            tui.app.notice.as_ref().map(|n| n.text.clone())
+        );
+        assert!(tui.app.store_dirty);
+
+        // Updated: new work comes, and a gone tag goes.
+        source.commit("two");
+        source.git(&["tag", "-d", "v1"]);
+        tui.key(KeyCode::Char('m'));
+        copy_from(&mut tui, &source);
+        let kept = tui.app.store.repos[0].mirror.clone().unwrap();
+        assert_eq!((kept.branches, kept.tags), (1, 0));
+        assert!(
+            tui.app.notice.as_ref().is_some_and(|n| n.text.contains("Updated the copy") && n.text.contains("1 gone")),
+            "{:?}",
+            tui.app.notice.as_ref().map(|n| n.text.clone())
+        );
+    }
+
+    #[test]
+    fn a_copy_that_fails_says_so_and_keeps_nothing() {
+        let mut tui = Tui::new("repos-copy-fails");
+        open_demo(&mut tui);
+        tui.key(KeyCode::Char('m'));
+        answer_all(&mut tui, &Arc::new(Canned::default()));
+        assert!(tui.said().contains("Copying public/demo failed"), "{}", tui.said());
+        assert!(tui.app.store.repos[0].mirror.is_none());
+        assert!(!tui.app.paths.repos.join(NODE).exists());
+        // And it can be tried again.
+        tui.key(KeyCode::Char('m'));
+        assert_eq!(tui.sent().len(), 1);
+    }
+
+    #[test]
+    fn the_copy_is_deleted_on_its_own_and_with_the_repository() {
+        let mut tui = Tui::new("repos-copy-delete");
+        let source = Source::new(&tui.dir.join("source"));
+        open_demo(&mut tui);
+        tui.key(KeyCode::Char('M'));
+        assert!(tui.said().contains("no copy"), "{}", tui.said());
+        tui.key(KeyCode::Char('m'));
+        copy_from(&mut tui, &source);
+        let dir = tui.app.paths.repos.join(NODE).join("public").join("demo.git");
+        assert!(dir.exists());
+
+        // Not unless it's confirmed.
+        tui.key(KeyCode::Char('M')).answer("n");
+        assert!(dir.exists() && tui.app.store.repos[0].mirror.is_some());
+        tui.key(KeyCode::Char('M')).answer("y");
+        assert!(!dir.exists() && tui.app.store.repos[0].mirror.is_none());
+        // The folders it was in go with it; the repository is still kept.
+        assert!(!tui.app.paths.repos.join(NODE).exists());
+        assert_eq!(tui.app.store.repos.len(), 1);
+
+        // Removing the repository from the list takes a copy with it.
+        tui.key(KeyCode::Char('m'));
+        copy_from(&mut tui, &source);
+        assert!(dir.exists());
+        tui.key(KeyCode::Esc).key(KeyCode::Char('D')).answer("y");
+        assert!(tui.app.store.repos.is_empty() && !dir.exists());
+    }
+
+    #[test]
+    fn a_copy_finished_for_a_repository_no_longer_kept_is_deleted() {
+        let mut tui = Tui::new("repos-copy-orphan");
+        let source = Source::new(&tui.dir.join("source"));
+        open_demo(&mut tui);
+        tui.key(KeyCode::Char('m'));
+        let sent = tui.sent();
+        let NetCommand::Git { id, repo, request, .. } = sent.into_iter().next().unwrap() else { panic!() };
+        // Dropped while it was being copied.
+        tui.app.remove_repo(&repo.to_string());
+        let result = answer(&Arc::new(source.node()), &repo, request);
+        tui.app.on_net(NetEvent::Git { id, result });
+        assert!(tui.app.store.repos.is_empty());
+        assert!(!tui.app.paths.repos.join(NODE).exists());
+    }
+
+    #[test]
+    fn copies_go_in_folders_every_system_can_have() {
+        let repos = Path::new("/data/repos");
+        let url = |group: &str, repo: &str| RepoUrl::new([1; 16], group, repo).unwrap();
+        let hex = "01".repeat(16);
+        assert_eq!(mirror_dir(repos, &url("public", "demo")).unwrap(), repos.join(&hex).join("public").join("demo.git"));
+        assert_eq!(mirror_dir(repos, &url("public", "demo.git")).unwrap(), mirror_dir(repos, &url("public", "demo")).unwrap());
+        for bad in ["con", "CON", "nul", "aux.txt", "com1", "LPT9", "ends.", "prn."] {
+            assert!(mirror_dir(repos, &url(bad, "demo")).is_err(), "{bad}");
+            assert!(mirror_dir(repos, &url("public", bad)).is_err(), "{bad}");
+        }
+        for fine in ["console", "com10", "com", "a.b", "-x", "_y"] {
+            assert!(mirror_dir(repos, &url("public", fine)).is_ok(), "{fine}");
+        }
+        // Names that would lead out of the folder never become a repository.
+        for escape in ["..", ".", "a/b", "a\\b", ""] {
+            assert!(RepoUrl::new([1; 16], "public", escape).is_err(), "{escape}");
+            assert!(RepoUrl::new([1; 16], escape, "demo").is_err(), "{escape}");
+        }
+    }
+
+    #[test]
+    fn two_repositories_are_not_copied_into_one_folder() {
+        let mut tui = Tui::new("repos-copy-clash");
+        let source = Source::new(&tui.dir.join("source"));
+        open_demo(&mut tui);
+        tui.key(KeyCode::Char('m'));
+        copy_from(&mut tui, &source);
+        // The same name in other capitals would share the folder where capitals
+        // don't count, so it isn't copied while the first is.
+        tui.app.add_repo(&format!("{NODE}/Public/Demo")).unwrap();
+        let other = parse_repo(&format!("{NODE}/Public/Demo")).unwrap();
+        let clash = tui.app.mirror_request(&other).unwrap_err();
+        assert!(clash.contains("same folder"), "{clash}");
+        assert!(tui.app.mirror_request(&demo_url()).is_ok());
+        // Once the first copy is gone, the other may be made.
+        tui.app.remove_mirror(&demo_url().to_string()).unwrap();
+        assert!(tui.app.mirror_request(&other).is_ok());
+    }
+
+    #[test]
+    fn what_is_known_of_a_copy_is_saved_and_older_files_still_load() {
+        let kept = SavedRepo {
+            url: "rns://x/g/r".into(),
+            mirror: Some(SavedMirror { updated: 5.0, branches: 2, tags: 1, bytes: 9, head: Some("main".into()) }),
+        };
+        let json = serde_json::to_string(&kept).unwrap();
+        assert_eq!(serde_json::from_str::<SavedRepo>(&json).unwrap(), kept);
+        // Without a copy nothing is written, so earlier versions read the file as ever.
+        let plain = serde_json::to_string(&SavedRepo { url: "rns://x/g/r".into(), mirror: None }).unwrap();
+        assert_eq!(plain, r#"{"url":"rns://x/g/r"}"#);
+        assert_eq!(serde_json::from_str::<SavedRepo>(&plain).unwrap().mirror, None);
+        // A copy's record without a HEAD, from a node that didn't say.
+        let bare = r#"{"url":"u","mirror":{"updated":1.0,"branches":0,"tags":0,"bytes":0}}"#;
+        assert_eq!(serde_json::from_str::<SavedRepo>(bare).unwrap().mirror.unwrap().head, None);
     }
 }

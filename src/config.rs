@@ -365,6 +365,8 @@ pub struct Paths {
     pub interface_profiles: PathBuf,
     /// What the node hosted here has served (see `crate::app::node_stats`).
     pub node_stats: PathBuf,
+    /// Copies of rngit repositories (the Repos tab), by node, group and name.
+    pub repos: PathBuf,
 }
 
 impl Paths {
@@ -405,6 +407,7 @@ impl Paths {
             reticulum_history: root.join("reticulum-history"),
             interface_profiles: root.join("interface-profiles.json"),
             node_stats: base.join("node-stats.json"),
+            repos: base.join("repos"),
             root,
             base,
         })

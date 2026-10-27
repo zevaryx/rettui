@@ -79,7 +79,19 @@ fn repos_keys(app: &App) -> Keys {
                 ("↑↓", "select"),
             ],
         ),
-        _ => mode("Repos", &[("←→", "pane"), ("r", "reload"), ("y", "copy URL"), ("Esc", "list"), ("↑↓", "select")]),
+        (_, None, RepoPane::Branches) => mode(
+            "Repos: branches",
+            &[
+                ("m", "copy here"),
+                ("M", "delete copy"),
+                ("r", "reload"),
+                ("←→", "pane"),
+                ("y", "copy URL"),
+                ("Esc", "list"),
+                ("↑↓", "select"),
+            ],
+        ),
+        _ => mode("Repos", &[("←→", "pane"), ("r", "reload"), ("m", "copy here"), ("y", "copy URL"), ("Esc", "list"), ("↑↓", "select")]),
     }
 }
 

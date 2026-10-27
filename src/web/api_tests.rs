@@ -1547,3 +1547,69 @@ async fn rngit_repositories_over_the_api() {
     web.post("/api/repos/remove", json!({ "url": url })).await;
     assert!(web.get("/api/repos").await.json()["repos"].as_array().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn an_rngit_repository_is_copied_to_this_computer_from_the_web_ui() {
+    use crate::net::git::tests::Source;
+    let web = TestWeb::start("repos-copy");
+    let url = format!("rns://{NODE}/public/demo");
+    let source = Source::new(&web.dir.join("source"));
+    source.git(&["tag", "v1"]);
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::new(source.node()));
+    let folder = web.with(|app| app.paths.repos.join(NODE).join("public").join("demo.git")).await;
+
+    // Nothing is copied yet, whether or not the repository is kept.
+    assert_eq!(web.post("/api/repos", json!({ "url": url })).await.status, StatusCode::OK);
+    assert!(web.get("/api/repos").await.json()["repos"][0]["mirror"].is_null());
+
+    // Copied: told, kept with the repository, and on disk where the app put it.
+    let copied = web.post("/api/repos/mirror", json!({ "url": url })).await;
+    assert_eq!(copied.status, StatusCode::OK, "{}", copied.text());
+    let said = copied.json();
+    assert!(said["said"].as_str().unwrap().starts_with("Copied public/demo"), "{said}");
+    assert_eq!((said["mirror"]["branches"].as_u64(), said["mirror"]["tags"].as_u64()), (Some(1), Some(1)));
+    assert!(folder.join("HEAD").exists());
+    let listed = web.get("/api/repos").await.json();
+    assert_eq!(listed["repos"][0]["mirror"]["branches"], 1);
+    assert_eq!(listed["repos"][0]["mirror"]["head"], "main");
+    assert!(listed["repos"][0]["mirror"]["bytes"].as_u64().unwrap() > 0);
+
+    // Updated with what the node has now.
+    source.commit("two");
+    source.git(&["tag", "-d", "v1"]);
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::new(source.node()));
+    let updated = web.post("/api/repos/mirror", json!({ "url": url })).await.json();
+    assert!(updated["said"].as_str().unwrap().starts_with("Updated the copy"), "{updated}");
+    assert_eq!(updated["mirror"]["tags"], 0);
+
+    // A repository not kept yet is kept by being copied.
+    let other = format!("rns://{NODE}/public/other");
+    web.post("/api/repos/mirror", json!({ "url": other })).await;
+    assert_eq!(web.get("/api/repos").await.json()["repos"].as_array().unwrap().len(), 2);
+
+    // The browser says which repository and no more: nonsense is refused, and
+    // a folder can't be named.
+    assert_eq!(web.post("/api/repos/mirror", json!({ "url": "rns://nowhere" })).await.status, StatusCode::BAD_REQUEST);
+    let escape = web.post("/api/repos/mirror", json!({ "url": format!("rns://{NODE}/public/.."), "dir": "/tmp/elsewhere" })).await;
+    assert_eq!(escape.status, StatusCode::BAD_REQUEST);
+    assert!(!std::path::Path::new("/tmp/elsewhere").exists());
+
+    // A node that can't answer leaves no copy and says why.
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::default());
+    let failed = web.post("/api/repos/mirror", json!({ "url": format!("rns://{NODE}/public/third") })).await;
+    assert_eq!(failed.status, StatusCode::BAD_GATEWAY);
+    assert!(!folder.with_file_name("third.git").exists());
+
+    // Deleted: the files, and what's known of them; the repository stays kept.
+    assert_eq!(web.post("/api/repos/mirror/delete", json!({ "url": url })).await.status, StatusCode::OK);
+    assert!(!folder.exists());
+    assert!(web.get("/api/repos").await.json()["repos"][0]["mirror"].is_null());
+    assert_eq!(web.post("/api/repos/mirror/delete", json!({ "url": url })).await.status, StatusCode::BAD_REQUEST);
+
+    // Taking a repository off the list takes its copy too.
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::new(source.node()));
+    web.post("/api/repos/mirror", json!({ "url": url })).await;
+    assert!(folder.exists());
+    web.post("/api/repos/remove", json!({ "url": url })).await;
+    assert!(!folder.exists());
+}

@@ -8105,7 +8105,7 @@ app.views.repos = {
     const state = this.state = await api.get('/repos');
     if (changed(this, 'list', [state, this.url])) {
       const items = state.repos.map((r) => el('div', { class: 'list-item' + (r.url === this.url ? ' selected' : ''), onclick: () => this.open(r.url) },
-        el('span', { class: 'main' }, el('div', { class: 'name', text: `${r.group}/${r.repo}` }), el('div', { class: 'sub mono', text: r.node_name })),
+        el('span', { class: 'main' }, el('div', { class: 'name', text: `${r.group}/${r.repo}${r.mirror ? ' ⇩' : ''}`, title: r.mirror ? 'Copied to this computer' : '' }), el('div', { class: 'sub mono', text: r.node_name })),
         el('button', { text: '×', title: 'Stop keeping it (nothing on the node changes)', onclick: (e) => {
           e.stopPropagation();
           this.remove(r);
@@ -8234,18 +8234,59 @@ app.views.repos = {
     return [got.data, null];
   },
 
+  // The copy of the repository kept on this computer, and what to do with it.
+  copyBar() {
+    const kept = this.state?.repos.find((r) => r.url === this.url);
+    const m = kept?.mirror;
+    const copy = el('button', { class: m ? '' : 'primary', text: this.copying ? 'Copying…' : m ? 'Update the copy' : 'Copy to this computer',
+      disabled: !!this.copying, onclick: () => this.mirror() });
+    return el('div', { class: 'row card-actions' },
+      el('span', { class: 'grow ' + (m ? '' : 'dim'),
+        text: m ? `Copy on this computer: ${m.branches} branches and ${m.tags} tags, ${humanBytes(m.bytes)}, updated ${ago(m.updated)} ago`
+          : 'No copy on this computer.' }),
+      copy,
+      m ? el('button', { text: 'Delete the copy', onclick: () => this.removeCopy() }) : null);
+  },
+
+  async mirror() {
+    const url = this.url;
+    this.copying = url;
+    this.render();
+    toast('Copying…');
+    try {
+      const done = await api.post('/repos/mirror', { url });
+      toast(done.said || 'Copied');
+    } catch (e) {
+      toast(`Copying failed: ${e.message}`, true);
+    }
+    this.copying = null;
+    await this.update();
+  },
+
+  async removeCopy() {
+    if (!await ask('Delete the copy of this repository on this computer?\nNothing on the node changes.', { yes: 'Delete' })) return;
+    try {
+      await api.post('/repos/mirror/delete', { url: this.url });
+      toast('Deleted the copy');
+    } catch (e) {
+      toast(e.message, true);
+    }
+    await this.update();
+  },
+
   refsPage() {
     const [data, shown] = this.answer('refs');
-    if (!data) return shown;
-    if (!data.refs.length) return el('div', { class: 'empty', text: 'Nothing pushed yet.' });
-    return data.refs.map((r) => {
+    const bar = this.copyBar();
+    if (!data) return [bar, shown];
+    if (!data.refs.length) return [bar, el('div', { class: 'empty', text: 'Nothing pushed yet.' })];
+    return [bar, ...data.refs.map((r) => {
       const branch = r.name.startsWith('refs/heads/');
       const name = r.name.replace(/^refs\/(heads|tags)\//, '');
       return el('div', { class: 'list-item' },
         el('span', { class: 'main' }, el('span', { class: 'dim', text: branch ? 'branch ' : r.name.startsWith('refs/tags/') ? 'tag ' : 'ref ' }),
           el('span', { class: 'name', text: name }), ' ', el('span', { class: 'mono dim', text: r.sha.slice(0, 7) })),
         data.head === r.name ? el('span', { class: 'state-ok', text: 'HEAD' }) : null);
-    });
+    })];
   },
 
   releasesPage() {
@@ -8359,6 +8400,10 @@ app.views.repos = {
     }
     if (e.key === 'r' && this.url) {
       this.reload();
+      return true;
+    }
+    if (e.key === 'm' && this.url && !this.copying) {
+      this.mirror();
       return true;
     }
     return false;
@@ -9115,7 +9160,7 @@ const KEYS = [
   ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],
     ['/', 'search the nodes and saved pages'], ['T', 'a new tab (Ctrl+click or middle-click a link for one)'], ['W', 'close the tab'],
     ['[ ]', 'previous or next tab']]],
-  ['Repos', [['n', 'add a repository'], ['r', 'ask the open one\'s node again']]],
+  ['Repos', [['n', 'add a repository'], ['r', 'ask the open one\'s node again'], ['m', 'copy it to this computer, or update the copy']]],
 ];
 
 function keysDialog() {

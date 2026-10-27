@@ -565,10 +565,28 @@ pub struct Store {
 }
 
 /// An rngit repository kept in the Repos tab.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavedRepo {
     /// Its `rns://<node>/<group>/<repo>` URL.
     pub url: String,
+    /// The copy of it kept on this computer, once one is made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<SavedMirror>,
+}
+
+/// What is known of the local copy of an rngit repository (the copy is
+/// in `Paths::repos`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedMirror {
+    /// When it was last brought up to date (Unix seconds).
+    pub updated: f64,
+    pub branches: usize,
+    pub tags: usize,
+    /// What it takes on disk.
+    pub bytes: u64,
+    /// The branch the node's HEAD was on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }
 
 /// Days a peer is kept after it was last heard (see [`Store::prune_peers`]).

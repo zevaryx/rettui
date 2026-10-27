@@ -168,6 +168,8 @@ pub fn router(state: WebState) -> Router {
         .route("/rncp/send", post(rncp_send))
         .route("/repos", get(repos).post(add_repo))
         .route("/repos/remove", post(remove_repo))
+        .route("/repos/mirror", post(repo_mirror))
+        .route("/repos/mirror/delete", post(repo_delete_mirror))
         .route("/repos/refs", get(repo_refs))
         .route("/repos/perms", get(repo_perms))
         .route("/repos/releases", get(repo_releases))
@@ -2470,6 +2472,48 @@ async fn add_repo(State(state): State<WebState>, axum::Json(body): axum::Json<Ur
 
 async fn remove_repo(State(state): State<WebState>, axum::Json(body): axum::Json<UrlBody>) -> ApiResult {
     state.write(move |o| o.app.remove_repo(&body.url)).await?;
+    ok()
+}
+
+/// Make a copy of a repository on this computer, or bring it up to date.
+/// The browser says which repository and no more: the folder is rettui's
+/// choice, in its data folder. It runs on after the browser leaves, so the
+/// copy is noted either way.
+async fn repo_mirror(State(state): State<WebState>, axum::Json(body): axum::Json<UrlBody>) -> ApiResult {
+    let repo = repo_url(&body.url)?;
+    let task = {
+        let state = state.clone();
+        let repo = repo.clone();
+        tokio::spawn(async move {
+            let asked = repo.clone();
+            let request = state
+                .write(move |o| {
+                    o.app.add_repo(&asked.to_string())?;
+                    o.app.mirror_request(&asked)
+                })
+                .await??;
+            let reply = state.git(repo, request).await?;
+            state
+                .write(move |o| {
+                    if let crate::net::git::GitReply::Mirrored(copy) = &reply {
+                        o.app.record_mirror(copy);
+                    }
+                    views::git_reply(&o.app, &reply)
+                })
+                .await
+        })
+    };
+    match task.await {
+        Ok(Ok(reply)) => Ok(axum::Json(reply)),
+        Ok(Err(e)) => Err(ApiError(StatusCode::BAD_GATEWAY, e)),
+        Err(_) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, "The copy stopped unexpectedly".into())),
+    }
+}
+
+/// Delete a repository's copy from this computer.
+async fn repo_delete_mirror(State(state): State<WebState>, axum::Json(body): axum::Json<UrlBody>) -> ApiResult {
+    let url = repo_url(&body.url)?.to_string();
+    state.write(move |o| o.app.remove_mirror(&url)).await?.map_err(bad)?;
     ok()
 }
 
