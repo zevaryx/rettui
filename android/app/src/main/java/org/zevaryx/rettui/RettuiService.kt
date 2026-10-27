@@ -134,6 +134,9 @@ class RettuiService : Service() {
                 -1
             }
             Log.i(TAG, "rettui stopped ($code)")
+            // It ended cleanly while the service still wanted it (the web
+            // UI's Stop rettui): as with Stop, the app says so.
+            if (code == 0 && running) Rettui.setStoppedByYou(this, true)
             // Stopped by itself (it failed, or its process is ending): the
             // service goes too.
             main.post { stopSelf() }

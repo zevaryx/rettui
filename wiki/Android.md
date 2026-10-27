@@ -60,9 +60,10 @@ repository.
   goes back from a conversation, room or page to its list.
 - Joins and leaves in RRC rooms start hidden on the phone. **Show joins and
   leaves** (behind ⋯ in a room) shows them.
-- After **Stop**, the app says rettui is stopped, with **Start**. If
+- After **Stop** (in the notification, or **Stop rettui** in the web UI), the app
+  says rettui is stopped, with **Start** and **Close the app**. If
   rettui stops by itself, the app shows what it printed, with **Start
-  again**.
+  again** and **Close the app**.
 - **Sharing with rettui:** share text, pictures or files from another app to
   rettui. A link on its own (`lxma://`, `lxmf@…`, a NomadNet page,
   `rrc://`) opens. Anything else asks which conversation it's for, and goes
