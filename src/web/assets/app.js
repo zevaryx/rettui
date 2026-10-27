@@ -949,7 +949,7 @@ function renderBottombar(unread, drawn) {
     }),
     item('⋯', 'More', more.some((t) => t.id === app.tab), 0, false, () => openSheet(whoLine(), more.map((tab) => ({
       text: `${tab.icon}  ${tab.title}`, checked: tab.id === app.tab, action: () => switchTab(tab.id),
-    })))));
+    })).concat([{ text: '⏻  Stop rettui', danger: true, action: () => stopRettui() }]))));
 }
 
 // Who you are and how the network is, for the top of More.
@@ -7314,7 +7314,8 @@ app.views.status = {
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
           el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
-          el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }), moreButton()), this.info),
+          el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }),
+          el('button', { class: 'more danger', text: 'Stop rettui', title: 'Save everything and close rettui', onclick: () => stopRettui() }), moreButton()), this.info),
         el('section', { class: 'panel grow settings-panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
           this.revertButton, this.saveButton), this.sectionTabs, el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
       el('div', { class: 'column', style: 'width:42%' },
@@ -8708,6 +8709,12 @@ async function restartReticulum() {
     : 'Restart Reticulum?\nLinks and transfers in progress stop; hubs reconnect and your node starts again.';
   if (!await ask(question, { title: 'Reticulum', yes: app.status?.external_shared_instance ? 'Reconnect' : 'Restart' })) return;
   attempt(() => api.post('/reticulum/restart'), 'Restarting Reticulum');
+}
+
+// Save everything and close rettui (the web page stays, saying it's gone).
+async function stopRettui() {
+  if (!await ask('Stop rettui?\nEverything is saved first. Nothing is received or sent until it is started again.', { title: 'Stop rettui', yes: 'Stop', danger: true })) return;
+  attempt(() => api.post('/quit'), 'Stopping rettui');
 }
 
 // ---- start ------------------------------------------------------------------

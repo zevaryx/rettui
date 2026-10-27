@@ -789,6 +789,10 @@ async fn the_hub_hosted_here_and_reticulums_config() {
     assert_eq!(web.post("/api/reticulum/text", json!({ "text": "[reticulum]\n  share_instance = Yes\n" })).await.status, StatusCode::OK);
     assert_eq!(web.post("/api/reticulum/restart", json!({})).await.status, StatusCode::OK);
     assert!(web.with(|app| app.take_rns_restart()).await);
+    // Stopping rettui is left for the event loop to carry out.
+    assert!(!web.with(|app| app.take_quit()).await);
+    assert_eq!(web.post("/api/quit", json!({})).await.status, StatusCode::OK);
+    assert!(web.with(|app| app.take_quit()).await);
 }
 
 #[tokio::test]

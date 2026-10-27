@@ -654,6 +654,7 @@ pub struct App {
     next_request: u64,
     /// A Reticulum restart the event loop should carry out.
     restart_pending: bool,
+    quit_pending: bool,
     /// The entry points the guide added (their interfaces' names), and
     /// when: said as each connects (see [`App::watch_connection`]).
     connect_watch: Option<(Vec<String>, Instant)>,
@@ -835,6 +836,7 @@ impl App {
             chat_selection: None,
             next_request: 1,
             restart_pending: false,
+            quit_pending: false,
             connect_watch: None,
             entry_reach: reach::Reachability::default(),
             identity_pending: None,
@@ -1523,6 +1525,18 @@ impl App {
             }
         }
         self.confirm("Restarting Reticulum…");
+    }
+
+    /// Stop rettui (from the web UI's Stop buttons): the event loop saves
+    /// everything and ends.
+    pub fn request_quit(&mut self) {
+        self.log("Stopping rettui…");
+        self.quit_pending = true;
+    }
+
+    /// Whether stopping was asked for.
+    pub fn take_quit(&mut self) -> bool {
+        std::mem::take(&mut self.quit_pending)
     }
 
     /// Whether a restart was asked for (the event loop carries it out).
