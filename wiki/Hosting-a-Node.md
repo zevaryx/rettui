@@ -250,8 +250,9 @@ rettui can serve git repositories to [rngit](https://github.com/zevaryx/rngit-rs
 clients, so people clone them over Reticulum with `git clone rns://<address>/<group>/<name>.git`
 (the stock `rngit` helper, `git-remote-rns` and rettui's [Repos tab](Repos) all
 work), and push to it. Cloning, fetching, pushing, creating repositories and
-deleting branches and tags work, and so do releases. Work documents, fork,
-mirror and sync are answered "not allowed" for now; use stock rngit for those.
+deleting branches and tags work, and so do releases, work documents and
+changing who may do what. Fork, mirror and sync are answered "not allowed" for
+now; use stock rngit for those.
 
 - **Switching it on:** set "Host rngit repositories" in Settings › Hosting
   (`git_host_enabled`). It announces itself (`git.repositories`) a few seconds

@@ -552,6 +552,74 @@ async fn ben_publishes_a_release_on_amys_repository() {
     let _ = std::fs::remove_dir_all(&repos);
 }
 
+/// Ben proposes a work document on one of Amy's repositories, and comments on
+/// it; Amy's node checks his signature, and what he reads back verifies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ben_proposes_a_work_document_on_amys_repository() {
+    use crate::app::node::NodeStatus;
+    use crate::app::repos::Detail;
+    use rngit::client::WorkScope;
+    let repos = std::env::temp_dir().join(format!("rettui-live-gitwork-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repos);
+    let source = repos.join("served/public/source.git");
+    std::fs::create_dir_all(&source).unwrap();
+    git_in(&source, &["init", "-q", "--bare", "-b", "main"]);
+    let served = repos.join("served").display().to_string();
+    let (mut amy, mut ben) = pair("gitwork", |s| {
+        s.git_host_enabled = true;
+        s.git_host_dir = Some(served);
+        s.git_host_access = Some("r:all, p:all, i:all".into());
+    })
+    .await;
+    until(&mut amy, &mut ben, "Amy's repositories hosted", |a, _| a.app.git_host.status == NodeStatus::Running).await;
+    let node = hex::encode(amy.app.git_host.address.expect("the node's address"));
+    ben.app.open_repo(&format!("rns://{node}/public/source")).unwrap();
+
+    // Asked again until Amy's path is known, and the (empty) list of documents comes.
+    let wait = Instant::now();
+    loop {
+        ben.app.reload_repo();
+        let asked = Instant::now();
+        until(&mut amy, &mut ben, "the documents", |_, b| {
+            b.app.repos.open.as_ref().is_some_and(|o| o.work.ready().is_some()) || asked.elapsed() > Duration::from_secs(4)
+        })
+        .await;
+        if ben.app.repos.open.as_ref().is_some_and(|o| o.work.ready().is_some()) {
+            break;
+        }
+        assert!(wait.elapsed() < PATIENCE, "Ben couldn't read the documents");
+    }
+    ben.app.new_doc(true, "Idea", "Build a thing\n").unwrap();
+    let proposed = repos.join("served/public/source.git.work/proposed/1/root");
+    until(&mut amy, &mut ben, "the proposal kept", |_, _| proposed.is_file()).await;
+    assert!(repos.join("served/public/source.git.work/1.allowed").is_file());
+
+    // Read back: listed, and signed by Ben's key.
+    let ben_hash = hex::encode(ben.identity.hash);
+    ben.app.reload_repo();
+    until(&mut amy, &mut ben, "the proposal listed", |_, b| {
+        b.app.repos.open.as_ref().and_then(|o| o.work.ready()).is_some_and(|w| w.proposed.len() == 1)
+    })
+    .await;
+    ben.app.open_doc(1, WorkScope::Proposed);
+    until(&mut amy, &mut ben, "the proposal read", |_, b| {
+        matches!(b.app.repos.open.as_ref().and_then(|o| o.detail.as_ref()), Some(Detail::Doc { load, .. }) if load.ready().is_some())
+    })
+    .await;
+    let doc = match ben.app.repos.open.as_ref().and_then(|o| o.detail.clone()) {
+        Some(Detail::Doc { load, .. }) => load.ready().cloned().unwrap(),
+        _ => unreachable!(),
+    };
+    assert_eq!((doc.title.as_str(), doc.text.as_str(), doc.author.as_str()), ("Idea", "Build a thing", ben_hash.as_str()));
+    assert_eq!(doc.signer.as_deref(), Some(ben_hash.as_str()));
+
+    // A comment goes in too.
+    ben.app.comment_doc(1, WorkScope::Proposed, "Soon").unwrap();
+    let comment = repos.join("served/public/source.git.work/proposed/1/1");
+    until(&mut amy, &mut ben, "the comment kept", |_, _| comment.is_file()).await;
+    let _ = std::fs::remove_dir_all(&repos);
+}
+
 /// Run `work`, taking in what Amy's network says meanwhile (as her rettui
 /// would, running).
 async fn while_running<T>(amy: &mut Peer, work: impl std::future::Future<Output = T>) -> T {
