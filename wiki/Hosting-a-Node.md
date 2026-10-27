@@ -9,6 +9,14 @@ rettui hosts a NomadNet node using rsNomad's node. Pages are Micron
 files in `node/pages/` (and downloads in `node/files/`) in the data directory,
 or the folder set in `node_dir`.
 
+- **Forks and mirrors:** someone who may make repositories in a group (`c`) can
+  have the node fork or mirror a repository on another rngit node, and `sync`
+  brings one up to date. Only `rns://` sources are taken, because the node runs
+  no programs (stock also takes `http`, `https` and `ssh`). The node fetches
+  with its own identity, so give `c` only to people you trust to have it read
+  what it may read. Mirrors are followed again once a day; a fork is followed
+  only when someone syncs it. The maker becomes the repository's administrator.
+  A node can't fork or mirror from itself.
 - **Switching it on:** press `h` in the Node tab, use **Start hosting** in
   the web UI, or set "Host a node" in the settings. The node uses your
   identity, so its address stays the same. Its name defaults to your display
@@ -250,9 +258,8 @@ rettui can serve git repositories to [rngit](https://github.com/zevaryx/rngit-rs
 clients, so people clone them over Reticulum with `git clone rns://<address>/<group>/<name>.git`
 (the stock `rngit` helper, `git-remote-rns` and rettui's [Repos tab](Repos) all
 work), and push to it. Cloning, fetching, pushing, creating repositories and
-deleting branches and tags work, and so do releases, work documents and
-changing who may do what. Fork, mirror and sync are answered "not allowed" for
-now; use stock rngit for those.
+deleting branches and tags work, and so do releases, work documents,
+changing who may do what, and forks, mirrors and sync.
 
 - **Switching it on:** set "Host rngit repositories" in Settings › Hosting
   (`git_host_enabled`). It announces itself (`git.repositories`) a few seconds

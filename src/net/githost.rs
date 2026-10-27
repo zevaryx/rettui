@@ -18,6 +18,10 @@ const ANNOUNCE_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// Stock waits a few seconds so the interfaces are up before the first announce.
 const FIRST_ANNOUNCE: Duration = Duration::from_secs(5);
 
+/// Mirrors are looked at hourly and followed again once a day old, as stock does.
+const MIRROR_CHECK_EVERY: Duration = Duration::from_secs(3600);
+const MIRROR_OLDER_THAN: Duration = Duration::from_secs(24 * 3600);
+
 /// What the git node runs with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitHostConfig {
@@ -87,6 +91,7 @@ pub struct HostedGit {
     pub hash: [u8; 16],
     destination: RegisteredDestination,
     announcer: tokio::task::JoinHandle<()>,
+    mirrors: tokio::task::JoinHandle<()>,
 }
 
 impl HostedGit {
@@ -103,6 +108,8 @@ impl HostedGit {
         node.max_bundle_bytes = config.push_bytes;
         node.quotas.max_push_bytes = config.push_bytes;
         node.quotas.max_repo_bytes = config.repo_bytes;
+        node.upstream = Some(rngit::serve::upstream(runtime.clone(), identity.clone(), rngit::client::Limits::default()));
+        let node = Arc::new(node);
         let activity: rngit::serve::Activity = {
             let ev = ev.clone();
             Arc::new(move |path, peer, status| {
@@ -111,7 +118,7 @@ impl HostedGit {
         };
         let app_data = config.name.as_ref().map(|n| n.as_bytes().to_vec());
         let destination =
-            rngit::serve::serve(runtime, identity, Arc::new(node), app_data.clone(), Some(activity)).await.map_err(|e| e.to_string())?;
+            rngit::serve::serve(runtime, identity, node.clone(), app_data.clone(), Some(activity)).await.map_err(|e| e.to_string())?;
         let hash = destination.handle.destination_hash();
         let handle = destination.handle.clone();
         let announcer = tokio::spawn(async move {
@@ -122,12 +129,14 @@ impl HostedGit {
                 tokio::time::sleep(ANNOUNCE_EVERY).await;
             }
         });
-        Ok(Self { hash, destination, announcer })
+        let mirrors = rngit::serve::keep_mirrors(node, MIRROR_CHECK_EVERY, MIRROR_OLDER_THAN);
+        Ok(Self { hash, destination, announcer, mirrors })
     }
 
     /// Stop answering, closing the links so clients see it go.
     pub async fn stop(self) {
         self.announcer.abort();
+        self.mirrors.abort();
         let _ = tokio::time::timeout(Duration::from_secs(3), self.destination.close()).await;
     }
 }
