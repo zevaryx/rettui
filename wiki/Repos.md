@@ -95,6 +95,26 @@ deletes its copy too.
   can't both be copied, as they would share a folder on some systems.
 - Backups don't include `repos/`: copy again from the node after a restore.
 
+### Reading the copy without the node
+
+`Enter` on a branch or tag in the Branches and tags pane (a click in the web UI)
+looks inside the copy: the files at the top, then folders (`Enter` opens one,
+or a file to read its text), `Esc` or **Back** one step up, and `L` (**Log**)
+the newest 200 commits. Nothing is asked of the node, so it works with no
+connection. If the node doesn't answer when a repository is opened, its
+branches and tags are the copy's, and the pane says so.
+
+- A file is shown as text up to 256 KB, with control characters taken out; a
+  file that isn't text (or isn't valid UTF-8) says so and shows nothing.
+  Symbolic links show as links; the folder of a submodule isn't in the copy.
+- Only the copy's own files are read, and a path that tries to leave the
+  repository is refused. The web UI names a repository, a branch or tag and a
+  path inside it, and no folder on this computer.
+- `rngit log DIR REF`, `rngit tree DIR REF [PATH]` and `rngit show DIR REF PATH`
+  of the `rngit` command do the same on a copy's folder.
+- The copy is as old as its last update (`m`): it shows what the node had then.
+  Releases and work documents aren't in a copy and need the node.
+
 ### Sending a copy to another repository
 
 `u` on an open repository that has a copy (**Send to…** in the web UI) sends

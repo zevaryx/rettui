@@ -8217,6 +8217,7 @@ app.views.repos = {
     const paths = { refs: '/repos/refs', releases: '/repos/releases', work: '/repos/work', perms: '/repos/perms' };
     for (const [pane, path] of Object.entries(paths)) this.fetch(pane, `${path}?url=${encodeURIComponent(url)}`);
     if (this.opened?.release) this.openRelease(this.opened.release);
+    if (this.opened?.copy) this.openCopy(this.opened.copy.ref, this.opened.copy.path, this.opened.copy.show);
     if (this.opened?.doc) this.openDoc(this.opened.doc, this.opened.scope);
   },
 
@@ -8285,7 +8286,8 @@ app.views.repos = {
       el('button', { text: 'Copy URL', onclick: () => copy(this.url, 'the repository\'s URL') }),
       el('button', { text: '↻', title: 'Ask the node again', onclick: () => this.reload() }));
     if (this.typing()) return;
-    const rows = this.opened?.release ? this.releasePage() : this.opened?.doc ? this.docPage() : this[`${this.pane}Page`]();
+    const rows = this.opened?.release ? this.releasePage() : this.opened?.doc ? this.docPage()
+      : this.opened?.copy ? this.copyPage() : this[`${this.pane}Page`]();
     this.body.replaceChildren(...[rows].flat());
   },
 
@@ -8367,15 +8369,64 @@ app.views.repos = {
     const [data, shown] = this.answer('refs');
     const bar = this.copyBar();
     if (!data) return [bar, shown];
-    if (!data.refs.length) return [bar, el('div', { class: 'empty', text: 'Nothing pushed yet.' })];
-    return [bar, ...data.refs.map((r) => {
+    const note = data.from_copy ? el('div', { class: 'empty state-warn', text: 'The node didn\'t answer: these are the copy\'s.' }) : null;
+    if (!data.refs.length) return [bar, note, el('div', { class: 'empty', text: 'Nothing pushed yet.' })];
+    const kept = this.state?.repos.find((r) => r.url === this.url);
+    return [bar, note, ...data.refs.map((r) => {
       const branch = r.name.startsWith('refs/heads/');
       const name = r.name.replace(/^refs\/(heads|tags)\//, '');
-      return el('div', { class: 'list-item' },
+      return el('div', { class: 'list-item', title: kept?.mirror ? 'Look inside the copy' : '', onclick: () => {
+        if (kept?.mirror) this.openCopy(r.name, '', 'folder');
+        else toast('There is no copy of it on this computer: copy it first', true);
+      } },
         el('span', { class: 'main' }, el('span', { class: 'dim', text: branch ? 'branch ' : r.name.startsWith('refs/tags/') ? 'tag ' : 'ref ' }),
           el('span', { class: 'name', text: name }), ' ', el('span', { class: 'mono dim', text: r.sha.slice(0, 7) })),
         data.head === r.name ? el('span', { class: 'state-ok', text: 'HEAD' }) : null);
     })];
+  },
+
+  // Look inside the copy on this computer: a folder, a file or the log of a branch or tag.
+  openCopy(ref, path, show) {
+    this.opened = { copy: { ref, path, show } };
+    this.got.copy = null;
+    const query = `url=${encodeURIComponent(this.url)}&ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(path)}&show=${show}`;
+    this.fetch('copy', `/repos/copy/files?${query}`);
+  },
+
+  copyPage() {
+    const { ref, path, show } = this.opened.copy;
+    const name = ref.replace(/^refs\/(heads|tags)\//, '');
+    const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    const back = el('button', { text: '‹ Back', onclick: () => {
+      if (show === 'log') this.openCopy(ref, path, 'folder');
+      else if (path) this.openCopy(ref, parent, 'folder');
+      else {
+        this.opened = null;
+        this.render();
+      }
+    } });
+    const head = (text) => el('div', { class: 'row card-actions' }, back, el('span', { class: 'grow mono', text }),
+      show === 'folder' ? el('button', { text: 'Log', onclick: () => this.openCopy(ref, path, 'log') }) : null);
+    const [data, shown] = this.answer('copy');
+    if (!data) return [head(`${name} · /${path}`), shown];
+    if (data.log) {
+      return [head(`${name} · newest commits`), ...(data.log.length ? data.log.map((c) => el('div', { class: 'list-item' },
+        el('span', { class: 'main' }, el('div', { class: 'name', text: c.subject }),
+          el('div', { class: 'sub', text: `${c.id.slice(0, 7)} · ${c.author} · ${ago(c.time)} ago` })))) : [el('div', { class: 'empty', text: 'No commits.' })])];
+    }
+    if (data.file) {
+      const f = data.file;
+      return [head(`${name} · /${path}`), f.text === null
+        ? el('div', { class: 'empty', text: `Not text (${humanBytes(f.size)}): nothing to show.` })
+        : el('pre', { class: 'repo-text', text: f.text + (f.truncated ? `\n… cut here; the file is ${humanBytes(f.size)}` : '') })];
+    }
+    return [head(`${name} · /${path}`), ...(data.folder.length ? data.folder.map((e) => el('div', { class: 'list-item', onclick: () => {
+      const next = path ? `${path}/${e.name}` : e.name;
+      if (e.kind === 'dir') this.openCopy(ref, next, 'folder');
+      else if (e.kind === 'submodule') toast('That is another repository: its files aren\'t in this copy', true);
+      else this.openCopy(ref, next, 'file');
+    } }, el('span', { class: 'main' }, el('span', { class: 'name', text: `${e.kind === 'dir' ? '▸ ' : e.kind === 'link' ? '↪ ' : e.kind === 'submodule' ? '◆ ' : ''}${e.name}` }),
+      e.size !== null ? el('span', { class: 'sub', text: ` ${humanBytes(e.size)}` }) : null))) : [el('div', { class: 'empty', text: 'Nothing in this folder.' })])];
   },
 
   releasesPage() {

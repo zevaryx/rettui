@@ -871,6 +871,23 @@ pub fn git_reply(app: &App, reply: &crate::net::git::GitReply) -> Value {
     }
 }
 
+/// What reading a repository's copy found, as the Repos section shows it.
+pub fn browse_json(view: &crate::app::repo_files::BrowseView) -> Value {
+    use crate::app::repo_files::BrowseView;
+    use rngit::local::EntryKind;
+    match view {
+        BrowseView::Folder(entries) => json!({ "folder": entries.iter().map(|e| json!({
+            "name": e.name, "size": e.size,
+            "kind": match e.kind { EntryKind::Dir => "dir", EntryKind::File => "file", EntryKind::Link => "link", EntryKind::Submodule => "submodule" },
+        })).collect::<Vec<_>>() }),
+        BrowseView::File(file) => json!({ "file": { "size": file.size, "text": file.text, "truncated": file.truncated } }),
+        BrowseView::Log(commits) => json!({ "log": commits.iter().map(|c| json!({
+            "id": c.id.to_string(), "author": crate::net::git::clean_text(&c.author, 100), "time": c.time, "subject": c.subject,
+        })).collect::<Vec<_>>() }),
+        BrowseView::Failed(e) => json!({ "error": e }),
+    }
+}
+
 /// A repository's local copy, as the Repos section shows it.
 fn mirror_json(m: &SavedMirror) -> Value {
     json!({ "updated": m.updated, "branches": m.branches, "tags": m.tags, "bytes": m.bytes, "head": m.head })

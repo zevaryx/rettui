@@ -12,7 +12,9 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, human_bytes, selected_bg};
 use crate::app::App;
+use crate::app::repo_files::{Browse, BrowseView};
 use crate::app::repos::{Detail, Load, OpenRepo, RepoPane, ReposFocus};
+use rngit::local::EntryKind;
 
 pub(super) fn draw_repos(frame: &mut Frame, app: &mut App, area: Rect) {
     let [left, right] = Layout::horizontal([Constraint::Length(super::side_width(app, area, 36)), Constraint::Min(20)]).areas(area);
@@ -129,6 +131,7 @@ fn draw_repo(frame: &mut Frame, app: &mut App, area: Rect) {
     match &open.detail {
         Some(Detail::Release { tag, load }) => draw_release(frame, app, tag, load, body),
         Some(Detail::Doc { load, .. }) => draw_doc(frame, app, load, body),
+        Some(Detail::Browse(browse)) => draw_browse(frame, app, browse, body),
         None => match app.repos.pane {
             RepoPane::Branches => draw_refs(frame, app, &open, body),
             RepoPane::Releases => draw_releases(frame, app, &open, body),
@@ -174,7 +177,7 @@ fn copy_line(app: &App, open: &OpenRepo) -> Line<'static> {
                 human_bytes(m.bytes),
                 super::ago(m.updated as i64)
             )),
-            Span::styled("  m updates, u sends on, M deletes", Style::default().fg(dim())),
+            Span::styled("  Enter looks inside, m updates, M deletes", Style::default().fg(dim())),
         ]),
         None => Line::from(Span::styled("No copy on this computer: m makes one", Style::default().fg(dim()))),
     }
@@ -188,6 +191,19 @@ fn draw_refs(frame: &mut Frame, app: &mut App, open: &OpenRepo, area: Rect) {
         return;
     }
     let refs = open.refs.ready().expect("checked");
+    let (copy, area) = if open.from_copy {
+        let [note, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+        (Some(note), rest)
+    } else {
+        (None, area)
+    };
+    if let Some(note) = copy {
+        frame.render_widget(
+            Paragraph::new("The node didn't answer: these are the copy's. Enter looks inside.").style(Style::default().fg(Color::Yellow)),
+            note,
+        );
+        app.regions.repo_list = area;
+    }
     let items = refs
         .refs
         .iter()
@@ -339,6 +355,80 @@ fn draw_release(frame: &mut Frame, app: &mut App, tag: &str, load: &Load<rngit::
         })
         .collect();
     draw_list(frame, app, items, "This release has no files.", files);
+}
+
+/// A branch or tag of the copy: where in it, then its folder, a file or its log.
+fn draw_browse(frame: &mut Frame, app: &mut App, browse: &Browse, area: Rect) {
+    let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    let place = if browse.path.is_empty() { "/".to_string() } else { format!("/{}", browse.path) };
+    let (what, hint) = match &browse.view {
+        BrowseView::Log(_) => ("log", "Esc back"),
+        BrowseView::File(_) => ("file", "Esc back"),
+        _ => ("", "Enter open, L log, Esc up"),
+    };
+    let title = if what == "log" { format!("{} · newest commits", browse.name()) } else { format!("{} · {place}", browse.name()) };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("⇩ ", Style::default().fg(Color::Green)),
+            Span::styled(title, Style::default().bold()),
+            Span::styled(format!("  {hint}"), Style::default().fg(dim())),
+        ])),
+        head,
+    );
+    app.regions.repo_list = body;
+    match &browse.view {
+        BrowseView::Failed(e) => {
+            frame.render_widget(Paragraph::new(e.clone()).style(Style::default().fg(Color::Red)).wrap(Wrap { trim: true }), body);
+        }
+        BrowseView::Folder(entries) => {
+            let items = entries
+                .iter()
+                .map(|entry| {
+                    let (mark, color) = match entry.kind {
+                        EntryKind::Dir => ("▸ ", Color::Cyan),
+                        EntryKind::Link => ("↪ ", Color::Yellow),
+                        EntryKind::Submodule => ("◆ ", Color::Yellow),
+                        EntryKind::File => ("  ", Color::Reset),
+                    };
+                    let mut spans = vec![Span::styled(format!("{mark}{}", entry.name), Style::default().fg(color))];
+                    if let Some(size) = entry.size {
+                        spans.push(Span::styled(format!("  {}", human_bytes(size)), Style::default().fg(dim())));
+                    }
+                    ListItem::new(Line::from(spans))
+                })
+                .collect();
+            draw_list(frame, app, items, "Nothing in this folder.", body);
+        }
+        BrowseView::Log(commits) => {
+            let items = commits
+                .iter()
+                .map(|c| {
+                    ListItem::new(Line::from(vec![
+                        Span::styled(c.id.to_string()[..7].to_string(), Style::default().fg(Color::Yellow)),
+                        Span::styled(format!("  {} ago  ", super::ago(c.time)), Style::default().fg(dim())),
+                        Span::raw(c.subject.clone()),
+                        Span::styled(format!("  {}", crate::net::git::clean_text(&c.author, 60)), Style::default().fg(dim())),
+                    ]))
+                })
+                .collect();
+            draw_list(frame, app, items, "No commits.", body);
+        }
+        BrowseView::File(view) => {
+            let mut lines = Vec::new();
+            match &view.text {
+                Some(text) => {
+                    lines.extend(text.lines().map(|l| Line::raw(l.to_string())));
+                    if view.truncated {
+                        lines.push(Line::styled(format!("… cut here; the file is {}", human_bytes(view.size)), Style::default().fg(dim())));
+                    }
+                }
+                None => {
+                    lines.push(Line::styled(format!("Not text ({}): nothing to show.", human_bytes(view.size)), Style::default().fg(dim())))
+                }
+            }
+            draw_scrolled(frame, app, lines, body);
+        }
+    }
 }
 
 fn draw_doc(frame: &mut Frame, app: &mut App, load: &Load<crate::net::git::Doc>, area: Rect) {
