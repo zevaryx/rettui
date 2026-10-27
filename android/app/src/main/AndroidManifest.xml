@@ -93,6 +93,12 @@
             android:label="@string/backups"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
 
+        <activity
+            android:name=".DownloadsActivity"
+            android:exported="false"
+            android:label="@string/downloads"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
         <receiver
             android:name=".NotificationActions"
             android:exported="false" />

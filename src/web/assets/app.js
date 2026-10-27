@@ -65,6 +65,8 @@ async function upload(path, file) {
 const IN_ANDROID_APP = /\brettui-android\//.test(navigator.userAgent);
 const androidBackupsButton = (text) => el('button', { text, title: "The app's own screen: save a copy of the identity, keep another from a file, back up and restore",
   onclick: () => { location.href = 'rettui-app:backups'; } });
+const androidDownloadsButton = () => el('button', { text: '📥 Where files are saved', title: "The app's own screen: Downloads, a folder you pick, or asked each time",
+  onclick: () => { location.href = 'rettui-app:downloads'; } });
 const androidRNodesButton = () => el('button', { text: '📻 RNode', title: 'Let rettui use an RNode over USB or Bluetooth, and add it as an interface (the app\'s own screen)',
   onclick: () => { location.href = 'rettui-app:rnodes'; } });
 
@@ -7642,6 +7644,7 @@ app.views.status = {
         el('button', { text: 'Download a backup', title: 'Settings, contacts and messages, in one file to restore with rettui restore',
           onclick: () => el('a', { href: 'api/backup', download: '' }).click() }),
         IN_ANDROID_APP ? androidBackupsButton('🔑 Identity and backups') : null,
+        IN_ANDROID_APP ? androidDownloadsButton() : null,
         el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text: IN_ANDROID_APP
           ? 'Download a backup: settings, contacts and messages, without your identity. Identity and backups (the app\'s own screen) saves the identity too, and restores.'
           : 'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' })),
