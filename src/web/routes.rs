@@ -2055,11 +2055,36 @@ async fn media(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> 
 
 async fn download(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> Result<Response, ApiError> {
     let location = location(&query.url)?;
+    let url = location.url();
     let fallback = location.path.rsplit('/').next().unwrap_or("download").to_string();
+    // The Android app's WebView asks for a download twice (once to see what
+    // it is, once to save it): the second is answered from the first, not
+    // fetched over the network again.
+    let kept = {
+        let mut last = LAST_DOWNLOAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match last.take() {
+            Some((kept_url, at, data, name)) if kept_url == url && at.elapsed() < SAME_DOWNLOAD => {
+                *last = Some((kept_url, at, data.clone(), name.clone()));
+                Some((data, name))
+            }
+            _ => None,
+        }
+    };
+    if let Some((data, name)) = kept {
+        return Ok(file_response(data, &name, false));
+    }
     let fetched = state.fetch(location, false).await?;
     let name = nomad_core::reply_file_name(fetched.metadata.as_deref()).unwrap_or(fallback);
+    *LAST_DOWNLOAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some((url, std::time::Instant::now(), fetched.data.clone(), name.clone()));
     Ok(file_response(fetched.data, &name, false))
 }
+
+/// The last file sent for download, for a second request for it (see
+/// `download`): its address, when, its bytes and its name.
+static LAST_DOWNLOAD: std::sync::Mutex<Option<SentFile>> = std::sync::Mutex::new(None);
+type SentFile = (String, std::time::Instant, Vec<u8>, String);
+const SAME_DOWNLOAD: std::time::Duration = std::time::Duration::from_secs(120);
 
 async fn saved(State(state): State<WebState>) -> ApiResult {
     Ok(axum::Json(state.read(|o| views::saved(&o.app)).await?))
