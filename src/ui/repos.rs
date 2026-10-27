@@ -174,7 +174,7 @@ fn copy_line(app: &App, open: &OpenRepo) -> Line<'static> {
                 human_bytes(m.bytes),
                 super::ago(m.updated as i64)
             )),
-            Span::styled("  m updates it, M deletes it", Style::default().fg(dim())),
+            Span::styled("  m updates, u sends on, M deletes", Style::default().fg(dim())),
         ]),
         None => Line::from(Span::styled("No copy on this computer: m makes one", Style::default().fg(dim()))),
     }

@@ -91,6 +91,32 @@ pub enum GitRequest {
     Mirror {
         dir: PathBuf,
     },
+    /// Send the copy in `dir` to this repository, making the repository
+    /// first if the node hasn't got it. Without `force`, a branch that
+    /// differs there is left as it is; `prune` removes branches and tags
+    /// the copy lacks. The folder is the app's to choose, never a UI's.
+    PushCopy {
+        dir: PathBuf,
+        force: bool,
+        prune: bool,
+    },
+}
+
+/// Names of rejected branches told back, at most.
+const MAX_REJECTED: usize = 20;
+
+/// What sending a local copy to a repository did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pushed {
+    pub repo: RepoUrl,
+    /// Whether the repository had to be made first.
+    pub created: bool,
+    pub pushed: usize,
+    pub up_to_date: usize,
+    /// Branches the node has that differ from the copy, and were left (the first few).
+    pub rejected: Vec<String>,
+    pub rejected_count: usize,
+    pub deleted: usize,
 }
 
 /// What making a local copy of a repository did.
@@ -156,6 +182,7 @@ pub enum GitReply {
     /// A change made: what to say of it.
     Done(String),
     Mirrored(Mirrored),
+    Pushed(Pushed),
 }
 
 /// Text from a node, safe to draw: no control characters but line breaks
@@ -221,6 +248,7 @@ pub async fn run<T: Transport>(client: &Client<T>, repo: &RepoUrl, signer: &dyn 
             GitReply::Done(format!("Deleted the release {tag}"))
         }
         GitRequest::Mirror { dir } => GitReply::Mirrored(mirror(client, repo, &dir).await?),
+        GitRequest::PushCopy { dir, force, prune } => GitReply::Pushed(push_copy(client, repo, &dir, force, prune).await?),
     };
     Ok(reply)
 }
@@ -306,6 +334,33 @@ async fn mirror<T: Transport>(client: &Client<T>, repo: &RepoUrl, dir: &Path) ->
         head: remote.head.as_deref().map(|head| clean_text(head.trim_start_matches("refs/heads/"), 200)),
         first,
         at,
+    })
+}
+
+/// Send the copy in `dir` to `repo`. The copy is held while it goes, so it
+/// isn't brought up to date at the same time.
+async fn push_copy<T: Transport>(client: &Client<T>, repo: &RepoUrl, dir: &Path, force: bool, prune: bool) -> Result<Pushed, String> {
+    let _held = Copying::take(dir)?;
+    if !dir.is_dir() {
+        return Err("There is no copy of it on this computer".to_string());
+    }
+    let mut created = false;
+    let report = match client.push_all(repo, dir, force, prune).await {
+        Err(rngit::Error::Remote { status: Status::NotFound, .. }) => {
+            client.create(repo).await.map_err(|e| format!("The repository isn't on the node, and making it failed: {}", describe(e)))?;
+            created = true;
+            client.push_all(repo, dir, force, prune).await.map_err(describe)?
+        }
+        other => other.map_err(describe)?,
+    };
+    Ok(Pushed {
+        repo: repo.clone(),
+        created,
+        pushed: report.pushed.len(),
+        up_to_date: report.up_to_date.len(),
+        rejected_count: report.rejected.len(),
+        rejected: report.rejected.iter().take(MAX_REJECTED).map(|name| clean_text(name.trim_start_matches("refs/heads/"), 200)).collect(),
+        deleted: report.deleted.len(),
     })
 }
 
@@ -889,6 +944,156 @@ pub(crate) mod tests {
         let before = refs_of(&dir);
         assert!(answer(&refused, &repo(), GitRequest::Mirror { dir: dir.clone() }).is_err());
         assert_eq!((refs_of(&dir), dir.exists()), (before, true));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A node that has no such repository until it is made.
+    #[derive(Default)]
+    struct Fresh {
+        made: std::sync::atomic::AtomicBool,
+        asked: std::sync::Mutex<Vec<(String, Value)>>,
+    }
+
+    struct Handle(Arc<Fresh>);
+
+    impl Transport for Handle {
+        async fn request(&self, path: &str, data: Vec<u8>) -> Result<Response, rngit::Error> {
+            let this = &self.0;
+            let value = rmpv::decode::read_value(&mut &data[..]).unwrap();
+            this.asked.lock().unwrap().push((path.to_string(), value));
+            let made = this.made.load(std::sync::atomic::Ordering::SeqCst);
+            Ok(match path {
+                "/git/list" if !made => Response::Packet(b"\x03No such repository".to_vec()),
+                "/git/list" => Response::Packet(vec![0]),
+                "/git/create" => {
+                    this.made.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Response::Packet(vec![0])
+                }
+                _ => Response::Packet(vec![0]),
+            })
+        }
+    }
+
+    fn copy_of(root: &Path) -> (Source, PathBuf) {
+        let source = Source::new(&root.join("source"));
+        source.git(&["tag", "v1"]);
+        source.git(&["checkout", "-q", "-b", "topic"]);
+        source.commit("topic");
+        source.git(&["checkout", "-q", "main"]);
+        let dir = root.join("repos").join("node").join("public").join("demo.git");
+        mirror_of(&source, &dir).unwrap();
+        (source, dir)
+    }
+
+    fn pushes(asked: &[(String, Value)]) -> Vec<String> {
+        let field = |v: &Value, key: &str| {
+            v.as_map().and_then(|m| m.iter().find(|(k, _)| k.as_str() == Some(key)).and_then(|(_, v)| v.as_str().map(str::to_string)))
+        };
+        asked.iter().filter(|(path, _)| path == "/git/push").filter_map(|(_, v)| field(v, "remote_ref")).collect()
+    }
+
+    #[test]
+    fn a_copy_is_sent_to_a_repository_that_has_nothing() {
+        let root = scratch("push");
+        let (_source, dir) = copy_of(&root);
+        let node =
+            Arc::new(Canned::default().reply("/git/list", "", Response::Packet(vec![0])).reply("/git/push", "", Response::Packet(vec![0])));
+        let reply = answer(&node, &repo(), GitRequest::PushCopy { dir: dir.clone(), force: false, prune: false }).unwrap();
+        let GitReply::Pushed(sent) = reply else { panic!("{reply:?}") };
+        assert_eq!((sent.pushed, sent.up_to_date, sent.rejected_count, sent.deleted, sent.created), (3, 0, 0, 0, false));
+        assert_eq!(sent.repo, repo());
+        let mut names = pushes(&node.asked());
+        names.sort();
+        assert_eq!(names, ["refs/heads/main", "refs/heads/topic", "refs/tags/v1"]);
+        // Listed for pushing, so the node checks the write permission first.
+        let first = node.asked().remove(0);
+        assert!(
+            first.0 == "/git/list"
+                && first.1.as_map().unwrap().iter().any(|(k, v)| k.as_str() == Some("for_push") && v.as_bool() == Some(true))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_repository_the_node_lacks_is_made_first() {
+        let root = scratch("push-new");
+        let (_source, dir) = copy_of(&root);
+        let node = Arc::new(Fresh::default());
+        let client = Client::new(Handle(node.clone()));
+        let identity = Identity::new();
+        let request = GitRequest::PushCopy { dir, force: false, prune: false };
+        let GitReply::Pushed(sent) = block_on(run(&client, &repo(), &IdentitySigner(&identity), request)).unwrap() else { panic!() };
+        assert!(sent.created && sent.pushed == 3, "{sent:?}");
+        let paths: Vec<String> = node.asked.lock().unwrap().iter().map(|(p, _)| p.clone()).collect();
+        assert_eq!(&paths[..3], ["/git/list", "/git/create", "/git/list"]);
+        assert_eq!(pushes(&node.asked.lock().unwrap()).len(), 3);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn what_cannot_be_sent_says_why_and_sends_nothing() {
+        let root = scratch("push-fails");
+        let (_source, dir) = copy_of(&root);
+        // No permission on the node.
+        let refused = Arc::new(Canned::default().reply("/git/list", "", Response::Packet(b"\x01Not allowed".to_vec())));
+        let err = answer(&refused, &repo(), GitRequest::PushCopy { dir: dir.clone(), force: false, prune: false }).unwrap_err();
+        assert!(err.contains("doesn't allow you that"), "{err}");
+        assert!(pushes(&refused.asked()).is_empty());
+        // No copy where the app looked.
+        let node = Arc::new(Canned::default().reply("/git/list", "", Response::Packet(vec![0])));
+        let err = answer(&node, &repo(), GitRequest::PushCopy { dir: root.join("nothing"), force: false, prune: false }).unwrap_err();
+        assert!(err.contains("no copy"), "{err}");
+        assert!(node.asked().is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_copy_being_updated_is_not_sent_at_the_same_time() {
+        let root = scratch("push-busy");
+        let (_source, dir) = copy_of(&root);
+        let _busy = Copying::take(&dir).unwrap();
+        let node = Arc::new(Canned::default().reply("/git/list", "", Response::Packet(vec![0])));
+        let err = answer(&node, &repo(), GitRequest::PushCopy { dir, force: false, prune: false }).unwrap_err();
+        assert!(err.contains("being copied"), "{err}");
+        assert!(node.asked().is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn force_and_prune_reach_the_node_and_rejected_branches_are_named() {
+        let root = scratch("push-how");
+        let (source, dir) = copy_of(&root);
+        // The node already has other work on main, and a branch the copy lacks.
+        let other = Source::new(&root.join("other"));
+        other.commit("theirs");
+        let list =
+            format!("{} refs/heads/main\n{} refs/heads/gone\n", other.git(&["rev-parse", "HEAD"]), other.git(&["rev-parse", "HEAD"]));
+        let node = || {
+            Arc::new(
+                Canned::default()
+                    .reply("/git/list", "", Response::Packet([&[0][..], list.as_bytes()].concat()))
+                    .reply("/git/push", "", Response::Packet(vec![0]))
+                    .reply("/git/delete", "", Response::Packet(vec![0])),
+            )
+        };
+        let _ = source;
+
+        let plain = node();
+        let GitReply::Pushed(sent) =
+            answer(&plain, &repo(), GitRequest::PushCopy { dir: dir.clone(), force: false, prune: false }).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!((sent.rejected.as_slice(), sent.rejected_count, sent.deleted), (&["main".to_string()][..], 1, 0));
+        assert!(!pushes(&plain.asked()).contains(&"refs/heads/main".to_string()));
+
+        let same = node();
+        let GitReply::Pushed(sent) = answer(&same, &repo(), GitRequest::PushCopy { dir, force: true, prune: true }).unwrap() else {
+            panic!()
+        };
+        assert_eq!((sent.rejected_count, sent.deleted), (0, 1));
+        assert!(pushes(&same.asked()).contains(&"refs/heads/main".to_string()));
+        assert!(same.asked().iter().any(|(path, _)| path == "/git/delete"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

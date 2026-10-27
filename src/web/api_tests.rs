@@ -1617,3 +1617,44 @@ async fn an_rngit_repository_is_copied_to_this_computer_from_the_web_ui() {
     web.post("/api/repos/remove", json!({ "url": url })).await;
     assert!(!folder.exists());
 }
+
+#[tokio::test]
+async fn a_copy_is_sent_on_to_another_repository_from_the_web_ui() {
+    use crate::net::git::tests::{Canned, Source};
+    use rngit::Response;
+    let web = TestWeb::start("repos-push");
+    let (url, to) = (format!("rns://{NODE}/public/demo"), format!("rns://{NODE}/public/elsewhere"));
+    let source = Source::new(&web.dir.join("source"));
+    source.git(&["tag", "v1"]);
+    let post = |body: serde_json::Value| web.post("/api/repos/push", body);
+
+    // No copy yet: nothing to send, and nothing asked of the node.
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::new(source.node()));
+    let none = post(json!({ "url": url, "to": to })).await;
+    assert_eq!(none.status, StatusCode::BAD_REQUEST);
+    assert!(none.error().contains("no copy"), "{}", none.error());
+    assert_eq!(web.post("/api/repos/mirror", json!({ "url": url })).await.status, StatusCode::OK);
+
+    // Not to itself, to nonsense, or in a way that isn't one.
+    assert!(post(json!({ "url": url, "to": url })).await.error().contains("another one"));
+    assert_eq!(post(json!({ "url": url, "to": "rns://nowhere" })).await.status, StatusCode::BAD_REQUEST);
+    assert!(post(json!({ "url": url, "to": to, "how": "sideways" })).await.error().contains("add, overwrite or same"));
+
+    // Sent: told what went. The browser can't name a folder.
+    let node = std::sync::Arc::new(Canned::default().reply("/git/list", "", Response::Packet(vec![0])).reply(
+        "/git/push",
+        "",
+        Response::Packet(vec![0]),
+    ));
+    *web.git_node.lock().unwrap() = Some(node.clone());
+    let sent = post(json!({ "url": url, "to": to, "how": "add", "dir": "/tmp/elsewhere" })).await;
+    assert_eq!(sent.status, StatusCode::OK, "{}", sent.text());
+    assert!(sent.json()["said"].as_str().unwrap().starts_with("Sent the copy to public/elsewhere: 2 sent"), "{}", sent.text());
+    let pushed = node.asked().iter().filter(|(path, _)| path == "/git/push").count();
+    assert_eq!(pushed, 2);
+
+    // A node that refuses says why.
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::default());
+    let refused = post(json!({ "url": url, "to": to })).await;
+    assert_eq!(refused.status, StatusCode::BAD_GATEWAY);
+}

@@ -6,8 +6,8 @@ comments. It talks to the node the way the `rngit` command does, so
 repositories, releases and documents made with one show in the other.
 
 rettui can keep a [copy of a repository on this computer](#a-copy-on-this-computer).
-Committing and pushing aren't in rettui: use `git` with rngit's
-`git-remote-rns` helper for that.
+A copy can be [sent to another repository](#sending-a-copy-to-another-repository).
+Committing isn't in rettui: use `git` with rngit's `git-remote-rns` helper for that.
 
 ## Adding a repository
 
@@ -89,6 +89,27 @@ deletes its copy too.
   dot) can't be copied. Two repositories whose names differ only in capitals
   can't both be copied, as they would share a folder on some systems.
 - Backups don't include `repos/`: copy again from the node after a restore.
+
+### Sending a copy to another repository
+
+`u` on an open repository that has a copy (**Send to…** in the web UI) sends
+the copy to another repository, on this node or another: every branch and
+tag in it, with their history. It asks for the repository
+(`rns://<node>/<group>/<repo>`), and the repository is made there if the node
+hasn't got it (which needs the node's `c` permission). Then it asks what to do
+with a branch the other repository has that differs from the copy:
+
+- **add** (the default) sends what is new and leaves such branches as they
+  are, and says which they were;
+- **overwrite** replaces them with the copy's;
+- **same** overwrites them too, and also deletes the branches and tags the
+  copy doesn't have, so the other repository ends up the same as the copy.
+
+It needs the other node's write permission for your identity. Only what the
+other repository lacks is sent, and a second send of an unchanged copy sends
+nothing. Nothing is changed on the repository the copy is of, and a copy
+can't be sent to its own repository. The copy being updated is not sent at
+the same time. The web UI names the two repositories and no folder.
 
 ## Writing
 

@@ -867,6 +867,7 @@ pub fn git_reply(app: &App, reply: &crate::net::git::GitReply) -> Value {
         GitReply::Mirrored(copy) => json!({ "said": crate::app::repos::mirror_said(copy), "mirror": mirror_json(&SavedMirror {
             updated: copy.at, branches: copy.branches, tags: copy.tags, bytes: copy.bytes, head: copy.head.clone(),
         }) }),
+        GitReply::Pushed(sent) => json!({ "said": crate::app::repos::push_said(sent) }),
     }
 }
 

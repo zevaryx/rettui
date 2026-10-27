@@ -170,6 +170,7 @@ pub fn router(state: WebState) -> Router {
         .route("/repos/remove", post(remove_repo))
         .route("/repos/mirror", post(repo_mirror))
         .route("/repos/mirror/delete", post(repo_delete_mirror))
+        .route("/repos/push", post(repo_push))
         .route("/repos/refs", get(repo_refs))
         .route("/repos/perms", get(repo_perms))
         .route("/repos/releases", get(repo_releases))
@@ -2509,6 +2510,29 @@ async fn repo_mirror(State(state): State<WebState>, axum::Json(body): axum::Json
         Ok(Err(e)) => Err(ApiError(StatusCode::BAD_GATEWAY, e)),
         Err(_) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, "The copy stopped unexpectedly".into())),
     }
+}
+
+#[derive(Deserialize)]
+struct PushBody {
+    url: String,
+    to: String,
+    /// `add`, `overwrite` or `same`.
+    #[serde(default)]
+    how: String,
+}
+
+/// Send a repository's copy on this computer to another repository. The
+/// browser says which two and how, and no more: the copy's folder is
+/// rettui's choice.
+async fn repo_push(State(state): State<WebState>, axum::Json(body): axum::Json<PushBody>) -> ApiResult {
+    let (from, to) = (repo_url(&body.url)?, repo_url(&body.to)?);
+    let how = crate::app::repos::PushHow::parse(&body.how).ok_or_else(|| bad("How is add, overwrite or same"))?;
+    let request = {
+        let (from, to) = (from.clone(), to.clone());
+        state.write(move |o| o.app.push_copy_request(&from, &to, how)).await?.map_err(bad)?
+    };
+    let reply = state.git(to, request).await.map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
+    Ok(axum::Json(state.read(move |o| views::git_reply(&o.app, &reply)).await?))
 }
 
 /// Delete a repository's copy from this computer.
