@@ -27,6 +27,9 @@ serde-saphyr = "1.1"
 lrgp = { path = "deps/lrgp-rs" }
 # Pictures for LXMF addresses (identicons), as Ratspeak draws them.
 lxmface = { path = "deps/LXMFace" }
+# Git over Reticulum (rngit): refs, releases and work documents on rngit
+# nodes. Ours, on the same rsReticulum commit (see the patch at the end).
+rngit = { path = "deps/rngit-rs" }
 
 # TUI
 ratatui = "0.30"
@@ -196,3 +199,9 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.unicode-width]
 opt-level = 3
+
+# rngit-rs takes rsReticulum from git at the commit deps/rsReticulum is on;
+# this makes it use that checkout, so both share one runtime and identity type.
+[patch."https://github.com/zevaryx/rsReticulum"]
+rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime" }
+rns-identity = { path = "deps/rsReticulum/crates/rns-identity" }

@@ -21,3 +21,7 @@
 [submodule "deps/LXMFace"]
 	path = deps/LXMFace
 	url = https://github.com/ratspeak/LXMFace
+[submodule "deps/rngit-rs"]
+	path = deps/rngit-rs
+	url = https://github.com/zevaryx/rngit-rs
+	branch = main
