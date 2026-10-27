@@ -1446,6 +1446,21 @@ mod tests {
     }
 
     #[test]
+    fn a_repository_called_dot_git_is_added_and_copied_like_any_other() {
+        let text = format!("rns://{NODE}/BASH_BLOG/.git");
+        let url = parse_repo(&text).unwrap();
+        assert_eq!((url.group.as_str(), url.repo.as_str(), url.repo_path().as_str()), ("BASH_BLOG", ".git", "BASH_BLOG/.git"));
+        assert_eq!(url.to_string(), text);
+        assert_eq!(parse_repo(&text.replace("rns://", "")).unwrap(), url);
+        let dir = mirror_dir(Path::new("/data/repos"), &url).unwrap();
+        assert_eq!(dir, Path::new("/data/repos").join(NODE).join("BASH_BLOG").join(".git.git"));
+        let mut tui = Tui::new("repos-dot-git");
+        assert_eq!(tui.app.add_repo(&text).unwrap(), text);
+        assert_eq!(tui.app.add_repo(&format!("{text}/")).unwrap(), text, "kept once");
+        assert_eq!(tui.app.store.repos.len(), 1);
+    }
+
+    #[test]
     fn copies_go_in_folders_every_system_can_have() {
         let repos = Path::new("/data/repos");
         let url = |group: &str, repo: &str| RepoUrl::new([1; 16], group, repo).unwrap();
