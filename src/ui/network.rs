@@ -281,6 +281,7 @@ fn draw_announces(frame: &mut Frame, app: &mut App, area: Rect) {
                 Kind::Propagation => Color::LightYellow,
                 Kind::Rrc => Color::LightCyan,
                 Kind::Phone => Color::LightBlue,
+                Kind::Git => Color::LightRed,
                 Kind::Other => Color::Gray,
             };
             let time = crate::clock::local(entry.at).map(|t| crate::clock::time(&t, true)).unwrap_or_default();

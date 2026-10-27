@@ -544,6 +544,10 @@ pub struct Store {
     pub saved: Vec<Bookmark>,
     /// RRC hubs and the rooms joined on them.
     pub rrc_hubs: Vec<HubConfig>,
+    /// rngit repositories kept in the Repos tab, in the order they were
+    /// added.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<SavedRepo>,
     /// Emoji picked lately, newest first (for the pickers).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recent_emoji: Vec<String>,
@@ -558,6 +562,13 @@ pub struct Store {
     /// again with the next save.
     #[serde(skip)]
     pub rewrite_peers: bool,
+}
+
+/// An rngit repository kept in the Repos tab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedRepo {
+    /// Its `rns://<node>/<group>/<repo>` URL.
+    pub url: String,
 }
 
 /// Days a peer is kept after it was last heard (see [`Store::prune_peers`]).
@@ -965,6 +976,7 @@ impl Store {
             identified_nodes: self.identified_nodes.clone(),
             saved: self.saved.clone(),
             rrc_hubs: self.rrc_hubs.clone(),
+            repos: self.repos.clone(),
             recent_emoji: self.recent_emoji.clone(),
             migration_notes: Vec::new(),
             rewrite_store: false,

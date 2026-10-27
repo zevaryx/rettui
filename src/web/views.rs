@@ -793,6 +793,79 @@ pub fn saved(app: &App) -> Value {
     json!(app.store.saved.iter().map(|b| json!({ "name": b.name, "url": b.url })).collect::<Vec<_>>())
 }
 
+/// The Repos tab: repositories kept, rngit nodes heard, and who you ask
+/// as.
+pub fn repos(app: &App) -> Value {
+    let repos: Vec<Value> = app
+        .store
+        .repos
+        .iter()
+        .filter_map(|r| {
+            let url = crate::app::repos::parse_repo(&r.url).ok()?;
+            let node = hex::encode(url.destination);
+            Some(json!({ "url": r.url, "node": node, "node_name": app.store.display_name(&node), "group": url.group, "repo": url.repo }))
+        })
+        .collect();
+    let nodes: Vec<Value> =
+        app.repos.nodes.iter().map(|n| json!({ "address": hex::encode(n.hash), "name": n.name, "hops": n.hops, "at": n.at })).collect();
+    let rngit = app.rngit_identity_file();
+    json!({
+        "repos": repos,
+        "nodes": nodes,
+        "identity": hex::encode(app.identity_hash),
+        "rngit_identity": rngit.map(|p| p.display().to_string()),
+        "max_release": crate::app::repos::MAX_RELEASE,
+    })
+}
+
+/// An identity hash, with the name it's known by (if one).
+fn who(app: &App, hash: &str) -> Value {
+    json!({ "hash": hash, "name": app.store.display_name(hash) })
+}
+
+/// What an rngit repository answered, as the Repos section shows it.
+pub fn git_reply(app: &App, reply: &crate::net::git::GitReply) -> Value {
+    use crate::net::git::{GitReply, clean_text};
+    let summary = |d: &rngit::client::WorkSummary| {
+        json!({ "id": d.id, "title": clean_text(&d.title, 200), "created": d.created, "edited": d.edited,
+            "author": who(app, &d.author), "comments": d.comments })
+    };
+    match reply {
+        GitReply::Refs(refs) => json!({
+            "refs": refs.refs.iter().map(|(sha, name)| json!({ "name": name, "sha": sha.to_string() })).collect::<Vec<_>>(),
+            "head": refs.head,
+        }),
+        GitReply::Perms(text) => json!({ "text": text }),
+        GitReply::Releases(list) => json!({
+            "releases": list.releases.iter().map(|r| json!({
+                "tag": r.tag, "status": r.status, "created": r.created, "by": who(app, &r.created_by),
+                "preview": clean_text(&r.preview, 200), "files": r.artifacts,
+            })).collect::<Vec<_>>(),
+            "latest": list.latest,
+        }),
+        GitReply::Release(r) => json!({
+            "tag": r.tag, "hash": r.hash, "status": r.status, "created": r.created, "by": who(app, &r.created_by),
+            "notes": clean_text(&r.notes, crate::net::git::MAX_TEXT),
+            "files": r.artifacts.iter().map(|a| json!({ "name": a.name, "size": a.size })).collect::<Vec<_>>(),
+        }),
+        GitReply::Work(work) => json!({
+            "active": work.active.iter().map(summary).collect::<Vec<_>>(),
+            "proposed": work.proposed.iter().map(summary).collect::<Vec<_>>(),
+            "completed": work.completed.iter().map(summary).collect::<Vec<_>>(),
+        }),
+        GitReply::Doc(doc) => json!({
+            "id": doc.id, "scope": doc.scope, "title": doc.title, "author": who(app, &doc.author),
+            "created": doc.created, "edited": doc.edited, "text": doc.text,
+            "signer": doc.signer.as_deref().map(|s| who(app, s)),
+            "comments": doc.comments.iter().map(|c| json!({
+                "id": c.id, "author": who(app, &c.author), "created": c.created, "text": c.text,
+            })).collect::<Vec<_>>(),
+        }),
+        GitReply::Artifact { name, signer, .. } => json!({ "name": name, "signer": who(app, signer) }),
+        GitReply::Done(said) => json!({ "said": said }),
+    }
+}
+
 /// `settings.json` for the settings editor, with what each field is.
 pub fn settings(app: &App, saved: &Settings) -> Value {
     let fields: Vec<Value> = FIELDS

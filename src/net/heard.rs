@@ -15,6 +15,8 @@ pub enum Kind {
     Rrc,
     /// LXST telephony (Sideband's and MeshChat's calls).
     Phone,
+    /// An rngit node (Git over Reticulum).
+    Git,
     Other,
 }
 
@@ -27,6 +29,7 @@ impl Kind {
             Kind::Propagation => "PROP",
             Kind::Rrc => "RRC",
             Kind::Phone => "CALL",
+            Kind::Git => "GIT",
             Kind::Other => "OTHER",
         }
     }
@@ -39,6 +42,7 @@ impl Kind {
             Kind::Propagation => "propagation",
             Kind::Rrc => "rrc",
             Kind::Phone => "phone",
+            Kind::Git => "git",
             Kind::Other => "other",
         }
     }
@@ -51,6 +55,7 @@ const KNOWN: &[(&str, Kind)] = &[
     (crate::lxmf::PROPAGATION_ASPECT, Kind::Propagation),
     (crate::rrc::DEFAULT_ASPECT, Kind::Rrc),
     ("lxst.telephony", Kind::Phone),
+    (super::git::GIT_ASPECT, Kind::Git),
 ];
 
 /// An announce, as the viewer shows it.
@@ -83,7 +88,7 @@ pub fn heard(hash: Hash, name_hash_heard: [u8; 10], app_data: Option<&[u8]>, hop
             .and_then(|pn| pn.metadata.get(&lxmf_core::constants::PN_META_NAME).cloned())
             .and_then(|name| crate::names::clean(&String::from_utf8_lossy(&name))),
         Kind::Rrc => hub_name(data).or_else(|| any_name(data)),
-        Kind::Phone | Kind::Other => any_name(data),
+        Kind::Phone | Kind::Git | Kind::Other => any_name(data),
     });
     Heard { hash, kind, aspect, name, hops }
 }
@@ -141,6 +146,8 @@ mod tests {
         let data = crate::rrc::host::announce_data("Hilltop hub");
         let hub = heard([3; 16], name_hash("rrc.hub"), Some(&data), 0);
         assert_eq!(hub.name.as_deref(), Some("Hilltop hub"));
+        let git = heard([7; 16], name_hash("git.repositories"), Some(b"Forge"), 1);
+        assert_eq!((git.kind, git.kind.tag(), git.kind.key(), git.name.as_deref()), (Kind::Git, "GIT", "git", Some("Forge")));
         // Something rettui doesn't know: no aspect; a name only if it reads
         // as one.
         let other = heard([4; 16], name_hash("example.thing"), Some(&[0x81, 0xa4, b'n', b'a', b'm', b'e', 0xa3, b'B', b'o', b'b']), 3);

@@ -24,8 +24,8 @@ it can edit your Reticulum configuration. It is built on:
 
 ## Four ways to use it
 
-- **Terminal UI (TUI):** nine tabs (Messages, Games, Channels, Network, Browser,
-  Node, Status, Reticulum, Hub) with keyboard and mouse control. Terminals
+- **Terminal UI (TUI):** ten tabs (Messages, Games, Channels, Network, Browser,
+  Node, Status, Reticulum, Hub, Repos) with keyboard and mouse control. Terminals
   narrower than 110 columns get a sidebar of icons and narrower side lists, so
   80×24 works well (see [Using the TUI](Using-the-TUI)).
 - **Web UI:** `rettui --web` runs the same client in a browser, with the same
@@ -58,6 +58,7 @@ it can edit your Reticulum configuration. It is built on:
 - [Notifications](Notifications): desktop and browser notifications, muting
 - [NomadNet Browsing](NomadNet-Browsing): pages, links, forms, images, the cache
 - [Hosting a Node](Hosting-a-Node): your own NomadNet node and its page editor
+- [Repos](Repos): git repositories on rngit nodes, their releases and work documents
 - [Network](Network): announces heard, interfaces, traffic
 - [RNode Radios](RNode-Radios): flashing a LoRa radio and using it with rettui
 

@@ -166,6 +166,22 @@ pub fn router(state: WebState) -> Router {
         .route("/identity", get(identities))
         .route("/identity/lookup", post(look_up_identity))
         .route("/rncp/send", post(rncp_send))
+        .route("/repos", get(repos).post(add_repo))
+        .route("/repos/remove", post(remove_repo))
+        .route("/repos/refs", get(repo_refs))
+        .route("/repos/perms", get(repo_perms))
+        .route("/repos/releases", get(repo_releases))
+        .route("/repos/release", get(repo_release))
+        .route("/repos/artifact", get(repo_artifact))
+        .route("/repos/work", get(repo_work))
+        .route("/repos/doc", get(repo_doc))
+        .route("/repos/doc/new", post(repo_new_doc))
+        .route("/repos/doc/comment", post(repo_comment))
+        .route("/repos/doc/edit", post(repo_edit_doc))
+        .route("/repos/doc/state", post(repo_doc_state))
+        .route("/repos/doc/delete", post(repo_delete_doc))
+        .route("/repos/release/new", post(repo_new_release))
+        .route("/repos/release/delete", post(repo_delete_release))
         .route("/hub", get(hosted_hub))
         .route("/hub/{action}", post(hosted_hub_action))
         .route("/reticulum", get(reticulum))
@@ -2439,6 +2455,182 @@ async fn reset_node_stats(State(state): State<WebState>) -> ApiResult {
 async fn node_announce(State(state): State<WebState>) -> ApiResult {
     state.write(|o| o.app.send(NetCommand::HostAnnounce)).await?;
     ok()
+}
+
+// ---- rngit repositories (the Repos section) ------------------------------
+
+async fn repos(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::repos(&o.app)).await?))
+}
+
+async fn add_repo(State(state): State<WebState>, axum::Json(body): axum::Json<UrlBody>) -> ApiResult {
+    let url = state.write(move |o| o.app.add_repo(&body.url)).await??;
+    Ok(axum::Json(json!({ "url": url })))
+}
+
+async fn remove_repo(State(state): State<WebState>, axum::Json(body): axum::Json<UrlBody>) -> ApiResult {
+    state.write(move |o| o.app.remove_repo(&body.url)).await?;
+    ok()
+}
+
+fn repo_url(text: &str) -> Result<rngit::RepoUrl, ApiError> {
+    crate::app::repos::parse_repo(text).map_err(bad)
+}
+
+fn work_scope(text: &str) -> Result<rngit::client::WorkScope, ApiError> {
+    crate::app::repos::parse_scope(text).ok_or_else(|| bad("A work list is active, completed, proposed or all"))
+}
+
+/// Ask a repository, and answer with what it said (as the Repos section
+/// shows it). A node that refuses, or can't be reached, is a 502.
+async fn ask_repo(state: &WebState, url: &str, request: crate::net::git::GitRequest) -> ApiResult {
+    let repo = repo_url(url)?;
+    let reply = state.git(repo, request).await.map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
+    Ok(axum::Json(state.read(move |o| views::git_reply(&o.app, &reply)).await?))
+}
+
+async fn repo_refs(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> ApiResult {
+    ask_repo(&state, &query.url, crate::net::git::GitRequest::Refs).await
+}
+
+async fn repo_perms(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> ApiResult {
+    ask_repo(&state, &query.url, crate::net::git::GitRequest::Perms).await
+}
+
+async fn repo_releases(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> ApiResult {
+    ask_repo(&state, &query.url, crate::net::git::GitRequest::Releases).await
+}
+
+async fn repo_work(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> ApiResult {
+    ask_repo(&state, &query.url, crate::net::git::GitRequest::Work(rngit::client::WorkScope::All)).await
+}
+
+#[derive(Deserialize)]
+struct ReleaseQuery {
+    url: String,
+    tag: String,
+}
+
+async fn repo_release(State(state): State<WebState>, Query(query): Query<ReleaseQuery>) -> ApiResult {
+    ask_repo(&state, &query.url, crate::net::git::GitRequest::Release(query.tag)).await
+}
+
+#[derive(Deserialize)]
+struct ArtifactQuery {
+    url: String,
+    tag: String,
+    name: String,
+}
+
+/// A release's file, checked against the release's signature, to the
+/// browser.
+async fn repo_artifact(State(state): State<WebState>, Query(query): Query<ArtifactQuery>) -> Result<Response, ApiError> {
+    use crate::net::git::{GitReply, GitRequest};
+    let repo = repo_url(&query.url)?;
+    let reply = state
+        .git(repo, GitRequest::Artifact { tag: query.tag, name: query.name })
+        .await
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
+    match reply {
+        GitReply::Artifact { name, data, .. } => Ok(file_response(data, &name, false)),
+        _ => Err(ApiError(StatusCode::BAD_GATEWAY, "The node answered something else".into())),
+    }
+}
+
+#[derive(Deserialize)]
+struct DocQuery {
+    url: String,
+    id: u64,
+    scope: String,
+}
+
+async fn repo_doc(State(state): State<WebState>, Query(query): Query<DocQuery>) -> ApiResult {
+    let scope = work_scope(&query.scope)?;
+    ask_repo(&state, &query.url, crate::net::git::GitRequest::WorkView { id: query.id, scope }).await
+}
+
+#[derive(Deserialize)]
+struct NewDocBody {
+    url: String,
+    title: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    propose: bool,
+}
+
+async fn repo_new_doc(State(state): State<WebState>, axum::Json(body): axum::Json<NewDocBody>) -> ApiResult {
+    let request = crate::app::repos::new_doc_request(body.propose, &body.title, &body.text)?;
+    ask_repo(&state, &body.url, request).await
+}
+
+#[derive(Deserialize)]
+struct DocBody {
+    url: String,
+    id: u64,
+    scope: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    done: bool,
+}
+
+async fn repo_comment(State(state): State<WebState>, axum::Json(body): axum::Json<DocBody>) -> ApiResult {
+    let request = crate::app::repos::comment_request(body.id, work_scope(&body.scope)?, &body.text)?;
+    ask_repo(&state, &body.url, request).await
+}
+
+async fn repo_edit_doc(State(state): State<WebState>, axum::Json(body): axum::Json<DocBody>) -> ApiResult {
+    let request = crate::app::repos::edit_request(body.id, work_scope(&body.scope)?, &body.title, &body.text)?;
+    ask_repo(&state, &body.url, request).await
+}
+
+/// Mark a document done, or active again.
+async fn repo_doc_state(State(state): State<WebState>, axum::Json(body): axum::Json<DocBody>) -> ApiResult {
+    use crate::net::git::GitRequest;
+    let request = if body.done { GitRequest::WorkComplete(body.id) } else { GitRequest::WorkActivate(body.id) };
+    ask_repo(&state, &body.url, request).await
+}
+
+async fn repo_delete_doc(State(state): State<WebState>, axum::Json(body): axum::Json<DocBody>) -> ApiResult {
+    let scope = work_scope(&body.scope)?;
+    ask_repo(&state, &body.url, crate::net::git::GitRequest::WorkDelete { id: body.id, scope }).await
+}
+
+#[derive(Deserialize)]
+struct ReleaseFile {
+    name: String,
+    /// Base64.
+    data: String,
+}
+
+#[derive(Deserialize)]
+struct NewReleaseBody {
+    url: String,
+    tag: String,
+    #[serde(default)]
+    notes: String,
+    files: Vec<ReleaseFile>,
+}
+
+/// Publish a release with files the browser picked (never files on this
+/// computer).
+async fn repo_new_release(State(state): State<WebState>, axum::Json(body): axum::Json<NewReleaseBody>) -> ApiResult {
+    let mut files = Vec::new();
+    for file in body.files {
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(file.data.as_bytes())
+            .map_err(|_| bad(format!("{} isn't base64", file.name)))?;
+        files.push((file.name, data));
+    }
+    let request = crate::app::repos::release_request(&body.tag, &body.notes, files)?;
+    ask_repo(&state, &body.url, request).await
+}
+
+async fn repo_delete_release(State(state): State<WebState>, axum::Json(body): axum::Json<ReleaseQuery>) -> ApiResult {
+    ask_repo(&state, &body.url, crate::net::git::GitRequest::ReleaseDelete(body.tag)).await
 }
 
 // ---- the RRC hub hosted here ----------------------------------------------

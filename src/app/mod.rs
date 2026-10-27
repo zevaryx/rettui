@@ -44,6 +44,7 @@ pub mod paths;
 pub mod print;
 pub mod reach;
 pub mod recorder;
+pub mod repos;
 pub mod reticulum;
 pub mod rncp;
 mod saver;
@@ -128,11 +129,22 @@ pub enum Tab {
     Status,
     Reticulum,
     Hub,
+    Repos,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 9] =
-        [Tab::Messages, Tab::Games, Tab::Channels, Tab::Network, Tab::Browser, Tab::Node, Tab::Status, Tab::Reticulum, Tab::Hub];
+    pub const ALL: [Tab; 10] = [
+        Tab::Messages,
+        Tab::Games,
+        Tab::Channels,
+        Tab::Network,
+        Tab::Browser,
+        Tab::Node,
+        Tab::Status,
+        Tab::Reticulum,
+        Tab::Hub,
+        Tab::Repos,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -145,6 +157,7 @@ impl Tab {
             Tab::Status => "Status",
             Tab::Reticulum => "Reticulum",
             Tab::Hub => "Hub",
+            Tab::Repos => "Repos",
         }
     }
 }
@@ -210,6 +223,8 @@ pub enum PromptKind {
     /// An `rncp` listener's address, then the file to send it.
     RncpTo,
     RncpFile(String),
+    /// Adding and changing things in the Repos tab.
+    Repo(repos::RepoPrompt),
     /// The other's speed test address.
     SpeedPeer,
     /// An address to find whose it is.
@@ -399,6 +414,11 @@ pub struct Regions {
     /// Hub tab: its panes' tabs, and the list.
     pub hub_panes: Vec<(Rect, hub::HubPane)>,
     pub hub_list: Rect,
+    /// The Repos tab: the list on the left, the open repository's panes
+    /// and its list.
+    pub repos_side: Rect,
+    pub repo_panes: Vec<(Rect, repos::RepoPane)>,
+    pub repo_list: Rect,
 }
 
 /// Text being selected (or selected) in a chat history with the mouse: in
@@ -628,6 +648,8 @@ pub struct App {
     pub tables: tables::TablesView,
     /// Files sent to `rncp` listeners, the newest last.
     pub rncp: Vec<rncp::RncpSend>,
+    /// The Repos tab (rngit repositories).
+    pub repos: repos::Repos,
     /// A speed test with someone (`v` in the Network tab).
     pub speed: speedtest::SpeedTest,
     /// Your addresses, and whose another is (`I` in the Network tab).
@@ -819,6 +841,7 @@ impl App {
             announce_log: announces::AnnounceLog::default(),
             tables: tables::TablesView::default(),
             rncp: Vec::new(),
+            repos: repos::Repos::default(),
             speed: speedtest::SpeedTest::default(),
             whois: whois::Whois::default(),
             routes: HashMap::new(),
@@ -1150,7 +1173,10 @@ impl App {
                     self.peers_seen_dirty = true;
                 }
             }
-            NetEvent::Heard(heard) => self.on_heard(heard),
+            NetEvent::Heard(heard) => {
+                self.heard_git_node(&heard);
+                self.on_heard(heard);
+            }
             NetEvent::Announced => {
                 self.announced = true;
                 self.log("Announced LXMF destination");
@@ -1177,6 +1203,7 @@ impl App {
             NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
             NetEvent::Tables(result) => self.on_tables(result),
             NetEvent::Rncp { to, name, state } => self.on_rncp(to, name, state),
+            NetEvent::Git { id, result } => self.on_git(id, result),
             NetEvent::Speed(event) => self.on_speed(event),
             NetEvent::Identified { to, result } => self.on_identified(to, result),
             NetEvent::Probed { to, result } => self.on_probed(to, result),
@@ -1457,6 +1484,7 @@ impl App {
             PromptKind::MoveNodeItem(root, path) => self.submit_move(root, &path, &text),
             PromptKind::SpeedPeer => self.submit_speed_prompt(&text),
             PromptKind::Whois => self.submit_whois_prompt(&text),
+            PromptKind::Repo(prompt) => self.submit_repo_prompt(prompt, &text),
             kind @ (PromptKind::RncpTo | PromptKind::RncpFile(_)) => {
                 if !text.is_empty() {
                     self.submit_rncp_prompt(kind, &text);

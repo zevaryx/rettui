@@ -11,6 +11,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{accent, block, dim};
 use crate::app::hub::HubPane;
 use crate::app::node::PageView;
+use crate::app::repos::{Detail, RepoPane, ReposFocus};
 use crate::app::{App, BrowserFocus, BrowserPane, Tab};
 
 type KeyList = &'static [(&'static str, &'static str)];
@@ -26,7 +27,7 @@ pub struct Keys {
 
 /// Keys that work in every tab, unless typing.
 const EVERYWHERE: KeyList = &[
-    ("1–9", "tabs"),
+    ("0–9", "tabs"),
     ("< >", "list width"),
     ("=", "list width back"),
     ("A", "announce"),
@@ -44,6 +45,42 @@ fn mode(title: &'static str, keys: KeyList) -> Keys {
 
 fn typing(title: &'static str, keys: KeyList) -> Keys {
     Keys { title, keys, typing: true }
+}
+
+/// The Repos tab's keys: of the list, or of what the open repository shows.
+fn repos_keys(app: &App) -> Keys {
+    let detail = app.repos.open.as_ref().and_then(|o| o.detail.as_ref());
+    match (app.repos.focus, detail, app.repos.pane) {
+        (ReposFocus::List, ..) => {
+            mode("Repos", &[("Enter", "open"), ("n", "add"), ("D", "remove"), ("y", "copy URL"), ("Tab", "repository"), ("↑↓", "select")])
+        }
+        (_, Some(Detail::Release { .. }), _) => mode(
+            "Repos: release",
+            &[("Enter", "download"), ("Esc", "back"), ("X", "delete release"), ("r", "reload"), ("y", "copy URL"), ("↑↓", "select")],
+        ),
+        (_, Some(Detail::Doc { .. }), _) => mode(
+            "Repos: document",
+            &[("c", "comment"), ("e", "edit"), ("x", "done/active"), ("Esc", "back"), ("X", "delete"), ("r", "reload"), ("↑↓", "scroll")],
+        ),
+        (_, None, RepoPane::Releases) => mode(
+            "Repos: releases",
+            &[("Enter", "open"), ("P", "publish"), ("r", "reload"), ("←→", "pane"), ("Esc", "list"), ("y", "copy URL"), ("↑↓", "select")],
+        ),
+        (_, None, RepoPane::Work) => mode(
+            "Repos: work",
+            &[
+                ("Enter", "open"),
+                ("s", "list"),
+                ("w", "new"),
+                ("p", "propose"),
+                ("r", "reload"),
+                ("←→", "pane"),
+                ("Esc", "list"),
+                ("↑↓", "select"),
+            ],
+        ),
+        _ => mode("Repos", &[("←→", "pane"), ("r", "reload"), ("y", "copy URL"), ("Esc", "list"), ("↑↓", "select")]),
+    }
 }
 
 /// The keys of the mode on screen.
@@ -558,6 +595,7 @@ pub fn keys(app: &App) -> Keys {
                 ("↑↓", "select"),
             ],
         ),
+        Tab::Repos => repos_keys(app),
         Tab::Hub if !app.hub.running() => mode("Hub", &[("e", "start"), ("y", "copy link"), ("Tab", "pane"), ("↑↓", "select")]),
         Tab::Hub if app.hub.pane == HubPane::People => mode(
             "Hub: people",
@@ -763,7 +801,7 @@ mod tests {
         press(&mut app, KeyCode::Char('?'));
         let shown = screen(&mut app, 100).join("\n");
         assert!(shown.contains("Keys · Network") && shown.contains("D forget path") && shown.contains("In every tab"), "{shown}");
-        assert!(shown.contains("q quit") && shown.contains("1–9 tabs"), "{shown}");
+        assert!(shown.contains("q quit") && shown.contains("0–9 tabs"), "{shown}");
         // Any key closes it, and does nothing else.
         press(&mut app, KeyCode::Char('f'));
         assert!(!app.keys_help);

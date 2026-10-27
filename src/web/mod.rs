@@ -65,6 +65,8 @@ struct PendingFetch {
 pub struct Owner {
     pub app: App,
     fetches: HashMap<u64, PendingFetch>,
+    /// Questions to rngit nodes a browser waits on the answer to.
+    git: HashMap<u64, oneshot::Sender<Result<net::git::GitReply, String>>>,
     next_request: u64,
     /// The latest notifications and their ids, for browsers catching up.
     recent: VecDeque<(u64, Notification)>,
@@ -156,6 +158,10 @@ impl Owner {
             // Loads a browser asked for: it gets the answer itself.
             NetEvent::Fetched { id, .. } if self.fetches.contains_key(&id) => {
                 self.on_net(event);
+                Scope::NONE
+            }
+            NetEvent::Git { id, result } if self.git.contains_key(&id) => {
+                let _ = self.git.remove(&id).expect("checked above").send(result);
                 Scope::NONE
             }
             NetEvent::Interfaces(_) => {
@@ -252,6 +258,8 @@ impl Scope {
             // The announce viewer asks for those after the last it has
             // (they come several a second on a busy network); the Network
             // list hears the same announce as an Announce.
+            // But an rngit node is listed in Repos.
+            NetEvent::Heard(heard) if heard.kind == net::heard::Kind::Git => Scope::PEERS,
             NetEvent::Heard(_) => Scope::NONE,
             _ => Scope::ALL,
         }
@@ -299,7 +307,7 @@ mod notice_tests {
             (12, note(&a, "second")),
             (13, Notification { title: "3 new messages".into(), body: String::new(), target: Target::Summary }),
         ]);
-        let owner = Owner { app, fetches: HashMap::new(), next_request: 0, recent };
+        let owner = Owner { app, fetches: HashMap::new(), git: HashMap::new(), next_request: 0, recent };
         let bodies = |since| owner.missed(since).into_iter().map(|(id, n)| (id, n.body)).collect::<Vec<_>>();
         // The latest about each conversation still unread, and nothing read.
         assert_eq!(bodies(0), [(12, "second".to_string())]);
@@ -431,6 +439,18 @@ impl WebState {
         self.run(true, f).await
     }
 
+    /// Ask an rngit repository something (or change something there), and
+    /// wait for the answer.
+    pub async fn git(&self, repo: rngit::RepoUrl, request: net::git::GitRequest) -> Result<net::git::GitReply, String> {
+        let (tx, rx) = oneshot::channel();
+        self.read(move |owner| {
+            let id = owner.app.git(&repo, request);
+            owner.git.insert(id, tx);
+        })
+        .await?;
+        rx.await.map_err(|_| "rettui is shutting down".to_string())?
+    }
+
     pub async fn fetch(&self, location: Location, refresh: bool) -> Result<Fetched, String> {
         let (tx, rx) = oneshot::channel();
         self.read(move |owner| owner.fetch(location, refresh, tx)).await?;
@@ -533,7 +553,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     // No tab is "on screen" in the web UI: unread counts are cleared by
     // browsers when they show a conversation or room.
     app.tab = Tab::Status;
-    let mut owner = Owner { app, fetches: HashMap::new(), next_request: FIRST_WEB_REQUEST, recent: VecDeque::new() };
+    let mut owner = Owner { app, fetches: HashMap::new(), git: HashMap::new(), next_request: FIRST_WEB_REQUEST, recent: VecDeque::new() };
     let push = push::WebPush::load(&paths).context("could not set up Web Push")?;
     // Ids go on from the last run's (milliseconds since 1970 at start), so a
     // browser catching up after a restart isn't confused.
@@ -702,8 +722,12 @@ pub(crate) mod testing {
         pub dir: PathBuf,
         sent: Arc<Mutex<Vec<NetCommand>>>,
         pub pages: Pages,
+        /// The rngit node every repository is on (none: no answer, ever).
+        pub git_node: GitNode,
         state: WebState,
     }
+
+    pub type GitNode = Arc<Mutex<Option<Arc<crate::net::git::tests::Canned>>>>;
 
     /// An answer: its status, headers and body.
     pub struct Answer {
@@ -747,11 +771,13 @@ pub(crate) mod testing {
             let (mut app, mut net) = crate::app::test_app_with_net(&dir, settings, store);
             app.tab = Tab::Status;
             let paths = app.paths.clone();
-            let mut owner = Owner { app, fetches: HashMap::new(), next_request: FIRST_WEB_REQUEST, recent: VecDeque::new() };
+            let mut owner =
+                Owner { app, fetches: HashMap::new(), git: HashMap::new(), next_request: FIRST_WEB_REQUEST, recent: VecDeque::new() };
             let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
             let sent: Arc<Mutex<Vec<NetCommand>>> = Arc::default();
             let pages: Pages = Arc::default();
-            let (kept, served) = (sent.clone(), pages.clone());
+            let git_node: GitNode = Arc::default();
+            let (kept, served, node) = (sent.clone(), pages.clone(), git_node.clone());
             std::thread::spawn(move || {
                 while let Some(job) = jobs.blocking_recv() {
                     (job.run)(&mut owner);
@@ -771,6 +797,12 @@ pub(crate) mod testing {
                             let data = crate::nomad::script::preview(script, None, fields);
                             owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None }) });
                         }
+                        if let NetCommand::Git { id, repo, request, .. } = &command
+                            && let Some(node) = node.lock().unwrap().clone()
+                        {
+                            let result = crate::net::git::tests::answer(&node, repo, request.clone());
+                            owner.apply(NetEvent::Git { id: *id, result });
+                        }
                         kept.lock().unwrap().push(command);
                     }
                 }
@@ -788,7 +820,7 @@ pub(crate) mod testing {
                 https: false,
                 ca: None,
             };
-            TestWeb { router: routes::router(state.clone()), dir, sent, pages, state }
+            TestWeb { router: routes::router(state.clone()), dir, sent, pages, git_node, state }
         }
 
         /// Run something on the app, as a job (and wait for it).

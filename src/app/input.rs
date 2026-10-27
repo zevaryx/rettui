@@ -216,6 +216,11 @@ impl App {
                 self.switch_tab(Tab::ALL[c as usize - '1' as usize]);
                 return;
             }
+            // The tenth.
+            KeyCode::Char('0') if !key.modifiers.contains(KeyModifiers::ALT) => {
+                self.switch_tab(Tab::Repos);
+                return;
+            }
             KeyCode::Char('A') => {
                 self.send(NetCommand::Announce);
                 return;
@@ -250,6 +255,7 @@ impl App {
             Tab::Status => self.status_key(key),
             Tab::Reticulum => self.rns_key(key),
             Tab::Hub => self.hub_key(key),
+            Tab::Repos => self.repos_key(key),
         }
     }
 
@@ -557,6 +563,7 @@ impl App {
             Tab::Reticulum if self.rns.history.is_some() => self.scroll_rns_history(at, delta),
             Tab::Reticulum => self.scroll_rns(at, delta),
             Tab::Hub => self.scroll_hub(delta.signum()),
+            Tab::Repos => self.scroll_repos(delta.signum()),
         }
     }
 
@@ -582,6 +589,7 @@ impl App {
             Tab::Reticulum if self.rns.history.is_some() => self.click_rns_history(at),
             Tab::Reticulum => self.click_rns(at, double),
             Tab::Hub => self.click_hub(at),
+            Tab::Repos => self.click_repos(at),
         }
     }
 }

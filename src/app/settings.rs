@@ -466,6 +466,8 @@ mod tests {
         let offline_map = dir.join("region.mbtiles");
         crate::web::mbtiles::sample(&offline_map, "png");
         refused(&mut app, "map_tiles_file", &offline_map.display().to_string());
+        // Nor another program's identity key.
+        refused(&mut app, "rngit_identity", "true");
         assert_eq!(app.saved_settings().unwrap().display_name, "rettui user", "nothing is saved when one is refused");
         // Scripts can be turned off, not back on.
         app.update_settings_from_web(&[("node_executable_pages", "false")]).unwrap();

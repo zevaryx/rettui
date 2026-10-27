@@ -9,12 +9,12 @@ state as the TUI.
 
 | Module | What it does | Built on |
 | --- | --- | --- |
-| `net/` | Network actor, on its own threads so heavy traffic can't hold up either UI: runtime, announces, paths and keys, commands and events | rsReticulum |
+| `net/` | Network actor, on its own threads so heavy traffic can't hold up either UI: runtime, announces, paths and keys, commands and events; rngit requests over Links (`git`) | rsReticulum, rngit-rs |
 | `lxmf/` | Sending, receiving and propagation node sync | rsLXMF |
 | `nomad/` | Page and file fetching, Micron parsing and layout, page cache, hosting a node and its pages | rsNomad |
 | `rrc/` | RRC wire format, hub replies, hub sessions | rsReticulum |
 | `reticulum/` | Reticulum config file: the options it has, editing it in place, and checking it | rsReticulum |
-| `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`), the page editor's formatting (`format`), notifications (`notify`) and input routing | |
+| `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`, `repos`), the page editor's formatting (`format`), notifications (`notify`) and input routing | |
 | `ui/` | Drawing per tab, plus the sidebar, footer and prompt (`chrome`), the keys of each mode for the footer and the `?` list (`keys`), and the text editors | ratatui |
 | `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty, Sixel, iTerm2 or half blocks), desktop notifications (`desktop`) | ratatui-image, notify-rust |
 | `web/` | Web UI: HTTP API, login, live updates and notifications, and the page's HTML/CSS/JS, service worker, font and logo (`web/assets`) | axum |

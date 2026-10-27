@@ -643,6 +643,7 @@ const TABS = [
   { id: 'status', icon: 'ⓘ', title: 'Status' },
   { id: 'reticulum', icon: '⛭', title: 'Reticulum' },
   { id: 'hub', icon: '⊛', title: 'Hub' },
+  { id: 'repos', icon: '⑂', title: 'Repos' },
 ];
 
 // On a phone, the bar at the bottom of the screen has these; the rest are
@@ -1385,7 +1386,7 @@ function refreshPeers() {
   peersTimer = setTimeout(() => {
     peersTimer = null;
     peersFetched = Date.now();
-    if (app.tab === 'network' || app.tab === 'browser') refresh();
+    if (app.tab === 'network' || app.tab === 'browser' || app.tab === 'repos') refresh();
     else refreshStatusSoon();
   }, Math.max(0, peersFetched + PEERS_EVERY - Date.now()));
 }
@@ -1850,8 +1851,9 @@ function browse(url) {
 // Pages, addresses and hubs written in chat, as rettui's src/links.rs
 // finds them (the same rules: keep the two alike): NomadNet pages and files
 // (<node>:/page/…, also after nomadnetwork://), LXMF addresses (lxmf@,
-// lxmf://, lxma:// with a key) and RRC hubs (rrc://hub/room, rrc@hub). A
-// bare hash isn't linked; punctuation after a link isn't part of it.
+// lxmf://, lxma:// with a key), RRC hubs (rrc://hub/room, rrc@hub) and
+// rngit repositories (rns://node/group/repo). A bare hash isn't linked;
+// punctuation after a link isn't part of it.
 // [start, end, url] for each, in order.
 const LINK_HASH = /[0-9a-fA-F]{32}(?![0-9A-Za-z])/y;
 const LINK_TRAILING = /[.,;:!?)\]}>'"*_`]+$/;
@@ -1874,6 +1876,14 @@ function findLinks(text) {
       if (end < 0) return null;
       const stop = text[end] === ':' || text[end] === '/' ? runEnd(end, end) : end;
       return [stop, text.slice(at, stop)];
+    }
+    // An rngit repository: a node, then its group and name.
+    if (has(at, 'rns://')) {
+      const end = hashEnd(at + 6);
+      if (end < 0 || text[end] !== '/') return null;
+      const stop = runEnd(end, end);
+      const url = 'rns://' + text.slice(at + 6, stop);
+      return repoUrl(url) ? [stop, url] : null;
     }
     if (has(at, 'lxma://')) {
       const end = hashEnd(at + 7);
@@ -1918,6 +1928,7 @@ function openLink(url) {
   url = url.replace(/^[a-z]+(?=:\/\/|@)/i, (scheme) => scheme.toLowerCase());
   if (url.startsWith('lxma://') || url.startsWith('lxmf@') || url.startsWith('lxmf://')) return openConversation(url);
   if (url.startsWith('rrc://') || url.startsWith('rrc@')) return openHubLink(url);
+  if (url.startsWith('rns://')) return openRepo(url);
   browse(url);
 }
 
@@ -6282,6 +6293,7 @@ app.views.browser = {
     if (!url) return;
     if (url.startsWith('lxmf@') || url.startsWith('lxmf://')) return openConversation(url);
     if (url.startsWith('rrc://') || url.startsWith('rrc@')) return openHubLink(url);
+    if (url.startsWith('rns://')) return openRepo(url);
     if (/:\/file\//.test(url)) {
       window.location.href = 'api/download?url=' + encodeURIComponent(url);
       toast('Downloading…');
@@ -8026,6 +8038,399 @@ app.views.hub = {
   },
 };
 
+// ---- Repos: rngit repositories ----------------------------------------------
+//
+// Git over Reticulum: repositories on rngit nodes, kept by their rns:// URL
+// (a node doesn't list them). The one open shows its branches and tags,
+// releases (files download checked against the release's signature), work
+// documents and permissions. Everything here asks the node, so it can take
+// a while over a slow link.
+
+// An rns://node/group/repo URL's parts, as rettui's parse_repo reads it, or
+// null.
+function repoUrl(url) {
+  const m = /^rns:\/\/([0-9a-fA-F]{32})\/([A-Za-z0-9._-]{1,128})\/([A-Za-z0-9._-]{1,128})\/?$/.exec(url.trim());
+  if (!m || [m[2], m[3]].some((part) => part === '.' || part === '..')) return null;
+  return { node: m[1].toLowerCase(), group: m[2], repo: m[3].replace(/\.git$/, '') };
+}
+
+async function openRepo(url) {
+  try {
+    const added = await api.post('/repos', { url });
+    switchTab('repos');
+    app.views.repos.open(added.url);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// An identity, by the name it's known by (or its hash).
+const whoName = (who) => (who ? (who.name && who.name !== who.hash ? who.name : who.hash.slice(0, 12)) : '?');
+
+const REPO_PANES = [['refs', 'Branches and tags'], ['releases', 'Releases'], ['work', 'Work'], ['perms', 'Permissions']];
+const WORK_SCOPES = [['active', 'Active'], ['proposed', 'Proposed'], ['completed', 'Done']];
+
+app.views.repos = {
+  panes: true,
+  // The repository open (its URL), the pane shown, the work list, and
+  // what's open of it: { release: tag } or { doc: id, scope }.
+  url: null,
+  pane: 'refs',
+  scope: 'active',
+  opened: null,
+  // What each pane last got: { url, data } or { url, error }.
+  got: {},
+
+  mount(root) {
+    this.list = el('div', { class: 'scroll' });
+    this.header = el('header');
+    this.tabs = el('div', { class: 'subtabs' });
+    this.body = el('div', { class: 'scroll repo-body' });
+    root.append(
+      el('section', { class: 'panel side' },
+        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Repos' }),
+          el('button', { class: 'phone-hidden', text: '+ Add', title: 'Add a repository by its rns:// URL  ( n )', onclick: () => this.add() })),
+        this.list),
+      el('section', { class: 'panel grow pane-main' }, this.header, this.body),
+      fab('Add a repository', () => this.add()));
+  },
+
+  async add(start = 'rns://') {
+    const url = await askText('Add a repository', { label: 'Its URL: rns://node/group/repo (the node\'s 32 hex characters, then two names)', value: start, ok: 'Add', mono: true,
+      act: (text) => api.post('/repos', { url: text }) });
+    if (url) this.open(url.url);
+  },
+
+  async update() {
+    const state = this.state = await api.get('/repos');
+    if (changed(this, 'list', [state, this.url])) {
+      const items = state.repos.map((r) => el('div', { class: 'list-item' + (r.url === this.url ? ' selected' : ''), onclick: () => this.open(r.url) },
+        el('span', { class: 'main' }, el('div', { class: 'name', text: `${r.group}/${r.repo}` }), el('div', { class: 'sub mono', text: r.node_name })),
+        el('button', { text: '×', title: 'Stop keeping it (nothing on the node changes)', onclick: (e) => {
+          e.stopPropagation();
+          this.remove(r);
+        } })));
+      if (state.nodes.length) {
+        items.push(el('div', { class: 'list-heading dim', text: 'rngit nodes heard' }));
+        for (const node of state.nodes) {
+          items.push(el('div', { class: 'list-item', title: 'A node doesn\'t list its repositories: add one by name', onclick: () => this.add(`rns://${node.address}/`) },
+            el('span', { class: 'main' }, el('div', { class: 'name' }, el('span', { class: 'tag git', text: 'GIT' }), ' ', node.name || `node ${node.address.slice(0, 8)}`),
+              el('div', { class: 'sub', text: `${node.hops} ${node.hops === 1 ? 'hop' : 'hops'}, ${ago(node.at)} ago` }))));
+        }
+      }
+      this.list.replaceChildren(...(items.length ? items
+        : [el('div', { class: 'empty', text: 'No repositories yet. Add one by its rns:// URL; a link to one in a message or page opens it. rngit nodes show here when they announce.' })]));
+    }
+    this.render();
+  },
+
+  async remove(repo) {
+    if (!await ask(`Stop keeping ${repo.group}/${repo.repo}?\nNothing on the node changes.`, { yes: 'Remove' })) return;
+    await api.post('/repos/remove', { url: repo.url }).catch((e) => toast(e.message, true));
+    if (this.url === repo.url) this.url = null;
+    this.update();
+  },
+
+  // Open a repository: every pane is asked for again.
+  open(url) {
+    if (this.url !== url) {
+      this.url = url;
+      this.opened = null;
+      this.got = {};
+    }
+    setPane(this, 'detail');
+    this.reload();
+    this.update();
+  },
+
+  reload() {
+    if (!this.url) return;
+    const url = this.url;
+    const paths = { refs: '/repos/refs', releases: '/repos/releases', work: '/repos/work', perms: '/repos/perms' };
+    for (const [pane, path] of Object.entries(paths)) this.fetch(pane, `${path}?url=${encodeURIComponent(url)}`);
+    if (this.opened?.release) this.openRelease(this.opened.release);
+    if (this.opened?.doc) this.openDoc(this.opened.doc, this.opened.scope);
+  },
+
+  async fetch(key, path) {
+    const url = this.url;
+    if (!this.got[key]) this.got[key] = { url, loading: true };
+    else this.got[key].loading = true;
+    this.render();
+    try {
+      const data = await api.get(path);
+      if (this.url === url) this.got[key] = { url, data };
+    } catch (e) {
+      if (this.url === url) this.got[key] = { url, error: e.message };
+    }
+    if (this.url === url) this.render();
+  },
+
+  openRelease(tag) {
+    this.opened = { release: tag };
+    this.got.release = null;
+    this.fetch('release', `/repos/release?url=${encodeURIComponent(this.url)}&tag=${encodeURIComponent(tag)}`);
+  },
+
+  openDoc(id, scope) {
+    this.opened = { doc: id, scope };
+    this.got.doc = null;
+    this.fetch('doc', `/repos/doc?url=${encodeURIComponent(this.url)}&id=${id}&scope=${scope}`);
+  },
+
+  // A change on the node; the lists are read again after.
+  async write(path, body, what) {
+    toast(`${what}…`);
+    try {
+      const done = await api.post(path, { url: this.url, ...body });
+      toast(done.said || 'Done');
+      this.reload();
+      return true;
+    } catch (e) {
+      toast(`${what} failed: ${e.message}`, true);
+      return false;
+    }
+  },
+
+  render() {
+    const repo = this.url && repoUrl(this.url);
+    if (!repo) {
+      this.header.replaceChildren(el('span', { class: 'title', text: 'Repository' }));
+      this.body.replaceChildren(el('div', { class: 'empty', text: 'Pick a repository, or add one by its URL. A node doesn\'t list its repositories: you need the URL, from its owner or its NomadNet page.' }));
+      return;
+    }
+    const count = (key, f) => (this.got[key]?.data ? ` ${f(this.got[key].data)}` : '');
+    this.tabs.replaceChildren(...REPO_PANES.map(([id, title]) => el('button', {
+      class: id === this.pane && !this.opened ? 'active' : '',
+      text: title + ({ refs: count('refs', (d) => d.refs.length), releases: count('releases', (d) => d.releases.length),
+        work: count('work', (d) => d.active.length + d.proposed.length) }[id] || ''),
+      onclick: () => {
+        this.pane = id;
+        this.opened = null;
+        this.render();
+      },
+    })));
+    this.header.replaceChildren(
+      el('button', { class: 'phone-only', text: '‹', title: 'Back to the list', onclick: () => setPane(this, 'list') }),
+      el('span', { class: 'title', text: `${repo.group}/${repo.repo}`, title: this.url }),
+      this.tabs, el('span', { class: 'grow' }),
+      el('button', { text: 'Copy URL', onclick: () => copy(this.url, 'the repository\'s URL') }),
+      el('button', { text: '↻', title: 'Ask the node again', onclick: () => this.reload() }));
+    if (this.typing()) return;
+    const rows = this.opened?.release ? this.releasePage() : this.opened?.doc ? this.docPage() : this[`${this.pane}Page`]();
+    this.body.replaceChildren(...[rows].flat());
+  },
+
+  typing() {
+    const focused = document.activeElement;
+    return this.body.contains(focused) && focused.matches('input[type=text], textarea');
+  },
+
+  // A pane's answer, or what's shown meanwhile (or why it isn't).
+  answer(key) {
+    const got = this.got[key];
+    if (!got || (got.loading && !got.data && !got.error)) return [null, el('div', { class: 'empty', text: 'Asking the node…' })];
+    if (got.error) return [null, el('div', { class: 'empty state-bad', text: got.error })];
+    return [got.data, null];
+  },
+
+  refsPage() {
+    const [data, shown] = this.answer('refs');
+    if (!data) return shown;
+    if (!data.refs.length) return el('div', { class: 'empty', text: 'Nothing pushed yet.' });
+    return data.refs.map((r) => {
+      const branch = r.name.startsWith('refs/heads/');
+      const name = r.name.replace(/^refs\/(heads|tags)\//, '');
+      return el('div', { class: 'list-item' },
+        el('span', { class: 'main' }, el('span', { class: 'dim', text: branch ? 'branch ' : r.name.startsWith('refs/tags/') ? 'tag ' : 'ref ' }),
+          el('span', { class: 'name', text: name }), ' ', el('span', { class: 'mono dim', text: r.sha.slice(0, 7) })),
+        data.head === r.name ? el('span', { class: 'state-ok', text: 'HEAD' }) : null);
+    });
+  },
+
+  releasesPage() {
+    const [data, shown] = this.answer('releases');
+    const publish = el('div', { class: 'row card-actions' }, el('button', { class: 'primary', text: 'Publish a release…', onclick: () => this.publish() }));
+    if (!data) return [publish, shown];
+    if (!data.releases.length) return [publish, el('div', { class: 'empty', text: 'No releases yet: publish one of a tag pushed already.' })];
+    return [publish, ...data.releases.map((r) => el('div', { class: 'list-item', onclick: () => this.openRelease(r.tag) },
+      el('span', { class: 'main' }, el('div', { class: 'name' }, r.tag, data.latest === r.tag ? el('span', { class: 'state-ok', text: ' latest' }) : null),
+        el('div', { class: 'sub', text: `${r.files} ${r.files === 1 ? 'file' : 'files'}${r.created ? `, ${ago(r.created)} ago` : ''} · ${r.preview}` }))))];
+  },
+
+  workPage() {
+    const [data, shown] = this.answer('work');
+    const scopes = el('div', { class: 'subtabs' }, WORK_SCOPES.map(([id, title]) => el('button', {
+      class: id === this.scope ? 'active' : '', text: `${title}${data ? ` ${data[id].length}` : ''}`,
+      onclick: () => {
+        this.scope = id;
+        this.render();
+      },
+    })));
+    const actions = el('div', { class: 'row card-actions' }, scopes, el('span', { class: 'grow' }),
+      el('button', { class: 'primary', text: 'New document…', onclick: () => this.editDoc({ propose: false }) }),
+      el('button', { text: 'Propose…', title: 'For those who may only propose documents', onclick: () => this.editDoc({ propose: true }) }));
+    if (!data) return [actions, shown];
+    const docs = data[this.scope];
+    if (!docs.length) return [actions, el('div', { class: 'empty', text: 'None here.' })];
+    return [actions, ...docs.map((d) => el('div', { class: 'list-item', onclick: () => this.openDoc(d.id, this.scope) },
+      el('span', { class: 'main' }, el('div', { class: 'name' }, el('span', { class: 'dim', text: `#${d.id} ` }), d.title),
+        el('div', { class: 'sub', text: `by ${whoName(d.author)}, ${ago(d.edited)} ago${d.comments ? ` · ${d.comments} ${d.comments === 1 ? 'comment' : 'comments'}` : ''}` }))))];
+  },
+
+  permsPage() {
+    const [data, shown] = this.answer('perms');
+    if (!data) return shown;
+    return [el('p', { class: 'dim', text: 'Who may do what here, as the node\'s .allowed file says. Setting it isn\'t offered: the nodes tried refuse it.' }),
+      el('pre', { class: 'repo-text', text: data.text || '(empty)' })];
+  },
+
+  releasePage() {
+    const tag = this.opened.release;
+    const back = el('button', { text: '‹ Releases', onclick: () => {
+      this.opened = null;
+      this.render();
+    } });
+    const [data, shown] = this.answer('release');
+    if (!data) return [back, shown];
+    const url = this.url;
+    return [
+      el('div', { class: 'row card-actions' }, back, el('span', { class: 'grow' }),
+        el('button', { class: 'danger', text: 'Delete release', onclick: async () => {
+          if (!await ask(`Delete the release ${tag} from the node?\nIts tag stays.`, { yes: 'Delete', danger: true })) return;
+          this.opened = null;
+          this.write('/repos/release/delete', { tag }, `Deleting the release ${tag}`);
+        } })),
+      el('h3', { text: `${data.tag} ` }, el('span', { class: 'dim', text: data.status })),
+      el('p', { class: 'dim', text: `Made by ${whoName(data.by)}${data.hash ? ` · commit ${data.hash.slice(0, 12)}` : ''}` }),
+      data.notes ? el('pre', { class: 'repo-text', text: data.notes }) : null,
+      el('h4', { text: 'Files' }),
+      data.files.length ? data.files.map((f) => el('div', { class: 'list-item' },
+        el('span', { class: 'main' }, el('span', { class: 'name', text: f.name }), el('span', { class: 'sub', text: ` ${humanBytes(f.size)}` })),
+        el('button', { text: 'Download', title: 'Checked against the release\'s signature first', onclick: () => {
+          window.location.href = `api/repos/artifact?url=${encodeURIComponent(url)}&tag=${encodeURIComponent(tag)}&name=${encodeURIComponent(f.name)}`;
+          toast(`Downloading ${f.name}…`);
+        } })))
+        : el('div', { class: 'empty', text: 'This release has no files.' }),
+    ];
+  },
+
+  docPage() {
+    const { doc: id, scope } = this.opened;
+    const back = el('button', { text: '‹ Work', onclick: () => {
+      this.opened = null;
+      this.render();
+    } });
+    const [data, shown] = this.answer('doc');
+    if (!data) return [back, shown];
+    const signed = !data.signer ? el('span', { class: 'state-bad', text: '✗ signature doesn\'t check out' })
+      : data.signer.hash === data.author.hash ? el('span', { class: 'state-ok', text: '✓ signed by them' })
+        : el('span', { class: 'state-warn', text: `signed by ${whoName(data.signer)}` });
+    const done = data.scope === 'completed';
+    const comment = el('textarea', { rows: 3, placeholder: 'A comment (Markdown)' });
+    return [
+      el('div', { class: 'row card-actions' }, back, el('span', { class: 'grow' }),
+        el('button', { text: 'Edit…', onclick: () => this.editDoc({ id, scope, title: data.title, text: data.text }) }),
+        el('button', { text: done ? 'Make active' : 'Mark done', onclick: () => this.write('/repos/doc/state', { id, scope, done: !done }, done ? `Making #${id} active` : `Marking #${id} done`) }),
+        el('button', { class: 'danger', text: 'Delete', onclick: async () => {
+          if (!await ask(`Delete #${id} (${data.title}) from the node?`, { yes: 'Delete', danger: true })) return;
+          this.opened = null;
+          this.write('/repos/doc/delete', { id, scope }, `Deleting #${id}`);
+        } })),
+      el('h3', {}, el('span', { class: 'dim', text: `#${data.id} ` }), data.title),
+      el('p', { class: 'dim' }, `${data.scope} · by ${whoName(data.author)}, ${ago(data.edited)} ago · `, signed),
+      el('div', { class: 'repo-text' }, linked(data.text)),
+      data.comments.map((c) => el('div', { class: 'repo-comment' },
+        el('div', { class: 'dim', text: `${whoName(c.author)}, ${ago(c.created)} ago` }), el('div', { class: 'repo-text' }, linked(c.text)))),
+      el('div', { class: 'repo-comment' }, comment,
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { class: 'primary', text: 'Comment', onclick: async () => {
+          if (!comment.value.trim()) return comment.focus();
+          if (await this.write('/repos/doc/comment', { id, scope, text: comment.value }, `Commenting on #${id}`)) comment.value = '';
+        } }))),
+    ];
+  },
+
+  // A key pressed with nothing typed into: true if it was one of the
+  // Repos keys (see KEYS).
+  key(e) {
+    if (e.key === 'n') {
+      this.add();
+      return true;
+    }
+    if (e.key === 'r' && this.url) {
+      this.reload();
+      return true;
+    }
+    return false;
+  },
+
+  // Write a new document (or propose one), or change one (`id` given).
+  editDoc({ id = null, scope = 'active', title = '', text = '', propose = false }) {
+    const heading = id !== null ? `Change #${id}` : propose ? 'Propose a work document' : 'New work document';
+    dialog(heading, (close) => {
+      const titleInput = el('input', { type: 'text', value: title, placeholder: 'Title', maxlength: 200 });
+      const textInput = el('textarea', { rows: 12, placeholder: 'What it is about (Markdown)' });
+      textInput.value = text;
+      const error = el('div', { class: 'status error', role: 'alert' });
+      const save = el('button', { class: 'primary', text: id !== null ? 'Save' : propose ? 'Propose' : 'Make', onclick: async () => {
+        if (!titleInput.value.trim()) return titleInput.focus();
+        save.disabled = true;
+        const ok = id !== null
+          ? await this.write('/repos/doc/edit', { id, scope, title: titleInput.value, text: textInput.value }, `Changing #${id}`)
+          : await this.write('/repos/doc/new', { title: titleInput.value, text: textInput.value, propose }, propose ? 'Proposing' : 'Making it');
+        save.disabled = false;
+        if (ok) close();
+        else error.textContent = 'The node didn\'t take it: see the notice.';
+      } });
+      requestAnimationFrame(() => titleInput.focus());
+      return el('div', { class: 'ask' }, el('label', { class: 'field' }, el('span', { text: 'Title' }), titleInput),
+        el('label', { class: 'field' }, el('span', { text: 'Text' }), textInput), error,
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: 'Cancel', onclick: () => close() }), save));
+    }, { className: 'ask-dialog wide' });
+  },
+
+  // Publish a release of a tag already pushed, with files picked here.
+  publish() {
+    const max = this.state?.max_release || 32 * 1024 * 1024;
+    dialog('Publish a release', (close) => {
+      const tag = el('input', { type: 'text', placeholder: 'v1.0 (pushed already)', class: 'mono' });
+      const notes = el('textarea', { rows: 6, placeholder: 'Release notes (Markdown)' });
+      const files = el('input', { type: 'file', multiple: true });
+      const error = el('div', { class: 'status error', role: 'alert' });
+      const go = el('button', { class: 'primary', text: 'Publish', onclick: async () => {
+        if (!tag.value.trim()) return tag.focus();
+        const picked = [...files.files];
+        if (!picked.length) return void (error.textContent = 'Pick at least one file');
+        const total = picked.reduce((n, f) => n + f.size, 0);
+        if (total > max) return void (error.textContent = `The files are at most ${humanBytes(max)} together`);
+        go.disabled = true;
+        const data = await Promise.all(picked.map(async (f) => ({ name: f.name, data: await base64Of(f) })));
+        const ok = await this.write('/repos/release/new', { tag: tag.value.trim(), notes: notes.value, files: data }, `Publishing ${tag.value.trim()}`);
+        go.disabled = false;
+        if (ok) close();
+        else error.textContent = 'The node didn\'t take it: see the notice.';
+      } });
+      requestAnimationFrame(() => tag.focus());
+      return el('div', { class: 'ask' },
+        el('p', { class: 'dim', text: 'Signed with the identity the node knows you by. The tag must be pushed already.' }),
+        el('label', { class: 'field' }, el('span', { text: 'Tag' }), tag),
+        el('label', { class: 'field' }, el('span', { text: 'Notes' }), notes),
+        el('label', { class: 'field' }, el('span', { text: `Files (at most ${humanBytes(max)} together)` }), files), error,
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: 'Cancel', onclick: () => close() }), go));
+    }, { className: 'ask-dialog wide' });
+  },
+};
+
+// A file's bytes as base64, to send in JSON.
+function base64Of(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',', 2)[1] || '');
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 app.views.reticulum = {
   panes: true,
   section: 'reticulum',
@@ -8698,7 +9103,7 @@ async function restartReticulum() {
 
 // The keys there are (the ? key shows them), as the terminal UI's popup.
 const KEYS = [
-  ['Anywhere', [['1–9', 'switch sections'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open'],
+  ['Anywhere', [['0–9', 'switch sections (0 is Repos)'], ['?', 'this list'], ['Esc', 'leave a text box, or close what\'s open'],
     ['< / >', 'the section\'s list narrower or wider (or drag its edge)'], ['=', 'the list back to its usual width']]],
   ['Messages', [['j / k', 'next or previous conversation'], ['i', 'write (the message box)'], ['r', 'reply to their newest message'],
     ['n', 'new conversation'], ['*', 'pin it, or unpin it'], ['g', 'games with them (the Games tab)'], ['/', 'search messages'], ['L', 'share a location'], ['K', 'send a Sideband command'], ['M', 'map of locations shared'],
@@ -8710,6 +9115,7 @@ const KEYS = [
   ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],
     ['/', 'search the nodes and saved pages'], ['T', 'a new tab (Ctrl+click or middle-click a link for one)'], ['W', 'close the tab'],
     ['[ ]', 'previous or next tab']]],
+  ['Repos', [['n', 'add a repository'], ['r', 'ask the open one\'s node again']]],
 ];
 
 function keysDialog() {
@@ -8726,11 +9132,13 @@ document.addEventListener('keydown', (e) => {
   if (typing && e.key === 'Escape' && !e.defaultPrevented) return document.activeElement.blur();
   // Nor under a dialog: its own keys only.
   if (typing || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('.overlay')) return;
-  if (e.key >= '1' && e.key <= String(TABS.length)) switchTab(TABS[Number(e.key) - 1].id);
+  // 1 to 9, and 0 for the tenth.
+  if (/^[0-9]$/.test(e.key) && TABS[(Number(e.key) + 9) % 10]) switchTab(TABS[(Number(e.key) + 9) % 10].id);
   else if (e.key === '?') keysDialog();
   else if (['<', '>', '='].includes(e.key) && app.views[app.tab]?.resizeSide?.(e.key)) e.preventDefault();
   else if (app.tab === 'messages' && app.views.messages.key(e)) e.preventDefault();
   else if (app.tab === 'games' && app.views.games.key(e)) e.preventDefault();
+  else if (app.tab === 'repos' && app.views.repos.key(e)) e.preventDefault();
   else if (e.key === 'f' && app.tab === 'browser' && app.views.browser.page) {
     e.preventDefault();
     setPane(app.views.browser, 'detail');

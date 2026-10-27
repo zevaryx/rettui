@@ -1,7 +1,8 @@
 //! Addresses written in chat, found so both UIs can link them: NomadNet
 //! pages and files (`<node>:/page/index.mu`, also after `nomadnetwork://`),
 //! LXMF addresses (`lxmf@<address>`, `lxmf://<address>`, and `lxma://`
-//! links with a public key) and RRC hubs (`rrc://<hub>/room`, `rrc@<hub>`).
+//! links with a public key), RRC hubs (`rrc://<hub>/room`, `rrc@<hub>`)
+//! and rngit repositories (`rns://<node>/<group>/<repo>`).
 //!
 //! A bare hash isn't linked: it could be any destination. What a link ends
 //! with is trimmed of the punctuation a sentence puts after it. The web UI
@@ -16,6 +17,8 @@ pub enum LinkKind {
     Lxmf,
     /// A hub, and maybe a room on it.
     Rrc,
+    /// An rngit repository, in the Repos tab.
+    Git,
 }
 
 /// A link found in some text.
@@ -87,6 +90,16 @@ fn link_at(text: &str, at: usize) -> Option<Found> {
             return found(end, LinkKind::Rrc, &text[at..end]);
         }
     }
+    // An rngit repository: a node, then its group and name.
+    if has_prefix(text, at, "rns://") {
+        let hash_end = hash_at(text, at + 6)?;
+        if text.as_bytes().get(hash_end) != Some(&b'/') {
+            return None;
+        }
+        let end = run_end(text, hash_end, hash_end);
+        let url = format!("rns://{}", &text[at + 6..end]);
+        return crate::app::repos::parse_repo(&url).is_ok().then_some(Found { start: at, end, kind: LinkKind::Git, url });
+    }
     // An address with its public key.
     if has_prefix(text, at, "lxma://") {
         let hash_end = hash_at(text, at + 7)?;
@@ -131,7 +144,7 @@ mod tests {
         let key = "ab".repeat(64);
         let text = format!(
             "See {NODE}:/page/index.mu, or nomadnetwork://{NODE}:/file/manual.pdf! Write to lxmf@{NODE} (or lxma://{NODE}:{key}). \
-             Chat: rrc://{NODE}/lobby. And rrc@{NODE}."
+             Chat: rrc://{NODE}/lobby. And rrc@{NODE}. Code: RNS://{NODE}/public/demo.git."
         );
         assert_eq!(
             urls(&text),
@@ -142,6 +155,7 @@ mod tests {
                 (LinkKind::Lxmf, format!("lxma://{NODE}:{key}")),
                 (LinkKind::Rrc, format!("rrc://{NODE}/lobby")),
                 (LinkKind::Rrc, format!("rrc@{NODE}")),
+                (LinkKind::Git, format!("rns://{NODE}/public/demo.git")),
             ]
         );
         // Where each is, as written (with nomadnetwork://).
@@ -165,6 +179,10 @@ mod tests {
             format!("a{NODE}:/page/x.mu"),
             format!("lxma://{NODE}:short"),
             "rrc://nothex".to_string(),
+            format!("rns://{NODE}"),
+            format!("rns://{NODE}/onlygroup"),
+            format!("rns://{NODE}/a/b/c"),
+            format!("rns://{NODE}/../demo"),
         ] {
             assert!(find(&text).is_empty(), "{text}");
         }

@@ -17,7 +17,9 @@ of the Reticulum instance it uses. Where files are kept is in
   Values are checked before saving, and most changes apply straight away (the
   editor says which ones wait for the next start).
 - **What the web UI can't change:** the Reticulum config directory and the
-  node folder, and it can turn "Run page scripts" off but not on. These decide
+  node folder, nor *Use rngit's identity* (which reads another program's
+  identity key, see [Repos](Repos#who-you-are-to-a-node)), and it can turn
+  "Run page scripts" off but not on. These decide
   what runs on the computer rettui runs on (a config's pipe interfaces run
   commands, and scripts are programs), and the web login must not be able to
   run programs there. Change them in the terminal UI, or in `settings.json`

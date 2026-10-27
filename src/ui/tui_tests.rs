@@ -119,7 +119,7 @@ impl Tui {
 
     pub fn tab(&mut self, tab: Tab) -> &mut Self {
         let number = Tab::ALL.iter().position(|t| *t == tab).unwrap() + 1;
-        self.key(KeyCode::Char(char::from(b'0' + number as u8)))
+        self.key(KeyCode::Char(char::from(b'0' + (number % 10) as u8)))
     }
 
     /// Nothing over the tab: whatever an earlier step left open closed.

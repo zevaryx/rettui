@@ -567,6 +567,9 @@ impl App {
         if url.starts_with("rrc://") || url.starts_with("rrc@") {
             return self.open_rrc_link(&url);
         }
+        if url.starts_with("rns://") {
+            return self.open_repo(&url).unwrap_or_else(|e| self.warn(e));
+        }
         if url.starts_with("lxma://") {
             return match self.add_contact(&url) {
                 Ok(key) => self.open_conversation(key),
@@ -684,6 +687,9 @@ impl App {
         if url.starts_with("rrc://") || url.starts_with("rrc@") {
             self.open_rrc_link(url);
             return;
+        }
+        if url.starts_with("rns://") {
+            return self.open_repo(url).unwrap_or_else(|e| self.warn(e));
         }
         if let Some(hash) = url.strip_prefix("lxmf@").or_else(|| url.strip_prefix("lxmf://")) {
             match parse_hash(hash) {
@@ -857,7 +863,7 @@ impl App {
         let Some(Interactive::Link { url, fields }) = page.items.get(self.browser.tab.selected?) else {
             return None;
         };
-        if ["#", "p:", "rrc://", "rrc@", "lxmf@", "lxmf://"].iter().any(|prefix| url.starts_with(prefix)) {
+        if ["#", "p:", "rrc://", "rrc@", "lxmf@", "lxmf://", "rns://"].iter().any(|prefix| url.starts_with(prefix)) {
             return None;
         }
         let mut location = self.resolve(url)?;

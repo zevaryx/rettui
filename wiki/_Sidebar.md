@@ -15,6 +15,7 @@
 - [Notifications](Notifications)
 - [NomadNet Browsing](NomadNet-Browsing)
 - [Hosting a Node](Hosting-a-Node)
+- [Repos](Repos)
 - [Network](Network)
 - [RNode Radios](RNode-Radios)
 

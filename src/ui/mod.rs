@@ -22,6 +22,7 @@ mod map;
 mod messages;
 mod network;
 mod node;
+mod repos;
 mod reticulum;
 mod search;
 mod status;
@@ -194,6 +195,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Tab::Status => draw_status(frame, app, body),
         Tab::Reticulum => draw_reticulum(frame, app, body),
         Tab::Hub => hub::draw_hub(frame, app, body),
+        Tab::Repos => repos::draw_repos(frame, app, body),
     }
     draw_footer(frame, app, footer);
     if app.contact_card.is_some() && app.tab == Tab::Messages {

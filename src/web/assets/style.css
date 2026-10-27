@@ -748,6 +748,7 @@ td.name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .tag.propagation { background: var(--yellow-bg); }
 .tag.rrc { background: var(--cyan-bg); }
 .tag.phone { background: var(--blue-bg); }
+.tag.git { background: var(--red-bg); }
 .tag.other { background: var(--grey-bg); }
 /* The announce viewer: a time first, then as the Network list. */
 .heard-table th:nth-child(1) { width: 6.5em; }
@@ -1345,3 +1346,11 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 .identities .identity { flex-wrap: wrap; gap: 6px 10px; cursor: default; }
 .identities .identity .main { flex: 1 1 260px; }
 .identities .identity .name, .identities .identity .sub { white-space: normal; overflow-wrap: anywhere; }
+
+/* Repos: a repository's documents, notes and permissions keep their lines. */
+.repo-body { padding: 0 12px 12px; }
+.repo-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 8px 0; }
+.repo-comment { border-top: 1px solid var(--border); padding: 8px 0; }
+.repo-comment textarea { width: 100%; box-sizing: border-box; }
+.ask-dialog.wide { width: min(640px, 100%); }
+.ask-dialog.wide textarea { width: 100%; box-sizing: border-box; }

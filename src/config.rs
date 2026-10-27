@@ -51,6 +51,12 @@ pub struct Settings {
     /// How long NomadNet pages and images stay cached (pages can ask for
     /// less with `#!c=`).
     pub cache_hours: u64,
+    /// Ask rngit nodes as the identity stock rngit keeps
+    /// (`~/.rngit/client_identity`), which they may already allow, rather
+    /// than rettui's own.
+    pub rngit_identity: bool,
+    /// How long a request to an rngit node may take, in seconds.
+    pub rngit_timeout_secs: u64,
     /// Host a NomadNet node with the pages in `node_dir`.
     pub node_enabled: bool,
     /// Name the node announces; the display name when unset.
@@ -237,6 +243,8 @@ impl Default for Settings {
             messages_kept: 1000,
             message_storage_mb: 0,
             cache_hours: 24,
+            rngit_identity: false,
+            rngit_timeout_secs: 120,
             node_enabled: false,
             node_name: None,
             node_announce_interval_mins: 360,
@@ -532,6 +540,8 @@ impl Field {
             // another node folder could hold
             // executable pages, or share files that aren't meant to be.
             "rns_config" | "node_dir" | "map_tiles_file" | "voice_recorder" | "print_command" => WebAccess::TerminalOnly,
+            // Which identity's keys are read, and signed with.
+            "rngit_identity" => WebAccess::TerminalOnly,
             "node_executable_pages" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }
@@ -663,7 +673,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "map_tiles_file",
         ],
     ),
-    (Section::Browsing, &["home", "browser_new_tabs", "cache_hours"]),
+    (Section::Browsing, &["home", "browser_new_tabs", "cache_hours", "rngit_identity", "rngit_timeout_secs"]),
     (
         Section::Hosting,
         &[
@@ -972,6 +982,20 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "rngit_identity",
+        label: "Use rngit's identity",
+        help: "Ask rngit nodes (the Repos tab) as the identity rngit itself keeps, in ~/.rngit/client_identity (or $RNGIT_CONFIG), so what a node already lets that identity do works here too. Off, rettui asks as your own identity",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "rngit_timeout_secs",
+        label: "rngit timeout (s)",
+        help: "Seconds a request to an rngit node may take before rettui gives up, a release's files included (10 to 3600)",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
         key: "node_enabled",
         label: "Host a node",
         help: "Serve the pages in the node folder as a NomadNet node (edit them in the Node tab)",
@@ -1240,6 +1264,9 @@ pub const UNKNOWN_SENDERS: &[&str] = &["show", "requests", "ignore"];
 /// The ways of announcing on its own.
 pub const ANNOUNCE_SCHEDULES: &[&str] = &["random", "fixed", "off"];
 const MAX_HOURS: u64 = 8_760;
+/// Shortest and longest an rngit request may be given, in seconds.
+const MIN_RNGIT_TIMEOUT: u64 = 10;
+const MAX_RNGIT_TIMEOUT: u64 = 3600;
 /// Highest stamp cost (LXMF's), and largest message limit (a gigabyte).
 const MAX_STAMP_COST: u64 = 254;
 const MAX_MESSAGE_KB: u64 = 1_000_000;
@@ -1324,6 +1351,8 @@ impl Settings {
             "rrc_messages_kept" => self.rrc_messages_kept.to_string(),
             "message_storage_mb" => self.message_storage_mb.to_string(),
             "cache_hours" => self.cache_hours.to_string(),
+            "rngit_identity" => self.rngit_identity.to_string(),
+            "rngit_timeout_secs" => self.rngit_timeout_secs.to_string(),
             "browser_new_tabs" => self.browser_new_tabs.to_string(),
             "node_enabled" => self.node_enabled.to_string(),
             "node_name" => self.node_name.clone().unwrap_or_default(),
@@ -1600,6 +1629,14 @@ impl Settings {
             }
             "message_storage_mb" => self.message_storage_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
             "cache_hours" => self.cache_hours = number(value, MAX_HOURS).map_err(fail)?,
+            "rngit_identity" => self.rngit_identity = toggle(value).map_err(fail)?,
+            "rngit_timeout_secs" => {
+                let secs = number(value, MAX_RNGIT_TIMEOUT).map_err(fail)?;
+                if secs < MIN_RNGIT_TIMEOUT {
+                    return Err(fail(format!("at least {MIN_RNGIT_TIMEOUT}")));
+                }
+                self.rngit_timeout_secs = secs;
+            }
             "propagation_node" => {
                 self.propagation_node = match optional(value) {
                     None => None,

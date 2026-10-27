@@ -122,7 +122,7 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   focused (Tab), the arrow keys move it. Each section keeps its own width,
   in this browser, and the pane beside it always keeps room (500px). Not on
   a phone, which shows one pane at a time.
-- **Keys:** `?` lists them all. `1`–`9` switch sections, `<`/`>` resize the
+- **Keys:** `?` lists them all. `1`–`9` and `0` switch sections, `<`/`>` resize the
   section's list, `/` searches the
   Network list (in Messages, [the messages](Messaging#searching); in
   Channels, [what was said](RRC-Chat); in the Browser, its nodes and saved
@@ -140,7 +140,7 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   layout:
   - **Bottom bar:** the sections are in a bar at the bottom of the screen:
     Messages, Channels, Games and Browser, each with how many are unread,
-    and **More** for Network, Node, Status, Reticulum and Hub. The bar shows
+    and **More** for Network, Node, Status, Reticulum, Hub and Repos. The bar shows
     under the lists; tapping the section you're in goes back to its list.
     With the phone held sideways, the sections are in a rail down the left
     instead, and the bars and headers are shorter, so the list or page gets

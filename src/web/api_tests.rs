@@ -1479,3 +1479,71 @@ async fn a_speed_test_over_the_api() {
     assert!(web.post("/api/speedtest", json!({ "peer": "nope" })).await.error().contains("32 hex"));
     assert!(web.post("/api/speedtest", json!({ "size": 99 })).await.error().contains("sizes"));
 }
+
+#[tokio::test]
+async fn rngit_repositories_over_the_api() {
+    use base64::Engine;
+    use rns_identity::identity::Identity;
+    let web = TestWeb::start("repos");
+    let author = Identity::new();
+    let url = format!("rns://{NODE}/public/demo");
+
+    // Kept, once; nonsense isn't a repository.
+    assert_eq!(web.post("/api/repos", json!({ "url": format!("{NODE}/public/demo") })).await.json()["url"], url);
+    let bad = web.post("/api/repos", json!({ "url": "rns://nowhere" })).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let repos = web.get("/api/repos").await.json();
+    assert_eq!(repos["repos"][0]["group"], "public");
+    assert_eq!(repos["repos"][0]["node"], NODE);
+    assert!(repos["rngit_identity"].is_null());
+
+    // A node that can't answer says so; then one that does.
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::default());
+    let quiet = web.get(&format!("/api/repos/refs?url={url}")).await;
+    assert_eq!(quiet.status, StatusCode::BAD_GATEWAY, "{}", quiet.text());
+    *web.git_node.lock().unwrap() = Some(std::sync::Arc::new(crate::net::git::tests::demo_node(&author)));
+    let refs = web.get(&format!("/api/repos/refs?url={url}")).await.json();
+    assert_eq!(refs["head"], "refs/heads/main", "{refs}");
+    assert_eq!(refs["refs"].as_array().unwrap().len(), 3);
+    assert_eq!(web.get(&format!("/api/repos/perms?url={url}")).await.json()["text"], "r:all\nw:owner");
+    let releases = web.get(&format!("/api/repos/releases?url={url}")).await.json();
+    assert_eq!(releases["latest"], "v1");
+    let release = web.get(&format!("/api/repos/release?url={url}&tag=v1")).await.json();
+    assert_eq!(release["files"][0]["name"], "app.txt");
+    let file = web.get(&format!("/api/repos/artifact?url={url}&tag=v1&name=app.txt")).await;
+    assert_eq!(file.body, b"the app");
+    assert_eq!(web.get(&format!("/api/repos/artifact?url={url}&tag=v1&name=other")).await.status, StatusCode::BAD_GATEWAY);
+    let work = web.get(&format!("/api/repos/work?url={url}")).await.json();
+    assert_eq!(work["proposed"][0]["title"], "Idea");
+    let doc = web.get(&format!("/api/repos/doc?url={url}&id=1&scope=active")).await.json();
+    assert_eq!(doc["signer"]["hash"], hex::encode(author.hash), "{doc}");
+    assert_eq!(doc["comments"][0]["text"], "On it");
+    assert_eq!(web.get(&format!("/api/repos/doc?url={url}&id=1&scope=somewhere")).await.status, StatusCode::BAD_REQUEST);
+
+    // Writing.
+    let made = web.post("/api/repos/doc/new", json!({ "url": url, "title": "New", "text": "Body" })).await.json();
+    assert!(made["said"].as_str().unwrap().contains("#1"), "{made}");
+    assert_eq!(web.post("/api/repos/doc/new", json!({ "url": url, "title": " " })).await.status, StatusCode::BAD_REQUEST);
+    let doc = |extra: serde_json::Value| {
+        let mut body = json!({ "url": url, "id": 1, "scope": "active" });
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        body
+    };
+    assert_eq!(web.post("/api/repos/doc/comment", doc(json!({ "text": "Nice" }))).await.status, StatusCode::OK);
+    assert_eq!(web.post("/api/repos/doc/edit", doc(json!({ "title": "Speed", "text": "Faster" }))).await.status, StatusCode::OK);
+    assert_eq!(web.post("/api/repos/doc/state", doc(json!({ "done": true }))).await.status, StatusCode::OK);
+    assert_eq!(web.post("/api/repos/doc/state", doc(json!({ "done": false }))).await.status, StatusCode::OK);
+    assert_eq!(web.post("/api/repos/doc/delete", doc(json!({}))).await.status, StatusCode::OK);
+    let data = base64::engine::general_purpose::STANDARD.encode(b"tarball");
+    let files = json!([{ "name": "app.tar.gz", "data": data }]);
+    let published = web.post("/api/repos/release/new", json!({ "url": url, "tag": "v2", "notes": "Notes", "files": files })).await;
+    assert_eq!(published.status, StatusCode::OK, "{}", published.text());
+    let files = json!([{ "name": "app.tar.gz", "data": "!!" }]);
+    let broken = web.post("/api/repos/release/new", json!({ "url": url, "tag": "v2", "files": files })).await;
+    assert!(broken.error().contains("base64"));
+    assert_eq!(web.post("/api/repos/release/delete", json!({ "url": url, "tag": "v2" })).await.status, StatusCode::OK);
+
+    // Taken off the list.
+    web.post("/api/repos/remove", json!({ "url": url })).await;
+    assert!(web.get("/api/repos").await.json()["repos"].as_array().unwrap().is_empty());
+}

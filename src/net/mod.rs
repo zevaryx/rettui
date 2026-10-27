@@ -8,6 +8,7 @@
 
 pub mod autopn;
 pub mod discovered;
+pub mod git;
 pub mod heard;
 pub mod iface_log;
 pub mod mqtt;
@@ -142,6 +143,16 @@ pub enum NetCommand {
         to: Hash,
         name: String,
         data: Vec<u8>,
+    },
+    /// Ask an rngit repository something, or change something there
+    /// (answered with [`NetEvent::Git`]). As rettui's identity, or the one
+    /// in `identity_file` (stock rngit's).
+    Git {
+        id: u64,
+        repo: rngit::RepoUrl,
+        request: git::GitRequest,
+        identity_file: Option<PathBuf>,
+        timeout: Duration,
     },
     /// Publish telemetry to an MQTT server (failures are logged).
     Mqtt {
@@ -390,6 +401,11 @@ pub enum NetEvent {
         to: Hash,
         name: String,
         state: remote::RncpState,
+    },
+    /// What an rngit repository answered.
+    Git {
+        id: u64,
+        result: Result<git::GitReply, String>,
     },
     /// A path forgotten (`had`: there was one).
     PathForgotten {
@@ -672,6 +688,8 @@ async fn run(
         .map_err(|e| format!("Could not subscribe to announces: {e}"))?;
 
     let links: LinkCache = Arc::new(Mutex::new(HashMap::new()));
+    // Links to rngit nodes, kept between requests.
+    let git_clients = git::Clients::default();
 
     // The hosted node starts in a task (it announces first) and comes back
     // here; `host_generation` drops nodes from superseded starts.
@@ -1042,6 +1060,9 @@ async fn run(
                     NetCommand::RncpSend { to, name, data } => {
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
                         tokio::spawn(async move { remote::rncp_send(&runtime, identity, to, name, data, ev).await });
+                    }
+                    NetCommand::Git { id, repo, request, identity_file, timeout } => {
+                        git::spawn(&runtime, &git_clients, &identity, id, repo, request, identity_file, timeout, &ev);
                     }
                     NetCommand::Blackhole { to, block, quiet } => {
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());

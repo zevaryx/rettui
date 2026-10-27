@@ -24,7 +24,8 @@ pub enum HeardFilter {
     Lxmf,
     Nomad,
     Propagation,
-    /// Anything else: RRC hubs, calls, and what rettui doesn't know.
+    /// Anything else: RRC hubs, calls, rngit nodes, and what rettui
+    /// doesn't know.
     Other,
 }
 
@@ -62,7 +63,7 @@ impl HeardFilter {
             HeardFilter::Lxmf => kind == Kind::Lxmf,
             HeardFilter::Nomad => kind == Kind::Nomad,
             HeardFilter::Propagation => kind == Kind::Propagation,
-            HeardFilter::Other => matches!(kind, Kind::Rrc | Kind::Phone | Kind::Other),
+            HeardFilter::Other => matches!(kind, Kind::Rrc | Kind::Phone | Kind::Git | Kind::Other),
         }
     }
 }
