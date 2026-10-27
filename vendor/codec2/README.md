@@ -14,6 +14,10 @@ changes:
   16 kHz) decode only, and encoding them gives silent frames.
 - `synthesise_one_frame` is split so that the newamp modes, whose phases
   are already worked out, skip the LPC phase step, as the C code does.
+- The random phases of unvoiced sounds come from a generator for each
+  thread, not one shared by all (without `micromath`). Decoding the same
+  bits gave different sounds depending on what other threads were decoding,
+  which made a test of the encoder fail now and then.
 
 The newamp code and codebooks are under the LGPL 2.1, as Codec2 is (see
 `COPYING`).

@@ -192,8 +192,10 @@ impl App {
                 let name = nomad_core::reply_file_name(content.metadata.as_deref())
                     .or_else(|| location.path.rsplit('/').next().map(str::to_string))
                     .unwrap_or_else(|| "download".to_string());
-                let saved = std::fs::create_dir_all(&self.paths.downloads).and_then(|()| {
-                    let target = unique_path(&self.paths.downloads, &name);
+                let folder =
+                    self.settings.nomad_files_dir.as_deref().map_or_else(|| self.paths.downloads.clone(), super::files::path_from_input);
+                let saved = std::fs::create_dir_all(&folder).and_then(|()| {
+                    let target = unique_path(&folder, &name);
                     std::fs::write(&target, &content.data).map(|()| target)
                 });
                 match saved {
@@ -1484,6 +1486,15 @@ mod tests {
         let (id, _) = fetched(&mut net).unwrap();
         app.on_fetched(id, Ok(FetchedContent { data: b"notes".to_vec(), metadata: None }));
         assert_eq!(std::fs::read(app.paths.downloads.join("notes.txt")).unwrap(), b"notes");
+        // With a folder chosen: saved there instead, made if it's new.
+        let chosen = app.paths.base.join("elsewhere");
+        app.update_settings(&[("nomad_files_dir", &chosen.display().to_string())]).unwrap();
+        app.navigate(Location { node, path: "/file/more.txt".into(), fields: BTreeMap::new() });
+        let (id, _) = fetched(&mut net).unwrap();
+        app.on_fetched(id, Ok(FetchedContent { data: b"more".to_vec(), metadata: None }));
+        assert_eq!(std::fs::read(chosen.join("more.txt")).unwrap(), b"more");
+        assert!(!app.paths.downloads.join("more.txt").exists());
+        assert!(app.update_settings(&[("nomad_files_dir", "/no/such/place/at/all")]).is_err());
         // A page that didn't come: said; one superseded: dropped.
         app.navigate(Location { node, path: "/page/gone.mu".into(), fields: BTreeMap::new() });
         let (id, _) = fetched(&mut net).unwrap();

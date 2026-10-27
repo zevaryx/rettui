@@ -1,4 +1,5 @@
 use crate::*;
+#[cfg(feature = "micromath")]
 use core::sync::atomic;
 #[cfg(feature = "micromath")]
 #[allow(unused_imports)]
@@ -985,12 +986,25 @@ pub fn phase_synth_zero_order(
 const CODEC2_RAND_MAX: f32 = 32767.0;
 
 //  todo: this should probably be in some states rather than a static
+#[cfg(feature = "micromath")]
 static next_rand: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+// One generator for each thread, so what one thread decodes doesn't change
+// with what another is decoding at the same time.
+#[cfg(not(feature = "micromath"))]
+thread_local! {
+    static next_rand: core::cell::Cell<usize> = const { core::cell::Cell::new(1) };
+}
 fn codec2_rand() -> f32 {
-    // next = next * 1103515245 + 12345 but allow overflow and allow thready accesses.
+    // next = next * 1103515245 + 12345 but allow overflow.
+    #[cfg(feature = "micromath")]
     let mut nextr = next_rand.load(atomic::Ordering::Relaxed);
+    #[cfg(not(feature = "micromath"))]
+    let mut nextr = next_rand.with(core::cell::Cell::get);
     nextr = nextr.overflowing_mul(1103515245).0.overflowing_add(12345).0;
+    #[cfg(feature = "micromath")]
     next_rand.store(nextr, atomic::Ordering::Relaxed);
+    #[cfg(not(feature = "micromath"))]
+    next_rand.with(|n| n.set(nextr));
     ((nextr / 65536) % 32768) as f32
 }
 

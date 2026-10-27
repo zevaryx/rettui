@@ -193,6 +193,7 @@ pub fn router(state: WebState) -> Router {
         .route("/reticulum/check", post(reticulum_check))
         .route("/reticulum/lora", get(reticulum_lora))
         .route("/reticulum/restart", post(reticulum_restart))
+        .route("/quit", post(quit))
         .route("/reticulum/history", get(reticulum_history))
         .route("/reticulum/history/{id}", get(reticulum_version))
         .route("/reticulum/history/{id}/restore", post(reticulum_restore))
@@ -2807,6 +2808,13 @@ struct RnsTextBody {
 /// owner loop; browsers follow it through the usual state updates.
 async fn reticulum_restart(State(state): State<WebState>) -> ApiResult {
     state.write(|o| o.app.request_rns_restart()).await?;
+    ok()
+}
+
+/// Stop rettui, as the terminal UI's `q` does: everything is saved, and the
+/// web server ends right after this answer.
+async fn quit(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.request_quit()).await?;
     ok()
 }
 

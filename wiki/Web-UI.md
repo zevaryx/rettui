@@ -185,5 +185,6 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   (messages, lists, forms) is in the phone's own font instead, and only
   addresses, code, logs and NomadNet pages stay in Fira Code.
 - **Stopping:** Ctrl-C or SIGTERM stops it cleanly, leaving hubs and saving
-  everything.
+  everything. So do the **Stop rettui** buttons: on Status (behind ⋯ on a
+  phone), and in the bottom bar's More menu on a phone. They ask first.
 - The TUI and the web UI can't use the same data directory at the same time.

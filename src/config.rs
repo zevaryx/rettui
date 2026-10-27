@@ -57,6 +57,10 @@ pub struct Settings {
     pub rngit_identity: bool,
     /// How long a request to an rngit node may take, in seconds.
     pub rngit_timeout_secs: u64,
+    /// Where files saved from NomadNet pages go; none is `downloads/` in
+    /// the data directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nomad_files_dir: Option<String>,
     /// Host a NomadNet node with the pages in `node_dir`.
     pub node_enabled: bool,
     /// Name the node announces; the display name when unset.
@@ -245,6 +249,7 @@ impl Default for Settings {
             cache_hours: 24,
             rngit_identity: false,
             rngit_timeout_secs: 120,
+            nomad_files_dir: None,
             node_enabled: false,
             node_name: None,
             node_announce_interval_mins: 360,
@@ -542,7 +547,9 @@ impl Field {
             // commands Reticulum runs; the recorder is a command run;
             // another node folder could hold
             // executable pages, or share files that aren't meant to be.
-            "rns_config" | "node_dir" | "map_tiles_file" | "voice_recorder" | "print_command" => WebAccess::TerminalOnly,
+            "rns_config" | "node_dir" | "nomad_files_dir" | "map_tiles_file" | "voice_recorder" | "print_command" => {
+                WebAccess::TerminalOnly
+            }
             // Which identity's keys are read, and signed with.
             "rngit_identity" => WebAccess::TerminalOnly,
             "node_executable_pages" => WebAccess::TurnOffOnly,
@@ -676,7 +683,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "map_tiles_file",
         ],
     ),
-    (Section::Browsing, &["home", "browser_new_tabs", "cache_hours", "rngit_identity", "rngit_timeout_secs"]),
+    (Section::Browsing, &["home", "browser_new_tabs", "cache_hours", "nomad_files_dir", "rngit_identity", "rngit_timeout_secs"]),
     (
         Section::Hosting,
         &[
@@ -975,6 +982,13 @@ pub const FIELDS: &[Field] = &[
         label: "Open pages in new tabs",
         help: "A saved page or node picked from the Browser's list opens in a tab of its own (an empty one is used first), and the tabs always show. T in the list (Ctrl+click in the web UI) opens it in the tab shown instead",
         kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "nomad_files_dir",
+        label: "NomadNet files folder",
+        help: "Folder files saved from NomadNet pages go in (a USB drive, an SD card, your Documents folder); empty uses downloads/ in the data directory. It names a folder on this computer, so it's set in the terminal UI or settings.json, not the web UI",
+        kind: FieldKind::Optional,
         effect: Effect::Now,
     },
     Field {
@@ -1356,6 +1370,7 @@ impl Settings {
             "cache_hours" => self.cache_hours.to_string(),
             "rngit_identity" => self.rngit_identity.to_string(),
             "rngit_timeout_secs" => self.rngit_timeout_secs.to_string(),
+            "nomad_files_dir" => self.nomad_files_dir.clone().unwrap_or_default(),
             "browser_new_tabs" => self.browser_new_tabs.to_string(),
             "node_enabled" => self.node_enabled.to_string(),
             "node_name" => self.node_name.clone().unwrap_or_default(),
@@ -1639,6 +1654,19 @@ impl Settings {
                     return Err(fail(format!("at least {MIN_RNGIT_TIMEOUT}")));
                 }
                 self.rngit_timeout_secs = secs;
+            }
+            "nomad_files_dir" => {
+                // Made when a file is saved, so it only needs a parent.
+                self.nomad_files_dir = match optional(value) {
+                    None => None,
+                    Some(text) => {
+                        let path = crate::app::files::path_from_input(&text);
+                        if !path.is_dir() && !path.parent().is_some_and(Path::is_dir) {
+                            return Err(fail(format!("no such directory as {text}")));
+                        }
+                        Some(path.display().to_string())
+                    }
+                };
             }
             "propagation_node" => {
                 self.propagation_node = match optional(value) {

@@ -923,6 +923,7 @@ function renderAppbar() {
   const deeper = !!view?.panes && (view.pane || 'list') !== 'list';
   $('#nav-back').classList.toggle('hidden', !deeper);
   document.body.classList.toggle('deeper', deeper);
+  if (!deeper || app.tab !== 'browser') document.body.classList.remove('bars-collapsed');
   $('#appbar-title').textContent = TABS.find((t) => t.id === app.tab)?.title || '';
 }
 
@@ -949,7 +950,7 @@ function renderBottombar(unread, drawn) {
     }),
     item('⋯', 'More', more.some((t) => t.id === app.tab), 0, false, () => openSheet(whoLine(), more.map((tab) => ({
       text: `${tab.icon}  ${tab.title}`, checked: tab.id === app.tab, action: () => switchTab(tab.id),
-    })))));
+    })).concat([{ text: '⏻  Stop rettui', danger: true, action: () => stopRettui() }]))));
 }
 
 // Who you are and how the network is, for the top of More.
@@ -4561,7 +4562,7 @@ app.views.messages = {
           e.target.disabled = false;
         } })),
       contact.trust === 'blocked' ? null : el('div', { class: 'row trust' },
-        el('span', { class: 'grow dim', text: 'Sideband commands:' }),
+        el('span', { class: 'grow dim row-label', text: 'Sideband commands:' }),
         el('button', { text: '📍 Ask where they are', title: 'Ask for their location, as Sideband does: Sideband answers with it (if it\'s set to), and it goes on the map',
           onclick: async () => {
             if (await attempt(() => api.post(`/conversations/${key}/command`, { command: 'location' }), 'Asked where they are: their answer goes on the map')) loadNow();
@@ -5956,7 +5957,8 @@ app.views.browser = {
       } }),
     };
     this.status = el('div', { class: 'page-status' });
-    this.content = el('div', { class: 'scroll page', onclick: (e) => this.click(e), onauxclick: (e) => e.button === 1 && this.click(e) });
+    this.content = el('div', { class: 'scroll page', onclick: (e) => this.click(e), onauxclick: (e) => e.button === 1 && this.click(e),
+      onscroll: () => this.barsOnScroll() });
     // Finding in the page (f, or the Find button): every match marked.
     this.findInput = el('input', { type: 'search', placeholder: 'Find in the page', oninput: () => this.find(0),
       onkeydown: (e) => {
@@ -6095,6 +6097,20 @@ app.views.browser = {
     this.buttons.identify.textContent = page?.identified ? 'Identified' : 'Identify';
     this.buttons.source.classList.toggle('on', this.viewSource);
     this.buttons.source.textContent = this.viewSource ? '◂ Page' : '</> Source';
+  },
+
+  // On a phone, scrolling a page down gives its room to the page: the top
+  // bars shrink to the back arrow until it's scrolled up again, or to the top.
+  barsOnScroll() {
+    const top = this.content.scrollTop;
+    const delta = top - (this.lastTop || 0);
+    this.lastTop = top;
+    const body = document.body;
+    if (!phone.matches) return body.classList.remove('bars-collapsed');
+    if (top < 24 || delta < -12) body.classList.remove('bars-collapsed');
+    // Only a page long enough to scroll without them, or hiding them would
+    // leave no way to bring them back.
+    else if (delta > 12 && this.content.scrollHeight - this.content.clientHeight > 240) body.classList.add('bars-collapsed');
   },
 
   renderPage() {
@@ -7310,7 +7326,8 @@ app.views.status = {
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
           el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
-          el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }), moreButton()), this.info),
+          el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }),
+          el('button', { class: 'more danger', text: 'Stop rettui', title: 'Save everything and close rettui', onclick: () => stopRettui() }), moreButton()), this.info),
         el('section', { class: 'panel grow settings-panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
           this.revertButton, this.saveButton), this.sectionTabs, el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
       el('div', { class: 'column', style: 'width:42%' },
@@ -9142,6 +9159,12 @@ async function restartReticulum() {
     : 'Restart Reticulum?\nLinks and transfers in progress stop; hubs reconnect and your node starts again.';
   if (!await ask(question, { title: 'Reticulum', yes: app.status?.external_shared_instance ? 'Reconnect' : 'Restart' })) return;
   attempt(() => api.post('/reticulum/restart'), 'Restarting Reticulum');
+}
+
+// Save everything and close rettui (the web page stays, saying it's gone).
+async function stopRettui() {
+  if (!await ask('Stop rettui?\nEverything is saved first. Nothing is received or sent until it is started again.', { title: 'Stop rettui', yes: 'Stop', danger: true })) return;
+  attempt(() => api.post('/quit'), 'Stopping rettui');
 }
 
 // ---- start ------------------------------------------------------------------

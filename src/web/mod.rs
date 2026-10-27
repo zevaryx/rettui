@@ -674,6 +674,9 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
             notify(&changes, Scope::ALL);
             break Ok(Some(name));
         }
+        if owner.app.take_quit() {
+            break Ok(None);
+        }
         if owner.app.take_rns_restart() {
             // Browsers see "starting" while the old stack stops; page loads
             // in flight belong to it.
