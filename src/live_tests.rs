@@ -481,7 +481,11 @@ async fn ben_pushes_to_amys_repositories() {
     let to = crate::app::repos::parse_repo(&format!("rns://{node}/public/made")).unwrap();
     ben.app.push_copy(&to, crate::app::repos::PushHow::parse("add").unwrap()).unwrap();
     let made = repos.join("served/public/made.git");
-    until(&mut amy, &mut ben, "the new repository holding the history", |_, _| made.join("refs/heads/main").exists()).await;
+    // Branches are written before tags, so wait for the last of them.
+    until(&mut amy, &mut ben, "the new repository holding the history", |_, _| {
+        made.join("refs/heads/main").exists() && made.join("refs/tags/v1").exists()
+    })
+    .await;
     assert_eq!(git(&made, &["rev-parse", "main"]), git(&work, &["rev-parse", "main"]));
     assert_eq!(git(&made, &["rev-parse", "v1^{commit}"]), git(&work, &["rev-parse", "v1^{commit}"]));
     git(&made, &["fsck", "--strict"]);
