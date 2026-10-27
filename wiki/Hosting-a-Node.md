@@ -10,13 +10,16 @@ files in `node/pages/` (and downloads in `node/files/`) in the data directory,
 or the folder set in `node_dir`.
 
 - **Forks and mirrors:** someone who may make repositories in a group (`c`) can
-  have the node fork or mirror a repository on another rngit node, and `sync`
-  brings one up to date. Only `rns://` sources are taken, because the node runs
-  no programs (stock also takes `http`, `https` and `ssh`). The node fetches
-  with its own identity, so give `c` only to people you trust to have it read
-  what it may read. Mirrors are followed again once a day; a fork is followed
-  only when someone syncs it. The maker becomes the repository's administrator.
-  A node can't fork or mirror from itself.
+  have the node fork or mirror a repository, and `sync` brings one up to date.
+  The source can be an `rns://` repository on another rngit node or an
+  `https://` one (GitHub, say), fetched by rettui itself; `http://` and `ssh`
+  are refused, because the node runs no programs. An `https://` source can't
+  carry a login or point at an address on your own network, redirects aren't
+  followed, and a fetch stops when it takes too long or comes to more than
+  *rngit repository limit*. The node fetches with its own identity, so give `c`
+  only to people you trust to have it read what it may read. Mirrors are
+  followed again once a day; a fork only when someone syncs it. The maker
+  becomes the repository's administrator. A node can't fork or mirror from itself.
 - **Switching it on:** press `h` in the Node tab, use **Start hosting** in
   the web UI, or set "Host a node" in the settings. The node uses your
   identity, so its address stays the same. Its name defaults to your display
