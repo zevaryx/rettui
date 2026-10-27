@@ -250,8 +250,8 @@ rettui can serve git repositories to [rngit](https://github.com/zevaryx/rngit-rs
 clients, so people clone them over Reticulum with `git clone rns://<address>/<group>/<name>.git`
 (the stock `rngit` helper, `git-remote-rns` and rettui's [Repos tab](Repos) all
 work), and push to it. Cloning, fetching, pushing, creating repositories and
-deleting branches and tags work. Releases, work documents, fork, mirror and
-sync are answered "not allowed" for now; use stock rngit for those.
+deleting branches and tags work, and so do releases. Work documents, fork,
+mirror and sync are answered "not allowed" for now; use stock rngit for those.
 
 - **Switching it on:** set "Host rngit repositories" in Settings › Hosting
   (`git_host_enabled`). It announces itself (`git.repositories`) a few seconds
@@ -280,6 +280,18 @@ sync are answered "not allowed" for now; use stock rngit for those.
   `.allowed`). `adm` includes everything. Anyone
   who doesn't identify themselves is `d7db22f63b453c23bb0688dde565b7c1`, as in
   rngit.
+- **Releases:** a release of a repository is a tag with files and notes.
+  Anyone who may read can list, read and download them (if they identify
+  themselves, as rngit asks), and `rel` in the rules (`rel:all`, or
+  `rel:<32 hex>`, or `adm`) lets someone publish, make latest and delete
+  them. The tag has to be pushed first. They are kept beside the repository, in
+  `demo.git.releases/<tag>/`, as stock rngit keeps them, with their notes, the
+  files, each file's `.rsg` signature and the signed `manifest.rsm` the
+  publisher made; the node keeps those and checks nothing, readers verify them.
+  A tag is named with letters, digits and `._-+`, a file by a plain name.
+  A file may be 64 MB and a release 256 MB, and all of a repository's releases
+  count towards its size limit. A release can only be added to while it is
+  being published.
 - **Limits:** a clone's bundle or a push is held in memory and handled in one
   piece, up to *rngit push limit* (256 MB), and building or unpacking one
   stops after two minutes. A repository may come to *rngit repository limit*

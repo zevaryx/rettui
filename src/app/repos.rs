@@ -751,7 +751,7 @@ impl App {
     }
 
     /// [`App::publish_release`] with files read from this computer.
-    pub(super) fn publish_release_paths(&mut self, tag: &str, notes: &str, paths: &str) -> Result<u64, String> {
+    pub fn publish_release_paths(&mut self, tag: &str, notes: &str, paths: &str) -> Result<u64, String> {
         let mut files = Vec::new();
         let mut total = 0u64;
         for text in split_paths(paths) {

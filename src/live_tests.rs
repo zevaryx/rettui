@@ -341,20 +341,7 @@ async fn amys_repositories_read_by_ben() {
     use crate::app::node::NodeStatus;
     let repos = std::env::temp_dir().join(format!("rettui-live-gitrepos-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&repos);
-    let git = |dir: &std::path::Path, args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@example.com")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@example.com")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .expect("git runs");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    };
+    let git = git_in;
     let work = repos.join("work");
     std::fs::create_dir_all(&work).unwrap();
     git(&work, &["init", "-q", "-b", "main"]);
@@ -412,6 +399,23 @@ async fn amys_repositories_read_by_ben() {
         .await;
     assert!(amy.app.git_host.requests >= 2 && amy.app.git_host.refused >= 1, "{} {}", amy.app.git_host.requests, amy.app.git_host.refused);
     let _ = std::fs::remove_dir_all(&repos);
+}
+
+/// Run git in `dir` as a nobody with no settings, and say what it printed.
+fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git runs");
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 /// Ben sends a copy of one of Amy's repositories to a new one on her node,
@@ -482,6 +486,69 @@ async fn ben_pushes_to_amys_repositories() {
     assert_eq!(git(&made, &["rev-parse", "v1^{commit}"]), git(&work, &["rev-parse", "v1^{commit}"]));
     git(&made, &["fsck", "--strict"]);
     assert!(amy.app.git_host.requests >= 5, "{}", amy.app.git_host.requests);
+    let _ = std::fs::remove_dir_all(&repos);
+}
+
+/// Ben publishes a release of one of Amy's repositories, reads it back, and
+/// deletes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ben_publishes_a_release_on_amys_repository() {
+    use crate::app::node::NodeStatus;
+    let repos = std::env::temp_dir().join(format!("rettui-live-gitrelease-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repos);
+    let work = repos.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    git_in(&work, &["init", "-q", "-b", "main"]);
+    std::fs::write(work.join("f"), "file\n").unwrap();
+    git_in(&work, &["add", "."]);
+    git_in(&work, &["commit", "-q", "-m", "one"]);
+    git_in(&work, &["tag", "v1"]);
+    let source = repos.join("served/public/source.git");
+    std::fs::create_dir_all(&source).unwrap();
+    git_in(&source, &["init", "-q", "--bare", "-b", "main"]);
+    git_in(&work, &["push", "-q", source.to_str().unwrap(), "main", "--tags"]);
+    let file = repos.join("app.bin");
+    std::fs::write(&file, b"the app").unwrap();
+    let served = repos.join("served").display().to_string();
+    let (mut amy, mut ben) = pair("gitrelease", |s| {
+        s.git_host_enabled = true;
+        s.git_host_dir = Some(served);
+        s.git_host_access = Some("rw:all, rel:all".into());
+    })
+    .await;
+    until(&mut amy, &mut ben, "Amy's repositories hosted", |a, _| a.app.git_host.status == NodeStatus::Running).await;
+    let node = hex::encode(amy.app.git_host.address.expect("the node's address"));
+    ben.app.open_repo(&format!("rns://{node}/public/source")).unwrap();
+
+    // Asked again until Amy's path is known, and the (empty) list of releases comes.
+    let wait = Instant::now();
+    loop {
+        ben.app.reload_repo();
+        let asked = Instant::now();
+        until(&mut amy, &mut ben, "the releases", |_, b| {
+            b.app.repos.open.as_ref().is_some_and(|o| o.releases.ready().is_some()) || asked.elapsed() > Duration::from_secs(4)
+        })
+        .await;
+        if ben.app.repos.open.as_ref().is_some_and(|o| o.releases.ready().is_some()) {
+            break;
+        }
+        assert!(wait.elapsed() < PATIENCE, "Ben couldn't read the releases");
+    }
+    ben.app.publish_release_paths("v1", "First release", &file.display().to_string()).unwrap();
+    let kept = repos.join("served/public/source.git.releases/v1");
+    until(&mut amy, &mut ben, "the release published", |_, _| {
+        std::fs::read_to_string(kept.join("META")).is_ok_and(|m| m.contains("published"))
+    })
+    .await;
+    assert_eq!(std::fs::read(kept.join("artifacts/app.bin")).unwrap(), b"the app");
+    assert!(kept.join("artifacts/manifest.rsm").is_file() && kept.join("artifacts/app.bin.rsg").is_file());
+
+    // Ben reads it back from Amy's node.
+    let listed = |b: &Peer| b.app.repos.open.as_ref().and_then(|o| o.releases.ready().map(|r| (r.releases.len(), r.latest.clone())));
+    ben.app.reload_repo();
+    until(&mut amy, &mut ben, "the release listed", |_, b| listed(b) == Some((1, Some("v1".into())))).await;
+    ben.app.delete_release("v1").unwrap();
+    until(&mut amy, &mut ben, "the release deleted", |_, _| !kept.exists()).await;
     let _ = std::fs::remove_dir_all(&repos);
 }
 
