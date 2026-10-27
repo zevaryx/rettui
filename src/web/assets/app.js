@@ -923,7 +923,7 @@ function renderAppbar() {
   const deeper = !!view?.panes && (view.pane || 'list') !== 'list';
   $('#nav-back').classList.toggle('hidden', !deeper);
   document.body.classList.toggle('deeper', deeper);
-  if (!deeper || app.tab !== 'browser') document.body.classList.remove('bars-collapsed');
+  if (!deeper || app.tab !== 'browser') app.views.browser?.setBars?.(0, false);
   $('#appbar-title').textContent = TABS.find((t) => t.id === app.tab)?.title || '';
 }
 
@@ -6100,17 +6100,47 @@ app.views.browser = {
   },
 
   // On a phone, scrolling a page down gives its room to the page: the top
-  // bars shrink to the back arrow until it's scrolled up again, or to the top.
+  // bars shrink with the scroll, from its first pixel, to the back arrow,
+  // and grow back as it's scrolled up, or at the top. Let go half way and
+  // they settle to the nearer end.
   barsOnScroll() {
-    const top = this.content.scrollTop;
+    const top = Math.max(0, this.content.scrollTop);
     const delta = top - (this.lastTop || 0);
     this.lastTop = top;
-    const body = document.body;
-    if (!phone.matches) return body.classList.remove('bars-collapsed');
-    if (top < 24 || delta < -12) body.classList.remove('bars-collapsed');
+    if (!phone.matches) return this.setBars(0, false);
+    clearTimeout(this.barsSettle);
+    if ((this.barsP || 0) === 0 || !this.barParts) this.measureBars();
+    const room = this.barParts.reduce((sum, [, h]) => sum + h, 0);
     // Only a page long enough to scroll without them, or hiding them would
     // leave no way to bring them back.
-    else if (delta > 12 && this.content.scrollHeight - this.content.clientHeight > 240) body.classList.add('bars-collapsed');
+    const long = this.content.scrollHeight - this.content.clientHeight > room + 120;
+    const p = top <= 0 ? 0 : delta > 0 && !long ? this.barsP || 0 : (this.barsP || 0) + delta / (room || 1);
+    this.setBars(Math.min(1, Math.max(0, p)), false);
+    this.barsSettle = setTimeout(() => this.barsP > 0 && this.barsP < 1 && this.setBars(this.barsP >= 0.5 ? 1 : 0, true), 160);
+  },
+
+  // The bars that shrink, and how tall each is now.
+  measureBars() {
+    const bars = [...document.querySelectorAll('.pane-main > .page-tabs, .pane-main > .toolbar, .pane-main > .page-status')];
+    this.barParts = bars.filter((n) => n.offsetHeight).map((n) => [n, n.offsetHeight]);
+  },
+
+  // Shrink the bars to `p` (0 whole, 1 only the back arrow), moving there
+  // over a moment if `ease`.
+  setBars(p, ease) {
+    this.barsP = p;
+    const transition = ease ? 'height .18s ease, opacity .18s ease, min-height .18s ease' : 'none';
+    for (const [node, height] of this.barParts || []) {
+      node.style.transition = transition;
+      node.style.height = p === 0 ? '' : `${height * (1 - p)}px`;
+      node.style.opacity = p === 0 ? '' : String(1 - p);
+      node.style.overflow = p === 0 ? '' : 'hidden';
+      node.style.borderWidth = p >= 1 ? '0' : '';
+    }
+    const body = document.body.style;
+    body.setProperty('--bars-p', String(p));
+    document.body.classList.toggle('bars-shrunk', p > 0);
+    document.body.classList.toggle('bars-easing', ease);
   },
 
   renderPage() {
