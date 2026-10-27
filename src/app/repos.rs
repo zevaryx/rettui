@@ -19,7 +19,7 @@ use rngit::RepoUrl;
 use rngit::client::{ReleaseDetail, ReleaseList, WorkKind, WorkList, WorkScope, WorkSummary};
 
 use super::{App, PromptKind, Tab, now};
-use crate::net::git::{Doc, GitReply, GitRequest, Mirrored};
+use crate::net::git::{Doc, GitReply, GitRequest, Mirrored, Pushed};
 use crate::net::heard::{Heard, Kind};
 use crate::net::{Hash, NetCommand};
 use crate::store::{SavedMirror, SavedRepo};
@@ -153,6 +153,8 @@ enum Asked {
     Write(RepoUrl, String),
     /// A local copy being made or brought up to date.
     Mirror(RepoUrl),
+    /// A local copy being sent to this repository.
+    Push(RepoUrl),
 }
 
 #[derive(Debug, Default)]
@@ -179,6 +181,7 @@ impl Repos {
             .filter_map(|a| match a {
                 Asked::Write(_, what) => Some(what.clone()),
                 Asked::Mirror(repo) => Some(format!("Copying {}/{}", repo.group, repo.repo)),
+                Asked::Push(repo) => Some(format!("Sending to {}/{}", repo.group, repo.repo)),
                 _ => None,
             })
             .collect()
@@ -273,6 +276,52 @@ fn remove_mirror_dir(repos: &Path, dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// What to do with a branch the node has that differs from the copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushHow {
+    /// Add what is new; leave branches that differ.
+    Add,
+    /// Also overwrite branches that differ.
+    Overwrite,
+    /// Also overwrite them, and delete what the copy lacks, so the node ends up the same.
+    Same,
+}
+
+impl PushHow {
+    /// `force` and `prune` for the library.
+    pub fn flags(self) -> (bool, bool) {
+        (self != PushHow::Add, self == PushHow::Same)
+    }
+
+    pub fn parse(text: &str) -> Option<PushHow> {
+        match text.trim().to_lowercase().as_str() {
+            "" | "add" | "a" => Some(PushHow::Add),
+            "overwrite" | "o" => Some(PushHow::Overwrite),
+            "same" | "s" => Some(PushHow::Same),
+            _ => None,
+        }
+    }
+}
+
+/// What sending a copy to a repository is told as.
+pub fn push_said(p: &Pushed) -> String {
+    let name = format!("{}/{}", p.repo.group, p.repo.repo);
+    let mut said = format!("Sent the copy to {name}: {} sent, {} already there", p.pushed, p.up_to_date);
+    if p.created {
+        said = format!("Made {name} and sent the copy: {} branches and tags", p.pushed);
+    }
+    if p.deleted > 0 {
+        said.push_str(&format!(", {} removed there", p.deleted));
+    }
+    if p.rejected_count > 0 {
+        said.push_str(&format!(". Left alone because they differ there: {}", p.rejected.join(", ")));
+        if p.rejected_count > p.rejected.len() {
+            said.push_str(&format!(" and {} more", p.rejected_count - p.rejected.len()));
+        }
+    }
+    said
+}
+
 /// What a copy made or updated is told as.
 pub fn mirror_said(m: &Mirrored) -> String {
     let what = format!("{} branches and {} tags, {}", m.branches, m.tags, crate::ui::human_bytes(m.bytes));
@@ -353,16 +402,39 @@ pub enum RepoPrompt {
     Add,
     ConfirmRemove(String),
     NewTitle(bool),
-    NewText { propose: bool, title: String },
-    Comment { id: u64, scope: WorkScope },
-    EditTitle { id: u64, scope: WorkScope },
-    EditText { id: u64, scope: WorkScope, title: String },
-    ConfirmDeleteDoc { id: u64, scope: WorkScope },
+    NewText {
+        propose: bool,
+        title: String,
+    },
+    Comment {
+        id: u64,
+        scope: WorkScope,
+    },
+    EditTitle {
+        id: u64,
+        scope: WorkScope,
+    },
+    EditText {
+        id: u64,
+        scope: WorkScope,
+        title: String,
+    },
+    ConfirmDeleteDoc {
+        id: u64,
+        scope: WorkScope,
+    },
     ReleaseTag,
     ReleaseNotes(String),
-    ReleaseFiles { tag: String, notes: String },
+    ReleaseFiles {
+        tag: String,
+        notes: String,
+    },
     ConfirmDeleteRelease(String),
     ConfirmRemoveMirror(String),
+    /// Where to send the copy.
+    PushTo,
+    /// How: what to do with branches that differ there.
+    PushHow(RepoUrl),
 }
 
 /// A work list by name.
@@ -440,6 +512,33 @@ impl App {
         let id = self.git(&repo, request);
         self.repos.asked.insert(id, Asked::Mirror(repo.clone()));
         self.notify(format!("Copying {}/{}…", repo.group, repo.repo));
+        Ok(id)
+    }
+
+    /// The request that sends a repository's copy to another repository.
+    /// The copy is the one `m` made; the folder is rettui's choice.
+    pub fn push_copy_request(&self, from: &RepoUrl, to: &RepoUrl, how: PushHow) -> Result<GitRequest, String> {
+        if from == to {
+            return Err("That is the repository the copy is of: send it to another one".into());
+        }
+        let kept = from.to_string();
+        if !self.store.repos.iter().any(|r| r.url == kept && r.mirror.is_some()) {
+            return Err("There is no copy of it on this computer: m makes one".into());
+        }
+        let (force, prune) = how.flags();
+        Ok(GitRequest::PushCopy { dir: self.mirror_dir_for(from)?, force, prune })
+    }
+
+    /// Send the open repository's copy to `to`.
+    pub fn push_copy(&mut self, to: &RepoUrl, how: PushHow) -> Result<u64, String> {
+        let from = self.repos.open.as_ref().map(|o| o.url.clone()).ok_or("No repository is open")?;
+        if self.repos.asked.values().any(|a| matches!(a, Asked::Push(r) if r == to)) {
+            return Err("A copy is being sent there already".into());
+        }
+        let request = self.push_copy_request(&from, to, how)?;
+        let id = self.git(to, request);
+        self.repos.asked.insert(id, Asked::Push(to.clone()));
+        self.notify(format!("Sending the copy to {}/{}…", to.group, to.repo));
         Ok(id)
     }
 
@@ -702,6 +801,8 @@ impl App {
             (Asked::Write(_, what), Err(e)) => self.fail(format!("{what} failed: {e}")),
             (Asked::Mirror(_), Ok(GitReply::Mirrored(copy))) => self.notify(mirror_said(&copy)),
             (Asked::Mirror(repo), Err(e)) => self.fail(format!("Copying {}/{} failed: {e}", repo.group, repo.repo)),
+            (Asked::Push(_), Ok(GitReply::Pushed(sent))) => self.notify(push_said(&sent)),
+            (Asked::Push(repo), Err(e)) => self.fail(format!("Sending the copy to {}/{} failed: {e}", repo.group, repo.repo)),
             // For a repository no longer open, or an answer of another kind.
             _ => {}
         }
@@ -865,6 +966,18 @@ impl App {
                     self.warn("There is no copy of it on this computer: m makes one");
                 }
             }
+            KeyCode::Char('u') => {
+                let url = open.url.to_string();
+                if self.store.repos.iter().any(|r| r.url == url && r.mirror.is_some()) {
+                    self.open_prompt(
+                        PromptKind::Repo(RepoPrompt::PushTo),
+                        "Send this copy to which repository? (rns://<node>/<group>/<repo>; made if it isn't there)",
+                        "",
+                    );
+                } else {
+                    self.warn("There is no copy of it on this computer: m makes one");
+                }
+            }
             KeyCode::Char('y') => self.copy(&open.url.to_string(), "the repository's URL"),
             _ => self.repo_pane_key(&open, code),
         }
@@ -1008,6 +1121,18 @@ impl App {
                 }
                 self.delete_release(&tag).map(drop)
             }
+            RepoPrompt::PushTo => match parse_repo(text) {
+                Ok(to) => {
+                    let title = "If a branch there differs: add (leave it), overwrite it, or same (overwrite, and remove what the copy lacks). Enter adds";
+                    self.open_prompt(PromptKind::Repo(RepoPrompt::PushHow(to)), title, "");
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            },
+            RepoPrompt::PushHow(to) => match PushHow::parse(text) {
+                Some(how) => self.push_copy(&to, how).map(drop),
+                None => Err("Type add, overwrite or same".into()),
+            },
             RepoPrompt::ConfirmRemoveMirror(url) if yes => self.remove_mirror(&url).map(|()| self.notify("Deleted the copy")),
             _ => Ok(()),
         };
@@ -1095,6 +1220,7 @@ mod tests {
     use crate::net::NetEvent;
     use crate::net::git::tests::{Canned, answer, demo_node};
     use crate::ui::tui_tests::Tui;
+    use rngit::Response;
 
     const NODE: &str = "0123456789abcdef0123456789abcdef";
 
@@ -1383,6 +1509,89 @@ mod tests {
             tui.app.notice.as_ref().is_some_and(|n| n.text.contains("Updated the copy") && n.text.contains("1 gone")),
             "{:?}",
             tui.app.notice.as_ref().map(|n| n.text.clone())
+        );
+    }
+
+    fn other_url() -> RepoUrl {
+        parse_repo(&format!("{NODE}/public/elsewhere")).unwrap()
+    }
+
+    #[test]
+    fn a_copy_is_sent_on_to_another_repository() {
+        let mut tui = Tui::new("repos-push");
+        let source = Source::new(&tui.dir.join("source"));
+        source.git(&["tag", "v1"]);
+        open_demo(&mut tui);
+
+        // Without a copy there is nothing to send.
+        tui.key(KeyCode::Char('u'));
+        assert!(tui.said().contains("no copy"), "{}", tui.said());
+        tui.key(KeyCode::Char('m'));
+        copy_from(&mut tui, &source);
+        assert!(tui.app.store.repos[0].mirror.is_some());
+
+        // Asked where, then how; not to itself, and only to a repository that can be one.
+        tui.key(KeyCode::Char('u')).answer("nowhere");
+        assert!(tui.said().contains("rns://<node>/<group>/<repo>"), "{}", tui.said());
+        tui.key(KeyCode::Char('u')).answer(&format!("{NODE}/public/demo")).key(KeyCode::Enter);
+        assert!(tui.said().contains("send it to another one"), "{}", tui.said());
+        tui.key(KeyCode::Char('u')).answer(&format!("{NODE}/public/elsewhere")).answer("sideways");
+        assert!(tui.said().contains("Type add, overwrite or same"), "{}", tui.said());
+        assert!(tui.sent().is_empty());
+
+        // Sent: to that repository, from the copy's folder, which is the app's choice.
+        tui.key(KeyCode::Char('u')).answer(&format!("{NODE}/public/elsewhere")).answer("same");
+        let sent = tui.sent();
+        let [NetCommand::Git { repo, request: GitRequest::PushCopy { dir, force: true, prune: true }, .. }] = &sent[..] else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(*repo, other_url());
+        assert_eq!(*dir, tui.app.paths.repos.join(NODE).join("public").join("demo.git"));
+        let screen = tui.draw();
+        assert!(screen.contains("Sending to public/else"), "{screen}");
+        // Asked again while it goes: refused.
+        tui.key(KeyCode::Char('u')).answer(&format!("{NODE}/public/elsewhere")).key(KeyCode::Enter);
+        assert!(tui.said().contains("being sent there already"), "{}", tui.said());
+        assert!(tui.sent().is_empty());
+
+        // Answered: told what happened.
+        let NetCommand::Git { id, repo, request, .. } = sent.into_iter().next().unwrap() else { unreachable!() };
+        let node =
+            Arc::new(Canned::default().reply("/git/list", "", Response::Packet(vec![0])).reply("/git/push", "", Response::Packet(vec![0])));
+        let result = answer(&node, &repo, request);
+        tui.app.on_net(NetEvent::Git { id, result });
+        let said = tui.app.notice.as_ref().map(|n| n.text.clone()).unwrap_or_default();
+        assert!(said.starts_with("Sent the copy to public/elsewhere: 2 sent"), "{said}");
+        assert!(!tui.draw().contains("Sending to"));
+
+        // Refused by the node: said, and it can be tried again.
+        tui.key(KeyCode::Char('u')).answer(&format!("{NODE}/public/elsewhere")).key(KeyCode::Enter);
+        answer_all(&mut tui, &Arc::new(Canned::default()));
+        assert!(tui.said().contains("Sending the copy to public/elsewhere failed"), "{}", tui.said());
+        tui.key(KeyCode::Char('u')).answer(&format!("{NODE}/public/elsewhere")).key(KeyCode::Enter);
+        assert_eq!(tui.sent().len(), 1);
+    }
+
+    #[test]
+    fn what_is_said_of_a_copy_sent() {
+        let sent = |created, rejected: &[&str], more| Pushed {
+            repo: other_url(),
+            created,
+            pushed: 3,
+            up_to_date: 1,
+            rejected: rejected.iter().map(|s| s.to_string()).collect(),
+            rejected_count: rejected.len() + more,
+            deleted: 0,
+        };
+        assert_eq!(push_said(&sent(false, &[], 0)), "Sent the copy to public/elsewhere: 3 sent, 1 already there");
+        assert_eq!(push_said(&sent(true, &[], 0)), "Made public/elsewhere and sent the copy: 3 branches and tags");
+        let said = push_said(&Pushed { deleted: 2, ..sent(false, &["main", "dev"], 3) });
+        assert!(said.contains("2 removed there") && said.contains("differ there: main, dev and 3 more"), "{said}");
+        assert_eq!(PushHow::parse(""), Some(PushHow::Add));
+        assert_eq!(PushHow::parse(" Overwrite "), Some(PushHow::Overwrite));
+        assert_eq!(
+            (PushHow::Add.flags(), PushHow::Overwrite.flags(), PushHow::Same.flags()),
+            ((false, false), (true, false), (true, true))
         );
     }
 

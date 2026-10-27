@@ -8292,7 +8292,28 @@ app.views.repos = {
         text: m ? `Copy on this computer: ${m.branches} branches and ${m.tags} tags, ${humanBytes(m.bytes)}, updated ${ago(m.updated)} ago`
           : 'No copy on this computer.' }),
       copy,
+      m ? el('button', { text: 'Send to…', title: 'Send the copy to another repository', onclick: () => this.sendCopy() }) : null,
       m ? el('button', { text: 'Delete the copy', onclick: () => this.removeCopy() }) : null);
+  },
+
+  // Send the copy on this computer to another repository (made there if it isn't).
+  async sendCopy() {
+    const from = this.url;
+    const to = await askText('Send the copy to', { label: 'A repository: rns://<node>/<group>/<repo>. It is made there if it isn\'t', ok: 'Next', mono: true });
+    if (!to) return;
+    const how = await choose('Send the copy', [
+      { text: 'Add what is new', value: 'add' },
+      { text: 'Overwrite branches that differ', value: 'overwrite' },
+      { text: 'Make it the same (also deletes)', value: 'same' },
+    ], { text: 'If a branch there differs from the copy, leave it, overwrite it, or overwrite it and also delete the branches and tags the copy lacks.' });
+    if (!how) return;
+    toast('Sending the copy…');
+    try {
+      const done = await api.post('/repos/push', { url: from, to, how });
+      toast(done.said || 'Sent');
+    } catch (e) {
+      toast(`Sending failed: ${e.message}`, true);
+    }
   },
 
   async mirror() {
