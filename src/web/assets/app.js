@@ -922,6 +922,7 @@ function renderAppbar() {
   const deeper = !!view?.panes && (view.pane || 'list') !== 'list';
   $('#nav-back').classList.toggle('hidden', !deeper);
   document.body.classList.toggle('deeper', deeper);
+  if (!deeper || app.tab !== 'browser') document.body.classList.remove('bars-collapsed');
   $('#appbar-title').textContent = TABS.find((t) => t.id === app.tab)?.title || '';
 }
 
@@ -5945,7 +5946,8 @@ app.views.browser = {
       } }),
     };
     this.status = el('div', { class: 'page-status' });
-    this.content = el('div', { class: 'scroll page', onclick: (e) => this.click(e), onauxclick: (e) => e.button === 1 && this.click(e) });
+    this.content = el('div', { class: 'scroll page', onclick: (e) => this.click(e), onauxclick: (e) => e.button === 1 && this.click(e),
+      onscroll: () => this.barsOnScroll() });
     // Finding in the page (f, or the Find button): every match marked.
     this.findInput = el('input', { type: 'search', placeholder: 'Find in the page', oninput: () => this.find(0),
       onkeydown: (e) => {
@@ -6084,6 +6086,20 @@ app.views.browser = {
     this.buttons.identify.textContent = page?.identified ? 'Identified' : 'Identify';
     this.buttons.source.classList.toggle('on', this.viewSource);
     this.buttons.source.textContent = this.viewSource ? '◂ Page' : '</> Source';
+  },
+
+  // On a phone, scrolling a page down gives its room to the page: the top
+  // bars shrink to the back arrow until it's scrolled up again, or to the top.
+  barsOnScroll() {
+    const top = this.content.scrollTop;
+    const delta = top - (this.lastTop || 0);
+    this.lastTop = top;
+    const body = document.body;
+    if (!phone.matches) return body.classList.remove('bars-collapsed');
+    if (top < 24 || delta < -12) body.classList.remove('bars-collapsed');
+    // Only a page long enough to scroll without them, or hiding them would
+    // leave no way to bring them back.
+    else if (delta > 12 && this.content.scrollHeight - this.content.clientHeight > 240) body.classList.add('bars-collapsed');
   },
 
   renderPage() {

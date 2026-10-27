@@ -1059,6 +1059,10 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   }
   #appbar-title { flex: 1; min-width: 0; font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #nav-back.hidden + #appbar-title { padding-left: 12px; }
+  /* A page scrolled down in the Browser: only the back arrow stays. */
+  body.bars-collapsed #appbar { min-height: calc(40px + env(safe-area-inset-top)); }
+  body.bars-collapsed #appbar-title, body.bars-collapsed .pane-main > .page-tabs, body.bars-collapsed .pane-main > .toolbar,
+  body.bars-collapsed .pane-main > .page-status { display: none; }
 
   /* The sections: in the bottom bar, not the sidebar. */
   #sidebar { display: none; }

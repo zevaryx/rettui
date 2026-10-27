@@ -5,6 +5,9 @@ network.
   you saved with `s`) and Nodes (every NomadNet node heard, newest first).
   Pages open beside the pane. You can also go to any address (`g`), or to
   your home page (`H`, set in the settings).
+- **On a phone:** scrolling a page down in the web UI shrinks the top bars to
+  the back arrow, so the page gets the screen; scroll up a little, or back to
+  the top, to bring them back.
 - **Searching:** `/` (or a click on the line under the lists' tabs) searches
   both lists by name or address, as the Network tab's search does: every
   word typed must match, and addresses can be pasted as `<hash>` or
