@@ -20,6 +20,8 @@ or the folder set in `node_dir`.
   only to people you trust to have it read what it may read. Mirrors are
   followed again once a day; a fork only when someone syncs it. The maker
   becomes the repository's administrator. A node can't fork or mirror from itself.
+  A sync keeps branches and tags the source has dropped, as rngit does; switch on
+  *rngit mirrors drop what sources drop* (`git_host_prune`) to have it remove them.
 - **Switching it on:** press `h` in the Node tab, use **Start hosting** in
   the web UI, or set "Host a node" in the settings. The node uses your
   identity, so its address stays the same. Its name defaults to your display

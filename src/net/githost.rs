@@ -34,6 +34,8 @@ pub struct GitHostConfig {
     /// Largest push taken or clone sent, and what a repository may come to, in bytes.
     pub push_bytes: usize,
     pub repo_bytes: u64,
+    /// Whether a sync drops what its source dropped.
+    pub prune: bool,
 }
 
 impl GitHostConfig {
@@ -45,6 +47,7 @@ impl GitHostConfig {
             access: settings.git_host_access.clone().unwrap_or_default(),
             push_bytes: usize::try_from(settings.git_host_push_mb.saturating_mul(1_000_000)).unwrap_or(usize::MAX),
             repo_bytes: settings.git_host_repo_mb.saturating_mul(1_000_000),
+            prune: settings.git_host_prune,
         })
     }
 }
@@ -108,6 +111,7 @@ impl HostedGit {
         node.max_bundle_bytes = config.push_bytes;
         node.quotas.max_push_bytes = config.push_bytes;
         node.quotas.max_repo_bytes = config.repo_bytes;
+        node.prune_synced = config.prune;
         node.upstream = Some(rngit::serve::upstream(runtime.clone(), identity.clone(), rngit::client::Limits::default()));
         let node = Arc::new(node);
         let activity: rngit::serve::Activity = {
@@ -154,7 +158,7 @@ mod tests {
         settings.git_host_enabled = true;
         let config = GitHostConfig::from_settings(&settings, &paths).unwrap();
         assert_eq!((config.dir.as_path(), config.name.as_deref(), config.access.as_str()), (paths.git_host.as_path(), None, ""));
-        assert_eq!((config.push_bytes, config.repo_bytes), (256_000_000, 1_024_000_000));
+        assert_eq!((config.push_bytes, config.repo_bytes, config.prune), (256_000_000, 1_024_000_000, false));
         settings.git_host_name = Some("  ".into());
         settings.git_host_access = Some("r:all".into());
         settings.git_host_dir = Some(dir.join("repos").display().to_string());

@@ -228,6 +228,9 @@ pub struct Settings {
     /// to on disk.
     pub git_host_push_mb: u64,
     pub git_host_repo_mb: u64,
+    /// Have a sync of a fork or mirror drop the branches and tags its source
+    /// dropped; off by default, as in stock rngit.
+    pub git_host_prune: bool,
     /// Host an RRC hub (rsRRCD's, in `rrc-hub/`).
     pub hub_enabled: bool,
     /// Name the hub announces and welcomes people with; the display name
@@ -329,6 +332,7 @@ impl Default for Settings {
             git_host_access: None,
             git_host_push_mb: 256,
             git_host_repo_mb: 1024,
+            git_host_prune: false,
             hub_enabled: false,
             hub_name: None,
             hub_greeting: None,
@@ -740,6 +744,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "git_host_access",
             "git_host_push_mb",
             "git_host_repo_mb",
+            "git_host_prune",
             "hub_open_rooms",
         ],
     ),
@@ -1223,6 +1228,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "git_host_prune",
+        label: "rngit mirrors drop what sources drop",
+        help: "When a fork or mirror is synced, remove the branches and tags its source no longer has. Off keeps them, as rngit does",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "tui_theme",
         label: "Terminal colours",
         help: "The terminal UI's colours: dark (for a dark terminal), light (for a light one), or basic (16 colours, for terminals without full colour). The web UI picks its own, in its Status page",
@@ -1505,6 +1517,7 @@ impl Settings {
             "git_host_access" => self.git_host_access.clone().unwrap_or_default(),
             "git_host_push_mb" => self.git_host_push_mb.to_string(),
             "git_host_repo_mb" => self.git_host_repo_mb.to_string(),
+            "git_host_prune" => self.git_host_prune.to_string(),
             "hub_enabled" => self.hub_enabled.to_string(),
             "hub_name" => self.hub_name.clone().unwrap_or_default(),
             "hub_greeting" => self.hub_greeting.clone().unwrap_or_default(),
@@ -1628,6 +1641,7 @@ impl Settings {
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
             "git_host_enabled" => self.git_host_enabled = toggle(value).map_err(fail)?,
+            "git_host_prune" => self.git_host_prune = toggle(value).map_err(fail)?,
             "git_host_name" => {
                 if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
                     return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));
