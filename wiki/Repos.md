@@ -8,6 +8,7 @@ repositories, releases and documents made with one show in the other.
 rettui can keep a [copy of a repository on this computer](#a-copy-on-this-computer).
 A copy can be [sent to another repository](#sending-a-copy-to-another-repository).
 Committing isn't in rettui: use `git` with rngit's `git-remote-rns` helper for that.
+rettui can also [host repositories](Hosting-a-Node#rngit-repositories) for others to read.
 
 ## Adding a repository
 

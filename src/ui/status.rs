@@ -66,6 +66,24 @@ fn hosting_hub(app: &App) -> Option<Vec<Span<'static>>> {
     })
 }
 
+/// The rngit repositories hosted here, while that's on.
+fn hosting_git(app: &App) -> Option<Vec<Span<'static>>> {
+    let git = &app.git_host;
+    Some(match &git.status {
+        NodeStatus::Off => return None,
+        NodeStatus::Starting => vec![Span::styled("◌ starting", Style::default().fg(Color::Yellow))],
+        NodeStatus::Failed(e) => vec![Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red))],
+        NodeStatus::Running => {
+            let mut spans = vec![Span::styled("● ", Style::default().fg(Color::Green))];
+            if let Some(url) = git.url() {
+                spans.push(Span::styled(url, Style::default().fg(accent())));
+            }
+            spans.push(Span::raw(format!("  {}", git.summary())));
+            spans
+        }
+    })
+}
+
 /// `settings.json`, a group at a time (their tabs above), one row per
 /// setting, with help for the selected one.
 fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -141,6 +159,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
             12 + u16::from(!steps.is_empty())
                 + u16::from(app.update_available().is_some())
                 + u16::from(app.hub.status != NodeStatus::Off)
+                + u16::from(app.git_host.status != NodeStatus::Off)
                 + u16::from(app.node.status == NodeStatus::Running),
         ),
         Constraint::Max(settings_height),
@@ -196,6 +215,9 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.node.status == NodeStatus::Running {
         let text = format!("{} served (Node tab)", app.node.served.label());
         lines.insert(7, Line::from(vec![label("Hosting a node"), Span::styled("● ", Style::default().fg(Color::Green)), Span::raw(text)]));
+    }
+    if let Some(spans) = hosting_git(app) {
+        lines.insert(7, Line::from([vec![label("Hosting rngit")], spans].concat()));
     }
     if let Some(spans) = hosting_hub(app) {
         lines.insert(7, Line::from([vec![label("Hosting a hub")], spans].concat()));

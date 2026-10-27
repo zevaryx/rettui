@@ -9,6 +9,7 @@
 pub mod autopn;
 pub mod discovered;
 pub mod git;
+pub mod githost;
 pub mod heard;
 pub mod iface_log;
 pub mod mqtt;
@@ -96,6 +97,8 @@ pub enum PeerKind {
 
 #[derive(Debug)]
 pub enum NetCommand {
+    /// Serve rngit repositories (or stop).
+    GitHost(Option<githost::GitHostConfig>),
     Announce,
     /// Write a paper message (answered with [`NetEvent::Paper`]).
     WritePaper {
@@ -454,6 +457,7 @@ pub enum NetEvent {
     Host(HostEvent),
     Pn(PnEvent),
     Hub(HubEvent),
+    GitHost(githost::GitHostEvent),
     /// The actor has shut down (after [`NetCommand::Shutdown`]).
     Stopped,
 }
@@ -493,6 +497,8 @@ pub struct NetOptions {
     pub propagation: Option<PnConfig>,
     /// RRC hub to host from the start, if any.
     pub hub: Option<HubHostConfig>,
+    /// rngit repositories to serve from the start, if any.
+    pub git_host: Option<githost::GitHostConfig>,
     /// The stamp cost asked of senders, and the largest message taken.
     pub stamp_cost: Option<u8>,
     pub max_message_bytes: u64,
@@ -782,6 +788,33 @@ async fn run(
     let mut hub_live = false;
     if hub_config.is_some() {
         launch_hub(hub_config.clone());
+    }
+    // The git node, started and stopped in tasks one at a time, as the hub is.
+    let git_slot: Arc<Mutex<Option<githost::HostedGit>>> = Arc::default();
+    let mut git_config = options.git_host.clone();
+    let launch_git = |config: Option<githost::GitHostConfig>| {
+        let (runtime, slot, ev) = (runtime.clone(), git_slot.clone(), ev.clone());
+        tokio::spawn(async move {
+            let mut slot = slot.lock().await;
+            if let Some(old) = slot.take() {
+                old.stop().await;
+            }
+            let event = match config {
+                None => githost::GitHostEvent::Stopped,
+                Some(config) => match githost::HostedGit::start(&runtime, &config, ev.clone()).await {
+                    Ok(node) => {
+                        let hash = node.hash;
+                        *slot = Some(node);
+                        githost::GitHostEvent::Started { hash }
+                    }
+                    Err(e) => githost::GitHostEvent::Failed(e),
+                },
+            };
+            let _ = ev.send(NetEvent::GitHost(event));
+        });
+    };
+    if git_config.is_some() {
+        launch_git(git_config.clone());
     }
     let mut rrc_sessions = rrc_session::Sessions::default();
     let mut stop = Stop::Quit;
@@ -1181,6 +1214,12 @@ async fn run(
                             launch_pn(config);
                         }
                     }
+                    NetCommand::GitHost(config) => {
+                        if config != git_config {
+                            launch_git(config.clone());
+                            git_config = config;
+                        }
+                    }
                     NetCommand::Hub(config) => {
                         if config != hub_config {
                             // Its name, greeting, announces, who makes rooms:
@@ -1372,6 +1411,9 @@ async fn run(
     rrc_sessions.close_all().await;
     if let Some(hub) = hub_slot.lock().await.take() {
         hub.stop().await;
+    }
+    if let Some(node) = git_slot.lock().await.take() {
+        node.stop().await;
     }
     drop(hosted);
     let quick = Duration::from_millis(500);

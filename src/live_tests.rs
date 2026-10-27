@@ -334,6 +334,86 @@ async fn amys_node_propagation_node_and_hub() {
     let _ = to_ben;
 }
 
+/// Amy hosts a repository; Ben, over Reticulum, reads its branches and
+/// makes a copy, and is turned away from one he isn't allowed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn amys_repositories_read_by_ben() {
+    use crate::app::node::NodeStatus;
+    let repos = std::env::temp_dir().join(format!("rettui-live-gitrepos-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repos);
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    let work = repos.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q", "-b", "main"]);
+    std::fs::write(work.join("README.md"), "hello\n").unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-q", "-m", "first"]);
+    git(&work, &["tag", "v1"]);
+    for name in ["open", "closed"] {
+        let bare = repos.join("served/public").join(format!("{name}.git"));
+        std::fs::create_dir_all(&bare).unwrap();
+        git(&bare, &["init", "-q", "--bare", "-b", "main"]);
+        git(&work, &["push", "-q", bare.to_str().unwrap(), "main", "--tags"]);
+    }
+    // Only the first can be read, by anyone.
+    std::fs::write(repos.join("served/public/open.git.allowed"), "r:all").unwrap();
+    let served = repos.join("served").display().to_string();
+    let (mut amy, mut ben) = pair("githost", |s| {
+        s.git_host_enabled = true;
+        s.git_host_dir = Some(served);
+    })
+    .await;
+    until(&mut amy, &mut ben, "Amy's repositories hosted", |a, _| a.app.git_host.status == NodeStatus::Running).await;
+    let node = hex::encode(amy.app.git_host.address.expect("the node's address"));
+
+    // Ben reads its branches and tags (waiting for the announce that gives him a path).
+    ben.app.open_repo(&format!("rns://{node}/public/open")).unwrap();
+    let wait = Instant::now();
+    loop {
+        until(&mut amy, &mut ben, "Ben's answer", |_, b| {
+            !matches!(b.app.repos.open.as_ref().unwrap().refs, crate::app::repos::Load::Loading)
+        })
+        .await;
+        match &ben.app.repos.open.as_ref().unwrap().refs {
+            crate::app::repos::Load::Ready(refs) => {
+                let names: Vec<&str> = refs.refs.iter().map(|(_, n)| n.as_str()).collect();
+                assert_eq!(names, ["refs/heads/main", "refs/tags/v1"]);
+                break;
+            }
+            // The path may not be known yet: ask again.
+            _ if wait.elapsed() < PATIENCE => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                ben.app.reload_repo();
+            }
+            other => panic!("Ben couldn't read the repository: {other:?}"),
+        }
+    }
+    // A copy of it, which has the history.
+    ben.app.mirror_repo().unwrap();
+    let url = ben.app.repos.open.as_ref().unwrap().url.clone();
+    until(&mut amy, &mut ben, "Ben's copy", |_, b| b.app.copy_refs(&url).is_some()).await;
+    assert_eq!(ben.app.copy_refs(&url).unwrap().refs.len(), 2);
+    // The one nobody may read is not there, as far as Ben can tell.
+    ben.app.open_repo(&format!("rns://{node}/public/closed")).unwrap();
+    until(&mut amy, &mut ben, "Ben refused", |_, b| matches!(b.app.repos.open.as_ref().unwrap().refs, crate::app::repos::Load::Failed(_)))
+        .await;
+    assert!(amy.app.git_host.requests >= 2 && amy.app.git_host.refused >= 1, "{} {}", amy.app.git_host.requests, amy.app.git_host.refused);
+    let _ = std::fs::remove_dir_all(&repos);
+}
+
 /// Run `work`, taking in what Amy's network says meanwhile (as her rettui
 /// would, running).
 async fn while_running<T>(amy: &mut Peer, work: impl std::future::Future<Output = T>) -> T {

@@ -213,6 +213,17 @@ pub struct Settings {
     /// Propagation nodes always peered with: addresses, separated by
     /// commas or spaces.
     pub pn_static_peers: Option<String>,
+    /// Host rngit repositories (Git over Reticulum), read by others with
+    /// `git clone rns://...`.
+    pub git_host_enabled: bool,
+    /// Name the git node announces; none by default, as with stock rngit.
+    pub git_host_name: Option<String>,
+    /// The folder of repositories it serves, as `group/name.git`; `git-host/` in
+    /// the data directory when unset.
+    pub git_host_dir: Option<String>,
+    /// Who may read every repository it serves, as in a `.allowed` file
+    /// (`r:all`); nobody beyond what the repositories' own `.allowed` files say.
+    pub git_host_access: Option<String>,
     /// Host an RRC hub (rsRRCD's, in `rrc-hub/`).
     pub hub_enabled: bool,
     /// Name the hub announces and welcomes people with; the display name
@@ -308,6 +319,10 @@ impl Default for Settings {
             pn_autopeer_depth: lxmf_core::constants::AUTOPEER_MAXDEPTH as u64,
             pn_max_peers: lxmf_core::constants::MAX_PEERS as u64,
             pn_static_peers: None,
+            git_host_enabled: false,
+            git_host_name: None,
+            git_host_dir: None,
+            git_host_access: None,
             hub_enabled: false,
             hub_name: None,
             hub_greeting: None,
@@ -356,6 +371,10 @@ pub struct Paths {
     pub rrc_hub: PathBuf,
     /// The hosted hub's identity (backed up with yours).
     pub rrc_hub_identity: PathBuf,
+    /// Default folder of the repositories the git node serves.
+    pub git_host: PathBuf,
+    /// The git node's identity: its address is in every clone URL.
+    pub git_host_identity: PathBuf,
     /// Map tiles fetched for the web UI's map.
     pub map_tiles: PathBuf,
     /// What the last update check found (see `crate::update`).
@@ -406,6 +425,8 @@ impl Paths {
             propagation: base.join("propagation"),
             rrc_hub: base.join("rrc-hub"),
             rrc_hub_identity: base.join("rrc-hub-identity"),
+            git_host: base.join("git-host"),
+            git_host_identity: base.join("git-host-identity"),
             map_tiles: root.join("map-tiles"),
             update_check: root.join("update-check.json"),
             games: base.join("games.json"),
@@ -552,6 +573,8 @@ impl Field {
             }
             // Which identity's keys are read, and signed with.
             "rngit_identity" => WebAccess::TerminalOnly,
+            // Which folder is served, and to whom.
+            "git_host_dir" | "git_host_access" => WebAccess::TerminalOnly,
             "node_executable_pages" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }
@@ -705,6 +728,10 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "hub_name",
             "hub_greeting",
             "hub_announce_interval_mins",
+            "git_host_enabled",
+            "git_host_name",
+            "git_host_dir",
+            "git_host_access",
             "hub_open_rooms",
         ],
     ),
@@ -1146,6 +1173,34 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "git_host_enabled",
+        label: "Host rngit repositories",
+        help: "Let others clone the repositories in the folder below over Reticulum (git clone rns://<your address>/<group>/<name>.git); who may is set by .allowed files and the access rule",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "git_host_name",
+        label: "rngit node name",
+        help: "Name your rngit node announces; empty announces none, as rngit does",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "git_host_dir",
+        label: "rngit repositories folder",
+        help: "Folder with a folder per group and name.git repositories in each; empty uses git-host/ in the data directory",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "git_host_access",
+        label: "rngit access",
+        help: "Who may read every repository, as in a .allowed file: r:all for anyone, r:<32 hex identity> for one person, several separated by commas; empty leaves it to each repository's .allowed file",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
         key: "tui_theme",
         label: "Terminal colours",
         help: "The terminal UI's colours: dark (for a dark terminal), light (for a light one), or basic (16 colours, for terminals without full colour). The web UI picks its own, in its Status page",
@@ -1422,6 +1477,10 @@ impl Settings {
             "pn_autopeer_depth" => self.pn_autopeer_depth.to_string(),
             "pn_max_peers" => self.pn_max_peers.to_string(),
             "pn_static_peers" => self.pn_static_peers.clone().unwrap_or_default(),
+            "git_host_enabled" => self.git_host_enabled.to_string(),
+            "git_host_name" => self.git_host_name.clone().unwrap_or_default(),
+            "git_host_dir" => self.git_host_dir.clone().unwrap_or_default(),
+            "git_host_access" => self.git_host_access.clone().unwrap_or_default(),
             "hub_enabled" => self.hub_enabled.to_string(),
             "hub_name" => self.hub_name.clone().unwrap_or_default(),
             "hub_greeting" => self.hub_greeting.clone().unwrap_or_default(),
@@ -1544,6 +1603,32 @@ impl Settings {
             "stamp_cost" => self.stamp_cost = number(value, MAX_STAMP_COST).map_err(fail)?,
             "max_message_kb" => self.max_message_kb = number(value, MAX_MESSAGE_KB).map_err(fail)?,
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
+            "git_host_enabled" => self.git_host_enabled = toggle(value).map_err(fail)?,
+            "git_host_name" => {
+                if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
+                    return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));
+                }
+                self.git_host_name = optional(value);
+            }
+            "git_host_dir" => {
+                // Made when the node starts, so it only needs a parent.
+                if let Some(text) = optional(value)
+                    && !expand_home(&text).parent().is_some_and(Path::is_dir)
+                {
+                    return Err(fail(format!("no such parent directory for {text}")));
+                }
+                self.git_host_dir = optional(value);
+            }
+            "git_host_access" => {
+                let rules = optional(value);
+                if let Some(text) = &rules
+                    && (text.len() > 1000
+                        || rngit::server::Rule::parse(text).len() != text.split(['\n', ',']).filter(|r| !r.trim().is_empty()).count())
+                {
+                    return Err(fail("rules like r:all or r:<32 hex>, separated by commas".into()));
+                }
+                self.git_host_access = rules;
+            }
             "hub_enabled" => self.hub_enabled = toggle(value).map_err(fail)?,
             "hub_open_rooms" => self.hub_open_rooms = toggle(value).map_err(fail)?,
             "hub_name" => {

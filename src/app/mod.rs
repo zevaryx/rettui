@@ -27,6 +27,7 @@ pub mod find;
 pub mod format;
 pub mod forward;
 pub mod games;
+pub mod git_host;
 pub mod guide;
 pub mod hub;
 pub mod identities;
@@ -535,6 +536,8 @@ pub struct App {
     pub pn: node::PnHost,
     /// The RRC hub hosted here.
     pub hub: hub::HubHost,
+    /// The rngit repositories hosted here.
+    pub git_host: git_host::GitHost,
     /// The Reticulum config editor.
     pub rns: reticulum::RnsState,
     pub net_state: NetState,
@@ -754,6 +757,7 @@ impl App {
         let pn_hash =
             rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::PROPAGATION_ASPECT, Some(&identity_hash));
         let pn = node::PnHost::new(pn_hash, crate::lxmf::pn::PnConfig::from_settings(&settings, &paths));
+        let git_host = git_host::GitHost::new(&paths, crate::net::githost::GitHostConfig::from_settings(&settings, &paths));
         let hub = hub::HubHost::new(&paths, crate::rrc::host::HubHostConfig::from_settings(&settings, &paths, identity_hash));
         let cache = Cache::new(paths.cache.clone(), std::time::Duration::from_secs(settings.cache_hours * 3600));
         let settings_file = Settings::load(&paths.settings).unwrap_or_else(|_| settings.clone());
@@ -782,6 +786,7 @@ impl App {
             node,
             pn,
             hub,
+            git_host,
             rns: reticulum::RnsState::default(),
             net_state: NetState::Starting,
             lxmf_hash: None,
@@ -1151,6 +1156,7 @@ impl App {
             NetEvent::Host(event) => self.on_host(event),
             NetEvent::Pn(event) => self.on_pn(event),
             NetEvent::Hub(event) => self.on_hub(event),
+            NetEvent::GitHost(event) => self.on_git_host(event),
             NetEvent::StartFailed(e) => {
                 self.log(format!("Network failed: {e}"));
                 self.net_state = NetState::Failed(e);
@@ -1542,6 +1548,7 @@ impl App {
         self.pings.retain(|_, ping| *ping != contacts::PingState::Waiting);
         self.pn.restarting(crate::lxmf::pn::PnConfig::from_settings(&self.settings, &self.paths));
         self.hub.restarting(crate::rrc::host::HubHostConfig::from_settings(&self.settings, &self.paths, self.identity_hash));
+        self.git_host.restarting(crate::net::githost::GitHostConfig::from_settings(&self.settings, &self.paths));
         self.browser.restarted();
         // Deliveries in progress belong to the old stack.
         self.tracks_restarting();

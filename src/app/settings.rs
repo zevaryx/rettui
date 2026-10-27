@@ -59,6 +59,7 @@ impl App {
         let mut node = false;
         let mut pn = false;
         let mut hub = false;
+        let mut git_host = false;
         let mut archive = false;
         for field in &changed {
             match field.key {
@@ -180,6 +181,13 @@ impl App {
                     self.settings.pn_transfer_kb = after.pn_transfer_kb;
                     pn = true;
                 }
+                "git_host_enabled" | "git_host_name" | "git_host_dir" | "git_host_access" => {
+                    self.settings.git_host_enabled = after.git_host_enabled;
+                    self.settings.git_host_name = after.git_host_name.clone();
+                    self.settings.git_host_dir = after.git_host_dir.clone();
+                    self.settings.git_host_access = after.git_host_access.clone();
+                    git_host = true;
+                }
                 "hub_enabled" | "hub_name" | "hub_greeting" | "hub_announce_interval_mins" | "hub_open_rooms" => {
                     self.settings.hub_enabled = after.hub_enabled;
                     self.settings.hub_name = after.hub_name.clone();
@@ -213,6 +221,9 @@ impl App {
             self.apply_pn_settings();
         }
         // The hub hosted here is named after you too, unless it has a name.
+        if git_host {
+            self.apply_git_host_settings();
+        }
         if hub || (renamed && after.hub_enabled) {
             self.apply_hub_settings();
         }
@@ -431,6 +442,9 @@ mod tests {
                     "nomad_files_dir" => dir.join("saved").display().to_string(),
                     "pn_name" => "Hilltop messages".into(),
                     "hub_name" => "Hilltop chat".into(),
+                    "git_host_name" => "Hilltop repositories".into(),
+                    "git_host_dir" => dir.join("repos").display().to_string(),
+                    "git_host_access" => "r:all".into(),
                     "hub_greeting" => "Welcome\\nand hello".into(),
                     "quiet_hours" => "22:00-07:00".into(),
                     "voice_recorder" => "arecord -q -t raw -f S16_LE -c 1 -r 8000".into(),

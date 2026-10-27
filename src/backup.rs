@@ -39,6 +39,8 @@ const KEPT: &[&str] = &[
 const IDENTITY: &str = "identity";
 /// The hosted RRC hub's identity, behind its address: kept with yours.
 const HUB_IDENTITY: &str = "rrc-hub-identity";
+/// The hosted rngit node's identity, behind its address: kept with yours.
+const GIT_IDENTITY: &str = "git-host-identity";
 /// Attachments received and sent.
 const FILES: &[&str] = &["downloads", "uploads"];
 
@@ -63,7 +65,7 @@ struct Manifest {
 fn kept(options: Options) -> Vec<&'static str> {
     let mut names: Vec<&str> = KEPT.to_vec();
     if options.identity {
-        names.extend([IDENTITY, HUB_IDENTITY]);
+        names.extend([IDENTITY, HUB_IDENTITY, GIT_IDENTITY]);
     }
     if options.files {
         names.extend(FILES);
@@ -147,7 +149,7 @@ fn destination(path: &Path) -> Option<PathBuf> {
         return None;
     }
     let first = rel.components().next()?.as_os_str().to_str()?;
-    let allowed = [MANIFEST, IDENTITY, HUB_IDENTITY].contains(&first) || KEPT.contains(&first) || FILES.contains(&first);
+    let allowed = [MANIFEST, IDENTITY, HUB_IDENTITY, GIT_IDENTITY].contains(&first) || KEPT.contains(&first) || FILES.contains(&first);
     allowed.then(|| rel.to_path_buf())
 }
 
@@ -230,7 +232,7 @@ pub fn restore(archive: &Path, base: &Path, force: bool) -> Result<String, Strin
     }
     // Identities are the owner's to read only.
     #[cfg(unix)]
-    for name in [IDENTITY, HUB_IDENTITY] {
+    for name in [IDENTITY, HUB_IDENTITY, GIT_IDENTITY] {
         use std::os::unix::fs::PermissionsExt;
         if base.join(name).is_file() {
             let _ = std::fs::set_permissions(base.join(name), std::fs::Permissions::from_mode(0o600));

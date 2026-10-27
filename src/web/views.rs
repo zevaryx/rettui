@@ -54,12 +54,20 @@ pub fn state(app: &App) -> Value {
         }),
         NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
     };
+    // The rngit repositories hosted here.
+    let git_host = match &app.git_host.status {
+        NodeStatus::Off => json!({ "state": "off" }),
+        NodeStatus::Starting => json!({ "state": "starting" }),
+        NodeStatus::Running => json!({ "state": "running", "url": app.git_host.url(), "summary": app.git_host.summary() }),
+        NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
+    };
     let message_unread = app.unread_messages();
     let (channel_unread, mention) = app.channels.total_unread();
     let online = app.interfaces.iter().filter(|i| i.online).count();
     json!({
         "display_name": app.settings.display_name,
         "icon": icon(app.own_appearance().as_ref()),
+        "git_host": git_host,
         "external_shared_instance": app.uses_external_shared_instance(),
         "wrap_lines": app.settings.wrap_lines,
         // Pages picked from the Browser's list open in new tabs.

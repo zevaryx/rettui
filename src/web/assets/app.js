@@ -7626,6 +7626,10 @@ app.views.status = {
       label('Last sync'), el('span', { text: sync }),
       label('Hosting messages'), hosting,
       ...(s.node_served ? [label('Hosting a node'), el('span', { text: `● ${s.node_served} served (Node)` })] : []),
+      ...(s.git_host.state === 'off' ? [] : [label('Hosting rngit'), s.git_host.state === 'running'
+        ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.git_host.url }),
+          el('span', { class: 'dim', text: `  ${s.git_host.summary}` }))
+        : el('span', { text: s.git_host.state === 'starting' ? 'starting' : `failed: ${s.git_host.error}` })]),
       ...(s.hub.state === 'off' ? [] : [label('Hosting a hub'), s.hub.state === 'running'
         ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.hub.hash }),
           el('span', { class: 'dim', text: `  ${s.hub.people} ${s.hub.people === 1 ? 'person' : 'people'} · ${s.hub.rooms} room${s.hub.rooms === 1 ? '' : 's'} (Hub section)` }))

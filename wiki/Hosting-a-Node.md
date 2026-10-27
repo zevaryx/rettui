@@ -1,6 +1,7 @@
-rettui can host three kinds of node: a NomadNet node (pages and files) and
+rettui can host four kinds of node: a NomadNet node (pages and files) and
 an LXMF propagation node (messages kept for people who are offline), with
-your identity, and an RRC hub (chat rooms), with one of its own.
+your identity, an RRC hub (chat rooms), with one of its own, and an rngit
+node (git repositories, read over Reticulum), with another of its own.
 
 ## NomadNet node
 
@@ -242,3 +243,48 @@ and the other RRC clients can join it as they join rrcd.
   operators of your choosing, the hub's bans) is yours to change there,
   then `/reload`. [Backups](Data-and-Storage#backups) keep the folder, and
   the hub's identity with yours.
+
+## rngit repositories
+
+rettui can serve git repositories to [rngit](https://github.com/zevaryx/rngit-rs)
+clients, so people clone them over Reticulum with `git clone rns://<address>/<group>/<name>.git`
+(the stock `rngit` helper, `git-remote-rns` and rettui's [Repos tab](Repos) all
+work). This part only reads: cloning and fetching. Pushing, creating
+repositories, releases and work documents are answered "not allowed" for now;
+use stock rngit for those.
+
+- **Switching it on:** set "Host rngit repositories" in Settings › Hosting
+  (`git_host_enabled`). It announces itself (`git.repositories`) a few seconds
+  after it starts, then every six hours. Status shows its address, as
+  `rns://<address>`, and how many requests it has answered and refused.
+- **Its repositories:** a folder with a folder for each group and
+  `name.git` repositories in each (`git-host/` in the data directory, or the
+  folder in "rngit repositories folder", `git_host_dir`, which only the
+  terminal UI can set). Make them with `git init --bare` or `git clone --bare`.
+  [Backups](Data-and-Storage#backups) keep the node's identity, not the
+  repositories.
+- **Its own identity:** like the hub, the node has an identity of its own
+  (`git-host-identity` in the data directory), made the first time it starts,
+  so its address stays the same. Back it up with yours.
+- **Who may read:** nobody does until you say so. Put a `.allowed` file beside
+  a repository (`demo.git.allowed`), or a `group.allowed` in a group's folder,
+  with rules like `r:all` (anyone), `r:<32 hex identity>` (one person) or
+  `adm:<32 hex>`, one on each line or separated by commas. "rngit access"
+  (`git_host_access`, terminal only) gives the same rules to every repository.
+  A repository someone may not read looks like one that isn't there. A line
+  that isn't a rule is skipped, so a typo can only take access away. Anyone
+  who doesn't identify themselves is `d7db22f63b453c23bb0688dde565b7c1`, as in
+  rngit.
+- **Limits:** a clone's bundle is built in memory and sent in one piece, up to
+  256 MB, and building one stops after two minutes. A request over 1 MB is
+  refused. Recent bundles are kept for ten minutes (64 MB in all), so the next
+  clone of the same thing is quick; a branch that moves is a new bundle.
+  rettui serves one request at a time, so a big clone makes the next client
+  wait.
+- **Security:** the web UI can switch it on and off, and name it, but can't pick
+  the folder or who may read. Nothing in a repository is run: hooks are never
+  called. Names that aren't plain folder names (`..`, a leading dot, a path)
+  are refused.
+
+`rngit serve DIR [RULES]` of the `rngit` command serves a folder the same way
+without rettui.

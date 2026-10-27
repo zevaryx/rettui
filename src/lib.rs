@@ -381,6 +381,7 @@ fn switched(data_dir: &Option<PathBuf>, rns_config: Option<String>) -> Result<(S
 /// Network options for an interactive session (the TUI or the web UI).
 fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::identity::Identity) -> net::NetOptions {
     let hub = rrc::host::HubHostConfig::from_settings(settings, paths, identity.hash);
+    let git_host = net::githost::GitHostConfig::from_settings(settings, paths);
     net::NetOptions {
         rns_config: settings.rns_config.clone(),
         identity,
@@ -394,6 +395,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         host: nomad::host::HostConfig::from_settings(settings, paths),
         propagation: lxmf::pn::PnConfig::from_settings(settings, paths),
         hub,
+        git_host,
         stamp_cost: lxmf::policy::stamp_cost(settings.stamp_cost),
         max_message_bytes: settings.max_message_kb * 1000,
         tickets: paths.tickets.clone(),
