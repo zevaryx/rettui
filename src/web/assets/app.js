@@ -4550,7 +4550,7 @@ app.views.messages = {
           e.target.disabled = false;
         } })),
       contact.trust === 'blocked' ? null : el('div', { class: 'row trust' },
-        el('span', { class: 'grow dim', text: 'Sideband commands:' }),
+        el('span', { class: 'grow dim row-label', text: 'Sideband commands:' }),
         el('button', { text: '📍 Ask where they are', title: 'Ask for their location, as Sideband does: Sideband answers with it (if it\'s set to), and it goes on the map',
           onclick: async () => {
             if (await attempt(() => api.post(`/conversations/${key}/command`, { command: 'location' }), 'Asked where they are: their answer goes on the map')) loadNow();

@@ -45,7 +45,7 @@
   --selected: #2a2a3a;
   --border: #3b3b4f;
   --text: #dcdce4;
-  --dim: #7a7a8c;
+  --dim: #9a9aae;
   --accent: #4fd6e0;
   --green: #3fcf8e;
   --yellow: #f2d45c;
@@ -425,7 +425,10 @@ header .avatar.icon { font-size: 17px; }
 .stranger { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px; margin-bottom: 10px; border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: 6px; font-size: 13px; }
 .unknown-mark { color: var(--yellow); font-weight: 700; }
 .blocked-mark { color: var(--red); }
-.dialog .trust { align-items: center; gap: 6px; font-size: 13px; }
+.dialog .trust { align-items: center; gap: 6px; font-size: 13px; flex-wrap: wrap; }
+/* A label that heads a row of buttons gets a line to itself on a narrow screen, not a sliver beside them. */
+.dialog .trust > .row-label { flex: 1 1 auto; }
+@media (max-width: 600px) { .dialog .trust > .row-label { flex-basis: 100%; } }
 
 /* Games (LRGP): the list of games with someone, and a game's board. */
 .dialog.games-dialog { width: min(480px, 100%); }
