@@ -19,6 +19,7 @@ use rngit::RepoUrl;
 use rngit::client::{ReleaseDetail, ReleaseList, WorkKind, WorkList, WorkScope, WorkSummary};
 
 use super::{App, PromptKind, Tab, now};
+use crate::app::browser::Location;
 use crate::net::git::{Doc, GitReply, GitRequest, Mirrored, Pushed};
 use crate::net::heard::{Heard, Kind};
 use crate::net::{Hash, NetCommand};
@@ -431,6 +432,8 @@ pub enum RepoPrompt {
     },
     ConfirmDeleteRelease(String),
     ConfirmRemoveMirror(String),
+    /// Copy a repository a link opened.
+    ConfirmCopyLinked,
     /// Where to send the copy.
     PushTo,
     /// How: what to do with branches that differ there.
@@ -889,7 +892,11 @@ impl App {
     pub(crate) fn repos_key(&mut self, key: KeyEvent) {
         match (self.repos.focus, key.code) {
             (_, KeyCode::Char('n')) => {
-                self.open_prompt(PromptKind::Repo(RepoPrompt::Add), "Add a repository (rns://node/group/repo)", "rns://")
+                // On a node heard, the prompt starts with its address.
+                let selected = self.repos.side.selected().unwrap_or(0);
+                let node = selected.checked_sub(self.store.repos.len()).and_then(|i| self.repos.nodes.get(i));
+                let start = node.map_or_else(|| "rns://".to_string(), |n| format!("rns://{}/", hex::encode(n.hash)));
+                self.open_prompt(PromptKind::Repo(RepoPrompt::Add), "Add a repository (rns://node/group/repo)", &start)
             }
             (ReposFocus::List, KeyCode::Down | KeyCode::Char('j')) => self.move_repos_side(1),
             (ReposFocus::List, KeyCode::Up | KeyCode::Char('k')) => self.move_repos_side(-1),
@@ -918,8 +925,25 @@ impl App {
         }
     }
 
-    /// Enter on the left: a repository opens; a node asks which of its
-    /// repositories (a node doesn't list them).
+    /// Follow a link to a repository: it opens, and if it hasn't been copied
+    /// to this computer, asks whether to copy it.
+    pub fn follow_repo_link(&mut self, url: &str) {
+        if let Err(e) = self.open_repo(url) {
+            return self.warn(e);
+        }
+        let kept = self.repos.open.as_ref().map(|o| o.url.to_string());
+        if kept.is_some_and(|kept| !self.store.repos.iter().any(|r| r.url == kept && r.mirror.is_some())) {
+            self.open_prompt(
+                PromptKind::Repo(RepoPrompt::ConfirmCopyLinked),
+                "Copy it to this computer, to read or clone from? Nothing on the node changes. Type y",
+                "",
+            );
+        }
+    }
+
+    /// Enter on the left: a repository opens; a node opens in the Browser,
+    /// where its pages are (a node doesn't list its repositories: `n` adds
+    /// one by name).
     fn open_side(&mut self) {
         let Some(selected) = self.repos.side.selected() else { return };
         if let Some(repo) = self.store.repos.get(selected).cloned() {
@@ -927,8 +951,7 @@ impl App {
                 self.warn(e);
             }
         } else if let Some(node) = self.repos.nodes.get(selected - self.store.repos.len()).cloned() {
-            let start = format!("rns://{}/", hex::encode(node.hash));
-            self.open_prompt(PromptKind::Repo(RepoPrompt::Add), "Which repository on this node? (rns://node/group/repo)", &start);
+            self.navigate(Location { node: node.hash, path: "/page/index.mu".into(), fields: Default::default() });
         }
     }
 
@@ -1133,6 +1156,7 @@ impl App {
                 Some(how) => self.push_copy(&to, how).map(drop),
                 None => Err("Type add, overwrite or same".into()),
             },
+            RepoPrompt::ConfirmCopyLinked if yes => self.mirror_repo().map(drop),
             RepoPrompt::ConfirmRemoveMirror(url) if yes => self.remove_mirror(&url).map(|()| self.notify("Deleted the copy")),
             _ => Ok(()),
         };
@@ -1383,12 +1407,20 @@ mod tests {
     fn nodes_links_and_the_list() {
         let mut tui = Tui::with("repos-list", |s| s.rngit_identity = true);
         tui.tab(Tab::Repos);
-        // An rngit node heard: listed, and Enter asks which repository.
+        // An rngit node heard: listed. Enter opens it in the Browser; n adds a repository on it.
         let hash = [7; 16];
         let heard = Heard { hash, kind: Kind::Git, aspect: Some(crate::net::git::GIT_ASPECT), name: None, hops: 2 };
         tui.app.on_net(NetEvent::Heard(heard));
         assert!(tui.draw().contains("node 07070707"));
-        tui.key(KeyCode::Enter).answer("public/site");
+        tui.key(KeyCode::Enter);
+        assert_eq!(tui.app.tab, Tab::Browser);
+        let asked = tui.sent();
+        assert!(
+            asked.iter().any(|c| matches!(c, NetCommand::Fetch { node, path, .. } if *node == hash && path == "/page/index.mu")),
+            "{asked:?}"
+        );
+        tui.tab(Tab::Repos);
+        tui.key(KeyCode::Char('n')).answer("public/site");
         let url = format!("rns://{}/public/site", hex::encode(hash));
         assert_eq!(tui.app.store.repos[0].url, url);
         // Asked as rngit's own identity, as the settings say.
@@ -1396,10 +1428,15 @@ mod tests {
         assert!(sent.iter().all(|c| matches!(c, NetCommand::Git { identity_file: Some(_), .. })));
         assert!(!sent.is_empty());
 
-        // A link to one opens it.
+        // A link to one opens it, and asks whether to copy it; anything but y leaves it be.
         tui.app.open_address(&format!("RNS://{NODE}/public/demo"));
         assert_eq!(tui.app.tab, Tab::Repos);
         assert_eq!(tui.app.store.repos.len(), 2);
+        assert!(tui.draw().contains("Copy it to this computer"));
+        tui.sent();
+        tui.answer("n");
+        assert!(!tui.sent().iter().any(|c| matches!(c, NetCommand::Git { request: GitRequest::Mirror { .. }, .. })));
+        // Once copied, a link doesn't ask again.
         tui.app.open_address("rns://nothex/a/b");
         assert!(tui.said().contains("rns://<node>/<group>/<repo>"), "{}", tui.said());
 
@@ -1570,6 +1607,32 @@ mod tests {
         assert!(tui.said().contains("Sending the copy to public/elsewhere failed"), "{}", tui.said());
         tui.key(KeyCode::Char('u')).answer(&format!("{NODE}/public/elsewhere")).key(KeyCode::Enter);
         assert_eq!(tui.sent().len(), 1);
+    }
+
+    #[test]
+    fn a_link_to_a_repository_offers_a_copy_once() {
+        let mut tui = Tui::new("repos-link-copy");
+        let source = Source::new(&tui.dir.join("source"));
+        tui.tab(Tab::Repos);
+        let link = format!("rns://{NODE}/public/demo");
+        tui.app.open_address(&link);
+        tui.sent();
+        assert!(tui.draw().contains("Copy it to this computer"));
+        tui.answer("y");
+        let sent = tui.sent();
+        assert!(matches!(&sent[..], [NetCommand::Git { request: GitRequest::Mirror { .. }, .. }]), "{sent:?}");
+        for command in sent {
+            let NetCommand::Git { id, repo, request, .. } = command else { unreachable!() };
+            let result = answer(&Arc::new(source.node()), &repo, request);
+            tui.app.on_net(NetEvent::Git { id, result });
+        }
+        assert!(tui.app.store.repos[0].mirror.is_some());
+        // Copied already: the link just opens it.
+        tui.app.open_address(&link);
+        assert!(!tui.draw().contains("Copy it to this computer"));
+        // And a link that isn't one says so, without asking anything.
+        tui.app.open_address("rns://nothex/a/b");
+        assert!(!tui.draw().contains("Copy it to this computer"));
     }
 
     #[test]

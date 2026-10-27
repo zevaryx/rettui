@@ -1941,6 +1941,22 @@ function linkNode(text, url) {
   } });
 }
 
+// Beside a link to a repository: copy it to this computer, after asking.
+function copyLink(url) {
+  return el('a', { class: 'chat-link', href: '#', text: '⇩ copy', title: 'Copy the repository to this computer', onclick: async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!await ask(`Copy ${url} to this computer?\nYou can read it or clone from it. Nothing on the node changes.`, { title: 'Copy the repository', yes: 'Copy' })) return;
+    toast('Copying…');
+    try {
+      const done = await api.post('/repos/mirror', { url });
+      toast(done.said || 'Copied');
+    } catch (err) {
+      toast(`Copying failed: ${err.message}`, true);
+    }
+  } });
+}
+
 // Plain text with the links in it (see findLinks).
 function linked(text) {
   const out = [];
@@ -1948,6 +1964,7 @@ function linked(text) {
   for (const [start, end, url] of findLinks(text)) {
     if (start > at) out.push(text.slice(at, start));
     out.push(linkNode(text.slice(start, end), url));
+    if (url.startsWith('rns://')) out.push(' ', copyLink(url));
     at = end;
   }
   if (at < text.length) out.push(text.slice(at));
@@ -8160,9 +8177,13 @@ app.views.repos = {
       if (state.nodes.length) {
         items.push(el('div', { class: 'list-heading dim', text: 'rngit nodes heard' }));
         for (const node of state.nodes) {
-          items.push(el('div', { class: 'list-item', title: 'A node doesn\'t list its repositories: add one by name', onclick: () => this.add(`rns://${node.address}/`) },
+          items.push(el('div', { class: 'list-item', title: 'Open the node in the Browser', onclick: () => browse(`${node.address}:/page/index.mu`) },
             el('span', { class: 'main' }, el('div', { class: 'name' }, el('span', { class: 'tag git', text: 'GIT' }), ' ', node.name || `node ${node.address.slice(0, 8)}`),
-              el('div', { class: 'sub', text: `${node.hops} ${node.hops === 1 ? 'hop' : 'hops'}, ${ago(node.at)} ago` }))));
+              el('div', { class: 'sub', text: `${node.hops} ${node.hops === 1 ? 'hop' : 'hops'}, ${ago(node.at)} ago` })),
+            el('button', { text: '+', title: 'Add a repository on this node (a node doesn\'t list them: add one by name)', onclick: (e) => {
+              e.stopPropagation();
+              this.add(`rns://${node.address}/`);
+            } })));
         }
       }
       this.list.replaceChildren(...(items.length ? items

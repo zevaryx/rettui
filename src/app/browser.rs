@@ -570,7 +570,7 @@ impl App {
             return self.open_rrc_link(&url);
         }
         if url.starts_with("rns://") {
-            return self.open_repo(&url).unwrap_or_else(|e| self.warn(e));
+            return self.follow_repo_link(&url);
         }
         if url.starts_with("lxma://") {
             return match self.add_contact(&url) {
@@ -691,7 +691,7 @@ impl App {
             return;
         }
         if url.starts_with("rns://") {
-            return self.open_repo(url).unwrap_or_else(|e| self.warn(e));
+            return self.follow_repo_link(url);
         }
         if let Some(hash) = url.strip_prefix("lxmf@").or_else(|| url.strip_prefix("lxmf://")) {
             match parse_hash(hash) {

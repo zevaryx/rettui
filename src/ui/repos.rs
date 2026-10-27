@@ -74,7 +74,7 @@ fn draw_side(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_repo(frame: &mut Frame, app: &mut App, area: Rect) {
     let Some(open) = app.repos.open.clone() else {
         let repo_block = block("Repository", false);
-        let hint = "Pick a repository on the left and press Enter, or n to add one. A node doesn't list its repositories: you need its URL, from its owner or its NomadNet page.";
+        let hint = "Pick a repository on the left and press Enter, or n to add one. A node doesn't list its repositories: Enter on one opens it in the Browser, where its owner may say which it has.";
         frame.render_widget(Paragraph::new(hint).style(Style::default().fg(dim())).wrap(Wrap { trim: true }).block(repo_block), area);
         app.regions.repo_panes.clear();
         app.regions.repo_list = Rect::default();

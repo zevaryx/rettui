@@ -19,11 +19,16 @@ end is optional).
   `rns://` can be left out.
 - An `rns://` link in a message, a channel or a NomadNet page opens the
   repository in the Repos tab, as does typing it into the Browser's
-  address bar (`g`).
+  address bar (`g`). In the terminal it then asks whether to copy the
+  repository to this computer (type `y`; it asks only if there is no copy yet).
+  In the web UI, a link in a message or channel has a **⇩ copy** link beside
+  it, which asks before it copies.
 - rngit nodes that announce are listed under the repositories you keep, as
   **⌂ node** and its address, nearest first (in the web UI, under
   *rngit nodes heard*). A node can't list what it hosts, so opening one
-  asks for the group and repository there.
+  (`Enter`, or a click in the web UI) shows the node's pages in the
+  [Browser](NomadNet-Browsing). To add a repository on it, press `n` with the
+  node picked (**+** beside it in the web UI): the address starts with the node's.
 - `D` (**×** in the web UI) removes a repository from the list (on the
   node, nothing changes), and `y` copies its URL.
 
