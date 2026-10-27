@@ -274,6 +274,10 @@ class MainActivity : Activity() {
                     recreate()
                 }
             })
+            addView(Button(context).apply {
+                text = getString(R.string.close_app)
+                setOnClickListener { finishAndRemoveTask() }
+            })
             // A backup can be restored, or the identity saved, even with
             // rettui failing to start.
             addView(Button(context).apply {

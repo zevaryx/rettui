@@ -11,6 +11,7 @@
     <string name="restart">Start again</string>
     <string name="stopped_by_you">rettui is stopped. Messages don\'t arrive until it\'s started again.</string>
     <string name="start">Start</string>
+    <string name="close_app">Close the app</string>
     <string name="backups">Identity and backups</string>
     <string name="identity">Your identity</string>
     <string name="identity_note">The private key behind your address. Lost, your address is gone for good; whoever has a copy can pose as you and read what\'s sent to you. Keep copies somewhere private.</string>
