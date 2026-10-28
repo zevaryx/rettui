@@ -220,6 +220,8 @@ pub enum PromptKind {
     },
     /// Hosted node pages, and the pictures and files with them.
     NewPage,
+    /// A file from this computer added to the node, without a page.
+    UploadToNode,
     RenamePage(crate::nomad::pages::Root, String),
     ConfirmDeletePage(crate::nomad::pages::Root, String),
     ConfirmResetNodeStats,
@@ -1494,6 +1496,7 @@ impl App {
                     self.submit_page_prompt(kind, &text);
                 }
             }
+            PromptKind::UploadToNode => self.node_upload_path(&text, false),
             // Empty moves it to the top.
             PromptKind::MoveNodeItem(root, path) => self.submit_move(root, &path, &text),
             PromptKind::SpeedPeer => self.submit_speed_prompt(&text),

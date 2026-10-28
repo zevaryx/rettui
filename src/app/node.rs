@@ -659,9 +659,10 @@ impl App {
         }
     }
 
-    /// The editor's Upload: a file from this computer added to the node,
-    /// and shown or linked to where the cursor is.
-    fn node_upload_path(&mut self, answer: &str) {
+    /// A file from this computer added to the node: from the editor's
+    /// Upload (`into_page`), shown or linked to where the cursor is; from
+    /// the list's `u`, only added.
+    pub(super) fn node_upload_path(&mut self, answer: &str, into_page: bool) {
         let path = super::files::path_from_input(answer);
         if answer.trim().is_empty() {
             return;
@@ -679,13 +680,27 @@ impl App {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         match self.node_add_file(&name, &data) {
             Ok(added) => {
-                if let Some(editor) = &mut self.node.editor {
+                let mut placed = false;
+                if into_page && let Some(editor) = &mut self.node.editor {
                     format::added(&mut editor.area, &added.address, added.image);
                     self.node.editing = true;
+                    placed = true;
                 }
-                let how = if added.image { "shown in the page" } else { "linked to download" };
+                let how = match (placed, added.image) {
+                    (true, true) => "shown in the page",
+                    (true, false) => "linked to download",
+                    (false, true) => "a picture for pages to show",
+                    (false, false) => "a file to download",
+                };
                 let smaller = if added.shrunk { ", made smaller" } else { "" };
                 self.confirm(format!("Added {}{smaller}: {how}", added.address.trim_start_matches(':')));
+                if !placed {
+                    let (root, path) = match added.address.split_once(":/media/") {
+                        Some((_, path)) => (Root::Pages, path),
+                        None => (Root::Files, added.address.trim_start_matches(":/file/")),
+                    };
+                    self.select_item(root, path);
+                }
             }
             Err(e) => self.warn(e),
         }
@@ -742,7 +757,7 @@ impl App {
 
     pub(super) fn node_format_answer(&mut self, action: format::Action, answer: &str) {
         if action == format::Action::Upload {
-            return self.node_upload_path(answer);
+            return self.node_upload_path(answer, true);
         }
         let Some(editor) = &mut self.node.editor else { return };
         self.node.editing = true;
@@ -793,6 +808,11 @@ impl App {
                 };
                 self.open_prompt(PromptKind::NewPage, "New page (e.g. about or blog/first)", &folder);
             }
+            KeyCode::Char('u') => self.open_prompt(
+                PromptKind::UploadToNode,
+                "File to add to the node (its path): a picture goes with the pages, any other file is one to download",
+                "",
+            ),
             KeyCode::Char('r') => {
                 if let Some((root, path, false)) = self.selected_item() {
                     self.open_prompt(PromptKind::RenamePage(root, path.clone()), &format!("Rename {path} to (links to it follow)"), &path);
@@ -1039,6 +1059,41 @@ mod tests {
         assert_eq!(std::fs::read_to_string(node.join("files/notes.txt")).unwrap(), "hello");
         let files: Vec<&str> = app.node.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(files, ["notes-2.txt", "notes.txt"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_uploaded_from_the_list_are_added_without_a_page() {
+        let (mut app, dir) = editing("upload-list");
+        let node = HostConfig::dir(&app.settings, &app.paths);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, "hello").unwrap();
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
+        assert!(matches!(app.prompt.as_ref().map(|p| &p.kind), Some(PromptKind::UploadToNode)));
+        type_text(&mut app, &notes.display().to_string());
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(std::fs::read_to_string(node.join("files/notes.txt")).unwrap(), "hello");
+        // The open page is left as it was, and what was added is picked.
+        assert!(!page_text(&app).contains("notes.txt"), "{}", page_text(&app));
+        assert!(!app.node.editing);
+        assert_eq!(app.selected_item(), Some((Root::Files, "notes.txt".into(), false)));
+
+        let picture = dir.join("dot.png");
+        std::fs::write(&picture, photo(20, 20)).unwrap();
+        key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
+        type_text(&mut app, &picture.display().to_string());
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(node.join("pages/images/dot.png").exists() || node.join("pages/images/dot.jpg").exists());
+        assert!(matches!(app.selected_item(), Some((Root::Pages, path, false)) if path.starts_with("images/dot.")));
+
+        // Nothing typed adds nothing; a missing file says so.
+        key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        key(&mut app, KeyCode::Char('u'), KeyModifiers::NONE);
+        type_text(&mut app, &dir.join("missing.txt").display().to_string());
+        key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.node.files.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

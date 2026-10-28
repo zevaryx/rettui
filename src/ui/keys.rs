@@ -579,6 +579,7 @@ pub fn keys(app: &App) -> Keys {
             &[
                 ("Enter", "edit"),
                 ("n", "new"),
+                ("u", "upload"),
                 ("r", "rename"),
                 ("m", "move"),
                 ("x", "delete"),

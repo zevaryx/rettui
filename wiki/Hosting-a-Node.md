@@ -59,7 +59,11 @@ or the folder set in `node_dir`.
   linked for visitors to download
   (`` `[name`:/file/name] ``), up to 32 MB. Names are made safe (spaces
   become `-`), and something already there is never replaced: the new one
-  gets `-2`, `-3`... on its name.
+  gets `-2`, `-3`... on its name. To add a picture or file without putting
+  it in a page, press `u` in the TUI's list (it asks for the path), or
+  **+ New** › **Upload a file** in the web UI, whose **+ New** asks whether
+  to make a page or upload files. Pages link to it later by its address
+  (**Copy its address** in its ⋯ menu).
 - **Folders:** the list shows `pages/` (pages, and the pictures they show)
   and `files/`, each with its folders. In the TUI, `n` makes a page in the
   folder picked, `r` renames what's picked, `m` moves it to a folder of its

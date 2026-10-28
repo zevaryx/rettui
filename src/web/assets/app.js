@@ -6847,7 +6847,7 @@ app.views.node = {
           el('div', { class: 'row card-actions' }, this.hostButton,
             el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/node/announce'), 'Announcing the node') }))),
         el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Pages and files' }),
-          el('button', { text: '+ New', title: 'A new page', onclick: () => this.create() })), this.list)),
+          el('button', { text: '+ New', title: 'A new page, or a file uploaded', onclick: () => this.create() })), this.list)),
       el('section', { class: 'panel grow pane-main' },
         el('header', {}, this.title, this.buttons),
         this.banner,
@@ -7031,7 +7031,7 @@ app.views.node = {
     else rows.push(el('div', { class: 'empty', text: 'No pages yet. Create one with + New.' }));
     rows.push(folderRow('files', '', 0));
     if (node.files.length) tree('files', node.files, '', 1);
-    else rows.push(el('div', { class: 'empty', text: 'No files to download yet: Upload, in a page\'s formatting bar, adds them.' }));
+    else rows.push(el('div', { class: 'empty', text: 'No files to download yet: + New uploads them, as does Upload in a page\'s formatting bar.' }));
     this.list.replaceChildren(...rows);
   },
 
@@ -7116,26 +7116,29 @@ app.views.node = {
     this.changed();
   },
 
-  pickFiles() {
+  pickFiles(intoPage = true) {
     const input = el('input', { type: 'file', multiple: true, class: 'hidden' });
     input.addEventListener('change', () => {
-      this.uploadFiles([...input.files]);
+      this.uploadFiles([...input.files], intoPage);
       input.remove();
     });
     document.body.append(input);
     input.click();
   },
 
-  // Files added to the node, each shown or linked to in the open page.
-  async uploadFiles(files) {
+  // Files added to the node, each shown or linked to in the open page
+  // (`intoPage`), or only added.
+  async uploadFiles(files, intoPage = true) {
     let placed = 0;
     for (const file of files) {
       const added = await attempt(() => upload('/node/upload?name=' + encodeURIComponent(file.name), file));
       if (!added) continue;
+      const inPage = intoPage && this.open && !this.open.executable;
       // Several: one to a line.
-      if (this.open && !this.open.executable) this.insertAddress(added.address, added.image, placed++ > 0);
+      if (inPage) this.insertAddress(added.address, added.image, placed++ > 0);
       const where = added.address.replace(/^:/, '');
-      toast(`Added ${where}${added.shrunk ? ', made smaller' : ''}: ${added.image ? 'shown in the page' : 'linked to download'}`);
+      const how = inPage ? (added.image ? 'shown in the page' : 'linked to download') : (added.image ? 'a picture for pages to show' : 'a file to download');
+      toast(`Added ${where}${added.shrunk ? ', made smaller' : ''}: ${how}`);
     }
     this.update();
   },
@@ -7334,7 +7337,12 @@ app.views.node = {
     toast(this.node?.status === 'running' ? `Saved ${open.path} (live)` : `Saved ${open.path}`);
   },
 
+  // A new page, or files from this device added to the node without one.
   async create() {
+    const what = await choose('New', [{ text: 'New page (.mu)', value: 'page' }, { text: 'Upload a file', value: 'file' }],
+      { text: 'Write a new Micron page, or add files from this device: a picture goes with the pages, anything else is a file to download.' });
+    if (what === 'file') return this.pickFiles(false);
+    if (what !== 'page') return;
     const result = await askText('New page', { label: 'Its name, like about, or blog/first', ok: 'Create', act: (name) => api.post('/node/pages', { name }) });
     if (result) this.load(result.path);
   },
