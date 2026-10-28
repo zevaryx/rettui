@@ -7405,7 +7405,6 @@ app.views.status = {
   markDirty() {
     const changes = this.changes();
     const dirty = Object.keys(changes).length > 0;
-    this.updateRadio();
     this.saveButton.disabled = !dirty;
     this.revertButton.disabled = !dirty;
     for (const field of this.fields || []) {
