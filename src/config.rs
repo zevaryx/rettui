@@ -583,8 +583,8 @@ impl Field {
             }
             // Which identity's keys are read, and signed with.
             "rngit_identity" => WebAccess::TerminalOnly,
-            // Which folder is served, and to whom.
-            "git_host_dir" | "git_host_access" => WebAccess::TerminalOnly,
+            // Which folder is served.
+            "git_host_dir" => WebAccess::TerminalOnly,
             "node_executable_pages" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }

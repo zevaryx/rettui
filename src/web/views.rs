@@ -855,7 +855,7 @@ fn hosted(app: &App) -> Value {
                     json!({ "kind": kind, "source": f.source, "synced": f.synced })
                 });
                 let name = format!("{}/{}", h.group, h.name.strip_suffix(".git").unwrap_or(&h.name));
-                json!({ "name": name, "url": app.hosted_url(h), "bytes": h.bytes, "following": following })
+                json!({ "name": name, "url": app.hosted_url(h), "bytes": h.bytes, "following": following, "open": h.open })
             })
             .collect()
     };

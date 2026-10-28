@@ -29,6 +29,7 @@ pub mod forward;
 pub mod games;
 pub mod git_host;
 pub mod guide;
+pub mod hosted_access;
 pub mod hub;
 pub mod identities;
 pub mod identity;
@@ -383,6 +384,10 @@ pub struct Regions {
     pub node_preview: Rect,
     /// Who may see what's selected (`w`).
     pub node_allowed: Rect,
+    /// Repos tab: the table of who may use a hosted repository, and its cells
+    /// (a row and a column each).
+    pub hosted_access: Rect,
+    pub hosted_access_cells: Vec<(Rect, usize, usize)>,
     /// The page editor's formatting ribbon: each button and its action.
     pub node_ribbon: Vec<(Rect, format::Action)>,
     /// Reticulum tab: sections, options, the text editor and the picker.

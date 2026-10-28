@@ -1809,3 +1809,66 @@ async fn the_owner_mirrors_and_manages_the_repositories_hosted_here() {
     let ssh = web.post("/api/hosted/follow", json!({ "source": "ssh://example.com/x.git", "kind": "fork", "name": "a/b" })).await;
     assert!(ssh.error().contains("Prohibited source URL"), "{}", ssh.text());
 }
+
+#[tokio::test]
+async fn the_owner_says_who_may_use_what_is_hosted_here() {
+    use crate::config::Settings;
+    use crate::net::githost::{GitHostEvent, owner_tests};
+    let web =
+        TestWeb::start_with("hosted-access", Settings { git_host_enabled: true, ..Settings::default() }, crate::store::Store::default());
+    owner_tests::source(&web.dir, "public", "demo");
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16] }))).await;
+    web.post("/api/hosted/new", json!({ "name": "team/empty" })).await;
+    // Nobody may clone it yet: the list says so.
+    assert_eq!(web.get("/api/repos").await.json()["hosted"]["repos"][0]["open"], false);
+
+    let table = web.get("/api/hosted/access?name=team/empty").await.json();
+    assert_eq!(table["whose"], "team/empty");
+    let perms: Vec<_> = table["perms"].as_array().unwrap().iter().map(|p| p["word"].as_str().unwrap().to_string()).collect();
+    assert_eq!(perms, ["r", "w", "rel", "i", "p", "s", "adm"]);
+    assert_eq!((table["rows"][0]["who"].as_str(), table["rows"][1]["who"].as_str()), (Some("all"), Some("none")));
+    assert!(table["fallback"].as_str().unwrap().contains("the group's"));
+
+    // Someone known only by identity; an LXMF address nobody has heard isn't one.
+    let ben = "0123456789abcdef0123456789abcdef";
+    let found = web.get(&format!("/api/hosted/person?text={ben}")).await.json();
+    assert_eq!((found["who"].as_str(), found["key"].is_null()), (Some(ben), true));
+    assert_eq!(web.get("/api/hosted/person?text=ben").await.status, StatusCode::BAD_REQUEST);
+
+    let rows = json!([
+        { "who": "all", "ticks": [true] },
+        { "who": "none", "ticks": [] },
+        { "who": ben, "ticks": [false, true, false, false, false, false, true] },
+    ]);
+    let saved = web.post("/api/hosted/access", json!({ "name": "team/empty", "rows": rows })).await;
+    assert_eq!(saved.json()["said"], "Saved who may use team/empty");
+    let allowed = web.with(|app| app.paths.git_host.join("team/empty.git.allowed")).await;
+    assert_eq!(std::fs::read_to_string(&allowed).unwrap(), format!("r:all\nw:{ben}\nadm:{ben}"));
+    assert_eq!(web.get("/api/repos").await.json()["hosted"]["repos"][0]["open"], true);
+    let table = web.get("/api/hosted/access?name=team/empty").await.json();
+    let row = table["rows"].as_array().unwrap().iter().find(|r| r["who"] == ben).unwrap().clone();
+    assert_eq!(row["ticks"], json!([false, true, false, false, false, false, true]));
+
+    // A group's table has Create; the setting for every repository is the web UI's too.
+    let group = web.get("/api/hosted/access?group=team").await.json();
+    assert_eq!(group["perms"].as_array().unwrap().len(), 8);
+    web.post(
+        "/api/hosted/access",
+        json!({ "group": "team", "rows": [{ "who": "all", "ticks": [false, false, false, false, false, false, false, true] }] }),
+    )
+    .await;
+    let team = web.with(|app| app.paths.git_host.join("team.allowed")).await;
+    assert_eq!(std::fs::read_to_string(team).unwrap(), "c:all");
+    let set = web.post("/api/settings", json!({ "values": { "git_host_access": "r:all" } })).await;
+    assert_eq!(set.status, StatusCode::OK, "{}", set.text());
+
+    // Nonsense is refused.
+    for body in [
+        json!({ "name": "team/empty", "rows": [{ "who": "ben", "ticks": [true] }] }),
+        json!({ "name": "../etc", "rows": [] }),
+        json!({ "group": "a/b", "rows": [] }),
+    ] {
+        assert_eq!(web.post("/api/hosted/access", body.clone()).await.status, StatusCode::BAD_REQUEST, "{body}");
+    }
+    assert_eq!(web.get("/api/hosted/access?name=team/gone").await.status, StatusCode::BAD_REQUEST);
+}

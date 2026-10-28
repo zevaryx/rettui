@@ -8363,6 +8363,69 @@ app.views.repos = {
     this.host('delete', { name: repo.name }, `Deleting ${repo.name}`);
   },
 
+  // Who may use a hosted repository (or with `group`, its group): a tick for
+  // each person and permission, written to its .allowed rules.
+  async access(name, group) {
+    const q = name ? `?name=${encodeURIComponent(name)}` : `?group=${encodeURIComponent(group)}`;
+    const now = await attempt(() => api.get('/hosted/access' + q));
+    if (!now) return;
+    dialog(`Who may use ${now.whose}`, (close) => {
+      const rows = now.rows.map((r) => ({ ...r, boxes: [] }));
+      const table = el('table', { class: 'access-table' });
+      // Anyone and No one stand for the whole column: ticking one clears the
+      // rest, and ticking someone clears them.
+      const ticked = (row, column) => {
+        if (!row.boxes[column].checked) return;
+        const whole = row.who === 'all' || row.who === 'none';
+        for (const other of rows) {
+          if (other !== row && (whole || other.who === 'all' || other.who === 'none')) other.boxes[column].checked = false;
+        }
+      };
+      const addRow = (row) => {
+        row.boxes = now.perms.map((p, column) => el('input', { type: 'checkbox', checked: !!row.ticks[column], title: `${p.name}: ${p.what}`,
+          'aria-label': `${row.name}: ${p.name}`, onchange: () => ticked(row, column) }));
+        const unknown = row.who !== 'all' && row.who !== 'none' && !row.key;
+        table.append(el('tr', {},
+          el('th', { class: row.who === 'all' || row.who === 'none' ? '' : 'person', title: row.who.length === 32 ? row.who : '' },
+            el('div', { class: 'access-who' }, el('span', { text: row.name }), unknown ? el('span', { class: 'dim', text: ' (by identity)' }) : null)),
+          ...row.boxes.map((box) => el('td', {}, box))));
+      };
+      table.append(el('tr', {}, el('th', {}), ...now.perms.map((p) => el('th', { class: 'perm', text: p.name, title: p.what }))));
+      rows.forEach(addRow);
+      const person = el('input', { type: 'text', class: 'mono grow', placeholder: 'LXMF address or identity hash' });
+      const add = async () => {
+        const text = person.value.trim();
+        if (!text) return;
+        const found = await attempt(() => api.get('/hosted/person?text=' + encodeURIComponent(text)));
+        if (!found) return;
+        person.value = '';
+        if (rows.some((r) => r.who === found.who)) return toast(`${found.name} is already here`);
+        const row = { ...found, ticks: [], boxes: [] };
+        rows.push(row);
+        addRow(row);
+      };
+      person.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+      const save = async () => {
+        const body = { name: name || '', group: group || '', rows: rows.map((r) => ({ who: r.who, ticks: r.boxes.map((b) => b.checked) })) };
+        const done = await attempt(() => api.post('/hosted/access', body));
+        if (!done) return;
+        toast(done.said);
+        close();
+        this.update();
+      };
+      return [
+        el('div', { class: 'access-scroll' }, table),
+        el('ul', { class: 'dim access-perms' }, ...now.perms.map((p) => el('li', {}, el('b', { text: p.name }), ` ${p.what}`))),
+        el('p', { class: 'dim', text: `${now.fallback} Someone who may not read it is told it isn't there.` }),
+        el('div', { class: 'row' }, person, el('button', { text: 'Add', onclick: add })),
+        el('div', { class: 'row actions' },
+          name ? el('button', { text: 'Its group…', title: 'Who may use every repository in its group', onclick: () => { close(); this.access(null, name.split('/')[0]); } }) : null,
+          el('span', { class: 'grow' }),
+          el('button', { text: 'Cancel', onclick: close }), el('button', { class: 'primary', text: 'Save', onclick: save })),
+      ];
+    }, { className: 'access-dialog' });
+  },
+
   renderHosted() {
     const hosted = this.state?.hosted;
     const running = hosted?.state === 'running';
@@ -8391,15 +8454,18 @@ app.views.repos = {
       const f = repo.following;
       const synced = f ? (f.synced ? `synced ${ago(f.synced)} ago` : 'never synced') : '';
       rows.push(el('div', { class: 'list-item hosted-repo' },
-        el('span', { class: 'main' }, el('div', { class: 'name mono', text: repo.name }),
-          el('div', { class: 'sub', text: [humanBytes(repo.bytes), f ? `${f.kind === 'mirror' ? '⇄ mirror' : '⑂ fork'} of ${f.source} · ${synced}` : ''].filter(Boolean).join(' · ') })),
+        el('span', { class: 'main', title: 'Who may use it', onclick: () => this.access(repo.name) }, el('div', { class: 'name mono', text: repo.name }),
+          el('div', { class: 'sub', text: [humanBytes(repo.bytes), f ? `${f.kind === 'mirror' ? '⇄ mirror' : '⑂ fork'} of ${f.source} · ${synced}` : '', repo.open ? 'anyone can clone' : ''].filter(Boolean).join(' · ') }),
+          // A repository others can't read looks to them as if it isn't there.
+          repo.open ? null : el('div', { class: 'sub private', text: 'Only those its rules name can clone it.' })),
         el('span', { class: 'row actions' },
         f ? el('button', { text: 'Sync', title: 'Fetch from its source again', onclick: () => this.host('sync', { name: repo.name }, `Syncing ${repo.name}`) }) : null,
         repo.url ? el('button', { text: 'Copy URL', onclick: () => copy(repo.url, 'the repository\'s URL') }) : null,
+        el('button', { text: 'Who may use it', onclick: () => this.access(repo.name) }),
         el('button', { text: 'Rename', onclick: () => this.renameHosted(repo) }),
         el('button', { class: 'danger', text: 'Delete', onclick: () => this.deleteHosted(repo) }))));
     }
-    rows.push(el('p', { class: 'dim', text: 'Who may read and push to them is set in the terminal (w and g in Repos › Hosted here), as the node\'s rules are.' }));
+    rows.push(el('p', { class: 'dim', text: 'Click a repository to say who may clone, push to and manage it. Anyone else is told it isn\'t there.' }));
     this.body.replaceChildren(...rows);
   },
 

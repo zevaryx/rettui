@@ -6,12 +6,13 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 use rngit::client::WorkScope;
 use unicode_width::UnicodeWidthStr;
 
-use super::{accent, block, dim, human_bytes, selected_bg};
+use super::{accent, block, dim, human_bytes, picked_style, selected_bg};
 use crate::app::App;
+use crate::app::hosted_access::{AccessWho, PERMS};
 use crate::app::node::NodeStatus;
 use crate::app::repo_files::{Browse, BrowseView};
 use crate::app::repos::{Detail, Load, OpenRepo, RepoPane, ReposFocus};
@@ -23,6 +24,7 @@ pub(super) fn draw_repos(frame: &mut Frame, app: &mut App, area: Rect) {
     draw_side(frame, app, left);
     if app.repos.focus == ReposFocus::Hosted {
         draw_hosted(frame, app, right);
+        draw_hosted_access(frame, app, area);
     } else {
         draw_repo(frame, app, right);
     }
@@ -83,6 +85,11 @@ fn draw_hosted(frame: &mut Frame, app: &mut App, area: Rect) {
                 };
                 spans.push(Span::styled(format!("  {mark} {how} {} · {synced}", following.source), Style::default().fg(dim())));
             }
+            // A repository others can't read looks to them as if it isn't there.
+            spans.push(match hosted.open {
+                true => Span::styled("  anyone can clone", Style::default().fg(dim())),
+                false => Span::styled("  only those its rules name can clone it (w)", Style::default().fg(Color::Yellow)),
+            });
             ListItem::new(Line::from(spans))
         })
         .collect();
@@ -91,6 +98,73 @@ fn draw_hosted(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, body, &mut app.repos.hosted);
+}
+
+/// Who may use a hosted repository or group: a row for each person, a column
+/// for each permission.
+fn draw_hosted_access(frame: &mut Frame, app: &mut App, area: Rect) {
+    let node_access = app.settings.git_host_access.clone().unwrap_or_default();
+    let Some(access) = &mut app.git_host.access else { return };
+    let columns = access.columns();
+    let labels: Vec<&str> = PERMS.iter().take(columns).map(|(_, _, name, _)| *name).collect();
+    let cell = labels.iter().map(|l| l.len()).max().unwrap_or(4) as u16 + 2;
+    let name_width = 22u16;
+    let width = (name_width + cell * columns as u16 + 4).max(60).min(area.width);
+    let height = (access.rows.len() as u16 + 7).min(area.height.saturating_sub(2)).max(8);
+    let rect = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 3,
+        width,
+        height: height.min(area.height),
+    };
+    frame.render_widget(Clear, rect);
+    let hint = " Space tick · a add someone · Enter save · Esc cancel ";
+    let title = format!("Who may use {}", access.whose());
+    let popup = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
+    let inner = popup.inner(rect);
+    frame.render_widget(popup, rect);
+    app.regions.hosted_access = inner;
+    app.regions.hosted_access_cells.clear();
+    let [head, body, _, about, fallback] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1), Constraint::Length(2)])
+            .areas(inner);
+    let mut spans = vec![Span::raw(" ".repeat(name_width as usize))];
+    for (column, label) in labels.iter().enumerate() {
+        let style = if column == access.at.1 { Style::default().fg(accent()).bold() } else { Style::default().fg(dim()) };
+        spans.push(Span::styled(format!("{label:^w$}", w = cell as usize), style));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), head);
+    // Scrolled so the cursor's row shows.
+    let shown = body.height as usize;
+    let first = access.at.0.saturating_sub(shown.saturating_sub(1));
+    for (i, row) in access.rows.iter().enumerate().skip(first).take(shown) {
+        let y = body.y + (i - first) as u16;
+        let mut name = super::clipped(&row.name, name_width as usize - 2);
+        if row.key.is_none() && matches!(row.who, AccessWho::Identity(_)) {
+            name = super::clipped(&format!("{} ?", row.name), name_width as usize - 2);
+        }
+        let name_style = if i < 2 { Style::default().bold() } else { Style::default() };
+        let mut spans = vec![Span::styled(format!(" {name:<w$}", w = name_width as usize - 1), name_style)];
+        for column in 0..columns {
+            let mark = if row.ticks[column] { "[x]" } else { "[ ]" };
+            let style = if (i, column) == access.at { picked_style() } else { Style::default() };
+            let x = body.x + name_width + cell * column as u16;
+            app.regions.hosted_access_cells.push((Rect { x, y, width: cell, height: 1 }.intersection(body), i, column));
+            spans.push(Span::styled(format!("{mark:^w$}", w = cell as usize), style));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), Rect { y, height: 1, ..body });
+    }
+    let (_, word, name, what) = PERMS[access.at.1.min(columns - 1)];
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(format!(" {name} ({word}): "), Style::default().bold()), Span::raw(what)])),
+        about,
+    );
+    let mut note = access.fallback(&node_access);
+    if access.rows.iter().any(|r| r.key.is_none() && matches!(r.who, AccessWho::Identity(_))) {
+        note.push_str(" ? is someone known only by identity.");
+    }
+    let fallback = Rect { x: fallback.x + 1, width: fallback.width.saturating_sub(2), ..fallback };
+    frame.render_widget(Paragraph::new(note).style(Style::default().fg(dim())).wrap(Wrap { trim: true }), fallback);
 }
 
 /// A short form of a hash, for lists.

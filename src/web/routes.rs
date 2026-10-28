@@ -193,6 +193,8 @@ pub fn router(state: WebState) -> Router {
         .route("/hosted/sync", post(hosted_sync))
         .route("/hosted/rename", post(hosted_rename))
         .route("/hosted/delete", post(hosted_delete))
+        .route("/hosted/access", get(hosted_access).post(set_hosted_access))
+        .route("/hosted/person", get(hosted_person))
         .route("/hub", get(hosted_hub))
         .route("/hub/{action}", post(hosted_hub_action))
         .route("/reticulum", get(reticulum))
@@ -2608,8 +2610,8 @@ async fn repo_delete_mirror(State(state): State<WebState>, axum::Json(body): axu
 
 // ---- The rngit node hosted here (in the Repos section) ---------------------
 //
-// Its owner makes, forks, mirrors, syncs, renames and deletes repositories.
-// Who may use them is the terminal's to say, as the node's own rules are.
+// Its owner makes, forks, mirrors, syncs, renames and deletes repositories,
+// and says who may use them.
 
 #[derive(Deserialize)]
 struct HostedBody {
@@ -2671,6 +2673,94 @@ async fn hosted_rename(State(state): State<WebState>, axum::Json(body): axum::Js
 async fn hosted_delete(State(state): State<WebState>, axum::Json(body): axum::Json<HostedBody>) -> ApiResult {
     let (group, repo) = hosted_name(&body.name)?;
     host(state, crate::net::githost::HostAction::Delete { group, repo }).await
+}
+
+#[derive(Deserialize)]
+struct AccessQuery {
+    /// A repository, `group/name`; or with none, the `group`'s own rules.
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    group: String,
+}
+
+fn access_of(name: &str, group: &str) -> Result<(String, Option<String>), ApiError> {
+    if name.is_empty() {
+        // A group's name is checked as a repository's would be.
+        hosted_name(&format!("{group}/x")).map(|(group, _)| (group, None))
+    } else {
+        hosted_name(name).map(|(group, repo)| (group, Some(repo)))
+    }
+}
+
+/// Who may use a hosted repository or group, as a table: a column for each
+/// permission and a row for each person (anyone, no one, those you know and
+/// anyone else its rules name), with what's ticked.
+async fn hosted_access(State(state): State<WebState>, Query(query): Query<AccessQuery>) -> ApiResult {
+    use crate::app::hosted_access::PERMS;
+    let (group, repo) = access_of(&query.name, &query.group)?;
+    let (access, node) = state
+        .read(move |o| {
+            let node = o.app.settings.git_host_access.clone().unwrap_or_default();
+            o.app.hosted_access(&group, repo.as_deref()).map(|a| (a, node))
+        })
+        .await?
+        .map_err(bad)?;
+    let perms: Vec<Value> =
+        PERMS.iter().take(access.columns()).map(|(_, word, name, what)| json!({ "word": word, "name": name, "what": what })).collect();
+    let rows: Vec<Value> = access
+        .rows
+        .iter()
+        .map(|r| json!({ "who": r.who.word(), "name": r.name, "key": r.key, "ticks": &r.ticks[..access.columns()] }))
+        .collect();
+    Ok(axum::Json(json!({ "whose": access.whose(), "perms": perms, "rows": rows, "fallback": access.fallback(&node) })))
+}
+
+#[derive(Deserialize)]
+struct SetAccessBody {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    group: String,
+    rows: Vec<AccessRowBody>,
+}
+
+#[derive(Deserialize)]
+struct AccessRowBody {
+    /// `all`, `none` or an identity's hash.
+    who: String,
+    /// One for each permission, in the order they were listed.
+    ticks: Vec<bool>,
+}
+
+async fn set_hosted_access(State(state): State<WebState>, axum::Json(body): axum::Json<SetAccessBody>) -> ApiResult {
+    use crate::app::hosted_access::{AccessRow, AccessWho, HostedAccess, PERMS};
+    let (group, repo) = access_of(&body.name, &body.group)?;
+    if body.rows.len() > crate::app::allowed::MAX_LISTED + 2 {
+        return Err(bad(format!("A table has at most {} people", crate::app::allowed::MAX_LISTED)));
+    }
+    let mut access = HostedAccess { group, repo, rows: Vec::new(), at: (0, 0) };
+    for row in body.rows {
+        let who = AccessWho::parse(&row.who).ok_or_else(|| bad("Who is all, none or an identity hash"))?;
+        let mut ticks = row.ticks;
+        ticks.resize(PERMS.len(), false);
+        access.rows.push(AccessRow { who, name: String::new(), key: None, ticks });
+    }
+    let whose = access.whose();
+    state.write(move |o| o.app.set_hosted_access(&access)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "said": format!("Saved who may use {whose}") })))
+}
+
+#[derive(Deserialize)]
+struct PersonQuery {
+    text: String,
+}
+
+/// Someone to add to the table: by LXMF address (once their key is known) or
+/// identity hash.
+async fn hosted_person(State(state): State<WebState>, Query(query): Query<PersonQuery>) -> ApiResult {
+    let (identity, name, key) = state.read(move |o| o.app.access_person(&query.text)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "who": hex::encode(identity), "name": name, "key": key })))
 }
 
 fn repo_url(text: &str) -> Result<rngit::RepoUrl, ApiError> {

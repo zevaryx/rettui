@@ -279,12 +279,14 @@ changing who may do what, and forks, mirrors and sync.
 - **Its own identity:** like the hub, the node has an identity of its own
   (`git-host-identity` in the data directory), made the first time it starts,
   so its address stays the same. Back it up with yours.
-- **Who may read:** nobody does until you say so. Put a `.allowed` file beside
-  a repository (`demo.git.allowed`), or a `group.allowed` in a group's folder,
-  with rules like `r:all` (anyone), `r:<32 hex identity>` (one person) or
-  `adm:<32 hex>`, one on each line or separated by commas. "rngit access"
-  (`git_host_access`, terminal only) gives the same rules to every repository.
-  A repository someone may not read looks like one that isn't there. A line
+- **Who may read:** nobody does until you say so. The easiest way is the
+  table under [Managing it](#rngit-repositories) below. Under it, each
+  repository has a `.allowed` file beside it (`demo.git.allowed`), and a group
+  a `group.allowed` in its folder, with rules like `r:all` (anyone),
+  `r:<32 hex identity>` (one person) or `adm:<32 hex>`, one on each line or
+  separated by commas. "rngit access" (`git_host_access`) in Settings › Hosting
+  gives the same rules to every repository. A repository someone may not read
+  looks like one that isn't there, so they're told "Not found". A line
   that isn't a rule is skipped, so a typo can only take access away.
   `r` reads, `w` pushes and deletes branches and tags, `rw` both, and `c` in a
   group's rules (a `group.allowed`, or "rngit access") lets someone make
@@ -329,15 +331,24 @@ changing who may do what, and forks, mirrors and sync.
   with it), copy its clone URL (`y`) and delete it with its releases and work
   documents (`X`, **Delete**, asked first). These act on the folder as its
   owner, whatever the rules say, so the node's rules don't have to give you
-  anything. The node has to be running. In the terminal only, `w` sets who may
-  use the picked repository and `g` its group, as rules separated by commas
-  (`r:all, rw:<32 hex>`); they're written to its `.allowed` file, one on each
-  line, and comments in it are dropped. A mirror or fork you make has no
-  `.allowed` of its own, so the group's rules and *rngit access* decide who
-  reads it.
-- **Security:** the web UI can switch it on and off, name it, and make, mirror,
-  fork, sync, rename and delete repositories, but can't pick the folder or who
-  may read. Nothing in a repository is run: hooks are never
+  anything. The node has to be running. Each one says whether anyone can clone
+  it, or only those its rules name.
+- **Who may use each one:** click a repository (or `Enter` on it in the
+  terminal, **Who may use it** in the web UI) for a table of people and
+  permissions: Read (clone), Push, Releases, Issues, Propose (work documents),
+  Stats and Admin. Tick *Anyone* for everyone, *No one* to shut everyone out
+  whatever the group says, or the people who may: your contacts and those you've
+  talked with are listed once their keys are known, and you can add anyone by
+  their LXMF address or identity hash (`a` in the terminal). A permission with
+  nothing ticked is left to the group, then to *rngit access*. `g` (**Its
+  group…**) does the same for the repository's group, with a Create column for
+  who may make repositories in it. Saving writes the `.allowed` file, which the
+  node reads for each request, so it applies at once; comments in it are
+  dropped. A mirror or fork you make has no `.allowed` of its own, so until you
+  tick something, the group's rules and *rngit access* decide who reads it.
+- **Security:** the web UI can switch it on and off, name it, make, mirror,
+  fork, sync, rename and delete repositories, and say who may use them, but
+  can't pick the folder. Nothing in a repository is run: hooks are never
   called. Names that aren't plain folder names (`..`, a leading dot, a path)
   are refused.
 

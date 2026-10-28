@@ -42,7 +42,7 @@ pub struct AllowedView {
 impl App {
     /// The identity behind an LXMF address, once its key has been heard
     /// (only the key that is the address's own).
-    fn identity_of(&self, key: &str) -> Option<Hash> {
+    pub(super) fn identity_of(&self, key: &str) -> Option<Hash> {
         let address = parse_hash(key)?;
         let public_key = self.known.as_ref()?.lock().ok()?.public_key_of(address)?;
         let identity = rns_identity::identity::Identity::from_public_key(&public_key).ok()?;

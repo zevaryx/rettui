@@ -7,6 +7,7 @@ use rngit::server::{Follows, Hosted, Node};
 
 use crate::app::App;
 use crate::app::PromptKind;
+use crate::app::hosted_access::HostedAccess;
 use crate::app::node::NodeStatus;
 use crate::app::repos::{Load, LoadingState, RepoPrompt, ReposFocus};
 use crate::config::Paths;
@@ -41,6 +42,8 @@ pub struct GitHost {
     pub hosted: Load<Vec<Hosted>>,
     /// What the owner asked that hasn't come back.
     acting: HashMap<u64, HostAction>,
+    /// The TUI's table of who may use a hosted repository or group, while open.
+    pub access: Option<HostedAccess>,
 }
 
 /// What the TUI's prompts about the repositories hosted here are for.
@@ -61,11 +64,8 @@ pub enum HostedPrompt {
         group: String,
         repo: String,
     },
-    /// The rules of a repository, or with no `repo`, of its group.
-    Rules {
-        group: String,
-        repo: Option<String>,
-    },
+    /// Someone to add to the table of who may use a repository or group.
+    AddPerson,
 }
 
 /// `group/name` (`.git` added if it isn't there) as a group and a
@@ -78,11 +78,6 @@ pub fn parse_hosted(text: &str) -> Result<(String, String), String> {
         Some(_) => Ok((group.to_string(), name)),
         None => Err(format!("{group}/{name} isn't a group and a name made of letters, digits and -_.")),
     }
-}
-
-/// The lines of a rules file as one line, for a prompt: comments dropped.
-fn rules_on_one_line(text: &str) -> String {
-    text.split(['\n', ',']).map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect::<Vec<_>>().join(", ")
 }
 
 /// A name for a fork or mirror of `source`: its own last two parts, as
@@ -114,6 +109,7 @@ impl GitHost {
             recent: VecDeque::new(),
             hosted: Load::Idle,
             acting: HashMap::new(),
+            access: None,
         }
     }
 
@@ -176,6 +172,11 @@ impl App {
     /// The rules of a hosted repository (`repo` given) or of a group, as
     /// written in its `.allowed` file.
     pub fn hosted_rules(&self, group: &str, repo: Option<&str>) -> Result<String, String> {
+        let config = self.git_host.config.as_ref().ok_or("rngit hosting is off")?;
+        let dir = config.dir.join(group).join(repo.unwrap_or_default());
+        if rngit::server::split_repo_path(&format!("{group}/{}", repo.unwrap_or("x.git"))).is_none() || !dir.is_dir() {
+            return Err("There is no such repository or group".into());
+        }
         self.git_host.folder().ok_or("rngit hosting is off")?.rules(group, repo)
     }
 
@@ -243,22 +244,27 @@ impl App {
             (KeyCode::Char('s'), Some(_)) => Err("Only a fork or a mirror syncs: this one follows nothing".into()),
             (KeyCode::Char('r'), Some((group, repo, _))) => {
                 let start = format!("{group}/{}", repo.strip_suffix(".git").unwrap_or(&repo));
-                self.open_prompt(prompt(HostedPrompt::Rename { group, repo }), "Rename to group/name (its releases and rules go with it)", &start);
+                self.open_prompt(
+                    prompt(HostedPrompt::Rename { group, repo }),
+                    "Rename to group/name (its releases and rules go with it)",
+                    &start,
+                );
                 Ok(())
             }
             (KeyCode::Char('X'), Some((group, repo, _))) => {
-                let title = format!("Delete {group}/{repo} from this node, with its releases and work documents? It can't be undone. Type y");
+                let title =
+                    format!("Delete {group}/{repo} from this node, with its releases and work documents? It can't be undone. Type y");
                 self.open_prompt(prompt(HostedPrompt::ConfirmDelete { group, repo }), &title, "");
                 Ok(())
             }
-            (KeyCode::Char('w'), Some((group, repo, _))) => self.hosted_rules(&group, Some(&repo)).map(|rules| {
-                let title = format!("Who may use {group}/{repo}: rules like r:all, rw:<identity>, adm:<identity>, separated by commas; empty for the group's");
-                self.open_prompt(prompt(HostedPrompt::Rules { group, repo: Some(repo) }), &title, &rules_on_one_line(&rules));
-            }),
-            (KeyCode::Char('g'), Some((group, ..))) => self.hosted_rules(&group, None).map(|rules| {
-                let title = format!("Who may use the group {group}: rules like r:all, c:<identity> (make repositories), separated by commas");
-                self.open_prompt(prompt(HostedPrompt::Rules { group, repo: None }), &title, &rules_on_one_line(&rules));
-            }),
+            (KeyCode::Enter | KeyCode::Char('w'), Some(_)) => {
+                self.open_hosted_access(false);
+                Ok(())
+            }
+            (KeyCode::Char('g'), Some(_)) => {
+                self.open_hosted_access(true);
+                Ok(())
+            }
             (KeyCode::Char('y'), Some(_)) => {
                 if let Some(url) = self.picked_hosted().and_then(|h| self.hosted_url(h)) {
                     self.copy(&url, "the repository's URL");
@@ -305,7 +311,7 @@ impl App {
             }
             HostedPrompt::ConfirmDelete { group, repo } if yes => self.host_act(HostAction::Delete { group, repo }).map(drop),
             HostedPrompt::ConfirmDelete { .. } => Ok(()),
-            HostedPrompt::Rules { group, repo } => self.set_hosted_rules(&group, repo.as_deref(), text),
+            HostedPrompt::AddPerson => self.add_access_person(text),
         }
     }
 
@@ -504,17 +510,47 @@ mod tests {
         tui.key(KeyCode::Down).key(KeyCode::Down).key(KeyCode::Char('s'));
         assert!(tui.said().contains("Only a fork or a mirror syncs"), "{}", tui.said());
 
-        // Who may use it, and the group.
-        tui.key(KeyCode::Char('w')).answer("r:all, rw:0123456789abcdef0123456789abcdef");
+        // Who may use it: a click on it shows a table of people and permissions.
+        let list = tui.app.regions.repo_list;
+        tui.click(list.x + 2, list.y + 2);
+        let screen = tui.draw();
+        assert!(screen.contains("Who may use team/empty") && screen.contains("Anyone") && screen.contains("Push"), "{screen}");
+        assert!(screen.contains("only those its rules name can clone it"), "{screen}");
+        let ben = "0123456789abcdef0123456789abcdef";
+        tui.key(KeyCode::Char(' ')).key(KeyCode::Char('a')).answer(ben);
+        assert!(tui.draw().contains("<0123456789ab> ?"));
+        tui.key(KeyCode::Right).key(KeyCode::Char(' ')).key(KeyCode::Enter);
         let allowed = tui.app.paths.git_host.join("team/empty.git.allowed");
-        assert_eq!(std::fs::read_to_string(&allowed).unwrap(), "r:all\nrw:0123456789abcdef0123456789abcdef");
-        tui.key(KeyCode::Char('w'));
-        assert_eq!(tui.app.prompt.as_ref().unwrap().input.text(), "r:all, rw:0123456789abcdef0123456789abcdef");
-        tui.settle();
-        tui.key(KeyCode::Char('w')).answer(", w:someone");
-        assert!(tui.said().contains("Invalid permission"), "{}", tui.said());
-        tui.key(KeyCode::Char('g')).answer("c:all");
+        assert_eq!(std::fs::read_to_string(&allowed).unwrap(), format!("r:all\nw:{ben}"));
+        assert!(tui.app.git_host.access.is_none() && tui.said().contains("Saved who may use team/empty.git"), "{}", tui.said());
+        assert!(matches!(run_all(&mut tui, &source)[0], HostAction::List));
+        assert!(tui.draw().contains("anyone can clone"));
+
+        // Opened again, it has the ticks; Anyone and No one stand for the
+        // whole column. A click outside closes it unsaved.
+        tui.key(KeyCode::Enter).draw();
+        let access = tui.app.git_host.access.as_ref().unwrap();
+        assert!(access.rows[0].ticks[0] && access.rows[2].ticks[1] && access.rows[2].name.starts_with("<0123"));
+        let cell = tui.app.regions.hosted_access_cells.iter().find(|(_, row, column)| (*row, *column) == (1, 0)).unwrap().0;
+        tui.click_in(cell);
+        let access = tui.app.git_host.access.as_ref().unwrap();
+        assert!(access.rows[1].ticks[0] && !access.rows[0].ticks[0]);
+        tui.click(0, 0);
+        assert!(tui.app.git_host.access.is_none());
+        assert_eq!(std::fs::read_to_string(&allowed).unwrap(), format!("r:all\nw:{ben}"));
+        tui.key(KeyCode::Char('w')).key(KeyCode::Char('a')).answer("someone");
+        assert!(tui.said().contains("isn't an LXMF address or an identity hash"), "{}", tui.said());
+        tui.key(KeyCode::Esc);
+
+        // The group's has a column for making repositories in it.
+        tui.key(KeyCode::Char('g'));
+        assert!(tui.draw().contains("Who may use the group team") && tui.draw().contains("Create"));
+        for _ in 0..7 {
+            tui.key(KeyCode::Right);
+        }
+        tui.key(KeyCode::Char(' ')).key(KeyCode::Enter);
         assert_eq!(std::fs::read_to_string(tui.app.paths.git_host.join("team.allowed")).unwrap(), "c:all");
+        run_all(&mut tui, &source);
 
         // Renamed, with its rules; then deleted, with them.
         tui.key(KeyCode::Char('r')).answer("2");
@@ -566,10 +602,11 @@ mod tests {
     }
 
     #[test]
-    fn the_web_ui_cannot_choose_the_folder_or_who_may_read() {
+    fn the_web_ui_cannot_choose_the_folder_but_can_say_who_may_read() {
         let (mut app, _commands, dir) = app("git-host-web");
         assert!(app.update_settings_from_web(&[("git_host_dir", "/tmp")]).is_err());
-        assert!(app.update_settings_from_web(&[("git_host_access", "r:all")]).is_err());
+        app.update_settings_from_web(&[("git_host_access", "r:all")]).unwrap();
+        assert_eq!(app.settings.git_host_access.as_deref(), Some("r:all"));
         app.update_settings_from_web(&[("git_host_enabled", "true")]).unwrap();
         assert!(app.git_host.status == NodeStatus::Starting);
         assert!(app.update_settings(&[("git_host_access", "nonsense")]).is_err());

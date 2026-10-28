@@ -936,6 +936,7 @@ impl App {
 
     pub(crate) fn repos_key(&mut self, key: KeyEvent) {
         match (self.repos.focus, key.code) {
+            (ReposFocus::Hosted, code) if self.git_host.access.is_some() => self.hosted_access_key(code),
             (ReposFocus::Hosted, KeyCode::Char('H')) => self.repos.focus = ReposFocus::List,
             (_, KeyCode::Char('H')) => {
                 self.repos.focus = ReposFocus::Hosted;
@@ -1357,6 +1358,9 @@ impl App {
     }
 
     pub(crate) fn click_repos(&mut self, at: Position) {
+        if self.git_host.access.is_some() && self.repos.focus == ReposFocus::Hosted {
+            return self.click_hosted_access(at);
+        }
         if let Some((_, pane)) = self.regions.repo_panes.iter().find(|(rect, _)| rect.contains(at)) {
             self.repos.focus = ReposFocus::Repo;
             if *pane != self.repos.pane {
@@ -1381,7 +1385,9 @@ impl App {
         if list.contains(at) && self.repos.focus == ReposFocus::Hosted {
             let index = self.repos.hosted.offset() + (at.y - list.y) as usize;
             if index < self.git_host.hosted.ready().map_or(0, Vec::len) {
+                // Picking one shows who may use it.
                 self.repos.hosted.select(Some(index));
+                self.open_hosted_access(false);
             }
             return;
         }

@@ -64,6 +64,9 @@ fn repos_keys(app: &App) -> Keys {
                 ("↑↓", "select"),
             ],
         ),
+        (ReposFocus::Hosted, ..) if app.git_host.access.is_some() => {
+            typing("Who may use it", &[("Space", "tick"), ("a", "add someone"), ("Enter", "save"), ("←→↑↓", "select"), ("Esc", "cancel")])
+        }
         (ReposFocus::Hosted, ..) => mode(
             "Repos: hosted here",
             &[
@@ -73,8 +76,8 @@ fn repos_keys(app: &App) -> Keys {
                 ("s", "sync"),
                 ("r", "rename"),
                 ("X", "delete"),
-                ("w", "who may use it"),
-                ("g", "group's rules"),
+                ("Enter", "who may use it"),
+                ("g", "who may use its group"),
                 ("y", "copy URL"),
                 ("R", "reload"),
                 ("Esc", "list"),
