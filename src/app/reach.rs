@@ -122,8 +122,12 @@ mod tests {
         let open = listener.local_addr().unwrap().port();
         assert!(matches!(probe("127.0.0.1", open), Reach::Up(_)));
         assert!(matches!(probe("localhost", open), Reach::Up(_)), "by name, over whichever address answers");
-        // A port nothing listens on any more.
-        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // A port held by a socket that doesn't listen. One merely let go of
+        // could be taken meanwhile by another test, or be picked as the
+        // probe's own port, which connects to itself.
+        let held = tokio::net::TcpSocket::new_v4().unwrap();
+        held.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let closed = held.local_addr().unwrap().port();
         assert_eq!(probe("127.0.0.1", closed), Reach::Down("refused"));
         assert_eq!(probe("no-such-host.invalid", 4242), Reach::Down("name not found"));
         assert_eq!(Reach::Up(Duration::from_millis(382)).label(), "up · 382 ms");
