@@ -2062,7 +2062,16 @@ async fn media(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> 
     Ok(file_response(fetched.data, &name, true))
 }
 
-async fn download(State(state): State<WebState>, Query(query): Query<UrlQuery>) -> Result<Response, ApiError> {
+#[derive(Deserialize)]
+struct DownloadQuery {
+    url: String,
+    /// Only fetch it (kept for the request that follows) and say what it is,
+    /// so a failure comes back to the page, not as the page it navigates to.
+    #[serde(default)]
+    prepare: bool,
+}
+
+async fn download(State(state): State<WebState>, Query(query): Query<DownloadQuery>) -> Result<Response, ApiError> {
     let location = location(&query.url)?;
     let url = location.url();
     let fallback = location.path.rsplit('/').next().unwrap_or("download").to_string();
@@ -2080,12 +2089,15 @@ async fn download(State(state): State<WebState>, Query(query): Query<UrlQuery>) 
         }
     };
     if let Some((data, name)) = kept {
-        return Ok(file_response(data, &name, false));
+        return Ok(if query.prepare { axum::Json(json!({ "name": name })).into_response() } else { file_response(data, &name, false) });
     }
     let fetched = state.fetch(location, false).await?;
     let name = nomad_core::reply_file_name(fetched.metadata.as_deref()).unwrap_or(fallback);
     *LAST_DOWNLOAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
         Some((url, std::time::Instant::now(), fetched.data.clone(), name.clone()));
+    if query.prepare {
+        return Ok(axum::Json(json!({ "name": name })).into_response());
+    }
     Ok(file_response(fetched.data, &name, false))
 }
 

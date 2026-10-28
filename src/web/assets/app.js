@@ -6362,8 +6362,11 @@ app.views.browser = {
     if (url.startsWith('rrc://') || url.startsWith('rrc@')) return openHubLink(url);
     if (url.startsWith('rns://')) return openRepo(url);
     if (/:\/file\//.test(url)) {
-      window.location.href = 'api/download?url=' + encodeURIComponent(url);
-      toast('Downloading…');
+      // Fetched first, so a failure is a message here, not the page the
+      // download navigates to; the download then takes what was fetched.
+      const address = 'api/download?url=' + encodeURIComponent(url);
+      toast('Fetching the file…');
+      if (await attempt(() => api.get(`/download?url=${encodeURIComponent(url)}&prepare=true`))) window.location.href = address;
       return;
     }
     setPane(this, 'detail');

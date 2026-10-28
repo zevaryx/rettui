@@ -665,6 +665,12 @@ async fn browsing_pages_forms_and_files() {
     // Asked for again at once (the Android app's WebView does): the same file, not another fetch.
     web.serve("/file/notes.txt", "other notes");
     assert_eq!(web.get(&format!("/api/download?url={NODE}:/file/notes.txt")).await.body, b"some notes");
+    // Fetched ahead (so a failure shows as a message): what the download then sends.
+    web.serve("/file/ahead.txt", "ahead");
+    let ahead = web.get(&format!("/api/download?url={NODE}:/file/ahead.txt&prepare=true")).await;
+    assert_eq!(ahead.json()["name"], "ahead.txt");
+    web.serve("/file/ahead.txt", "changed");
+    assert_eq!(web.get(&format!("/api/download?url={NODE}:/file/ahead.txt")).await.body, b"ahead");
 
     // Saved pages: once each, and taken off again.
     assert_eq!(web.post("/api/saved", json!({ "url": url })).await.status, StatusCode::OK);
