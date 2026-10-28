@@ -8147,7 +8147,7 @@ app.views.repos = {
   // The repository open (its URL), the pane shown, the work list, and
   // what's open of it: { release: tag } or { doc: id, scope }.
   url: null,
-  pane: 'refs',
+  repoPane: 'refs',
   scope: 'active',
   opened: null,
   // What each pane last got: { url, data } or { url, error }.
@@ -8305,11 +8305,11 @@ app.views.repos = {
     }
     const count = (key, f) => (this.got[key]?.data ? ` ${f(this.got[key].data)}` : '');
     this.tabs.replaceChildren(...REPO_PANES.map(([id, title]) => el('button', {
-      class: id === this.pane && !this.opened ? 'active' : '',
+      class: id === this.repoPane && !this.opened ? 'active' : '',
       text: title + ({ refs: count('refs', (d) => d.refs.length), releases: count('releases', (d) => d.releases.length),
         work: count('work', (d) => d.active.length + d.proposed.length) }[id] || ''),
       onclick: () => {
-        this.pane = id;
+        this.repoPane = id;
         this.opened = null;
         this.render();
       },
@@ -8322,7 +8322,7 @@ app.views.repos = {
       el('button', { text: '↻', title: 'Ask the node again', onclick: () => this.reload() }));
     if (this.typing()) return;
     const rows = this.opened?.release ? this.releasePage() : this.opened?.doc ? this.docPage()
-      : this.opened?.copy ? this.copyPage() : this[`${this.pane}Page`]();
+      : this.opened?.copy ? this.copyPage() : this[`${this.repoPane}Page`]();
     this.body.replaceChildren(...[rows].flat());
   },
 
