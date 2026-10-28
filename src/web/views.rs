@@ -833,7 +833,38 @@ pub fn repos(app: &App) -> Value {
         "identity": hex::encode(app.identity_hash),
         "rngit_identity": rngit.map(|p| p.display().to_string()),
         "max_release": crate::app::repos::MAX_RELEASE,
+        "hosted": hosted(app),
     })
+}
+
+/// The rngit node hosted here and what it has, for its owner.
+fn hosted(app: &App) -> Value {
+    use crate::app::node::NodeStatus;
+    use crate::app::repos::Load;
+    let state = match &app.git_host.status {
+        NodeStatus::Off => "off",
+        NodeStatus::Starting => "starting",
+        NodeStatus::Running => "running",
+        NodeStatus::Failed(_) => "failed",
+    };
+    let list = |list: &[rngit::server::Hosted]| -> Vec<Value> {
+        list.iter()
+            .map(|h| {
+                let following = h.following.as_ref().map(|f| {
+                    let kind = if f.kind == rngit::server::Follows::Mirror { "mirror" } else { "fork" };
+                    json!({ "kind": kind, "source": f.source, "synced": f.synced })
+                });
+                let name = format!("{}/{}", h.group, h.name.strip_suffix(".git").unwrap_or(&h.name));
+                json!({ "name": name, "url": app.hosted_url(h), "bytes": h.bytes, "following": following })
+            })
+            .collect()
+    };
+    let (repos, error) = match &app.git_host.hosted {
+        Load::Ready(hosted) => (Some(list(hosted)), None),
+        Load::Failed(e) => (None, Some(e.clone())),
+        Load::Idle | Load::Loading => (None, None),
+    };
+    json!({ "state": state, "url": app.git_host.url(), "repos": repos, "error": error, "acting": app.git_host.acting() })
 }
 
 /// An identity hash, with the name it's known by (if one).

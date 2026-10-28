@@ -318,8 +318,26 @@ changing who may do what, and forks, mirrors and sync.
   clone of the same thing is quick; a branch that moves is a new bundle.
   rettui serves one request at a time, so a big clone makes the next client
   wait.
-- **Security:** the web UI can switch it on and off, and name it, but can't pick
-  the folder or who may read. Nothing in a repository is run: hooks are never
+- **Managing it:** `H` in the [Repos tab](Repos), or **⌂ Hosted here** at the
+  top of the web UI's Repos list, lists what the node hosts, with each one's
+  size and, for a fork or mirror, its source and when it last synced. From
+  there you can mirror (`m`, **Mirror**) or fork (`f`, **Fork**) a repository
+  from an `rns://` or `https://` URL, named after the source unless you name it
+  (`group/name`; the group is made if it isn't there), make an empty one to push
+  to (`n`, **New**), sync a fork or mirror now (`s`, **Sync**), rename one, even
+  into another group (`r`, **Rename**: its releases, work documents and rules go
+  with it), copy its clone URL (`y`) and delete it with its releases and work
+  documents (`X`, **Delete**, asked first). These act on the folder as its
+  owner, whatever the rules say, so the node's rules don't have to give you
+  anything. The node has to be running. In the terminal only, `w` sets who may
+  use the picked repository and `g` its group, as rules separated by commas
+  (`r:all, rw:<32 hex>`); they're written to its `.allowed` file, one on each
+  line, and comments in it are dropped. A mirror or fork you make has no
+  `.allowed` of its own, so the group's rules and *rngit access* decide who
+  reads it.
+- **Security:** the web UI can switch it on and off, name it, and make, mirror,
+  fork, sync, rename and delete repositories, but can't pick the folder or who
+  may read. Nothing in a repository is run: hooks are never
   called. Names that aren't plain folder names (`..`, a leading dot, a path)
   are refused.
 

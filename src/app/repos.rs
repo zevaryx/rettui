@@ -66,6 +66,8 @@ pub enum ReposFocus {
     #[default]
     List,
     Repo,
+    /// The repositories the rngit node hosted here has, on the right.
+    Hosted,
 }
 
 /// Something asked of a node: not yet, on its way, come, or failed.
@@ -184,6 +186,8 @@ pub struct Repos {
     pub open: Option<OpenRepo>,
     /// rngit nodes heard, nearest first.
     pub nodes: Vec<GitNode>,
+    /// The repository picked of those hosted here.
+    pub hosted: ListState,
     asked: HashMap<u64, Asked>,
 }
 
@@ -453,6 +457,8 @@ pub enum RepoPrompt {
     PushTo,
     /// How: what to do with branches that differ there.
     PushHow(RepoUrl),
+    /// About the repositories hosted here.
+    Hosted(super::git_host::HostedPrompt),
 }
 
 /// A work list by name.
@@ -930,6 +936,12 @@ impl App {
 
     pub(crate) fn repos_key(&mut self, key: KeyEvent) {
         match (self.repos.focus, key.code) {
+            (ReposFocus::Hosted, KeyCode::Char('H')) => self.repos.focus = ReposFocus::List,
+            (_, KeyCode::Char('H')) => {
+                self.repos.focus = ReposFocus::Hosted;
+                self.list_hosted();
+            }
+            (ReposFocus::Hosted, code) => self.hosted_key(code),
             (_, KeyCode::Char('n')) => {
                 // On a node heard, the prompt starts with its address.
                 let selected = self.repos.side.selected().unwrap_or(0);
@@ -1328,6 +1340,7 @@ impl App {
             },
             RepoPrompt::ConfirmCopyLinked if yes => self.mirror_repo().map(drop),
             RepoPrompt::ConfirmRemoveMirror(url) if yes => self.remove_mirror(&url).map(|()| self.notify("Deleted the copy")),
+            RepoPrompt::Hosted(prompt) => self.submit_hosted_prompt(prompt, text),
             _ => Ok(()),
         };
         if let Err(e) = result {
@@ -1365,6 +1378,13 @@ impl App {
             return;
         }
         let list = self.regions.repo_list;
+        if list.contains(at) && self.repos.focus == ReposFocus::Hosted {
+            let index = self.repos.hosted.offset() + (at.y - list.y) as usize;
+            if index < self.git_host.hosted.ready().map_or(0, Vec::len) {
+                self.repos.hosted.select(Some(index));
+            }
+            return;
+        }
         if list.contains(at) {
             self.repos.focus = ReposFocus::Repo;
             let index = self.repos.items.offset() + (at.y - list.y) as usize;
@@ -1378,12 +1398,13 @@ impl App {
         match self.repos.focus {
             ReposFocus::List => self.move_repos_side(delta),
             ReposFocus::Repo => self.move_repo_items(delta),
+            ReposFocus::Hosted => self.move_hosted(delta),
         }
     }
 }
 
 /// A list's state can be set loading, whatever it holds.
-trait LoadingState {
+pub(super) trait LoadingState {
     fn loading(&mut self);
 }
 

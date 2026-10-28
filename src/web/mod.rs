@@ -67,6 +67,8 @@ pub struct Owner {
     fetches: HashMap<u64, PendingFetch>,
     /// Questions to rngit nodes a browser waits on the answer to.
     git: HashMap<u64, oneshot::Sender<Result<net::git::GitReply, String>>>,
+    /// What the owner asked of the rngit node hosted here, a browser waits on.
+    hosting: HashMap<u64, oneshot::Sender<Result<net::githost::HostReply, String>>>,
     next_request: u64,
     /// The latest notifications and their ids, for browsers catching up.
     recent: VecDeque<(u64, Notification)>,
@@ -163,6 +165,12 @@ impl Owner {
             NetEvent::Git { id, result } if self.git.contains_key(&id) => {
                 let _ = self.git.remove(&id).expect("checked above").send(result);
                 Scope::NONE
+            }
+            // The browser gets the answer, and the app lists them again.
+            NetEvent::GitHost(net::githost::GitHostEvent::Owned { id, ref result }) if self.hosting.contains_key(&id) => {
+                let _ = self.hosting.remove(&id).expect("checked above").send(result.clone());
+                self.on_net(event);
+                scope
             }
             NetEvent::Interfaces(_) => {
                 let before = (self.app.interfaces.clone(), self.app.traffic.rates);
@@ -307,7 +315,7 @@ mod notice_tests {
             (12, note(&a, "second")),
             (13, Notification { title: "3 new messages".into(), body: String::new(), target: Target::Summary }),
         ]);
-        let owner = Owner { app, fetches: HashMap::new(), git: HashMap::new(), next_request: 0, recent };
+        let owner = Owner { app, fetches: HashMap::new(), git: HashMap::new(), hosting: HashMap::new(), next_request: 0, recent };
         let bodies = |since| owner.missed(since).into_iter().map(|(id, n)| (id, n.body)).collect::<Vec<_>>();
         // The latest about each conversation still unread, and nothing read.
         assert_eq!(bodies(0), [(12, "second".to_string())]);
@@ -451,6 +459,19 @@ impl WebState {
         rx.await.map_err(|_| "rettui is shutting down".to_string())?
     }
 
+    /// Ask the rngit node hosted here to do something for its owner, and
+    /// wait for what came of it.
+    pub async fn host(&self, action: net::githost::HostAction) -> Result<net::githost::HostReply, String> {
+        let (tx, rx) = oneshot::channel();
+        self.write(move |owner| {
+            let id = owner.app.host_act(action)?;
+            owner.hosting.insert(id, tx);
+            Ok::<_, String>(())
+        })
+        .await??;
+        rx.await.map_err(|_| "rettui is shutting down".to_string())?
+    }
+
     pub async fn fetch(&self, location: Location, refresh: bool) -> Result<Fetched, String> {
         let (tx, rx) = oneshot::channel();
         self.read(move |owner| owner.fetch(location, refresh, tx)).await?;
@@ -553,7 +574,14 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     // No tab is "on screen" in the web UI: unread counts are cleared by
     // browsers when they show a conversation or room.
     app.tab = Tab::Status;
-    let mut owner = Owner { app, fetches: HashMap::new(), git: HashMap::new(), next_request: FIRST_WEB_REQUEST, recent: VecDeque::new() };
+    let mut owner = Owner {
+        app,
+        fetches: HashMap::new(),
+        git: HashMap::new(),
+        hosting: HashMap::new(),
+        next_request: FIRST_WEB_REQUEST,
+        recent: VecDeque::new(),
+    };
     let push = push::WebPush::load(&paths).context("could not set up Web Push")?;
     // Ids go on from the last run's (milliseconds since 1970 at start), so a
     // browser catching up after a restart isn't confused.
@@ -774,13 +802,19 @@ pub(crate) mod testing {
             let (mut app, mut net) = crate::app::test_app_with_net(&dir, settings, store);
             app.tab = Tab::Status;
             let paths = app.paths.clone();
-            let mut owner =
-                Owner { app, fetches: HashMap::new(), git: HashMap::new(), next_request: FIRST_WEB_REQUEST, recent: VecDeque::new() };
+            let mut owner = Owner {
+                app,
+                fetches: HashMap::new(),
+                git: HashMap::new(),
+                hosting: HashMap::new(),
+                next_request: FIRST_WEB_REQUEST,
+                recent: VecDeque::new(),
+            };
             let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
             let sent: Arc<Mutex<Vec<NetCommand>>> = Arc::default();
             let pages: Pages = Arc::default();
             let git_node: GitNode = Arc::default();
-            let (kept, served, node) = (sent.clone(), pages.clone(), git_node.clone());
+            let (kept, served, node, test_dir) = (sent.clone(), pages.clone(), git_node.clone(), dir.clone());
             std::thread::spawn(move || {
                 while let Some(job) = jobs.blocking_recv() {
                     (job.run)(&mut owner);
@@ -805,6 +839,12 @@ pub(crate) mod testing {
                         {
                             let result = crate::net::git::tests::answer(&node, repo, request.clone());
                             owner.apply(NetEvent::Git { id: *id, result });
+                        }
+                        // The rngit node hosted here, which mirrors from `source/` in the test's folder.
+                        if let NetCommand::GitHostAction { id, action } = &command {
+                            let (root, source) = (owner.app.paths.git_host.clone(), test_dir.join("source"));
+                            let result = crate::net::githost::owner_tests::run(&root, &source, action.clone());
+                            owner.apply(NetEvent::GitHost(crate::net::githost::GitHostEvent::Owned { id: *id, result }));
                         }
                         kept.lock().unwrap().push(command);
                     }

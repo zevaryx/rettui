@@ -1756,3 +1756,56 @@ async fn the_copy_of_a_repository_is_read_in_the_web_ui_without_the_node() {
     let other = web.get(&format!("/api/repos/copy/files?url={}&ref=refs%2Fheads%2Fmain", enc(&format!("rns://{NODE}/public/other")))).await;
     assert_eq!(other.status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn the_owner_mirrors_and_manages_the_repositories_hosted_here() {
+    use crate::config::Settings;
+    use crate::net::githost::{GitHostEvent, owner_tests};
+    let web = TestWeb::start_with("hosted", Settings { git_host_enabled: true, ..Settings::default() }, crate::store::Store::default());
+    let source = format!("rns://{NODE}/public/demo");
+    // Not yet running: nothing can be asked of it.
+    assert_eq!(web.get("/api/repos").await.json()["hosted"]["state"], "starting");
+    let early = web.post("/api/hosted/new", json!({ "name": "team/x" })).await;
+    assert_eq!(early.status, StatusCode::BAD_GATEWAY, "{}", early.text());
+    assert!(early.error().contains("Host rngit repositories first"));
+
+    owner_tests::source(&web.dir, "public", "demo");
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16] }))).await;
+    let hosted = web.get("/api/repos").await.json()["hosted"].clone();
+    assert_eq!((hosted["state"].as_str(), hosted["repos"].as_array().map(Vec::len)), (Some("running"), Some(0)));
+
+    // A mirror named after its source, a fork named here, an empty repository.
+    let mirrored = web.post("/api/hosted/follow", json!({ "source": source, "kind": "mirror", "name": "" })).await;
+    assert_eq!(mirrored.json()["said"], format!("Mirrored {source} into public/demo.git"));
+    web.post("/api/hosted/follow", json!({ "source": source, "kind": "fork", "name": "forks/demo" })).await;
+    assert_eq!(web.post("/api/hosted/new", json!({ "name": "team/empty" })).await.status, StatusCode::OK);
+    let repos = web.get("/api/repos").await.json()["hosted"]["repos"].clone();
+    let names: Vec<_> = repos.as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, ["forks/demo", "public/demo", "team/empty"]);
+    assert_eq!(repos[1]["following"]["kind"], "mirror");
+    assert_eq!(repos[1]["following"]["source"], source);
+    assert_eq!(repos[1]["url"], format!("rns://{}/public/demo", "07".repeat(16)));
+    assert!(repos[2]["following"].is_null());
+
+    // Synced, renamed, deleted.
+    assert_eq!(web.post("/api/hosted/sync", json!({ "name": "public/demo" })).await.json()["said"], "Synced public/demo.git");
+    let unsynced = web.post("/api/hosted/sync", json!({ "name": "team/empty" })).await;
+    assert!(unsynced.error().contains("neither a fork nor a mirror"), "{}", unsynced.text());
+    web.post("/api/hosted/rename", json!({ "name": "team/empty", "to": "team/full" })).await;
+    let taken = web.post("/api/hosted/rename", json!({ "name": "team/full", "to": "public/demo" })).await;
+    assert!(taken.error().contains("already there"), "{}", taken.text());
+    assert_eq!(web.post("/api/hosted/delete", json!({ "name": "team/full" })).await.status, StatusCode::OK);
+    let repos = web.get("/api/repos").await.json()["hosted"]["repos"].clone();
+    assert_eq!(repos.as_array().unwrap().len(), 2);
+
+    // Nonsense is refused before anything is asked.
+    for (path, body) in [
+        ("/api/hosted/new", json!({ "name": "../etc" })),
+        ("/api/hosted/follow", json!({ "source": source, "kind": "copy", "name": "a/b" })),
+        ("/api/hosted/delete", json!({ "name": "nogroup" })),
+    ] {
+        assert_eq!(web.post(path, body).await.status, StatusCode::BAD_REQUEST, "{path}");
+    }
+    let ssh = web.post("/api/hosted/follow", json!({ "source": "ssh://example.com/x.git", "kind": "fork", "name": "a/b" })).await;
+    assert!(ssh.error().contains("Prohibited source URL"), "{}", ssh.text());
+}

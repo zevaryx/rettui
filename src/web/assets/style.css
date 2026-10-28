@@ -923,6 +923,7 @@ a.chat-link:hover { filter: brightness(1.25); }
 .rns-radio { padding: 6px 0 10px; line-height: 1.5; }
 .setting select { max-width: 520px; }
 .badge.quiet { background: var(--raised); color: var(--dim); }
+.hosted-repo .actions { flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .list-heading { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding: 10px 12px 4px; }
 .rns-iface { padding-left: 20px; }
 .rns-file { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
@@ -1105,6 +1106,8 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .column { gap: 0; }
   .side, .members { width: auto; }
   .resizer { display: none; }
+  .hosted-repo { flex-wrap: wrap; }
+  .hosted-repo .main { flex-basis: 100%; }
 
   /* One pane at a time: the list, what was picked from it, or a room's
      members. */

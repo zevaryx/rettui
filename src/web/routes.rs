@@ -188,6 +188,11 @@ pub fn router(state: WebState) -> Router {
         .route("/repos/doc/delete", post(repo_delete_doc))
         .route("/repos/release/new", post(repo_new_release))
         .route("/repos/release/delete", post(repo_delete_release))
+        .route("/hosted/new", post(hosted_new))
+        .route("/hosted/follow", post(hosted_follow))
+        .route("/hosted/sync", post(hosted_sync))
+        .route("/hosted/rename", post(hosted_rename))
+        .route("/hosted/delete", post(hosted_delete))
         .route("/hub", get(hosted_hub))
         .route("/hub/{action}", post(hosted_hub_action))
         .route("/reticulum", get(reticulum))
@@ -2599,6 +2604,73 @@ async fn repo_delete_mirror(State(state): State<WebState>, axum::Json(body): axu
     let url = repo_url(&body.url)?.to_string();
     state.write(move |o| o.app.remove_mirror(&url)).await?.map_err(bad)?;
     ok()
+}
+
+// ---- The rngit node hosted here (in the Repos section) ---------------------
+//
+// Its owner makes, forks, mirrors, syncs, renames and deletes repositories.
+// Who may use them is the terminal's to say, as the node's own rules are.
+
+#[derive(Deserialize)]
+struct HostedBody {
+    /// `group/name`.
+    name: String,
+    #[serde(default)]
+    to: String,
+    #[serde(default)]
+    source: String,
+    /// `mirror` or `fork`.
+    #[serde(default)]
+    kind: String,
+}
+
+/// Do it, running on after the browser leaves (a mirror takes a while), and
+/// say what came of it.
+async fn host(state: WebState, action: crate::net::githost::HostAction) -> ApiResult {
+    let task = tokio::spawn(async move { state.host(action).await });
+    match task.await {
+        Ok(Ok(crate::net::githost::HostReply::Done(said))) => Ok(axum::Json(json!({ "said": said }))),
+        Ok(Ok(_)) => ok(),
+        Ok(Err(e)) => Err(ApiError(StatusCode::BAD_GATEWAY, e)),
+        Err(_) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, "It stopped unexpectedly".into())),
+    }
+}
+
+fn hosted_name(text: &str) -> Result<(String, String), ApiError> {
+    crate::app::git_host::parse_hosted(text).map_err(bad)
+}
+
+async fn hosted_new(State(state): State<WebState>, axum::Json(body): axum::Json<HostedBody>) -> ApiResult {
+    let (group, repo) = hosted_name(&body.name)?;
+    host(state, crate::net::githost::HostAction::Make { group, repo }).await
+}
+
+async fn hosted_follow(State(state): State<WebState>, axum::Json(body): axum::Json<HostedBody>) -> ApiResult {
+    use rngit::server::Follows;
+    let kind = match body.kind.as_str() {
+        "mirror" => Follows::Mirror,
+        "fork" => Follows::Fork,
+        _ => return Err(bad("A repository follows its source as a mirror or a fork")),
+    };
+    let source = body.source.trim().to_string();
+    let name = if body.name.trim().is_empty() { crate::app::git_host::suggested_name(&source) } else { body.name };
+    let (group, repo) = hosted_name(&name)?;
+    host(state, crate::net::githost::HostAction::Follow { group, repo, source, kind }).await
+}
+
+async fn hosted_sync(State(state): State<WebState>, axum::Json(body): axum::Json<HostedBody>) -> ApiResult {
+    let (group, repo) = hosted_name(&body.name)?;
+    host(state, crate::net::githost::HostAction::Sync { group, repo }).await
+}
+
+async fn hosted_rename(State(state): State<WebState>, axum::Json(body): axum::Json<HostedBody>) -> ApiResult {
+    let ((group, repo), (to_group, to_repo)) = (hosted_name(&body.name)?, hosted_name(&body.to)?);
+    host(state, crate::net::githost::HostAction::Rename { group, repo, to_group, to_repo }).await
+}
+
+async fn hosted_delete(State(state): State<WebState>, axum::Json(body): axum::Json<HostedBody>) -> ApiResult {
+    let (group, repo) = hosted_name(&body.name)?;
+    host(state, crate::net::githost::HostAction::Delete { group, repo }).await
 }
 
 fn repo_url(text: &str) -> Result<rngit::RepoUrl, ApiError> {

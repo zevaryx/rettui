@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rngit::server::{Node, Rule};
+use rngit::server::{Follows, Hosted, Node, Rule};
 use rns_identity::identity::Identity;
 use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
@@ -67,6 +67,96 @@ pub enum GitHostEvent {
         peer: Option<[u8; 16]>,
         status: u8,
     },
+    /// What came of what the owner asked (see [`HostAction`]).
+    Owned {
+        id: u64,
+        result: Result<HostReply, String>,
+    },
+}
+
+/// What the node's owner asks of it: these work on the folder directly,
+/// whatever the rules say (see [`rngit::server::Node::hosted`] and the calls
+/// after it). Repositories are `name.git`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostAction {
+    List,
+    Make {
+        group: String,
+        repo: String,
+    },
+    /// Fork or mirror an `rns://` or `https://` repository.
+    Follow {
+        group: String,
+        repo: String,
+        source: String,
+        kind: Follows,
+    },
+    Sync {
+        group: String,
+        repo: String,
+    },
+    Rename {
+        group: String,
+        repo: String,
+        to_group: String,
+        to_repo: String,
+    },
+    Delete {
+        group: String,
+        repo: String,
+    },
+}
+
+/// What came of a [`HostAction`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostReply {
+    Listed(Vec<Hosted>),
+    /// A change made, as said to the owner.
+    Done(String),
+}
+
+impl HostAction {
+    /// What it is, while it goes.
+    pub fn what(&self) -> String {
+        match self {
+            HostAction::List => "Listing the hosted repositories".into(),
+            HostAction::Make { group, repo } => format!("Making {group}/{repo}"),
+            HostAction::Follow { group, repo, kind: Follows::Mirror, .. } => format!("Mirroring into {group}/{repo}"),
+            HostAction::Follow { group, repo, kind: Follows::Fork, .. } => format!("Forking into {group}/{repo}"),
+            HostAction::Sync { group, repo } => format!("Syncing {group}/{repo}"),
+            HostAction::Rename { group, repo, .. } => format!("Renaming {group}/{repo}"),
+            HostAction::Delete { group, repo } => format!("Deleting {group}/{repo}"),
+        }
+    }
+
+    /// Do it. Forks, mirrors and syncs fetch, so this blocks.
+    pub fn run(self, node: &Node) -> Result<HostReply, String> {
+        let done = |text: String| Ok(HostReply::Done(text));
+        match self {
+            HostAction::List => Ok(HostReply::Listed(node.hosted())),
+            HostAction::Make { group, repo } => {
+                node.make_repository(&group, &repo, None)?;
+                done(format!("Made {group}/{repo}"))
+            }
+            HostAction::Follow { group, repo, source, kind } => {
+                node.follow_source(&group, &repo, &source, kind, None)?;
+                let how = if kind == Follows::Mirror { "Mirrored" } else { "Forked" };
+                done(format!("{how} {source} into {group}/{repo}"))
+            }
+            HostAction::Sync { group, repo } => {
+                node.sync_repository(&group, &repo)?;
+                done(format!("Synced {group}/{repo}"))
+            }
+            HostAction::Rename { group, repo, to_group, to_repo } => {
+                node.rename_repository(&group, &repo, &to_group, &to_repo)?;
+                done(format!("Renamed {group}/{repo} to {to_group}/{to_repo}"))
+            }
+            HostAction::Delete { group, repo } => {
+                node.delete_repository(&group, &repo)?;
+                done(format!("Deleted {group}/{repo}"))
+            }
+        }
+    }
 }
 
 /// The git node's identity, made the first time.
@@ -92,6 +182,8 @@ pub fn address(path: &std::path::Path) -> Option<[u8; 16]> {
 /// A running git node.
 pub struct HostedGit {
     pub hash: [u8; 16],
+    /// What answers requests, for the owner to act on too.
+    pub node: Arc<Node>,
     destination: RegisteredDestination,
     announcer: tokio::task::JoinHandle<()>,
     mirrors: tokio::task::JoinHandle<()>,
@@ -133,8 +225,8 @@ impl HostedGit {
                 tokio::time::sleep(ANNOUNCE_EVERY).await;
             }
         });
-        let mirrors = rngit::serve::keep_mirrors(node, MIRROR_CHECK_EVERY, MIRROR_OLDER_THAN);
-        Ok(Self { hash, destination, announcer, mirrors })
+        let mirrors = rngit::serve::keep_mirrors(node.clone(), MIRROR_CHECK_EVERY, MIRROR_OLDER_THAN);
+        Ok(Self { hash, node, destination, announcer, mirrors })
     }
 
     /// Stop answering, closing the links so clients see it go.
@@ -142,6 +234,56 @@ impl HostedGit {
         self.announcer.abort();
         self.mirrors.abort();
         let _ = tokio::time::timeout(Duration::from_secs(3), self.destination.close()).await;
+    }
+}
+
+/// The owner's actions run as the network task runs them, on a node of a
+/// folder, which fetches a fork's or mirror's source by copying the
+/// repository `source/<group>/<repo>.git` the URL names.
+#[cfg(test)]
+pub mod owner_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct Copy(PathBuf);
+
+    fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            if entry.path().is_dir() {
+                copy_dir(&entry.path(), &to.join(entry.file_name()))?;
+            } else {
+                std::fs::copy(entry.path(), to.join(entry.file_name()))?;
+            }
+        }
+        Ok(())
+    }
+
+    impl rngit::server::Upstream for Copy {
+        fn pull(&self, source: &rngit::RepoUrl, dest: &Path, _timeout: Duration) -> Result<(), String> {
+            let from = self.0.join(&source.group).join(source.dir_name());
+            if !from.is_dir() {
+                return Err("Not found".into());
+            }
+            copy_dir(&from, dest).map_err(|e| e.to_string())
+        }
+    }
+
+    /// Run what the owner asked of the node at `root`.
+    pub fn run(root: &Path, source: &Path, action: HostAction) -> Result<HostReply, String> {
+        let mut node = Node::new(root.to_path_buf());
+        node.upstream = Some(Arc::new(Copy(source.to_path_buf())));
+        action.run(&node)
+    }
+
+    /// A source with `group/<repo>.git` in it, empty.
+    pub fn source(dir: &Path, group: &str, repo: &str) -> PathBuf {
+        let root = dir.join("source");
+        Node::new(root.clone()).make_repository(group, &format!("{repo}.git"), None).unwrap();
+        root
     }
 }
 

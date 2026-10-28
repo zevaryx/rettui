@@ -99,6 +99,12 @@ pub enum PeerKind {
 pub enum NetCommand {
     /// Serve rngit repositories (or stop).
     GitHost(Option<githost::GitHostConfig>),
+    /// Something the owner asks of the git node (answered with a
+    /// [`githost::GitHostEvent::Owned`]).
+    GitHostAction {
+        id: u64,
+        action: githost::HostAction,
+    },
     Announce,
     /// Write a paper message (answered with [`NetEvent::Paper`]).
     WritePaper {
@@ -1219,6 +1225,20 @@ async fn run(
                             launch_git(config.clone());
                             git_config = config;
                         }
+                    }
+                    NetCommand::GitHostAction { id, action } => {
+                        let (slot, ev) = (git_slot.clone(), ev.clone());
+                        tokio::spawn(async move {
+                            // Not held while it runs: a mirror can take minutes.
+                            let node = slot.lock().await.as_ref().map(|hosted| hosted.node.clone());
+                            let result = match node {
+                                None => Err("The rngit node isn't running".to_string()),
+                                Some(node) => tokio::task::spawn_blocking(move || action.run(&node))
+                                    .await
+                                    .unwrap_or_else(|e| Err(format!("It stopped: {e}"))),
+                            };
+                            let _ = ev.send(NetEvent::GitHost(githost::GitHostEvent::Owned { id, result }));
+                        });
                     }
                     NetCommand::Hub(config) => {
                         if config != hub_config {

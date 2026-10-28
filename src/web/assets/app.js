@@ -8118,6 +8118,16 @@ app.views.hub = {
 // documents and permissions. Everything here asks the node, so it can take
 // a while over a slow link.
 
+// A name for a fork or mirror of a source here, group/name, from its last two
+// parts, as rettui's suggested_name makes it.
+function suggestedName(source) {
+  const path = source.includes('://') ? source.split('://')[1] : source;
+  const parts = path.replace(/\/+$/, '').split('/').slice(1).filter(Boolean);
+  const plain = (part) => part.replace(/\.git$/, '').replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '');
+  if (parts.length >= 2) return `${plain(parts[parts.length - 2])}/${plain(parts[parts.length - 1])}`;
+  return `mirrors/${parts.length ? plain(parts[0]) : ''}`;
+}
+
 // An rns://node/group/repo URL's parts, as rettui's parse_repo reads it, or
 // null.
 function repoUrl(url) {
@@ -8175,13 +8185,18 @@ app.views.repos = {
 
   async update() {
     const state = this.state = await api.get('/repos');
-    if (changed(this, 'list', [state, this.url])) {
-      const items = state.repos.map((r) => el('div', { class: 'list-item' + (r.url === this.url ? ' selected' : ''), onclick: () => this.open(r.url) },
+    if (changed(this, 'list', [state, this.url, this.hosting])) {
+      const hosted = state.hosted;
+      const count = hosted.repos ? ` · ${hosted.repos.length}` : '';
+      const items = [el('div', { class: 'list-item' + (this.hosting ? ' selected' : ''), title: 'Mirror, fork and manage the repositories this computer hosts', onclick: () => this.openHosted() },
+        el('span', { class: 'main' }, el('div', { class: 'name', text: '⌂ Hosted here' }),
+          el('div', { class: 'sub', text: hosted.state === 'running' ? `rngit node${count}` : `rngit node ${hosted.state}` })))];
+      items.push(...state.repos.map((r) => el('div', { class: 'list-item' + (r.url === this.url ? ' selected' : ''), onclick: () => this.open(r.url) },
         el('span', { class: 'main' }, el('div', { class: 'name', text: `${r.group}/${r.repo}${r.mirror ? ' ⇩' : ''}`, title: r.mirror ? 'Copied to this computer' : '' }), el('div', { class: 'sub mono', text: r.node_name })),
         el('button', { text: '×', title: 'Stop keeping it (nothing on the node changes)', onclick: (e) => {
           e.stopPropagation();
           this.remove(r);
-        } })));
+        } }))));
       if (state.nodes.length) {
         items.push(el('div', { class: 'list-heading dim', text: 'rngit nodes heard' }));
         for (const node of state.nodes) {
@@ -8198,8 +8213,8 @@ app.views.repos = {
             } })));
         }
       }
-      this.list.replaceChildren(...(items.length ? items
-        : [el('div', { class: 'empty', text: 'No repositories yet. Add one by its rns:// URL; a link to one in a message or page opens it. rngit nodes show here when they announce.' })]));
+      if (items.length === 1) items.push(el('div', { class: 'empty', text: 'No repositories yet. Add one by its rns:// URL; a link to one in a message or page opens it. rngit nodes show here when they announce.' }));
+      this.list.replaceChildren(...items);
     }
     this.render();
   },
@@ -8236,6 +8251,7 @@ app.views.repos = {
 
   // Open a repository: every pane is asked for again.
   open(url) {
+    this.hosting = false;
     if (this.url !== url) {
       this.url = url;
       this.opened = null;
@@ -8296,7 +8312,99 @@ app.views.repos = {
     }
   },
 
+  // ---- The rngit node hosted here, for its owner ----
+
+  openHosted() {
+    this.hosting = true;
+    this.url = null;
+    this.opened = null;
+    setPane(this, 'detail');
+    this.update();
+  },
+
+  // Ask the node to do something; the list is read again after.
+  async host(path, body, what) {
+    toast(`${what}…`);
+    try {
+      const done = await api.post('/hosted/' + path, body);
+      toast(done.said || 'Done');
+      return true;
+    } catch (e) {
+      toast(`${what} failed: ${e.message}`, true);
+      return false;
+    } finally {
+      this.update();
+    }
+  },
+
+  async follow(kind) {
+    const label = kind === 'mirror'
+      ? 'An rns://node/group/repo or https:// repository. A mirror follows it again once a day, and can be synced any time.'
+      : 'An rns://node/group/repo or https:// repository. A fork is synced only when you ask.';
+    const source = await askText(kind === 'mirror' ? 'Mirror a repository here' : 'Fork a repository here', { label, ok: 'Next', mono: true, placeholder: 'https://…' });
+    if (!source) return;
+    const name = await askText('Keep it here as', { label: 'group/name (the group is made if it isn\'t there)', value: suggestedName(source), ok: kind === 'mirror' ? 'Mirror' : 'Fork', mono: true });
+    if (!name) return;
+    this.host('follow', { source, name, kind }, `${kind === 'mirror' ? 'Mirroring' : 'Forking'} into ${name}`);
+  },
+
+  async newHosted() {
+    const name = await askText('New empty repository', { label: 'group/name (the group is made if it isn\'t there). Push to it with git and rngit\'s helper.', ok: 'Make', mono: true });
+    if (name) this.host('new', { name }, `Making ${name}`);
+  },
+
+  async renameHosted(repo) {
+    const to = await askText(`Rename ${repo.name}`, { label: 'group/name: its releases, work documents and rules go with it', value: repo.name, ok: 'Rename', mono: true });
+    if (to && to !== repo.name) this.host('rename', { name: repo.name, to }, `Renaming ${repo.name}`);
+  },
+
+  async deleteHosted(repo) {
+    if (!await ask(`Delete ${repo.name} from this node, with its releases and work documents?\nIt can't be undone.`, { yes: 'Delete', danger: true })) return;
+    this.host('delete', { name: repo.name }, `Deleting ${repo.name}`);
+  },
+
+  renderHosted() {
+    const hosted = this.state?.hosted;
+    const running = hosted?.state === 'running';
+    this.header.replaceChildren(
+      el('button', { class: 'phone-only', text: '‹', title: 'Back to the list', onclick: () => setPane(this, 'list') }),
+      el('span', { class: 'title', text: 'Hosted here' }),
+      running && hosted.url ? el('span', { class: 'mono dim phone-hidden', text: hosted.url }) : null,
+      el('span', { class: 'grow' }),
+      running ? el('button', { text: 'Mirror', title: 'Mirror a repository from rns:// or https://', onclick: () => this.follow('mirror') }) : null,
+      running ? el('button', { text: 'Fork', title: 'Fork a repository from rns:// or https://', onclick: () => this.follow('fork') }) : null,
+      running ? el('button', { text: 'New', title: 'Make an empty repository to push to', onclick: () => this.newHosted() }) : null,
+      el('button', { text: '↻', title: 'List them again', onclick: () => this.update() }));
+    const note = (text) => el('div', { class: 'empty', text });
+    if (!running) {
+      const text = hosted?.state === 'starting' ? 'The rngit node is starting…'
+        : hosted?.state === 'failed' ? 'The rngit node failed to start: see the log in Status.'
+          : 'This computer isn\'t hosting rngit repositories. Turn on "Host rngit repositories" in Settings › Hosting to mirror, fork and keep repositories here.';
+      return this.body.replaceChildren(note(text));
+    }
+    const rows = [];
+    for (const what of hosted.acting) rows.push(el('div', { class: 'dim', text: `◌ ${what}…` }));
+    if (hosted.error) rows.push(note(`Couldn't list them: ${hosted.error}`));
+    else if (!hosted.repos) rows.push(note('Listing…'));
+    else if (!hosted.repos.length) rows.push(note('Nothing hosted yet. Mirror a repository from rns:// or https://, fork one, or make an empty one to push to.'));
+    for (const repo of hosted.repos || []) {
+      const f = repo.following;
+      const synced = f ? (f.synced ? `synced ${ago(f.synced)} ago` : 'never synced') : '';
+      rows.push(el('div', { class: 'list-item hosted-repo' },
+        el('span', { class: 'main' }, el('div', { class: 'name mono', text: repo.name }),
+          el('div', { class: 'sub', text: [humanBytes(repo.bytes), f ? `${f.kind === 'mirror' ? '⇄ mirror' : '⑂ fork'} of ${f.source} · ${synced}` : ''].filter(Boolean).join(' · ') })),
+        el('span', { class: 'row actions' },
+        f ? el('button', { text: 'Sync', title: 'Fetch from its source again', onclick: () => this.host('sync', { name: repo.name }, `Syncing ${repo.name}`) }) : null,
+        repo.url ? el('button', { text: 'Copy URL', onclick: () => copy(repo.url, 'the repository\'s URL') }) : null,
+        el('button', { text: 'Rename', onclick: () => this.renameHosted(repo) }),
+        el('button', { class: 'danger', text: 'Delete', onclick: () => this.deleteHosted(repo) }))));
+    }
+    rows.push(el('p', { class: 'dim', text: 'Who may read and push to them is set in the terminal (w and g in Repos › Hosted here), as the node\'s rules are.' }));
+    this.body.replaceChildren(...rows);
+  },
+
   render() {
+    if (this.hosting) return this.renderHosted();
     const repo = this.url && repoUrl(this.url);
     if (!repo) {
       this.header.replaceChildren(el('span', { class: 'title', text: 'Repository' }));

@@ -12,14 +12,85 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, human_bytes, selected_bg};
 use crate::app::App;
+use crate::app::node::NodeStatus;
 use crate::app::repo_files::{Browse, BrowseView};
 use crate::app::repos::{Detail, Load, OpenRepo, RepoPane, ReposFocus};
 use rngit::local::EntryKind;
+use rngit::server::Follows;
 
 pub(super) fn draw_repos(frame: &mut Frame, app: &mut App, area: Rect) {
     let [left, right] = Layout::horizontal([Constraint::Length(super::side_width(app, area, 36)), Constraint::Min(20)]).areas(area);
     draw_side(frame, app, left);
-    draw_repo(frame, app, right);
+    if app.repos.focus == ReposFocus::Hosted {
+        draw_hosted(frame, app, right);
+    } else {
+        draw_repo(frame, app, right);
+    }
+}
+
+/// The repositories the rngit node hosted here has, to manage.
+fn draw_hosted(frame: &mut Frame, app: &mut App, area: Rect) {
+    let title = match app.git_host.url() {
+        Some(url) if app.git_host.status == NodeStatus::Running => format!("Hosted here · {url}"),
+        _ => "Hosted here".to_string(),
+    };
+    let hosted_block = block(&title, true);
+    let inner = hosted_block.inner(area);
+    frame.render_widget(hosted_block, area);
+    app.regions.repo_panes.clear();
+    let [about, _, body] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)]).areas(inner);
+    app.regions.repo_list = body;
+    let mut spans = Vec::new();
+    for what in app.git_host.acting() {
+        spans.push(Span::styled(format!("◌ {what}…  "), Style::default().fg(Color::Yellow)));
+    }
+    if spans.is_empty() {
+        spans.push(Span::styled("m mirrors and f forks a repository here, n makes an empty one; H goes back", Style::default().fg(dim())));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), about);
+    let hint = |text: String| Paragraph::new(text).style(Style::default().fg(dim())).wrap(Wrap { trim: true });
+    if app.git_host.status != NodeStatus::Running {
+        let text = match &app.git_host.status {
+            NodeStatus::Failed(e) => format!("The rngit node failed to start: {e}"),
+            NodeStatus::Starting => "The rngit node is starting…".to_string(),
+            _ => "This computer isn't hosting rngit repositories. Turn on \"Host rngit repositories\" in Settings › Hosting to mirror, fork and keep repositories here.".to_string(),
+        };
+        return frame.render_widget(hint(text), body);
+    }
+    let list = match &app.git_host.hosted {
+        Load::Ready(list) => list,
+        Load::Failed(e) => return frame.render_widget(hint(format!("Couldn't list them: {e}")), body),
+        _ => return frame.render_widget(hint("Listing…".into()), body),
+    };
+    if list.is_empty() {
+        return frame.render_widget(
+            hint(
+                "Nothing hosted yet. m mirrors a repository from rns:// or https://, f forks one, n makes an empty one to push to.".into(),
+            ),
+            body,
+        );
+    }
+    let items: Vec<ListItem> = list
+        .iter()
+        .map(|hosted| {
+            let name = format!("{}/{}", hosted.group, hosted.name.strip_suffix(".git").unwrap_or(&hosted.name));
+            let mut spans = vec![Span::raw(name), Span::styled(format!("  {}", human_bytes(hosted.bytes)), Style::default().fg(dim()))];
+            if let Some(following) = &hosted.following {
+                let (mark, how) = if following.kind == Follows::Mirror { ("⇄", "mirror of") } else { ("⑂", "fork of") };
+                let synced = match following.synced {
+                    0 => "never synced".to_string(),
+                    at => format!("synced {} ago", super::ago(at as i64)),
+                };
+                spans.push(Span::styled(format!("  {mark} {how} {} · {synced}", following.source), Style::default().fg(dim())));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    if app.repos.hosted.selected().is_none_or(|at| at >= items.len()) {
+        app.repos.hosted.select(Some(0));
+    }
+    let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
+    frame.render_stateful_widget(list, body, &mut app.repos.hosted);
 }
 
 /// A short form of a hash, for lists.
@@ -76,7 +147,7 @@ fn draw_side(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_repo(frame: &mut Frame, app: &mut App, area: Rect) {
     let Some(open) = app.repos.open.clone() else {
         let repo_block = block("Repository", false);
-        let hint = "Pick a repository on the left and press Enter, or n to add one. A node doesn't list its repositories: Enter on one opens it in the Browser, where its owner may say which it has.";
+        let hint = "Pick a repository on the left and press Enter, or n to add one. A node doesn't list its repositories: Enter on one opens it in the Browser, where its owner may say which it has. H shows the repositories this computer hosts.";
         frame.render_widget(Paragraph::new(hint).style(Style::default().fg(dim())).wrap(Wrap { trim: true }).block(repo_block), area);
         app.regions.repo_panes.clear();
         app.regions.repo_list = Rect::default();
