@@ -122,13 +122,16 @@ mod tests {
         let open = listener.local_addr().unwrap().port();
         assert!(matches!(probe("127.0.0.1", open), Reach::Up(_)));
         assert!(matches!(probe("localhost", open), Reach::Up(_)), "by name, over whichever address answers");
-        // A port held by a socket that doesn't listen. One merely let go of
-        // could be taken meanwhile by another test, or be picked as the
-        // probe's own port, which connects to itself.
-        let held = tokio::net::TcpSocket::new_v4().unwrap();
-        held.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-        let closed = held.local_addr().unwrap().port();
-        assert_eq!(probe("127.0.0.1", closed), Reach::Down("refused"));
+        // A port nothing listens on any more. Meanwhile another test binding
+        // port 0 can take it, or the probe's own connection can be given it
+        // as its local port and connect to itself: then it's up, and another
+        // port is tried. (A port held by a socket that doesn't listen isn't
+        // refused everywhere: macOS doesn't answer.)
+        let refused = (0..20).map(|_| {
+            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            probe("127.0.0.1", port)
+        });
+        assert_eq!(refused.into_iter().find(|reach| !matches!(reach, Reach::Up(_))), Some(Reach::Down("refused")));
         assert_eq!(probe("no-such-host.invalid", 4242), Reach::Down("name not found"));
         assert_eq!(Reach::Up(Duration::from_millis(382)).label(), "up · 382 ms");
         assert_eq!(Reach::Down("refused").label(), "down · refused");
