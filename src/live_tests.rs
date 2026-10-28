@@ -595,8 +595,9 @@ async fn ben_proposes_a_work_document_on_amys_repository() {
     }
     ben.app.new_doc(true, "Idea", "Build a thing\n").unwrap();
     let proposed = repos.join("served/public/source.git.work/proposed/1/root");
-    until(&mut amy, &mut ben, "the proposal kept", |_, _| proposed.is_file()).await;
-    assert!(repos.join("served/public/source.git.work/1.allowed").is_file());
+    // Its rules are written after it, so both are waited for.
+    let owner = repos.join("served/public/source.git.work/1.allowed");
+    until(&mut amy, &mut ben, "the proposal and its rules kept", |_, _| proposed.is_file() && owner.is_file()).await;
 
     // Read back: listed, and signed by Ben's key.
     let ben_hash = hex::encode(ben.identity.hash);
