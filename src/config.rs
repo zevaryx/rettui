@@ -1048,7 +1048,7 @@ pub const FIELDS: &[Field] = &[
     Field {
         key: "rngit_timeout_secs",
         label: "rngit timeout (s)",
-        help: "Seconds a request to an rngit node may take before rettui gives up, a release's files included (10 to 3600)",
+        help: "Seconds a request to an rngit node may take before rettui gives up (10 to 3600); copying a repository or downloading a release file may take an hour, or this if longer",
         kind: FieldKind::Number,
         effect: Effect::Now,
     },

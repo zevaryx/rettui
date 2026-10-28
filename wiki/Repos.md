@@ -109,7 +109,8 @@ deletes its copy too.
   branch or tag with a name git wouldn't allow is refused, and nothing of
   that copy is kept.
 - A copy may come to 256 MB in one go. A bigger repository isn't copied, and
-  says so. How long a copy may take is **rngit timeout** (below). A copy that
+  says so. A copy may take an hour (or **rngit timeout**, below, if that's
+  longer), so a big repository over a slow link gets there. A copy that
   fails to be made leaves nothing behind, and one that fails to be updated
   stays as it was. rettui can't say how far a copy has got, only that it
   is going.
@@ -188,8 +189,9 @@ identity file instead (`~/.rngit/client_identity`, or the folder in
 another program's key.
 
 **rngit timeout** (`rngit_timeout_secs`, 120 seconds) is how long a
-request may take before it's given up, from 10 seconds to an hour. A slow
-link and a large file may need more.
+request may take before it's given up, from 10 seconds to an hour.
+Copying a repository and downloading a release file may take an hour
+whatever it says, since the whole transfer counts.
 
 Answers are capped so a node can't use up rettui's memory: a file of up
 to 64 MB, 10,000 branches and tags, and 2,000 entries in a list.

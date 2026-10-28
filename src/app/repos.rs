@@ -482,7 +482,10 @@ impl App {
     /// [`crate::net::NetEvent::Git`] with the id given back.
     pub fn git(&mut self, repo: &RepoUrl, request: GitRequest) -> u64 {
         let id = self.request_id();
-        let timeout = std::time::Duration::from_secs(self.settings.rngit_timeout_secs.max(1));
+        let mut timeout = std::time::Duration::from_secs(self.settings.rngit_timeout_secs.max(1));
+        if matches!(request, GitRequest::Mirror { .. } | GitRequest::Artifact { .. }) {
+            timeout = timeout.max(crate::net::git::BULK_TIMEOUT);
+        }
         self.send(NetCommand::Git { id, repo: repo.clone(), request, identity_file: self.rngit_identity_file(), timeout });
         id
     }
@@ -1623,7 +1626,7 @@ mod tests {
         assert_eq!(tui.app.store.repos[0].url, url);
         // Asked as rngit's own identity, as the settings say.
         let sent = tui.sent();
-        assert!(sent.iter().all(|c| matches!(c, NetCommand::Git { identity_file: Some(_), .. })));
+        assert!(sent.iter().all(|c| matches!(c, NetCommand::Git { identity_file: Some(_), timeout, .. } if timeout.as_secs() == 120)));
         assert!(!sent.is_empty());
 
         // A link to one opens it, and asks whether to copy it; anything but y leaves it be.
@@ -1782,8 +1785,10 @@ mod tests {
         assert!(screen.contains("Copying public/demo"), "{screen}");
         // The folder is the app's choice, under its data folder.
         let sent = tui.sent();
-        let [NetCommand::Git { request: GitRequest::Mirror { dir }, .. }] = &sent[..] else { panic!("{sent:?}") };
+        let [NetCommand::Git { request: GitRequest::Mirror { dir }, timeout, .. }] = &sent[..] else { panic!("{sent:?}") };
         let dir = dir.clone();
+        // The whole transfer counts against it, so a copy has longer than a request.
+        assert_eq!(*timeout, crate::net::git::BULK_TIMEOUT);
         assert_eq!(dir, tui.app.paths.repos.join(NODE).join("public").join("demo.git"));
         // Asked again while it goes: refused, not sent twice.
         tui.key(KeyCode::Char('m'));

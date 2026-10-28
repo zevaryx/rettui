@@ -26,6 +26,11 @@ pub const GIT_ASPECT: &str = "git.repositories";
 /// Longest a request may take unless the settings say otherwise, a
 /// release's files included.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
+/// Longest a request that brings back a whole repository or a release file
+/// may take. Reticulum counts the reply's whole transfer against the
+/// request's time, so a copy of a big repository over a slow link outlasts
+/// any one request's; a transfer that stalls still fails on its own.
+pub const BULK_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// Largest release file taken (it's held in memory).
 pub const MAX_ARTIFACT: usize = 64 * 1024 * 1024;
 /// Largest copy of a repository taken in one go: its bundle is held in
