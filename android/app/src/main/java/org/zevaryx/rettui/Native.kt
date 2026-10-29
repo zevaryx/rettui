@@ -21,4 +21,12 @@ object Native {
     /** The locks rettui needs held (see rettui's src/power.rs): 1 a wake lock, 2 Wi-Fi's multicast lock. */
     @JvmStatic
     external fun wants(): Int
+
+    /**
+     * The phone's own network changed; `mobile` whether it's mobile data. If
+     * it isn't, rettui's connections still on mobile data reconnect over it.
+     * How many did.
+     */
+    @JvmStatic
+    external fun networkChanged(mobile: Boolean): Int
 }

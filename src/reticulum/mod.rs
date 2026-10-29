@@ -475,6 +475,15 @@ pub fn mobile_data_devices() -> Vec<String> {
         .collect()
 }
 
+/// Whether `name` is one of the phone's mobile data interfaces: those of
+/// [`mobile_data_devices`] by prefix, and `v4-` ones, which Android adds for
+/// IPv4 over a mobile network that has only IPv6.
+#[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
+pub fn is_mobile_data_device(name: &str) -> bool {
+    let name = name.strip_prefix("v4-").unwrap_or(name);
+    ["rmnet", "ccmni", "seth_lte"].iter().any(|prefix| name.starts_with(prefix))
+}
+
 /// The config with every AutoInterface that's on (and not limited to
 /// chosen `devices`) also ignoring [`mobile_data_devices`]; None when
 /// they all do already.
@@ -730,6 +739,12 @@ mod tests {
             assert!(ignored.split(',').any(|i| i.trim() == name), "{name} in {ignored}");
         }
         assert_eq!(without_mobile_data(&changed), None, "once is enough");
+        for name in ["rmnet1", "rmnet_data0", "v4-rmnet1", "ccmni2", "seth_lte0"] {
+            assert!(is_mobile_data_device(name), "{name}");
+        }
+        for name in ["wlan0", "lo", "eth0", "v4-wlan0", "dummy0"] {
+            assert!(!is_mobile_data_device(name), "{name}");
+        }
         assert!(has_auto_interface(DEFAULT) && !has_auto_interface(&DEFAULT.replace("enabled = Yes", "enabled = No")));
 
         // The user's own are kept; one limited to chosen devices, one

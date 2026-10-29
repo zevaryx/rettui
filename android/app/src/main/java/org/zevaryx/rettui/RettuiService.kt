@@ -9,6 +9,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -83,6 +86,7 @@ class RettuiService : Service() {
     private var listener: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var networkWatch: ConnectivityManager.NetworkCallback? = null
     private val main = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -142,6 +146,38 @@ class RettuiService : Service() {
             main.post { stopSelf() }
         }, "rettui").apply { start() }
         listener = Thread(::listen, "rettui-events").apply { isDaemon = true; start() }
+        watchNetwork()
+    }
+
+    /**
+     * When the phone's own network changes to one that isn't mobile data
+     * (Wi-Fi is back), rettui's connections still on mobile data reconnect
+     * over it. One made while Wi-Fi was away for a moment otherwise stays
+     * on mobile data, which the phone keeps up, and keeps its radio awake.
+     */
+    private fun watchNetwork() {
+        val watch = object : ConnectivityManager.NetworkCallback() {
+            private var current: Network? = null
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                // Called again for the same network as its signal changes.
+                if (network == current) return
+                current = network
+                if (!running) return
+                val moved = try {
+                    Native.networkChanged(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))
+                } catch (e: Throwable) {
+                    0
+                }
+                if (moved > 0) Log.i(TAG, "Reconnecting $moved connections that were on mobile data")
+            }
+
+            override fun onLost(network: Network) {
+                if (network == current) current = null
+            }
+        }
+        runCatching { getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(watch) }
+            .onSuccess { networkWatch = watch }
     }
 
     /**
@@ -166,6 +202,8 @@ class RettuiService : Service() {
     override fun onDestroy() {
         listener?.interrupt()
         listener = null
+        networkWatch?.let { runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } }
+        networkWatch = null
         // After this, applyLocks takes nothing again.
         synchronized(this) {
             running = false

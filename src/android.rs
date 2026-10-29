@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JString};
-use jni::sys::{JNI_VERSION_1_6, jint, jobjectArray};
+use jni::sys::{JNI_VERSION_1_6, jboolean, jint, jobjectArray};
 
 /// Standard output and error are the process's: one run at a time sends
 /// them to its file.
@@ -76,6 +76,18 @@ pub extern "system" fn Java_org_zevaryx_rettui_Native_stop(_env: JNIEnv, _class:
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_zevaryx_rettui_Native_wants(_env: JNIEnv, _class: JClass) -> jint {
     jint::from(crate::power::wants())
+}
+
+/// `Native.networkChanged(mobile)`: the phone's own network changed, and
+/// `mobile` says whether it's mobile data. When it isn't, connections still
+/// on mobile data are shut down to reconnect over it (see
+/// [`crate::mobile_data`]). How many were.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_zevaryx_rettui_Native_networkChanged(_env: JNIEnv, _class: JClass, mobile: jboolean) -> jint {
+    if mobile != 0 {
+        return 0;
+    }
+    jint::try_from(crate::mobile_data::leave()).unwrap_or(jint::MAX)
 }
 
 /// Send standard output and error to `file` until what's returned is called.

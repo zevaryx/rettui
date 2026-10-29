@@ -112,6 +112,12 @@ can then:
   the other end is still there after 5 seconds of quiet (as Reticulum
   does everywhere), which keeps mobile data busy while the phone is awake.
   On mobile data, fewer TCP interfaces use less.
+- **Back to Wi-Fi when it's back.** A TCP interface that reconnects while
+  Wi-Fi is away for a moment goes over mobile data, and the phone keeps
+  mobile data up in the background after Wi-Fi returns. When the phone
+  switches back to Wi-Fi (or any network that isn't mobile data), the app
+  drops rettui's connections still on mobile data, and they reconnect over
+  Wi-Fi within seconds; a transfer over one may have to start again.
 
 To see what rettui uses, *Settings > Battery > Battery usage*, or
 `adb shell dumpsys batterystats org.zevaryx.rettui` on a computer.

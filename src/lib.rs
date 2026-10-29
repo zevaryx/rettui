@@ -20,6 +20,8 @@ mod live_tests;
 mod logging;
 mod lxmf;
 mod markdown;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+mod mobile_data;
 mod names;
 mod net;
 mod nomad;
