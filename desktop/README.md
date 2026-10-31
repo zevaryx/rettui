@@ -4,7 +4,8 @@ The web UI in a window of its own, without a browser. It runs rettui in
 this process, as the Android app does: the web UI listens on 127.0.0.1 (on
 port 8741, or the one it had last time, kept in `desktop_port` in the data
 folder), and the window opens its login link. Links that aren't rettui's
-open in the system's browser; downloads go to the Downloads folder. Closing
+open in the system's browser; downloads go to the Downloads folder;
+notifications are the system's own, since the webview has none. Closing
 the window stops rettui, which saves everything first.
 
 It's a separate package so that `rettui` itself never links the system
@@ -29,6 +30,6 @@ Installers (`.deb`, AppImage, `.dmg`, NSIS `.exe`) come from the Tauri CLI:
 
 ## Not done yet
 
-- Native notifications (webviews have no Web Push).
+- Clicking a notification to open what it's about (they show, natively, but a click only brings nothing up yet).
 - Identity, backup and pipe interface screens, which the web UI leaves out.
 - Updates, signing and the release workflow.

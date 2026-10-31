@@ -91,6 +91,10 @@ fn run(data_dir: Option<PathBuf>) -> Result<(), String> {
             }
         }))
         .plugin(tauri_plugin_opener::init())
+        // Notifications, which the webview doesn't show: the page sends
+        // them here (capabilities/web-ui.json allows it that and nothing
+        // else).
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             let handle = app.handle().clone();
             let _ = app_handle.set(handle.clone());
