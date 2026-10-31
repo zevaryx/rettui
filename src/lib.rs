@@ -258,6 +258,13 @@ pub fn request_stop() {
     STOP.notify_one();
 }
 
+/// Where the web UI keeps its login secret, for a program that runs it
+/// in-process and opens it itself (the desktop app, as the Android app
+/// reads its own): `data_dir` as `--data-dir` would be given.
+pub fn web_token_path(data_dir: Option<PathBuf>) -> Result<PathBuf> {
+    Ok(Paths::new(data_dir)?.web_token)
+}
+
 pub(crate) async fn stop_requested() {
     STOP.notified().await;
 }
@@ -528,6 +535,13 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_desktop_app_finds_the_login_secret_in_the_data_folder() {
+        let dir = std::env::temp_dir().join(format!("rettui-token-path-{}", std::process::id()));
+        assert_eq!(super::web_token_path(Some(dir.clone())).unwrap(), dir.join("web_token"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_web_ui_stops_when_asked_from_within() {
         let dir = std::env::temp_dir().join(format!("rettui-run-with-{}", std::process::id()));

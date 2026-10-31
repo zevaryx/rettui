@@ -6,6 +6,13 @@ description = "Terminal Reticulum client: LXMF messaging and NomadNet browsing"
 # rsReticulum, rsLXMF and rsNomad are AGPL-3.0-or-later.
 license = "AGPL-3.0-or-later"
 
+# The desktop app (desktop/) is its own package, so rettui itself never
+# links the system webview (GTK and WebKitGTK on Linux): plain `cargo build`
+# here builds rettui alone.
+[workspace]
+members = ["desktop"]
+exclude = ["deps", "vendor"]
+
 [dependencies]
 # Reticulum / LXMF / NomadNet, vendored as git submodules under deps/
 # (the libraries expect rsReticulum as a sibling of rsLXMF and rsNomad).

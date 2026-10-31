@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rettui",
+  "identifier": "org.zevaryx.rettui",
+  "build": {},
+  "app": {
+    "windows": [],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "nsis", "app", "dmg"],
+    "category": "SocialNetworking",
+    "shortDescription": "Reticulum client: LXMF messaging, NomadNet browsing and RRC chat",
+    "icon": ["icons/icon.png"],
+    "linux": { "deb": { "depends": [] } }
+  }
+}
