@@ -1,9 +1,9 @@
 name: Desktop
 
 # The desktop app (desktop/, rettui-desktop): rettui's web UI in a window of
-# its own. Unsigned installers for every platform the Build workflow makes;
-# for Linux also a plain archive (what the AUR's rettui-desktop-bin
-# installs) and a Flatpak bundle. Run it from Actions > Desktop > Run
+# its own. Unsigned installers for every platform the Build workflow makes,
+# a plain archive of the program for each (what the built-in updater and
+# the AUR's rettui-desktop-bin install), and for Linux a Flatpak bundle. Run it from Actions > Desktop > Run
 # workflow, or push to feature/desktop or feat/desktop; the Release workflow
 # calls it and attaches what it makes to the same release.
 on:
@@ -91,6 +91,9 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           APP_VERSION: ${{ steps.version.outputs.app }}
+          # A release build for its target, which updates itself from the
+          # archives below (see src/update/install.rs).
+          RETTUI_RELEASE_TARGET: ${{ matrix.target }}
         run: |
           case "$TARGET" in
             x86_64-unknown-linux-gnu) bundles=deb,appimage ;;
@@ -114,14 +117,23 @@ jobs:
           for file in "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage "$bundle"/nsis/*.exe "$bundle"/dmg/*.dmg; do
             cp "$file" "dist/$name.${file##*.}"
           done
-          # The program alone, with its icon and menu entry, for the AUR.
-          if [[ "$TARGET" == *linux* ]]; then
-            mkdir -p "dist/$name"
-            cp "target/$TARGET/release/rettui-desktop" README.md desktop/linux/rettui-desktop.desktop "dist/$name/"
-            cp desktop/icons/icon.png "dist/$name/rettui-desktop.png"
+          # The program alone, as the Build workflow packs rettui: what the
+          # updater unpacks. For Linux with its icon and menu entry, for the
+          # AUR and the Flatpak.
+          mkdir -p "dist/$name"
+          cp README.md "dist/$name/"
+          if [[ "$TARGET" == *windows* ]]; then
+            cp "target/$TARGET/release/rettui-desktop.exe" "dist/$name/"
+            (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
+          else
+            cp "target/$TARGET/release/rettui-desktop" "dist/$name/"
+            if [[ "$TARGET" == *linux* ]]; then
+              cp desktop/linux/rettui-desktop.desktop "dist/$name/"
+              cp desktop/icons/icon.png "dist/$name/rettui-desktop.png"
+            fi
             tar -czf "dist/$name.tar.gz" -C dist "$name"
-            rm -r "dist/$name"
           fi
+          rm -r "dist/$name"
           ls -l dist
           if [ -z "$(ls dist)" ]; then
             echo "::error::No installers in $bundle"

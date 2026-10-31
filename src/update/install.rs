@@ -9,6 +9,10 @@
 //! this one's place; rettui carries on as it was until it's started again.
 //! The checksums come from the same release: they catch a download gone
 //! wrong, not a release that isn't GitHub's.
+//!
+//! The desktop app (`rettui-desktop`) is updated the same way, from the
+//! release's `rettui-desktop` archives; its Flatpak and AppImage are
+//! replaced whole instead.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -54,8 +58,13 @@ impl Install {
         if cfg!(target_os = "android") {
             return Self::Elsewhere("In the Android app: install its new APK".into());
         }
-        if DESKTOP_APP.load(std::sync::atomic::Ordering::Relaxed) {
-            return Self::desktop_app();
+        // The desktop app's packages that replace the whole app: a
+        // program unpacked in their place would be lost, or the wrong kind.
+        if std::env::var_os("FLATPAK_ID").is_some() {
+            return Self::Elsewhere("In a Flatpak: install the new release's .flatpak".into());
+        }
+        if std::env::var_os("APPIMAGE").is_some() {
+            return Self::Elsewhere("An AppImage: download the new release's AppImage".into());
         }
         let exe = std::env::current_exe().and_then(|p| p.canonicalize());
         Self::from(RELEASE_TARGET, in_container(), exe)
@@ -82,20 +91,20 @@ impl Install {
         }
     }
 
-    /// The desktop app's copy is inside the app, which has its own
-    /// downloads (`rettui-desktop`): replacing it with rettui's would leave
-    /// no window.
-    fn desktop_app() -> Self {
-        Self::Elsewhere("In the desktop app: install the new release's rettui-desktop download".into())
-    }
-
     pub fn in_place(&self) -> bool {
         matches!(self, Self::InPlace { .. })
     }
 }
 
-/// Set by the desktop app before it runs rettui (see [`crate::desktop_app`]).
+/// Set by the desktop app before it runs rettui (see [`crate::desktop_app`]):
+/// it's updated from the release's `rettui-desktop` archives instead.
 pub(crate) static DESKTOP_APP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The program this is, as the releases name its archives: `rettui`, or
+/// the desktop app's `rettui-desktop`.
+fn program_name() -> &'static str {
+    if DESKTOP_APP.load(std::sync::atomic::Ordering::Relaxed) { "rettui-desktop" } else { "rettui" }
+}
 
 /// In a container, where the program is the image's: replaced, it would
 /// be lost with the container.
@@ -119,10 +128,11 @@ fn writable(dir: &Path) -> bool {
     made
 }
 
-/// A release's archive for `target`, as the Build workflow names it.
-fn archive_name(version: &str, target: &str) -> String {
+/// A release's archive of `program` for `target`, as the Build and Desktop
+/// workflows name it.
+fn archive_name(program: &str, version: &str, target: &str) -> String {
     let kind = if target.contains("windows") { "zip" } else { "tar.gz" };
-    format!("rettui-v{version}-{target}.{kind}")
+    format!("{program}-v{version}-{target}.{kind}")
 }
 
 /// The SHA-256 that `SHA256SUMS` (as sha256sum writes it) gives `name`.
@@ -137,10 +147,10 @@ fn checksum_for(sums: &str, name: &str) -> Option<[u8; 32]> {
     })
 }
 
-/// The `rettui` program in a release's archive (a `.zip` for Windows).
-fn unpack(archive: &[u8], windows: bool) -> Result<Vec<u8>, String> {
-    let name = if windows { "rettui.exe" } else { "rettui" };
-    let is_it = |path: &Path| path.file_name().is_some_and(|f| f == name);
+/// `program` in a release's archive (a `.zip` for Windows).
+fn unpack(archive: &[u8], program: &str, windows: bool) -> Result<Vec<u8>, String> {
+    let name = if windows { format!("{program}.exe") } else { program.to_string() };
+    let is_it = |path: &Path| path.file_name().is_some_and(|f| f == name.as_str());
     let read = |reader: &mut dyn Read| -> Result<Vec<u8>, String> {
         let mut data = Vec::new();
         reader.take(MAX_ARCHIVE).read_to_end(&mut data).map_err(|e| format!("Couldn't unpack the release: {e}"))?;
@@ -190,16 +200,16 @@ pub fn install_release(release: &Release) -> Result<String, String> {
     if !super::newer(VERSION, &release.version) {
         return Err(format!("rettui {VERSION} is as new as {} already", release.version));
     }
-    let program = fetch_program(&release.version, target)?;
+    let program = fetch_program(program_name(), &release.version, target)?;
     replace(&exe, &program, &release.version, run_version)?;
     Ok(format!("Installed rettui {}: start rettui again to use it", release.version))
 }
 
 /// A release's program for `target`, downloaded and checked against its
 /// `SHA256SUMS`.
-fn fetch_program(version: &str, target: &str) -> Result<Vec<u8>, String> {
+fn fetch_program(program: &str, version: &str, target: &str) -> Result<Vec<u8>, String> {
     let agent = super::agent(DOWNLOAD);
-    let name = archive_name(version, target);
+    let name = archive_name(program, version, target);
     let base = format!("{RELEASES}/v{version}");
     let sums = download(&agent, &format!("{base}/SHA256SUMS"), 1_000_000)?;
     let expected = checksum_for(&String::from_utf8_lossy(&sums), &name)
@@ -209,7 +219,7 @@ fn fetch_program(version: &str, target: &str) -> Result<Vec<u8>, String> {
     if found != expected {
         return Err(format!("The download isn't what the release's SHA256SUMS says {name} is, so it isn't installed"));
     }
-    unpack(&archive, target.contains("windows"))
+    unpack(&archive, program, target.contains("windows"))
 }
 
 /// What a program says it is (`--version`).
@@ -291,7 +301,6 @@ mod tests {
         };
         assert!(how(Install::from(None, false, Ok(exe.clone()))).starts_with("Built from source"));
         assert!(how(Install::from(target, true, Ok(exe.clone()))).starts_with("In a container"));
-        assert!(how(Install::desktop_app()).contains("rettui-desktop download"));
         for managed in ["/usr/bin/rettui", "/opt/homebrew/Cellar/rettui/1.6.0/bin/rettui", "/nix/store/abc-rettui/bin/rettui"] {
             assert!(how(Install::from(target, false, Ok(managed.into()))).contains("package manager"), "{managed}");
         }
@@ -301,8 +310,10 @@ mod tests {
 
     #[test]
     fn archives_and_their_checksums() {
-        assert_eq!(archive_name("1.7.0", "aarch64-apple-darwin"), "rettui-v1.7.0-aarch64-apple-darwin.tar.gz");
-        assert_eq!(archive_name("1.7.0", "x86_64-pc-windows-msvc"), "rettui-v1.7.0-x86_64-pc-windows-msvc.zip");
+        assert_eq!(archive_name("rettui", "1.7.0", "aarch64-apple-darwin"), "rettui-v1.7.0-aarch64-apple-darwin.tar.gz");
+        assert_eq!(archive_name("rettui", "1.7.0", "x86_64-pc-windows-msvc"), "rettui-v1.7.0-x86_64-pc-windows-msvc.zip");
+        // The desktop app's, from the Desktop workflow.
+        assert_eq!(archive_name("rettui-desktop", "1.11.0", "x86_64-pc-windows-msvc"), "rettui-desktop-v1.11.0-x86_64-pc-windows-msvc.zip");
         let a = "ab".repeat(32);
         let sums =
             format!("{a}  rettui-v1.7.0-x86_64-unknown-linux-gnu.tar.gz\n{}  rettui-v1.7.0-x86_64-pc-windows-msvc.zip\n", "cd".repeat(32));
@@ -324,7 +335,9 @@ mod tests {
             tar.append_data(&mut header, path, data).unwrap();
         }
         let packed = tar.into_inner().unwrap().finish().unwrap();
-        assert_eq!(unpack(&packed, false).unwrap(), b"the program");
+        assert_eq!(unpack(&packed, "rettui", false).unwrap(), b"the program");
+        // The desktop app's archive has rettui-desktop, not rettui.
+        assert!(unpack(&packed, "rettui-desktop", false).is_err());
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default();
         zip.start_file("rettui-v1.7.0-x/README.md", options).unwrap();
@@ -332,9 +345,9 @@ mod tests {
         zip.start_file("rettui-v1.7.0-x/rettui.exe", options).unwrap();
         std::io::Write::write_all(&mut zip, b"the windows program").unwrap();
         let packed = zip.finish().unwrap().into_inner();
-        assert_eq!(unpack(&packed, true).unwrap(), b"the windows program");
-        assert!(unpack(&packed, false).is_err());
-        assert!(unpack(b"not an archive", false).is_err());
+        assert_eq!(unpack(&packed, "rettui", true).unwrap(), b"the windows program");
+        assert!(unpack(&packed, "rettui", false).is_err());
+        assert!(unpack(b"not an archive", "rettui", false).is_err());
     }
 
     #[test]
@@ -382,7 +395,7 @@ mod tests {
     #[test]
     #[ignore]
     fn a_real_release_downloads_checks_and_runs() {
-        let program = fetch_program("1.5.1", "x86_64-unknown-linux-gnu").unwrap();
+        let program = fetch_program("rettui", "1.5.1", "x86_64-unknown-linux-gnu").unwrap();
         let dir = std::env::temp_dir().join(format!("rettui-real-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
