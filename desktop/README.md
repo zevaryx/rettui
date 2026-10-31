@@ -32,4 +32,4 @@ Installers (`.deb`, AppImage, `.dmg`, NSIS `.exe`) come from the Tauri CLI:
 
 - Opening what a notification is about when it's clicked.
 - Identity, backup and pipe interface screens, which the web UI leaves out.
-- Updates, signing and the release workflow.
+- Code signing: the builds are unsigned for now.
