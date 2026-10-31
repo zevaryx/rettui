@@ -16,6 +16,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY deps ./deps
 COPY vendor ./vendor
 COPY src ./src
+# The desktop app is in the same workspace (only its manifest is read).
+COPY desktop ./desktop
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     test -f deps/rsReticulum/Cargo.toml \
