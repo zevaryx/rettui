@@ -1,11 +1,14 @@
 name: Desktop
 
 # The desktop app (desktop/, rettui-desktop): rettui's web UI in a window of
-# its own. Unsigned installers for every platform the Build workflow makes,
-# and for Linux a plain archive (what the AUR's rettui-desktop-bin installs).
-# Run it from Actions > Desktop > Run workflow; the Release workflow calls it
-# and attaches what it makes to the same release.
+# its own. Unsigned installers for every platform the Build workflow makes;
+# for Linux also a plain archive (what the AUR's rettui-desktop-bin
+# installs) and a Flatpak bundle. Run it from Actions > Desktop > Run
+# workflow, or push to feature/desktop or feat/desktop; the Release workflow
+# calls it and attaches what it makes to the same release.
 on:
+  push:
+    branches: [feature/desktop, feat/desktop]
   workflow_dispatch:
     inputs:
       linux-only:
@@ -131,4 +134,56 @@ jobs:
         with:
           name: desktop-${{ matrix.target }}
           path: dist/*
+          if-no-files-found: error
+
+  # A Flatpak of the Linux build, on the GNOME runtime (which has WebKitGTK).
+  flatpak:
+    name: Flatpak (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            Cargo.toml
+            desktop/flatpak
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-${{ matrix.arch }}-unknown-linux-gnu
+          path: artifacts
+
+      - name: The archive, beside the manifest
+        id: version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          if [ -z "$VERSION" ]; then
+            VERSION="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)-${GITHUB_SHA::7}"
+          fi
+          VERSION="${VERSION//\//-}"
+          cp "artifacts/rettui-desktop-$VERSION-$ARCH-unknown-linux-gnu.tar.gz" desktop/flatpak/rettui-desktop.tar.gz
+          echo "bundle=rettui-desktop-$VERSION-$ARCH-unknown-linux-gnu.flatpak" >> "$GITHUB_OUTPUT"
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: desktop/flatpak/io.github.zevaryx.rettui.yml
+          bundle: ${{ steps.version.outputs.bundle }}
+          arch: ${{ matrix.arch }}
+          upload-artifact: false
+          cache: false
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-flatpak-${{ matrix.arch }}
+          path: ${{ steps.version.outputs.bundle }}
           if-no-files-found: error

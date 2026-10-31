@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.zevaryx.rettui</id>
+  <name>rettui</name>
+  <summary>Reticulum client: LXMF messaging, NomadNet browsing and RRC chat</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <developer id="io.github.zevaryx">
+    <name>zevaryx</name>
+  </developer>
+  <description>
+    <p>
+      rettui talks over Reticulum, without servers: on your local network,
+      by radio, or over the internet through entry points people run. It
+      sends and receives LXMF messages, browses and hosts NomadNet pages,
+      and joins RRC chat rooms. This is its web UI in a window of its own.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.zevaryx.rettui.desktop</launchable>
+  <url type="homepage">https://github.com/zevaryx/rettui</url>
+  <url type="bugtracker">https://github.com/zevaryx/rettui/issues</url>
+  <content_rating type="oars-1.1"/>
+</component>

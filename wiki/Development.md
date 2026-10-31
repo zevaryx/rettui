@@ -47,13 +47,15 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
 - **Desktop** ([desktop.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/desktop.yml)) builds
   the desktop app (`desktop/`, `rettui-desktop`) for the same platforms as Build:
   - Run it from *Actions > Desktop > Run workflow* (tick *Linux only* for
-    just the Linux builds), and download from the run's *Artifacts*.
+    just the Linux builds), or push to `feature/desktop`, and download
+    from the run's *Artifacts*.
   - It runs rettui in the same process and shows its web UI in the
     system's webview (WebKitGTK on Linux, WebView2 on Windows, WKWebView
     on macOS). It's a package of its own so that `rettui` never links
     them: `cargo build` at the top builds rettui alone.
-  - It makes, unsigned: a `.deb` (and on x86-64 an AppImage) and a plain
-    `.tar.gz` for Linux, an installer `.exe` for Windows and a `.dmg` for
+  - It makes, unsigned: a `.deb` (and on x86-64 an AppImage), a Flatpak
+    bundle (`.flatpak`, on the GNOME runtime, from `desktop/flatpak/`) and
+    a plain `.tar.gz` for Linux, an installer `.exe` for Windows and a `.dmg` for
     macOS, named like `rettui-desktop-v1.11.0-x86_64-unknown-linux-gnu.deb`.
     macOS asks to allow an unsigned app in *System Settings > Privacy &
     Security*, and Windows SmartScreen warns before running it.

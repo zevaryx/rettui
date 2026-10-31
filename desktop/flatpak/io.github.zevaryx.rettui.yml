@@ -1,0 +1,45 @@
+# The desktop app as a Flatpak, from the Desktop workflow's Linux archive
+# (rettui-desktop.tar.gz, beside this file when it's built). The GNOME
+# runtime has the WebKitGTK the app shows the web UI in.
+#
+#   flatpak-builder --repo=repo build io.github.zevaryx.rettui.yml
+#   flatpak build-bundle repo rettui-desktop.flatpak io.github.zevaryx.rettui
+id: io.github.zevaryx.rettui
+runtime: org.gnome.Platform
+runtime-version: "48"
+sdk: org.gnome.Sdk
+command: rettui-desktop
+finish-args:
+  # Reticulum over TCP, UDP and AutoInterface, and a shared instance.
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Voice messages: the microphone and playback.
+  - --socket=pulseaudio
+  # RNodes and other serial interfaces.
+  - --device=all
+  - --talk-name=org.freedesktop.Notifications
+  # rettui's own data folder and Reticulum's config, shared with the
+  # terminal rettui rather than kept apart in the sandbox (see
+  # desktop/src/main.rs).
+  - --filesystem=~/.local/share/rettui:create
+  - --filesystem=~/.reticulum:create
+  - --filesystem=~/.config/reticulum
+  - --filesystem=/etc/reticulum:ro
+  - --filesystem=xdg-download
+modules:
+  - name: rettui-desktop
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 rettui-desktop /app/bin/rettui-desktop
+      - install -Dm644 rettui-desktop.png /app/share/icons/hicolor/512x512/apps/io.github.zevaryx.rettui.png
+      - sed 's/^Icon=.*/Icon=io.github.zevaryx.rettui/' rettui-desktop.desktop > io.github.zevaryx.rettui.desktop
+      - install -Dm644 io.github.zevaryx.rettui.desktop /app/share/applications/io.github.zevaryx.rettui.desktop
+      - install -Dm644 io.github.zevaryx.rettui.metainfo.xml /app/share/metainfo/io.github.zevaryx.rettui.metainfo.xml
+    sources:
+      - type: archive
+        path: rettui-desktop.tar.gz
+      - type: file
+        path: io.github.zevaryx.rettui.metainfo.xml
