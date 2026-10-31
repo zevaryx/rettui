@@ -1,0 +1,134 @@
+name: Desktop
+
+# The desktop app (desktop/, rettui-desktop): rettui's web UI in a window of
+# its own. Unsigned installers for every platform the Build workflow makes,
+# and for Linux a plain archive (what the AUR's rettui-desktop-bin installs).
+# Run it from Actions > Desktop > Run workflow; the Release workflow calls it
+# and attaches what it makes to the same release.
+on:
+  workflow_dispatch:
+    inputs:
+      linux-only:
+        description: Only the Linux builds
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      version:
+        description: Version in the file names (the tag, for a release; else Cargo.toml's and the commit)
+        type: string
+        default: ""
+      linux-only:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    # As the Build workflow: the oldest Linux runners for the widest glibc
+    # support. Ubuntu 22.04 has WebKitGTK 4.1, which Tauri 2 needs.
+    runs-on: >-
+      ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'ubuntu-22.04-arm'
+      || contains(matrix.target, 'linux') && 'ubuntu-22.04'
+      || contains(matrix.target, 'windows') && 'windows-latest'
+      || 'macos-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: >-
+          ${{ fromJSON(inputs.linux-only
+          && '["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]'
+          || '["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin"]') }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ matrix.target }}
+
+      - name: WebKitGTK
+        if: contains(matrix.target, 'linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf file
+
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Version
+        id: version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          # Not a release: name it after Cargo.toml's version and the commit.
+          if [ -z "$VERSION" ]; then
+            VERSION="v$cargo_version-${GITHUB_SHA::7}"
+          fi
+          echo "name=${VERSION//\//-}" >> "$GITHUB_OUTPUT"
+          # The installers' own version: rettui's, which a release's tag is.
+          echo "app=$cargo_version" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        shell: bash
+        working-directory: desktop
+        env:
+          TARGET: ${{ matrix.target }}
+          APP_VERSION: ${{ steps.version.outputs.app }}
+        run: |
+          case "$TARGET" in
+            x86_64-unknown-linux-gnu) bundles=deb,appimage ;;
+            *linux*) bundles=deb ;;
+            *windows*) bundles=nsis ;;
+            *) bundles=app,dmg ;;
+          esac
+          cargo tauri build --target "$TARGET" --bundles "$bundles" --config "{\"version\": \"$APP_VERSION\"}" -- --locked
+
+      - name: Package
+        id: package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.name }}
+        run: |
+          name="rettui-desktop-$VERSION-$TARGET"
+          bundle="target/$TARGET/release/bundle"
+          mkdir -p dist
+          shopt -s nullglob
+          for file in "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage "$bundle"/nsis/*.exe "$bundle"/dmg/*.dmg; do
+            cp "$file" "dist/$name.${file##*.}"
+          done
+          # The program alone, with its icon and menu entry, for the AUR.
+          if [[ "$TARGET" == *linux* ]]; then
+            mkdir -p "dist/$name"
+            cp "target/$TARGET/release/rettui-desktop" README.md desktop/linux/rettui-desktop.desktop "dist/$name/"
+            cp desktop/icons/icon.png "dist/$name/rettui-desktop.png"
+            tar -czf "dist/$name.tar.gz" -C dist "$name"
+            rm -r "dist/$name"
+          fi
+          ls -l dist
+          if [ -z "$(ls dist)" ]; then
+            echo "::error::No installers in $bundle"
+            exit 1
+          fi
+
+      # Named apart from the Build workflow's rettui-* artifacts, which the
+      # Docker image is made from.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error

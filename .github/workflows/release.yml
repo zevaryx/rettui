@@ -1,7 +1,7 @@
 name: Release
 
 # Pushing a version tag (v1.2.0, or v1.3.0-rc.1 for a prerelease) builds
-# every platform and the Android app, publishes the Docker image to GitHub's
+# every platform, the desktop app and the Android app, publishes the Docker image to GitHub's
 # container registry and makes a GitHub release with the archives, Debian
 # packages and APK attached (and, for a release, a Homebrew formula and the
 # AUR's PKGBUILD), and the tag's section of CHANGELOG.md as its notes. The
@@ -43,6 +43,14 @@ jobs:
     with:
       version: ${{ github.ref_name }}
 
+  # The desktop app's installers (rettui-desktop), attached to the same
+  # release.
+  desktop:
+    needs: check
+    uses: ./.github/workflows/desktop.yml
+    with:
+      version: ${{ github.ref_name }}
+
   # The Android app (arm64-v8a: almost every phone), signed with the
   # ANDROID_KEYSTORE secret's key, as the test builds are.
   android:
@@ -68,7 +76,7 @@ jobs:
 
   release:
     name: GitHub release
-    needs: [build, android, docker]
+    needs: [build, desktop, android, docker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -85,10 +93,16 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+
       # Debian packages of the Linux binaries (in the checksums too).
       - name: Debian packages
         run: |
-          for archive in dist/*-unknown-linux-gnu.tar.gz; do
+          for archive in dist/rettui-v*-unknown-linux-gnu.tar.gz; do
             .github/scripts/package-deb.sh "$GITHUB_REF_NAME" "$archive" dist
           done
 
@@ -96,14 +110,17 @@ jobs:
         working-directory: dist
         run: sha256sum * > SHA256SUMS
 
-      # For a Homebrew tap and the AUR's rettui-bin, from the checksums (a
-      # release's, not a prerelease's): attached, to publish from.
+      # For a Homebrew tap and the AUR's rettui-bin and rettui-desktop-bin,
+      # from the checksums (a release's, not a prerelease's): attached, to
+      # publish from.
       - name: Homebrew formula and AUR package
         if: ${{ !contains(github.ref_name, '-') }}
         run: |
           .github/scripts/homebrew-formula.sh "$GITHUB_REF_NAME" dist/SHA256SUMS > dist/rettui.rb
           .github/scripts/aur-pkgbuild.sh "$GITHUB_REF_NAME" dist/SHA256SUMS aur
           cp aur/PKGBUILD dist/PKGBUILD
+          .github/scripts/aur-pkgbuild.sh "$GITHUB_REF_NAME" dist/SHA256SUMS aur-desktop desktop
+          cp aur-desktop/PKGBUILD dist/PKGBUILD-desktop
 
       - name: Publish
         env:
@@ -192,14 +209,18 @@ jobs:
             echo "::error::aur.archlinux.org's host key ($fingerprint) isn't the one it publishes"
             exit 1
           fi
-          AUR_MAINTAINER="$AUR_USERNAME <$AUR_EMAIL>" .github/scripts/aur-pkgbuild.sh "$TAG" dist/SHA256SUMS aur
-          # .SRCINFO as makepkg writes it, in Arch Linux (makepkg won't run
-          # as root).
-          docker run --rm -v "$PWD/aur/PKGBUILD:/PKGBUILD:ro" archlinux:base bash -euc '
-            useradd -m build
-            install -o build -m 644 /PKGBUILD /home/build/PKGBUILD
-            cd /home/build && runuser -u build -- makepkg --printsrcinfo
-          ' > srcinfo
-          mv srcinfo aur/.SRCINFO
           export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts_aur -o StrictHostKeyChecking=yes"
-          .github/scripts/publish-aur.sh "$TAG" aur ssh://aur@aur.archlinux.org/rettui-bin.git
+          # rettui-bin, then the desktop app's rettui-desktop-bin.
+          for package in rettui desktop; do
+            AUR_MAINTAINER="$AUR_USERNAME <$AUR_EMAIL>" .github/scripts/aur-pkgbuild.sh "$TAG" dist/SHA256SUMS "aur-$package" "$package"
+            # .SRCINFO as makepkg writes it, in Arch Linux (makepkg won't
+            # run as root).
+            docker run --rm -v "$PWD/aur-$package/PKGBUILD:/PKGBUILD:ro" archlinux:base bash -euc '
+              useradd -m build
+              install -o build -m 644 /PKGBUILD /home/build/PKGBUILD
+              cd /home/build && runuser -u build -- makepkg --printsrcinfo
+            ' > srcinfo
+            mv srcinfo "aur-$package/.SRCINFO"
+            name="$(sed -n 's/^pkgname=//p' "aur-$package/PKGBUILD")"
+            .github/scripts/publish-aur.sh "$TAG" "aur-$package" "ssh://aur@aur.archlinux.org/$name.git"
+          done

@@ -17,6 +17,7 @@ state as the TUI.
 | `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`, `repos`), the page editor's formatting (`format`), notifications (`notify`) and input routing | |
 | `ui/` | Drawing per tab, plus the sidebar, footer and prompt (`chrome`), the keys of each mode for the footer and the `?` list (`keys`), and the text editors | ratatui |
 | `term/` | Text input, the editors' text area, selection, clipboard, images (Kitty, Sixel, iTerm2 or half blocks), desktop notifications (`desktop`) | ratatui-image, notify-rust |
+| `desktop/` | The desktop app (`rettui-desktop`): the web UI in a window of its own, a package of its own on Tauri | Tauri |
 | `web/` | Web UI: HTTP API, login, live updates and notifications, and the page's HTML/CSS/JS, service worker, font and logo (`web/assets`) | axum |
 
 `main.rs` only calls `lib.rs`, which has the command line and starts the
@@ -32,7 +33,8 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
 - **CI** ([ci.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/ci.yml)) runs on every pull request:
   - a formatting check: run `cargo fmt` before committing (`rustfmt.toml`
     has rettui's style; `cargo fmt --check` says what it would change);
-  - Clippy, with warnings as errors;
+  - Clippy, with warnings as errors (and the desktop app, which needs
+    WebKitGTK, checked on Linux);
   - the tests on Linux, Windows and macOS.
 - **Build** ([build.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/build.yml)) builds the binaries
   for every platform in the [Installing](Installing) table without making a
@@ -42,6 +44,19 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   - Download the archives from the run's *Artifacts*.
   - They're named after the version and commit, for example
     `rettui-v1.2.0-a4e545b-x86_64-unknown-linux-gnu.tar.gz`.
+- **Desktop** ([desktop.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/desktop.yml)) builds
+  the desktop app (`desktop/`, `rettui-desktop`) for the same platforms as Build:
+  - Run it from *Actions > Desktop > Run workflow* (tick *Linux only* for
+    just the Linux builds), and download from the run's *Artifacts*.
+  - It runs rettui in the same process and shows its web UI in the
+    system's webview (WebKitGTK on Linux, WebView2 on Windows, WKWebView
+    on macOS). It's a package of its own so that `rettui` never links
+    them: `cargo build` at the top builds rettui alone.
+  - It makes, unsigned: a `.deb` (and on x86-64 an AppImage) and a plain
+    `.tar.gz` for Linux, an installer `.exe` for Windows and a `.dmg` for
+    macOS, named like `rettui-desktop-v1.11.0-x86_64-unknown-linux-gnu.deb`.
+    macOS asks to allow an unsigned app in *System Settings > Privacy &
+    Security*, and Windows SmartScreen warns before running it.
 - **Android** ([android.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/android.yml)) builds a test
   APK of the [Android app](Android) (`android/`):
   - Run it from *Actions > Android > Run workflow*, or push to
@@ -60,7 +75,8 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   prerelease, `v1.7.0-rc.1`, may have its own, or uses the release's). It:
   1. checks the tag matches the version in `Cargo.toml`, and that
      `CHANGELOG.md` has its section;
-  2. builds every platform with the Build workflow, and the Android app
+  2. builds every platform with the Build workflow, the desktop app with
+     the Desktop workflow, and the Android app
      (`rettui-v1.7.0-android-arm64-v8a.apk`) with the Android workflow;
   3. pushes the Docker image to `ghcr.io`, using those Linux binaries
      (the Dockerfile's `prebuilt` stage);
@@ -69,9 +85,11 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
      `rettui_1.7.0_arm64.deb`;
   5. for a release (not a prerelease), writes a Homebrew formula
      (`rettui.rb`, by `.github/scripts/homebrew-formula.sh`) and the
-     AUR's `rettui-bin` package (`PKGBUILD` and `.SRCINFO`, by
-     `.github/scripts/aur-pkgbuild.sh`) from the checksums;
-  6. creates a GitHub release with the archives, the packages, the APK,
+     AUR's `rettui-bin` and `rettui-desktop-bin` packages (`PKGBUILD` and
+     `PKGBUILD-desktop`, by `.github/scripts/aur-pkgbuild.sh`) from the
+     checksums;
+  6. creates a GitHub release with the archives, the packages, the
+     desktop app's installers, the APK,
      `SHA256SUMS`, `rettui.rb` and `PKGBUILD`, and the tag's section of
      `CHANGELOG.md` (printed by `.github/scripts/release-notes.sh v1.7.0`)
      as its notes, with the Docker image's name;
@@ -150,9 +168,10 @@ secret.
   line and its commits' author, both public on the AUR. The job checks
   the AUR's host key against the fingerprint aur.archlinux.org
   publishes, writes `.SRCINFO` with `makepkg` (in an Arch Linux
-  container), and pushes to `rettui-bin`
-  (`.github/scripts/publish-aur.sh`); the first push makes the package.
-  Then `yay -S rettui-bin` (or any AUR helper) installs it.
+  container), and pushes to `rettui-bin` and `rettui-desktop-bin`
+  (`.github/scripts/publish-aur.sh`); the first push makes each package.
+  Then `yay -S rettui-bin` (or any AUR helper) installs rettui, and
+  `yay -S rettui-desktop-bin` the desktop app.
 
 By hand, from any release's `SHA256SUMS`: `homebrew-formula.sh` and
 `aur-pkgbuild.sh` write the formula and the package, and

@@ -54,6 +54,9 @@ impl Install {
         if cfg!(target_os = "android") {
             return Self::Elsewhere("In the Android app: install its new APK".into());
         }
+        if DESKTOP_APP.load(std::sync::atomic::Ordering::Relaxed) {
+            return Self::desktop_app();
+        }
         let exe = std::env::current_exe().and_then(|p| p.canonicalize());
         Self::from(RELEASE_TARGET, in_container(), exe)
     }
@@ -79,10 +82,20 @@ impl Install {
         }
     }
 
+    /// The desktop app's copy is inside the app, which has its own
+    /// downloads (`rettui-desktop`): replacing it with rettui's would leave
+    /// no window.
+    fn desktop_app() -> Self {
+        Self::Elsewhere("In the desktop app: install the new release's rettui-desktop download".into())
+    }
+
     pub fn in_place(&self) -> bool {
         matches!(self, Self::InPlace { .. })
     }
 }
+
+/// Set by the desktop app before it runs rettui (see [`crate::desktop_app`]).
+pub(crate) static DESKTOP_APP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// In a container, where the program is the image's: replaced, it would
 /// be lost with the container.
@@ -278,6 +291,7 @@ mod tests {
         };
         assert!(how(Install::from(None, false, Ok(exe.clone()))).starts_with("Built from source"));
         assert!(how(Install::from(target, true, Ok(exe.clone()))).starts_with("In a container"));
+        assert!(how(Install::desktop_app()).contains("rettui-desktop download"));
         for managed in ["/usr/bin/rettui", "/opt/homebrew/Cellar/rettui/1.6.0/bin/rettui", "/nix/store/abc-rettui/bin/rettui"] {
             assert!(how(Install::from(target, false, Ok(managed.into()))).contains("package manager"), "{managed}");
         }
