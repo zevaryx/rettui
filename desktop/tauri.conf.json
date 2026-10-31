@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "rettui Desktop",
-  "identifier": "org.zevaryx.rettui.desktop",
+  "identifier": "io.github.zevaryx.rettui",
   "build": {},
   "app": {
     "windows": [],

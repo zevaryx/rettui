@@ -28,7 +28,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let data_dir = match (args.next().as_deref(), args.next()) {
         (Some("--data-dir"), Some(dir)) => Some(PathBuf::from(dir)),
-        _ => None,
+        _ => flatpak_data_dir(),
     };
     if let Err(e) = run(data_dir) {
         eprintln!("rettui: {e}");
@@ -125,6 +125,14 @@ fn run(data_dir: Option<PathBuf>) -> Result<(), String> {
     });
     // rettui saves everything before it returns.
     server.join().map_err(|_| "rettui stopped unexpectedly".to_string())?
+}
+
+/// In a Flatpak, the folder the terminal rettui uses
+/// (`~/.local/share/rettui`, which the Flatpak may write to), rather than
+/// one inside the sandbox: both then have the same identity and messages.
+fn flatpak_data_dir() -> Option<PathBuf> {
+    std::env::var_os("FLATPAK_ID")?;
+    Some(PathBuf::from(std::env::var_os("HOME")?).join(".local/share/rettui"))
 }
 
 /// The port last used (so the page keeps its saved state, which is kept
