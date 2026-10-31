@@ -24,6 +24,12 @@ const PORT: u16 = 8741;
 const START: Duration = Duration::from_secs(30);
 
 fn main() {
+    // What the updater runs to check a new copy works here (see rettui's
+    // src/update/install.rs).
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("rettui-desktop {}", rettui::VERSION);
+        return;
+    }
     // `--data-dir` as rettui takes it, for a second identity's folder.
     let mut args = std::env::args().skip(1);
     let data_dir = match (args.next().as_deref(), args.next()) {

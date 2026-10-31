@@ -258,8 +258,12 @@ pub fn request_stop() {
     STOP.notify_one();
 }
 
-/// Say that rettui runs inside the desktop app, before [`run_with`]: it
-/// then leaves updating to the app's own releases.
+/// This build's version, for the desktop app's `--version`.
+pub const VERSION: &str = update::VERSION;
+
+/// Say that rettui runs inside the desktop app, before [`run_with`]:
+/// installing an update then replaces it with the release's
+/// `rettui-desktop`, not `rettui`.
 pub fn desktop_app() {
     update::install::DESKTOP_APP.store(true, std::sync::atomic::Ordering::Relaxed);
 }

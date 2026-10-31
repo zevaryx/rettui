@@ -57,6 +57,12 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
     bundle (`.flatpak`, on the GNOME runtime, from `desktop/flatpak/`) and
     a plain `.tar.gz` for Linux, an installer `.exe` for Windows and a `.dmg` for
     macOS, named like `rettui-desktop-v1.11.0-x86_64-unknown-linux-gnu.deb`.
+  - It also packs the program alone for every platform
+    (`rettui-desktop-v1.11.0-<target>.tar.gz`, `.zip` for Windows), as
+    Build packs `rettui`: the desktop app's Install (in Status) updates
+    itself from those, as rettui does. Packages (`.deb`, the AUR) leave
+    updating to the package manager, and the Flatpak and AppImage are
+    replaced whole.
     macOS asks to allow an unsigned app in *System Settings > Privacy &
     Security*, and Windows SmartScreen warns before running it.
 - **Android** ([android.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/android.yml)) builds a test
