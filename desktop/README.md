@@ -30,6 +30,6 @@ Installers (`.deb`, AppImage, `.dmg`, NSIS `.exe`) come from the Tauri CLI:
 
 ## Not done yet
 
-- Clicking a notification to open what it's about (they show, natively, but a click only brings nothing up yet).
+- Opening what a notification is about when it's clicked.
 - Identity, backup and pipe interface screens, which the web UI leaves out.
 - Updates, signing and the release workflow.
