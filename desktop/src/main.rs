@@ -48,6 +48,7 @@ fn run(data_dir: Option<PathBuf>) -> Result<(), String> {
     // Set once the window is up: rettui stopping by itself (a signal, say)
     // closes it.
     let app_handle: Arc<OnceLock<AppHandle>> = Arc::default();
+    rettui::desktop_app();
     let server = {
         let app_handle = app_handle.clone();
         thread::spawn(move || {

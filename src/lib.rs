@@ -258,6 +258,12 @@ pub fn request_stop() {
     STOP.notify_one();
 }
 
+/// Say that rettui runs inside the desktop app, before [`run_with`]: it
+/// then leaves updating to the app's own releases.
+pub fn desktop_app() {
+    update::install::DESKTOP_APP.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Where the web UI keeps its login secret, for a program that runs it
 /// in-process and opens it itself (the desktop app, as the Android app
 /// reads its own): `data_dir` as `--data-dir` would be given.
