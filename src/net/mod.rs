@@ -45,6 +45,12 @@ pub use remote::{
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 /// Read the path table every so many stats intervals (30 s).
 const ROUTES_EVERY: u32 = 6;
+/// How often the hosted node looks again for pages and files put in its
+/// folder from outside rettui (copied in, or written by a script).
+#[cfg(not(test))]
+const NODE_RESCAN: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const NODE_RESCAN: Duration = Duration::from_secs(1);
 /// Known identities and stamp tickets are saved (when changed) every this
 /// many stats ticks: on a busy network new ones come several a second,
 /// and each save writes the whole file.
@@ -922,6 +928,7 @@ async fn run(
     };
     let mut sync_timer = timer(sync_interval);
     let mut stats_timer = tokio::time::interval(STATS_INTERVAL);
+    let mut node_rescan = tokio::time::interval_at(tokio::time::Instant::now() + NODE_RESCAN, NODE_RESCAN);
     // The path table, every so many stats ticks (it can be long).
     let mut routes_due = 0u32;
     let mut known_save_due = KNOWN_SAVE_EVERY;
@@ -970,6 +977,11 @@ async fn run(
                         propagation_node = Some(pick.node);
                     }
                     let _ = ev.send(NetEvent::PropagationPicked(result));
+                }
+            }
+            _ = node_rescan.tick(), if hosted.is_some() => {
+                if let Some(Err(e)) = hosted.as_ref().map(|node| node.reload_routes()) {
+                    let _ = ev.send(NetEvent::Log(format!("Could not reload node pages: {e}")));
                 }
             }
             _ = stats_timer.tick() => {

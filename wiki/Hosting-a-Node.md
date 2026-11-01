@@ -33,7 +33,8 @@ or the folder set in `node_dir`.
   preview alone (`Ctrl-P` / `p`, or the buttons in the web UI). Saving writes
   the file, and visitors get the new version straight away. New, renamed and
   deleted pages are picked up without a restart. You can also edit the files
-  with any editor.
+  with any editor, or copy pages into the folder: rettui looks for new ones
+  every minute.
 - **Formatting ribbon:** above the page editor, in both UIs, buttons put
   Micron markup around the selection, on the selected lines, or at the
   cursor: bold, italic, underline and normal (removes formatting), text and
@@ -129,9 +130,13 @@ off, a script is never sent, and a visitor who asks for one gets the same
   `#!/usr/bin/env python3` finds Python if it's in a folder on that path.
   Where it isn't (Homebrew, `/usr/local`, pyenv or a virtual environment),
   put its folder in *Script PATH*, or start the page with Python's full path,
-  such as `#!/opt/homebrew/bin/python3`.
+  such as `#!/opt/homebrew/bin/python3` or `#!/srv/node/venv/bin/python`.
+  Use full paths: a script runs in the folder rettui was started in, not its
+  page's folder, so `#!../venv/bin/python` or a relative *Script PATH* folder
+  doesn't find it.
 - **Limits:** a script has 10 seconds to finish (*Script time limit*, up to
-  120) and may print up to 512 KB. Past either, the visitor gets nothing. A
+  120) and may print up to 512 KB. Past either, or if it can't be run, the
+  visitor gets a "Page failed" page saying it couldn't be made. A
   running script holds up the node's other requests until it ends, so a long
   limit makes everyone wait. What it writes to its error output
   never reaches visitors; a script that fails but printed something still

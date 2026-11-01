@@ -241,6 +241,8 @@ async fn amys_node_propagation_node_and_hub() {
     let (mut amy, mut ben) = pair("hosting", |s| {
         s.node_enabled = true;
         s.node_name = Some("Amy's node".into());
+        s.node_executable_pages = true;
+        s.node_script_timeout_secs = 1;
         s.pn_enabled = true;
         s.hub_enabled = true;
         s.hub_name = Some("Amy's hub".into());
@@ -264,6 +266,29 @@ async fn amys_node_propagation_node_and_hub() {
     // A page that isn't there.
     ben.app.navigate(crate::app::resolve_url(&format!("{node}:/page/nope.mu"), None).unwrap());
     until(&mut amy, &mut ben, "Ben told the page isn't there", |_, b| b.app.browser.tab.loading.is_none()).await;
+    // A page put in Amy's folder from outside rettui is found a moment later.
+    std::fs::write(amy.app.paths.node.join("pages").join("copied.mu"), "Copied in by hand").unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    ben.app.navigate(crate::app::resolve_url(&format!("{node}:/page/copied.mu"), None).unwrap());
+    until(&mut amy, &mut ben, "Ben loading the copied page", |_, b| {
+        b.app.browser.tab.loading.is_none() && b.app.browser.tab.source.as_deref().is_some_and(|s| s.contains("Copied in by hand"))
+    })
+    .await;
+    // A script that runs past its time limit gets a page saying so, rather
+    // than leaving Ben waiting.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let slow = amy.app.paths.node.join("pages").join("slow.mu");
+        std::fs::write(&slow, "#!/bin/sh\nsleep 5\n").unwrap();
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        ben.app.navigate(crate::app::resolve_url(&format!("{node}:/page/slow.mu"), None).unwrap());
+        until(&mut amy, &mut ben, "Ben told the script failed", |_, b| {
+            b.app.browser.tab.loading.is_none() && b.app.browser.tab.source.as_deref().is_some_and(|s| s.contains("could not be generated"))
+        })
+        .await;
+    }
 
     // Amy blocks Ben (his identity known, so in Reticulum too), then lets
     // him back.
