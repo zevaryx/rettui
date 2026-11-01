@@ -33,7 +33,7 @@ case "$kind" in
   desktop)
     program=rettui-desktop
     desc="Reticulum client in a window of its own (rettui's web UI): LXMF messaging, NomadNet browsing and hosting, and RRC chat"
-    depends=('glibc' 'gcc-libs' 'gtk3' 'webkit2gtk-4.1')
+    depends=('glibc' 'gcc-libs' 'gtk3' 'webkit2gtk-4.1' 'libayatana-appindicator')
     ;;
   *)
     echo "::error::$kind isn't a package (rettui or desktop)" >&2

@@ -13,7 +13,8 @@ path = "src/main.rs"
 [dependencies]
 # rettui itself, run in this process: the same web UI the browser shows.
 rettui = { path = ".." }
-tauri = { version = "2.12", features = [] }
+# The tray icon keeps it reachable while it runs in the background.
+tauri = { version = "2.12", features = ["tray-icon"] }
 # Links that aren't rettui's open in the system's browser.
 tauri-plugin-opener = "2.7"
 # One copy at a time: a second start brings the first one's window up, as

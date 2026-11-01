@@ -7,8 +7,17 @@ folder), and the window opens its login link. Links that aren't rettui's
 open in the system's browser; downloads go to the Downloads folder;
 notifications are the system's own, since the webview has none, and
 clicking one opens what it's about (on Windows, while the toast is still
-on screen, not from the notification centre). Closing
-the window stops rettui, which saves everything first.
+on screen, not from the notification centre).
+
+Closing the window leaves rettui running in the background, so messages
+keep arriving and notifications keep coming, with an icon in the system
+tray (the menu bar on a Mac): a click on it opens the window again, and
+its menu has **Open rettui** and **Quit**. Starting the app again opens
+the window too. *Keep running when closed* (Settings › System, on) turns
+that off, so closing the window stops rettui, which saves everything
+first; *Minimize to tray* (off) hides the window to the tray when it's
+minimized. On Linux the tray needs libayatana-appindicator (the Flatpak
+has none yet); without it the window closes and minimizes as usual.
 
 It's a separate package so that `rettui` itself never links the system
 webview: `cargo build` at the top builds rettui alone.
