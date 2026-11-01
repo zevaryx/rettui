@@ -133,8 +133,9 @@ off, visitors get the script's own text, so keep secrets out of it.
   line naming a program that scripts can't find, says where that program is
   on your computer. In the web UI, this runs scripts already on the node, as
   any visitor could; the web UI still can't write them or turn them on.
-- **Docker:** rettui's image has no Python. A script in it needs a program
-  that's there (`/bin/sh`), or an image built on rettui's with Python added.
+- **Docker:** rettui's image has Python 3 (`/usr/bin/python3`), so
+  `#!/usr/bin/env python3` works there. For any other program, build an image
+  on rettui's with it added.
 
 ## Propagation node
 
