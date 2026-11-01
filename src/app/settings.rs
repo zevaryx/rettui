@@ -127,6 +127,13 @@ impl App {
                         crate::power::set_wake(after.keep_awake);
                     }
                 }
+                "keep_running" | "minimize_to_tray" => {
+                    self.settings.keep_running = after.keep_running;
+                    self.settings.minimize_to_tray = after.minimize_to_tray;
+                    // What the desktop app reads when its window is closed
+                    // or minimized.
+                    crate::set_tray(&after);
+                }
                 "notify_messages" => self.settings.notify_messages = after.notify_messages,
                 "notify_rrc" => self.settings.notify_rrc = after.notify_rrc,
                 "unknown_senders" => self.settings.unknown_senders = after.unknown_senders.clone(),
