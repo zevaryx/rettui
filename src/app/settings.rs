@@ -165,12 +165,20 @@ impl App {
                         max_bytes: after.max_message_kb * 1000,
                     });
                 }
-                "node_enabled" | "node_name" | "node_announce_interval_mins" | "node_dir" | "node_executable_pages" => {
+                "node_enabled"
+                | "node_name"
+                | "node_announce_interval_mins"
+                | "node_dir"
+                | "node_executable_pages"
+                | "node_script_path"
+                | "node_script_timeout_secs" => {
                     self.settings.node_enabled = after.node_enabled;
                     self.settings.node_name = after.node_name.clone();
                     self.settings.node_announce_interval_mins = after.node_announce_interval_mins;
                     self.settings.node_dir = after.node_dir.clone();
                     self.settings.node_executable_pages = after.node_executable_pages;
+                    self.settings.node_script_path = after.node_script_path.clone();
+                    self.settings.node_script_timeout_secs = after.node_script_timeout_secs;
                     node = true;
                 }
                 "pn_enabled" | "pn_name" | "pn_stamp_cost" | "pn_storage_mb" | "pn_transfer_kb" => {
@@ -443,6 +451,7 @@ mod tests {
                     "home" => home.clone(),
                     "node_name" => "Hilltop".into(),
                     "node_dir" => node_dir.clone(),
+                    "node_script_path" => "/usr/bin:/bin:/opt/python/bin".into(),
                     "nomad_files_dir" => dir.join("saved").display().to_string(),
                     "pn_name" => "Hilltop messages".into(),
                     "hub_name" => "Hilltop chat".into(),
@@ -483,6 +492,9 @@ mod tests {
         refused(&mut app, "rns_config", "");
         refused(&mut app, "node_dir", &elsewhere);
         refused(&mut app, "nomad_files_dir", &elsewhere);
+        // Nor where scripts find the programs they run (the time limit is fine).
+        refused(&mut app, "node_script_path", "/tmp/bin");
+        app.update_settings_from_web(&[("node_script_timeout_secs", "30")]).unwrap();
         // Nor a file to read map tiles from.
         let offline_map = dir.join("region.mbtiles");
         crate::web::mbtiles::sample(&offline_map, "png");
@@ -497,6 +509,7 @@ mod tests {
         app.update_settings_from_web(&[("rns_config", &rns), ("display_name", "Changed"), ("messages_kept", "50")]).unwrap();
         let saved = app.saved_settings().unwrap();
         assert_eq!((saved.display_name.as_str(), saved.messages_kept), ("Changed", 50));
+        assert_eq!(app.saved_settings().unwrap().node_script_timeout_secs, 30);
         // The terminal UI may change them all.
         app.update_settings(&[("node_executable_pages", "true"), ("rns_config", &elsewhere)]).unwrap();
         assert!(app.saved_settings().unwrap().node_executable_pages);

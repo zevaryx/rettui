@@ -102,7 +102,8 @@ or the folder set in `node_dir`.
   from the cache), and runs your script pages itself (see below).
 - **Scripts:** executable pages run as programs for visitors only when "Run
   page scripts" is on. The web UI can't change, rename or create scripts,
-  turn "Run page scripts" on or move the node folder, so the web login can't
+  turn "Run page scripts" on, change *Script PATH* or move the node folder,
+  so the web login can't
   be used to run programs on the host. The TUI can do all of these.
 
 ### Script pages
@@ -112,18 +113,24 @@ NomadNet: any file with its execute bit set (`chmod +x page.mu`), usually
 starting with a line such as `#!/usr/bin/env python3`. Each visitor who
 opens it runs it, and gets what it prints. Scripts run only on Linux, macOS
 and other Unix systems, and only while "Run page scripts" is on: while it's
-off, visitors get the script's own text, so keep secrets out of it.
+off, a script is never sent, and a visitor who asks for one gets the same
+"not found" page as for a page that isn't there.
 
 - **What a script gets:** no shell and nothing to read on its input. Its
   environment holds only, as NomadNet gives it, `link_id` (the visitor's
   link), `remote_identity` (the identity hash of a visitor who identified),
   each `field_…` a form sent and each `var_…` a link sent, and `PATH`, which
-  is just `/usr/bin:/bin`. So `#!/usr/bin/env python3` finds Python only if
-  it's in `/usr/bin` or `/bin`. Where it isn't (Homebrew, `/usr/local`, pyenv
-  or a virtual environment), start the page with Python's full path instead,
+  is `/usr/bin:/bin` unless *Script PATH* (Settings, Hosting; terminal only)
+  says otherwise: a list of folders joined with colons, or `host` for the
+  `PATH` rettui itself was started with, as NomadNet does. So
+  `#!/usr/bin/env python3` finds Python if it's in a folder on that path.
+  Where it isn't (Homebrew, `/usr/local`, pyenv or a virtual environment),
+  put its folder in *Script PATH*, or start the page with Python's full path,
   such as `#!/opt/homebrew/bin/python3`.
-- **Limits:** a script has 10 seconds to finish and may print up to 512 KB.
-  Past either, the visitor gets nothing. What it writes to its error output
+- **Limits:** a script has 10 seconds to finish (*Script time limit*, up to
+  120) and may print up to 512 KB. Past either, the visitor gets nothing. A
+  running script holds up the node's other requests until it ends, so a long
+  limit makes everyone wait. What it writes to its error output
   never reaches visitors; a script that fails but printed something still
   sends that.
 - **Trying one:** open it on your own node in the Browser (`b` in the Node

@@ -231,6 +231,7 @@ pub enum NetCommand {
         script: PathBuf,
         fields: BTreeMap<String, String>,
         identify: bool,
+        limits: nomad::script::Limits,
     },
     /// Connect to an RRC hub (no-op if a session is already running).
     /// `key`: the hub's public key, for the hub hosted here.
@@ -1279,11 +1280,11 @@ async fn run(
                             let _ = ev.send(NetEvent::Fetched { id, result });
                         });
                     }
-                    NetCommand::RunScript { id, script, fields, identify } => {
+                    NetCommand::RunScript { id, script, fields, identify, limits } => {
                         let ev = ev.clone();
                         let remote_identity = identify.then_some(identity.hash);
                         tokio::task::spawn_blocking(move || {
-                            let data = nomad::script::preview(&script, remote_identity, &fields);
+                            let data = nomad::script::preview(&script, remote_identity, &fields, &limits);
                             let _ = ev.send(NetEvent::Fetched { id, result: Ok(FetchedContent { data, metadata: None }) });
                         });
                     }

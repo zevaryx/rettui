@@ -72,6 +72,12 @@ pub struct Settings {
     pub node_dir: Option<String>,
     /// Run executable pages as scripts (NomadNet dynamic pages).
     pub node_executable_pages: bool,
+    /// The `PATH` page scripts run with: none is `/usr/bin:/bin`, `host`
+    /// is rettui's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_script_path: Option<String>,
+    /// Seconds a page script may run before it is stopped.
+    pub node_script_timeout_secs: u64,
     /// Wrap long lines in the text editors instead of scrolling sideways.
     pub wrap_lines: bool,
     /// Show people joining and leaving RRC rooms in the chat.
@@ -273,6 +279,8 @@ impl Default for Settings {
             node_announce_interval_mins: 360,
             node_dir: None,
             node_executable_pages: false,
+            node_script_path: None,
+            node_script_timeout_secs: 10,
             // A phone's screen is small: only what people say, there.
             show_joins: !cfg!(target_os = "android"),
             keep_awake: false,
@@ -578,7 +586,7 @@ impl Field {
             // commands Reticulum runs; the recorder is a command run;
             // another node folder could hold
             // executable pages, or share files that aren't meant to be.
-            "rns_config" | "node_dir" | "nomad_files_dir" | "map_tiles_file" | "voice_recorder" | "print_command" => {
+            "rns_config" | "node_dir" | "nomad_files_dir" | "map_tiles_file" | "voice_recorder" | "print_command" | "node_script_path" => {
                 WebAccess::TerminalOnly
             }
             // Which identity's keys are read, and signed with.
@@ -725,6 +733,8 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "node_announce_interval_mins",
             "node_dir",
             "node_executable_pages",
+            "node_script_path",
+            "node_script_timeout_secs",
             "pn_enabled",
             "pn_name",
             "pn_stamp_cost",
@@ -1085,6 +1095,20 @@ pub const FIELDS: &[Field] = &[
         label: "Run page scripts",
         help: "Run executable pages as programs (NomadNet dynamic pages); only with scripts you trust",
         kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "node_script_path",
+        label: "Script PATH",
+        help: "Where page scripts find programs, such as python3 for #!/usr/bin/env python3: folders joined with colons, or host for rettui's own PATH; empty uses /usr/bin:/bin. Terminal only",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "node_script_timeout_secs",
+        label: "Script time limit (s)",
+        help: "Seconds a page script may run before it is stopped (1 to 120). A running script holds up the node's other requests",
+        kind: FieldKind::Number,
         effect: Effect::Now,
     },
     Field {
@@ -1466,6 +1490,8 @@ impl Settings {
             "node_announce_interval_mins" => self.node_announce_interval_mins.to_string(),
             "node_dir" => self.node_dir.clone().unwrap_or_default(),
             "node_executable_pages" => self.node_executable_pages.to_string(),
+            "node_script_path" => self.node_script_path.clone().unwrap_or_default(),
+            "node_script_timeout_secs" => self.node_script_timeout_secs.to_string(),
             "wrap_lines" => self.wrap_lines.to_string(),
             "show_joins" => self.show_joins.to_string(),
             "keep_awake" => self.keep_awake.to_string(),
@@ -1563,6 +1589,14 @@ impl Settings {
             "auto_propagation_node" => self.auto_propagation_node = toggle(value).map_err(fail)?,
             "node_enabled" => self.node_enabled = toggle(value).map_err(fail)?,
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
+            "node_script_path" => {
+                // Folders to look in; nothing here is run by the setting itself.
+                if optional(value).is_some_and(|p| p.len() > 4096 || p.contains(['\n', '\0'])) {
+                    return Err(fail("a list of folders joined with colons, or host".into()));
+                }
+                self.node_script_path = optional(value);
+            }
+            "node_script_timeout_secs" => self.node_script_timeout_secs = between(value, (1, 120)).map_err(fail)?,
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
             "keep_awake" => self.keep_awake = toggle(value).map_err(fail)?,

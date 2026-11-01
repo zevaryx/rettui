@@ -966,7 +966,13 @@ impl App {
         if self.settings.node_executable_pages
             && let Some(script) = store.script(&location.path)
         {
-            let command = NetCommand::RunScript { id, script, fields: location.fields.clone(), identify };
+            let command = NetCommand::RunScript {
+                id,
+                script,
+                fields: location.fields.clone(),
+                identify,
+                limits: crate::nomad::script::Limits::from_settings(&self.settings),
+            };
             return self.net.send(command).is_err().then(|| Err("The network task isn't running, so the script can't run".to_string()));
         }
         Some(store.serve(&location.path).map(|data| crate::nomad::FetchedContent { data, metadata: None }))

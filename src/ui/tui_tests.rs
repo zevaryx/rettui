@@ -613,10 +613,10 @@ fn browsing_this_clients_own_script_pages() {
     tui.key(KeyCode::Enter);
     let mut ran = None;
     while let Ok(command) = tui.net.try_recv() {
-        if let NetCommand::RunScript { id, script, fields, identify } = command {
+        if let NetCommand::RunScript { id, script, fields, identify, limits } = command {
             assert_eq!(fields.get("field_name").map(String::as_str), Some("Bob"));
             assert!(!identify);
-            ran = Some((id, crate::nomad::script::preview(&script, None, &fields)));
+            ran = Some((id, crate::nomad::script::preview(&script, None, &fields, &limits)));
         }
     }
     let (id, data) = ran.expect("the script was asked to run");
