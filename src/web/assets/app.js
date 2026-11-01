@@ -7644,6 +7644,11 @@ app.views.status = {
       label('Last sync'), el('span', { text: sync }),
       label('Hosting messages'), hosting,
       ...(s.node_served ? [label('Hosting a node'), el('span', { text: `● ${s.node_served} served (Node)` })] : []),
+      ...(s.rncp_in.state === 'off' ? [] : [label('Receiving files'), s.rncp_in.state === 'running'
+        ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.rncp_in.address }),
+          el('span', { class: 'dim', text: '  ' + [`${s.rncp_in.received} received`, s.rncp_in.nobody ? 'no one may send yet' : null,
+            s.rncp_in.refused ? `${s.rncp_in.refused} refused` : null].filter(Boolean).join(' · ') }))
+        : el('span', { text: s.rncp_in.state === 'starting' ? 'starting' : `failed: ${s.rncp_in.error}` })]),
       ...(s.git_host.state === 'off' ? [] : [label('Hosting rngit'), s.git_host.state === 'running'
         ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.git_host.url }),
           el('span', { class: 'dim', text: `  ${s.git_host.summary}` }))
@@ -9338,7 +9343,7 @@ async function rncpDialog(address) {
     const timer = setInterval(async () => {
       if (!document.body.contains(list)) return clearInterval(timer);
       const now = await api.get('/rncp').catch(() => null);
-      if (now) show(now.sends);
+      if (now) { show(now.sends); showGot(now.received); }
     }, 1000);
     const send = async () => {
       const picked = file.files[0];
@@ -9346,11 +9351,18 @@ async function rncpDialog(address) {
       const q = `?to=${encodeURIComponent(to.value.trim())}&name=${encodeURIComponent(picked.name)}`;
       if (await attempt(() => upload('/rncp/send' + q, picked), `Sending ${picked.name}`)) file.value = '';
     };
+    const got = el('div', { class: 'rncp-sends' });
+    const showGot = (files) => got.replaceChildren(...(files.length ? [el('h4', { text: 'Received' })] : []),
+      ...files.slice().reverse().map((f) => el('div', { class: 'row' },
+        el('span', { class: 'grow', text: `${f.name} (${humanBytes(f.bytes)}) from ${f.from_name || 'someone'}` }),
+        el('span', { class: 'dim mono', text: f.path }))));
+    showGot(sends.received);
     return [
       el('p', { class: 'dim', text: `Someone running rncp -l gets it in their folder. Their listener must allow your identity, ${sends.identity} (rncp -a), or let anyone send (rncp -l -n). Up to ${humanBytes(sends.max)}.` }),
       el('label', { class: 'field' }, el('span', { text: 'To' }), to),
       el('label', { class: 'field' }, el('span', { text: 'File' }), file),
       list,
+      got,
       el('div', { class: 'row actions' }, el('span', { class: 'grow' }),
         el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } }), el('button', { class: 'primary', text: 'Send', onclick: send })),
     ];

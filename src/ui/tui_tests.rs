@@ -2189,3 +2189,22 @@ fn a_speed_test_at_the_keyboard() {
     assert!(!tui.app.speed.open);
     assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::SpeedListen(None))));
 }
+
+#[test]
+fn receiving_files_with_rncp_shows_in_status() {
+    use crate::app::rncp_in::{Listening, Received};
+    let mut tui = Tui::new("rncp-status");
+    tui.tab(Tab::Status);
+    assert!(!tui.draw().contains("Receiving files"), "off, nothing to say");
+    tui.app.rncp_in.status = Listening::On([0x5a; 16]);
+    tui.app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![] });
+    let screen = tui.draw();
+    assert!(screen.contains("Receiving files") && screen.contains(&"5a".repeat(16)) && screen.contains("no one may send yet"), "{screen}");
+    tui.app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![[1; 16]] });
+    tui.app.rncp_in.refused = 2;
+    tui.app.rncp_in.received.push(Received { name: "a".into(), bytes: 1, path: "x/a".into(), from: None, at: 0.0 });
+    let screen = tui.draw();
+    assert!(screen.contains("1 received") && screen.contains("2 refused") && !screen.contains("no one may send"), "{screen}");
+    tui.app.rncp_in.status = Listening::Failed("no transport".into());
+    assert!(tui.draw().contains("no transport"));
+}

@@ -15,6 +15,7 @@ pub mod iface_log;
 pub mod mqtt;
 mod reannounce;
 pub mod remote;
+pub mod rncplisten;
 pub mod speedtest;
 
 use std::collections::{BTreeMap, HashMap};
@@ -99,6 +100,8 @@ pub enum PeerKind {
 pub enum NetCommand {
     /// Serve rngit repositories (or stop).
     GitHost(Option<githost::GitHostConfig>),
+    /// Start, change or stop receiving files sent with rncp.
+    RncpListen(Option<rncplisten::RncpListenConfig>),
     /// Something the owner asks of the git node (answered with a
     /// [`githost::GitHostEvent::Owned`]).
     GitHostAction {
@@ -467,6 +470,7 @@ pub enum NetEvent {
     Pn(PnEvent),
     Hub(HubEvent),
     GitHost(githost::GitHostEvent),
+    RncpListen(rncplisten::RncpListenEvent),
     /// The actor has shut down (after [`NetCommand::Shutdown`]).
     Stopped,
 }
@@ -508,6 +512,8 @@ pub struct NetOptions {
     pub hub: Option<HubHostConfig>,
     /// rngit repositories to serve from the start, if any.
     pub git_host: Option<githost::GitHostConfig>,
+    /// Receiving files sent with rncp from the start, if so.
+    pub rncp_listen: Option<rncplisten::RncpListenConfig>,
     /// The stamp cost asked of senders, and the largest message taken.
     pub stamp_cost: Option<u8>,
     pub max_message_bytes: u64,
@@ -824,6 +830,33 @@ async fn run(
     };
     if git_config.is_some() {
         launch_git(git_config.clone());
+    }
+    // The rncp listener, started and stopped one at a time, as the git node is.
+    let rncp_slot: Arc<Mutex<Option<rncplisten::Listening>>> = Arc::default();
+    let mut rncp_config = options.rncp_listen.clone();
+    let launch_rncp = |config: Option<rncplisten::RncpListenConfig>| {
+        let (runtime, slot, ev, identity) = (runtime.clone(), rncp_slot.clone(), ev.clone(), identity.clone());
+        tokio::spawn(async move {
+            let mut slot = slot.lock().await;
+            if let Some(old) = slot.take() {
+                old.stop().await;
+            }
+            let event = match config {
+                None => rncplisten::RncpListenEvent::Stopped,
+                Some(config) => match rncplisten::start(&runtime, &identity, &config, ev.clone()).await {
+                    Ok(listening) => {
+                        let hash = listening.hash;
+                        *slot = Some(listening);
+                        rncplisten::RncpListenEvent::Started { hash }
+                    }
+                    Err(e) => rncplisten::RncpListenEvent::Failed(e),
+                },
+            };
+            let _ = ev.send(NetEvent::RncpListen(event));
+        });
+    };
+    if rncp_config.is_some() {
+        launch_rncp(rncp_config.clone());
     }
     let mut rrc_sessions = rrc_session::Sessions::default();
     let mut stop = Stop::Quit;
@@ -1228,6 +1261,12 @@ async fn run(
                         if config != git_config {
                             launch_git(config.clone());
                             git_config = config;
+                        }
+                    }
+                    NetCommand::RncpListen(config) => {
+                        if config != rncp_config {
+                            launch_rncp(config.clone());
+                            rncp_config = config;
                         }
                     }
                     NetCommand::GitHostAction { id, action } => {

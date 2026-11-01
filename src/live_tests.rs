@@ -1334,3 +1334,43 @@ async fn speed_test_with_nomadnet() {
     println!("RESULT {:?}", me.app.speed.lines);
     assert!(me.app.speed.lines.iter().any(|l| l.starts_with("Upload")), "{:?}", me.app.speed.lines);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn files_received_with_rncp_from_who_is_allowed() {
+    let (mut amy, mut ben) = pair("rncp-in", |_| {}).await;
+    let saved = amy.dir.join("received-files");
+    let saved_text = saved.display().to_string();
+    // Amy listens, for nobody yet.
+    amy.app.update_settings(&[("rncp_listen", "true"), ("rncp_dir", &saved_text)]).unwrap();
+    let mine = crate::net::remote::destinations_of(amy.identity.hash)
+        .into_iter()
+        .find(|(kind, _)| *kind == "rncp listener")
+        .map(|(_, hash)| hash)
+        .unwrap();
+    until(&mut amy, &mut ben, "Amy listening", |a, _| a.app.rncp_in.status == crate::app::rncp_in::Listening::On(mine)).await;
+
+    // Ben isn't on the list: refused, and nothing is saved.
+    ben.app.rncp_send(&hex::encode(mine), "notes.txt", b"Meet at the hill at noon".to_vec()).unwrap();
+    until(&mut amy, &mut ben, "Ben's first send ending", |a, b| {
+        b.app.rncp.iter().all(|s| !matches!(s.state, net::RncpState::Sending(_))) && a.app.rncp_in.refused > 0
+    })
+    .await;
+    assert!(matches!(&ben.app.rncp[0].state, net::RncpState::Failed(_)), "{:?}", ben.app.rncp[0].state);
+    assert!(!saved.join("notes.txt").exists());
+
+    // Allowed, he can send, and it says who from.
+    amy.app.update_settings(&[("rncp_allowed", &hex::encode(ben.identity.hash))]).unwrap();
+    until(&mut amy, &mut ben, "Amy listening again", |a, _| a.app.rncp_in.status == crate::app::rncp_in::Listening::On(mine)).await;
+    ben.app.rncp_send(&hex::encode(mine), "notes.txt", b"Meet at the hill at noon".to_vec()).unwrap();
+    until(&mut amy, &mut ben, "the file arriving", |a, _| !a.app.rncp_in.received.is_empty()).await;
+    let got = &amy.app.rncp_in.received[0];
+    assert_eq!((got.name.as_str(), got.bytes, got.from.as_deref()), ("notes.txt", 24, Some(hex::encode(ben.identity.hash).as_str())));
+    assert_eq!(std::fs::read_to_string(saved.join("notes.txt")).unwrap(), "Meet at the hill at noon");
+
+    // A second file of the same name doesn't write over the first.
+    until(&mut amy, &mut ben, "Ben's send ending", |_, b| b.app.rncp.iter().all(|s| !matches!(s.state, net::RncpState::Sending(_)))).await;
+    ben.app.rncp_send(&hex::encode(mine), "notes.txt", b"Changed my mind".to_vec()).unwrap();
+    until(&mut amy, &mut ben, "the second file arriving", |a, _| a.app.rncp_in.received.len() == 2).await;
+    assert_eq!(std::fs::read_to_string(saved.join("notes.txt")).unwrap(), "Meet at the hill at noon");
+    assert_eq!(std::fs::read_to_string(&amy.app.rncp_in.received[1].path).unwrap(), "Changed my mind");
+}

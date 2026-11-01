@@ -398,6 +398,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         propagation: lxmf::pn::PnConfig::from_settings(settings, paths),
         hub,
         git_host,
+        rncp_listen: net::rncplisten::RncpListenConfig::from_settings(settings, paths),
         stamp_cost: lxmf::policy::stamp_cost(settings.stamp_cost),
         max_message_bytes: settings.max_message_kb * 1000,
         tickets: paths.tickets.clone(),

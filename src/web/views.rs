@@ -61,6 +61,19 @@ pub fn state(app: &App) -> Value {
         NodeStatus::Running => json!({ "state": "running", "url": app.git_host.url(), "summary": app.git_host.summary() }),
         NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
     };
+    // Files received with rncp.
+    let rncp_in = {
+        use crate::app::rncp_in::Listening;
+        match &app.rncp_in.status {
+            Listening::Off => json!({ "state": "off" }),
+            Listening::Starting => json!({ "state": "starting" }),
+            Listening::On(hash) => json!({
+                "state": "running", "address": hex::encode(hash), "received": app.rncp_in.received.len(),
+                "refused": app.rncp_in.refused, "nobody": app.rncp_in.config.as_ref().is_none_or(|c| c.allowed.is_empty()),
+            }),
+            Listening::Failed(e) => json!({ "state": "failed", "error": e }),
+        }
+    };
     let message_unread = app.unread_messages();
     let (channel_unread, mention) = app.channels.total_unread();
     let online = app.interfaces.iter().filter(|i| i.online).count();
@@ -68,6 +81,7 @@ pub fn state(app: &App) -> Value {
         "display_name": app.settings.display_name,
         "icon": icon(app.own_appearance().as_ref()),
         "git_host": git_host,
+        "rncp_in": rncp_in,
         "external_shared_instance": app.uses_external_shared_instance(),
         "wrap_lines": app.settings.wrap_lines,
         // Pages picked from the Browser's list open in new tabs.

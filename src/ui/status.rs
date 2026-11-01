@@ -66,6 +66,31 @@ fn hosting_hub(app: &App) -> Option<Vec<Span<'static>>> {
     })
 }
 
+/// Receiving files sent with rncp, while that's on.
+fn receiving_files(app: &App) -> Option<Vec<Span<'static>>> {
+    use crate::app::rncp_in::Listening;
+    let rncp = &app.rncp_in;
+    Some(match &rncp.status {
+        Listening::Off => return None,
+        Listening::Starting => vec![Span::styled("◌ starting", Style::default().fg(Color::Yellow))],
+        Listening::Failed(e) => vec![Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red))],
+        Listening::On(hash) => {
+            let mut spans =
+                vec![Span::styled("● ", Style::default().fg(Color::Green)), Span::styled(hex::encode(hash), Style::default().fg(accent()))];
+            let allowed = rncp.config.as_ref().map_or(0, |c| c.allowed.len());
+            let mut parts = vec![format!("{} received", rncp.received.len())];
+            if allowed == 0 {
+                parts.push("no one may send yet".into());
+            }
+            if rncp.refused > 0 {
+                parts.push(format!("{} refused", rncp.refused));
+            }
+            spans.push(Span::raw(format!("  {}", parts.join(" · "))));
+            spans
+        }
+    })
+}
+
 /// The rngit repositories hosted here, while that's on.
 fn hosting_git(app: &App) -> Option<Vec<Span<'static>>> {
     let git = &app.git_host;
@@ -160,6 +185,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
                 + u16::from(app.update_available().is_some())
                 + u16::from(app.hub.status != NodeStatus::Off)
                 + u16::from(app.git_host.status != NodeStatus::Off)
+                + u16::from(app.rncp_in.status != crate::app::rncp_in::Listening::Off)
                 + u16::from(app.node.status == NodeStatus::Running),
         ),
         Constraint::Max(settings_height),
@@ -215,6 +241,9 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.node.status == NodeStatus::Running {
         let text = format!("{} served (Node tab)", app.node.served.label());
         lines.insert(7, Line::from(vec![label("Hosting a node"), Span::styled("● ", Style::default().fg(Color::Green)), Span::raw(text)]));
+    }
+    if let Some(spans) = receiving_files(app) {
+        lines.insert(7, Line::from([vec![label("Receiving files")], spans].concat()));
     }
     if let Some(spans) = hosting_git(app) {
         lines.insert(7, Line::from([vec![label("Hosting rngit")], spans].concat()));

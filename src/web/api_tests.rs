@@ -1882,3 +1882,38 @@ async fn the_owner_says_who_may_use_what_is_hosted_here() {
     }
     assert_eq!(web.get("/api/hosted/access?name=team/gone").await.status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn files_received_with_rncp_are_listed() {
+    use crate::app::rncp_in::{Listening, Received};
+    let web = TestWeb::start("rncp-received");
+    assert_eq!(web.get("/api/state").await.json()["rncp_in"]["state"], "off");
+    web.with(|app| {
+        app.rncp_in.status = Listening::On([0x5a; 16]);
+        app.rncp_in.refused = 1;
+        app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![] });
+        app.rncp_in.received.push(Received {
+            name: "notes.txt".into(),
+            bytes: 24,
+            path: "x/notes.txt".into(),
+            from: Some("ab".repeat(16)),
+            at: 5.0,
+        });
+    })
+    .await;
+    let state = web.get("/api/state").await.json();
+    assert_eq!(state["rncp_in"]["address"], "5a".repeat(16));
+    assert_eq!(
+        (state["rncp_in"]["received"].as_u64(), state["rncp_in"]["refused"].as_u64(), state["rncp_in"]["nobody"].as_bool()),
+        (Some(1), Some(1), Some(true))
+    );
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["received"][0]["name"].as_str(), listed["received"][0]["bytes"].as_u64()),
+        (Some("notes.txt"), Some(24)),
+        "{listed}"
+    );
+    // The web login can't turn it on, or say who may send.
+    let refused = web.post("/api/settings", json!({ "values": { "rncp_listen": "true" } })).await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+}

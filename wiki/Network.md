@@ -111,6 +111,21 @@ shows your identity, your interfaces and the log.
   your browser picks, never a file from the computer rettui runs on. How
   it's going shows as it goes, and the log says when it arrived or why it
   didn't.
+- **Receiving files with rncp:** *Receive files with rncp* (Settings,
+  Hosting; turned on in the terminal) makes rettui listen at your rncp
+  address, as `rncp -l` does, and save what is sent to *Received files
+  folder* (`received/` in the data directory unless you set one). Nobody
+  may send until you list them in *Who may send files*: identity hashes,
+  as `rncp -a` takes, separated by commas (a sender sees theirs in the
+  send dialog; `I` in the Network tab shows yours and anyone's). Someone
+  not on the list is turned away and counted. A file is saved under its own
+  name, without any folders, and never written over one that's there: a
+  second `notes.txt` becomes `notes.txt.1`. Status shows your rncp address
+  and how many files came; the log names each one with who sent it, and
+  the web UI's **Send a file…** dialog lists the latest. rettui doesn't
+  limit how big a file may be, so list only people you trust to send
+  sensibly; the web UI can turn this off, not on, and can't change who may
+  send or the folder.
 - **Speed test:** `v` in the Network tab, or **Speed test** in the web UI,
   measures how fast data goes between you and someone else, as NomadNet
   1.4's speed test does, so the other can use rettui or NomadNet

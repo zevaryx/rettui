@@ -50,6 +50,7 @@ pub mod repo_files;
 pub mod repos;
 pub mod reticulum;
 pub mod rncp;
+pub mod rncp_in;
 mod saver;
 pub mod search;
 mod settings;
@@ -661,6 +662,8 @@ pub struct App {
     pub tables: tables::TablesView,
     /// Files sent to `rncp` listeners, the newest last.
     pub rncp: Vec<rncp::RncpSend>,
+    /// Files received with `rncp`, and whether it is listening.
+    pub rncp_in: rncp_in::RncpIn,
     /// The Repos tab (rngit repositories).
     pub repos: repos::Repos,
     /// A speed test with someone (`v` in the Network tab).
@@ -766,6 +769,7 @@ impl App {
         let pn_hash =
             rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::PROPAGATION_ASPECT, Some(&identity_hash));
         let pn = node::PnHost::new(pn_hash, crate::lxmf::pn::PnConfig::from_settings(&settings, &paths));
+        let rncp_listen = crate::net::rncplisten::RncpListenConfig::from_settings(&settings, &paths);
         let git_host = git_host::GitHost::new(&paths, crate::net::githost::GitHostConfig::from_settings(&settings, &paths));
         let hub = hub::HubHost::new(&paths, crate::rrc::host::HubHostConfig::from_settings(&settings, &paths, identity_hash));
         let cache = Cache::new(paths.cache.clone(), std::time::Duration::from_secs(settings.cache_hours * 3600));
@@ -858,6 +862,7 @@ impl App {
             announce_log: announces::AnnounceLog::default(),
             tables: tables::TablesView::default(),
             rncp: Vec::new(),
+            rncp_in: rncp_in::RncpIn::new(rncp_listen),
             repos: repos::Repos::default(),
             speed: speedtest::SpeedTest::default(),
             whois: whois::Whois::default(),
@@ -1167,6 +1172,7 @@ impl App {
             NetEvent::Pn(event) => self.on_pn(event),
             NetEvent::Hub(event) => self.on_hub(event),
             NetEvent::GitHost(event) => self.on_git_host(event),
+            NetEvent::RncpListen(event) => self.on_rncp_listen(event),
             NetEvent::StartFailed(e) => {
                 self.log(format!("Network failed: {e}"));
                 self.net_state = NetState::Failed(e);
@@ -1564,6 +1570,7 @@ impl App {
         self.pn.restarting(crate::lxmf::pn::PnConfig::from_settings(&self.settings, &self.paths));
         self.hub.restarting(crate::rrc::host::HubHostConfig::from_settings(&self.settings, &self.paths, self.identity_hash));
         self.git_host.restarting(crate::net::githost::GitHostConfig::from_settings(&self.settings, &self.paths));
+        self.rncp_in.restarting(crate::net::rncplisten::RncpListenConfig::from_settings(&self.settings, &self.paths));
         self.browser.restarted();
         // Deliveries in progress belong to the old stack.
         self.tracks_restarting();

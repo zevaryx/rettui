@@ -2485,7 +2485,22 @@ async fn rncp_sends(State(state): State<WebState>) -> ApiResult {
                     })
                 })
                 .collect();
-            axum::Json(json!({ "sends": sends, "identity": hex::encode(o.app.identity_hash), "max": crate::app::rncp::MAX_SEND }))
+            // And what others sent here.
+            let received: Vec<Value> = o
+                .app
+                .rncp_in
+                .received
+                .iter()
+                .map(|f| {
+                    json!({
+                        "name": f.name, "bytes": f.bytes, "at": f.at, "path": f.path.display().to_string(),
+                        "from": f.from, "from_name": f.from.as_deref().map(|from| o.app.store.display_name(from)),
+                    })
+                })
+                .collect();
+            axum::Json(json!({
+                "sends": sends, "identity": hex::encode(o.app.identity_hash), "max": crate::app::rncp::MAX_SEND, "received": received,
+            }))
         })
         .await
         .map_err(ApiError::from)
