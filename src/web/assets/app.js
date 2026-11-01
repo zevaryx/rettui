@@ -1467,6 +1467,14 @@ const notifications = {
   },
 
   async start() {
+    // A click on one the desktop app showed opens what it's about (the app
+    // brings its window forward).
+    if (DESKTOP_APP) {
+      DESKTOP_APP.addPluginListener('notification', 'actionPerformed', (action) => {
+        const target = action?.notification?.extra?.target;
+        if (target) openTarget(target);
+      }).catch((e) => console.warn('Clicks on notifications won\'t open anything:', e));
+    }
     if (this.state() === 'insecure' || !('serviceWorker' in navigator)) return;
     try {
       this.worker = await navigator.serviceWorker.register('sw.js');
@@ -1585,7 +1593,7 @@ const notifications = {
     if (this.push === 'on' && document.visibilityState !== 'visible') return;
     if (DESKTOP_APP) {
       try {
-        return await DESKTOP_APP.invoke('plugin:notification|notify', { options: { title, body } });
+        return await DESKTOP_APP.invoke('plugin:notification|notify', { options: { title, body, extra: { target } } });
       } catch (e) {
         console.warn('Could not show a notification:', e);
       }

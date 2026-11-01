@@ -1,8 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "web-ui",
-  "description": "What rettui's own web UI, served on 127.0.0.1, may ask of the app: showing notifications, which the webview can't. Nothing else, and no other page.",
-  "windows": ["main"],
-  "remote": { "urls": ["http://127.0.0.1:*/*"] },
-  "permissions": ["notification:allow-notify", "notification:allow-is-permission-granted"]
+  "description": "What rettui's own web UI, served on 127.0.0.1, may ask of the app: showing notifications, which the webview can't, and hearing when one is clicked. Nothing else, and no other page.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/*"
+    ]
+  },
+  "permissions": [
+    "notification:allow-notify",
+    "notification:allow-is-permission-granted",
+    "notification:allow-register-listener",
+    "notification:allow-remove-listener"
+  ]
 }
