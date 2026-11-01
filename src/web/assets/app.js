@@ -6940,7 +6940,8 @@ app.views.node = {
       label('Name'), el('span', { text: node.name }),
       label('Served'), el('span', { text: node.served.label }),
       label('Requests'), el('span', { text: [String(node.served.requests), node.served.not_found ? `${node.served.not_found} not found` : null,
-        node.served.last ? `last ${new Date(node.served.last * 1000).toLocaleString()}` : null].filter(Boolean).join(' · ') }),
+        node.served.last ? `last ${new Date(node.served.last * 1000).toLocaleString()}` : null,
+        node.stats?.visitors ? `${node.stats.visitors} identified ${node.stats.visitors === 1 ? 'visitor' : 'visitors'} since start` : null].filter(Boolean).join(' · ') }),
       label('Since'), el('span', { class: 'row' }, el('span', { class: 'dim', text: new Date(node.served.since * 1000).toLocaleString() }),
         el('button', { text: 'Reset', title: 'Count what the node serves again from now', onclick: async () => {
           if (!await ask('Reset the node\'s statistics?\nThe counts start again from now.', { title: 'Reset statistics', yes: 'Reset', danger: true })) return;

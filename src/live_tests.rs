@@ -1293,3 +1293,44 @@ async fn a_speed_test_between_two_rettuis() {
     ben.app.speed.open = false;
     until(&mut amy, &mut ben, "Ben no longer listening", |_, b| b.app.speed.listening.is_none()).await;
 }
+
+/// A speed test with a real NomadNet, by hand: start NomadNet with a
+/// `TCPServerInterface` on `NOMADNET_PORT`, its speed test screen open (its
+/// address in the file `NOMADNET_SPEED_FILE`), then run this with
+/// `cargo test --locked -- --ignored speed_test_with_nomadnet`. It writes
+/// its own speed test address to `RETTUI_SPEED_FILE` for NomadNet's screen,
+/// waits for `RETTUI_SPEED_READY_FILE` to exist, and sends a test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a NomadNet running by hand"]
+async fn speed_test_with_nomadnet() {
+    let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+    let port = var("NOMADNET_PORT");
+    let client = format!(
+        "  [[To NomadNet]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n{TAKE_ALL}"
+    );
+    let mut me = Peer::start("nomadnet-speed", &client, |_| {});
+    let started = Instant::now();
+    while me.app.lxmf_hash.is_none() {
+        me.pump();
+        assert!(started.elapsed() < PATIENCE, "rettui didn't start");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let theirs = std::fs::read_to_string(var("NOMADNET_SPEED_FILE")).unwrap();
+    let theirs = theirs.trim().to_string();
+    std::fs::write(var("RETTUI_SPEED_FILE"), hex::encode(me.app.speed_address())).unwrap();
+    while !std::path::Path::new(&var("RETTUI_SPEED_READY_FILE")).exists() {
+        me.pump();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    me.app.speed_set_peer(&theirs).unwrap();
+    me.app.speed_set_size(1).unwrap();
+    me.app.speed_send().unwrap();
+    let started = Instant::now();
+    while me.app.speed.sending.is_some() || me.app.speed.lines.is_empty() {
+        me.pump();
+        assert!(started.elapsed() < Duration::from_secs(120), "no result: {:?}", me.app.speed.lines);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    println!("RESULT {:?}", me.app.speed.lines);
+    assert!(me.app.speed.lines.iter().any(|l| l.starts_with("Upload")), "{:?}", me.app.speed.lines);
+}

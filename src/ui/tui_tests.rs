@@ -2025,6 +2025,7 @@ fn the_node_counts_what_it_serves_across_restarts_until_reset() {
         media_hits: media,
         not_found_count: requests - pages - files - media,
         last_request_ms: None,
+        visitors: 0,
     };
     let mut tui = Tui::new("node-stats");
     tui.tab(Tab::Node);
@@ -2037,6 +2038,12 @@ fn the_node_counts_what_it_serves_across_restarts_until_reset() {
     tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(7, 3, 1, 2))));
     let screen = tui.draw();
     assert!(screen.contains("3 pages · 1 file · 2 pic") && screen.contains("7 · 1 not found"), "{screen}");
+    assert!(!screen.contains("identified"), "nobody has identified yet");
+    // Visitors who identified are counted by the running node.
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(nomad_core::NomadServeStats { visitors: 2, ..stats(7, 3, 1, 2) })));
+    let shown = tui.draw();
+    assert!(shown.contains("2 identified since"), "{shown}");
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(7, 3, 1, 2))));
     tui.tab(Tab::Status);
     assert!(tui.draw().contains("3 pages · 1 file · 2 pictures served"));
 

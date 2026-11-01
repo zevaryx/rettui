@@ -109,6 +109,7 @@ mod tests {
             media_hits: media,
             not_found_count: not_found,
             last_request_ms: None,
+            visitors: 0,
         }
     }
 

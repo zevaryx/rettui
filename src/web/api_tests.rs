@@ -1423,9 +1423,11 @@ async fn the_nodes_statistics_and_resetting_them() {
     web.with(|app| {
         app.node.served.pages = 5;
         app.node.served.requests = 6;
+        app.node.stats = Some(nomad_core::NomadServeStats { request_count: 6, visitors: 3, ..Default::default() });
     })
     .await;
     let node = web.get("/api/node").await.json();
+    assert_eq!(node["stats"]["visitors"], 3, "{node}");
     assert_eq!((node["served"]["pages"].as_u64(), node["served"]["label"].as_str()), (Some(5), Some("5 pages · 0 files")), "{node}");
     assert_eq!(web.post("/api/node/stats/reset", json!({})).await.status, StatusCode::OK);
     let node = web.get("/api/node").await.json();

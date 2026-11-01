@@ -1004,6 +1004,7 @@ pub fn node(app: &App) -> Value {
         "scripts": app.settings.node_executable_pages,
         "stats": app.node.stats.as_ref().map(|s| json!({
             "requests": s.request_count, "pages": s.page_hits, "files": s.file_hits, "not_found": s.not_found_count,
+            "visitors": s.visitors,
         })),
         // Kept across restarts, until reset.
         "served": {

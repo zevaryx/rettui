@@ -92,7 +92,10 @@ or the folder set in `node_dir`.
   something not there), when the last one came, and since when it has
   counted, as NomadNet does. The counts are kept across restarts until you
   reset them, with `R` in the TUI or **Reset** in the web UI. While the node
-  runs, Status shows them too.
+  runs, Status shows them too. It also says (a Visitors line) how many
+  different visitors who identified themselves have come since the node
+  started (a visitor who doesn't identify can't be told apart, and this
+  number starts again with the node).
 - **Selecting text in the editors:** Shift with the arrows, Home/End or
   PgUp/PgDn, `Ctrl-A` for everything, or drag with the mouse. Typing, pasting
   or deleting replaces the selection.
