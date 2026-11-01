@@ -2105,6 +2105,40 @@ fn sending_a_file_to_an_rncp_listener() {
 }
 
 #[test]
+fn getting_a_file_from_an_rncp_listener() {
+    use crate::net::remote::FetchState;
+    let mut tui = Tui::new("rncp-get");
+    tui.tab(Tab::Network);
+    let to = "ab".repeat(16);
+    tui.key(KeyCode::Char('O'));
+    let mine = hex::encode(tui.app.identity_hash);
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.contains(&mine) && p.title.contains("-F")));
+    tui.answer("nope");
+    assert!(tui.said().contains("32 hex"), "{}", tui.said());
+    tui.key(KeyCode::Char('O')).answer(&to);
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.contains("Get which file")));
+    tui.answer("/srv/maps/hill.txt");
+    let sent = tui.sent();
+    assert!(
+        sent.iter()
+            .any(|c| matches!(c, NetCommand::RncpFetch { path, dir, .. } if path == "/srv/maps/hill.txt" && dir.ends_with("received"))),
+        "{sent:?}"
+    );
+    // Asking twice for the same one is turned down while it's on its way.
+    assert!(tui.app.rncp_fetch(&to, "/srv/maps/hill.txt").unwrap_err().contains("already"));
+    let hash = crate::net::parse_hash(&to).unwrap();
+    let say = |tui: &mut Tui, state| tui.app.on_net(crate::net::NetEvent::RncpFetch { to: hash, path: "/srv/maps/hill.txt".into(), state });
+    say(&mut tui, FetchState::Fetching(0.5));
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("50%")));
+    say(&mut tui, FetchState::Fetched { name: "hill.txt".into(), saved: "x/hill.txt".into(), bytes: 12, secs: 1.5 });
+    assert!(tui.app.log.iter().any(|l| l.contains("Got hill.txt (12 B)")));
+    tui.key(KeyCode::Char('O')).answer(&to).answer("/srv/maps/hill.txt");
+    say(&mut tui, FetchState::Failed("not allowed".into()));
+    assert!(tui.said().contains("Could not get"), "{}", tui.said());
+    assert_eq!(tui.app.rncp_fetches.len(), 2);
+}
+
+#[test]
 fn whose_an_address_is_at_the_keyboard() {
     use crate::net::Identified;
     let mut tui = Tui::new("whois");

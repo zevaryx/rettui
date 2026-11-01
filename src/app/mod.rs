@@ -229,6 +229,9 @@ pub enum PromptKind {
     /// An `rncp` listener's address, then the file to send it.
     RncpTo,
     RncpFile(String),
+    /// An `rncp -F` listener's address, then the path of the file to get.
+    RncpGetFrom,
+    RncpGetFile(String),
     /// Adding and changing things in the Repos tab.
     Repo(repos::RepoPrompt),
     /// The other's speed test address.
@@ -662,6 +665,8 @@ pub struct App {
     pub tables: tables::TablesView,
     /// Files sent to `rncp` listeners, the newest last.
     pub rncp: Vec<rncp::RncpSend>,
+    /// Files fetched from `rncp` listeners, the newest last.
+    pub rncp_fetches: Vec<rncp::RncpFetch>,
     /// Files received with `rncp`, and whether it is listening.
     pub rncp_in: rncp_in::RncpIn,
     /// The Repos tab (rngit repositories).
@@ -862,6 +867,7 @@ impl App {
             announce_log: announces::AnnounceLog::default(),
             tables: tables::TablesView::default(),
             rncp: Vec::new(),
+            rncp_fetches: Vec::new(),
             rncp_in: rncp_in::RncpIn::new(rncp_listen),
             repos: repos::Repos::default(),
             speed: speedtest::SpeedTest::default(),
@@ -1228,6 +1234,7 @@ impl App {
             NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
             NetEvent::Tables(result) => self.on_tables(result),
             NetEvent::Rncp { to, name, state } => self.on_rncp(to, name, state),
+            NetEvent::RncpFetch { to, path, state } => self.on_rncp_fetch(to, path, state),
             NetEvent::Git { id, result } => self.on_git(id, result),
             NetEvent::Speed(event) => self.on_speed(event),
             NetEvent::Identified { to, result } => self.on_identified(to, result),
@@ -1515,7 +1522,7 @@ impl App {
             PromptKind::SpeedPeer => self.submit_speed_prompt(&text),
             PromptKind::Whois => self.submit_whois_prompt(&text),
             PromptKind::Repo(prompt) => self.submit_repo_prompt(prompt, &text),
-            kind @ (PromptKind::RncpTo | PromptKind::RncpFile(_)) => {
+            kind @ (PromptKind::RncpTo | PromptKind::RncpFile(_) | PromptKind::RncpGetFrom | PromptKind::RncpGetFile(_)) => {
                 if !text.is_empty() {
                     self.submit_rncp_prompt(kind, &text);
                 }

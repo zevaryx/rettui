@@ -4,6 +4,7 @@
 //! unless it lets anyone send (`rncp -l -n`).
 
 use super::{App, PromptKind, now};
+use crate::net::remote::FetchState;
 use crate::net::{NetCommand, RncpState, parse_hash};
 
 /// Largest file sent, in bytes (it's held in memory while it goes).
@@ -19,6 +20,16 @@ pub struct RncpSend {
     /// When it was asked for (Unix seconds).
     pub at: f64,
     pub state: RncpState,
+}
+
+/// A file asked for from a listener.
+#[derive(Debug, Clone)]
+pub struct RncpFetch {
+    pub to: String,
+    /// The path asked for, as the listener knows it.
+    pub path: String,
+    pub at: f64,
+    pub state: FetchState,
 }
 
 /// The name a file goes as: its own, without the folders it's in.
@@ -94,6 +105,60 @@ impl App {
         }
     }
 
+    /// Fetch the file at `path` (as the listener names it) from the `rncp -l -F`
+    /// listener at `to`. It's saved in the folder files received go to.
+    pub fn rncp_fetch(&mut self, to: &str, path: &str) -> Result<(), String> {
+        let hash = parse_hash(to.trim()).ok_or("An rncp address is 32 hex characters")?;
+        let path = path.trim().to_string();
+        if path.is_empty() || path.chars().count() > 1024 || path.chars().any(char::is_control) {
+            return Err("A file's path is at most 1024 characters, on one line".into());
+        }
+        let to = hex::encode(hash);
+        if self.rncp_fetches.iter().any(|f| f.to == to && f.path == path && matches!(f.state, FetchState::Fetching(_))) {
+            return Err(format!("{path} is already being fetched from there"));
+        }
+        self.rncp_fetches.push(RncpFetch { to: to.clone(), path: path.clone(), at: now(), state: FetchState::Fetching(0.0) });
+        if self.rncp_fetches.len() > KEPT {
+            let gone = self.rncp_fetches.len() - KEPT;
+            self.rncp_fetches.drain(..gone);
+        }
+        let dir = self.settings.rncp_dir.as_deref().map_or_else(|| self.paths.rncp_received.clone(), super::files::expand_home);
+        self.send(NetCommand::RncpFetch { to: hash, path: path.clone(), dir });
+        self.confirm(format!("Asking {} for {path}…", self.store.display_name(&to)));
+        Ok(())
+    }
+
+    pub(super) fn on_rncp_fetch(&mut self, to: crate::net::Hash, path: String, state: FetchState) {
+        let to = hex::encode(to);
+        let who = self.store.display_name(&to);
+        let Some(fetch) =
+            self.rncp_fetches.iter_mut().rev().find(|f| f.to == to && f.path == path && matches!(f.state, FetchState::Fetching(_)))
+        else {
+            return;
+        };
+        fetch.state = state.clone();
+        match state {
+            FetchState::Fetching(done) if done > 0.0 => self.confirm(format!("Getting {path} from {who}: {:.0}%", done * 100.0)),
+            FetchState::Fetching(_) => {}
+            FetchState::Fetched { name, saved, bytes, secs } => {
+                let size = crate::ui::human_bytes(bytes as u64);
+                self.log(format!("Got {name} ({size}) from {who} with rncp in {secs:.1} s, saved as {}", saved.display()));
+                self.notify(format!("Got {name} from {who}"));
+            }
+            FetchState::Failed(e) => {
+                self.log(format!("Could not get {path} from {who} with rncp: {e}"));
+                self.fail(format!("Could not get {path}: {e}"));
+            }
+        }
+    }
+
+    /// Ask for the listener's address, then the path of the file (`O`).
+    pub(super) fn ask_rncp_fetch(&mut self, address: Option<String>) {
+        let mine = hex::encode(self.identity_hash);
+        let title = format!("Get a file from which rncp listener? (it must run rncp -l -F and allow your identity {mine})");
+        self.open_prompt(PromptKind::RncpGetFrom, &title, &address.unwrap_or_default());
+    }
+
     /// Ask for the listener's address, then the file (`F`).
     pub(super) fn ask_rncp(&mut self, address: Option<String>) {
         let mine = hex::encode(self.identity_hash);
@@ -113,6 +178,19 @@ impl App {
             },
             PromptKind::RncpFile(to) => {
                 if let Err(e) = self.rncp_send_path(&to, text) {
+                    self.warn(e);
+                }
+            }
+            PromptKind::RncpGetFrom => match parse_hash(text.trim()) {
+                Some(hash) => {
+                    let to = hex::encode(hash);
+                    let title = format!("Get which file from {}? (its path on that computer)", self.store.display_name(&to));
+                    self.open_prompt(PromptKind::RncpGetFile(to), &title, "");
+                }
+                None => self.warn("An rncp address is 32 hex characters"),
+            },
+            PromptKind::RncpGetFile(to) => {
+                if let Err(e) = self.rncp_fetch(&to, text) {
                     self.warn(e);
                 }
             }

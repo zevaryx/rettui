@@ -1917,3 +1917,35 @@ async fn files_received_with_rncp_are_listed() {
     let refused = web.post("/api/settings", json!({ "values": { "rncp_listen": "true" } })).await;
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn files_are_fetched_from_an_rncp_listener() {
+    use crate::net::remote::FetchState;
+    let web = TestWeb::start("rncp-fetch");
+    let to = "ab".repeat(16);
+    let bad = web.post("/api/rncp/fetch", json!({ "to": "nope", "path": "x" })).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let ok = web.post("/api/rncp/fetch", json!({ "to": to, "path": "maps/hill.txt" })).await;
+    assert_eq!(ok.status, StatusCode::OK);
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["fetches"][0]["state"].as_str(), listed["fetches"][0]["path"].as_str()),
+        (Some("fetching"), Some("maps/hill.txt")),
+        "{listed}"
+    );
+    let hash = crate::net::parse_hash(&to).unwrap();
+    web.with(move |app| {
+        app.on_net(crate::net::NetEvent::RncpFetch {
+            to: hash,
+            path: "maps/hill.txt".into(),
+            state: FetchState::Fetched { name: "hill.txt".into(), saved: "x/hill.txt".into(), bytes: 3, secs: 0.1 },
+        })
+    })
+    .await;
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["fetches"][0]["state"].as_str(), listed["fetches"][0]["saved"].as_str()),
+        (Some("fetched"), Some("x/hill.txt")),
+        "{listed}"
+    );
+}

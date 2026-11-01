@@ -9343,7 +9343,7 @@ async function rncpDialog(address) {
     const timer = setInterval(async () => {
       if (!document.body.contains(list)) return clearInterval(timer);
       const now = await api.get('/rncp').catch(() => null);
-      if (now) { show(now.sends); showGot(now.received); }
+      if (now) { show(now.sends); showGot(now.received); showGets(now.fetches); }
     }, 1000);
     const send = async () => {
       const picked = file.files[0];
@@ -9357,14 +9357,31 @@ async function rncpDialog(address) {
         el('span', { class: 'grow', text: `${f.name} (${humanBytes(f.bytes)}) from ${f.from_name || 'someone'}` }),
         el('span', { class: 'dim mono', text: f.path }))));
     showGot(sends.received);
+    // And asking a listener for one of its files.
+    const wanted = el('input', { type: 'text', class: 'mono', placeholder: 'its path on that computer', spellcheck: false });
+    const gets = el('div', { class: 'rncp-sends' });
+    const showGets = (fetches) => gets.replaceChildren(...fetches.slice().reverse().map((f) => el('div', { class: 'row' },
+      el('span', { class: 'grow', text: `${f.path} from ${f.from_name}` }),
+      el('span', { class: f.state === 'failed' ? 'state-bad' : f.state === 'fetched' ? 'online' : 'dim',
+        text: f.state === 'fetching' ? `${Math.round(f.progress * 100)}%` : f.state === 'fetched' ? f.saved : f.error }))));
+    showGets(sends.fetches);
+    const get = async () => {
+      if (!wanted.value.trim()) return toast('Type the path of the file to get');
+      if (await attempt(() => api.post('/rncp/fetch', { to: to.value.trim(), path: wanted.value.trim() }), 'Asking for it')) wanted.value = '';
+    };
     return [
       el('p', { class: 'dim', text: `Someone running rncp -l gets it in their folder. Their listener must allow your identity, ${sends.identity} (rncp -a), or let anyone send (rncp -l -n). Up to ${humanBytes(sends.max)}.` }),
       el('label', { class: 'field' }, el('span', { text: 'To' }), to),
       el('label', { class: 'field' }, el('span', { text: 'File' }), file),
       list,
+      el('h4', { text: 'Get a file' }),
+      el('p', { class: 'dim', text: `From a listener run with rncp -l -F that allows your identity. The file is saved on the computer rettui runs on, with the ones received.` }),
+      el('label', { class: 'field' }, el('span', { text: 'Path' }), wanted),
+      gets,
       got,
       el('div', { class: 'row actions' }, el('span', { class: 'grow' }),
-        el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } }), el('button', { class: 'primary', text: 'Send', onclick: send })),
+        el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } }), el('button', { text: 'Get', onclick: get }),
+        el('button', { class: 'primary', text: 'Send', onclick: send })),
     ];
   });
 }

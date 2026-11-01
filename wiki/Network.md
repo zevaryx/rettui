@@ -126,6 +126,16 @@ shows your identity, your interfaces and the log.
   limit how big a file may be, so list only people you trust to send
   sensibly; the web UI can turn this off, not on, and can't change who may
   send or the folder.
+- **Getting a file from an rncp listener:** `O` in the Network tab (in the
+  list, the announces or the tables), or **Get a file** in the web UI's
+  **Send a file…** dialog, asks a listener run with `rncp -l -F` for a file,
+  as `rncp --fetch` does. Give its address, then the file's path on that
+  computer (relative to its jail folder if it runs with `-j`). The listener
+  must allow your identity, shown in the dialog (`rncp -a`), unless it lets
+  anyone (`-n`). The file is saved in *Received files folder*, under its
+  own name and never over one that's there. A listener that isn't run with
+  `-F`, or doesn't allow you, closes the link, and rettui says so. The web
+  UI can ask for a file but only saves it on the computer rettui runs on.
 - **Speed test:** `v` in the Network tab, or **Speed test** in the web UI,
   measures how fast data goes between you and someone else, as NomadNet
   1.4's speed test does, so the other can use rettui or NomadNet

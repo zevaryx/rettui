@@ -1211,9 +1211,21 @@ async fn a_file_sent_to_an_rncp_listener() {
     )
     .unwrap();
     let runtime = net::start_runtime(Some(&rns.display().to_string())).await.unwrap();
+    // The open one also hands out the files in its shared folder (rncp -F -j).
+    let shared = dir.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("map.txt"), "The hill is north of the lake").unwrap();
     let listen = |allowed: Vec<[u8; 16]>| {
         let identity = Identity::new();
-        let config = RncpListenerConfig { identity: identity.clone(), save_dir: saved.clone(), allowed, ..RncpListenerConfig::default() };
+        let fetch = !allowed.is_empty();
+        let config = RncpListenerConfig {
+            identity: identity.clone(),
+            save_dir: saved.clone(),
+            allowed,
+            allow_fetch: fetch,
+            fetch_jail: fetch.then(|| shared.clone()),
+            ..RncpListenerConfig::default()
+        };
         let (events, _) = tokio::sync::mpsc::channel(64);
         let transport_tx = runtime.transport_tx.clone();
         async move { (spawn_rncp_listener(transport_tx, config, events).await.unwrap(), identity) }
@@ -1258,6 +1270,25 @@ async fn a_file_sent_to_an_rncp_listener() {
     );
     assert!(!saved.join("secret.txt").exists());
     assert!(amy.app.log.iter().any(|l| l.contains("Sent notes.txt (24 B)")), "{:?}", amy.app.log);
+
+    // And Amy gets a file from the one that hands them out; the other doesn't.
+    amy.app.rncp_fetch(&to, "map.txt").unwrap();
+    amy.app.rncp_fetch(&refused, "map.txt").unwrap();
+    until_one(&mut amy, "both fetches finishing", |a| {
+        a.app.rncp_fetches.iter().all(|f| !matches!(f.state, net::remote::FetchState::Fetching(_)))
+    })
+    .await;
+    assert!(
+        matches!(&amy.app.rncp_fetches[0].state, net::remote::FetchState::Fetched { bytes: 29, .. }),
+        "{:?}",
+        amy.app.rncp_fetches[0].state
+    );
+    assert_eq!(std::fs::read_to_string(amy.app.paths.rncp_received.join("map.txt")).unwrap(), "The hill is north of the lake");
+    assert!(
+        matches!(&amy.app.rncp_fetches[1].state, net::remote::FetchState::Failed(e) if e.contains("-F")),
+        "{:?}",
+        amy.app.rncp_fetches[1].state
+    );
 
     announcing.abort();
     open.shutdown().await;

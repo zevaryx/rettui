@@ -156,6 +156,13 @@ pub enum NetCommand {
         name: String,
         data: Vec<u8>,
     },
+    /// Fetch a file from an `rncp -l -F` listener into `dir` (answered
+    /// with [`NetEvent::RncpFetch`]).
+    RncpFetch {
+        to: Hash,
+        path: String,
+        dir: PathBuf,
+    },
     /// Ask an rngit repository something, or change something there
     /// (answered with [`NetEvent::Git`]). As rettui's identity, or the one
     /// in `identity_file` (stock rngit's).
@@ -416,6 +423,12 @@ pub enum NetEvent {
         to: Hash,
         name: String,
         state: remote::RncpState,
+    },
+    /// How getting a file from an `rncp` listener is going.
+    RncpFetch {
+        to: Hash,
+        path: String,
+        state: remote::FetchState,
     },
     /// What an rngit repository answered.
     Git {
@@ -1135,6 +1148,10 @@ async fn run(
                     NetCommand::RncpSend { to, name, data } => {
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
                         tokio::spawn(async move { remote::rncp_send(&runtime, identity, to, name, data, ev).await });
+                    }
+                    NetCommand::RncpFetch { to, path, dir } => {
+                        let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
+                        tokio::spawn(async move { remote::rncp_fetch(&runtime, identity, to, path, dir, ev).await });
                     }
                     NetCommand::Git { id, repo, request, identity_file, timeout } => {
                         git::spawn(&runtime, &git_clients, &identity, id, repo, request, identity_file, timeout, &ev);
