@@ -56,8 +56,9 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   - Closing its window leaves rettui running, with a tray icon to open
     it again or quit (*Keep running when closed*, on; *Minimize to tray*,
     off). On Linux the tray needs libayatana-appindicator, which the
-    `.deb` depends on and the AppImage carries; the Flatpak has none yet,
-    so there the window closes as before.
+    `.deb` depends on and the AppImage and Flatpak carry (the Flatpak
+    builds it from `desktop/flatpak/shared/`, copied from Flathub's shared
+    modules).
   - It makes, unsigned: a `.deb` (and on x86-64 an AppImage), a Flatpak
     bundle (`.flatpak`, on the GNOME runtime, from `desktop/flatpak/`) and
     a plain `.tar.gz` for Linux, an installer `.exe` for Windows and a `.dmg` for

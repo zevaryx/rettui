@@ -21,6 +21,8 @@ finish-args:
   # RNodes and other serial interfaces.
   - --device=all
   - --talk-name=org.freedesktop.Notifications
+  # The tray icon, which closing the window leaves rettui running behind.
+  - --talk-name=org.kde.StatusNotifierWatcher
   # rettui's own data folder and Reticulum's config, shared with the
   # terminal rettui rather than kept apart in the sandbox (see
   # desktop/src/main.rs).
@@ -30,6 +32,9 @@ finish-args:
   - --filesystem=/etc/reticulum:ro
   - --filesystem=xdg-download
 modules:
+  # The tray icon's library, which the GNOME runtime doesn't have (from
+  # Flathub's shared modules; see shared/README.md).
+  - shared/libayatana-appindicator/libayatana-appindicator-gtk3.json
   - name: rettui-desktop
     buildsystem: simple
     build-commands:

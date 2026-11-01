@@ -200,8 +200,8 @@ fn stop(server: &Mutex<Option<Server>>) -> Result<(), String> {
 static TRAY: AtomicBool = AtomicBool::new(false);
 
 /// The tray icon: a click opens the window, its menu opens it or quits.
-/// Linux needs the appindicator library for it, which panics when missing
-/// (as in the Flatpak); the app then runs without one.
+/// Linux needs the appindicator library for it, which panics when it's
+/// missing; the app then runs without one.
 fn add_tray(app: &App) {
     let build = || -> tauri::Result<()> {
         let open = MenuItem::with_id(app, "open", "Open rettui", true, None::<&str>)?;
