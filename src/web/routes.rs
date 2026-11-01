@@ -130,6 +130,7 @@ pub fn router(state: WebState) -> Router {
         .route("/propagation", post(set_propagation))
         .route("/announce", post(announce))
         .route("/sync", post(sync))
+        .route("/sync/cancel", post(cancel_sync))
         .route("/settings", get(get_settings).post(save_settings))
         .route("/guide", get(guide).post(apply_guide))
         .route("/guide/dismiss", post(dismiss_guide))
@@ -1764,6 +1765,11 @@ async fn announce(State(state): State<WebState>) -> ApiResult {
 
 async fn sync(State(state): State<WebState>) -> ApiResult {
     state.write(|o| o.app.send(NetCommand::Sync)).await?;
+    ok()
+}
+
+async fn cancel_sync(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.cancel_sync()).await?;
     ok()
 }
 

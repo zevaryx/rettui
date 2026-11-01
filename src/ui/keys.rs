@@ -31,7 +31,7 @@ const EVERYWHERE: KeyList = &[
     ("< >", "list width"),
     ("=", "list width back"),
     ("A", "announce"),
-    ("S", "sync"),
+    ("S", "sync (stop one)"),
     ("^L", "redraw"),
     ("q", "quit"),
     ("?", "keys"),

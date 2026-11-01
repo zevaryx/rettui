@@ -567,6 +567,8 @@ pub struct App {
     pub sync: SyncState,
     /// How the sync running is going ("3 of 10 downloaded").
     pub sync_progress: Option<String>,
+    /// Stopping the sync was asked for; it ends after its download.
+    pub sync_stopping: bool,
 
     pub conversations: ListState,
     pub active_conversation: Option<String>,
@@ -808,6 +810,7 @@ impl App {
             shown_view: 0,
             sync: SyncState::Idle,
             sync_progress: None,
+            sync_stopping: false,
             conversations: ListState::default(),
             active_conversation: None,
             compose: TextInput::default(),
@@ -1230,11 +1233,15 @@ impl App {
             NetEvent::SyncStarted => {
                 self.sync = SyncState::Running(Instant::now());
                 self.sync_progress = None;
+                self.sync_stopping = false;
             }
-            NetEvent::SyncProgress(text) => self.sync_progress = Some(text),
+            NetEvent::SyncProgress(text) if !self.sync_stopping => self.sync_progress = Some(text),
+            NetEvent::SyncProgress(_) => {}
             NetEvent::Synced(result) => {
                 self.sync_progress = None;
+                let stopped = std::mem::take(&mut self.sync_stopping);
                 match &result {
+                    Ok(n) if stopped => self.log(format!("Sync stopped ({n} message(s) downloaded)")),
                     Ok(0) => {}
                     Ok(n) => self.log(format!("Downloaded {n} message(s) from propagation node")),
                     Err(e) => {

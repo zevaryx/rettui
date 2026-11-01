@@ -7386,7 +7386,9 @@ app.views.status = {
       el('div', { class: 'column grow' },
         el('section', { class: 'panel', style: 'max-height:55%' }, el('header', {}, el('span', { class: 'title grow', text: 'Identity' }),
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
-          el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+          this.syncButton = el('button', { text: 'Sync now', onclick: () => (app.status?.sync.state === 'running'
+            ? attempt(() => api.post('/sync/cancel'), 'Stopping the sync')
+            : attempt(() => api.post('/sync'), 'Syncing with the propagation node')) }),
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
           el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }),
           el('button', { class: 'more danger', text: 'Stop rettui', title: 'Save everything and close rettui', onclick: () => stopRettui() }), moreButton()), this.info),
@@ -7575,6 +7577,7 @@ app.views.status = {
       done: `${s.sync.at} · ${s.sync.count} new`,
       failed: `${s.sync.at} · failed: ${s.sync.error}`,
     }[s.sync.state];
+    if (this.syncButton) this.syncButton.textContent = s.sync.state === 'running' ? 'Stop sync' : 'Sync now';
     const h = s.hosting;
     const hosting = h.state === 'running'
       ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: h.hash }),

@@ -207,6 +207,8 @@ pub enum NetCommand {
     /// [`discovered`]).
     SetDiscoveredEntryPoints(u32),
     Sync,
+    /// Stop the sync that's running, after the download it's on.
+    CancelSync,
     /// Send a message (its propagation node is the one set here).
     SendMessage {
         id: u64,
@@ -1143,6 +1145,7 @@ async fn run(
                         }
                     }
                     NetCommand::Sync => sync(propagation_node, &pn_local),
+                    NetCommand::CancelSync => syncer.cancel(),
                     NetCommand::WritePaper { id, paper } => {
                         let (runtime, known, identity, ev) =
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone());

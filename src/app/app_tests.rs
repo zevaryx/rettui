@@ -491,6 +491,20 @@ fn send_progress_cancelling_and_sync_progress() {
     assert!(tui.draw().contains("3 of 10 downloaded"), "{}", tui.draw());
     tui.app.on_net(NetEvent::Synced(Ok(10)));
     assert!(matches!(tui.app.sync, SyncState::Done(..)) && tui.app.sync_progress.is_none());
+
+    // Stopping one: S asks, progress waits, and what came is kept.
+    tui.app.on_net(NetEvent::SyncStarted);
+    tui.app.cancel_sync();
+    tui.app.cancel_sync();
+    assert_eq!(tui.sent().iter().filter(|c| matches!(c, NetCommand::CancelSync)).count(), 1);
+    tui.app.on_net(NetEvent::SyncProgress("4 of 10 downloaded".into()));
+    assert_eq!(tui.app.sync_progress.as_deref(), Some("stopping…"));
+    tui.app.on_net(NetEvent::Synced(Ok(4)));
+    assert!(!tui.app.sync_stopping && matches!(tui.app.sync, SyncState::Done(_, Ok(4))));
+    assert!(tui.app.log.iter().any(|l| l.contains("Sync stopped (4 message(s) downloaded)")));
+    // Nothing running, nothing to stop.
+    tui.app.cancel_sync();
+    assert!(!tui.app.sync_stopping);
 }
 
 #[test]

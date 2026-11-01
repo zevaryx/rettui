@@ -1372,6 +1372,8 @@ async fn send_progress_and_cancelling_a_send() {
     })
     .await;
     assert_eq!(web.get("/api/state").await.json()["sync"]["progress"], "1 of 2 downloaded");
+    assert_eq!(web.post("/api/sync/cancel", json!({})).await.status, StatusCode::OK);
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::CancelSync)));
 }
 
 #[tokio::test]
