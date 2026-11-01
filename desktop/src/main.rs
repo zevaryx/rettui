@@ -98,6 +98,19 @@ fn run(data_dir: Option<PathBuf>) -> Result<(), String> {
         .setup(move |app| {
             let handle = app.handle().clone();
             let _ = app_handle.set(handle.clone());
+            // A click on a notification brings the window forward; the page
+            // opens what it's about.
+            {
+                use tauri_plugin_notification::NotificationExt as _;
+                let handle = handle.clone();
+                app.notification().on_action(move |_| {
+                    if let Some(window) = handle.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                })?;
+            }
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(home))
                 .title("rettui")
                 .inner_size(1200.0, 800.0)
