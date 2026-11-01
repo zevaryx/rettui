@@ -16,8 +16,9 @@ its menu has **Open rettui** and **Quit**. Starting the app again opens
 the window too. *Keep running when closed* (Settings › System, on) turns
 that off, so closing the window stops rettui, which saves everything
 first; *Minimize to tray* (off) hides the window to the tray when it's
-minimized. On Linux the tray needs libayatana-appindicator (the Flatpak
-has none yet); without it the window closes and minimizes as usual.
+minimized. On Linux the tray needs libayatana-appindicator (the
+Flatpak carries its own); without it the window closes and minimizes as
+usual.
 
 It's a separate package so that `rettui` itself never links the system
 webview: `cargo build` at the top builds rettui alone.
