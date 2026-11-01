@@ -6,7 +6,10 @@
 #   flatpak build-bundle repo rettui-desktop.flatpak io.github.zevaryx.rettui
 id: io.github.zevaryx.rettui
 runtime: org.gnome.Platform
-runtime-version: "48"
+# Not 48: its WebKit sets the realtime time limit to 0 inside the sandbox,
+# so the kernel kills the app as soon as WebKit makes a thread realtime,
+# about a second after the window opens.
+runtime-version: "51"
 sdk: org.gnome.Sdk
 command: rettui-desktop
 finish-args:
