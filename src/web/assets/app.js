@@ -63,6 +63,9 @@ async function upload(path, file) {
 // identity and backups, and RNodes over USB and Bluetooth: the page only
 // links to them.
 const IN_ANDROID_APP = /\brettui-android\//.test(navigator.userAgent);
+// In rettui's desktop app (rettui-desktop), whose webview has no web
+// notifications: the app shows them instead, asked through its bridge.
+const DESKTOP_APP = window.__TAURI__?.core;
 const androidBackupsButton = (text) => el('button', { text, title: "The app's own screen: save a copy of the identity, keep another from a file, back up and restore",
   onclick: () => { location.href = 'rettui-app:backups'; } });
 const androidDownloadsButton = () => el('button', { text: '📥 Where files are saved', title: "The app's own screen: Downloads, a folder you pick, or asked each time",
@@ -1454,15 +1457,24 @@ const notifications = {
   // Notifications shown without the service worker, by tag (to close them).
   open: new Map(),
 
-  // 'granted', 'default', 'denied', 'insecure' (plain HTTP from elsewhere)
-  // or 'unsupported'.
+  // 'granted', 'default', 'denied', 'insecure' (plain HTTP from elsewhere),
+  // 'unsupported', or 'app' (the desktop app shows them).
   state() {
+    if (DESKTOP_APP) return 'app';
     if (!window.isSecureContext) return 'insecure';
     if (!('Notification' in window)) return 'unsupported';
     return Notification.permission;
   },
 
   async start() {
+    // A click on one the desktop app showed opens what it's about (the app
+    // brings its window forward).
+    if (DESKTOP_APP) {
+      DESKTOP_APP.addPluginListener('notification', 'actionPerformed', (action) => {
+        const target = action?.notification?.extra?.target;
+        if (target) openTarget(target);
+      }).catch((e) => console.warn('Clicks on notifications won\'t open anything:', e));
+    }
     if (this.state() === 'insecure' || !('serviceWorker' in navigator)) return;
     try {
       this.worker = await navigator.serviceWorker.register('sw.js');
@@ -1482,6 +1494,8 @@ const notifications = {
   // Whether this browser has background notifications, and that rettui has
   // its subscription (made with rettui's current key).
   async checkPush() {
+    // The desktop app runs rettui itself: nothing to push to.
+    if (DESKTOP_APP) return;
     const registration = await navigator.serviceWorker.ready;
     if (!registration.pushManager || this.state() !== 'granted') {
       this.push = registration.pushManager && this.state() !== 'denied' ? 'off' : null;
@@ -1577,6 +1591,13 @@ const notifications = {
     // In the background with Web Push on, the push shows it (a page in the
     // background may be stopped at any moment).
     if (this.push === 'on' && document.visibilityState !== 'visible') return;
+    if (DESKTOP_APP) {
+      try {
+        return await DESKTOP_APP.invoke('plugin:notification|notify', { options: { title, body, extra: { target } } });
+      } catch (e) {
+        console.warn('Could not show a notification:', e);
+      }
+    }
     if (this.state() === 'granted') {
       // A newer one about the same conversation or room replaces it.
       const options = { body, tag, renotify: true, icon: 'brand/icon.png', data: { target } };
@@ -1608,13 +1629,14 @@ const notifications = {
     const state = this.state();
     const text = {
       granted: 'on in this browser',
+      app: 'on: the desktop app shows them',
       default: 'not allowed in this browser yet',
       denied: 'blocked in this browser (allow them in this site\'s settings)',
       insecure: 'not available: browsers only allow them on HTTPS or on this computer (localhost)',
       unsupported: 'not supported by this browser (on an iPhone, add rettui to the Home Screen first)',
     }[state];
     const allowed = el('div', { class: 'row' },
-      el('span', { class: state === 'granted' ? 'state-ok' : 'dim', text }),
+      el('span', { class: state === 'granted' || state === 'app' ? 'state-ok' : 'dim', text }),
       state === 'default' ? el('button', { text: 'Allow', onclick: () => this.allow() }) : null);
     if (!this.push || state === 'denied') return allowed;
     const on = this.push === 'on';

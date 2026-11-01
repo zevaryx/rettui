@@ -85,6 +85,11 @@ pub struct Settings {
     /// In the Android app: keep the phone's processor awake while rettui
     /// runs (a wake lock; see `RettuiService`).
     pub keep_awake: bool,
+    /// In the desktop app: closing the window leaves rettui running, with
+    /// an icon in the system tray to open it again or quit.
+    pub keep_running: bool,
+    /// In the desktop app: minimizing the window puts it in the system tray.
+    pub minimize_to_tray: bool,
     /// The date with each chat line's time (RRC rooms).
     pub chat_dates: bool,
     /// Messages each RRC room and whisper conversation keeps.
@@ -295,6 +300,8 @@ impl Default for Settings {
             // A phone's screen is small: only what people say, there.
             show_joins: !cfg!(target_os = "android"),
             keep_awake: false,
+            keep_running: true,
+            minimize_to_tray: false,
             chat_dates: true,
             rrc_messages_kept: 500,
             wrap_lines: false,
@@ -785,7 +792,19 @@ const SECTIONS: &[(Section, &[&str])] = &[
     ),
     (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins", "chat_dates"]),
     (Section::Notifications, &["notify_messages", "notify_rrc", "quiet_hours", "quiet_hours_trusted"]),
-    (Section::System, &["log_level", "update_check", "update_prereleases", "discovered_entry_points", "keep_awake", "rns_config"]),
+    (
+        Section::System,
+        &[
+            "log_level",
+            "update_check",
+            "update_prereleases",
+            "discovered_entry_points",
+            "keep_awake",
+            "keep_running",
+            "minimize_to_tray",
+            "rns_config",
+        ],
+    ),
 ];
 
 impl Field {
@@ -1347,6 +1366,20 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "keep_running",
+        label: "Keep running when closed",
+        help: "In the desktop app: closing its window leaves rettui running in the background, so messages keep arriving and notifications keep coming. Its icon in the system tray (the menu bar on a Mac) opens it again or quits. Off, closing the window stops rettui",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "minimize_to_tray",
+        label: "Minimize to tray",
+        help: "In the desktop app: minimizing its window hides it to the system tray (the menu bar on a Mac) instead of the taskbar or dock; its icon there opens it again",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "chat_dates",
         label: "Dates on chat lines",
         help: "Show the date with the time of each line in RRC rooms and whispers (as the Dates setting writes it), not only the time. D toggles it in the terminal UI's Channels tab",
@@ -1541,6 +1574,8 @@ impl Settings {
             "wrap_lines" => self.wrap_lines.to_string(),
             "show_joins" => self.show_joins.to_string(),
             "keep_awake" => self.keep_awake.to_string(),
+            "keep_running" => self.keep_running.to_string(),
+            "minimize_to_tray" => self.minimize_to_tray.to_string(),
             "chat_dates" => self.chat_dates.to_string(),
             "notify_messages" => self.notify_messages.to_string(),
             "notify_rrc" => self.notify_rrc.to_string(),
@@ -1649,6 +1684,8 @@ impl Settings {
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
             "keep_awake" => self.keep_awake = toggle(value).map_err(fail)?,
+            "keep_running" => self.keep_running = toggle(value).map_err(fail)?,
+            "minimize_to_tray" => self.minimize_to_tray = toggle(value).map_err(fail)?,
             "browser_new_tabs" => self.browser_new_tabs = toggle(value).map_err(fail)?,
             "chat_dates" => self.chat_dates = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,

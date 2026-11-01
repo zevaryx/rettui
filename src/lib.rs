@@ -258,6 +258,45 @@ pub fn request_stop() {
     STOP.notify_one();
 }
 
+/// The desktop app's tray settings as they stand (see [`keep_running`] and
+/// [`minimize_to_tray`]), changed while it runs.
+static KEEP_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static MINIMIZE_TO_TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_tray(settings: &Settings) {
+    KEEP_RUNNING.store(settings.keep_running, std::sync::atomic::Ordering::Relaxed);
+    MINIMIZE_TO_TRAY.store(settings.minimize_to_tray, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the desktop app keeps running when its window is closed (the
+/// Keep running when closed setting).
+pub fn keep_running() -> bool {
+    KEEP_RUNNING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether the desktop app hides its window to the tray when it's
+/// minimized (the Minimize to tray setting).
+pub fn minimize_to_tray() -> bool {
+    MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// This build's version, for the desktop app's `--version`.
+pub const VERSION: &str = update::VERSION;
+
+/// Say that rettui runs inside the desktop app, before [`run_with`]:
+/// installing an update then replaces it with the release's
+/// `rettui-desktop`, not `rettui`.
+pub fn desktop_app() {
+    update::install::DESKTOP_APP.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Where the web UI keeps its login secret, for a program that runs it
+/// in-process and opens it itself (the desktop app, as the Android app
+/// reads its own): `data_dir` as `--data-dir` would be given.
+pub fn web_token_path(data_dir: Option<PathBuf>) -> Result<PathBuf> {
+    Ok(Paths::new(data_dir)?.web_token)
+}
+
 pub(crate) async fn stop_requested() {
     STOP.notified().await;
 }
@@ -310,9 +349,11 @@ async fn run(cli: Cli) -> Result<()> {
             _ => cli.https.then_some(web::tls::Https::Own),
         };
         let (mut settings, mut paths, mut identity) = (settings, paths, identity);
+        set_tray(&settings);
         // Switching identity starts the web UI over as the other one.
         while web::run(settings, paths, identity, &address, https.clone()).await?.is_some() {
             (settings, paths, identity) = switched(&cli.data_dir, cli.rns_config.clone())?;
+            set_tray(&settings);
         }
         return Ok(());
     }
@@ -529,6 +570,13 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_desktop_app_finds_the_login_secret_in_the_data_folder() {
+        let dir = std::env::temp_dir().join(format!("rettui-token-path-{}", std::process::id()));
+        assert_eq!(super::web_token_path(Some(dir.clone())).unwrap(), dir.join("web_token"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_web_ui_stops_when_asked_from_within() {
         let dir = std::env::temp_dir().join(format!("rettui-run-with-{}", std::process::id()));
