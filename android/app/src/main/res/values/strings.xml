@@ -27,6 +27,10 @@
     <string name="restore_confirm">rettui stops, the backup takes the place of what\'s here (which is moved aside, not deleted), and rettui starts again.</string>
     <string name="restore">Restore</string>
     <string name="restore_not_stopped">rettui didn\'t stop, so nothing was restored. Try again, or stop it from its notification first.</string>
+    <string name="save_failed">Couldn\'t save it: %1$s</string>
+    <string name="read_file_failed">Couldn\'t read it: %1$s</string>
+    <string name="command_failed">Couldn\'t run rettui: %1$s</string>
+    <string name="not_running">rettui isn\'t running</string>
     <string name="working">Working…</string>
     <string name="done">Done</string>
     <string name="failed">That didn\'t work</string>
@@ -38,6 +42,14 @@
     <string name="downloads_choose">Choose a folder…</string>
     <string name="downloads_default">Use Downloads</string>
     <string name="downloads_saved">Saved %1$s</string>
+    <string name="downloads_saved_in">Saved %1$s in %2$s</string>
+    <string name="downloads_folder">Downloads</string>
+    <string name="downloading">Downloading %1$s</string>
+    <string name="download_failed">Couldn\'t download %1$s: %2$s</string>
+    <string name="downloads_no_file">couldn\'t make the file in that folder</string>
+    <string name="downloads_no_room">no room in Downloads</string>
+    <string name="not_saved">Not saved</string>
+    <string name="no_app_for_link">Nothing here opens %1$s links</string>
     <string name="rnodes">RNodes</string>
     <string name="usb">Over USB</string>
     <string name="usb_note">Plugged in with a USB-C cable or an OTG adapter. Tap one to let rettui use it and add it to the Reticulum config.</string>
@@ -63,10 +75,14 @@
     <string name="battery_note">To save battery, many phones stop apps running in the background, and with rettui, Reticulum: messages only arrive while the app is open. Allowing rettui to run in the background keeps it reachable. It uses some more battery.</string>
     <string name="battery_allow">Allow</string>
     <string name="battery_not_now">Not now</string>
+    <string name="notifications_off">Notifications are off</string>
+    <string name="notifications_off_note">rettui can\'t say when a message or a mention arrives while the app is closed. They still arrive, and show when you open it.</string>
+    <string name="notifications_turn_on">Turn them on</string>
     <string name="reply">Reply</string>
     <string name="mark_read">Mark read</string>
     <string name="you">You</string>
     <string name="reply_failed">Your reply wasn\'t sent</string>
     <string name="read_failed">Couldn\'t mark it read</string>
+    <string name="nothing_to_do">Nothing to do for this notification</string>
     <string name="share_left_out">Left out (too big, or unreadable): %1$s</string>
 </resources>

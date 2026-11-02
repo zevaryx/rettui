@@ -132,7 +132,7 @@ class BackupsActivity : Activity() {
             said
         } catch (e: Exception) {
             deleteChosen(uri)
-            Rettui.Said(false, "Couldn't save it: ${e.message}")
+            Rettui.Said(false, getString(R.string.save_failed, e.message))
         } finally {
             file.delete()
         }
@@ -145,7 +145,7 @@ class BackupsActivity : Activity() {
             contentResolver.openInputStream(uri)!!.use { input -> file.outputStream().use { input.copyTo(it) } }
             use(file)
         } catch (e: Exception) {
-            Rettui.Said(false, "Couldn't read it: ${e.message}")
+            Rettui.Said(false, getString(R.string.read_file_failed, e.message))
         } finally {
             file.delete()
         }

@@ -38,6 +38,8 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction"
+        android:enableOnBackInvokedCallback="true"
         android:extractNativeLibs="true"
         android:networkSecurityConfig="@xml/network_security"
         android:theme="@style/Theme.Rettui">

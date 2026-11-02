@@ -58,6 +58,8 @@ repository.
   read or swiped aside.
 - Attaching a file offers the camera beside the files. A photo taken
   goes into the message, and isn't kept in the phone's gallery.
+- With rettui's notifications turned off, the app says so once, with
+  **Turn them on**. Messages still arrive; they show when you open it.
 - Recording voice messages and sharing your location ask for the
   microphone or location the first time.
 - Downloads (exports, backups, files from messages and NomadNet pages) go in
@@ -148,7 +150,10 @@ shown when rettui stops. On it:
   `before-restore-<time>` folder, not deleted), and rettui starts again.
 
 Back up the identity before uninstalling the app: uninstalling deletes
-everything the app keeps.
+everything the app keeps. Nothing of rettui's goes to Android's cloud
+backups, nor to a new phone set up from this one: save a full backup here
+and restore it there. (A copied identity would leave two phones answering
+for the same address.)
 
 ## RNodes
 

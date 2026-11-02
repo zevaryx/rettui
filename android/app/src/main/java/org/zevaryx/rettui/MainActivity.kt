@@ -20,6 +20,8 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
@@ -86,6 +88,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 33) onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, back!!)
         handle(intent)
         waiting = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -161,6 +164,7 @@ class MainActivity : Activity() {
         super.onResume()
         Rettui.setShowing(this, true)
         watch.run()
+        if (started) askNotifications()
     }
 
     override fun onPause() {
@@ -191,8 +195,16 @@ class MainActivity : Activity() {
         }
     }
 
-    @Deprecated("Activity's own back handling, kept for API 26")
-    override fun onBackPressed() {
+    /**
+     * Back, from Android 13 on (the app takes part in its predictive back,
+     * so the screens it opens slide back to this one).
+     */
+    private val back = if (Build.VERSION.SDK_INT >= 33) OnBackInvokedCallback { goBack() } else null
+
+    @Deprecated("Activity's own back handling, kept for Android 12 and earlier")
+    override fun onBackPressed() = goBack()
+
+    private fun goBack() {
         if (web.visibility != android.view.View.VISIBLE) {
             moveTaskToBack(true)
             return
@@ -205,21 +217,59 @@ class MainActivity : Activity() {
     }
 
     private fun begin() {
+        started = true
         RettuiService.start(this)
         waitedSince = System.currentTimeMillis()
         waitForRettui()
-        askBattery()
+        if (!askBattery()) askNotifications()
+    }
+
+    /** Past the first start's questions (notifications, battery). */
+    private var started = false
+    /** The question on screen, so another doesn't go over it. */
+    private var asking: AlertDialog? = null
+
+    /**
+     * With notifications off for rettui (or its Messages ones), messages
+     * arrive unannounced while the app is closed: say so once, with a way to
+     * turn them on. Asked again only after they've been on.
+     */
+    private fun askNotifications() {
+        val prefs = getSharedPreferences("app", MODE_PRIVATE)
+        val manager = getSystemService(android.app.NotificationManager::class.java)
+        val messages = manager.getNotificationChannel(RettuiService.CHANNEL_MESSAGES)
+        val on = manager.areNotificationsEnabled() && messages?.importance != android.app.NotificationManager.IMPORTANCE_NONE
+        if (on) {
+            prefs.edit().remove("asked_notifications").apply()
+            return
+        }
+        if (prefs.getBoolean("asked_notifications", false) || asking?.isShowing == true) return
+        prefs.edit().putBoolean("asked_notifications", true).apply()
+        asking = AlertDialog.Builder(this)
+            .setTitle(R.string.notifications_off)
+            .setMessage(R.string.notifications_off_note)
+            .setPositiveButton(R.string.notifications_turn_on) { _, _ ->
+                // The Messages ones, if only they are off; else the app's.
+                val settings = if (manager.areNotificationsEnabled() && messages != null) {
+                    Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_CHANNEL_ID, messages.id)
+                } else {
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                }
+                runCatching { startActivity(settings.putExtra(Settings.EXTRA_APP_PACKAGE, packageName)) }
+            }
+            .setNegativeButton(R.string.battery_not_now, null)
+            .show()
     }
 
     /**
      * Once: ask to be left out of battery optimisation, which on many
      * phones stops background apps, and with them Reticulum and messages.
      */
-    private fun askBattery() {
+    private fun askBattery(): Boolean {
         val prefs = getSharedPreferences("app", MODE_PRIVATE)
-        if (getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName) || prefs.getBoolean("asked_battery", false)) return
+        if (getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName) || prefs.getBoolean("asked_battery", false)) return false
         prefs.edit().putBoolean("asked_battery", true).apply()
-        AlertDialog.Builder(this)
+        asking = AlertDialog.Builder(this)
             .setTitle(R.string.battery)
             .setMessage(R.string.battery_note)
             .setPositiveButton(R.string.battery_allow) { _, _ ->
@@ -231,6 +281,7 @@ class MainActivity : Activity() {
             }
             .setNegativeButton(R.string.battery_not_now, null)
             .show()
+        return true
     }
 
     /**
@@ -391,7 +442,7 @@ class MainActivity : Activity() {
                 try {
                     startActivity(Intent(Intent.ACTION_VIEW, request.url))
                 } catch (e: Exception) {
-                    Toast.makeText(this@MainActivity, "Nothing here opens ${request.url.scheme} links", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, getString(R.string.no_app_for_link, request.url.scheme), Toast.LENGTH_SHORT).show()
                 }
                 return true
             }
@@ -520,7 +571,7 @@ class MainActivity : Activity() {
     /** Fetch `url` and write it to `target` (the file asked for), else the folder picked, else Downloads. */
     private fun save(url: String, name: String, type: String, target: Uri?) {
         val cookie = CookieManager.getInstance().getCookie(url)
-        Toast.makeText(this, "Downloading $name", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.downloading, name), Toast.LENGTH_SHORT).show()
         Thread {
             val result = try {
                 val connection = URL(url).openConnection() as HttpURLConnection
@@ -533,7 +584,7 @@ class MainActivity : Activity() {
                         getString(R.string.downloads_saved, name)
                     } else if (folder != null) {
                         val parent = DocumentsContract.buildDocumentUriUsingTree(folder, DocumentsContract.getTreeDocumentId(folder))
-                        val saved = DocumentsContract.createDocument(contentResolver, parent, type, name) ?: error("couldn't make the file in that folder")
+                        val saved = DocumentsContract.createDocument(contentResolver, parent, type, name) ?: error(getString(R.string.downloads_no_file))
                         contentResolver.openOutputStream(saved)!!.use { input.copyTo(it) }
                         getString(R.string.downloads_saved, name)
                     } else if (Build.VERSION.SDK_INT >= 29) {
@@ -542,17 +593,17 @@ class MainActivity : Activity() {
                             put(MediaStore.Downloads.MIME_TYPE, type)
                         }
                         val saved = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                            ?: error("no room in Downloads")
+                            ?: error(getString(R.string.downloads_no_room))
                         contentResolver.openOutputStream(saved)!!.use { input.copyTo(it) }
-                        "Saved $name in Downloads"
+                        getString(R.string.downloads_saved_in, name, getString(R.string.downloads_folder))
                     } else {
                         val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
                         File(dir, name).outputStream().use { input.copyTo(it) }
-                        "Saved $name in ${dir.path}"
+                        getString(R.string.downloads_saved_in, name, dir.path)
                     }
                 }
             } catch (e: Exception) {
-                "Couldn't download $name: ${e.message}"
+                getString(R.string.download_failed, name, e.message)
             }
             main.post { Toast.makeText(this, result, Toast.LENGTH_LONG).show() }
         }.start()
@@ -583,7 +634,7 @@ class MainActivity : Activity() {
             val (url, name, type) = pendingSave ?: return
             pendingSave = null
             val target = data?.data
-            if (resultCode == RESULT_OK && target != null) save(url, name, type, target) else Toast.makeText(this, "Not saved", Toast.LENGTH_SHORT).show()
+            if (resultCode == RESULT_OK && target != null) save(url, name, type, target) else Toast.makeText(this, R.string.not_saved, Toast.LENGTH_SHORT).show()
             return
         }
         super.onActivityResult(requestCode, resultCode, data)

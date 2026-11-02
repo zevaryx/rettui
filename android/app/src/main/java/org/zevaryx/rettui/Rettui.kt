@@ -55,7 +55,7 @@ object Rettui {
             val code = Native.run(args(context, *args), output.path)
             Said(code == 0, output.readText().trim())
         } catch (e: Throwable) {
-            Said(false, "Couldn't run rettui: $e")
+            Said(false, context.getString(R.string.command_failed, e.toString()))
         } finally {
             output.delete()
         }
@@ -91,7 +91,7 @@ object Rettui {
      * web UI itself does. What it answered, or why it couldn't.
      */
     fun api(context: Context, path: String, body: JSONObject? = null): Said = try {
-        val token = RettuiService.token(context) ?: error("rettui isn't running")
+        val token = RettuiService.token(context) ?: error(context.getString(R.string.not_running))
         val connection = URL("http://127.0.0.1:${port(context)}/api/$path").openConnection() as HttpURLConnection
         connection.setRequestProperty("Authorization", "Bearer $token")
         connection.connectTimeout = 3000
