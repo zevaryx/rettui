@@ -6389,7 +6389,7 @@ dependencies = [
 
 [[package]]
 name = "rettui"
-version = "1.11.0"
+version = "1.11.0-dev.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
