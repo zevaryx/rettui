@@ -22,6 +22,7 @@
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 
+mod font_chars;
 pub mod html;
 pub(crate) mod layout;
 pub mod source;

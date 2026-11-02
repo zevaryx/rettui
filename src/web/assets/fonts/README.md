@@ -41,5 +41,25 @@ make("FiraCodeNerdFont-Bold.ttf", "FiraCodeNerdFont-Bold-Text.woff2", lambda c: 
 make("FiraCodeNerdFont-Regular.ttf", "FiraCodeNerdFont-Icons.woff2", icon)
 ```
 
+`src/nomad/micron/font_chars.rs` lists the characters the text fonts draw,
+so Micron pages give any other character the columns the terminal UI gives
+it. Run this again after changing the fonts:
+
+```python
+from fontTools.ttLib import TTFont
+
+chars = None
+for weight in ("Regular", "Bold"):
+    cmap = set(TTFont(f"FiraCodeNerdFont-{weight}-Text.woff2").getBestCmap())
+    chars = cmap if chars is None else chars & cmap
+ranges, chars = [], sorted(chars)
+for c in chars:
+    if ranges and ranges[-1][1] == c - 1:
+        ranges[-1][1] = c
+    else:
+        ranges.append([c, c])
+print("".join(f"    (0x{a:04X}, 0x{b:04X}),\n" for a, b in ranges))
+```
+
 rettui's web UI serves them itself (`/fonts/…`), so browsers never fetch fonts
 from a third party.
