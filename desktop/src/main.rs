@@ -224,6 +224,14 @@ fn add_tray(app: &App) {
         if let Some(icon) = app.default_window_icon() {
             tray = tray.icon(icon.clone());
         }
+        // The icon goes to the tray as a file. A Flatpak's own temporary
+        // folders are hidden from the desktop, so there it goes in the app's
+        // cache folder, which has the same path outside the sandbox.
+        if std::env::var_os("FLATPAK_ID").is_some()
+            && let Some(cache) = std::env::var_os("XDG_CACHE_HOME")
+        {
+            tray = tray.temp_dir_path(PathBuf::from(cache).join("tray-icon"));
+        }
         tray.build(app)?;
         Ok(())
     };
