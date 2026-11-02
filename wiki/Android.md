@@ -53,7 +53,11 @@ repository.
 - Messages and mentions show as Android notifications while the app isn't
   on screen. Tapping one opens what it's about. **Reply** answers from the
   notification (a message goes the way set for that conversation), and
-  **Mark read** marks it read without opening rettui.
+  **Mark read** marks it read without opening rettui. A conversation's
+  notification shows its last few messages, one under another, until it's
+  read or swiped aside.
+- Attaching a file offers the camera beside the files. A photo taken
+  goes into the message, and isn't kept in the phone's gallery.
 - Recording voice messages and sharing your location ask for the
   microphone or location the first time.
 - Downloads (exports, backups, files from messages and NomadNet pages) go in

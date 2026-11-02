@@ -453,7 +453,7 @@ class MainActivity : Activity() {
                 pendingFiles?.onReceiveValue(null)
                 pendingFiles = callback
                 return try {
-                    startActivityForResult(params.createIntent(), PICK_FILES)
+                    startActivityForResult(withCamera(params), PICK_FILES)
                     true
                 } catch (e: Exception) {
                     pendingFiles = null
@@ -462,6 +462,30 @@ class MainActivity : Activity() {
             }
         }
         web.setDownloadListener { url, _, disposition, mime, _ -> download(url, disposition, mime) }
+    }
+
+    /** The photo the camera was asked to take, if it was offered (see withCamera). */
+    private var pendingPhoto: Pair<File, Uri>? = null
+
+    /**
+     * The page's file picker, with the camera beside it when the page takes
+     * pictures: a photo taken goes in the app's private cache (see Photos),
+     * not the gallery.
+     */
+    private fun withCamera(params: WebChromeClient.FileChooserParams): Intent {
+        pendingPhoto = null
+        val picker = params.createIntent()
+        val types = params.acceptTypes.orEmpty().map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+        val pictures = types.isEmpty() || types.any { it == "*/*" || it.startsWith("image/") || it in setOf(".jpg", ".jpeg") }
+        val camera = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        if (!pictures || camera.resolveActivity(packageManager) == null) return picker
+        val (file, uri) = Photos.next(this)
+        camera.putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        // The camera app has to be let in to that one photo; ClipData carries the grant.
+        camera.clipData = android.content.ClipData.newRawUri(null, uri)
+        pendingPhoto = file to uri
+        return Intent.createChooser(picker, null).putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(camera))
     }
 
     /** A download waiting for the "save as" screen: its address, name and type. */
@@ -548,8 +572,11 @@ class MainActivity : Activity() {
     @Deprecated("Activity's own result handling, kept for API 26")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == PICK_FILES) {
-            pendingFiles?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+            // A photo taken comes back with nothing picked: it's in the file given to the camera.
+            val photo = pendingPhoto?.takeIf { (file, _) -> resultCode == RESULT_OK && data?.data == null && data?.clipData == null && file.length() > 0 }
+            pendingFiles?.onReceiveValue(if (photo != null) arrayOf(photo.second) else WebChromeClient.FileChooserParams.parseResult(resultCode, data))
             pendingFiles = null
+            pendingPhoto = null
             return
         }
         if (requestCode == SAVE_FILE) {
