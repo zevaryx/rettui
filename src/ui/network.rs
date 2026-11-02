@@ -362,6 +362,9 @@ fn draw_announces(frame: &mut Frame, app: &mut App, area: Rect) {
             let address = entry.address();
             spans.extend(highlighted(&address, usize::MAX, &terms, Style::default().fg(dim())));
             spans.push(Span::styled(format!("  {} hop{}", heard.hops, if heard.hops == 1 { "" } else { "s" }), Style::default().fg(dim())));
+            if let Some(software) = &heard.software {
+                spans.push(Span::styled(format!("  {software}"), Style::default().fg(dim())));
+            }
             if let Some(interface) = app.routes.get(address.as_str()) {
                 spans.push(Span::styled(format!("  via {interface}"), Style::default().fg(dim())));
             }

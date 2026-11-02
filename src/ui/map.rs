@@ -100,8 +100,7 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
 
     // The places: name, then when and how far.
     let here = app.settings.own_location();
-    let list_block =
-        block("Places", false).title_bottom(Line::styled(" Enter open · o map · x delete ", Style::default().fg(dim())));
+    let list_block = block("Places", false).title_bottom(Line::styled(" Enter open · o map · x delete ", Style::default().fg(dim())));
     let list_inner = list_block.inner(list_area);
     let rows = usize::from(list_inner.height / 2).max(1);
     let first = selected.saturating_sub(rows - 1);

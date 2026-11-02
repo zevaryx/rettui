@@ -276,6 +276,7 @@ fn reticulums_path_and_announce_rate_tables() {
         aspect: None,
         name: Some("Hilltop relay".into()),
         hops: 1,
+        software: None,
     };
     tui.app.announce_log.push(heard, now);
     let paths = vec![
@@ -1694,7 +1695,14 @@ fn network_peers_of_each_kind_and_the_announce_viewer() {
         tui.app.on_net(NetEvent::Announce { kind, hash: [n; 16], name: Some(name.into()), hops: 1 });
     }
     for (n, kind) in [(1u8, Kind::Lxmf), (2, Kind::Nomad), (3, Kind::Propagation), (4, Kind::Rrc), (5, Kind::Phone), (6, Kind::Other)] {
-        tui.app.on_net(NetEvent::Heard(Heard { hash: [n; 16], kind, aspect: None, name: Some(format!("heard {n}")), hops: 2 }));
+        tui.app.on_net(NetEvent::Heard(Heard {
+            hash: [n; 16],
+            kind,
+            aspect: None,
+            name: Some(format!("heard {n}")),
+            hops: 2,
+            software: None,
+        }));
     }
     tui.tab(Tab::Network);
     // Each peer: opened, and the keys for its kind.
@@ -1766,7 +1774,7 @@ fn network_peers_of_each_kind_and_the_announce_viewer() {
     tui.key(KeyCode::Char('g'));
     for n in 0..(crate::app::announces::KEPT + 5) {
         let hash = [(n % 250) as u8, (n / 250) as u8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9];
-        tui.app.on_net(NetEvent::Heard(Heard { hash, kind: Kind::Other, aspect: None, name: None, hops: 1 }));
+        tui.app.on_net(NetEvent::Heard(Heard { hash, kind: Kind::Other, aspect: None, name: None, hops: 1, software: None }));
     }
     tui.draw();
 }
@@ -2304,4 +2312,45 @@ fn interfaces_found_listed_added_and_mapped_at_the_keyboard() {
     assert!(tui.app.map.is_some());
     tui.key(KeyCode::Char('i'));
     assert!(tui.app.map.is_none());
+}
+
+#[test]
+fn ask_where_someone_is_from_the_map_and_see_what_runs_a_propagation_node() {
+    use crate::lxmf::fields::{Command, Telemetry};
+    use crate::lxmf::{Extras, InboundMessage};
+    let mut tui = Tui::new("map-ask");
+    let key = "ab".repeat(16);
+    let telemetry = Telemetry { location: Some(crate::lxmf::Location::at(51.5, -0.1)), ..Telemetry::default() };
+    let message = InboundMessage {
+        source: [0xab; 16],
+        timestamp: crate::app::now() - 60.0,
+        extras: Extras { telemetry: Some(telemetry), ..Extras::default() },
+        ..InboundMessage::default()
+    };
+    tui.app.on_net(crate::net::NetEvent::Message(Box::new(message)));
+    tui.tab(Tab::Messages);
+    tui.key(KeyCode::Char('M'));
+    assert!(tui.app.map.is_some() && tui.draw().contains("w ask where"));
+    tui.key(KeyCode::Char('w'));
+    let asked = tui.sent();
+    assert!(
+        asked.iter().any(|c| matches!(c, NetCommand::SendMessage { message, .. } if message.commands == [Command::TelemetryRequest] && hex::encode(message.to) == key)),
+        "{asked:?}"
+    );
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("where they are")));
+    // The announce viewer says what runs a propagation node.
+    tui.key(KeyCode::Esc);
+    tui.tab(Tab::Network);
+    let node = crate::net::heard::Heard {
+        hash: [5; 16],
+        kind: crate::net::heard::Kind::Propagation,
+        aspect: None,
+        name: Some("Hill node".into()),
+        hops: 1,
+        software: Some("lxmd 1.2.1".into()),
+    };
+    tui.app.announce_log.push(node, crate::app::now());
+    tui.key(KeyCode::Char('a'));
+    let shown = tui.draw();
+    assert!(shown.contains("Hill node") && shown.contains("lxmd 1.2.1"), "{shown}");
 }

@@ -2293,6 +2293,10 @@ async function mapDialog({ at = null, name = '', key = null, interfaceId = null 
               switchTab('messages', { focus: true });
               setPane(app.views.messages, 'detail');
             } }) : null,
+            p.key ? el('button', { class: 'inline', text: '📍 Ask where', title: 'Ask where they are now, as Sideband does: their answer moves them on the map', onclick: async (e) => {
+              e.stopPropagation();
+              await attempt(() => api.post(`/conversations/${p.key}/command`, { command: 'location' }), `Asked ${p.name} where they are: their answer goes on the map`);
+            } }) : null,
             el('a', { href: p.map, target: '_blank', rel: 'noopener noreferrer', text: 'OpenStreetMap ↗', onclick: (e) => e.stopPropagation() }),
             p.key && p.at ? el('button', { class: 'inline danger', text: 'Delete locations', title: 'Take their place and trail off the map (their messages stay)', onclick: async (e) => {
               e.stopPropagation();
@@ -5894,7 +5898,8 @@ app.views.network = {
     },
     el('td', { class: 'dim', text: clockTime(new Date(a.at * 1000), true) }),
     el('td', {}, el('span', { class: 'tag ' + a.kind, text: a.tag, title: a.aspect || 'A kind rettui doesn\'t know' })),
-    el('td', { class: 'name' }, a.name ? highlighted(a.name, terms) : el('span', { class: 'dim', text: '(unnamed)' })),
+    el('td', { class: 'name' }, a.name ? highlighted(a.name, terms) : el('span', { class: 'dim', text: '(unnamed)' }),
+      a.software ? el('span', { class: 'dim', text: ` · ${a.software}`, title: 'What runs this propagation node' }) : null),
     el('td', { class: 'mono dim' }, highlighted(a.hash, terms)),
     el('td', { class: 'dim', text: `${a.hops} hop${a.hops === 1 ? '' : 's'}` }),
     el('td', { class: 'dim', text: a.via || '' }),

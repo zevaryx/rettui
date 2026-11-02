@@ -155,6 +155,16 @@ impl App {
     }
 
     /// Copy someone's address (see [`App::address_link`]), `whose`.
+    /// Ask where they are (a Sideband telemetry request), from the contact
+    /// card or the map.
+    pub(super) fn ask_location(&mut self, key: &str) {
+        let name = self.store.display_name(key);
+        match self.send_command(key, crate::lxmf::fields::Command::TelemetryRequest) {
+            Ok(_) => self.confirm(format!("Asked {name} where they are: their answer goes on the map (M)")),
+            Err(e) => self.warn(e),
+        }
+    }
+
     pub(super) fn copy_address(&mut self, key: &str, whose: &str) {
         let link = self.address_link(key);
         let what = if link.starts_with("lxma://") {
@@ -347,13 +357,7 @@ impl App {
                     self.warn(e);
                 }
             }
-            CardAction::AskLocation => {
-                let name = self.store.display_name(&key);
-                match self.send_command(&key, crate::lxmf::fields::Command::TelemetryRequest) {
-                    Ok(_) => self.confirm(format!("Asked {name} where they are: their answer goes on the map (M)")),
-                    Err(e) => self.warn(e),
-                }
-            }
+            CardAction::AskLocation => self.ask_location(&key),
             CardAction::Command => self.open_command_prompt(key),
             CardAction::Track => {
                 let title = format!("Ask {} where they are every how many minutes?", self.store.display_name(&key));

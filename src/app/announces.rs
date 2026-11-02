@@ -249,7 +249,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn heard(byte: u8, kind: Kind, name: &str) -> Heard {
-        Heard { hash: [byte; 16], kind, aspect: None, name: Some(name.into()), hops: byte % 4 }
+        Heard { hash: [byte; 16], kind, aspect: None, name: Some(name.into()), hops: byte % 4, software: None }
     }
 
     fn screen(app: &mut App) -> String {

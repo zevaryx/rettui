@@ -215,6 +215,7 @@ pub fn keys(app: &App) -> Keys {
                 ("Enter", "open"),
                 ("+/-", "zoom"),
                 ("0", "all"),
+                ("w", "ask where"),
                 ("i", "interfaces"),
                 ("o", "OpenStreetMap"),
                 ("x", "delete locations"),

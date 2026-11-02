@@ -227,6 +227,11 @@ impl App {
                     self.show_found(&id);
                 }
             }
+            KeyCode::Char('w') => {
+                if let Some(key) = places[map.selected].key.clone() {
+                    self.ask_location(&key);
+                }
+            }
             KeyCode::Char('x') => {
                 if let Some(key) = places[map.selected].key.clone() {
                     let question = format!(

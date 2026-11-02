@@ -36,7 +36,9 @@ shows your identity, your interfaces and the log.
   shows every announce in place of the list, as it arrives, of every kind:
   LXMF peers, NomadNet and propagation nodes, RRC hubs, LXST calls, and
   whatever else announces on the network (tagged OTHER, with a name when
-  its announce carries one as text). The list keeps one row per peer or
+  its announce carries one as text). A propagation node's says what runs
+  it, as LXMF 1.2 announces it and Sideband shows it (*lxmd 1.2.1*,
+  *rettui 1.2.0*). The list keeps one row per peer or
   node; this shows each announce, with when it was heard, so it's where to
   see who's announcing how often, or what's on a new interface. It follows
   the newest; moving up holds it where you are (`End`, or scrolling to the

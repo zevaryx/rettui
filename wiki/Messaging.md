@@ -577,14 +577,17 @@ Sideband 2.x shows them.
   the mouse wheel) zoom in on it and out, `0` shows them all again,
   `Enter` opens the conversation (or, for an interface, shows it in
   the list of interfaces found), `o` opens the place on OpenStreetMap,
-  `x` deletes their locations, `i` leaves interfaces off the map (or
+  `w` asks the one picked where they are now (as *Ask where they are* on
+  the contact card does), `x` deletes their locations, `i` leaves
+  interfaces off the map (or
   puts them back), `Esc` closes it.
 - **In the web UI:** 🗺 beside **+ New** (or `M`), or **Map** beside a
   location in a conversation. Drag it, zoom with the wheel, a double click,
   two fingers or `+`/`−`, and `⤢` shows them all. A click on a place or in
   the list shows it; the list also opens the conversation, or the place on
   OpenStreetMap. How far each may be off shows as a circle around it.
-  `▲` hides interfaces or shows them again, and **Details** beside one
+  **📍 Ask where** in the list asks someone where they are now. `▲`
+  hides interfaces or shows them again, and **Details** beside one
   shows what's known of it.
 - **Trails:** each place someone sends (a location, a live update, an
   answer when tracked) and each a collector passes on is kept on their

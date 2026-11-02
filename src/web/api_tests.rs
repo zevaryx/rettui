@@ -1504,7 +1504,14 @@ async fn an_rngit_nodes_pages_and_repositories_linked_from_a_page() {
     let web = TestWeb::start("repos-pages");
     let (git, pages) = ([7u8; 16], [9u8; 16]);
     web.with_owner(move |o| {
-        o.apply(NetEvent::Heard(Heard { hash: git, kind: Kind::Git, aspect: Some(GIT_ASPECT), name: Some("Moon Forge".into()), hops: 1 }));
+        o.apply(NetEvent::Heard(Heard {
+            hash: git,
+            kind: Kind::Git,
+            aspect: Some(GIT_ASPECT),
+            name: Some("Moon Forge".into()),
+            hops: 1,
+            software: None,
+        }));
         o.app.store.peers.insert(
             hex::encode(pages),
             crate::store::Peer { kind: PeerKind::Nomad, name: Some("Moon Forge pages".into()), hops: 2, last_seen: 1 },

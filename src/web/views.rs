@@ -600,7 +600,7 @@ pub fn announces(app: &App, after: Option<u64>, filter: crate::app::announces::H
             (network::matches_text(&terms, &[name.unwrap_or_default(), &hash]) && app.goes_via(&hash, via)).then(|| {
                 json!({
                     "seq": entry.seq, "at": entry.at, "kind": entry.heard.kind.key(), "tag": entry.heard.kind.tag(),
-                    "aspect": entry.heard.aspect, "name": name, "hash": hash, "hops": entry.heard.hops,
+                    "aspect": entry.heard.aspect, "name": name, "hash": hash, "hops": entry.heard.hops, "software": entry.heard.software,
                     "via": app.routes.get(hash.as_str()),
                 })
             })
@@ -1427,6 +1427,7 @@ mod tests {
                 aspect: None,
                 name: Some(format!("n{i}")),
                 hops: 1,
+                software: None,
             }));
         }
         let all = announces(&app, None, crate::app::announces::HeardFilter::All, "", None);
