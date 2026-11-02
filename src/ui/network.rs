@@ -48,6 +48,64 @@ pub(super) fn draw_network(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.whois.open {
         draw_whois(frame, app, area);
     }
+    if app.found_view.open {
+        draw_found(frame, app, area);
+    }
+}
+
+/// Interfaces others make known (`e`): one a line, and what's known of the
+/// one picked under them.
+fn draw_found(frame: &mut Frame, app: &mut App, area: Rect) {
+    let found = app.found_interfaces();
+    let now = crate::app::now() as u64;
+    let width = 100.min(area.width);
+    let height = area.height.saturating_sub(2).max(3);
+    let rect = Rect { x: area.x + area.width.saturating_sub(width) / 2, y: area.y + 1, width, height };
+    frame.render_widget(ratatui::widgets::Clear, rect);
+    let hint = " Enter add to Reticulum · m map · y copy · Esc close ";
+    let title = format!("Interfaces found · {}", found.len());
+    let outer = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
+    let inner = outer.inner(rect);
+    frame.render_widget(outer, rect);
+    if found.is_empty() {
+        let message = "None yet. Interface discovery (Discover interfaces, in the Reticulum tab) lists the entry points and radios others announce, \
+                       and Sideband 2.x sends its own in telemetry. They show here as they're heard.";
+        frame.render_widget(Paragraph::new(message).style(Style::default().fg(dim())).wrap(Wrap { trim: true }), inner);
+        return;
+    }
+    let selected = app.found_view.list.selected().unwrap_or(0).min(found.len() - 1);
+    app.found_view.list.select(Some(selected));
+    let details = found[selected].interface.details(now);
+    let detail_rows = (details.len() as u16 + 2).min(inner.height / 2);
+    let [list_area, detail_area] = Layout::vertical([Constraint::Min(2), Constraint::Length(detail_rows)]).areas(inner);
+    let items: Vec<ListItem> = found
+        .iter()
+        .map(|f| {
+            let mark = if f.connected { Span::styled("● ", Style::default().fg(Color::Green)) } else { Span::raw("  ") };
+            let name: String = f.interface.name.chars().take(28).collect();
+            let stale = f.interface.status.as_deref() == Some("stale");
+            let style = if stale { Style::default().fg(dim()) } else { Style::default() };
+            ListItem::new(Line::from(vec![
+                mark,
+                Span::styled(format!("{name:<29}"), style.bold()),
+                Span::styled(f.interface.summary(), style),
+                Span::styled(format!("  {}", f.source()), Style::default().fg(dim())),
+            ]))
+        })
+        .collect();
+    let list = List::new(items).highlight_style(Style::default().bg(selected_bg())).highlight_symbol("▌");
+    frame.render_stateful_widget(list, list_area, &mut app.found_view.list);
+    let picked = &found[selected];
+    let mut lines = vec![Line::styled(
+        format!("{} · from {}{}", picked.interface.name, picked.source(), if picked.connected { " · connected" } else { "" }),
+        Style::default().fg(accent()).bold(),
+    )];
+    lines.extend(
+        details
+            .into_iter()
+            .map(|(label, value)| Line::from(vec![Span::styled(format!("  {label:<14}"), Style::default().fg(dim())), Span::raw(value)])),
+    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), detail_area);
 }
 
 /// Your addresses, and whose another is (`I`).

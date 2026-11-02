@@ -148,6 +148,10 @@ pub struct Message {
     /// location), in words.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sensors: Vec<crate::lxmf::sensors::Reading>,
+    /// Interfaces they made known with it (Sideband's Interfaces sensor),
+    /// for the map and the list of interfaces found.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interfaces: Vec<crate::net::found::FoundInterface>,
     /// What else it brought, in words: a command asked for, a location
     /// share that stopped, something rettui can't show.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

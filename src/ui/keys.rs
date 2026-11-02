@@ -215,6 +215,7 @@ pub fn keys(app: &App) -> Keys {
                 ("Enter", "open"),
                 ("+/-", "zoom"),
                 ("0", "all"),
+                ("i", "interfaces"),
                 ("o", "OpenStreetMap"),
                 ("x", "delete locations"),
                 ("Esc", "close"),
@@ -347,6 +348,10 @@ pub fn keys(app: &App) -> Keys {
         Tab::Network if app.whois.open => {
             typing("Identities", &[("↑↓", "select"), ("y", "copy"), ("e", "look up another"), ("Esc", "close")])
         }
+        Tab::Network if app.found_view.open => mode(
+            "Interfaces found",
+            &[("Enter", "add to Reticulum"), ("m", "on the map"), ("y", "copy"), ("↑↓", "select"), ("Esc", "close")],
+        ),
         Tab::Network if app.speed.open => {
             typing("Speed test", &[("Enter", "send"), ("←→", "size"), ("e", "their address"), ("y", "copy yours"), ("Esc", "close")])
         }
@@ -425,6 +430,7 @@ pub fn keys(app: &App) -> Keys {
                 ("a", "announces"),
                 ("t", "tables"),
                 ("v", "speed test"),
+                ("e", "interfaces found"),
                 ("D", "forget path"),
                 ("O", "get file"),
                 ("↑↓", "select"),

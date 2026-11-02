@@ -1949,3 +1949,59 @@ async fn files_are_fetched_from_an_rncp_listener() {
         "{listed}"
     );
 }
+
+#[tokio::test]
+async fn interfaces_found_listed_mapped_and_added_over_the_api() {
+    use crate::lxmf::fields::Telemetry;
+    use crate::net::found::FoundInterface;
+    let web = TestWeb::start("found");
+    let hill = FoundInterface {
+        name: "Hill".into(),
+        kind: "BackboneInterface".into(),
+        transport: true,
+        transport_id: Some("ab".repeat(16)),
+        reachable_on: Some("hill.example.net".into()),
+        port: Some(4242),
+        latitude: Some(51.5),
+        longitude: Some(-0.1),
+        last_heard: Some(1),
+        heard_count: Some(1),
+        ..FoundInterface::default()
+    };
+    let radio = FoundInterface {
+        name: "Radio".into(),
+        kind: "RNodeInterface".into(),
+        frequency: Some(868_100_000),
+        bandwidth: Some(125_000),
+        spreading_factor: Some(8),
+        coding_rate: Some(5),
+        ..FoundInterface::default()
+    };
+    web.with_owner(move |o| o.apply(NetEvent::Discovered(vec![hill]))).await;
+    // Bob sends his radio in his telemetry.
+    let telemetry = Telemetry {
+        interfaces: vec![radio],
+        sensors: vec![crate::lxmf::sensors::Reading { sensor: "Interfaces".into(), value: "Radio".into() }],
+        ..Telemetry::default()
+    };
+    let message = InboundMessage { extras: Extras { telemetry: Some(telemetry), ..Extras::default() }, ..from_bob(1, "") };
+    web.with(move |app| app.on_message(message)).await;
+    let found = web.get("/api/found").await.json();
+    let rows = found["interfaces"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{found}");
+    assert_eq!((rows[0]["name"].as_str(), rows[0]["source"].as_str()), (Some("Hill"), Some("interface discovery")));
+    assert_eq!(rows[1]["from"].as_str(), Some(BOB));
+    assert!(rows[0]["add"].is_null() && rows[0]["located"] == true && rows[1]["located"] == false);
+    // On the map: the one that says where it is.
+    let map = web.get("/api/locations").await.json();
+    let mapped = map["interfaces"].as_array().unwrap();
+    assert_eq!((mapped.len(), mapped[0]["name"].as_str()), (1, Some("Hill")), "{map}");
+    // Added to the Reticulum config, and an unknown one refused.
+    let id = rows[0]["id"].as_str().unwrap().to_string();
+    let added = web.post(&format!("/api/found/{id}/add"), json!({})).await;
+    assert_eq!(added.status, StatusCode::OK);
+    assert!(added.json()["done"].as_str().unwrap().contains("Hill"));
+    let text = web.with(|app| std::fs::read_to_string(app.rns_path()).unwrap()).await;
+    assert!(text.contains("target_host = hill.example.net"), "{text}");
+    assert_eq!(web.post("/api/found/nope/add", json!({})).await.status, StatusCode::BAD_REQUEST);
+}

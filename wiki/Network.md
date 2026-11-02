@@ -145,6 +145,24 @@ shows your identity, your interfaces and the log.
   and both see how long it took, as a rate (*Upload: 1.2 Mbps*, *Download:
   1.1 Mbps*). While it's open, rettui takes tests from the address you
   entered and turns away anyone else's; closed, it takes none.
+- **Interfaces found:** `e` in the Network tab, or **Interfaces found** in
+  the web UI, lists the interfaces others make known, as Sideband 2.x
+  does: the entry points, RNodes and I2P addresses [interface
+  discovery](Settings-and-Reticulum-Config) finds (*Discover interfaces*
+  in the Reticulum config), and those contacts send in their telemetry
+  (Sideband's Interfaces sensor). Each says how to reach it (host and port,
+  or the radio's frequency, bandwidth, spreading factor and coding rate),
+  whether its node passes traffic on, its network name if it has one, and,
+  for one discovery found, how many hops away it is and when it was heard.
+  ● marks one rettui is connected to (see *Discovered entry points*).
+  `Enter` (**Add to Reticulum**) adds the one picked to the Reticulum
+  config, kept in its history: an entry point as a TCP client, which
+  connects when Reticulum restarts, an I2P address as an I2P interface, and
+  an RNode's radio settings as an RNode interface that's off until you set
+  its port and TX power. One that points at this device isn't added. `m`
+  (**On the map**) shows it on [the map](Messaging#locations-and-the-map),
+  if it says where it is, and `y` (**Copy**) copies where to reach it.
+  Blocked contacts' aren't listed.
 - **Identities:** `I` in the Network tab (in the list, the announces or
   the tables), or **Identities…** in the web UI, shows your addresses
   (your identity, LXMF address, node, propagation node, RRC hub and speed

@@ -92,6 +92,8 @@ pub fn router(state: WebState) -> Router {
         .route("/backup", get(download_backup))
         .route("/announces", get(announces))
         .route("/tables", get(tables))
+        .route("/found", get(found))
+        .route("/found/{id}/add", post(add_found))
         .route("/map/tiles/{z}/{x}/{y}", get(map_tile))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/archive", get(conversation_archive))
@@ -693,6 +695,17 @@ async fn live_position(State(state): State<WebState>, axum::Json(body): axum::Js
 }
 
 /// Everyone's newest location, for the map.
+async fn found(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::found(&o.app)).await?))
+}
+
+/// Add an interface found to the Reticulum config (never a pipe: the web UI
+/// only adds what [`crate::net::found::FoundInterface::config`] allows).
+async fn add_found(State(state): State<WebState>, Path(id): Path<String>) -> ApiResult {
+    let done = state.write(move |o| o.app.add_found_interface(&id, true)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "ok": true, "done": done })))
+}
+
 async fn locations(State(state): State<WebState>) -> ApiResult {
     Ok(axum::Json(state.read(|o| views::locations(&o.app)).await?))
 }

@@ -8,6 +8,7 @@
 
 pub mod autopn;
 pub mod discovered;
+pub mod found;
 pub mod git;
 pub mod githost;
 pub mod heard;
@@ -417,6 +418,8 @@ pub enum NetEvent {
     },
     /// The path table and the announce-rate table, as read.
     Tables(Result<Tables, String>),
+    /// The interfaces discovery has found, when they change.
+    Discovered(Vec<found::FoundInterface>),
     /// How a speed test is going.
     Speed(speedtest::SpeedEvent),
     /// Whose a destination is, as found.
@@ -932,6 +935,8 @@ async fn run(
     // The path table, every so many stats ticks (it can be long).
     let mut routes_due = 0u32;
     let mut known_save_due = KNOWN_SAVE_EVERY;
+    // The interfaces discovery found, as last told.
+    let mut found_told: Vec<found::FoundInterface> = Vec::new();
     let mut reannounce = reannounce::Reannounce::default();
     let log = |line: String| {
         let _ = ev.send(NetEvent::Log(line));
@@ -989,6 +994,11 @@ async fn run(
                     if let Ok(paths) = remote::paths(&runtime).await {
                         let routes = paths.into_iter().map(|(hash, info)| (hash, info.interface)).collect();
                         let _ = ev.send(NetEvent::Routes(routes));
+                    }
+                    let found = found::listed(&runtime.discovered_interfaces().await);
+                    if found != found_told {
+                        found_told = found.clone();
+                        let _ = ev.send(NetEvent::Discovered(found));
                     }
                     routes_due = ROUTES_EVERY;
                 }

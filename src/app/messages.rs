@@ -92,6 +92,7 @@ impl App {
         }
         let location = extras.telemetry.as_ref().and_then(|t| t.location);
         let sensors = extras.telemetry.as_ref().map(|t| t.sensors.clone()).unwrap_or_default();
+        let interfaces = extras.telemetry.as_ref().map(|t| t.interfaces.clone()).unwrap_or_default();
         // Nothing to show but what the fields say. A reaction's text may be
         // its emoji again, for clients without reactions (Mesh-Client sends
         // it so): that's the reaction, not a message as well.
@@ -197,6 +198,7 @@ impl App {
             continues: extras.continues.map(hex::encode),
             location,
             sensors,
+            interfaces,
             notes,
             format: extras.format.filter(|_| !message.content.trim().is_empty()),
             signal: message.signal,

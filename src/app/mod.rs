@@ -26,6 +26,7 @@ pub(crate) mod files;
 pub mod find;
 pub mod format;
 pub mod forward;
+pub mod found;
 pub mod games;
 pub mod git_host;
 pub mod guide;
@@ -675,6 +676,10 @@ pub struct App {
     pub speed: speedtest::SpeedTest,
     /// Your addresses, and whose another is (`I` in the Network tab).
     pub whois: whois::Whois,
+    /// Interfaces others make known (`e` in the Network tab).
+    pub found_view: found::FoundView,
+    /// What interface discovery has found, as last told.
+    pub discovered: Vec<crate::net::found::FoundInterface>,
     /// The interface each destination with a path goes through, by address.
     pub routes: HashMap<String, String>,
     pub net_search: NetSearch,
@@ -872,6 +877,8 @@ impl App {
             repos: repos::Repos::default(),
             speed: speedtest::SpeedTest::default(),
             whois: whois::Whois::default(),
+            found_view: found::FoundView::default(),
+            discovered: Vec::new(),
             routes: HashMap::new(),
             net_search: NetSearch::default(),
             browser: Browser::default(),
@@ -1233,6 +1240,7 @@ impl App {
             NetEvent::PathProgress { to, text } => self.on_path_progress(to, text),
             NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
             NetEvent::Tables(result) => self.on_tables(result),
+            NetEvent::Discovered(found) => self.on_discovered(found),
             NetEvent::Rncp { to, name, state } => self.on_rncp(to, name, state),
             NetEvent::RncpFetch { to, path, state } => self.on_rncp_fetch(to, path, state),
             NetEvent::Git { id, result } => self.on_git(id, result),

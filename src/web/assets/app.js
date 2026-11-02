@@ -2075,7 +2075,11 @@ function slippyMap(data, places, onPick) {
     el('div', { class: 'map-controls' },
       button('+', 'Closer', () => zoomAt(1)),
       button('−', 'Further', () => zoomAt(-1)),
-      button('⤢', 'All of them', () => fit())),
+      button('⤢', 'All of them', () => fit()),
+      places.some((p) => p.interface) ? button('▲', 'Interfaces others made known: hide or show them', () => {
+        node.classList.toggle('no-interfaces');
+        for (const p of places) if (p.interface) p.row?.toggleAttribute('hidden', node.classList.contains('no-interfaces'));
+      }) : null),
     data.tiles && data.credit?.includes('OpenStreetMap')
       ? el('a', { class: 'map-credit', href: 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener noreferrer', text: data.credit })
       : el('span', { class: 'map-credit', text: data.tiles ? data.credit || '' : 'No map tiles (the Map tiles setting is empty)' }));
@@ -2091,7 +2095,7 @@ function slippyMap(data, places, onPick) {
   }
   for (const p of places) {
     p.circle = el('div', { class: 'map-circle', hidden: true });
-    p.marker = el('button', { type: 'button', class: 'map-marker' + (p.key ? '' : ' station'), title: p.label, onclick: () => onPick(p) },
+    p.marker = el('button', { type: 'button', class: 'map-marker' + (p.interface ? ' interface' : p.key ? '' : ' station'), title: p.about || p.label, onclick: () => onPick(p) },
       p.icon || p.key ? avatar(p.icon, p.name, p.key) : el('span', { class: 'map-pin' }),
       el('span', { class: 'map-label', text: p.name }));
     marks.append(p.circle, p.marker);
@@ -2244,11 +2248,12 @@ function slippyMap(data, places, onPick) {
 // Where everyone was, from the newest location each has shared (and this
 // station, if its Location is set), on a map and in a list. With `at`, a
 // message's location is shown as well (it may not be their newest).
-async function mapDialog({ at = null, name = '', key = null } = {}) {
+async function mapDialog({ at = null, name = '', key = null, interfaceId = null } = {}) {
   const data = await attempt(() => api.get('/locations'));
   if (!data) return;
-  const places = data.places.slice();
-  let focus = key ? places.find((p) => p.key === key) : null;
+  // People's places, then interfaces' (marked apart, and hidden with ▲).
+  const places = data.places.concat(data.interfaces || []);
+  let focus = key ? places.find((p) => p.key === key) : interfaceId ? places.find((p) => p.interface === interfaceId) : null;
   if (at && !(focus && focus.latitude === at.latitude && focus.longitude === at.longitude)) {
     focus = { ...at, name: name ? `${name} (this message)` : 'This message', key: null, at: null, icon: null };
     places.push(focus);
@@ -2269,7 +2274,7 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
   const station = data.here ? data.places[0] : null;
   const close = dialog('Map', (close) => {
     for (const p of places) {
-      const about = [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away, p.via ? `via ${p.via}` : '',
+      const about = p.interface ? [p.about, `from ${p.via}`].join(' · ') : [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away, p.via ? `via ${p.via}` : '',
         p.trail?.length > 1 ? `trail of ${p.trail.length}` : ''].filter(Boolean).join(' · ');
       const row = el('div', { class: 'list-item', onclick: () => pick(p) },
         p.icon || p.key ? avatar(p.icon, p.name, p.key) : null,
@@ -2277,6 +2282,10 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
           el('div', { class: 'name', text: p.name }),
           el('div', { class: 'sub', text: about || p.label }),
           el('div', { class: 'row map-actions' },
+            p.interface ? el('button', { class: 'inline', text: 'Details', title: 'What\'s known of it, and adding it to Reticulum', onclick: (e) => {
+              e.stopPropagation();
+              foundDialog(p.interface);
+            } }) : null,
             p.key ? el('button', { class: 'inline', text: 'Messages', title: 'Open your conversation', onclick: (e) => {
               e.stopPropagation();
               close();
@@ -2293,6 +2302,7 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
               mapDialog();
             } }) : null)));
       rows.set(p, row);
+      p.row = row;
       list.append(row);
     }
     return [el('div', { class: 'map-body' }, view.node, list)];
@@ -5686,6 +5696,7 @@ app.views.network = {
         el('button', { class: 'more', text: 'Tables', title: 'Reticulum\'s path table and announce rates  ( t )', 'data-label': 'Path table and announce rates', onclick: () => tablesDialog() }),
         el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+        el('button', { class: 'more', text: 'Interfaces found', title: 'Entry points and radios others make known, by interface discovery or in their telemetry  ( e )', onclick: () => foundDialog() }),
         el('button', { class: 'more', text: 'Speed test', title: 'Measure how fast data goes between you and someone else, with rettui or NomadNet  ( v )', onclick: () => speedDialog() }),
         el('button', { class: 'more', text: 'Identities…', title: 'Your addresses, and whose an address is  ( I )', onclick: () => identityDialog(this.selected) }),
         el('button', { class: 'more', text: 'Send a file…', title: 'Send a file to someone running rncp -l  ( F )', onclick: () => rncpDialog(this.selected) }),
@@ -9446,6 +9457,48 @@ function tablesDialog() {
   show();
 }
 
+// Interfaces others make known, as Sideband 2.x lists them: the entry
+// points and radios interface discovery finds, and those contacts send in
+// their telemetry. Each can be added to the Reticulum config (an RNode
+// added off, as its port is set by hand), and shown on the map.
+function foundDialog(focus = null) {
+  let timer = null;
+  let picked = focus;
+  const list = el('div', { class: 'scroll tables-list' });
+  const detail = el('div', { class: 'found-detail' });
+  const summary = el('div', { class: 'dim' });
+  const show = async () => {
+    clearTimeout(timer);
+    const data = await api.get('/found').catch((e) => ({ error: e.message, interfaces: [] }));
+    if (!list.isConnected) return;
+    const rows = data.interfaces;
+    summary.textContent = data.error || `${rows.length} found`;
+    if (!rows.some((r) => r.id === picked)) picked = rows[0]?.id ?? null;
+    list.replaceChildren(...(rows.length ? rows.map((r) => el('button', {
+      class: 'list-item' + (r.id === picked ? ' selected' : '') + (r.stale ? ' dim' : ''), onclick: () => { picked = r.id; show(); },
+    }, el('span', { class: 'main' },
+      el('div', { class: 'name' }, r.connected ? el('span', { class: 'online', text: '● ' }) : null, r.name),
+      el('div', { class: 'sub', text: `${r.summary} · ${r.source}` })))) : [el('div', { class: 'empty',
+      text: 'None yet. Interface discovery (Discover interfaces, in the Reticulum settings) lists the entry points and radios others announce, and Sideband 2.x sends its own in telemetry. They show here as they\'re heard.' })]));
+    const r = rows.find((row) => row.id === picked);
+    detail.replaceChildren(...(r ? [
+      el('div', { class: 'name', text: `${r.name} · from ${r.source}${r.connected ? ' · connected' : ''}` }),
+      el('dl', {}, ...r.details.flatMap(([label, value]) => [el('dt', { text: label }), el('dd', { text: value })])),
+      el('div', { class: 'row actions' },
+        el('button', { class: 'primary', text: 'Add to Reticulum', disabled: !!r.add, title: r.add || 'Add it to the Reticulum config, as a TCP client for an entry point (it connects when Reticulum restarts)', onclick: async () => {
+          if (!await ask(`Add ${r.name} to the Reticulum config?\n${r.kind === 'RNode' ? 'It\'s added off: set its port and TX power in the Reticulum settings, then turn it on.' : 'It connects when Reticulum restarts.'}`, { title: 'Add interface', yes: 'Add' })) return;
+          const result = await attempt(() => api.post(`/found/${r.id}/add`));
+          if (result) toast(result.done);
+        } }),
+        r.located ? el('button', { text: 'On the map', onclick: () => mapDialog({ interfaceId: r.id }) }) : null,
+        r.reach ? el('button', { text: 'Copy', title: 'Copy where to reach it', onclick: () => copy(r.reach, 'where to reach it') }) : null),
+      r.add ? el('p', { class: 'dim', text: r.add }) : null].filter(Boolean) : []));
+    timer = setTimeout(show, 10000);
+  };
+  dialog('Interfaces found', () => el('div', { class: 'tables found' }, summary, list, detail), { className: 'tables-dialog', onclose: () => clearTimeout(timer) });
+  show();
+}
+
 // Interface profiles: named sets of interfaces on and off, to switch
 // between. Switching one turns them on and off in the config (kept in its
 // history) and restarts Reticulum. `changed` runs once the file changes.
@@ -9625,6 +9678,8 @@ document.addEventListener('keydown', (e) => {
     app.views.network.toggleMode();
   } else if (e.key === 't' && app.tab === 'network') {
     tablesDialog();
+  } else if (e.key === 'e' && app.tab === 'network') {
+    foundDialog();
   } else if (e.key === 'v' && app.tab === 'network') {
     speedDialog();
   } else if (e.key === 'I' && app.tab === 'network') {

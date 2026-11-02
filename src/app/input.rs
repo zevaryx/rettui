@@ -341,7 +341,7 @@ impl App {
                 MouseEventKind::ScrollDown => self.zoom_map(false),
                 MouseEventKind::Down(_) if self.regions.map_list.contains(at) => {
                     let index = self.regions.map_first + (at.y - self.regions.map_list.y) as usize / 2;
-                    let count = self.locations().len();
+                    let count = self.map_places().len();
                     if let Some(map) = self.map.as_mut()
                         && index < count
                     {

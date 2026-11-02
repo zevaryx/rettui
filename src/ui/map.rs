@@ -20,7 +20,7 @@ const LIST_WIDTH: u16 = 34;
 const COASTLINES: f64 = 10.0;
 
 pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
-    let places = app.locations();
+    let places = app.map_places();
     let Some(view) = app.map.clone() else { return };
     let area = frame.area();
     let width = area.width.saturating_sub(2);
@@ -80,10 +80,12 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
         let order = (0..places.len()).filter(|&i| i != selected).chain([selected]);
         for i in order {
             let place = &places[i];
-            let (mark, colour) = match place.key {
-                None => ('◆', Color::Yellow),
-                Some(_) if i == selected => ('●', accent()),
-                Some(_) => ('●', Color::LightMagenta),
+            let (mark, colour) = match (&place.key, &place.interface) {
+                (None, Some(_)) if i == selected => ('▲', accent()),
+                (None, Some(_)) => ('▲', Color::Cyan),
+                (None, None) => ('◆', Color::Yellow),
+                (Some(_), _) if i == selected => ('●', accent()),
+                (Some(_), _) => ('●', Color::LightMagenta),
             };
             let mut style = Style::default().fg(colour);
             if i == selected {
@@ -98,7 +100,8 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
 
     // The places: name, then when and how far.
     let here = app.settings.own_location();
-    let list_block = block("Places", false).title_bottom(Line::styled(" Enter open · o map · x delete ", Style::default().fg(dim())));
+    let list_block =
+        block("Places", false).title_bottom(Line::styled(" Enter open · o map · x delete ", Style::default().fg(dim())));
     let list_inner = list_block.inner(list_area);
     let rows = usize::from(list_inner.height / 2).max(1);
     let first = selected.saturating_sub(rows - 1);
@@ -106,19 +109,24 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
     for (i, place) in places.iter().enumerate().skip(first).take(rows) {
         let picked = i == selected;
         let base = if picked { Style::default().bg(selected_bg()) } else { Style::default() };
-        let mark = if place.key.is_none() { "◆ " } else { "● " };
+        let mark = match (&place.key, &place.interface) {
+            (None, Some(_)) => "▲ ",
+            (None, None) => "◆ ",
+            (Some(_), _) => "● ",
+        };
         lines.push(Line::from(vec![
             Span::styled(mark, base.fg(accent())),
             Span::styled(place.name.clone(), base.add_modifier(Modifier::BOLD)),
         ]));
-        let mut about = match place.at {
-            Some(at) => format!("  {} ago", ago(at as i64)),
-            None => "  this station (settings)".to_string(),
+        let mut about = match (place.at, &place.about) {
+            (_, Some(what)) => format!("  {what}"),
+            (Some(at), None) => format!("  {} ago", ago(at as i64)),
+            (None, None) => "  this station (settings)".to_string(),
         };
         if let (Some(here), Some(_)) = (here, &place.key) {
             about.push_str(&format!(" · {}", here.away(&place.location)));
         }
-        if let Some(via) = &place.via {
+        if let Some(via) = place.via.as_ref().filter(|_| place.interface.is_none()) {
             about.push_str(&format!(" · via {via}"));
         }
         if trails[i].len() > 1 {

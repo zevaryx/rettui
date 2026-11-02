@@ -360,8 +360,10 @@ rettui shows what each one is, rather than an empty message:
   magnetic field, proximity, the radio link (quality, RSSI, SNR), where it
   was received and how far, the processor (how busy, its load averages),
   memory, storage, tanks and fuel, power used and made, information text
-  and readings of the sender's own. Reticulum transport and propagation
-  node statistics, and connection maps, are only named. Like location
+  and readings of the sender's own, and the interfaces it makes known
+  (Sideband 2.x's Interfaces sensor, listed under [Interfaces
+  found](Network)). Reticulum transport and propagation node statistics,
+  and connection maps, are only named. Like location
   updates, readings don't notify you or count as unread, and newer ones
   replace the ones before.
 - **Locations** (Sideband and Columba telemetry, field `0x02`) show as a
@@ -564,20 +566,26 @@ Places from anyone blocked aren't passed on. Other sensors aren't sent.
 
 The **map** shows everyone's newest location, the newest first, and this
 station's if it's set. Someone who said they'd stopped sharing (as Columba
-does) isn't on it, nor is anyone blocked.
+does) isn't on it, nor is anyone blocked. [Interfaces others make
+known](Network) that say where they are go on it too, marked ▲, as
+Sideband 2.x shows them.
 
 - **In the TUI:** `M` in Messages opens it, on the open conversation's
   place if they shared one. It draws the coastlines when it's zoomed out
   far enough to show them, with each place on it, and lists them with how
   long ago and how far from this station. `↑↓` pick a place, `+`/`-` (or
   the mouse wheel) zoom in on it and out, `0` shows them all again,
-  `Enter` opens the conversation, `o` opens the place on OpenStreetMap,
-  `x` deletes their locations, `Esc` closes it.
+  `Enter` opens the conversation (or, for an interface, shows it in
+  the list of interfaces found), `o` opens the place on OpenStreetMap,
+  `x` deletes their locations, `i` leaves interfaces off the map (or
+  puts them back), `Esc` closes it.
 - **In the web UI:** 🗺 beside **+ New** (or `M`), or **Map** beside a
   location in a conversation. Drag it, zoom with the wheel, a double click,
   two fingers or `+`/`−`, and `⤢` shows them all. A click on a place or in
   the list shows it; the list also opens the conversation, or the place on
   OpenStreetMap. How far each may be off shows as a circle around it.
+  `▲` hides interfaces or shows them again, and **Details** beside one
+  shows what's known of it.
 - **Trails:** each place someone sends (a location, a live update, an
   answer when tracked) and each a collector passes on is kept on their
   *trail*, even though each update replaces the one before in the

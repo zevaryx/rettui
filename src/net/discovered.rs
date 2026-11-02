@@ -264,7 +264,7 @@ pub fn candidates(found: &[DiscoveredInterface]) -> Vec<Candidate> {
 /// `127.1.2.3`, `[::ffff:127.0.0.1]` or `LocalHost.` would otherwise point
 /// rettui at what listens on this device. Other networks' addresses (a LAN)
 /// stay: interfaces there are found this way too.
-fn reachable(host: &str) -> bool {
+pub(crate) fn reachable(host: &str) -> bool {
     let host = host.trim_matches(['[', ']']).trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() || host == "localhost" || host.ends_with(".localhost") || host.ends_with(".onion") {
         return false;

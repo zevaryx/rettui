@@ -394,6 +394,9 @@ impl App {
         if self.speed.open {
             return self.speed_key(key);
         }
+        if self.found_view.open {
+            return self.found_key(key);
+        }
         if self.tables.open {
             return self.tables_key(key);
         }
@@ -424,6 +427,7 @@ impl App {
             KeyCode::Char('a') => self.toggle_announce_viewer(),
             KeyCode::Char('t') => self.toggle_tables(),
             KeyCode::Char('v') => self.toggle_speed(),
+            KeyCode::Char('e') => self.toggle_found(),
             KeyCode::Char('f') => {
                 self.net_filter = match self.net_filter {
                     NetFilter::All => NetFilter::Peers,

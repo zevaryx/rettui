@@ -2242,3 +2242,66 @@ fn receiving_files_with_rncp_shows_in_status() {
     tui.app.rncp_in.status = Listening::Failed("no transport".into());
     assert!(tui.draw().contains("no transport"));
 }
+
+#[test]
+fn interfaces_found_listed_added_and_mapped_at_the_keyboard() {
+    use crate::net::found::FoundInterface;
+    let mut tui = Tui::new("found");
+    tui.tab(Tab::Network);
+    tui.key(KeyCode::Char('e'));
+    assert!(tui.app.found_view.open && tui.draw().contains("None yet"));
+    let hill = FoundInterface {
+        name: "Hill".into(),
+        kind: "BackboneInterface".into(),
+        transport: true,
+        transport_id: Some("ab".repeat(16)),
+        reachable_on: Some("hill.example.net".into()),
+        port: Some(4242),
+        latitude: Some(51.5),
+        longitude: Some(-0.1),
+        last_heard: Some(1),
+        heard_count: Some(2),
+        status: Some("available".into()),
+        ..FoundInterface::default()
+    };
+    let radio = FoundInterface {
+        name: "Radio".into(),
+        kind: "RNodeInterface".into(),
+        frequency: Some(868_100_000),
+        bandwidth: Some(125_000),
+        spreading_factor: Some(8),
+        coding_rate: Some(5),
+        ..FoundInterface::default()
+    };
+    tui.app.on_net(crate::net::NetEvent::Discovered(vec![hill, radio]));
+    let screen = tui.draw();
+    assert!(screen.contains("Backbone · hill.example.net:4242") && screen.contains("RNode · 868.1 MHz"), "{screen}");
+    assert!(screen.contains("Reachable on") && screen.contains("Heard"), "{screen}");
+    // The radio is added off, for its port to be set.
+    tui.key(KeyCode::Down).key(KeyCode::Enter);
+    assert!(
+        tui.app.notice.as_ref().is_some_and(|n| n.text.contains("Added Radio") && n.text.contains("off")),
+        "{:?}",
+        tui.app.notice.as_ref().map(|n| n.text.clone())
+    );
+    let text = std::fs::read_to_string(tui.app.rns_path()).unwrap();
+    assert!(text.contains("[[Radio]]") && text.contains("frequency = 868100000") && text.contains("enabled = No"), "{text}");
+    // The entry point copied, then shown on the map.
+    tui.key(KeyCode::Up).key(KeyCode::Char('y'));
+    assert_eq!(tui.app.clipboard.last.as_deref(), Some("hill.example.net:4242"));
+    tui.key(KeyCode::Char('m'));
+    assert!(!tui.app.found_view.open && tui.app.tab == Tab::Messages && tui.app.map.is_some());
+    let screen = tui.draw();
+    assert!(screen.contains("▲ Hill") && screen.contains("Backbone · hill"), "{screen}");
+    // Enter on it goes back to it in the list.
+    tui.key(KeyCode::Enter);
+    assert!(tui.app.found_view.open && tui.app.tab == Tab::Network && tui.app.map.is_none());
+    tui.key(KeyCode::Esc);
+    assert!(!tui.app.found_view.open);
+    // Left off the map, nothing's left to show, so it closes.
+    tui.tab(Tab::Messages);
+    tui.key(KeyCode::Char('M'));
+    assert!(tui.app.map.is_some());
+    tui.key(KeyCode::Char('i'));
+    assert!(tui.app.map.is_none());
+}
