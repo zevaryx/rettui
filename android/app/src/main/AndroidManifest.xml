@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Scheduled backups carry on after the phone restarts. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Asked once: to be left out of battery optimisation. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Asked for only when the web UI records voice or shares a location. -->
@@ -111,6 +113,11 @@
             android:authorities="org.zevaryx.rettui.photos"
             android:exported="false"
             android:grantUriPermissions="true" />
+
+        <service
+            android:name=".ScheduledBackups"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <receiver
             android:name=".NotificationActions"

@@ -89,7 +89,8 @@ class DownloadsActivity : Activity() {
             text = getString(R.string.downloads_default)
             isAllCaps = false
             setOnClickListener {
-                folder(this@DownloadsActivity)?.let { runCatching { contentResolver.releasePersistableUriPermission(it, Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+                // Kept if scheduled backups go there too.
+                folder(this@DownloadsActivity)?.takeIf { it != ScheduledBackups.folder(this@DownloadsActivity) }?.let { runCatching { contentResolver.releasePersistableUriPermission(it, Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(FOLDER).apply()
                 show()
             }

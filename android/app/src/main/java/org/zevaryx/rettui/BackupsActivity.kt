@@ -13,10 +13,14 @@ import android.text.InputType
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.view.View
 import android.widget.ScrollView
 import android.widget.TextView
 import java.io.File
 import org.json.JSONObject
+import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -34,7 +38,11 @@ class BackupsActivity : Activity() {
         private const val OPEN_IDENTITY = 2
         private const val SAVE_BACKUP = 3
         private const val OPEN_BACKUP = 4
+        private const val PICK_FOLDER = 5
     }
+
+    private lateinit var scheduleFolder: TextView
+    private lateinit var scheduleLast: TextView
 
     private val main = Handler(Looper.getMainLooper())
     private var busy: AlertDialog? = null
@@ -86,9 +94,68 @@ class BackupsActivity : Activity() {
         }
         action(getString(R.string.backup_restore)) { open(OPEN_BACKUP) }
 
+        heading(getString(R.string.schedule))
+        note(getString(R.string.schedule_note, ScheduledBackups.KEPT))
+        scheduleFolder = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        column.addView(scheduleFolder)
+        action(getString(R.string.downloads_choose)) {
+            startActivityForResult(
+                Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+                ),
+                PICK_FOLDER,
+            )
+        }
+        val every = listOf(0 to R.string.schedule_off, 1 to R.string.schedule_daily, 7 to R.string.schedule_weekly)
+        column.addView(RadioGroup(this).apply {
+            for ((days, label) in every) {
+                addView(RadioButton(context).apply {
+                    id = View.generateViewId()
+                    text = getString(label)
+                    setTextColor(Color.WHITE)
+                    isChecked = ScheduledBackups.every(context) == days
+                    setOnCheckedChangeListener { _, checked -> if (checked) ScheduledBackups.setEvery(context, days).also { showSchedule() } }
+                })
+            }
+        })
+        scheduleLast = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.LTGRAY)
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        column.addView(scheduleLast)
+        action(getString(R.string.schedule_now)) {
+            work {
+                val problem = ScheduledBackups.run(this)
+                main.post { showSchedule() }
+                if (problem == null) Rettui.Said(true, getString(R.string.schedule_saved)) else Rettui.Said(false, problem)
+            }
+        }
+        showSchedule()
+
         showClearOfBars(ScrollView(this).apply {
             addView(column)
         })
+    }
+
+    /** Where scheduled backups go, and how the last one went. */
+    private fun showSchedule() {
+        val folder = ScheduledBackups.folder(this)
+        scheduleFolder.text = if (folder == null) {
+            getString(R.string.schedule_no_folder)
+        } else {
+            getString(R.string.downloads_in_folder, Uri.decode(android.provider.DocumentsContract.getTreeDocumentId(folder)))
+        }
+        val last = ScheduledBackups.last(this)
+        scheduleLast.text = when {
+            last == null -> ""
+            last.second == null -> getString(R.string.schedule_last_ok, DateFormat.getDateTimeInstance().format(Date(last.first)))
+            else -> getString(R.string.schedule_last_failed, DateFormat.getDateTimeInstance().format(Date(last.first)), last.second)
+        }
     }
 
     private fun save(request: Int, type: String, name: String) {
@@ -107,6 +174,10 @@ class BackupsActivity : Activity() {
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) return
         when (requestCode) {
+            PICK_FOLDER -> {
+                ScheduledBackups.setFolder(this, uri)
+                showSchedule()
+            }
             SAVE_IDENTITY -> work { saveThrough(uri) { file -> Rettui.command(this, "identity", "export", file.path) }.also { if (it.ok) markBackedUp() } }
             SAVE_BACKUP -> work { saveThrough(uri) { file -> Rettui.command(this, "backup", file.path) } }
             OPEN_IDENTITY -> askName { name -> work { openThrough(uri) { file -> Rettui.command(this, "identity", "import", file.path, "--name", name) } } }

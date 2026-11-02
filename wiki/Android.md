@@ -149,6 +149,14 @@ shown when rettui stops. On it:
   stops, the backup takes the place of what's here (moved aside into a
   `before-restore-<time>` folder, not deleted), and rettui starts again.
 
+- **Backups on a schedule:** choose a folder, then **Every day** or
+  **Every week**. Android makes a full backup there while the phone
+  charges, and keeps the newest 5 it made; older ones it made are deleted,
+  and nothing else in the folder is touched. **Make one now** makes one
+  straight away. If one fails, a notification says why. Each holds the
+  identity: keep the folder private, and think twice about one a cloud
+  drive copies.
+
 Back up the identity before uninstalling the app: uninstalling deletes
 everything the app keeps. Nothing of rettui's goes to Android's cloud
 backups, nor to a new phone set up from this one: save a full backup here
