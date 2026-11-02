@@ -430,6 +430,9 @@ fn in_terminal() -> bool {
 /// A new passphrase, typed twice, unseen; empty if `optional` and none was typed.
 fn new_passphrase(optional: bool) -> Result<Zeroizing<String>> {
     if let Some(passphrase) = passphrase_from_env() {
+        if let Some(why) = crate::backup::sealed::weakness(&passphrase) {
+            eprintln!("{why}");
+        }
         return Ok(passphrase);
     }
     if !in_terminal() {
@@ -449,6 +452,9 @@ fn new_passphrase(optional: bool) -> Result<Zeroizing<String>> {
             return Ok(first);
         }
         bail!("No passphrase typed");
+    }
+    if let Some(why) = crate::backup::sealed::weakness(&first) {
+        eprintln!("{why} Type it again to use it anyway, or Ctrl-C.");
     }
     let again = Zeroizing::new(rpassword::prompt_password("The passphrase again: ")?);
     if *first != *again {
@@ -482,6 +488,28 @@ pub fn backup(paths: &Paths, file: Option<PathBuf>, options: crate::backup::Opti
     } else if options.identity {
         println!("It has your identity: keep it private, as whoever has it can pose as you and read what's sent to you.");
     }
+    Ok(())
+}
+
+/// Open the backup `file`, sealed with a passphrase, without restoring it:
+/// the plain backup to `out`, or only its identity to `identity` (for
+/// Sideband, NomadNet or another rettui). Neither the data directory nor
+/// Reticulum is touched.
+pub fn unseal(file: &Path, out: Option<&Path>, identity: Option<&Path>) -> Result<()> {
+    let target = out.or(identity).ok_or_else(|| anyhow!("Say where to write it: a file for the plain backup, or --identity FILE"))?;
+    if target.exists() {
+        bail!("{} exists already: pick another name", target.display());
+    }
+    if !crate::backup::is_sealed(file) {
+        bail!("{} isn't sealed with a passphrase: it's a plain backup already (tar xzf opens it)", file.display());
+    }
+    let passphrase = match passphrase_from_env() {
+        Some(passphrase) => passphrase,
+        None if in_terminal() => Zeroizing::new(rpassword::prompt_password(format!("{}'s passphrase: ", file.display()))?),
+        None => bail!("{} is sealed with a passphrase: type it in a terminal, or set {PASSPHRASE_VAR}", file.display()),
+    };
+    let what = crate::backup::unseal(file, &passphrase, target, identity.is_some()).map_err(|e| anyhow!(e))?;
+    println!("Saved {what} to {}. Keep it private: whoever has your identity can pose as you.", target.display());
     Ok(())
 }
 

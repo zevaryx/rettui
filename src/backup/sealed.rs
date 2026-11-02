@@ -47,6 +47,29 @@ const KEY_PREFIX: &str = "rettui-backup-key-1:";
 /// What the chunks' key is for (HKDF's info).
 const INFO: &[u8] = b"rettui backup chunks";
 
+/// Fewer characters than this, and a passphrase is called short.
+pub const SHORT: usize = 12;
+
+/// Why `passphrase` is easy to guess, if it is: short, or digits alone
+/// (a PIN). Only a warning: it's still theirs to use. (The web UI and the
+/// Android app say the same, by the same rule.)
+pub fn weakness(passphrase: &str) -> Option<&'static str> {
+    let length = passphrase.chars().count();
+    if length == 0 {
+        None
+    } else if length < 20 && passphrase.chars().all(|c| c.is_ascii_digit()) {
+        Some(
+            "A PIN of digits alone is easy to guess: anyone with the backup can try every one, as fast as their computer goes, with nothing to stop them. A few words are much safer.",
+        )
+    } else if length < SHORT {
+        Some(
+            "That passphrase is short: anyone with the backup can try passphrases as fast as their computer goes, with nothing to stop them. A few words (12 characters or more) are much safer.",
+        )
+    } else {
+        None
+    }
+}
+
 /// How a passphrase is stretched: Argon2id's cost and salt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Stretch {
@@ -416,6 +439,16 @@ mod tests {
         assert!(Stretch::from_bytes(&stretch).is_err());
         stretch[0..4].copy_from_slice(&64u32.to_le_bytes());
         assert!(Stretch::from_bytes(&stretch).is_ok());
+    }
+
+    #[test]
+    fn short_passphrases_and_pins_are_called_weak() {
+        assert!(weakness("").is_none());
+        assert!(weakness("123456").unwrap().contains("PIN"));
+        assert!(weakness("1234567890123456").unwrap().contains("PIN"));
+        assert!(weakness("hunter2").unwrap().contains("short"));
+        assert!(weakness("correct horse battery").is_none());
+        assert!(weakness("12345678901234567890").is_none());
     }
 
     #[test]

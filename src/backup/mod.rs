@@ -171,6 +171,43 @@ fn wanted<R: Read>(entry: &tar::Entry<R>) -> bool {
     kind.is_file() || kind.is_dir()
 }
 
+/// Write the backup sealed in `archive`, opened with `passphrase`, to the new
+/// file `to` (only its owner may read it): the plain backup, or with
+/// `identity` only the identity in it. What was written.
+pub fn unseal(archive: &Path, passphrase: &str, to: &Path, identity: bool) -> Result<&'static str, String> {
+    let file = || std::fs::File::open(archive).map_err(|e| format!("Couldn't open {}: {e}", archive.display()));
+    let opener = sealed::Opener::new(std::io::BufReader::new(file()?), passphrase)
+        .map_err(|e| format!("Couldn't open {}: {e}", archive.display()))?;
+    let mut plain = opener.open(std::io::BufReader::new(file()?)).map_err(|e| format!("Couldn't open {}: {e}", archive.display()))?;
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    let write = |data: &mut dyn Read| -> Result<(), String> {
+        let mut out = open.open(to).map_err(|e| format!("{}: {e}", to.display()))?;
+        let copied = std::io::copy(data, &mut out).and_then(|_| out.sync_all());
+        copied.map_err(|e| {
+            let _ = std::fs::remove_file(to);
+            format!("Couldn't open {}: {e}", archive.display())
+        })
+    };
+    if !identity {
+        write(&mut plain)?;
+        return Ok("the plain backup");
+    }
+    // Only the identity, from the backup as it's read.
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(plain));
+    let bad = |e: std::io::Error| format!("{} isn't a rettui backup: {e}", archive.display());
+    for entry in tar.entries().map_err(bad)? {
+        let mut entry = entry.map_err(bad)?;
+        if entry.path().map_err(bad)?.as_ref() == Path::new(ROOT).join(IDENTITY) && entry.header().entry_type().is_file() {
+            write(&mut entry)?;
+            return Ok("the identity");
+        }
+    }
+    Err(format!("{} has no identity in it (backed up without it, or from the web UI)", archive.display()))
+}
+
 /// Whether the file `path` is a backup sealed with a passphrase.
 pub fn is_sealed(path: &Path) -> bool {
     let mut start = [0u8; sealed::MAGIC.len()];
@@ -331,6 +368,32 @@ mod tests {
         write_file(&from, &plain, Options::default(), None).unwrap();
         assert!(!is_sealed(&plain));
         assert!(restore(&plain, &base.join("again"), false, Some("unused")).is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_sealed_backup_opened_without_restoring_it() {
+        let base = std::env::temp_dir().join(format!("rettui-backup-unseal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let from = base.join("from");
+        data(&from);
+        let file = base.join("sealed.tar.gz");
+        write_file(&from, &file, Options { identity: true, files: false }, Some(&sealed::quick_key("pw"))).unwrap();
+        // The plain backup, which restores as any other.
+        let plain = base.join("plain.tar.gz");
+        assert_eq!(unseal(&file, "pw", &plain, false).unwrap(), "the plain backup");
+        assert!(!is_sealed(&plain));
+        assert!(restore(&plain, &base.join("to"), false, None).is_ok());
+        // Only the identity.
+        let identity = base.join("identity");
+        assert_eq!(unseal(&file, "pw", &identity, true).unwrap(), "the identity");
+        assert_eq!(std::fs::read_to_string(&identity).unwrap(), "secret");
+        // Never over a file, nor with another passphrase; none in it, said so.
+        assert!(unseal(&file, "pw", &identity, true).unwrap_err().contains("identity"));
+        assert!(unseal(&file, "nope", &base.join("x"), false).unwrap_err().contains("that isn't its passphrase"));
+        let without = base.join("without.tar.gz");
+        write_file(&from, &without, Options::default(), Some(&sealed::quick_key("pw"))).unwrap();
+        assert!(unseal(&without, "pw", &base.join("none"), true).unwrap_err().contains("no identity"));
         let _ = std::fs::remove_dir_all(&base);
     }
 

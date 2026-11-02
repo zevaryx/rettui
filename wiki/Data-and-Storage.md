@@ -198,7 +198,16 @@ it after a few tries.
 The passphrase is stretched with Argon2id (64 MB, 3 passes, a fresh salt
 each time), which makes each guess slow, into a key pair. The backup is
 encrypted to its public half with X25519 and AES-256-GCM, in 64 KB chunks
-that can't be changed, reordered or cut short unnoticed.
+that can't be changed, reordered or cut short unnoticed. A short
+passphrase, or a PIN, gets a warning. [Sealed Backups](Sealed-Backups)
+says how it all works, and what it protects against.
+
+`rettui unseal FILE OUT` opens a sealed backup without restoring it (and
+without rettui running): the plain backup to `OUT`, or with
+`--identity FILE` only the identity, to use in Sideband, NomadNet or
+another rettui. `tools/unseal_backup.py` in rettui's repository does the
+same with Python, without rettui at all. See
+[Sealed Backups](Sealed-Backups#opening-a-sealed-backup-without-rettui).
 
 `rettui backup-key` turns a passphrase into a *backup key*
 (`rettui-backup-key-1:…`), the public half: `rettui backup --key KEY` seals

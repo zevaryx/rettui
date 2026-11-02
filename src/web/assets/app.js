@@ -9365,6 +9365,19 @@ async function identityDialog(address) {
 
 // A file sent to an rncp listener, as `rncp FILE ADDRESS` does, and how
 // the ones sent lately went.
+// Why a passphrase is easy to guess (short, or a PIN), as rettui says it.
+function passphraseWeakness(passphrase) {
+  const length = [...passphrase].length;
+  if (!length) return '';
+  if (length < 20 && /^[0-9]+$/.test(passphrase)) {
+    return 'A PIN of digits alone is easy to guess: anyone with the backup can try every one, as fast as their computer goes, with nothing to stop them. A few words are much safer.';
+  }
+  if (length < 12) {
+    return 'That passphrase is short: anyone with the backup can try passphrases as fast as their computer goes, with nothing to stop them. A few words (12 characters or more) are much safer.';
+  }
+  return '';
+}
+
 // Download a backup, sealed with a passphrase if one is typed: then
 // rettui restore asks for it, and it can't be restored without it.
 function backupDialog() {
@@ -9372,6 +9385,9 @@ function backupDialog() {
     const first = el('input', { type: 'password', autocomplete: 'new-password', placeholder: 'none' });
     const again = el('input', { type: 'password', autocomplete: 'new-password' });
     const error = el('div', { class: 'status error', role: 'alert' });
+    // Easy to guess: said, as rettui says it (backup::sealed::weakness), and theirs to use anyway.
+    const weak = el('div', { class: 'status', style: 'color:var(--yellow)' });
+    first.addEventListener('input', () => { weak.textContent = passphraseWeakness(first.value); });
     const go = el('button', { class: 'primary', text: 'Download' });
     const download = async () => {
       error.textContent = '';
@@ -9399,6 +9415,7 @@ function backupDialog() {
     return [
       el('p', { class: 'dim', text: 'Settings, contacts and messages, without your identity. A passphrase seals it: it can\'t be restored without it (rettui restore asks for it), so don\'t lose it. Leave it empty for none.' }),
       el('label', { class: 'field' }, el('span', { text: 'Passphrase' }), first),
+      weak,
       el('label', { class: 'field' }, el('span', { text: 'Again' }), again),
       error,
       el('div', { class: 'row actions' }, el('span', { class: 'grow' }), go),

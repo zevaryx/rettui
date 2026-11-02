@@ -202,6 +202,20 @@ enum Command {
         #[arg(long)]
         no_passphrase: bool,
     },
+    /// Open a backup sealed with a passphrase without restoring it (and
+    /// without rettui running): the plain backup to OUT, or only the
+    /// identity in it, for Sideband, NomadNet or another rettui. It asks for
+    /// the passphrase (or takes RETTUI_BACKUP_PASSPHRASE).
+    Unseal {
+        /// The sealed backup.
+        file: PathBuf,
+        /// Where to write the plain backup (a .tar.gz).
+        #[arg(required_unless_present = "identity", conflicts_with = "identity")]
+        out: Option<PathBuf>,
+        /// Write only the identity in it, to this file.
+        #[arg(long, value_name = "FILE")]
+        identity: Option<PathBuf>,
+    },
     /// Turn a passphrase into a backup key, to seal backups with
     /// (`rettui backup --key`) without the passphrase at hand. Restoring one
     /// still takes the passphrase.
@@ -339,6 +353,7 @@ async fn run(cli: Cli) -> Result<()> {
             return cli::backup(&paths, file.clone(), options, seal);
         }
         Some(Command::BackupKey) => return cli::backup_key(),
+        Some(Command::Unseal { file, out, identity }) => return cli::unseal(file, out.as_deref(), identity.as_deref()),
         Some(Command::Restore { file, force }) => return cli::restore(&paths, file, *force),
         Some(Command::Identity { action: IdentityAction::Export { file } }) => return cli::export_identity(&paths, file),
         Some(Command::Identity { action: IdentityAction::Import { file, name } }) => return cli::import_identity(&paths, file, name),
@@ -406,7 +421,7 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         Some(Command::Update { yes }) => cli::update(&settings, yes).await,
-        Some(Command::Backup { .. } | Command::BackupKey | Command::Restore { .. } | Command::Identity { .. }) => {
+        Some(Command::Backup { .. } | Command::BackupKey | Command::Unseal { .. } | Command::Restore { .. } | Command::Identity { .. }) => {
             unreachable!("handled before loading")
         }
         None => {

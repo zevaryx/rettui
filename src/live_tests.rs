@@ -787,6 +787,14 @@ async fn the_command_line_against_a_running_rettui() {
     if !asks {
         assert!(crate::cli::restore(&other, &sealed, false).unwrap_err().to_string().contains("sealed with a passphrase"));
     }
+    // `rettui unseal`: only a sealed backup, never over a file, and its
+    // passphrase asked for (or said to be needed).
+    assert!(crate::cli::unseal(&backup, Some(&dir.join("x.tar.gz")), None).unwrap_err().to_string().contains("plain backup already"));
+    assert!(crate::cli::unseal(&sealed, Some(&backup), None).unwrap_err().to_string().contains("exists already"));
+    assert!(crate::cli::unseal(&sealed, None, None).is_err());
+    if !asks {
+        assert!(crate::cli::unseal(&sealed, None, Some(&dir.join("id"))).unwrap_err().to_string().contains("sealed with a passphrase"));
+    }
     assert!(crate::backup::restore(&sealed, &other.base, false, Some("rosebud")).is_ok());
     assert!(
         crate::cli::backup(

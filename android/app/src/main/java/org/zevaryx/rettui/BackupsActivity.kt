@@ -201,6 +201,23 @@ class BackupsActivity : Activity() {
         }
         val first = field(if (twice) R.string.passphrase_none else R.string.passphrase)
         val again = field(R.string.passphrase_again)
+        // A new one easy to guess: said, as rettui says it, and theirs to use anyway.
+        val weak = TextView(this).apply {
+            setTextColor(Color.rgb(0xf2, 0xd4, 0x5c))
+            setPadding(0, dp(4), 0, dp(4))
+            visibility = View.GONE
+        }
+        if (twice) {
+            first.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    val why = weakness(s?.toString().orEmpty())
+                    weak.text = why?.let { getString(it) }
+                    weak.visibility = if (why == null) View.GONE else View.VISIBLE
+                }
+            })
+        }
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), 0)
@@ -209,7 +226,10 @@ class BackupsActivity : Activity() {
                 setPadding(0, 0, 0, dp(8))
             })
             addView(first)
-            if (twice) addView(again)
+            if (twice) {
+                addView(weak)
+                addView(again)
+            }
         }
         val dialog = AlertDialog.Builder(this)
             .setTitle(title)
@@ -229,6 +249,17 @@ class BackupsActivity : Activity() {
                     then(typed)
                 }
             }
+        }
+    }
+
+    /** Why a new passphrase is easy to guess, if it is (rettui's own rule, backup::sealed::weakness). */
+    private fun weakness(passphrase: String): Int? {
+        val length = passphrase.codePointCount(0, passphrase.length)
+        return when {
+            length == 0 -> null
+            length < 20 && passphrase.all { it in '0'..'9' } -> R.string.passphrase_pin
+            length < 12 -> R.string.passphrase_short
+            else -> null
         }
     }
 

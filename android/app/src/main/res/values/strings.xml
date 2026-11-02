@@ -47,6 +47,8 @@
     <string name="passphrase_none">Passphrase (empty: none)</string>
     <string name="passphrase_again">The passphrase again</string>
     <string name="passphrases_differ">The passphrases differ</string>
+    <string name="passphrase_pin">A PIN of digits alone is easy to guess: anyone with the backup can try every one, as fast as their computer goes, with nothing to stop them. A few words are much safer.</string>
+    <string name="passphrase_short">That passphrase is short: anyone with the backup can try passphrases as fast as their computer goes, with nothing to stop them. A few words (12 characters or more) are much safer.</string>
     <string name="passphrase_needed">Type its passphrase</string>
     <string name="backup_passphrase">Seal it with a passphrase?</string>
     <string name="backup_passphrase_note">Sealed, the backup can\'t be restored without the passphrase, here or with rettui restore on a computer: don\'t lose it. Leave it empty for none.</string>

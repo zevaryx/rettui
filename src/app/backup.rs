@@ -38,8 +38,13 @@ impl App {
             if typed.is_empty() {
                 return self.start_backup(to, None);
             }
+            // Easy to guess: said, and theirs to use anyway.
+            let title = match backup::sealed::weakness(&typed) {
+                Some(why) => format!("{why} Type it again to use it anyway (Esc: don't back up)"),
+                None => "The passphrase again".to_string(),
+            };
             self.backup_passphrase = Some(typed);
-            self.open_prompt(PromptKind::BackUpPassphraseAgain(to), "The passphrase again", "");
+            self.open_prompt(PromptKind::BackUpPassphraseAgain(to), &title, "");
             return;
         }
         let first = self.backup_passphrase.take().unwrap_or_default();
@@ -144,13 +149,16 @@ mod tests {
         std::fs::write(&app.paths.identity, [7u8; 64]).unwrap();
         let to = dir.join("sealed.tar.gz");
         // Typed differently the second time: nothing is made.
-        app.submit_backup_passphrase(to.clone(), "one thing", false);
+        app.submit_backup_passphrase(to.clone(), "one thing and another", false);
         assert!(matches!(app.prompt.as_ref().map(|p| &p.kind), Some(PromptKind::BackUpPassphraseAgain(_))));
+        assert_eq!(app.prompt.as_ref().unwrap().title, "The passphrase again");
         app.prompt = None;
         app.submit_backup_passphrase(to.clone(), "another", true);
         assert!(app.notice.as_ref().is_some_and(|n| n.text.contains("differ")));
         // The same twice: sealed with it.
         app.submit_backup_passphrase(to.clone(), "rosebud", false);
+        // A short one: said so, and still used.
+        assert!(app.prompt.as_ref().unwrap().title.contains("short"));
         app.prompt = None;
         app.submit_backup_passphrase(to.clone(), "rosebud", true);
         assert!(app.backup_passphrase.is_none());
