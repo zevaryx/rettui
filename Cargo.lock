@@ -6357,7 +6357,7 @@ dependencies = [
 
 [[package]]
 name = "rettui"
-version = "1.10.0"
+version = "1.11.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -6429,7 +6429,7 @@ dependencies = [
 
 [[package]]
 name = "rettui-desktop"
-version = "1.10.0"
+version = "1.11.0"
 dependencies = [
  "directories",
  "rettui",
