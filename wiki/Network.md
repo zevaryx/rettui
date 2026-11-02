@@ -111,6 +111,31 @@ shows your identity, your interfaces and the log.
   your browser picks, never a file from the computer rettui runs on. How
   it's going shows as it goes, and the log says when it arrived or why it
   didn't.
+- **Receiving files with rncp:** *Receive files with rncp* (Settings,
+  Hosting; turned on in the terminal) makes rettui listen at your rncp
+  address, as `rncp -l` does, and save what is sent to *Received files
+  folder* (`received/` in the data directory unless you set one). Nobody
+  may send until you list them in *Who may send files*: identity hashes,
+  as `rncp -a` takes, separated by commas (a sender sees theirs in the
+  send dialog; `I` in the Network tab shows yours and anyone's). Someone
+  not on the list is turned away and counted. A file is saved under its own
+  name, without any folders, and never written over one that's there: a
+  second `notes.txt` becomes `notes.txt.1`. Status shows your rncp address
+  and how many files came; the log names each one with who sent it, and
+  the web UI's **Send a file…** dialog lists the latest. rettui doesn't
+  limit how big a file may be, so list only people you trust to send
+  sensibly; the web UI can turn this off, not on, and can't change who may
+  send or the folder.
+- **Getting a file from an rncp listener:** `O` in the Network tab (in the
+  list, the announces or the tables), or **Get a file** in the web UI's
+  **Send a file…** dialog, asks a listener run with `rncp -l -F` for a file,
+  as `rncp --fetch` does. Give its address, then the file's path on that
+  computer (relative to its jail folder if it runs with `-j`). The listener
+  must allow your identity, shown in the dialog (`rncp -a`), unless it lets
+  anyone (`-n`). The file is saved in *Received files folder*, under its
+  own name and never over one that's there. A listener that isn't run with
+  `-F`, or doesn't allow you, closes the link, and rettui says so. The web
+  UI can ask for a file but only saves it on the computer rettui runs on.
 - **Speed test:** `v` in the Network tab, or **Speed test** in the web UI,
   measures how fast data goes between you and someone else, as NomadNet
   1.4's speed test does, so the other can use rettui or NomadNet

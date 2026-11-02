@@ -830,8 +830,8 @@ pub(crate) mod testing {
                             owner.apply(NetEvent::Fetched { id: *id, result });
                         }
                         // Script pages of its own node run, as in the network task.
-                        if let NetCommand::RunScript { id, script, fields, .. } = &command {
-                            let data = crate::nomad::script::preview(script, None, fields);
+                        if let NetCommand::RunScript { id, script, fields, limits, .. } = &command {
+                            let data = crate::nomad::script::preview(script, None, fields, limits);
                             owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None }) });
                         }
                         if let NetCommand::Git { id, repo, request, .. } = &command

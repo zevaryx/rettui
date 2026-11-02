@@ -55,7 +55,8 @@ MeshChat, NomadNet and other LXMF clients).
   message bigger than that (a node can be set to take them), within your
   *Largest message* limit, comes in a transfer of its own. While it runs,
   the Status tab (either UI) says how many of the messages waiting have
-  come (*3 of 10 downloaded*).
+  come (*3 of 10 downloaded*). `S` again, or **Stop sync** in the web UI,
+  stops it after the download it's on; what has come is kept.
 - **Attachments:**
   - The first image goes in the LXMF image field, which Sideband and MeshChat
     show inline. Other files are sent as file attachments.

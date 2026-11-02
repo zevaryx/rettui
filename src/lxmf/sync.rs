@@ -22,6 +22,21 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const SYNC_LIMIT_KB: f64 = 512.0;
 /// Downloads in one sync, at most (should a node keep sending the same).
 const MAX_ROUNDS: usize = 100;
+/// Why a sync ended before it had connected, when it was stopped.
+const STOPPED: &str = "Stopped";
+
+/// How a sync reports and is stopped.
+pub struct Watch<'a> {
+    pub progress: Progress<'a>,
+    pub cancel: &'a AtomicBool,
+}
+
+/// Wait until `cancel` is set.
+async fn stopped(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
 
 /// Runs a propagation node sync in the background; at most one at a time.
 pub struct Syncer {
@@ -34,6 +49,9 @@ pub struct Syncer {
     ring: PathBuf,
     ev: mpsc::UnboundedSender<NetEvent>,
     running: Arc<AtomicBool>,
+    /// Set to stop the sync running: it ends after the download it's on,
+    /// keeping what has come (the node has dropped those already).
+    cancel: Arc<AtomicBool>,
 }
 
 impl Syncer {
@@ -46,7 +64,24 @@ impl Syncer {
         ring: PathBuf,
         ev: mpsc::UnboundedSender<NetEvent>,
     ) -> Self {
-        Self { runtime, known, policy, identity, lxmf_hash, ring, ev, running: Arc::new(AtomicBool::new(false)) }
+        Self {
+            runtime,
+            known,
+            policy,
+            identity,
+            lxmf_hash,
+            ring,
+            ev,
+            running: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Stop the sync that's running, if one is.
+    pub fn cancel(&self) {
+        if self.running.load(Ordering::SeqCst) {
+            self.cancel.store(true, Ordering::SeqCst);
+        }
     }
 
     pub fn start(&self, node: Option<Hash>) {
@@ -57,8 +92,9 @@ impl Syncer {
         if self.running.swap(true, Ordering::SeqCst) {
             return;
         }
+        self.cancel.store(false, Ordering::SeqCst);
         let _ = self.ev.send(NetEvent::SyncStarted);
-        let (runtime, known, policy, identity, ev, running, lxmf_hash, ring) = (
+        let (runtime, known, policy, identity, ev, running, lxmf_hash, ring, cancel) = (
             self.runtime.clone(),
             self.known.clone(),
             self.policy.clone(),
@@ -67,6 +103,7 @@ impl Syncer {
             self.running.clone(),
             self.lxmf_hash,
             self.ring.clone(),
+            self.cancel.clone(),
         );
         // A message too big for one download comes on its own, if it's
         // within the size limit for incoming messages.
@@ -78,7 +115,17 @@ impl Syncer {
             let progress = |text: String| {
                 let _ = ev.send(NetEvent::SyncProgress(text));
             };
-            let result = match sync(&runtime, &identity, lxmf_hash, &ring, node, largest_kb, &progress).await {
+            let result = match sync(
+                &runtime,
+                &identity,
+                lxmf_hash,
+                &ring,
+                node,
+                largest_kb,
+                &Watch { progress: &progress, cancel: &cancel },
+            )
+            .await
+            {
                 Ok(messages) => {
                     let count = messages.len();
                     // Parse concurrently: verifying an unknown sender can wait
@@ -89,6 +136,8 @@ impl Syncer {
                     .await;
                     Ok(count)
                 }
+                // Stopped before anything came: nothing to report as wrong.
+                Err(e) if e == STOPPED => Ok(0),
                 Err(e) => Err(e),
             };
             running.store(false, Ordering::SeqCst);
@@ -132,14 +181,17 @@ pub async fn sync(
     ring: &Path,
     node: Hash,
     largest_kb: f64,
-    progress: Progress<'_>,
+    watch: &Watch<'_>,
 ) -> Result<Vec<Vec<u8>>, String> {
+    let Watch { progress, cancel } = *watch;
     progress("connecting".into());
     // The node finds our messages from the identity we present on the Link.
-    let LinkSession { handle, .. } = crate::net::connect(runtime, node, identity.clone(), link_options("rettui.sync", true), progress)
-        .await
-        .map_err(|e| format!("Link to propagation node failed: {e}"))?;
-    let result = sync_on(&handle, identity, lxmf_hash, ring, largest_kb, progress).await;
+    let connecting = crate::net::connect(runtime, node, identity.clone(), link_options("rettui.sync", true), progress);
+    let LinkSession { handle, .. } = tokio::select! {
+        linked = connecting => linked.map_err(|e| format!("Link to propagation node failed: {e}"))?,
+        () = stopped(cancel) => return Err(STOPPED.into()),
+    };
+    let result = sync_on(&handle, identity, lxmf_hash, ring, largest_kb, watch).await;
     handle.close().await;
     result
 }
@@ -150,10 +202,16 @@ async fn sync_on(
     lxmf_hash: Hash,
     ring: &Path,
     largest_kb: f64,
-    progress: Progress<'_>,
+    watch: &Watch<'_>,
 ) -> Result<Vec<Vec<u8>>, String> {
+    let Watch { progress, cancel } = *watch;
     progress("asking what's waiting".into());
-    let Value::Array(mut waiting) = get(handle, Value::Array(vec![Value::Nil, Value::Nil])).await? else {
+    // Nothing has been taken from the node yet, so this can be dropped.
+    let listed = tokio::select! {
+        listed = get(handle, Value::Array(vec![Value::Nil, Value::Nil])) => listed?,
+        () = stopped(cancel) => return Err(STOPPED.into()),
+    };
+    let Value::Array(mut waiting) = listed else {
         return Err("Unexpected message list from propagation node".to_string());
     };
     let total = waiting.len();
@@ -164,8 +222,10 @@ async fn sync_on(
     let mut messages = Vec::new();
     // Downloads of up to SYNC_LIMIT_KB, until the node sends nothing more
     // (it leaves out what doesn't fit)...
+    // (Stopping waits for the download under way: dropping it would lose
+    // messages the node has already let go of.)
     for _ in 0..MAX_ROUNDS {
-        if waiting.is_empty() {
+        if waiting.is_empty() || cancel.load(Ordering::SeqCst) {
             break;
         }
         let before = waiting.len();
@@ -177,6 +237,9 @@ async fn sync_on(
     }
     // ...then, on its own, any message too big for one of those.
     for id in waiting.clone().into_iter().take(MAX_ROUNDS) {
+        if cancel.load(Ordering::SeqCst) {
+            break;
+        }
         let mut one = vec![id.clone()];
         download(handle, identity, lxmf_hash, ring, &mut one, largest_kb, &mut messages).await?;
         if one.is_empty() {

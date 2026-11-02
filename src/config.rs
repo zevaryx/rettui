@@ -72,6 +72,12 @@ pub struct Settings {
     pub node_dir: Option<String>,
     /// Run executable pages as scripts (NomadNet dynamic pages).
     pub node_executable_pages: bool,
+    /// The `PATH` page scripts run with: none is `/usr/bin:/bin`, `host`
+    /// is rettui's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_script_path: Option<String>,
+    /// Seconds a page script may run before it is stopped.
+    pub node_script_timeout_secs: u64,
     /// Wrap long lines in the text editors instead of scrolling sideways.
     pub wrap_lines: bool,
     /// Show people joining and leaving RRC rooms in the chat.
@@ -236,6 +242,17 @@ pub struct Settings {
     /// Have a sync of a fork or mirror drop the branches and tags its source
     /// dropped; off by default, as in stock rngit.
     pub git_host_prune: bool,
+    /// Listen for files sent with `rncp` (to this identity's rncp address),
+    /// from the identities in `rncp_allowed` only.
+    pub rncp_listen: bool,
+    /// Identities that may send files: identity hashes (32 hex characters),
+    /// separated by commas or spaces. Nobody else is let in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rncp_allowed: Option<String>,
+    /// Where received files are saved; `received/` in the data directory
+    /// when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rncp_dir: Option<String>,
     /// Host an RRC hub (rsRRCD's, in `rrc-hub/`).
     pub hub_enabled: bool,
     /// Name the hub announces and welcomes people with; the display name
@@ -278,6 +295,8 @@ impl Default for Settings {
             node_announce_interval_mins: 360,
             node_dir: None,
             node_executable_pages: false,
+            node_script_path: None,
+            node_script_timeout_secs: 10,
             // A phone's screen is small: only what people say, there.
             show_joins: !cfg!(target_os = "android"),
             keep_awake: false,
@@ -340,6 +359,9 @@ impl Default for Settings {
             git_host_push_mb: 256,
             git_host_repo_mb: 1024,
             git_host_prune: false,
+            rncp_listen: false,
+            rncp_allowed: None,
+            rncp_dir: None,
             hub_enabled: false,
             hub_name: None,
             hub_greeting: None,
@@ -408,6 +430,8 @@ pub struct Paths {
     pub node_stats: PathBuf,
     /// Copies of rngit repositories (the Repos tab), by node, group and name.
     pub repos: PathBuf,
+    /// Files received with rncp, when no folder is set.
+    pub rncp_received: PathBuf,
 }
 
 impl Paths {
@@ -451,6 +475,7 @@ impl Paths {
             interface_profiles: root.join("interface-profiles.json"),
             node_stats: base.join("node-stats.json"),
             repos: base.join("repos"),
+            rncp_received: base.join("received"),
             root,
             base,
         })
@@ -461,6 +486,12 @@ impl Settings {
     /// The propagation nodes always peered with ([`Settings::pn_static_peers`]).
     pub fn static_peers(&self) -> Vec<crate::net::Hash> {
         let text = self.pn_static_peers.as_deref().unwrap_or_default();
+        text.split(|c: char| c == ',' || c.is_whitespace()).filter_map(crate::net::parse_hash).collect()
+    }
+
+    /// The identities that may send files with rncp ([`Settings::rncp_allowed`]).
+    pub fn rncp_allowed_list(&self) -> Vec<crate::net::Hash> {
+        let text = self.rncp_allowed.as_deref().unwrap_or_default();
         text.split(|c: char| c == ',' || c.is_whitespace()).filter_map(crate::net::parse_hash).collect()
     }
 
@@ -585,14 +616,13 @@ impl Field {
             // commands Reticulum runs; the recorder is a command run;
             // another node folder could hold
             // executable pages, or share files that aren't meant to be.
-            "rns_config" | "node_dir" | "nomad_files_dir" | "map_tiles_file" | "voice_recorder" | "print_command" => {
-                WebAccess::TerminalOnly
-            }
+            "rns_config" | "node_dir" | "nomad_files_dir" | "map_tiles_file" | "voice_recorder" | "print_command" | "node_script_path"
+            | "rncp_allowed" | "rncp_dir" => WebAccess::TerminalOnly,
             // Which identity's keys are read, and signed with.
             "rngit_identity" => WebAccess::TerminalOnly,
             // Which folder is served.
             "git_host_dir" => WebAccess::TerminalOnly,
-            "node_executable_pages" => WebAccess::TurnOffOnly,
+            "node_executable_pages" | "rncp_listen" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }
     }
@@ -732,6 +762,8 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "node_announce_interval_mins",
             "node_dir",
             "node_executable_pages",
+            "node_script_path",
+            "node_script_timeout_secs",
             "pn_enabled",
             "pn_name",
             "pn_stamp_cost",
@@ -752,6 +784,9 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "git_host_push_mb",
             "git_host_repo_mb",
             "git_host_prune",
+            "rncp_listen",
+            "rncp_allowed",
+            "rncp_dir",
             "hub_open_rooms",
         ],
     ),
@@ -1107,6 +1142,20 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "node_script_path",
+        label: "Script PATH",
+        help: "Where page scripts find programs, such as python3 for #!/usr/bin/env python3: folders joined with colons, or host for rettui's own PATH; empty uses /usr/bin:/bin. Terminal only",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "node_script_timeout_secs",
+        label: "Script time limit (s)",
+        help: "Seconds a page script may run before it is stopped (1 to 120). A running script holds up the node's other requests",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
         key: "pn_enabled",
         label: "Host a propagation node",
         help: "Keep messages for people who are offline until they collect them, and pass them on to other propagation nodes (Auto-peer, Static peers), as lxmd does",
@@ -1251,6 +1300,27 @@ pub const FIELDS: &[Field] = &[
         label: "rngit mirrors drop what sources drop",
         help: "When a fork or mirror is synced, remove the branches and tags its source no longer has. Off keeps them, as rngit does",
         kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "rncp_listen",
+        label: "Receive files with rncp",
+        help: "Take files sent to your rncp address (see the Network tab) from the identities allowed below, and save them in the folder below; off, nothing is taken. Turned on in the terminal only",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "rncp_allowed",
+        label: "Who may send files",
+        help: "Identity hashes (32 hex characters, as rncp -a takes) that may send files, separated by commas; nobody else is let in. Terminal only",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "rncp_dir",
+        label: "Received files folder",
+        help: "Where files sent with rncp are saved; empty uses received/ in the data directory. Terminal only",
+        kind: FieldKind::Optional,
         effect: Effect::Now,
     },
     Field {
@@ -1499,6 +1569,8 @@ impl Settings {
             "node_announce_interval_mins" => self.node_announce_interval_mins.to_string(),
             "node_dir" => self.node_dir.clone().unwrap_or_default(),
             "node_executable_pages" => self.node_executable_pages.to_string(),
+            "node_script_path" => self.node_script_path.clone().unwrap_or_default(),
+            "node_script_timeout_secs" => self.node_script_timeout_secs.to_string(),
             "wrap_lines" => self.wrap_lines.to_string(),
             "show_joins" => self.show_joins.to_string(),
             "keep_awake" => self.keep_awake.to_string(),
@@ -1550,6 +1622,9 @@ impl Settings {
             "git_host_name" => self.git_host_name.clone().unwrap_or_default(),
             "git_host_dir" => self.git_host_dir.clone().unwrap_or_default(),
             "git_host_access" => self.git_host_access.clone().unwrap_or_default(),
+            "rncp_listen" => self.rncp_listen.to_string(),
+            "rncp_allowed" => self.rncp_allowed.clone().unwrap_or_default(),
+            "rncp_dir" => self.rncp_dir.clone().unwrap_or_default(),
             "git_host_push_mb" => self.git_host_push_mb.to_string(),
             "git_host_repo_mb" => self.git_host_repo_mb.to_string(),
             "git_host_prune" => self.git_host_prune.to_string(),
@@ -1598,6 +1673,14 @@ impl Settings {
             "auto_propagation_node" => self.auto_propagation_node = toggle(value).map_err(fail)?,
             "node_enabled" => self.node_enabled = toggle(value).map_err(fail)?,
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
+            "node_script_path" => {
+                // Folders to look in; nothing here is run by the setting itself.
+                if optional(value).is_some_and(|p| p.len() > 4096 || p.contains(['\n', '\0'])) {
+                    return Err(fail("a list of folders joined with colons, or host".into()));
+                }
+                self.node_script_path = optional(value);
+            }
+            "node_script_timeout_secs" => self.node_script_timeout_secs = between(value, (1, 120)).map_err(fail)?,
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
             "keep_awake" => self.keep_awake = toggle(value).map_err(fail)?,
@@ -1679,6 +1762,32 @@ impl Settings {
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
             "git_host_enabled" => self.git_host_enabled = toggle(value).map_err(fail)?,
             "git_host_prune" => self.git_host_prune = toggle(value).map_err(fail)?,
+            "rncp_listen" => self.rncp_listen = toggle(value).map_err(fail)?,
+            "rncp_allowed" => {
+                self.rncp_allowed = match optional(value) {
+                    None => None,
+                    Some(text) => {
+                        let mut who = Vec::new();
+                        for hash in text.split(|c: char| c == ',' || c.is_whitespace()).filter(|a| !a.is_empty()) {
+                            let hash = crate::net::parse_hash(hash)
+                                .ok_or_else(|| fail(format!("{hash} isn't an identity hash (32 hex characters)")))?;
+                            if !who.contains(&hex::encode(hash)) {
+                                who.push(hex::encode(hash));
+                            }
+                        }
+                        (!who.is_empty()).then(|| who.join(", "))
+                    }
+                };
+            }
+            "rncp_dir" => {
+                // Made when the first file arrives, so it only needs a parent.
+                if let Some(text) = optional(value)
+                    && !expand_home(&text).parent().is_some_and(Path::is_dir)
+                {
+                    return Err(fail(format!("no such parent directory for {text}")));
+                }
+                self.rncp_dir = optional(value);
+            }
             "git_host_name" => {
                 if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
                     return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));

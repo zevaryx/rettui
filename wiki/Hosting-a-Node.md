@@ -33,7 +33,8 @@ or the folder set in `node_dir`.
   preview alone (`Ctrl-P` / `p`, or the buttons in the web UI). Saving writes
   the file, and visitors get the new version straight away. New, renamed and
   deleted pages are picked up without a restart. You can also edit the files
-  with any editor.
+  with any editor, or copy pages into the folder: rettui looks for new ones
+  every minute.
 - **Formatting ribbon:** above the page editor, in both UIs, buttons put
   Micron markup around the selection, on the selected lines, or at the
   cursor: bold, italic, underline and normal (removes formatting), text and
@@ -92,7 +93,10 @@ or the folder set in `node_dir`.
   something not there), when the last one came, and since when it has
   counted, as NomadNet does. The counts are kept across restarts until you
   reset them, with `R` in the TUI or **Reset** in the web UI. While the node
-  runs, Status shows them too.
+  runs, Status shows them too. It also says (a Visitors line) how many
+  different visitors who identified themselves have come since the node
+  started (a visitor who doesn't identify can't be told apart, and this
+  number starts again with the node).
 - **Selecting text in the editors:** Shift with the arrows, Home/End or
   PgUp/PgDn, `Ctrl-A` for everything, or drag with the mouse. Typing, pasting
   or deleting replaces the selection.
@@ -102,7 +106,8 @@ or the folder set in `node_dir`.
   from the cache), and runs your script pages itself (see below).
 - **Scripts:** executable pages run as programs for visitors only when "Run
   page scripts" is on. The web UI can't change, rename or create scripts,
-  turn "Run page scripts" on or move the node folder, so the web login can't
+  turn "Run page scripts" on, change *Script PATH* or move the node folder,
+  so the web login can't
   be used to run programs on the host. The TUI can do all of these.
 
 ### Script pages
@@ -112,18 +117,28 @@ NomadNet: any file with its execute bit set (`chmod +x page.mu`), usually
 starting with a line such as `#!/usr/bin/env python3`. Each visitor who
 opens it runs it, and gets what it prints. Scripts run only on Linux, macOS
 and other Unix systems, and only while "Run page scripts" is on: while it's
-off, visitors get the script's own text, so keep secrets out of it.
+off, a script is never sent, and a visitor who asks for one gets the same
+"not found" page as for a page that isn't there.
 
 - **What a script gets:** no shell and nothing to read on its input. Its
   environment holds only, as NomadNet gives it, `link_id` (the visitor's
   link), `remote_identity` (the identity hash of a visitor who identified),
   each `field_…` a form sent and each `var_…` a link sent, and `PATH`, which
-  is just `/usr/bin:/bin`. So `#!/usr/bin/env python3` finds Python only if
-  it's in `/usr/bin` or `/bin`. Where it isn't (Homebrew, `/usr/local`, pyenv
-  or a virtual environment), start the page with Python's full path instead,
-  such as `#!/opt/homebrew/bin/python3`.
-- **Limits:** a script has 10 seconds to finish and may print up to 512 KB.
-  Past either, the visitor gets nothing. What it writes to its error output
+  is `/usr/bin:/bin` unless *Script PATH* (Settings, Hosting; terminal only)
+  says otherwise: a list of folders joined with colons, or `host` for the
+  `PATH` rettui itself was started with, as NomadNet does. So
+  `#!/usr/bin/env python3` finds Python if it's in a folder on that path.
+  Where it isn't (Homebrew, `/usr/local`, pyenv or a virtual environment),
+  put its folder in *Script PATH*, or start the page with Python's full path,
+  such as `#!/opt/homebrew/bin/python3` or `#!/srv/node/venv/bin/python`.
+  Use full paths: a script runs in the folder rettui was started in, not its
+  page's folder, so `#!../venv/bin/python` or a relative *Script PATH* folder
+  doesn't find it.
+- **Limits:** a script has 10 seconds to finish (*Script time limit*, up to
+  120) and may print up to 512 KB. Past either, or if it can't be run, the
+  visitor gets a "Page failed" page saying it couldn't be made. A
+  running script holds up the node's other requests until it ends, so a long
+  limit makes everyone wait. What it writes to its error output
   never reaches visitors; a script that fails but printed something still
   sends that.
 - **Trying one:** open it on your own node in the Browser (`b` in the Node
@@ -133,8 +148,9 @@ off, visitors get the script's own text, so keep secrets out of it.
   line naming a program that scripts can't find, says where that program is
   on your computer. In the web UI, this runs scripts already on the node, as
   any visitor could; the web UI still can't write them or turn them on.
-- **Docker:** rettui's image has no Python. A script in it needs a program
-  that's there (`/bin/sh`), or an image built on rettui's with Python added.
+- **Docker:** rettui's image has Python 3 (`/usr/bin/python3`), so
+  `#!/usr/bin/env python3` works there. For any other program, build an image
+  on rettui's with it added.
 
 ## Propagation node
 

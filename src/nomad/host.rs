@@ -19,6 +19,7 @@ pub struct HostConfig {
     pub name: String,
     pub announce_interval: Option<Duration>,
     pub executable_pages: bool,
+    pub limits: crate::nomad::script::Limits,
 }
 
 impl HostConfig {
@@ -36,6 +37,7 @@ impl HostConfig {
             announce_interval: (settings.node_announce_interval_mins > 0)
                 .then(|| Duration::from_secs(settings.node_announce_interval_mins * 60)),
             executable_pages: settings.node_executable_pages,
+            limits: crate::nomad::script::Limits::from_settings(settings),
         })
     }
 }
@@ -55,6 +57,8 @@ pub async fn start(runtime: &ReticulumHandle, identity: &Identity, config: &Host
             announce_interval: config.announce_interval,
             announce_at_start: true,
             allow_executable_pages: config.executable_pages,
+            script_path: Some(config.limits.path.clone()),
+            script_timeout: config.limits.timeout,
             ..NomadNodeConfig::default()
         },
     )

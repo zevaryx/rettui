@@ -9,7 +9,7 @@ use ratatui::layout::Position;
 
 use super::files::{path_from_input, unique_path};
 use super::notify::{self, Notification, Target};
-use super::{App, HistoryHit, MessageAction, PaperView, PromptKind, Tab, now};
+use super::{App, HistoryHit, MessageAction, PaperView, PromptKind, SyncState, Tab, now};
 use crate::lxmf::{self, DeliveryMode};
 use crate::markdown::TextFormat;
 use crate::net::{NetCommand, parse_hash};
@@ -371,6 +371,16 @@ impl App {
         self.send_progress.insert(number, super::CANCELLING.into());
         self.send(NetCommand::CancelSend(number));
         Ok(())
+    }
+
+    /// Stop the sync that's running: it ends after the download it's on,
+    /// and keeps what has come.
+    pub fn cancel_sync(&mut self) {
+        if matches!(self.sync, SyncState::Running(_)) && !self.sync_stopping {
+            self.sync_stopping = true;
+            self.sync_progress = Some("stopping…".into());
+            self.send(NetCommand::CancelSync);
+        }
     }
 
     /// How sending a message (by id) is going, while it's being sent.

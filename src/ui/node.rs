@@ -23,7 +23,8 @@ use crate::nomad::pages::Root;
 pub(super) fn draw_node(frame: &mut Frame, app: &mut App, area: Rect) {
     // Wide enough for the 32-character node address.
     let [left, right] = Layout::horizontal([Constraint::Length(super::side_width(app, area, 43)), Constraint::Min(20)]).areas(area);
-    let [status_area, list_area] = Layout::vertical([Constraint::Length(9), Constraint::Min(3)]).areas(left);
+    let [status_area, list_area] =
+        Layout::vertical([Constraint::Length(if visitors(app) > 0 { 10 } else { 9 }), Constraint::Min(3)]).areas(left);
     draw_status(frame, app, status_area);
     draw_pages(frame, app, list_area);
     draw_editor(frame, app, right);
@@ -67,6 +68,12 @@ fn draw_allowed(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, rect, &mut view.list);
 }
 
+/// Different visitors who identified, since the node started: only the
+/// running node knows.
+fn visitors(app: &App) -> u64 {
+    app.node.stats.as_ref().map_or(0, |s| s.visitors)
+}
+
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let label = |s: &str| Span::styled(format!("{s:<9}"), Style::default().fg(dim()));
     let state = match &app.node.status {
@@ -87,7 +94,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         requests.push_str(&format!(" · last {}", crate::clock::when(last)));
     }
     let dir = HostConfig::dir(&app.settings, &app.paths).display().to_string();
-    let lines = vec![
+    let mut lines = vec![
         Line::from(vec![label("Node"), state]),
         Line::from(vec![
             label("Address"),
@@ -102,6 +109,11 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::from(vec![label("Folder"), Span::styled(dir, Style::default().fg(dim()))]),
     ];
+    let identified = visitors(app);
+    if identified > 0 {
+        let text = format!("{identified} identified since the node started");
+        lines.insert(5, Line::from(vec![label("Visitors"), Span::raw(text)]));
+    }
     frame.render_widget(Paragraph::new(lines).block(block("Hosting", false)), area);
 }
 

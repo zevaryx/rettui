@@ -130,6 +130,7 @@ pub fn router(state: WebState) -> Router {
         .route("/propagation", post(set_propagation))
         .route("/announce", post(announce))
         .route("/sync", post(sync))
+        .route("/sync/cancel", post(cancel_sync))
         .route("/settings", get(get_settings).post(save_settings))
         .route("/guide", get(guide).post(apply_guide))
         .route("/guide/dismiss", post(dismiss_guide))
@@ -166,6 +167,7 @@ pub fn router(state: WebState) -> Router {
         .route("/identity", get(identities))
         .route("/identity/lookup", post(look_up_identity))
         .route("/rncp/send", post(rncp_send))
+        .route("/rncp/fetch", post(rncp_fetch))
         .route("/repos", get(repos).post(add_repo))
         .route("/repos/remove", post(remove_repo))
         .route("/repos/page", post(repos_on_page))
@@ -1767,6 +1769,11 @@ async fn sync(State(state): State<WebState>) -> ApiResult {
     ok()
 }
 
+async fn cancel_sync(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.cancel_sync()).await?;
+    ok()
+}
+
 async fn get_settings(State(state): State<WebState>) -> ApiResult {
     let view = state
         .read(|o| {
@@ -2461,6 +2468,7 @@ async fn look_up_identity(State(state): State<WebState>, axum::Json(body): axum:
 /// the largest that may be sent.
 async fn rncp_sends(State(state): State<WebState>) -> ApiResult {
     use crate::net::RncpState;
+    use crate::net::remote::FetchState;
     state
         .read(|o| {
             let sends: Vec<Value> = o
@@ -2479,7 +2487,39 @@ async fn rncp_sends(State(state): State<WebState>) -> ApiResult {
                     })
                 })
                 .collect();
-            axum::Json(json!({ "sends": sends, "identity": hex::encode(o.app.identity_hash), "max": crate::app::rncp::MAX_SEND }))
+            // Files asked for from listeners.
+            let fetches: Vec<Value> = o
+                .app
+                .rncp_fetches
+                .iter()
+                .map(|f| {
+                    let (state, progress, error, saved) = match &f.state {
+                        FetchState::Fetching(done) => ("fetching", *done, None, None),
+                        FetchState::Fetched { saved, .. } => ("fetched", 1.0, None, Some(saved.display().to_string())),
+                        FetchState::Failed(e) => ("failed", 0.0, Some(e.clone()), None),
+                    };
+                    json!({
+                        "from": f.to, "from_name": o.app.store.display_name(&f.to), "path": f.path, "at": f.at,
+                        "state": state, "progress": progress, "error": error, "saved": saved,
+                    })
+                })
+                .collect();
+            // And what others sent here.
+            let received: Vec<Value> = o
+                .app
+                .rncp_in
+                .received
+                .iter()
+                .map(|f| {
+                    json!({
+                        "name": f.name, "bytes": f.bytes, "at": f.at, "path": f.path.display().to_string(),
+                        "from": f.from, "from_name": f.from.as_deref().map(|from| o.app.store.display_name(from)),
+                    })
+                })
+                .collect();
+            axum::Json(json!({
+                "sends": sends, "identity": hex::encode(o.app.identity_hash), "max": crate::app::rncp::MAX_SEND, "received": received, "fetches": fetches,
+            }))
         })
         .await
         .map_err(ApiError::from)
@@ -2495,6 +2535,19 @@ struct RncpQuery {
 /// rncp listener.
 async fn rncp_send(State(state): State<WebState>, Query(query): Query<RncpQuery>, body: axum::body::Bytes) -> ApiResult {
     state.write(move |o| o.app.rncp_send(&query.to, &query.name, body.to_vec())).await??;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct RncpFetchBody {
+    to: String,
+    path: String,
+}
+
+/// Ask an `rncp -l -F` listener for a file. It's saved on this computer,
+/// where files received go.
+async fn rncp_fetch(State(state): State<WebState>, axum::Json(body): axum::Json<RncpFetchBody>) -> ApiResult {
+    state.write(move |o| o.app.rncp_fetch(&body.to, &body.path)).await??;
     ok()
 }
 

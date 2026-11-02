@@ -50,6 +50,7 @@ pub mod repo_files;
 pub mod repos;
 pub mod reticulum;
 pub mod rncp;
+pub mod rncp_in;
 mod saver;
 pub mod search;
 mod settings;
@@ -228,6 +229,9 @@ pub enum PromptKind {
     /// An `rncp` listener's address, then the file to send it.
     RncpTo,
     RncpFile(String),
+    /// An `rncp -F` listener's address, then the path of the file to get.
+    RncpGetFrom,
+    RncpGetFile(String),
     /// Adding and changing things in the Repos tab.
     Repo(repos::RepoPrompt),
     /// The other's speed test address.
@@ -567,6 +571,8 @@ pub struct App {
     pub sync: SyncState,
     /// How the sync running is going ("3 of 10 downloaded").
     pub sync_progress: Option<String>,
+    /// Stopping the sync was asked for; it ends after its download.
+    pub sync_stopping: bool,
 
     pub conversations: ListState,
     pub active_conversation: Option<String>,
@@ -659,6 +665,10 @@ pub struct App {
     pub tables: tables::TablesView,
     /// Files sent to `rncp` listeners, the newest last.
     pub rncp: Vec<rncp::RncpSend>,
+    /// Files fetched from `rncp` listeners, the newest last.
+    pub rncp_fetches: Vec<rncp::RncpFetch>,
+    /// Files received with `rncp`, and whether it is listening.
+    pub rncp_in: rncp_in::RncpIn,
     /// The Repos tab (rngit repositories).
     pub repos: repos::Repos,
     /// A speed test with someone (`v` in the Network tab).
@@ -764,6 +774,7 @@ impl App {
         let pn_hash =
             rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::PROPAGATION_ASPECT, Some(&identity_hash));
         let pn = node::PnHost::new(pn_hash, crate::lxmf::pn::PnConfig::from_settings(&settings, &paths));
+        let rncp_listen = crate::net::rncplisten::RncpListenConfig::from_settings(&settings, &paths);
         let git_host = git_host::GitHost::new(&paths, crate::net::githost::GitHostConfig::from_settings(&settings, &paths));
         let hub = hub::HubHost::new(&paths, crate::rrc::host::HubHostConfig::from_settings(&settings, &paths, identity_hash));
         let cache = Cache::new(paths.cache.clone(), std::time::Duration::from_secs(settings.cache_hours * 3600));
@@ -808,6 +819,7 @@ impl App {
             shown_view: 0,
             sync: SyncState::Idle,
             sync_progress: None,
+            sync_stopping: false,
             conversations: ListState::default(),
             active_conversation: None,
             compose: TextInput::default(),
@@ -855,6 +867,8 @@ impl App {
             announce_log: announces::AnnounceLog::default(),
             tables: tables::TablesView::default(),
             rncp: Vec::new(),
+            rncp_fetches: Vec::new(),
+            rncp_in: rncp_in::RncpIn::new(rncp_listen),
             repos: repos::Repos::default(),
             speed: speedtest::SpeedTest::default(),
             whois: whois::Whois::default(),
@@ -1164,6 +1178,7 @@ impl App {
             NetEvent::Pn(event) => self.on_pn(event),
             NetEvent::Hub(event) => self.on_hub(event),
             NetEvent::GitHost(event) => self.on_git_host(event),
+            NetEvent::RncpListen(event) => self.on_rncp_listen(event),
             NetEvent::StartFailed(e) => {
                 self.log(format!("Network failed: {e}"));
                 self.net_state = NetState::Failed(e);
@@ -1219,6 +1234,7 @@ impl App {
             NetEvent::PathForgotten { to, had } => self.on_path_forgotten(to, had),
             NetEvent::Tables(result) => self.on_tables(result),
             NetEvent::Rncp { to, name, state } => self.on_rncp(to, name, state),
+            NetEvent::RncpFetch { to, path, state } => self.on_rncp_fetch(to, path, state),
             NetEvent::Git { id, result } => self.on_git(id, result),
             NetEvent::Speed(event) => self.on_speed(event),
             NetEvent::Identified { to, result } => self.on_identified(to, result),
@@ -1230,11 +1246,15 @@ impl App {
             NetEvent::SyncStarted => {
                 self.sync = SyncState::Running(Instant::now());
                 self.sync_progress = None;
+                self.sync_stopping = false;
             }
-            NetEvent::SyncProgress(text) => self.sync_progress = Some(text),
+            NetEvent::SyncProgress(text) if !self.sync_stopping => self.sync_progress = Some(text),
+            NetEvent::SyncProgress(_) => {}
             NetEvent::Synced(result) => {
                 self.sync_progress = None;
+                let stopped = std::mem::take(&mut self.sync_stopping);
                 match &result {
+                    Ok(n) if stopped => self.log(format!("Sync stopped ({n} message(s) downloaded)")),
                     Ok(0) => {}
                     Ok(n) => self.log(format!("Downloaded {n} message(s) from propagation node")),
                     Err(e) => {
@@ -1502,7 +1522,7 @@ impl App {
             PromptKind::SpeedPeer => self.submit_speed_prompt(&text),
             PromptKind::Whois => self.submit_whois_prompt(&text),
             PromptKind::Repo(prompt) => self.submit_repo_prompt(prompt, &text),
-            kind @ (PromptKind::RncpTo | PromptKind::RncpFile(_)) => {
+            kind @ (PromptKind::RncpTo | PromptKind::RncpFile(_) | PromptKind::RncpGetFrom | PromptKind::RncpGetFile(_)) => {
                 if !text.is_empty() {
                     self.submit_rncp_prompt(kind, &text);
                 }
@@ -1557,6 +1577,7 @@ impl App {
         self.pn.restarting(crate::lxmf::pn::PnConfig::from_settings(&self.settings, &self.paths));
         self.hub.restarting(crate::rrc::host::HubHostConfig::from_settings(&self.settings, &self.paths, self.identity_hash));
         self.git_host.restarting(crate::net::githost::GitHostConfig::from_settings(&self.settings, &self.paths));
+        self.rncp_in.restarting(crate::net::rncplisten::RncpListenConfig::from_settings(&self.settings, &self.paths));
         self.browser.restarted();
         // Deliveries in progress belong to the old stack.
         self.tracks_restarting();

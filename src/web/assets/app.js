@@ -6962,7 +6962,8 @@ app.views.node = {
       label('Name'), el('span', { text: node.name }),
       label('Served'), el('span', { text: node.served.label }),
       label('Requests'), el('span', { text: [String(node.served.requests), node.served.not_found ? `${node.served.not_found} not found` : null,
-        node.served.last ? `last ${new Date(node.served.last * 1000).toLocaleString()}` : null].filter(Boolean).join(' · ') }),
+        node.served.last ? `last ${new Date(node.served.last * 1000).toLocaleString()}` : null,
+        node.stats?.visitors ? `${node.stats.visitors} identified ${node.stats.visitors === 1 ? 'visitor' : 'visitors'} since start` : null].filter(Boolean).join(' · ') }),
       label('Since'), el('span', { class: 'row' }, el('span', { class: 'dim', text: new Date(node.served.since * 1000).toLocaleString() }),
         el('button', { text: 'Reset', title: 'Count what the node serves again from now', onclick: async () => {
           if (!await ask('Reset the node\'s statistics?\nThe counts start again from now.', { title: 'Reset statistics', yes: 'Reset', danger: true })) return;
@@ -7408,7 +7409,9 @@ app.views.status = {
       el('div', { class: 'column grow' },
         el('section', { class: 'panel', style: 'max-height:55%' }, el('header', {}, el('span', { class: 'title grow', text: 'Identity' }),
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
-          el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+          this.syncButton = el('button', { text: 'Sync now', onclick: () => (app.status?.sync.state === 'running'
+            ? attempt(() => api.post('/sync/cancel'), 'Stopping the sync')
+            : attempt(() => api.post('/sync'), 'Syncing with the propagation node')) }),
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
           el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }),
           el('button', { class: 'more danger', text: 'Stop rettui', title: 'Save everything and close rettui', onclick: () => stopRettui() }), moreButton()), this.info),
@@ -7597,6 +7600,7 @@ app.views.status = {
       done: `${s.sync.at} · ${s.sync.count} new`,
       failed: `${s.sync.at} · failed: ${s.sync.error}`,
     }[s.sync.state];
+    if (this.syncButton) this.syncButton.textContent = s.sync.state === 'running' ? 'Stop sync' : 'Sync now';
     const h = s.hosting;
     const hosting = h.state === 'running'
       ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: h.hash }),
@@ -7662,6 +7666,11 @@ app.views.status = {
       label('Last sync'), el('span', { text: sync }),
       label('Hosting messages'), hosting,
       ...(s.node_served ? [label('Hosting a node'), el('span', { text: `● ${s.node_served} served (Node)` })] : []),
+      ...(s.rncp_in.state === 'off' ? [] : [label('Receiving files'), s.rncp_in.state === 'running'
+        ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.rncp_in.address }),
+          el('span', { class: 'dim', text: '  ' + [`${s.rncp_in.received} received`, s.rncp_in.nobody ? 'no one may send yet' : null,
+            s.rncp_in.refused ? `${s.rncp_in.refused} refused` : null].filter(Boolean).join(' · ') }))
+        : el('span', { text: s.rncp_in.state === 'starting' ? 'starting' : `failed: ${s.rncp_in.error}` })]),
       ...(s.git_host.state === 'off' ? [] : [label('Hosting rngit'), s.git_host.state === 'running'
         ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.git_host.url }),
           el('span', { class: 'dim', text: `  ${s.git_host.summary}` }))
@@ -9356,7 +9365,7 @@ async function rncpDialog(address) {
     const timer = setInterval(async () => {
       if (!document.body.contains(list)) return clearInterval(timer);
       const now = await api.get('/rncp').catch(() => null);
-      if (now) show(now.sends);
+      if (now) { show(now.sends); showGot(now.received); showGets(now.fetches); }
     }, 1000);
     const send = async () => {
       const picked = file.files[0];
@@ -9364,13 +9373,37 @@ async function rncpDialog(address) {
       const q = `?to=${encodeURIComponent(to.value.trim())}&name=${encodeURIComponent(picked.name)}`;
       if (await attempt(() => upload('/rncp/send' + q, picked), `Sending ${picked.name}`)) file.value = '';
     };
+    const got = el('div', { class: 'rncp-sends' });
+    const showGot = (files) => got.replaceChildren(...(files.length ? [el('h4', { text: 'Received' })] : []),
+      ...files.slice().reverse().map((f) => el('div', { class: 'row' },
+        el('span', { class: 'grow', text: `${f.name} (${humanBytes(f.bytes)}) from ${f.from_name || 'someone'}` }),
+        el('span', { class: 'dim mono', text: f.path }))));
+    showGot(sends.received);
+    // And asking a listener for one of its files.
+    const wanted = el('input', { type: 'text', class: 'mono', placeholder: 'its path on that computer', spellcheck: false });
+    const gets = el('div', { class: 'rncp-sends' });
+    const showGets = (fetches) => gets.replaceChildren(...fetches.slice().reverse().map((f) => el('div', { class: 'row' },
+      el('span', { class: 'grow', text: `${f.path} from ${f.from_name}` }),
+      el('span', { class: f.state === 'failed' ? 'state-bad' : f.state === 'fetched' ? 'online' : 'dim',
+        text: f.state === 'fetching' ? `${Math.round(f.progress * 100)}%` : f.state === 'fetched' ? f.saved : f.error }))));
+    showGets(sends.fetches);
+    const get = async () => {
+      if (!wanted.value.trim()) return toast('Type the path of the file to get');
+      if (await attempt(() => api.post('/rncp/fetch', { to: to.value.trim(), path: wanted.value.trim() }), 'Asking for it')) wanted.value = '';
+    };
     return [
       el('p', { class: 'dim', text: `Someone running rncp -l gets it in their folder. Their listener must allow your identity, ${sends.identity} (rncp -a), or let anyone send (rncp -l -n). Up to ${humanBytes(sends.max)}.` }),
       el('label', { class: 'field' }, el('span', { text: 'To' }), to),
       el('label', { class: 'field' }, el('span', { text: 'File' }), file),
       list,
+      el('h4', { text: 'Get a file' }),
+      el('p', { class: 'dim', text: `From a listener run with rncp -l -F that allows your identity. The file is saved on the computer rettui runs on, with the ones received.` }),
+      el('label', { class: 'field' }, el('span', { text: 'Path' }), wanted),
+      gets,
+      got,
       el('div', { class: 'row actions' }, el('span', { class: 'grow' }),
-        el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } }), el('button', { class: 'primary', text: 'Send', onclick: send })),
+        el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } }), el('button', { text: 'Get', onclick: get }),
+        el('button', { class: 'primary', text: 'Send', onclick: send })),
     ];
   });
 }

@@ -5,7 +5,7 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 
-use super::{App, BrowserFocus, ChatSelection, PromptKind, Tab};
+use super::{App, BrowserFocus, ChatSelection, PromptKind, SyncState, Tab};
 use crate::net::NetCommand;
 use crate::nomad::micron;
 use crate::term::selection::Selection;
@@ -225,8 +225,13 @@ impl App {
                 self.send(NetCommand::Announce);
                 return;
             }
+            // While one runs, S stops it.
             KeyCode::Char('S') => {
-                self.send(NetCommand::Sync);
+                if matches!(self.sync, SyncState::Running(_)) {
+                    self.cancel_sync();
+                } else {
+                    self.send(NetCommand::Sync);
+                }
                 return;
             }
             // The side list narrower, wider, or as it was.

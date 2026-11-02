@@ -29,6 +29,7 @@ fn options(settings: &Settings, paths: &Paths, identity: Identity, announce: boo
         propagation: None,
         hub: None,
         git_host: None,
+        rncp_listen: None,
         stamp_cost: crate::lxmf::policy::stamp_cost(settings.stamp_cost),
         max_message_bytes: settings.max_message_kb * 1000,
         tickets: paths.tickets.clone(),

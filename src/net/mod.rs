@@ -15,6 +15,7 @@ pub mod iface_log;
 pub mod mqtt;
 mod reannounce;
 pub mod remote;
+pub mod rncplisten;
 pub mod speedtest;
 
 use std::collections::{BTreeMap, HashMap};
@@ -44,6 +45,12 @@ pub use remote::{
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 /// Read the path table every so many stats intervals (30 s).
 const ROUTES_EVERY: u32 = 6;
+/// How often the hosted node looks again for pages and files put in its
+/// folder from outside rettui (copied in, or written by a script).
+#[cfg(not(test))]
+const NODE_RESCAN: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const NODE_RESCAN: Duration = Duration::from_secs(1);
 /// Known identities and stamp tickets are saved (when changed) every this
 /// many stats ticks: on a busy network new ones come several a second,
 /// and each save writes the whole file.
@@ -99,6 +106,8 @@ pub enum PeerKind {
 pub enum NetCommand {
     /// Serve rngit repositories (or stop).
     GitHost(Option<githost::GitHostConfig>),
+    /// Start, change or stop receiving files sent with rncp.
+    RncpListen(Option<rncplisten::RncpListenConfig>),
     /// Something the owner asks of the git node (answered with a
     /// [`githost::GitHostEvent::Owned`]).
     GitHostAction {
@@ -152,6 +161,13 @@ pub enum NetCommand {
         to: Hash,
         name: String,
         data: Vec<u8>,
+    },
+    /// Fetch a file from an `rncp -l -F` listener into `dir` (answered
+    /// with [`NetEvent::RncpFetch`]).
+    RncpFetch {
+        to: Hash,
+        path: String,
+        dir: PathBuf,
     },
     /// Ask an rngit repository something, or change something there
     /// (answered with [`NetEvent::Git`]). As rettui's identity, or the one
@@ -207,6 +223,8 @@ pub enum NetCommand {
     /// [`discovered`]).
     SetDiscoveredEntryPoints(u32),
     Sync,
+    /// Stop the sync that's running, after the download it's on.
+    CancelSync,
     /// Send a message (its propagation node is the one set here).
     SendMessage {
         id: u64,
@@ -229,6 +247,7 @@ pub enum NetCommand {
         script: PathBuf,
         fields: BTreeMap<String, String>,
         identify: bool,
+        limits: nomad::script::Limits,
     },
     /// Connect to an RRC hub (no-op if a session is already running).
     /// `key`: the hub's public key, for the hub hosted here.
@@ -411,6 +430,12 @@ pub enum NetEvent {
         name: String,
         state: remote::RncpState,
     },
+    /// How getting a file from an `rncp` listener is going.
+    RncpFetch {
+        to: Hash,
+        path: String,
+        state: remote::FetchState,
+    },
     /// What an rngit repository answered.
     Git {
         id: u64,
@@ -464,6 +489,7 @@ pub enum NetEvent {
     Pn(PnEvent),
     Hub(HubEvent),
     GitHost(githost::GitHostEvent),
+    RncpListen(rncplisten::RncpListenEvent),
     /// The actor has shut down (after [`NetCommand::Shutdown`]).
     Stopped,
 }
@@ -505,6 +531,8 @@ pub struct NetOptions {
     pub hub: Option<HubHostConfig>,
     /// rngit repositories to serve from the start, if any.
     pub git_host: Option<githost::GitHostConfig>,
+    /// Receiving files sent with rncp from the start, if so.
+    pub rncp_listen: Option<rncplisten::RncpListenConfig>,
     /// The stamp cost asked of senders, and the largest message taken.
     pub stamp_cost: Option<u8>,
     pub max_message_bytes: u64,
@@ -822,6 +850,33 @@ async fn run(
     if git_config.is_some() {
         launch_git(git_config.clone());
     }
+    // The rncp listener, started and stopped one at a time, as the git node is.
+    let rncp_slot: Arc<Mutex<Option<rncplisten::Listening>>> = Arc::default();
+    let mut rncp_config = options.rncp_listen.clone();
+    let launch_rncp = |config: Option<rncplisten::RncpListenConfig>| {
+        let (runtime, slot, ev, identity) = (runtime.clone(), rncp_slot.clone(), ev.clone(), identity.clone());
+        tokio::spawn(async move {
+            let mut slot = slot.lock().await;
+            if let Some(old) = slot.take() {
+                old.stop().await;
+            }
+            let event = match config {
+                None => rncplisten::RncpListenEvent::Stopped,
+                Some(config) => match rncplisten::start(&runtime, &identity, &config, ev.clone()).await {
+                    Ok(listening) => {
+                        let hash = listening.hash;
+                        *slot = Some(listening);
+                        rncplisten::RncpListenEvent::Started { hash }
+                    }
+                    Err(e) => rncplisten::RncpListenEvent::Failed(e),
+                },
+            };
+            let _ = ev.send(NetEvent::RncpListen(event));
+        });
+    };
+    if rncp_config.is_some() {
+        launch_rncp(rncp_config.clone());
+    }
     let mut rrc_sessions = rrc_session::Sessions::default();
     let mut stop = Stop::Quit;
     let syncer = lxmf::Syncer::new(runtime.clone(), known.clone(), policy.clone(), identity.clone(), lxmf_hash, ring.clone(), ev.clone());
@@ -873,6 +928,7 @@ async fn run(
     };
     let mut sync_timer = timer(sync_interval);
     let mut stats_timer = tokio::time::interval(STATS_INTERVAL);
+    let mut node_rescan = tokio::time::interval_at(tokio::time::Instant::now() + NODE_RESCAN, NODE_RESCAN);
     // The path table, every so many stats ticks (it can be long).
     let mut routes_due = 0u32;
     let mut known_save_due = KNOWN_SAVE_EVERY;
@@ -921,6 +977,11 @@ async fn run(
                         propagation_node = Some(pick.node);
                     }
                     let _ = ev.send(NetEvent::PropagationPicked(result));
+                }
+            }
+            _ = node_rescan.tick(), if hosted.is_some() => {
+                if let Some(Err(e)) = hosted.as_ref().map(|node| node.reload_routes()) {
+                    let _ = ev.send(NetEvent::Log(format!("Could not reload node pages: {e}")));
                 }
             }
             _ = stats_timer.tick() => {
@@ -1100,6 +1161,10 @@ async fn run(
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
                         tokio::spawn(async move { remote::rncp_send(&runtime, identity, to, name, data, ev).await });
                     }
+                    NetCommand::RncpFetch { to, path, dir } => {
+                        let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
+                        tokio::spawn(async move { remote::rncp_fetch(&runtime, identity, to, path, dir, ev).await });
+                    }
                     NetCommand::Git { id, repo, request, identity_file, timeout } => {
                         git::spawn(&runtime, &git_clients, &identity, id, repo, request, identity_file, timeout, &ev);
                     }
@@ -1143,6 +1208,7 @@ async fn run(
                         }
                     }
                     NetCommand::Sync => sync(propagation_node, &pn_local),
+                    NetCommand::CancelSync => syncer.cancel(),
                     NetCommand::WritePaper { id, paper } => {
                         let (runtime, known, identity, ev) =
                             (runtime.clone(), known.clone(), identity.clone(), ev.clone());
@@ -1226,6 +1292,12 @@ async fn run(
                             git_config = config;
                         }
                     }
+                    NetCommand::RncpListen(config) => {
+                        if config != rncp_config {
+                            launch_rncp(config.clone());
+                            rncp_config = config;
+                        }
+                    }
                     NetCommand::GitHostAction { id, action } => {
                         let (slot, ev) = (git_slot.clone(), ev.clone());
                         tokio::spawn(async move {
@@ -1276,11 +1348,11 @@ async fn run(
                             let _ = ev.send(NetEvent::Fetched { id, result });
                         });
                     }
-                    NetCommand::RunScript { id, script, fields, identify } => {
+                    NetCommand::RunScript { id, script, fields, identify, limits } => {
                         let ev = ev.clone();
                         let remote_identity = identify.then_some(identity.hash);
                         tokio::task::spawn_blocking(move || {
-                            let data = nomad::script::preview(&script, remote_identity, &fields);
+                            let data = nomad::script::preview(&script, remote_identity, &fields, &limits);
                             let _ = ev.send(NetEvent::Fetched { id, result: Ok(FetchedContent { data, metadata: None }) });
                         });
                     }

@@ -613,10 +613,10 @@ fn browsing_this_clients_own_script_pages() {
     tui.key(KeyCode::Enter);
     let mut ran = None;
     while let Ok(command) = tui.net.try_recv() {
-        if let NetCommand::RunScript { id, script, fields, identify } = command {
+        if let NetCommand::RunScript { id, script, fields, identify, limits } = command {
             assert_eq!(fields.get("field_name").map(String::as_str), Some("Bob"));
             assert!(!identify);
-            ran = Some((id, crate::nomad::script::preview(&script, None, &fields)));
+            ran = Some((id, crate::nomad::script::preview(&script, None, &fields, &limits)));
         }
     }
     let (id, data) = ran.expect("the script was asked to run");
@@ -2025,6 +2025,7 @@ fn the_node_counts_what_it_serves_across_restarts_until_reset() {
         media_hits: media,
         not_found_count: requests - pages - files - media,
         last_request_ms: None,
+        visitors: 0,
     };
     let mut tui = Tui::new("node-stats");
     tui.tab(Tab::Node);
@@ -2037,6 +2038,12 @@ fn the_node_counts_what_it_serves_across_restarts_until_reset() {
     tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(7, 3, 1, 2))));
     let screen = tui.draw();
     assert!(screen.contains("3 pages · 1 file · 2 pic") && screen.contains("7 · 1 not found"), "{screen}");
+    assert!(!screen.contains("identified"), "nobody has identified yet");
+    // Visitors who identified are counted by the running node.
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(nomad_core::NomadServeStats { visitors: 2, ..stats(7, 3, 1, 2) })));
+    let shown = tui.draw();
+    assert!(shown.contains("2 identified since"), "{shown}");
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(7, 3, 1, 2))));
     tui.tab(Tab::Status);
     assert!(tui.draw().contains("3 pages · 1 file · 2 pictures served"));
 
@@ -2095,6 +2102,40 @@ fn sending_a_file_to_an_rncp_listener() {
     say(&mut tui, crate::net::RncpState::Failed("the listener closed the link".into()));
     assert!(tui.said().contains("Could not send notes.txt"), "{}", tui.said());
     assert_eq!(tui.app.rncp.len(), 2);
+}
+
+#[test]
+fn getting_a_file_from_an_rncp_listener() {
+    use crate::net::remote::FetchState;
+    let mut tui = Tui::new("rncp-get");
+    tui.tab(Tab::Network);
+    let to = "ab".repeat(16);
+    tui.key(KeyCode::Char('O'));
+    let mine = hex::encode(tui.app.identity_hash);
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.contains(&mine) && p.title.contains("-F")));
+    tui.answer("nope");
+    assert!(tui.said().contains("32 hex"), "{}", tui.said());
+    tui.key(KeyCode::Char('O')).answer(&to);
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.contains("Get which file")));
+    tui.answer("/srv/maps/hill.txt");
+    let sent = tui.sent();
+    assert!(
+        sent.iter()
+            .any(|c| matches!(c, NetCommand::RncpFetch { path, dir, .. } if path == "/srv/maps/hill.txt" && dir.ends_with("received"))),
+        "{sent:?}"
+    );
+    // Asking twice for the same one is turned down while it's on its way.
+    assert!(tui.app.rncp_fetch(&to, "/srv/maps/hill.txt").unwrap_err().contains("already"));
+    let hash = crate::net::parse_hash(&to).unwrap();
+    let say = |tui: &mut Tui, state| tui.app.on_net(crate::net::NetEvent::RncpFetch { to: hash, path: "/srv/maps/hill.txt".into(), state });
+    say(&mut tui, FetchState::Fetching(0.5));
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("50%")));
+    say(&mut tui, FetchState::Fetched { name: "hill.txt".into(), saved: "x/hill.txt".into(), bytes: 12, secs: 1.5 });
+    assert!(tui.app.log.iter().any(|l| l.contains("Got hill.txt (12 B)")));
+    tui.key(KeyCode::Char('O')).answer(&to).answer("/srv/maps/hill.txt");
+    say(&mut tui, FetchState::Failed("not allowed".into()));
+    assert!(tui.said().contains("Could not get"), "{}", tui.said());
+    assert_eq!(tui.app.rncp_fetches.len(), 2);
 }
 
 #[test]
@@ -2181,4 +2222,23 @@ fn a_speed_test_at_the_keyboard() {
     tui.key(KeyCode::Esc);
     assert!(!tui.app.speed.open);
     assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::SpeedListen(None))));
+}
+
+#[test]
+fn receiving_files_with_rncp_shows_in_status() {
+    use crate::app::rncp_in::{Listening, Received};
+    let mut tui = Tui::new("rncp-status");
+    tui.tab(Tab::Status);
+    assert!(!tui.draw().contains("Receiving files"), "off, nothing to say");
+    tui.app.rncp_in.status = Listening::On([0x5a; 16]);
+    tui.app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![] });
+    let screen = tui.draw();
+    assert!(screen.contains("Receiving files") && screen.contains(&"5a".repeat(16)) && screen.contains("no one may send yet"), "{screen}");
+    tui.app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![[1; 16]] });
+    tui.app.rncp_in.refused = 2;
+    tui.app.rncp_in.received.push(Received { name: "a".into(), bytes: 1, path: "x/a".into(), from: None, at: 0.0 });
+    let screen = tui.draw();
+    assert!(screen.contains("1 received") && screen.contains("2 refused") && !screen.contains("no one may send"), "{screen}");
+    tui.app.rncp_in.status = Listening::Failed("no transport".into());
+    assert!(tui.draw().contains("no transport"));
 }

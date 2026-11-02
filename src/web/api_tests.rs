@@ -1372,6 +1372,8 @@ async fn send_progress_and_cancelling_a_send() {
     })
     .await;
     assert_eq!(web.get("/api/state").await.json()["sync"]["progress"], "1 of 2 downloaded");
+    assert_eq!(web.post("/api/sync/cancel", json!({})).await.status, StatusCode::OK);
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::CancelSync)));
 }
 
 #[tokio::test]
@@ -1421,9 +1423,11 @@ async fn the_nodes_statistics_and_resetting_them() {
     web.with(|app| {
         app.node.served.pages = 5;
         app.node.served.requests = 6;
+        app.node.stats = Some(nomad_core::NomadServeStats { request_count: 6, visitors: 3, ..Default::default() });
     })
     .await;
     let node = web.get("/api/node").await.json();
+    assert_eq!(node["stats"]["visitors"], 3, "{node}");
     assert_eq!((node["served"]["pages"].as_u64(), node["served"]["label"].as_str()), (Some(5), Some("5 pages · 0 files")), "{node}");
     assert_eq!(web.post("/api/node/stats/reset", json!({})).await.status, StatusCode::OK);
     let node = web.get("/api/node").await.json();
@@ -1877,4 +1881,71 @@ async fn the_owner_says_who_may_use_what_is_hosted_here() {
         assert_eq!(web.post("/api/hosted/access", body.clone()).await.status, StatusCode::BAD_REQUEST, "{body}");
     }
     assert_eq!(web.get("/api/hosted/access?name=team/gone").await.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn files_received_with_rncp_are_listed() {
+    use crate::app::rncp_in::{Listening, Received};
+    let web = TestWeb::start("rncp-received");
+    assert_eq!(web.get("/api/state").await.json()["rncp_in"]["state"], "off");
+    web.with(|app| {
+        app.rncp_in.status = Listening::On([0x5a; 16]);
+        app.rncp_in.refused = 1;
+        app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![] });
+        app.rncp_in.received.push(Received {
+            name: "notes.txt".into(),
+            bytes: 24,
+            path: "x/notes.txt".into(),
+            from: Some("ab".repeat(16)),
+            at: 5.0,
+        });
+    })
+    .await;
+    let state = web.get("/api/state").await.json();
+    assert_eq!(state["rncp_in"]["address"], "5a".repeat(16));
+    assert_eq!(
+        (state["rncp_in"]["received"].as_u64(), state["rncp_in"]["refused"].as_u64(), state["rncp_in"]["nobody"].as_bool()),
+        (Some(1), Some(1), Some(true))
+    );
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["received"][0]["name"].as_str(), listed["received"][0]["bytes"].as_u64()),
+        (Some("notes.txt"), Some(24)),
+        "{listed}"
+    );
+    // The web login can't turn it on, or say who may send.
+    let refused = web.post("/api/settings", json!({ "values": { "rncp_listen": "true" } })).await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn files_are_fetched_from_an_rncp_listener() {
+    use crate::net::remote::FetchState;
+    let web = TestWeb::start("rncp-fetch");
+    let to = "ab".repeat(16);
+    let bad = web.post("/api/rncp/fetch", json!({ "to": "nope", "path": "x" })).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let ok = web.post("/api/rncp/fetch", json!({ "to": to, "path": "maps/hill.txt" })).await;
+    assert_eq!(ok.status, StatusCode::OK);
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["fetches"][0]["state"].as_str(), listed["fetches"][0]["path"].as_str()),
+        (Some("fetching"), Some("maps/hill.txt")),
+        "{listed}"
+    );
+    let hash = crate::net::parse_hash(&to).unwrap();
+    web.with(move |app| {
+        app.on_net(crate::net::NetEvent::RncpFetch {
+            to: hash,
+            path: "maps/hill.txt".into(),
+            state: FetchState::Fetched { name: "hill.txt".into(), saved: "x/hill.txt".into(), bytes: 3, secs: 0.1 },
+        })
+    })
+    .await;
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["fetches"][0]["state"].as_str(), listed["fetches"][0]["saved"].as_str()),
+        (Some("fetched"), Some("x/hill.txt")),
+        "{listed}"
+    );
 }
