@@ -200,6 +200,9 @@ pub enum PromptKind {
     ConfirmDeleteIdentity(String),
     /// Where to save a backup of everything.
     BackUpAll,
+    /// A passphrase to seal it with (typed hidden), then again to check it.
+    BackUpPassphrase(PathBuf),
+    BackUpPassphraseAgain(PathBuf),
     ConfirmDeleteMessage {
         key: String,
         id: String,
@@ -310,6 +313,13 @@ pub struct Prompt {
     pub kind: PromptKind,
     pub title: String,
     pub input: TextInput,
+}
+
+impl PromptKind {
+    /// What's typed is shown as dots (a passphrase).
+    pub fn is_secret(&self) -> bool {
+        matches!(self, PromptKind::BackUpPassphrase(_) | PromptKind::BackUpPassphraseAgain(_))
+    }
 }
 
 pub enum NetState {
@@ -648,7 +658,7 @@ pub struct App {
     decoded_tx: tokio::sync::mpsc::UnboundedSender<Decoded>,
     decoded_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Decoded>>,
     /// Writes the store and chat history in the background.
-    saver: saver::Saver,
+    pub(crate) saver: saver::Saver,
     /// Checking for a newer rettui (see [`updates`]).
     pub(crate) updates: updates::Updates,
     /// Locations shared live (see [`live`]).
@@ -686,6 +696,8 @@ pub struct App {
 
     pub browser: Browser,
     pub prompt: Option<Prompt>,
+    /// A backup's passphrase as first typed, until it's typed again.
+    pub backup_passphrase: Option<zeroize::Zeroizing<String>>,
     pub regions: Regions,
     /// Kitty graphics support, if the terminal has it.
     pub graphics: Option<Graphics>,
@@ -883,6 +895,7 @@ impl App {
             net_search: NetSearch::default(),
             browser: Browser::default(),
             prompt: None,
+            backup_passphrase: None,
             regions: Regions::default(),
             graphics,
             clipboard: Clipboard::new(),
@@ -1398,6 +1411,9 @@ impl App {
             | PromptKind::ConfirmSwitchIdentity(_)
             | PromptKind::ConfirmDeleteIdentity(_)) => self.submit_identities_prompt(kind, &text),
             PromptKind::BackUpAll => self.submit_backup_prompt(&text),
+            // As typed: spaces at either end are part of it.
+            PromptKind::BackUpPassphrase(to) => self.submit_backup_passphrase(to, prompt.input.text(), false),
+            PromptKind::BackUpPassphraseAgain(to) => self.submit_backup_passphrase(to, prompt.input.text(), true),
             PromptKind::ContactNotes(key) => {
                 // Lines were shown as ↵ to edit on one line.
                 let notes = prompt.input.text().replace(" ↵ ", "\n").replace('↵', "\n");

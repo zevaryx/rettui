@@ -34,6 +34,8 @@ class ScheduledBackups : JobService() {
         private const val FOLDER = "backups_folder"
         private const val LAST = "backups_last"
         private const val LAST_OK = "backups_last_ok"
+        /** The key backups are sealed to (`rettui backup-key`), or "": not sealed. */
+        private const val KEY = "backups_key"
         private const val CHANNEL = "backups"
         private const val ID_FAILED = 2
 
@@ -54,6 +56,29 @@ class ScheduledBackups : JobService() {
             val saved = prefs(context).getString(FOLDER, null) ?: return null
             val uri = Uri.parse(saved)
             return uri.takeIf { context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission } }
+        }
+
+        /** Whether a passphrase was set for them, or chosen not to be. */
+        fun decided(context: Context) = prefs(context).contains(KEY)
+
+        /** Whether they're sealed with a passphrase. */
+        fun sealed(context: Context) = !prefs(context).getString(KEY, null).isNullOrEmpty()
+
+        /**
+         * Seal them with `passphrase` from now on (none: not sealed). Only the
+         * key made from it is kept, never the passphrase. What went wrong, if
+         * anything (slow: stretching the passphrase).
+         */
+        fun setPassphrase(context: Context, passphrase: String): String? {
+            if (passphrase.isEmpty()) {
+                prefs(context).edit().putString(KEY, "").apply()
+                return null
+            }
+            val said = Rettui.withPassphrase(context, passphrase, "backup-key")
+            val key = said.text.lines().lastOrNull { it.startsWith("rettui-backup-key-") }
+            if (!said.ok || key == null) return said.text.removePrefix("Error: ").ifEmpty { context.getString(R.string.failed) }
+            prefs(context).edit().putString(KEY, key.trim()).apply()
+            return null
         }
 
         /** The last one: when (Unix ms), and whether it worked, or what went wrong. */
@@ -104,7 +129,9 @@ class ScheduledBackups : JobService() {
             val folder = folder(context) ?: return context.getString(R.string.schedule_no_folder)
             val file = File.createTempFile("passing", null, context.cacheDir).also { it.delete() }
             val problem = try {
-                val said = Rettui.command(context, "backup", file.path)
+                val key = prefs(context).getString(KEY, null).orEmpty()
+                val sealing = if (key.isEmpty()) arrayOf("--no-passphrase") else arrayOf("--key", key)
+                val said = Rettui.withPassphrase(context, null, "backup", file.path, *sealing)
                 if (!said.ok) {
                     said.text.removePrefix("Error: ").ifEmpty { context.getString(R.string.failed) }
                 } else {

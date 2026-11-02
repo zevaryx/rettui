@@ -1033,6 +1033,29 @@ fn messages_at_the_keyboard_and_with_the_mouse() {
 }
 
 #[test]
+fn a_backup_sealed_with_a_passphrase_typed_unseen() {
+    let mut tui = Tui::new("sealed-backup");
+    std::fs::write(&tui.app.paths.identity, [7u8; 64]).unwrap();
+    tui.tab(Tab::Status);
+    let backup = tui.dir.join("sealed.tar.gz");
+    // Where: in place of the name it suggests.
+    tui.key(KeyCode::Char('B'));
+    tui.app.prompt.as_mut().unwrap().input = crate::term::input::TextInput::with_text(&backup.display().to_string());
+    tui.key(KeyCode::Enter);
+    assert!(tui.app.prompt.as_ref().unwrap().title.contains("passphrase"));
+    // Typed, it shows as dots.
+    tui.keys("hunter 2");
+    let screen = tui.draw();
+    assert!(screen.contains("••••••••") && !screen.contains("hunter 2"), "{screen}");
+    tui.key(KeyCode::Enter).answer("hunter 2");
+    tui.app.saver.finish();
+    assert!(crate::backup::is_sealed(&backup));
+    let restored = tui.dir.join("restored");
+    assert!(crate::backup::restore(&backup, &restored, false, Some("hunter 2")).is_ok());
+    assert!(restored.join("identity").exists());
+}
+
+#[test]
 fn the_network_and_status_tabs() {
     use crate::net::{NetEvent, PeerKind};
     let mut tui = Tui::new("network");
@@ -1101,7 +1124,8 @@ fn the_network_and_status_tabs() {
     }
     tui.settle();
     let backup = tui.dir.join("backup.tar.gz").display().to_string();
-    tui.key(KeyCode::Char('B')).answer(&backup);
+    // No passphrase: Enter.
+    tui.key(KeyCode::Char('B')).answer(&backup).answer("");
     let identity = tui.dir.join("identity-copy").display().to_string();
     tui.key(KeyCode::Char('b')).answer(&identity);
     tui.key(KeyCode::Char('i')).answer("/no/such/identity");

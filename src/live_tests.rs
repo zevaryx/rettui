@@ -759,12 +759,52 @@ async fn the_command_line_against_a_running_rettui() {
 
     // `rettui backup` and `rettui restore`.
     let backup = dir.join("backup.tar.gz");
-    crate::cli::backup(&paths, Some(backup.clone()), crate::backup::Options { identity: true, files: false }).unwrap();
+    crate::cli::backup(&paths, Some(backup.clone()), crate::backup::Options { identity: true, files: false }, crate::cli::Seal::None)
+        .unwrap();
     assert!(backup.is_file());
     let empty = Paths::new(Some(dir.join("empty"))).unwrap();
-    assert!(crate::cli::backup(&empty, Some(dir.join("none.tar.gz")), crate::backup::Options { identity: false, files: false }).is_err());
+    assert!(
+        crate::cli::backup(
+            &empty,
+            Some(dir.join("none.tar.gz")),
+            crate::backup::Options { identity: false, files: false },
+            crate::cli::Seal::None
+        )
+        .is_err()
+    );
     crate::cli::restore(&empty, &backup, false).unwrap();
     assert!(empty.settings.is_file());
+    // Sealed to a backup key (`rettui backup --key`): restored with its
+    // passphrase; with no terminal here, without one it says what it needs.
+    let key = crate::backup::sealed::quick_key("rosebud").encode();
+    let sealed = dir.join("sealed.tar.gz");
+    crate::cli::backup(&paths, Some(sealed.clone()), crate::backup::Options { identity: true, files: false }, crate::cli::Seal::Key(key))
+        .unwrap();
+    assert!(crate::backup::is_sealed(&sealed));
+    let other = Paths::new(Some(dir.join("other"))).unwrap();
+    // (In a terminal, it would ask.)
+    let asks = std::io::IsTerminal::is_terminal(&std::io::stdin()) || std::env::var("RETTUI_BACKUP_PASSPHRASE").is_ok();
+    if !asks {
+        assert!(crate::cli::restore(&other, &sealed, false).unwrap_err().to_string().contains("sealed with a passphrase"));
+    }
+    assert!(crate::backup::restore(&sealed, &other.base, false, Some("rosebud")).is_ok());
+    assert!(
+        crate::cli::backup(
+            &paths,
+            Some(dir.join("bad.tar.gz")),
+            crate::backup::Options::default(),
+            crate::cli::Seal::Key("nonsense".into())
+        )
+        .is_err()
+    );
+    // Asked for with no terminal and none set: not made, rather than made unsealed.
+    if !asks {
+        assert!(
+            crate::cli::backup(&paths, Some(dir.join("asked.tar.gz")), crate::backup::Options::default(), crate::cli::Seal::Passphrase)
+                .is_err()
+        );
+        assert!(!dir.join("asked.tar.gz").exists());
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -8,7 +8,9 @@ use anyhow::{Result, anyhow, bail};
 use rns_identity::identity::Identity;
 use tokio::sync::mpsc::UnboundedReceiver;
 use unicode_width::UnicodeWidthStr;
+use zeroize::Zeroizing;
 
+use crate::backup::sealed::BackupKey;
 use crate::config::{Paths, Settings};
 use crate::lxmf::{DeliveryMode, InboundMessage};
 use crate::net::{self, Hash, NetCommand, NetEvent, NetOptions};
@@ -398,17 +400,95 @@ pub async fn update(settings: &Settings, yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Back up the data directory to `file` (default: today's name, here).
-pub fn backup(paths: &Paths, file: Option<PathBuf>, options: crate::backup::Options) -> Result<()> {
+/// Where a backup's passphrase comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Seal {
+    /// Asked for in a terminal, optional (none without a terminal, unless
+    /// RETTUI_BACKUP_PASSPHRASE is set).
+    Ask,
+    /// Asked for, and needed.
+    Passphrase,
+    /// Sealed to this backup key.
+    Key(String),
+    /// Not sealed.
+    None,
+}
+
+/// The passphrase for backups set for this run (for scripts, and the
+/// Android app, which has no terminal).
+const PASSPHRASE_VAR: &str = "RETTUI_BACKUP_PASSPHRASE";
+
+fn passphrase_from_env() -> Option<Zeroizing<String>> {
+    std::env::var(PASSPHRASE_VAR).ok().filter(|p| !p.is_empty()).map(Zeroizing::new)
+}
+
+fn in_terminal() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+/// A new passphrase, typed twice, unseen; empty if `optional` and none was typed.
+fn new_passphrase(optional: bool) -> Result<Zeroizing<String>> {
+    if let Some(passphrase) = passphrase_from_env() {
+        return Ok(passphrase);
+    }
+    if !in_terminal() {
+        if optional {
+            return Ok(Zeroizing::new(String::new()));
+        }
+        bail!("No passphrase: type it in a terminal, or set {PASSPHRASE_VAR}");
+    }
+    let ask = if optional {
+        "A passphrase to seal the backup with, so only someone who knows it can restore it (Enter: none): "
+    } else {
+        "Passphrase: "
+    };
+    let first = Zeroizing::new(rpassword::prompt_password(ask)?);
+    if first.is_empty() {
+        if optional {
+            return Ok(first);
+        }
+        bail!("No passphrase typed");
+    }
+    let again = Zeroizing::new(rpassword::prompt_password("The passphrase again: ")?);
+    if *first != *again {
+        bail!("The passphrases differ");
+    }
+    Ok(first)
+}
+
+/// Back up the data directory to `file` (default: today's name, here),
+/// sealed as `seal` says.
+pub fn backup(paths: &Paths, file: Option<PathBuf>, options: crate::backup::Options, seal: Seal) -> Result<()> {
     if !paths.settings.exists() && !paths.identity.exists() {
         bail!("{} has nothing of rettui's to back up (another --data-dir?)", paths.base.display());
     }
     let file = file.unwrap_or_else(|| PathBuf::from(crate::backup::default_name()));
-    let count = crate::backup::write_file(&paths.base, &file, options).map_err(|e| anyhow!("Couldn't back up: {e}"))?;
+    if file.exists() {
+        bail!("Couldn't back up: {} exists already: pick another name", file.display());
+    }
+    let key = match seal {
+        Seal::None => None,
+        Seal::Key(text) => Some(BackupKey::decode(&text).map_err(|e| anyhow!(e))?),
+        Seal::Ask | Seal::Passphrase => {
+            let passphrase = new_passphrase(seal == Seal::Ask)?;
+            if passphrase.is_empty() { None } else { Some(BackupKey::from_passphrase(&passphrase).map_err(|e| anyhow!(e))?) }
+        }
+    };
+    let count = crate::backup::write_file(&paths.base, &file, options, key.as_ref()).map_err(|e| anyhow!("Couldn't back up: {e}"))?;
     println!("Backed up {count} files from {} to {}.", paths.base.display(), file.display());
-    if options.identity {
+    if key.is_some() {
+        println!("It's sealed with your passphrase: it can't be restored without it, so don't lose it.");
+    } else if options.identity {
         println!("It has your identity: keep it private, as whoever has it can pose as you and read what's sent to you.");
     }
+    Ok(())
+}
+
+/// Print the backup key for a passphrase (asked for, or from the environment).
+pub fn backup_key() -> Result<()> {
+    let passphrase = new_passphrase(false)?;
+    println!("{}", BackupKey::from_passphrase(&passphrase).map_err(|e| anyhow!(e))?.encode());
     Ok(())
 }
 
@@ -433,7 +513,17 @@ pub fn import_identity(paths: &Paths, file: &Path, name: &str) -> Result<()> {
 
 /// Restore the backup `file` into the data directory.
 pub fn restore(paths: &Paths, file: &Path, force: bool) -> Result<()> {
-    let done = crate::backup::restore(file, &paths.base, force).map_err(|e| anyhow!(e))?;
+    // A sealed one: its passphrase, from the environment or typed.
+    let passphrase = if crate::backup::is_sealed(file) {
+        match passphrase_from_env() {
+            Some(passphrase) => Some(passphrase),
+            None if in_terminal() => Some(Zeroizing::new(rpassword::prompt_password(format!("{}'s passphrase: ", file.display()))?)),
+            None => bail!("{} is sealed with a passphrase: type it in a terminal, or set {PASSPHRASE_VAR}", file.display()),
+        }
+    } else {
+        None
+    };
+    let done = crate::backup::restore(file, &paths.base, force, passphrase.as_deref().map(String::as_str)).map_err(|e| anyhow!(e))?;
     println!("{done}.");
     Ok(())
 }

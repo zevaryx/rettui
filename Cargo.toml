@@ -105,6 +105,10 @@ rusqlite = { version = "0.40", default-features = false, features = ["bundled"] 
 # for Linux and macOS, .zip for Windows.
 tar = { version = "0.4", default-features = false }
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+argon2 = "0.5"
+rpassword = "7"
+zeroize = "1"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 
 [target.'cfg(unix)'.dependencies]
 # Bounded terminal capability probe (poll/read on stdin).
@@ -190,6 +194,15 @@ opt-level = 3
 [profile.dev.package.cbc]
 opt-level = 3
 [profile.dev.package.hkdf]
+opt-level = 3
+# Sealed backups: stretching a passphrase takes seconds unoptimised.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.dev.package.aes-gcm]
+opt-level = 3
+[profile.dev.package.ghash]
 opt-level = 3
 [profile.dev.package.rns-crypto]
 opt-level = 3

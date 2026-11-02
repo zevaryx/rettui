@@ -865,6 +865,24 @@ async fn paper_backups_tiles_and_signing_out() {
     assert_eq!(backup.status, StatusCode::OK, "{}", backup.text());
     assert_eq!(backup.headers[header::CONTENT_TYPE], "application/gzip");
     assert!(backup.body.starts_with(&[0x1f, 0x8b]));
+    // Sealed with a passphrase: made, then fetched (twice, as the Android
+    // app's WebView does) by its id, and restored only with it.
+    let made = web.post("/api/backup", json!({ "passphrase": "rosebud" })).await;
+    assert_eq!(made.status, StatusCode::OK, "{}", made.text());
+    let id = made.json()["id"].as_str().unwrap().to_string();
+    let sealed = web.get(&format!("/api/backup/{id}")).await;
+    assert_eq!(sealed.status, StatusCode::OK, "{}", sealed.text());
+    assert!(sealed.body.starts_with(crate::backup::sealed::MAGIC));
+    assert_eq!(web.get(&format!("/api/backup/{id}")).await.body, sealed.body);
+    let file = web.dir.join("sealed.tar.gz");
+    std::fs::write(&file, &sealed.body).unwrap();
+    assert!(crate::backup::restore(&file, &web.dir.join("restored"), false, Some("rosebud")).is_ok());
+    // None typed: a plain one. Another id, or none like one, isn't there.
+    let plain = web.post("/api/backup", json!({ "passphrase": "" })).await;
+    let id = plain.json()["id"].as_str().unwrap().to_string();
+    assert!(web.get(&format!("/api/backup/{id}")).await.body.starts_with(&[0x1f, 0x8b]));
+    assert_eq!(web.get(&format!("/api/backup/{}", "0".repeat(32))).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(web.get("/api/backup/..%2Fsettings.json").await.status, StatusCode::BAD_REQUEST);
 
     // Map tiles: none set and no offline map here.
     assert_eq!(web.get("/api/map/tiles/1/0/0").await.status, StatusCode::NOT_FOUND);

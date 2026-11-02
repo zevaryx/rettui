@@ -61,6 +61,43 @@ object Rettui {
         }
     }
 
+    /** The variable rettui takes a backup's passphrase from (it has no terminal here to ask). */
+    private const val PASSPHRASE = "RETTUI_BACKUP_PASSPHRASE"
+
+    /**
+     * Run one of rettui's commands with `passphrase` as a backup's (if there
+     * is one), set only while it runs: the process's environment, one
+     * command at a time.
+     */
+    @Synchronized
+    fun withPassphrase(context: Context, passphrase: String?, vararg args: String): Said {
+        if (passphrase.isNullOrEmpty()) {
+            Os.unsetenv(PASSPHRASE)
+            return command(context, *args)
+        }
+        return try {
+            Os.setenv(PASSPHRASE, passphrase, true)
+            command(context, *args)
+        } finally {
+            Os.unsetenv(PASSPHRASE)
+        }
+    }
+
+    /** The start of a backup sealed with a passphrase. */
+    private val SEALED = "rettui sealed backup1\n".toByteArray()
+
+    /** Whether `input` (a file, from its start) is a backup sealed with a passphrase. */
+    fun sealed(input: java.io.InputStream): Boolean {
+        val start = ByteArray(SEALED.size)
+        var got = 0
+        while (got < start.size) {
+            val n = input.read(start, got, start.size - got)
+            if (n < 0) return false
+            got += n
+        }
+        return start.contentEquals(SEALED)
+    }
+
     /** Whether rettui's process is there (starting, running or stopping). */
     fun running(context: Context): Boolean {
         val name = context.packageName + PROCESS

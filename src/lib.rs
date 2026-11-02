@@ -189,12 +189,29 @@ enum Command {
         /// new addresses).
         #[arg(long)]
         without_identity: bool,
+        /// Seal it with a passphrase, asked for here (or taken from
+        /// RETTUI_BACKUP_PASSPHRASE): it can't be restored without it. In a
+        /// terminal, rettui asks for one anyway (Enter for none).
+        #[arg(long, conflicts_with_all = ["key", "no_passphrase"])]
+        passphrase: bool,
+        /// Seal it to a backup key (from `rettui backup-key`), for backups
+        /// made without anyone there to type the passphrase.
+        #[arg(long, value_name = "KEY", conflicts_with = "no_passphrase")]
+        key: Option<String>,
+        /// Don't ask for a passphrase: the backup isn't sealed.
+        #[arg(long)]
+        no_passphrase: bool,
     },
+    /// Turn a passphrase into a backup key, to seal backups with
+    /// (`rettui backup --key`) without the passphrase at hand. Restoring one
+    /// still takes the passphrase.
+    BackupKey,
     /// Restore a backup into the data directory, with rettui stopped.
     ///
     /// A data directory that has an identity or messages already is left
     /// alone, unless --force: then what the backup replaces is moved aside
-    /// first, into a before-restore-<time> folder.
+    /// first, into a before-restore-<time> folder. A sealed backup asks for
+    /// its passphrase (or takes it from RETTUI_BACKUP_PASSPHRASE).
     Restore {
         file: PathBuf,
         /// Restore over what's there (moved aside first).
@@ -311,10 +328,17 @@ async fn run(cli: Cli) -> Result<()> {
     let paths = Paths::new(cli.data_dir.clone())?;
     // Before anything is loaded (and, in a new data directory, made).
     match &cli.command {
-        Some(Command::Backup { file, with_files, without_identity }) => {
+        Some(Command::Backup { file, with_files, without_identity, passphrase, key, no_passphrase }) => {
             let options = backup::Options { identity: !without_identity, files: *with_files };
-            return cli::backup(&paths, file.clone(), options);
+            let seal = match (key, passphrase, no_passphrase) {
+                (Some(key), ..) => cli::Seal::Key(key.clone()),
+                (None, true, _) => cli::Seal::Passphrase,
+                (None, false, true) => cli::Seal::None,
+                (None, false, false) => cli::Seal::Ask,
+            };
+            return cli::backup(&paths, file.clone(), options, seal);
         }
+        Some(Command::BackupKey) => return cli::backup_key(),
         Some(Command::Restore { file, force }) => return cli::restore(&paths, file, *force),
         Some(Command::Identity { action: IdentityAction::Export { file } }) => return cli::export_identity(&paths, file),
         Some(Command::Identity { action: IdentityAction::Import { file, name } }) => return cli::import_identity(&paths, file, name),
@@ -382,7 +406,9 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         Some(Command::Update { yes }) => cli::update(&settings, yes).await,
-        Some(Command::Backup { .. } | Command::Restore { .. } | Command::Identity { .. }) => unreachable!("handled before loading"),
+        Some(Command::Backup { .. } | Command::BackupKey | Command::Restore { .. } | Command::Identity { .. }) => {
+            unreachable!("handled before loading")
+        }
         None => {
             let (mut settings, mut paths, mut identity) = (settings, paths, identity);
             // Switching identity starts over as the other one.

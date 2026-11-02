@@ -12,6 +12,11 @@
 //! Restoring puts them in a data directory while rettui isn't running
 //! there: one that already has an identity or a store is left alone unless
 //! asked (`force`), and then what was there is moved aside first.
+//!
+//! A backup can be sealed with a passphrase (see [`sealed`]): then only
+//! someone who knows it can restore it.
+
+pub mod sealed;
 
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -108,10 +113,10 @@ pub fn create(base: &Path, out: impl Write, options: Options) -> Result<usize, S
 }
 
 /// Write a backup of the data directory `base` to the new file `to`, which
-/// only its owner can read (it may hold the identity); how many files it
-/// holds. A file there already is left alone, and one left unfinished is
-/// removed.
-pub fn write_file(base: &Path, to: &Path, options: Options) -> Result<usize, String> {
+/// only its owner can read (it may hold the identity), sealed to `key` if
+/// one is given; how many files it holds. A file there already is left
+/// alone, and one left unfinished is removed.
+pub fn write_file(base: &Path, to: &Path, options: Options, key: Option<&sealed::BackupKey>) -> Result<usize, String> {
     let mut open = std::fs::OpenOptions::new();
     open.write(true).create_new(true);
     #[cfg(unix)]
@@ -120,7 +125,13 @@ pub fn write_file(base: &Path, to: &Path, options: Options) -> Result<usize, Str
         std::io::ErrorKind::AlreadyExists => format!("{} exists already: pick another name", to.display()),
         _ => format!("{}: {e}", to.display()),
     })?;
-    let written = create(base, std::io::BufWriter::new(file), options);
+    let out = std::io::BufWriter::new(file);
+    let written = match key {
+        None => create(base, out, options),
+        Some(key) => sealed::Sealer::new(out, key).map_err(|e| e.to_string()).and_then(|mut sealer| {
+            create(base, &mut sealer, options).and_then(|count| sealer.finish().map(|_| count).map_err(|e| e.to_string()))
+        }),
+    };
     if written.is_err() {
         let _ = std::fs::remove_file(to);
     }
@@ -160,13 +171,36 @@ fn wanted<R: Read>(entry: &tar::Entry<R>) -> bool {
     kind.is_file() || kind.is_dir()
 }
 
-/// Restore the backup `archive` into the data directory `base`. One that
-/// has an identity or a store already is left alone unless `force`, and
-/// then what the backup would replace is moved aside first. What was done.
-pub fn restore(archive: &Path, base: &Path, force: bool) -> Result<String, String> {
-    let open = || -> Result<tar::Archive<flate2::read::GzDecoder<std::fs::File>>, String> {
-        let file = std::fs::File::open(archive).map_err(|e| format!("Couldn't open {}: {e}", archive.display()))?;
-        Ok(tar::Archive::new(flate2::read::GzDecoder::new(file)))
+/// Whether the file `path` is a backup sealed with a passphrase.
+pub fn is_sealed(path: &Path) -> bool {
+    let mut start = [0u8; sealed::MAGIC.len()];
+    std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut start)).is_ok() && sealed::is_sealed(&start)
+}
+
+/// Restore the backup `archive` into the data directory `base`, with
+/// `passphrase` if it's sealed. One that has an identity or a store
+/// already is left alone unless `force`, and then what the backup would
+/// replace is moved aside first. What was done.
+pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str>) -> Result<String, String> {
+    let file = || std::fs::File::open(archive).map_err(|e| format!("Couldn't open {}: {e}", archive.display()));
+    // Sealed: the passphrase is checked once (it's slow), then each reading
+    // opens it again.
+    let opener = if is_sealed(archive) {
+        let passphrase = passphrase.ok_or_else(|| format!("{} is sealed with a passphrase: give it to restore it", archive.display()))?;
+        Some(
+            sealed::Opener::new(std::io::BufReader::new(file()?), passphrase)
+                .map_err(|e| format!("Couldn't open {}: {e}", archive.display()))?,
+        )
+    } else {
+        None
+    };
+    let open = || -> Result<tar::Archive<flate2::read::GzDecoder<Box<dyn Read>>>, String> {
+        let input = std::io::BufReader::new(file()?);
+        let input: Box<dyn Read> = match &opener {
+            Some(opener) => Box::new(opener.open(input).map_err(|e| format!("Couldn't open {}: {e}", archive.display()))?),
+            None => Box::new(input),
+        };
+        Ok(tar::Archive::new(flate2::read::GzDecoder::new(input)))
     };
     let bad = |e: &dyn std::fmt::Display| format!("{} isn't a rettui backup: {e}", archive.display());
     // First, that it's one: its manifest, and nothing outside what a
@@ -274,6 +308,33 @@ mod tests {
     }
 
     #[test]
+    fn a_sealed_backup_restores_only_with_its_passphrase() {
+        let base = std::env::temp_dir().join(format!("rettui-backup-sealed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (from, to) = (base.join("from"), base.join("to"));
+        data(&from);
+        let file = base.join("sealed.tar.gz");
+        let key = sealed::quick_key("open sesame");
+        let count = write_file(&from, &file, Options { identity: true, files: false }, Some(&key)).unwrap();
+        assert_eq!(count, 6);
+        assert!(is_sealed(&file));
+        // Nothing of it reads without the passphrase: not even as gzip.
+        assert!(!std::fs::read(&file).unwrap().windows(6).any(|w| w == b"secret"));
+        assert!(restore(&file, &to, false, None).unwrap_err().contains("sealed with a passphrase"));
+        assert!(restore(&file, &to, false, Some("open sesame?")).unwrap_err().contains("that isn't its passphrase"));
+        assert!(!to.join("identity").exists());
+        let done = restore(&file, &to, false, Some("open sesame")).unwrap();
+        assert!(done.starts_with("Restored 6 files"), "{done}");
+        assert_eq!(std::fs::read_to_string(to.join("identity")).unwrap(), "secret");
+        // A plain one needs none, and ignores one given.
+        let plain = base.join("plain.tar.gz");
+        write_file(&from, &plain, Options::default(), None).unwrap();
+        assert!(!is_sealed(&plain));
+        assert!(restore(&plain, &base.join("again"), false, Some("unused")).is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn backed_up_and_restored_elsewhere_without_what_isnt_kept() {
         let base = std::env::temp_dir().join(format!("rettui-backup-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -282,7 +343,7 @@ mod tests {
         let file = base.join("backup.tar.gz");
         let count = create(&from, std::fs::File::create(&file).unwrap(), Options { identity: true, files: false }).unwrap();
         assert_eq!(count, 6, "identities, settings, store, archive, the hub's config");
-        let done = restore(&file, &to, false).unwrap();
+        let done = restore(&file, &to, false, None).unwrap();
         assert!(done.starts_with("Restored 6 files"), "{done}");
         assert_eq!(std::fs::read_to_string(to.join("identity")).unwrap(), "secret");
         assert_eq!(std::fs::read_to_string(to.join("rrc-hub-identity")).unwrap(), "hub secret");
@@ -300,7 +361,7 @@ mod tests {
         let file = base.join("files.tar.gz");
         create(&from, std::fs::File::create(&file).unwrap(), Options { identity: false, files: true }).unwrap();
         let other = base.join("other");
-        let done = restore(&file, &other, false).unwrap();
+        let done = restore(&file, &other, false, None).unwrap();
         assert!(done.contains("no identity"), "{done}");
         assert!(other.join("downloads/abc/photo.jpg").exists() && !other.join("identity").exists());
         assert!(other.join("rrc-hub/config.yaml").exists() && !other.join("rrc-hub-identity").exists());
@@ -317,9 +378,9 @@ mod tests {
         create(&from, std::fs::File::create(&file).unwrap(), Options { identity: true, files: false }).unwrap();
         std::fs::create_dir_all(&to).unwrap();
         std::fs::write(to.join("identity"), "mine").unwrap();
-        assert!(restore(&file, &to, false).unwrap_err().contains("--force"));
+        assert!(restore(&file, &to, false, None).unwrap_err().contains("--force"));
         assert_eq!(std::fs::read_to_string(to.join("identity")).unwrap(), "mine");
-        let done = restore(&file, &to, true).unwrap();
+        let done = restore(&file, &to, true, None).unwrap();
         assert!(done.contains("before-restore-"), "{done}");
         assert_eq!(std::fs::read_to_string(to.join("identity")).unwrap(), "secret");
         let aside =
@@ -348,7 +409,7 @@ mod tests {
         header.set_cksum();
         tar.append_data(&mut header, "notes/a.txt", &b"hi"[..]).unwrap();
         tar.into_inner().unwrap().finish().unwrap();
-        assert!(restore(&file, &base.join("to"), false).unwrap_err().contains("isn't a rettui backup"));
+        assert!(restore(&file, &base.join("to"), false, None).unwrap_err().contains("isn't a rettui backup"));
         assert!(!base.join("to").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -380,16 +441,16 @@ mod tests {
         tar.append_data(&mut header, format!("{ROOT}/node/index.mu"), &b"hi"[..]).unwrap();
         tar.into_inner().unwrap().finish().unwrap();
         let to = base.join("to");
-        restore(&file, &to, false).unwrap();
+        restore(&file, &to, false, None).unwrap();
         assert!(!std::fs::symlink_metadata(to.join("node")).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(to.join("node/index.mu")).unwrap(), "hi");
         assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
         // Written to a new file only its owner can read, never over one.
         let saved = base.join("saved.tar.gz");
-        write_file(&to, &saved, Options::default()).unwrap();
+        write_file(&to, &saved, Options::default(), None).unwrap();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&saved).unwrap().permissions().mode() & 0o777, 0o600);
-        assert!(write_file(&to, &saved, Options::default()).unwrap_err().contains("exists already"));
+        assert!(write_file(&to, &saved, Options::default(), None).unwrap_err().contains("exists already"));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -7699,7 +7699,7 @@ app.views.status = {
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Backup'), el('div', {},
         el('button', { text: 'Download a backup', title: 'Settings, contacts and messages, in one file to restore with rettui restore',
-          onclick: () => el('a', { href: 'api/backup', download: '' }).click() }),
+          onclick: () => backupDialog() }),
         IN_ANDROID_APP ? androidBackupsButton('🔑 Identity and backups') : null,
         IN_ANDROID_APP ? androidDownloadsButton() : null,
         el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text: IN_ANDROID_APP
@@ -9365,6 +9365,47 @@ async function identityDialog(address) {
 
 // A file sent to an rncp listener, as `rncp FILE ADDRESS` does, and how
 // the ones sent lately went.
+// Download a backup, sealed with a passphrase if one is typed: then
+// rettui restore asks for it, and it can't be restored without it.
+function backupDialog() {
+  dialog('Download a backup', (close) => {
+    const first = el('input', { type: 'password', autocomplete: 'new-password', placeholder: 'none' });
+    const again = el('input', { type: 'password', autocomplete: 'new-password' });
+    const error = el('div', { class: 'status error', role: 'alert' });
+    const go = el('button', { class: 'primary', text: 'Download' });
+    const download = async () => {
+      error.textContent = '';
+      if (!first.value) {
+        close();
+        return el('a', { href: 'api/backup', download: '' }).click();
+      }
+      if (first.value !== again.value) return void (error.textContent = 'The passphrases differ.');
+      go.disabled = true;
+      go.textContent = 'Sealing…';
+      try {
+        // Sent in the request's body, never in an address.
+        const made = await api.post('/backup', { passphrase: first.value });
+        close();
+        el('a', { href: `api/backup/${made.id}`, download: '' }).click();
+      } catch (e) {
+        error.textContent = e.message;
+        go.disabled = false;
+        go.textContent = 'Download';
+      }
+    };
+    go.onclick = download;
+    for (const input of [first, again]) input.addEventListener('keydown', (e) => e.key === 'Enter' && download());
+    setTimeout(() => first.focus());
+    return [
+      el('p', { class: 'dim', text: 'Settings, contacts and messages, without your identity. A passphrase seals it: it can\'t be restored without it (rettui restore asks for it), so don\'t lose it. Leave it empty for none.' }),
+      el('label', { class: 'field' }, el('span', { text: 'Passphrase' }), first),
+      el('label', { class: 'field' }, el('span', { text: 'Again' }), again),
+      error,
+      el('div', { class: 'row actions' }, el('span', { class: 'grow' }), go),
+    ];
+  });
+}
+
 async function rncpDialog(address) {
   const sends = await attempt(() => api.get('/rncp'));
   if (!sends) return;

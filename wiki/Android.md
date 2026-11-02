@@ -144,18 +144,24 @@ shown when rettui stops. On it:
   NomadNet, MeshChat or another rettui, kept beside yours under a name you
   give it. Switch to it in Status > **👤 Identities**.
 - **Save a full backup:** settings, contacts, messages and the identity in
-  use, in one file. `rettui restore` restores it on a computer.
-- **Restore a backup:** one saved here or by rettui on a computer. rettui
+  use, in one file. It asks for a passphrase to seal it with first (leave
+  it empty for none): a sealed backup can't be restored without it.
+  `rettui restore` restores it on a computer.
+- **Restore a backup:** one saved here or by rettui on a computer (a
+  sealed one asks for its passphrase). rettui
   stops, the backup takes the place of what's here (moved aside into a
   `before-restore-<time>` folder, not deleted), and rettui starts again.
 
 - **Backups on a schedule:** choose a folder, then **Every day** or
-  **Every week**. Android makes a full backup there while the phone
-  charges, and keeps the newest 5 it made; older ones it made are deleted,
-  and nothing else in the folder is touched. **Make one now** makes one
-  straight away. If one fails, a notification says why. Each holds the
-  identity: keep the folder private, and think twice about one a cloud
-  drive copies.
+  **Every week**. The first time, it asks for a passphrase to seal them
+  with (leave it empty for none). The phone keeps only a key made from it,
+  which seals backups but can't open them: you type the passphrase to
+  restore one. **Change the passphrase…** changes it for the next ones.
+  Android makes a full backup there while the phone charges, and keeps the
+  newest 5 it made; older ones it made are deleted, and nothing else in
+  the folder is touched. **Make one now** makes one straight away. If one
+  fails, a notification says why. Each holds the identity: seal them, or
+  keep the folder private.
 
 Back up the identity before uninstalling the app: uninstalling deletes
 everything the app keeps. Nothing of rettui's goes to Android's cloud
