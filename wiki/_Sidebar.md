@@ -22,6 +22,7 @@
 **Settings and data**
 - [Settings and Reticulum Config](Settings-and-Reticulum-Config)
 - [Data and Storage](Data-and-Storage)
+- [Sealed Backups](Sealed-Backups)
 
 **More**
 - [Glossary](Glossary)

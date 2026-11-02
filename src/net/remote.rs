@@ -560,6 +560,20 @@ pub enum RncpState {
     Failed(String),
 }
 
+/// How getting a file from an `rncp` listener is going.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FetchState {
+    /// How much of it has come, 0 to 1.
+    Fetching(f32),
+    Fetched {
+        name: String,
+        saved: PathBuf,
+        bytes: usize,
+        secs: f64,
+    },
+    Failed(String),
+}
+
 /// Longest a file may take to send, from finding the listener on.
 const RNCP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// Longest to wait for the listener's key, if it hasn't been heard.
@@ -621,6 +635,73 @@ pub async fn rncp_send(
         ),
         Err(rns_runtime::rncp::RncpError::PathTimeout) => RncpState::Failed("no listener heard at that address".into()),
         Err(e) => RncpState::Failed(e.to_string()),
+    };
+    let _ = ev.send(say(state));
+}
+
+/// Get the file at `path` on the `rncp` listener `to` (one run with `-F`,
+/// which must allow this identity, as `rncp --fetch` asks), and save it in
+/// `dir` under its own name, never over another file. Says how it goes as
+/// [`super::NetEvent::RncpFetch`].
+pub async fn rncp_fetch(
+    runtime: &ReticulumHandle,
+    identity: Identity,
+    to: Hash,
+    path: String,
+    dir: PathBuf,
+    ev: tokio::sync::mpsc::UnboundedSender<super::NetEvent>,
+) {
+    let say = |state| super::NetEvent::RncpFetch { to, path: path.clone(), state };
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<f32>(16);
+    let _ = ev.send(say(FetchState::Fetching(0.0)));
+    let (events, asked) = (ev.clone(), path.clone());
+    let watcher = tokio::spawn(async move {
+        let mut shown = 0;
+        while let Some(done) = progress_rx.recv().await {
+            let step = (done.clamp(0.0, 1.0) * 20.0) as u32;
+            if step > shown {
+                shown = step;
+                let _ = events.send(super::NetEvent::RncpFetch { to, path: asked.clone(), state: FetchState::Fetching(done) });
+            }
+        }
+    });
+    let (transport_tx, handle, remote_path) = (runtime.transport_tx.clone(), tokio::runtime::Handle::current(), path.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return Err(rns_runtime::rncp::RncpError::Io(format!("could not make {}: {e}", dir.display())));
+        }
+        handle.block_on(rns_runtime::rncp::rncp_fetch_file(rns_runtime::rncp::RncpFetchRequest {
+            transport_tx,
+            identity,
+            dest_hash: to,
+            remote_path: &remote_path,
+            save_dir: &dir,
+            overwrite: false,
+            overall_timeout: RNCP_TIMEOUT,
+            path_wait: RNCP_PATH_WAIT,
+            progress_tx: Some(progress_tx),
+        }))
+    })
+    .await
+    .unwrap_or_else(|e| Err(rns_runtime::rncp::RncpError::Io(e.to_string())));
+    let _ = watcher.await;
+    let state = match result {
+        Ok(outcome) => FetchState::Fetched {
+            name: outcome.file_name,
+            saved: outcome.saved_path,
+            bytes: outcome.bytes,
+            secs: outcome.duration.as_secs_f64(),
+        },
+        Err(rns_runtime::rncp::RncpError::Denied) => FetchState::Failed(
+            "the listener won't give you that: it needs to run with -F (fetch), allow your identity (rncp -a), and the file must be inside its fetch folder (-j)"
+                .into(),
+        ),
+        // A listener not run with -F, or not allowing us, closes the link.
+        Err(rns_runtime::rncp::RncpError::ResourceFailed(e)) if e.contains("link closed") => {
+            FetchState::Failed("the listener closed the link: it must be run with rncp -l -F and allow your identity (rncp -a)".into())
+        }
+        Err(rns_runtime::rncp::RncpError::PathTimeout) => FetchState::Failed("no listener heard at that address".into()),
+        Err(e) => FetchState::Failed(e.to_string()),
     };
     let _ = ev.send(say(state));
 }

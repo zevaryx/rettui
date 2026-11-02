@@ -82,6 +82,7 @@ rettui keeps its data in `~/.local/share/rettui/`:
 - `rrc/`: RRC chat history, one file per hub (the newest messages of each room and whisper conversation, 500 unless "Chat messages kept", `rrc_messages_kept`, says otherwise)
 - `rettui.log`: logging, as detailed as *Log level* says (Status, `log_level`: error, warn by default, info, debug or trace; it changes at once). `RETTUI_LOG=debug`, set when rettui starts, decides instead
 - `downloads/`: received attachments (one folder per sender) and NomadNet files (those go in *NomadNet files folder*, Browsing settings, `nomad_files_dir`, instead, if you set one: a USB drive or your Documents folder, say; set in the terminal UI or settings.json, not the web UI)
+- `received/`: files sent to you with [rncp](Network), unless *Received files folder* (`rncp_dir`) says another
 - `repos/`: copies of [rngit repositories](Repos#a-copy-on-this-computer), by
   node, group and name; deleting one is harmless (copy it again)
 - `uploads/`: files attached to messages sent from the web UI, and the
@@ -164,24 +165,59 @@ certificates and push keys aren't kept: rettui makes them again.
 Attachments (`downloads/`, `uploads/`) are left out unless asked for.
 
 - **Terminal UI:** `B` in the Status tab asks where to save it (your home
-  folder, `rettui-backup-<date>.tar.gz`, to begin with), with your
-  identity, once what's waiting to be saved is written. The log says when
-  it's done.
-- **Web UI:** **Download a backup** (Status, *Backup*). It never has the
-  identity (the login link would otherwise give away the key): back that
-  up in the terminal UI, or with `rettui backup`. In the
-  [Android app](Android), *Identity and backups* saves one with the identity.
+  folder, `rettui-backup-<date>.tar.gz`, to begin with), then for a
+  passphrase to seal it with (typed twice, shown as dots; `Enter` for
+  none), with your identity, once what's waiting to be saved is written.
+  The log says when it's done.
+- **Web UI:** **Download a backup** (Status, *Backup*), with a passphrase if
+  you type one. It never has the identity (the login link would otherwise
+  give away the key): back that up in the terminal UI, or with `rettui
+  backup`. In the [Android app](Android), *Identity and backups* saves one
+  with the identity, and can make them on a schedule.
 - **Command line:** `rettui backup [FILE]` (by default
   `rettui-backup-<date>.tar.gz` here); `--with-files` adds attachments,
-  `--without-identity` leaves the identity out. It reads what's saved, so
-  with rettui running it's what was saved last (every 10 seconds).
+  `--without-identity` leaves the identity out. In a terminal it asks for a
+  passphrase (`Enter` for none); `--passphrase` needs one, `--no-passphrase`
+  doesn't ask, and `RETTUI_BACKUP_PASSPHRASE` gives one without asking, for
+  scripts. It reads what's saved, so with rettui running it's what was
+  saved last (every 10 seconds).
 
 A backup with the identity is as private as the identity itself: the file
 is made readable only by you, and whoever has it can pose as you and read
 what's sent to you. rettui never writes over a file that's there already.
 
+### Sealed with a passphrase
+
+A backup sealed with a passphrase can't be read, or restored, without it:
+a copy that lands somewhere it shouldn't (a cloud folder, a lost USB stick)
+gives nothing away. **Don't lose the passphrase**: nothing gets the backup
+back without it. Use a few words rather than a short PIN: a backup can be
+guessed at on another computer, as fast as it can go, with nothing to stop
+it after a few tries.
+
+The passphrase is stretched with Argon2id (64 MB, 3 passes, a fresh salt
+each time), which makes each guess slow, into a key pair. The backup is
+encrypted to its public half with X25519 and AES-256-GCM, in 64 KB chunks
+that can't be changed, reordered or cut short unnoticed. A short
+passphrase, or a PIN, gets a warning. [Sealed Backups](Sealed-Backups)
+says how it all works, and what it protects against.
+
+`rettui unseal FILE OUT` opens a sealed backup without restoring it (and
+without rettui running): the plain backup to `OUT`, or with
+`--identity FILE` only the identity, to use in Sideband, NomadNet or
+another rettui. `tools/unseal_backup.py` in rettui's repository does the
+same with Python, without rettui at all. See
+[Sealed Backups](Sealed-Backups#opening-a-sealed-backup-without-rettui).
+
+`rettui backup-key` turns a passphrase into a *backup key*
+(`rettui-backup-key-1:…`), the public half: `rettui backup --key KEY` seals
+a backup with it, without the passphrase, so a script (or the Android app's
+scheduled backups) can make sealed backups knowing only the key, which
+can't open them. Restoring one still takes the passphrase.
+
 To restore, stop rettui, then `rettui restore FILE` (with `--data-dir DIR`
-for another data directory). Into a data directory that's empty, or new,
+for another data directory). A sealed backup asks for its passphrase (or
+takes `RETTUI_BACKUP_PASSPHRASE`). Into a data directory that's empty, or new,
 it just unpacks. One that has an identity or messages already is left
 alone, unless `--force`: then what the backup replaces is first moved into
 a `before-restore-<time>/` folder there. A restored backup without an

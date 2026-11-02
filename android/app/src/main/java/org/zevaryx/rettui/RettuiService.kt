@@ -317,6 +317,45 @@ class RettuiService : Service() {
         }
     }
 
+    /** One line of a conversation's notification: who said it, what, and when. */
+    private data class Line(val who: String, val text: String, val at: Long)
+
+    /** What each conversation's or room's notification shows (by its tag), newest last. */
+    private val said = mutableMapOf<String, MutableList<Line>>()
+
+    /**
+     * A conversation's or room's notification as a chat: each message under
+     * the one before, rather than the newest alone. Its lines start over
+     * once it has gone (read, or swiped aside). Nothing for other
+     * notifications (a game's move, a summary).
+     */
+    private fun chat(manager: NotificationManager, tag: String, target: JSONObject?, title: String, body: String): Notification.Style? {
+        val kind = target?.optString("kind")
+        if (kind != "conversation" && kind != "room") return null
+        val room = target.optString("room")
+        // In a room, the title says who and where ("Ann in #general"); the
+        // room is the chat's title instead.
+        val who = if (kind == "room" && room.isNotEmpty()) title.removeSuffix(" in #$room") else title
+        val lines = synchronized(said) {
+            val showing = manager.activeNotifications.any { it.tag == tag }
+            val lines = if (showing) said.getOrPut(tag) { mutableListOf() } else mutableListOf<Line>().also { said[tag] = it }
+            lines.add(Line(who, body, System.currentTimeMillis()))
+            // As many as a notification shows.
+            while (lines.size > 8) lines.removeAt(0)
+            lines.toList()
+        }
+        // By name: Android's Person is only from Android 9 on.
+        @Suppress("DEPRECATION")
+        val style = Notification.MessagingStyle(getString(R.string.you))
+        if (kind == "room" && room.isNotEmpty() && !title.endsWith("(whisper)")) {
+            style.setConversationTitle("#$room")
+            if (Build.VERSION.SDK_INT >= 28) style.setGroupConversation(true)
+        }
+        @Suppress("DEPRECATION")
+        for (line in lines) style.addMessage(Notification.MessagingStyle.Message(line.text, line.at, line.who))
+        return style
+    }
+
     private fun handle(event: String, data: String) {
         val manager = getSystemService(NotificationManager::class.java)
         try {
@@ -332,14 +371,18 @@ class RettuiService : Service() {
                         Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_TARGET, target),
                         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                     )
+                    val title = json.optString("title").take(200)
+                    val body = json.optString("body").take(1000)
                     val builder = Notification.Builder(this, CHANNEL_MESSAGES)
                         .setSmallIcon(R.drawable.ic_notification)
                         .setColor(getColor(R.color.accent))
-                        .setContentTitle(json.optString("title").take(200))
-                        .setContentText(json.optString("body").take(1000))
-                        .setStyle(Notification.BigTextStyle().bigText(json.optString("body").take(1000)))
+                        .setContentTitle(title)
+                        .setContentText(body)
+                        .setStyle(chat(manager, tag, json.optJSONObject("target"), title, body) ?: Notification.BigTextStyle().bigText(body))
                         .setContentIntent(open)
                         .setAutoCancel(true)
+                        // A message: Do Not Disturb's "messages" exceptions apply.
+                        .setCategory(Notification.CATEGORY_MESSAGE)
                     // A conversation or a room can be answered, or marked
                     // read, from here.
                     if (json.optJSONObject("target")?.optString("kind") in setOf("conversation", "room")) {
@@ -349,7 +392,10 @@ class RettuiService : Service() {
                     manager.notify(tag, 0, builder.build())
                 }
                 // Read, here or elsewhere: its notification goes.
-                "read" -> manager.cancel(tag, 0)
+                "read" -> {
+                    manager.cancel(tag, 0)
+                    synchronized(said) { said.remove(tag) }
+                }
             }
         } catch (e: Exception) {
             Log.i(TAG, "Couldn't read a $event event: $e")

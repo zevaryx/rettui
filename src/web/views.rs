@@ -61,6 +61,19 @@ pub fn state(app: &App) -> Value {
         NodeStatus::Running => json!({ "state": "running", "url": app.git_host.url(), "summary": app.git_host.summary() }),
         NodeStatus::Failed(e) => json!({ "state": "failed", "error": e }),
     };
+    // Files received with rncp.
+    let rncp_in = {
+        use crate::app::rncp_in::Listening;
+        match &app.rncp_in.status {
+            Listening::Off => json!({ "state": "off" }),
+            Listening::Starting => json!({ "state": "starting" }),
+            Listening::On(hash) => json!({
+                "state": "running", "address": hex::encode(hash), "received": app.rncp_in.received.len(),
+                "refused": app.rncp_in.refused, "nobody": app.rncp_in.config.as_ref().is_none_or(|c| c.allowed.is_empty()),
+            }),
+            Listening::Failed(e) => json!({ "state": "failed", "error": e }),
+        }
+    };
     let message_unread = app.unread_messages();
     let (channel_unread, mention) = app.channels.total_unread();
     let online = app.interfaces.iter().filter(|i| i.online).count();
@@ -68,6 +81,7 @@ pub fn state(app: &App) -> Value {
         "display_name": app.settings.display_name,
         "icon": icon(app.own_appearance().as_ref()),
         "git_host": git_host,
+        "rncp_in": rncp_in,
         "external_shared_instance": app.uses_external_shared_instance(),
         "wrap_lines": app.settings.wrap_lines,
         // Pages picked from the Browser's list open in new tabs.
@@ -406,6 +420,28 @@ pub fn conversation(app: &App, key: &str, last: Option<usize>) -> Value {
 /// Everyone's newest location, for the map (see `App::locations`): this
 /// station's first if it's set, then the newest; and whether there are
 /// tiles to draw it on, and whose they are.
+/// Interfaces others make known (see [`crate::app::found`]), with what's
+/// known of each.
+pub fn found(app: &App) -> Value {
+    let now = crate::app::now() as u64;
+    let rows: Vec<Value> = app
+        .found_interfaces()
+        .iter()
+        .map(|f| {
+            let i = &f.interface;
+            json!({
+                "id": i.id(), "name": i.name, "kind": i.kind_label(), "summary": i.summary(), "reach": i.reach(),
+                "source": f.source(), "from": f.from.as_ref().map(|(key, _)| key), "connected": f.connected,
+                "stale": i.status.as_deref() == Some("stale"), "located": i.location().is_some(),
+                "details": i.details(now).into_iter().map(|(label, value)| [label.to_string(), value]).collect::<Vec<_>>(),
+                // Why it can't be added, if it can't.
+                "add": i.config().err(),
+            })
+        })
+        .collect();
+    json!({ "interfaces": rows })
+}
+
 pub fn locations(app: &App) -> Value {
     let here = app.settings.own_location();
     let places: Vec<Value> = app
@@ -441,8 +477,21 @@ pub fn locations(app: &App) -> Value {
         (Some(file), Some(web)) if file != web => Some(format!("{file} · {web}")),
         (file, web) => file.or(web),
     };
+    // Interfaces others made known, where they say they are.
+    let interfaces: Vec<Value> = app
+        .interface_places()
+        .iter()
+        .map(|p| {
+            let l = &p.location;
+            json!({
+                "interface": p.interface, "name": p.name, "at": p.at, "via": p.via, "about": p.about,
+                "latitude": l.latitude, "longitude": l.longitude, "label": l.label(), "map": l.map_url(),
+            })
+        })
+        .collect();
     json!({
         "places": places,
+        "interfaces": interfaces,
         "tiles": tiles.is_some() || file.is_some(),
         "credit": credit,
         "here": here.map(|h| json!({ "latitude": h.latitude, "longitude": h.longitude })),
@@ -551,7 +600,7 @@ pub fn announces(app: &App, after: Option<u64>, filter: crate::app::announces::H
             (network::matches_text(&terms, &[name.unwrap_or_default(), &hash]) && app.goes_via(&hash, via)).then(|| {
                 json!({
                     "seq": entry.seq, "at": entry.at, "kind": entry.heard.kind.key(), "tag": entry.heard.kind.tag(),
-                    "aspect": entry.heard.aspect, "name": name, "hash": hash, "hops": entry.heard.hops,
+                    "aspect": entry.heard.aspect, "name": name, "hash": hash, "hops": entry.heard.hops, "software": entry.heard.software,
                     "via": app.routes.get(hash.as_str()),
                 })
             })
@@ -1004,6 +1053,7 @@ pub fn node(app: &App) -> Value {
         "scripts": app.settings.node_executable_pages,
         "stats": app.node.stats.as_ref().map(|s| json!({
             "requests": s.request_count, "pages": s.page_hits, "files": s.file_hits, "not_found": s.not_found_count,
+            "visitors": s.visitors,
         })),
         // Kept across restarts, until reset.
         "served": {
@@ -1377,6 +1427,7 @@ mod tests {
                 aspect: None,
                 name: Some(format!("n{i}")),
                 hops: 1,
+                software: None,
             }));
         }
         let all = announces(&app, None, crate::app::announces::HeardFilter::All, "", None);

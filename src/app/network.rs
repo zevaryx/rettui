@@ -368,6 +368,8 @@ impl App {
             ('P', current) => self.open_prompt(PromptKind::FindPath, "Find a path to (address)", &current.unwrap_or_default()),
             // A file sent to it (or any address typed), as rncp does.
             ('F', current) => self.ask_rncp(current),
+            // A file fetched from it, from an rncp -F listener.
+            ('O', current) => self.ask_rncp_fetch(current),
             // Whose it is (or any address typed's), and your addresses.
             ('I', current) => self.open_whois(current),
             // Probed, as rnprobe does.
@@ -391,6 +393,9 @@ impl App {
         }
         if self.speed.open {
             return self.speed_key(key);
+        }
+        if self.found_view.open {
+            return self.found_key(key);
         }
         if self.tables.open {
             return self.tables_key(key);
@@ -422,6 +427,7 @@ impl App {
             KeyCode::Char('a') => self.toggle_announce_viewer(),
             KeyCode::Char('t') => self.toggle_tables(),
             KeyCode::Char('v') => self.toggle_speed(),
+            KeyCode::Char('e') => self.toggle_found(),
             KeyCode::Char('f') => {
                 self.net_filter = match self.net_filter {
                     NetFilter::All => NetFilter::Peers,
@@ -449,7 +455,7 @@ impl App {
                     self.set_propagation_node(&key);
                 }
             }
-            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F' | 'I')) => self.address_action(c, selected.map(|(key, _)| key)),
+            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F' | 'O' | 'I')) => self.address_action(c, selected.map(|(key, _)| key)),
             // Block an LXMF peer, or unblock one.
             KeyCode::Char('b') => {
                 if let Some((key, PeerKind::Lxmf)) = selected {

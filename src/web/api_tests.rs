@@ -865,6 +865,24 @@ async fn paper_backups_tiles_and_signing_out() {
     assert_eq!(backup.status, StatusCode::OK, "{}", backup.text());
     assert_eq!(backup.headers[header::CONTENT_TYPE], "application/gzip");
     assert!(backup.body.starts_with(&[0x1f, 0x8b]));
+    // Sealed with a passphrase: made, then fetched (twice, as the Android
+    // app's WebView does) by its id, and restored only with it.
+    let made = web.post("/api/backup", json!({ "passphrase": "rosebud" })).await;
+    assert_eq!(made.status, StatusCode::OK, "{}", made.text());
+    let id = made.json()["id"].as_str().unwrap().to_string();
+    let sealed = web.get(&format!("/api/backup/{id}")).await;
+    assert_eq!(sealed.status, StatusCode::OK, "{}", sealed.text());
+    assert!(sealed.body.starts_with(crate::backup::sealed::MAGIC));
+    assert_eq!(web.get(&format!("/api/backup/{id}")).await.body, sealed.body);
+    let file = web.dir.join("sealed.tar.gz");
+    std::fs::write(&file, &sealed.body).unwrap();
+    assert!(crate::backup::restore(&file, &web.dir.join("restored"), false, Some("rosebud")).is_ok());
+    // None typed: a plain one. Another id, or none like one, isn't there.
+    let plain = web.post("/api/backup", json!({ "passphrase": "" })).await;
+    let id = plain.json()["id"].as_str().unwrap().to_string();
+    assert!(web.get(&format!("/api/backup/{id}")).await.body.starts_with(&[0x1f, 0x8b]));
+    assert_eq!(web.get(&format!("/api/backup/{}", "0".repeat(32))).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(web.get("/api/backup/..%2Fsettings.json").await.status, StatusCode::BAD_REQUEST);
 
     // Map tiles: none set and no offline map here.
     assert_eq!(web.get("/api/map/tiles/1/0/0").await.status, StatusCode::NOT_FOUND);
@@ -1372,6 +1390,8 @@ async fn send_progress_and_cancelling_a_send() {
     })
     .await;
     assert_eq!(web.get("/api/state").await.json()["sync"]["progress"], "1 of 2 downloaded");
+    assert_eq!(web.post("/api/sync/cancel", json!({})).await.status, StatusCode::OK);
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::CancelSync)));
 }
 
 #[tokio::test]
@@ -1421,9 +1441,11 @@ async fn the_nodes_statistics_and_resetting_them() {
     web.with(|app| {
         app.node.served.pages = 5;
         app.node.served.requests = 6;
+        app.node.stats = Some(nomad_core::NomadServeStats { request_count: 6, visitors: 3, ..Default::default() });
     })
     .await;
     let node = web.get("/api/node").await.json();
+    assert_eq!(node["stats"]["visitors"], 3, "{node}");
     assert_eq!((node["served"]["pages"].as_u64(), node["served"]["label"].as_str()), (Some(5), Some("5 pages · 0 files")), "{node}");
     assert_eq!(web.post("/api/node/stats/reset", json!({})).await.status, StatusCode::OK);
     let node = web.get("/api/node").await.json();
@@ -1500,7 +1522,14 @@ async fn an_rngit_nodes_pages_and_repositories_linked_from_a_page() {
     let web = TestWeb::start("repos-pages");
     let (git, pages) = ([7u8; 16], [9u8; 16]);
     web.with_owner(move |o| {
-        o.apply(NetEvent::Heard(Heard { hash: git, kind: Kind::Git, aspect: Some(GIT_ASPECT), name: Some("Moon Forge".into()), hops: 1 }));
+        o.apply(NetEvent::Heard(Heard {
+            hash: git,
+            kind: Kind::Git,
+            aspect: Some(GIT_ASPECT),
+            name: Some("Moon Forge".into()),
+            hops: 1,
+            software: None,
+        }));
         o.app.store.peers.insert(
             hex::encode(pages),
             crate::store::Peer { kind: PeerKind::Nomad, name: Some("Moon Forge pages".into()), hops: 2, last_seen: 1 },
@@ -1877,4 +1906,127 @@ async fn the_owner_says_who_may_use_what_is_hosted_here() {
         assert_eq!(web.post("/api/hosted/access", body.clone()).await.status, StatusCode::BAD_REQUEST, "{body}");
     }
     assert_eq!(web.get("/api/hosted/access?name=team/gone").await.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn files_received_with_rncp_are_listed() {
+    use crate::app::rncp_in::{Listening, Received};
+    let web = TestWeb::start("rncp-received");
+    assert_eq!(web.get("/api/state").await.json()["rncp_in"]["state"], "off");
+    web.with(|app| {
+        app.rncp_in.status = Listening::On([0x5a; 16]);
+        app.rncp_in.refused = 1;
+        app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![] });
+        app.rncp_in.received.push(Received {
+            name: "notes.txt".into(),
+            bytes: 24,
+            path: "x/notes.txt".into(),
+            from: Some("ab".repeat(16)),
+            at: 5.0,
+        });
+    })
+    .await;
+    let state = web.get("/api/state").await.json();
+    assert_eq!(state["rncp_in"]["address"], "5a".repeat(16));
+    assert_eq!(
+        (state["rncp_in"]["received"].as_u64(), state["rncp_in"]["refused"].as_u64(), state["rncp_in"]["nobody"].as_bool()),
+        (Some(1), Some(1), Some(true))
+    );
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["received"][0]["name"].as_str(), listed["received"][0]["bytes"].as_u64()),
+        (Some("notes.txt"), Some(24)),
+        "{listed}"
+    );
+    // The web login can't turn it on, or say who may send.
+    let refused = web.post("/api/settings", json!({ "values": { "rncp_listen": "true" } })).await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn files_are_fetched_from_an_rncp_listener() {
+    use crate::net::remote::FetchState;
+    let web = TestWeb::start("rncp-fetch");
+    let to = "ab".repeat(16);
+    let bad = web.post("/api/rncp/fetch", json!({ "to": "nope", "path": "x" })).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let ok = web.post("/api/rncp/fetch", json!({ "to": to, "path": "maps/hill.txt" })).await;
+    assert_eq!(ok.status, StatusCode::OK);
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["fetches"][0]["state"].as_str(), listed["fetches"][0]["path"].as_str()),
+        (Some("fetching"), Some("maps/hill.txt")),
+        "{listed}"
+    );
+    let hash = crate::net::parse_hash(&to).unwrap();
+    web.with(move |app| {
+        app.on_net(crate::net::NetEvent::RncpFetch {
+            to: hash,
+            path: "maps/hill.txt".into(),
+            state: FetchState::Fetched { name: "hill.txt".into(), saved: "x/hill.txt".into(), bytes: 3, secs: 0.1 },
+        })
+    })
+    .await;
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["fetches"][0]["state"].as_str(), listed["fetches"][0]["saved"].as_str()),
+        (Some("fetched"), Some("x/hill.txt")),
+        "{listed}"
+    );
+}
+
+#[tokio::test]
+async fn interfaces_found_listed_mapped_and_added_over_the_api() {
+    use crate::lxmf::fields::Telemetry;
+    use crate::net::found::FoundInterface;
+    let web = TestWeb::start("found");
+    let hill = FoundInterface {
+        name: "Hill".into(),
+        kind: "BackboneInterface".into(),
+        transport: true,
+        transport_id: Some("ab".repeat(16)),
+        reachable_on: Some("hill.example.net".into()),
+        port: Some(4242),
+        latitude: Some(51.5),
+        longitude: Some(-0.1),
+        last_heard: Some(1),
+        heard_count: Some(1),
+        ..FoundInterface::default()
+    };
+    let radio = FoundInterface {
+        name: "Radio".into(),
+        kind: "RNodeInterface".into(),
+        frequency: Some(868_100_000),
+        bandwidth: Some(125_000),
+        spreading_factor: Some(8),
+        coding_rate: Some(5),
+        ..FoundInterface::default()
+    };
+    web.with_owner(move |o| o.apply(NetEvent::Discovered(vec![hill]))).await;
+    // Bob sends his radio in his telemetry.
+    let telemetry = Telemetry {
+        interfaces: vec![radio],
+        sensors: vec![crate::lxmf::sensors::Reading { sensor: "Interfaces".into(), value: "Radio".into() }],
+        ..Telemetry::default()
+    };
+    let message = InboundMessage { extras: Extras { telemetry: Some(telemetry), ..Extras::default() }, ..from_bob(1, "") };
+    web.with(move |app| app.on_message(message)).await;
+    let found = web.get("/api/found").await.json();
+    let rows = found["interfaces"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{found}");
+    assert_eq!((rows[0]["name"].as_str(), rows[0]["source"].as_str()), (Some("Hill"), Some("interface discovery")));
+    assert_eq!(rows[1]["from"].as_str(), Some(BOB));
+    assert!(rows[0]["add"].is_null() && rows[0]["located"] == true && rows[1]["located"] == false);
+    // On the map: the one that says where it is.
+    let map = web.get("/api/locations").await.json();
+    let mapped = map["interfaces"].as_array().unwrap();
+    assert_eq!((mapped.len(), mapped[0]["name"].as_str()), (1, Some("Hill")), "{map}");
+    // Added to the Reticulum config, and an unknown one refused.
+    let id = rows[0]["id"].as_str().unwrap().to_string();
+    let added = web.post(&format!("/api/found/{id}/add"), json!({})).await;
+    assert_eq!(added.status, StatusCode::OK);
+    assert!(added.json()["done"].as_str().unwrap().contains("Hill"));
+    let text = web.with(|app| std::fs::read_to_string(app.rns_path()).unwrap()).await;
+    assert!(text.contains("target_host = hill.example.net"), "{text}");
+    assert_eq!(web.post("/api/found/nope/add", json!({})).await.status, StatusCode::BAD_REQUEST);
 }

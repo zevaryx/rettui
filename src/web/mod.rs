@@ -367,7 +367,7 @@ mod scope_tests {
         assert_eq!(Scope::of(&NetEvent::Log("Interface x went offline".into())), Scope::STATUS);
         let announce = NetEvent::Announce { kind: net::PeerKind::Lxmf, hash: [0; 16], name: None, hops: 1 };
         assert_eq!(Scope::of(&announce), Scope::PEERS);
-        let heard = net::heard::Heard { hash: [0; 16], kind: net::heard::Kind::Other, aspect: None, name: None, hops: 1 };
+        let heard = net::heard::Heard { hash: [0; 16], kind: net::heard::Kind::Other, aspect: None, name: None, hops: 1, software: None };
         assert_eq!(Scope::of(&NetEvent::Heard(heard)), Scope::NONE);
         assert_eq!(Scope::of(&NetEvent::Announced), Scope::ALL);
         assert_eq!(Scope::of(&NetEvent::SyncStarted), Scope::ALL);
@@ -830,8 +830,8 @@ pub(crate) mod testing {
                             owner.apply(NetEvent::Fetched { id: *id, result });
                         }
                         // Script pages of its own node run, as in the network task.
-                        if let NetCommand::RunScript { id, script, fields, .. } = &command {
-                            let data = crate::nomad::script::preview(script, None, fields);
+                        if let NetCommand::RunScript { id, script, fields, limits, .. } = &command {
+                            let data = crate::nomad::script::preview(script, None, fields, limits);
                             owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None }) });
                         }
                         if let NetCommand::Git { id, repo, request, .. } = &command

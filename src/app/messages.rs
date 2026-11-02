@@ -9,7 +9,7 @@ use ratatui::layout::Position;
 
 use super::files::{path_from_input, unique_path};
 use super::notify::{self, Notification, Target};
-use super::{App, HistoryHit, MessageAction, PaperView, PromptKind, Tab, now};
+use super::{App, HistoryHit, MessageAction, PaperView, PromptKind, SyncState, Tab, now};
 use crate::lxmf::{self, DeliveryMode};
 use crate::markdown::TextFormat;
 use crate::net::{NetCommand, parse_hash};
@@ -92,6 +92,7 @@ impl App {
         }
         let location = extras.telemetry.as_ref().and_then(|t| t.location);
         let sensors = extras.telemetry.as_ref().map(|t| t.sensors.clone()).unwrap_or_default();
+        let interfaces = extras.telemetry.as_ref().map(|t| t.interfaces.clone()).unwrap_or_default();
         // Nothing to show but what the fields say. A reaction's text may be
         // its emoji again, for clients without reactions (Mesh-Client sends
         // it so): that's the reaction, not a message as well.
@@ -197,6 +198,7 @@ impl App {
             continues: extras.continues.map(hex::encode),
             location,
             sensors,
+            interfaces,
             notes,
             format: extras.format.filter(|_| !message.content.trim().is_empty()),
             signal: message.signal,
@@ -371,6 +373,16 @@ impl App {
         self.send_progress.insert(number, super::CANCELLING.into());
         self.send(NetCommand::CancelSend(number));
         Ok(())
+    }
+
+    /// Stop the sync that's running: it ends after the download it's on,
+    /// and keeps what has come.
+    pub fn cancel_sync(&mut self) {
+        if matches!(self.sync, SyncState::Running(_)) && !self.sync_stopping {
+            self.sync_stopping = true;
+            self.sync_progress = Some("stopping…".into());
+            self.send(NetCommand::CancelSync);
+        }
     }
 
     /// How sending a message (by id) is going, while it's being sent.

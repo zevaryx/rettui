@@ -60,6 +60,7 @@ impl App {
         let mut pn = false;
         let mut hub = false;
         let mut git_host = false;
+        let mut rncp = false;
         let mut archive = false;
         for field in &changed {
             match field.key {
@@ -127,6 +128,13 @@ impl App {
                         crate::power::set_wake(after.keep_awake);
                     }
                 }
+                "keep_running" | "minimize_to_tray" => {
+                    self.settings.keep_running = after.keep_running;
+                    self.settings.minimize_to_tray = after.minimize_to_tray;
+                    // What the desktop app reads when its window is closed
+                    // or minimized.
+                    crate::set_tray(&after);
+                }
                 "notify_messages" => self.settings.notify_messages = after.notify_messages,
                 "notify_rrc" => self.settings.notify_rrc = after.notify_rrc,
                 "unknown_senders" => self.settings.unknown_senders = after.unknown_senders.clone(),
@@ -165,12 +173,20 @@ impl App {
                         max_bytes: after.max_message_kb * 1000,
                     });
                 }
-                "node_enabled" | "node_name" | "node_announce_interval_mins" | "node_dir" | "node_executable_pages" => {
+                "node_enabled"
+                | "node_name"
+                | "node_announce_interval_mins"
+                | "node_dir"
+                | "node_executable_pages"
+                | "node_script_path"
+                | "node_script_timeout_secs" => {
                     self.settings.node_enabled = after.node_enabled;
                     self.settings.node_name = after.node_name.clone();
                     self.settings.node_announce_interval_mins = after.node_announce_interval_mins;
                     self.settings.node_dir = after.node_dir.clone();
                     self.settings.node_executable_pages = after.node_executable_pages;
+                    self.settings.node_script_path = after.node_script_path.clone();
+                    self.settings.node_script_timeout_secs = after.node_script_timeout_secs;
                     node = true;
                 }
                 "pn_enabled" | "pn_name" | "pn_stamp_cost" | "pn_storage_mb" | "pn_transfer_kb" => {
@@ -180,6 +196,12 @@ impl App {
                     self.settings.pn_storage_mb = after.pn_storage_mb;
                     self.settings.pn_transfer_kb = after.pn_transfer_kb;
                     pn = true;
+                }
+                "rncp_listen" | "rncp_allowed" | "rncp_dir" => {
+                    self.settings.rncp_listen = after.rncp_listen;
+                    self.settings.rncp_allowed = after.rncp_allowed.clone();
+                    self.settings.rncp_dir = after.rncp_dir.clone();
+                    rncp = true;
                 }
                 "git_host_enabled" | "git_host_name" | "git_host_dir" | "git_host_access" | "git_host_push_mb" | "git_host_repo_mb"
                 | "git_host_prune" => {
@@ -227,6 +249,9 @@ impl App {
         // The hub hosted here is named after you too, unless it has a name.
         if git_host {
             self.apply_git_host_settings();
+        }
+        if rncp {
+            self.apply_rncp_settings();
         }
         if hub || (renamed && after.hub_enabled) {
             self.apply_hub_settings();
@@ -443,12 +468,15 @@ mod tests {
                     "home" => home.clone(),
                     "node_name" => "Hilltop".into(),
                     "node_dir" => node_dir.clone(),
+                    "node_script_path" => "/usr/bin:/bin:/opt/python/bin".into(),
                     "nomad_files_dir" => dir.join("saved").display().to_string(),
                     "pn_name" => "Hilltop messages".into(),
                     "hub_name" => "Hilltop chat".into(),
                     "git_host_name" => "Hilltop repositories".into(),
                     "git_host_dir" => dir.join("repos").display().to_string(),
                     "git_host_access" => "r:all".into(),
+                    "rncp_allowed" => address.clone(),
+                    "rncp_dir" => dir.join("received").display().to_string(),
                     "hub_greeting" => "Welcome\\nand hello".into(),
                     "quiet_hours" => "22:00-07:00".into(),
                     "voice_recorder" => "arecord -q -t raw -f S16_LE -c 1 -r 8000".into(),
@@ -483,6 +511,15 @@ mod tests {
         refused(&mut app, "rns_config", "");
         refused(&mut app, "node_dir", &elsewhere);
         refused(&mut app, "nomad_files_dir", &elsewhere);
+        // Nor where scripts find the programs they run (the time limit is fine).
+        refused(&mut app, "node_script_path", "/tmp/bin");
+        // Nor who may send files here, or where they go; receiving files can be
+        // turned off, not on.
+        refused(&mut app, "rncp_allowed", &"ab".repeat(16));
+        refused(&mut app, "rncp_dir", &elsewhere);
+        refused(&mut app, "rncp_listen", "true");
+        app.update_settings_from_web(&[("rncp_listen", "false")]).unwrap();
+        app.update_settings_from_web(&[("node_script_timeout_secs", "30")]).unwrap();
         // Nor a file to read map tiles from.
         let offline_map = dir.join("region.mbtiles");
         crate::web::mbtiles::sample(&offline_map, "png");
@@ -497,6 +534,7 @@ mod tests {
         app.update_settings_from_web(&[("rns_config", &rns), ("display_name", "Changed"), ("messages_kept", "50")]).unwrap();
         let saved = app.saved_settings().unwrap();
         assert_eq!((saved.display_name.as_str(), saved.messages_kept), ("Changed", 50));
+        assert_eq!(app.saved_settings().unwrap().node_script_timeout_secs, 30);
         // The terminal UI may change them all.
         app.update_settings(&[("node_executable_pages", "true"), ("rns_config", &elsewhere)]).unwrap();
         assert!(app.saved_settings().unwrap().node_executable_pages);

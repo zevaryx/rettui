@@ -429,6 +429,17 @@ pub fn add_interface(text: &str, name: &str, kind: &str) -> Result<String, Strin
     Ok(doc.text())
 }
 
+/// Add an interface made known by someone else (see
+/// [`crate::net::found`]): its type, with `keys` already written as the
+/// file has them, and on or off.
+pub fn add_found_interface(text: &str, name: &str, kind: &str, keys: &[(&str, String)], on: bool) -> Result<String, String> {
+    let mut doc = Doc::new(text);
+    let mut all = vec![("type", kind), ("enabled", if on { "Yes" } else { "No" })];
+    all.extend(keys.iter().map(|(k, v)| (*k, v.as_str())));
+    doc.add_subsection("interfaces", name.trim(), &all)?;
+    Ok(doc.text())
+}
+
 pub fn rename_interface(text: &str, name: &str, new_name: &str) -> Result<String, String> {
     let mut doc = Doc::new(text);
     doc.rename(&["interfaces", name], new_name.trim())?;

@@ -1609,7 +1609,7 @@ mod tests {
         tui.tab(Tab::Repos);
         // An rngit node heard: listed. Enter opens it in the Browser; n adds a repository on it.
         let hash = [7; 16];
-        let heard = Heard { hash, kind: Kind::Git, aspect: Some(crate::net::git::GIT_ASPECT), name: None, hops: 2 };
+        let heard = Heard { hash, kind: Kind::Git, aspect: Some(crate::net::git::GIT_ASPECT), name: None, hops: 2, software: None };
         tui.app.on_net(NetEvent::Heard(heard));
         assert!(tui.draw().contains("node 07070707"));
         // With no other node to guess, the prompt starts empty; empty tries the node itself.
@@ -1664,8 +1664,14 @@ mod tests {
         let mut tui = Tui::with("repos-pages", |_| {});
         tui.tab(Tab::Repos);
         let (git, pages, other) = ([7; 16], [9; 16], [8; 16]);
-        let heard =
-            Heard { hash: git, kind: Kind::Git, aspect: Some(crate::net::git::GIT_ASPECT), name: Some("Moon Forge".into()), hops: 2 };
+        let heard = Heard {
+            hash: git,
+            kind: Kind::Git,
+            aspect: Some(crate::net::git::GIT_ASPECT),
+            name: Some("Moon Forge".into()),
+            hops: 2,
+            software: None,
+        };
         tui.app.on_net(NetEvent::Heard(heard));
         let nomad = |name: &str, hops| Peer { kind: PeerKind::Nomad, name: Some(name.into()), hops, last_seen: 1 };
         tui.app.store.peers.insert(hex::encode(pages), nomad("moon forge pages", 3));

@@ -45,14 +45,21 @@ repository.
 ## Using it
 
 - Opening the app starts rettui, then shows the web UI. Everything else
-  is the same as in a browser.
+  is the same as in a browser. The bars above and below the page (the
+  phone's clock, its buttons) follow the web UI's theme (Status, Theme).
 - rettui keeps running when the app is closed, so messages keep
   arriving. Its notification ("Reticulum is running") says so; **Stop**
   in it stops rettui.
 - Messages and mentions show as Android notifications while the app isn't
   on screen. Tapping one opens what it's about. **Reply** answers from the
   notification (a message goes the way set for that conversation), and
-  **Mark read** marks it read without opening rettui.
+  **Mark read** marks it read without opening rettui. A conversation's
+  notification shows its last few messages, one under another, until it's
+  read or swiped aside.
+- Attaching a file offers the camera beside the files. A photo taken
+  goes into the message, and isn't kept in the phone's gallery.
+- With rettui's notifications turned off, the app says so once, with
+  **Turn them on**. Messages still arrive; they show when you open it.
 - Recording voice messages and sharing your location ask for the
   microphone or location the first time.
 - Downloads (exports, backups, files from messages and NomadNet pages) go in
@@ -137,13 +144,30 @@ shown when rettui stops. On it:
   NomadNet, MeshChat or another rettui, kept beside yours under a name you
   give it. Switch to it in Status > **👤 Identities**.
 - **Save a full backup:** settings, contacts, messages and the identity in
-  use, in one file. `rettui restore` restores it on a computer.
-- **Restore a backup:** one saved here or by rettui on a computer. rettui
+  use, in one file. It asks for a passphrase to seal it with first (leave
+  it empty for none): a sealed backup can't be restored without it.
+  `rettui restore` restores it on a computer.
+- **Restore a backup:** one saved here or by rettui on a computer (a
+  sealed one asks for its passphrase). rettui
   stops, the backup takes the place of what's here (moved aside into a
   `before-restore-<time>` folder, not deleted), and rettui starts again.
 
+- **Backups on a schedule:** choose a folder, then **Every day** or
+  **Every week**. The first time, it asks for a passphrase to seal them
+  with (leave it empty for none). The phone keeps only a key made from it,
+  which seals backups but can't open them: you type the passphrase to
+  restore one. **Change the passphrase…** changes it for the next ones.
+  Android makes a full backup there while the phone charges, and keeps the
+  newest 5 it made; older ones it made are deleted, and nothing else in
+  the folder is touched. **Make one now** makes one straight away. If one
+  fails, a notification says why. Each holds the identity: seal them, or
+  keep the folder private.
+
 Back up the identity before uninstalling the app: uninstalling deletes
-everything the app keeps.
+everything the app keeps. Nothing of rettui's goes to Android's cloud
+backups, nor to a new phone set up from this one: save a full backup here
+and restore it there. (A copied identity would leave two phones answering
+for the same address.)
 
 ## RNodes
 

@@ -283,6 +283,8 @@ pub struct Telemetry {
     pub location: Option<Location>,
     /// The other sensors' readings, in words.
     pub sensors: Vec<super::sensors::Reading>,
+    /// Interfaces the sender makes known (Sideband's Interfaces sensor).
+    pub interfaces: Vec<crate::net::found::FoundInterface>,
 }
 
 /// Sensor numbers in a telemetry map.
@@ -363,6 +365,7 @@ fn telemetry_from(value: Value) -> Option<Telemetry> {
         time: at(&sensors, SENSOR_TIME).and_then(Value::as_i64),
         location: at(&sensors, SENSOR_LOCATION).and_then(location_of),
         sensors: super::sensors::read(&sensors),
+        interfaces: at(&sensors, super::sensors::INTERFACES).map(crate::net::found::FoundInterface::from_sensor).unwrap_or_default(),
     })
 }
 
@@ -896,6 +899,28 @@ mod tests {
     }
 
     /// Telemetry as Sideband packs it: a msgpack map, in bytes.
+    #[test]
+    fn interfaces_sideband_sends_in_telemetry_are_read() {
+        // Sideband 2.x's Interfaces sensor: each interface's name, and its
+        // keys as interface discovery has them.
+        let hill = Value::Map(vec![
+            (Value::from(0x00), Value::from("BackboneInterface")),
+            (Value::from(0x02), Value::from("hill.example.net")),
+            (Value::from(0x06), Value::from(4242)),
+            (Value::from(0x03), Value::F64(51.5)),
+            (Value::from(0x04), Value::F64(-0.1)),
+        ]);
+        let sensors = Value::Map(vec![
+            (Value::from(SENSOR_TIME), Value::from(1_700_000_000)),
+            (Value::from(super::super::sensors::INTERFACES), Value::Map(vec![(Value::from("Hill"), hill)])),
+        ]);
+        let telemetry = telemetry_from(Value::Binary(encode(&sensors))).unwrap();
+        assert_eq!(telemetry.interfaces.len(), 1);
+        assert_eq!(telemetry.interfaces[0].summary(), "Backbone · hill.example.net:4242");
+        let said: Vec<String> = telemetry.sensors.iter().map(|r| format!("{}: {}", r.sensor, r.value)).collect();
+        assert_eq!(said, vec!["Interfaces: Hill (Backbone · hill.example.net:4242)".to_string()]);
+    }
+
     fn telemetry(location: Value) -> LxMessage {
         let sensors = Value::Map(vec![(Value::from(1), Value::from(1_790_000_000)), (Value::from(2), location)]);
         let mut message = message();

@@ -16,6 +16,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY deps ./deps
 COPY vendor ./vendor
 COPY src ./src
+# The desktop app is in the same workspace (only its manifest is read).
+COPY desktop ./desktop
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     test -f deps/rsReticulum/Cargo.toml \
@@ -24,6 +26,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp target/release/rettui /rettui
 
 FROM debian:bookworm-slim AS runtime
+# Python, for script pages such as `#!/usr/bin/env python3` (opt-in: "Run
+# page scripts"); scripts only find programs in /usr/bin and /bin.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 # setpriv (util-linux, already in the image) drops to PUID/PGID at start.
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 

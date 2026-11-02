@@ -89,9 +89,12 @@ pub fn router(state: WebState) -> Router {
         .route("/locations/{key}", axum::routing::delete(forget_locations))
         .route("/update/install", post(install_update))
         .route("/update/check", post(check_update))
-        .route("/backup", get(download_backup))
+        .route("/backup", get(download_backup).post(make_backup))
+        .route("/backup/{id}", get(download_made_backup))
         .route("/announces", get(announces))
         .route("/tables", get(tables))
+        .route("/found", get(found))
+        .route("/found/{id}/add", post(add_found))
         .route("/map/tiles/{z}/{x}/{y}", get(map_tile))
         .route("/conversations/{key}", get(conversation))
         .route("/conversations/{key}/archive", get(conversation_archive))
@@ -130,6 +133,7 @@ pub fn router(state: WebState) -> Router {
         .route("/propagation", post(set_propagation))
         .route("/announce", post(announce))
         .route("/sync", post(sync))
+        .route("/sync/cancel", post(cancel_sync))
         .route("/settings", get(get_settings).post(save_settings))
         .route("/guide", get(guide).post(apply_guide))
         .route("/guide/dismiss", post(dismiss_guide))
@@ -166,6 +170,7 @@ pub fn router(state: WebState) -> Router {
         .route("/identity", get(identities))
         .route("/identity/lookup", post(look_up_identity))
         .route("/rncp/send", post(rncp_send))
+        .route("/rncp/fetch", post(rncp_fetch))
         .route("/repos", get(repos).post(add_repo))
         .route("/repos/remove", post(remove_repo))
         .route("/repos/page", post(repos_on_page))
@@ -580,17 +585,81 @@ async fn install_update(State(state): State<WebState>) -> ApiResult {
 /// A backup of settings, contacts and messages, to download: never with
 /// the identity, nor attachments (see [`crate::backup`]).
 async fn download_backup(State(state): State<WebState>) -> Result<Response, ApiError> {
+    let path = made_backup(&state, None).await?;
+    send_backup(path).await
+}
+
+/// Backups made to be downloaded (sealed ones, see [`make_backup`]): one
+/// not fetched within this long is deleted.
+const MADE_BACKUP_KEPT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// A backup made in the cache, sealed with `passphrase` if there is one.
+async fn made_backup(state: &WebState, passphrase: Option<zeroize::Zeroizing<String>>) -> Result<PathBuf, ApiError> {
     let dir = state.paths.cache.clone();
     std::fs::create_dir_all(&dir).map_err(|e| bad(format!("Couldn't make {}: {e}", dir.display())))?;
-    let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
-    let path = dir.join(format!("backup-{nanos}.tar.gz"));
+    // Ones made and never fetched.
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let old =
+            entry.metadata().and_then(|m| m.modified()).ok().and_then(|at| at.elapsed().ok()).is_some_and(|age| age > MADE_BACKUP_KEPT);
+        if name.starts_with("backup-") && name.ends_with(".tar.gz") && old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    let id = hex::encode(rand::random::<[u8; 16]>());
+    let path = dir.join(format!("backup-{id}.tar.gz"));
     let (done, made) = tokio::sync::oneshot::channel();
     let to = path.clone();
-    state.write(move |o| o.app.back_up_for_download(to, done)).await?;
+    state.write(move |o| o.app.back_up_for_download(to, passphrase, done)).await?;
     made.await.map_err(|_| bad("The backup wasn't made"))?.map_err(|e| bad(format!("Couldn't back up: {e}")))?;
+    Ok(path)
+}
+
+async fn send_backup(path: PathBuf) -> Result<Response, ApiError> {
     let body = send_then_delete(path).await.map_err(|e| bad(format!("Couldn't read the backup: {e}")))?;
     let disposition = format!("attachment; filename=\"{}\"", crate::backup::default_name());
     Ok(([(header::CONTENT_TYPE, "application/gzip".to_string()), (header::CONTENT_DISPOSITION, disposition)], body).into_response())
+}
+
+#[derive(Deserialize)]
+struct MakeBackup {
+    #[serde(default)]
+    passphrase: String,
+}
+
+/// Make a backup sealed with a passphrase (sent in the body, never in an
+/// address), for the browser to fetch at `/api/backup/<id>` within 10
+/// minutes: a download can't carry a body.
+async fn make_backup(State(state): State<WebState>, axum::Json(body): axum::Json<MakeBackup>) -> ApiResult {
+    let passphrase = zeroize::Zeroizing::new(body.passphrase);
+    if passphrase.len() > 1024 {
+        return Err(bad("That passphrase is too long (1024 characters at most)"));
+    }
+    let passphrase = (!passphrase.is_empty()).then_some(passphrase);
+    let path = made_backup(&state, passphrase).await?;
+    let id = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix("backup-"))
+        .and_then(|n| n.strip_suffix(".tar.gz"))
+        .unwrap_or_default();
+    Ok(axum::Json(json!({ "ok": true, "id": id })))
+}
+
+/// A backup made by [`make_backup`].
+async fn download_made_backup(State(state): State<WebState>, Path(id): Path<String>) -> Result<Response, ApiError> {
+    if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return Err(bad("No such backup"));
+    }
+    let path = state.paths.cache.join(format!("backup-{id}.tar.gz"));
+    if !path.is_file() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "No such backup: it was made more than 10 minutes ago".into()));
+    }
+    // Kept for its 10 minutes, not deleted once sent: the Android app's
+    // WebView asks for a download twice.
+    let data = tokio::fs::read(&path).await.map_err(|e| bad(format!("Couldn't read the backup: {e}")))?;
+    let disposition = format!("attachment; filename=\"{}\"", crate::backup::default_name());
+    Ok(([(header::CONTENT_TYPE, "application/gzip".to_string()), (header::CONTENT_DISPOSITION, disposition)], data).into_response())
 }
 
 /// A file's contents as a response body, read as it's sent; the file is
@@ -691,6 +760,17 @@ async fn live_position(State(state): State<WebState>, axum::Json(body): axum::Js
 }
 
 /// Everyone's newest location, for the map.
+async fn found(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::found(&o.app)).await?))
+}
+
+/// Add an interface found to the Reticulum config (never a pipe: the web UI
+/// only adds what [`crate::net::found::FoundInterface::config`] allows).
+async fn add_found(State(state): State<WebState>, Path(id): Path<String>) -> ApiResult {
+    let done = state.write(move |o| o.app.add_found_interface(&id, true)).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "ok": true, "done": done })))
+}
+
 async fn locations(State(state): State<WebState>) -> ApiResult {
     Ok(axum::Json(state.read(|o| views::locations(&o.app)).await?))
 }
@@ -1767,6 +1847,11 @@ async fn sync(State(state): State<WebState>) -> ApiResult {
     ok()
 }
 
+async fn cancel_sync(State(state): State<WebState>) -> ApiResult {
+    state.write(|o| o.app.cancel_sync()).await?;
+    ok()
+}
+
 async fn get_settings(State(state): State<WebState>) -> ApiResult {
     let view = state
         .read(|o| {
@@ -2461,6 +2546,7 @@ async fn look_up_identity(State(state): State<WebState>, axum::Json(body): axum:
 /// the largest that may be sent.
 async fn rncp_sends(State(state): State<WebState>) -> ApiResult {
     use crate::net::RncpState;
+    use crate::net::remote::FetchState;
     state
         .read(|o| {
             let sends: Vec<Value> = o
@@ -2479,7 +2565,39 @@ async fn rncp_sends(State(state): State<WebState>) -> ApiResult {
                     })
                 })
                 .collect();
-            axum::Json(json!({ "sends": sends, "identity": hex::encode(o.app.identity_hash), "max": crate::app::rncp::MAX_SEND }))
+            // Files asked for from listeners.
+            let fetches: Vec<Value> = o
+                .app
+                .rncp_fetches
+                .iter()
+                .map(|f| {
+                    let (state, progress, error, saved) = match &f.state {
+                        FetchState::Fetching(done) => ("fetching", *done, None, None),
+                        FetchState::Fetched { saved, .. } => ("fetched", 1.0, None, Some(saved.display().to_string())),
+                        FetchState::Failed(e) => ("failed", 0.0, Some(e.clone()), None),
+                    };
+                    json!({
+                        "from": f.to, "from_name": o.app.store.display_name(&f.to), "path": f.path, "at": f.at,
+                        "state": state, "progress": progress, "error": error, "saved": saved,
+                    })
+                })
+                .collect();
+            // And what others sent here.
+            let received: Vec<Value> = o
+                .app
+                .rncp_in
+                .received
+                .iter()
+                .map(|f| {
+                    json!({
+                        "name": f.name, "bytes": f.bytes, "at": f.at, "path": f.path.display().to_string(),
+                        "from": f.from, "from_name": f.from.as_deref().map(|from| o.app.store.display_name(from)),
+                    })
+                })
+                .collect();
+            axum::Json(json!({
+                "sends": sends, "identity": hex::encode(o.app.identity_hash), "max": crate::app::rncp::MAX_SEND, "received": received, "fetches": fetches,
+            }))
         })
         .await
         .map_err(ApiError::from)
@@ -2495,6 +2613,19 @@ struct RncpQuery {
 /// rncp listener.
 async fn rncp_send(State(state): State<WebState>, Query(query): Query<RncpQuery>, body: axum::body::Bytes) -> ApiResult {
     state.write(move |o| o.app.rncp_send(&query.to, &query.name, body.to_vec())).await??;
+    ok()
+}
+
+#[derive(Deserialize)]
+struct RncpFetchBody {
+    to: String,
+    path: String,
+}
+
+/// Ask an `rncp -l -F` listener for a file. It's saved on this computer,
+/// where files received go.
+async fn rncp_fetch(State(state): State<WebState>, axum::Json(body): axum::Json<RncpFetchBody>) -> ApiResult {
+    state.write(move |o| o.app.rncp_fetch(&body.to, &body.path)).await??;
     ok()
 }
 

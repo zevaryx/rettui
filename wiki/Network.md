@@ -36,7 +36,9 @@ shows your identity, your interfaces and the log.
   shows every announce in place of the list, as it arrives, of every kind:
   LXMF peers, NomadNet and propagation nodes, RRC hubs, LXST calls, and
   whatever else announces on the network (tagged OTHER, with a name when
-  its announce carries one as text). The list keeps one row per peer or
+  its announce carries one as text). A propagation node's says what runs
+  it, as LXMF 1.2 announces it and Sideband shows it (*lxmd 1.2.1*,
+  *rettui 1.2.0*). The list keeps one row per peer or
   node; this shows each announce, with when it was heard, so it's where to
   see who's announcing how often, or what's on a new interface. It follows
   the newest; moving up holds it where you are (`End`, or scrolling to the
@@ -111,6 +113,31 @@ shows your identity, your interfaces and the log.
   your browser picks, never a file from the computer rettui runs on. How
   it's going shows as it goes, and the log says when it arrived or why it
   didn't.
+- **Receiving files with rncp:** *Receive files with rncp* (Settings,
+  Hosting; turned on in the terminal) makes rettui listen at your rncp
+  address, as `rncp -l` does, and save what is sent to *Received files
+  folder* (`received/` in the data directory unless you set one). Nobody
+  may send until you list them in *Who may send files*: identity hashes,
+  as `rncp -a` takes, separated by commas (a sender sees theirs in the
+  send dialog; `I` in the Network tab shows yours and anyone's). Someone
+  not on the list is turned away and counted. A file is saved under its own
+  name, without any folders, and never written over one that's there: a
+  second `notes.txt` becomes `notes.txt.1`. Status shows your rncp address
+  and how many files came; the log names each one with who sent it, and
+  the web UI's **Send a file…** dialog lists the latest. rettui doesn't
+  limit how big a file may be, so list only people you trust to send
+  sensibly; the web UI can turn this off, not on, and can't change who may
+  send or the folder.
+- **Getting a file from an rncp listener:** `O` in the Network tab (in the
+  list, the announces or the tables), or **Get a file** in the web UI's
+  **Send a file…** dialog, asks a listener run with `rncp -l -F` for a file,
+  as `rncp --fetch` does. Give its address, then the file's path on that
+  computer (relative to its jail folder if it runs with `-j`). The listener
+  must allow your identity, shown in the dialog (`rncp -a`), unless it lets
+  anyone (`-n`). The file is saved in *Received files folder*, under its
+  own name and never over one that's there. A listener that isn't run with
+  `-F`, or doesn't allow you, closes the link, and rettui says so. The web
+  UI can ask for a file but only saves it on the computer rettui runs on.
 - **Speed test:** `v` in the Network tab, or **Speed test** in the web UI,
   measures how fast data goes between you and someone else, as NomadNet
   1.4's speed test does, so the other can use rettui or NomadNet
@@ -120,6 +147,24 @@ shows your identity, your interfaces and the log.
   and both see how long it took, as a rate (*Upload: 1.2 Mbps*, *Download:
   1.1 Mbps*). While it's open, rettui takes tests from the address you
   entered and turns away anyone else's; closed, it takes none.
+- **Interfaces found:** `e` in the Network tab, or **Interfaces found** in
+  the web UI, lists the interfaces others make known, as Sideband 2.x
+  does: the entry points, RNodes and I2P addresses [interface
+  discovery](Settings-and-Reticulum-Config) finds (*Discover interfaces*
+  in the Reticulum config), and those contacts send in their telemetry
+  (Sideband's Interfaces sensor). Each says how to reach it (host and port,
+  or the radio's frequency, bandwidth, spreading factor and coding rate),
+  whether its node passes traffic on, its network name if it has one, and,
+  for one discovery found, how many hops away it is and when it was heard.
+  ● marks one rettui is connected to (see *Discovered entry points*).
+  `Enter` (**Add to Reticulum**) adds the one picked to the Reticulum
+  config, kept in its history: an entry point as a TCP client, which
+  connects when Reticulum restarts, an I2P address as an I2P interface, and
+  an RNode's radio settings as an RNode interface that's off until you set
+  its port and TX power. One that points at this device isn't added. `m`
+  (**On the map**) shows it on [the map](Messaging#locations-and-the-map),
+  if it says where it is, and `y` (**Copy**) copies where to reach it.
+  Blocked contacts' aren't listed.
 - **Identities:** `I` in the Network tab (in the list, the announces or
   the tables), or **Identities…** in the web UI, shows your addresses
   (your identity, LXMF address, node, propagation node, RRC hub and speed
