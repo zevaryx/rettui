@@ -45,7 +45,7 @@ class DownloadsActivity : Activity() {
         title = getString(R.string.downloads)
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 48, 48, 48)
+            setPadding(dp(16), dp(16), dp(16), dp(16))
         }
         column.addView(TextView(this).apply {
             text = getString(R.string.downloads)
@@ -57,7 +57,7 @@ class DownloadsActivity : Activity() {
             text = getString(R.string.downloads_note)
             textSize = 14f
             setTextColor(Color.LTGRAY)
-            setPadding(0, 16, 0, 16)
+            setPadding(0, dp(6), 0, dp(6))
         })
         column.addView(CheckBox(this).apply {
             text = getString(R.string.downloads_ask)
@@ -70,7 +70,7 @@ class DownloadsActivity : Activity() {
         where = TextView(this).apply {
             textSize = 14f
             setTextColor(Color.LTGRAY)
-            setPadding(0, 24, 0, 8)
+            setPadding(0, dp(8), 0, dp(4))
         }
         column.addView(where)
         column.addView(Button(this).apply {

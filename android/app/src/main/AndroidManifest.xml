@@ -33,7 +33,7 @@
         android:allowBackup="false"
         android:extractNativeLibs="true"
         android:networkSecurityConfig="@xml/network_security"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:theme="@style/Theme.Rettui">
 
         <activity
             android:name=".MainActivity"
@@ -77,8 +77,7 @@
             android:name=".RNodesActivity"
             android:exported="true"
             android:label="@string/rnodes"
-            android:launchMode="singleTop"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
@@ -90,14 +89,12 @@
         <activity
             android:name=".BackupsActivity"
             android:exported="false"
-            android:label="@string/backups"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+            android:label="@string/backups" />
 
         <activity
             android:name=".DownloadsActivity"
             android:exported="false"
-            android:label="@string/downloads"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+            android:label="@string/downloads" />
 
         <receiver
             android:name=".NotificationActions"

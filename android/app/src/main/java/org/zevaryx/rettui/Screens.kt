@@ -1,13 +1,19 @@
 package org.zevaryx.rettui
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Color
 import android.os.Build
 import android.view.View
 import android.view.WindowInsets
+import android.view.WindowInsetsController
+import kotlin.math.roundToInt
 
-/** The app's own screens' background, the web UI's dark one. */
-val BACKGROUND = Color.rgb(0x16, 0x18, 0x1d)
+/** The app's own screens' background, the web UI's dark one (its `--bg`). */
+val BACKGROUND = Color.rgb(0x16, 0x16, 0x1e)
+
+/** `value` density-independent pixels, in this screen's pixels. */
+fun Context.dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 
 /**
  * Show `root` as the screen, kept clear of the status and navigation bars,
@@ -18,6 +24,7 @@ val BACKGROUND = Color.rgb(0x16, 0x18, 0x1d)
 fun Activity.showClearOfBars(root: View) {
     root.setBackgroundColor(BACKGROUND)
     setContentView(root)
+    colorBars(BACKGROUND, light = false)
     if (Build.VERSION.SDK_INT < 30) return
     window.setDecorFitsSystemWindows(false)
     val own = intArrayOf(root.paddingLeft, root.paddingTop, root.paddingRight, root.paddingBottom)
@@ -29,4 +36,23 @@ fun Activity.showClearOfBars(root: View) {
         WindowInsets.CONSUMED
     }
     root.requestApplyInsets()
+}
+
+/**
+ * The status and navigation bars over `background`: their icons dark on a
+ * `light` one, light otherwise. Before Android 11 the bars aren't drawn
+ * over the screen, so they're given the colour too.
+ */
+@Suppress("DEPRECATION")
+fun Activity.colorBars(background: Int, light: Boolean) {
+    if (Build.VERSION.SDK_INT >= 30) {
+        val both = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+        window.insetsController?.setSystemBarsAppearance(if (light) both else 0, both)
+        return
+    }
+    window.statusBarColor = background
+    window.navigationBarColor = background
+    val flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+    val decor = window.decorView
+    decor.systemUiVisibility = if (light) decor.systemUiVisibility or flags else decor.systemUiVisibility and flags.inv()
 }

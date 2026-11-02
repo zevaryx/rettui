@@ -44,20 +44,20 @@ class BackupsActivity : Activity() {
         title = getString(R.string.backups)
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 48, 48, 48)
+            setPadding(dp(16), dp(16), dp(16), dp(16))
         }
         fun heading(text: String) = column.addView(TextView(this).apply {
             this.text = text
             textSize = 20f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            setPadding(0, 32, 0, 8)
+            setPadding(0, dp(12), 0, dp(4))
         })
         fun note(text: String) = column.addView(TextView(this).apply {
             this.text = text
             textSize = 14f
             setTextColor(Color.LTGRAY)
-            setPadding(0, 0, 0, 12)
+            setPadding(0, 0, 0, dp(4))
         })
         fun action(text: String, run: () -> Unit) = column.addView(Button(this).apply {
             this.text = text

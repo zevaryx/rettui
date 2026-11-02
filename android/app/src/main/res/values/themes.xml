@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark on every phone, as the web UI starts: the screen shown while
+         rettui starts (and Android 12's splash behind the icon) is its
+         background rather than a white flash, and dialogs, buttons and
+         ticks read on the app's own dark screens. -->
+    <style name="Theme.Rettui" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:colorBackground">@color/background</item>
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+</resources>

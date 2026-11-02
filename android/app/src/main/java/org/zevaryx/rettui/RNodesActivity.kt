@@ -104,7 +104,7 @@ class RNodesActivity : Activity() {
         usb = getSystemService(UsbManager::class.java)
         list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 48, 48, 48)
+            setPadding(dp(16), dp(16), dp(16), dp(16))
         }
         showClearOfBars(ScrollView(this).apply {
             addView(list)
@@ -162,14 +162,14 @@ class RNodesActivity : Activity() {
         textSize = 20f
         setTypeface(typeface, Typeface.BOLD)
         setTextColor(Color.WHITE)
-        setPadding(0, 32, 0, 8)
+        setPadding(0, dp(12), 0, dp(4))
     })
 
     private fun note(text: String) = list.addView(TextView(this).apply {
         this.text = text
         textSize = 14f
         setTextColor(Color.LTGRAY)
-        setPadding(0, 0, 0, 12)
+        setPadding(0, 0, 0, dp(4))
     })
 
     private fun button(text: String, run: () -> Unit) = list.addView(Button(this).apply {

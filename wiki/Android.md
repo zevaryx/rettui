@@ -45,7 +45,8 @@ repository.
 ## Using it
 
 - Opening the app starts rettui, then shows the web UI. Everything else
-  is the same as in a browser.
+  is the same as in a browser. The bars above and below the page (the
+  phone's clock, its buttons) follow the web UI's theme (Status, Theme).
 - rettui keeps running when the app is closed, so messages keep
   arriving. Its notification ("Reticulum is running") says so; **Stop**
   in it stops rettui.

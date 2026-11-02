@@ -18,11 +18,13 @@ import android.os.PowerManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -32,6 +34,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -70,7 +73,9 @@ class MainActivity : Activity() {
 
     private val main = Handler(Looper.getMainLooper())
     private lateinit var web: WebView
-    private lateinit var waiting: TextView
+    private lateinit var waiting: LinearLayout
+    /** The web UI's screen: the page, and what shows while rettui starts. */
+    private lateinit var screen: LinearLayout
     private var loaded = false
     /** What the page is to do once it has loaded (a notification's, a share's). */
     private val pending = mutableListOf<String>()
@@ -82,19 +87,21 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         handle(intent)
-        waiting = TextView(this).apply {
-            text = getString(R.string.starting)
+        waiting = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            textSize = 18f
-            setTextColor(Color.LTGRAY)
+            addView(ProgressBar(context).apply { isIndeterminate = true })
+            addView(TextView(context).apply {
+                text = getString(R.string.starting)
+                gravity = Gravity.CENTER
+                textSize = 18f
+                setTextColor(Color.LTGRAY)
+                setPadding(0, dp(16), 0, 0)
+            })
         }
         web = WebView(this).apply { visibility = android.view.View.GONE }
         setUpWebView()
-        showClearOfBars(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(waiting, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        })
+        showWebScreen()
         // Android 13 and later ask before an app shows notifications;
         // rettui starts either way.
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -172,6 +179,7 @@ class MainActivity : Activity() {
             main.removeCallbacks(this)
             if (web.visibility != android.view.View.VISIBLE) return
             if (!loaded || Rettui.running(this@MainActivity)) {
+                followPageTheme()
                 main.postDelayed(this, 2000)
                 return
             }
@@ -262,7 +270,7 @@ class MainActivity : Activity() {
         val log = if (byYou) "" else RettuiService.logFile(this).takeIf { it.isFile }?.readText()?.takeLast(20_000) ?: ""
         showClearOfBars(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 48, 32, 32)
+            setPadding(dp(12), dp(16), dp(12), dp(12))
             addView(TextView(context).apply {
                 text = getString(if (byYou) R.string.stopped_by_you else R.string.stopped)
                 textSize = 18f
@@ -296,6 +304,59 @@ class MainActivity : Activity() {
                 })
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         })
+    }
+
+    /** The web UI's screen, with a new WebView if its last one went (see onRenderProcessGone). */
+    private fun showWebScreen() {
+        (waiting.parent as? ViewGroup)?.removeView(waiting)
+        screen = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(waiting, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        showClearOfBars(screen)
+        pageColors()?.let { (background, light) -> paint(background, light) }
+    }
+
+    /**
+     * The web UI's theme, as the page last had it: its background, and
+     * whether it's light. Kept, so the next start shows it from the first.
+     */
+    private fun pageColors(): Pair<Int, Boolean>? {
+        val prefs = getSharedPreferences("app", MODE_PRIVATE)
+        if (!prefs.contains("page_background")) return null
+        return prefs.getInt("page_background", BACKGROUND) to prefs.getBoolean("page_light", false)
+    }
+
+    /**
+     * Match the bars around the page to its theme (Status, Theme): the room
+     * kept for the status and navigation bars has the page's background, and
+     * the bars' icons read on it. Asked when the page loads and every few
+     * seconds while it shows (see watch), since its theme can change.
+     */
+    private fun followPageTheme() {
+        if (!loaded) return
+        val ask = "(() => { const root = document.documentElement; " +
+            "return [root.dataset.theme || 'dark', getComputedStyle(root).getPropertyValue('--bg').trim()]; })()"
+        web.evaluateJavascript(ask) { said ->
+            val (theme, color) = runCatching { org.json.JSONArray(said).let { it.getString(0) to it.getString(1) } }.getOrNull()
+                ?: return@evaluateJavascript
+            // The page's own colour, only if it's a plain #rrggbb.
+            val background = Regex("#[0-9a-fA-F]{6}").matchEntire(color)?.let { Color.parseColor(it.value) } ?: return@evaluateJavascript
+            val light = theme == "light"
+            if (pageColors() == background to light) return@evaluateJavascript
+            getSharedPreferences("app", MODE_PRIVATE).edit().putInt("page_background", background).putBoolean("page_light", light).apply()
+            paint(background, light)
+        }
+    }
+
+    private fun paint(background: Int, light: Boolean) {
+        // Not over another screen (rettui stopped).
+        if (screen.parent == null) return
+        screen.setBackgroundColor(background)
+        web.setBackgroundColor(background)
+        (waiting.getChildAt(1) as? TextView)?.setTextColor(if (light) Color.DKGRAY else Color.LTGRAY)
+        colorBars(background, light)
     }
 
     private fun local(uri: Uri) = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == Rettui.port(this)
@@ -339,6 +400,29 @@ class MainActivity : Activity() {
                 loaded = true
                 pending.forEach { view.evaluateJavascript(it, null) }
                 pending.clear()
+                followPageTheme()
+            }
+
+            // The page's renderer went (Android ends it to free memory, or it
+            // crashed). Left alone, Android ends the whole app with it; a new
+            // WebView loads the web UI again instead.
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                if (view != web) return true
+                Log.w("rettui", "The web UI's renderer went (crashed: ${detail.didCrash()}); loading it again")
+                val showing = web.visibility == android.view.View.VISIBLE
+                main.removeCallbacks(watch)
+                (web.parent as? ViewGroup)?.removeView(web)
+                web.destroy()
+                loaded = false
+                web = WebView(this@MainActivity).apply { visibility = android.view.View.GONE }
+                setUpWebView()
+                showWebScreen()
+                if (showing) {
+                    waiting.visibility = android.view.View.VISIBLE
+                    waitedSince = System.currentTimeMillis()
+                    waitForRettui(grace = 20_000)
+                }
+                return true
             }
         }
         web.webChromeClient = object : WebChromeClient() {

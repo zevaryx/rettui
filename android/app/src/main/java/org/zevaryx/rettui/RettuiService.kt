@@ -340,6 +340,8 @@ class RettuiService : Service() {
                         .setStyle(Notification.BigTextStyle().bigText(json.optString("body").take(1000)))
                         .setContentIntent(open)
                         .setAutoCancel(true)
+                        // A message: Do Not Disturb's "messages" exceptions apply.
+                        .setCategory(Notification.CATEGORY_MESSAGE)
                     // A conversation or a room can be answered, or marked
                     // read, from here.
                     if (json.optJSONObject("target")?.optString("kind") in setOf("conversation", "room")) {
