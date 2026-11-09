@@ -11,6 +11,7 @@ pub mod discovered;
 pub mod found;
 pub mod git;
 pub mod githost;
+pub mod gitpages;
 pub mod heard;
 pub mod iface_log;
 pub mod mqtt;
@@ -237,6 +238,14 @@ pub enum NetCommand {
     Fetch {
         id: u64,
         node: Hash,
+        path: String,
+        fields: BTreeMap<String, String>,
+        identify: bool,
+    },
+    /// Make a page of the rngit node hosted here, as visitors get it (a
+    /// client can't fetch from its own node); answered with `Fetched`.
+    GitPage {
+        id: u64,
         path: String,
         fields: BTreeMap<String, String>,
         identify: bool,
@@ -840,9 +849,9 @@ async fn run(
                 None => githost::GitHostEvent::Stopped,
                 Some(config) => match githost::HostedGit::start(&runtime, &config, ev.clone()).await {
                     Ok(node) => {
-                        let hash = node.hash;
+                        let (hash, pages) = (node.hash, node.pages);
                         *slot = Some(node);
-                        githost::GitHostEvent::Started { hash }
+                        githost::GitHostEvent::Started { hash, pages }
                     }
                     Err(e) => githost::GitHostEvent::Failed(e),
                 },
@@ -1355,6 +1364,28 @@ async fn run(
                                 let _ = ev.send(NetEvent::FetchProgress { id, text });
                             };
                             let result = nomad::fetch(&runtime, &links, node, &path, &fields, identity, &progress).await;
+                            let _ = ev.send(NetEvent::Fetched { id, result });
+                        });
+                    }
+                    NetCommand::GitPage { id, path, fields, identify } => {
+                        let (slot, ev) = (git_slot.clone(), ev.clone());
+                        let peer = identify.then_some(identity.hash);
+                        tokio::spawn(async move {
+                            let hosted = slot.lock().await.as_ref().and_then(|hosted| Some((hosted.node.clone(), hosted.site.clone()?)));
+                            let result = match hosted {
+                                None => Err("The rngit node's pages aren't being served".to_string()),
+                                Some((node, site)) => tokio::task::spawn_blocking(move || {
+                                    match gitpages::answer(&node, &site, &path, &fields, peer).0 {
+                                        gitpages::Reply::Page(page) => FetchedContent { data: page.into_bytes(), metadata: None },
+                                        gitpages::Reply::File { name, data } => FetchedContent {
+                                            data,
+                                            metadata: Some(rns_runtime::link_manager::pack_file_name_metadata(&name)),
+                                        },
+                                    }
+                                })
+                                .await
+                                .map_err(|e| format!("It stopped: {e}")),
+                            };
                             let _ = ev.send(NetEvent::Fetched { id, result });
                         });
                     }

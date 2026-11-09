@@ -48,6 +48,8 @@ empty tries the rngit node itself and forgets any choice.
 
 The choice is kept, so the next time the node opens its pages straight away.
 `b` in the list (**⌂** beside the node in the web UI) asks again, to change it.
+The rngit node you host knows where its own pages are, so it never asks (see
+[its pages](Hosting-a-Node#rngit-repositories)).
 
 ### Adding the repositories on a page
 

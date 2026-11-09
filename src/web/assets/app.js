@@ -8484,6 +8484,17 @@ app.views.repos = {
     }, { className: 'access-dialog' });
   },
 
+  // The pages of the node hosted here, in the Browser: a repository's
+  // (`group/name`), or the list of them all.
+  hostedPages(name) {
+    const pages = this.state?.hosted?.pages;
+    if (!pages) return;
+    if (!name) return browse(`${pages}:/page/index.mu`);
+    const [g, r] = name.split('/');
+    switchTab('browser');
+    app.views.browser.go(`${pages}:/page/repo.mu`, { fields: { var_g: g, var_r: r } });
+  },
+
   renderHosted() {
     const hosted = this.state?.hosted;
     const running = hosted?.state === 'running';
@@ -8495,6 +8506,7 @@ app.views.repos = {
       running ? el('button', { text: 'Mirror', title: 'Mirror a repository from rns:// or https://', onclick: () => this.follow('mirror') }) : null,
       running ? el('button', { text: 'Fork', title: 'Fork a repository from rns:// or https://', onclick: () => this.follow('fork') }) : null,
       running ? el('button', { text: 'New', title: 'Make an empty repository to push to', onclick: () => this.newHosted() }) : null,
+      running && hosted.pages ? el('button', { text: 'Pages', title: 'Browse them as visitors do, on the node\'s NomadNet pages', onclick: () => this.hostedPages() }) : null,
       el('button', { text: '↻', title: 'List them again', onclick: () => this.update() }));
     const note = (text) => el('div', { class: 'empty', text });
     if (!running) {
@@ -8519,6 +8531,7 @@ app.views.repos = {
         el('span', { class: 'row actions' },
         f ? el('button', { text: 'Sync', title: 'Fetch from its source again', onclick: () => this.host('sync', { name: repo.name }, `Syncing ${repo.name}`) }) : null,
         repo.url ? el('button', { text: 'Copy URL', onclick: () => copy(repo.url, 'the repository\'s URL') }) : null,
+        hosted.pages ? el('button', { text: 'Pages', title: 'Its page, as visitors who may read it see it', onclick: () => this.hostedPages(repo.name) }) : null,
         el('button', { text: 'Who may use it', onclick: () => this.access(repo.name) }),
         el('button', { text: 'Rename', onclick: () => this.renameHosted(repo) }),
         el('button', { class: 'danger', text: 'Delete', onclick: () => this.deleteHosted(repo) }))));

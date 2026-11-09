@@ -79,6 +79,7 @@ fn repos_keys(app: &App) -> Keys {
                 ("Enter", "who may use it"),
                 ("g", "who may use its group"),
                 ("y", "copy URL"),
+                ("b", "its pages"),
                 ("R", "reload"),
                 ("Esc", "list"),
                 ("↑↓", "select"),

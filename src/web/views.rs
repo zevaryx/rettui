@@ -913,7 +913,8 @@ fn hosted(app: &App) -> Value {
         Load::Failed(e) => (None, Some(e.clone())),
         Load::Idle | Load::Loading => (None, None),
     };
-    json!({ "state": state, "url": app.git_host.url(), "repos": repos, "error": error, "acting": app.git_host.acting() })
+    json!({ "state": state, "url": app.git_host.url(), "pages": app.git_host.pages.map(hex::encode), "repos": repos, "error": error,
+        "acting": app.git_host.acting() })
 }
 
 /// An identity hash, with the name it's known by (if one).

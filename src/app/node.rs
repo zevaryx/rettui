@@ -942,10 +942,10 @@ impl App {
         }
     }
 
-    /// Whether a location is on this client's own node (never cached, so
-    /// edits show at once).
+    /// Whether a location is on this client's own node, or the pages of the
+    /// rngit node hosted here (never cached, so edits show at once).
     pub fn is_own_node(&self, node: Hash) -> bool {
-        node == self.node.hash
+        node == self.node.hash || Some(node) == self.git_host.pages
     }
 
     /// A path on this client's own node, read from the node folder: a client
@@ -959,6 +959,9 @@ impl App {
         location: &Location,
         identify: bool,
     ) -> Option<Result<crate::nomad::FetchedContent, String>> {
+        if Some(location.node) == self.git_host.pages {
+            return self.own_git_page(id, location, identify);
+        }
         let store = match self.node_store() {
             Ok(store) => store,
             Err(e) => return Some(Err(e)),

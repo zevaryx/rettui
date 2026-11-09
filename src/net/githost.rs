@@ -1,5 +1,7 @@
 //! Hosting rngit repositories: a `git.repositories` destination that answers
-//! clones and fetches from a folder (see [`rngit::server`]).
+//! clones and fetches from a folder (see [`rngit::server`]), and, as stock
+//! rngit's `serve_nomadnet` does, a `nomadnetwork.node` destination of the
+//! same identity with pages to browse them (see [`super::gitpages`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,6 +38,8 @@ pub struct GitHostConfig {
     pub repo_bytes: u64,
     /// Whether a sync drops what its source dropped.
     pub prune: bool,
+    /// Whether it serves NomadNet pages to browse the repositories.
+    pub pages: bool,
 }
 
 impl GitHostConfig {
@@ -48,6 +52,7 @@ impl GitHostConfig {
             push_bytes: usize::try_from(settings.git_host_push_mb.saturating_mul(1_000_000)).unwrap_or(usize::MAX),
             repo_bytes: settings.git_host_repo_mb.saturating_mul(1_000_000),
             prune: settings.git_host_prune,
+            pages: settings.git_host_pages,
         })
     }
 }
@@ -57,6 +62,8 @@ impl GitHostConfig {
 pub enum GitHostEvent {
     Started {
         hash: [u8; 16],
+        /// Where its pages are, when it serves them.
+        pages: Option<[u8; 16]>,
     },
     Stopped,
     Failed(String),
@@ -179,12 +186,62 @@ pub fn address(path: &std::path::Path) -> Option<[u8; 16]> {
     Some(Destination::hash_from_name_and_identity(rngit::serve::ASPECT, Some(&identity.hash)))
 }
 
+/// The destination name NomadNet nodes announce under.
+const PAGES_ASPECT: &str = "nomadnetwork.node";
+
+/// Serve the pages of `node` at the `nomadnetwork.node` destination of `identity`.
+async fn serve_pages(
+    runtime: &ReticulumHandle,
+    identity: Identity,
+    node: Arc<Node>,
+    site: super::gitpages::Site,
+    activity: rngit::serve::Activity,
+) -> Result<RegisteredDestination, String> {
+    let options = DestinationRuntimeOptions { default_app_data: site.name.as_ref().map(|n| n.as_bytes().to_vec()), ..Default::default() };
+    let registered =
+        runtime.register_destination(identity, PAGES_ASPECT, options).await.map_err(|e| format!("Couldn't serve the pages: {e}"))?;
+    let site = Arc::new(site);
+    for path in super::gitpages::PATHS {
+        let (node, site, activity) = (node.clone(), site.clone(), activity.clone());
+        registered
+            .handle
+            .register_request_handler(path, AllowPolicy::AllowAll, Vec::new(), false, move |request| {
+                let peer = request.remote_identity.as_ref().map(|identity| identity.hash);
+                // Bad form data is answered as a page with no variables.
+                let vars = nomad_core::decode_request_fields(&request.data).map(|f| f.fields).unwrap_or_default();
+                let answer = || super::gitpages::answer(&node, &site, &request.path, &vars, peer);
+                // Reading a big repository takes a while: let the runtime's other threads carry on meanwhile.
+                let (reply, status) = match tokio::runtime::Handle::try_current() {
+                    Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(answer),
+                    _ => answer(),
+                };
+                activity(&request.path, peer, status);
+                match reply {
+                    super::gitpages::Reply::Page(page) => RequestOutcome::Reply(page.into_bytes()),
+                    super::gitpages::Reply::File { name, data } => RequestOutcome::ReplyFile {
+                        data,
+                        metadata: Some(rns_runtime::link_manager::pack_file_name_metadata(&name)),
+                        auto_compress: true,
+                    },
+                }
+            })
+            .await
+            .map_err(|e| format!("Couldn't serve {path}: {e}"))?;
+    }
+    Ok(registered)
+}
+
 /// A running git node.
 pub struct HostedGit {
     pub hash: [u8; 16],
+    /// Where its pages are, when it serves them.
+    pub pages: Option<[u8; 16]>,
+    /// What its pages say of it, when it serves them.
+    pub site: Option<super::gitpages::Site>,
     /// What answers requests, for the owner to act on too.
     pub node: Arc<Node>,
     destination: RegisteredDestination,
+    pages_destination: Option<RegisteredDestination>,
     announcer: tokio::task::JoinHandle<()>,
     mirrors: tokio::task::JoinHandle<()>,
 }
@@ -213,20 +270,37 @@ impl HostedGit {
             })
         };
         let app_data = config.name.as_ref().map(|n| n.as_bytes().to_vec());
-        let destination =
-            rngit::serve::serve(runtime, identity, node.clone(), app_data.clone(), Some(activity)).await.map_err(|e| e.to_string())?;
+        let destination = rngit::serve::serve(runtime, identity.clone(), node.clone(), app_data.clone(), Some(activity.clone()))
+            .await
+            .map_err(|e| e.to_string())?;
         let hash = destination.handle.destination_hash();
-        let handle = destination.handle.clone();
+        let site = config.pages.then(|| super::gitpages::Site { name: config.name.clone(), address: hash });
+        let pages_destination = if let Some(site) = site.clone() {
+            match serve_pages(runtime, identity, node.clone(), site, activity).await {
+                Ok(pages) => Some(pages),
+                Err(e) => {
+                    let _ = tokio::time::timeout(Duration::from_secs(3), destination.close()).await;
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
+        let pages = pages_destination.as_ref().map(|d| d.handle.destination_hash());
+        let mut handles = vec![destination.handle.clone()];
+        handles.extend(pages_destination.as_ref().map(|d| d.handle.clone()));
         let announcer = tokio::spawn(async move {
             tokio::time::sleep(FIRST_ANNOUNCE).await;
             loop {
-                let options = DestinationAnnounceOptions { app_data: app_data.clone(), ..DestinationAnnounceOptions::default() };
-                let _ = handle.announce(options).await;
+                for handle in &handles {
+                    let options = DestinationAnnounceOptions { app_data: app_data.clone(), ..DestinationAnnounceOptions::default() };
+                    let _ = handle.announce(options).await;
+                }
                 tokio::time::sleep(ANNOUNCE_EVERY).await;
             }
         });
         let mirrors = rngit::serve::keep_mirrors(node.clone(), MIRROR_CHECK_EVERY, MIRROR_OLDER_THAN);
-        Ok(Self { hash, node, destination, announcer, mirrors })
+        Ok(Self { hash, pages, site, node, destination, pages_destination, announcer, mirrors })
     }
 
     /// Stop answering, closing the links so clients see it go.
@@ -234,6 +308,9 @@ impl HostedGit {
         self.announcer.abort();
         self.mirrors.abort();
         let _ = tokio::time::timeout(Duration::from_secs(3), self.destination.close()).await;
+        if let Some(pages) = self.pages_destination {
+            let _ = tokio::time::timeout(Duration::from_secs(3), pages.close()).await;
+        }
     }
 }
 
@@ -300,7 +377,7 @@ mod tests {
         settings.git_host_enabled = true;
         let config = GitHostConfig::from_settings(&settings, &paths).unwrap();
         assert_eq!((config.dir.as_path(), config.name.as_deref(), config.access.as_str()), (paths.git_host.as_path(), None, ""));
-        assert_eq!((config.push_bytes, config.repo_bytes, config.prune), (256_000_000, 1_024_000_000, false));
+        assert_eq!((config.push_bytes, config.repo_bytes, config.prune, config.pages), (256_000_000, 1_024_000_000, false, true));
         settings.git_host_name = Some("  ".into());
         settings.git_host_access = Some("r:all".into());
         settings.git_host_dir = Some(dir.join("repos").display().to_string());

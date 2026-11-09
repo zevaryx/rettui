@@ -26,6 +26,7 @@ mod font_chars;
 pub mod html;
 pub(crate) mod layout;
 pub mod source;
+pub mod write;
 
 pub use layout::hit_at;
 

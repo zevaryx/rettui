@@ -423,6 +423,21 @@ async fn amys_repositories_read_by_ben() {
     until(&mut amy, &mut ben, "Ben refused", |_, b| matches!(b.app.repos.open.as_ref().unwrap().refs, crate::app::repos::Load::Failed(_)))
         .await;
     assert!(amy.app.git_host.requests >= 2 && amy.app.git_host.refused >= 1, "{} {}", amy.app.git_host.requests, amy.app.git_host.refused);
+
+    // Ben browses the node's pages, which show him only what he may read.
+    let pages = hex::encode(amy.app.git_host.pages.expect("its pages"));
+    until(&mut amy, &mut ben, "Ben hearing its pages", |_, b| b.app.store.peers.contains_key(&pages)).await;
+    let index = crate::app::resolve_url(&format!("{pages}:/page/index.mu"), None).unwrap();
+    ben.app.navigate(index.clone());
+    until(&mut amy, &mut ben, "Ben loading its pages", |_, b| b.app.browser.tab.loading.is_none() && b.app.browser.tab.source.is_some())
+        .await;
+    let shown = ben.app.browser.tab.source.clone().unwrap();
+    assert!(shown.contains(">Repositories") && shown.contains("open") && !shown.contains("closed"), "{shown}");
+    // Amy sees her own, made here: a client can't open a link to itself.
+    amy.app.navigate(index);
+    until(&mut amy, &mut ben, "Amy loading her pages", |a, _| a.app.browser.tab.loading.is_none() && a.app.browser.tab.source.is_some())
+        .await;
+    assert_eq!(amy.app.browser.tab.source.as_deref(), Some(shown.as_str()));
     let _ = std::fs::remove_dir_all(&repos);
 }
 
