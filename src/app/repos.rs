@@ -1019,6 +1019,10 @@ impl App {
 
     /// The node with an rngit node's pages, if one is kept and still known.
     pub fn page_node_for(&self, git: Hash) -> Option<Hash> {
+        // The node hosted here knows where its own are.
+        if Some(git) == self.git_host.address && self.git_host.pages.is_some() {
+            return self.git_host.pages;
+        }
         let kept = self.store.git_pages.get(&hex::encode(git))?;
         net::parse_hash(kept)
     }

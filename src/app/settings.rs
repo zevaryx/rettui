@@ -204,8 +204,9 @@ impl App {
                     rncp = true;
                 }
                 "git_host_enabled" | "git_host_name" | "git_host_dir" | "git_host_access" | "git_host_push_mb" | "git_host_repo_mb"
-                | "git_host_prune" => {
+                | "git_host_prune" | "git_host_pages" => {
                     self.settings.git_host_prune = after.git_host_prune;
+                    self.settings.git_host_pages = after.git_host_pages;
                     self.settings.git_host_push_mb = after.git_host_push_mb;
                     self.settings.git_host_repo_mb = after.git_host_repo_mb;
                     self.settings.git_host_enabled = after.git_host_enabled;

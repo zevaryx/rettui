@@ -840,6 +840,17 @@ pub(crate) mod testing {
                             let result = crate::net::git::tests::answer(&node, repo, request.clone());
                             owner.apply(NetEvent::Git { id: *id, result });
                         }
+                        // The pages of the rngit node hosted here, as the network task makes them.
+                        if let NetCommand::GitPage { id, path, fields, identify } = &command {
+                            let node = rngit::server::Node::new(owner.app.paths.git_host.clone());
+                            let site = crate::net::gitpages::Site { name: None, address: owner.app.git_host.address.unwrap_or_default() };
+                            let peer = identify.then_some(owner.app.identity_hash);
+                            let data = match crate::net::gitpages::answer(&node, &site, path, fields, peer).0 {
+                                crate::net::gitpages::Reply::Page(page) => page.into_bytes(),
+                                crate::net::gitpages::Reply::File { data, .. } => data,
+                            };
+                            owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None }) });
+                        }
                         // The rngit node hosted here, which mirrors from `source/` in the test's folder.
                         if let NetCommand::GitHostAction { id, action } = &command {
                             let (root, source) = (owner.app.paths.git_host.clone(), test_dir.join("source"));

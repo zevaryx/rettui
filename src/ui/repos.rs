@@ -47,7 +47,14 @@ fn draw_hosted(frame: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::styled(format!("◌ {what}…  "), Style::default().fg(Color::Yellow)));
     }
     if spans.is_empty() {
-        spans.push(Span::styled("m mirrors and f forks a repository here, n makes an empty one; H goes back", Style::default().fg(dim())));
+        spans.push(Span::styled(
+            if app.git_host.pages.is_some() {
+                "m mirrors and f forks a repository here, n makes an empty one, b shows its pages; H goes back"
+            } else {
+                "m mirrors and f forks a repository here, n makes an empty one; H goes back"
+            },
+            Style::default().fg(dim()),
+        ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), about);
     let hint = |text: String| Paragraph::new(text).style(Style::default().fg(dim())).wrap(Wrap { trim: true });

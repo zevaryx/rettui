@@ -242,6 +242,9 @@ pub struct Settings {
     /// Have a sync of a fork or mirror drop the branches and tags its source
     /// dropped; off by default, as in stock rngit.
     pub git_host_prune: bool,
+    /// Serve NomadNet pages to browse the hosted repositories (as stock
+    /// rngit's `serve_nomadnet`), showing each visitor what they may clone.
+    pub git_host_pages: bool,
     /// Listen for files sent with `rncp` (to this identity's rncp address),
     /// from the identities in `rncp_allowed` only.
     pub rncp_listen: bool,
@@ -359,6 +362,7 @@ impl Default for Settings {
             git_host_push_mb: 256,
             git_host_repo_mb: 1024,
             git_host_prune: false,
+            git_host_pages: true,
             rncp_listen: false,
             rncp_allowed: None,
             rncp_dir: None,
@@ -784,6 +788,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "git_host_push_mb",
             "git_host_repo_mb",
             "git_host_prune",
+            "git_host_pages",
             "rncp_listen",
             "rncp_allowed",
             "rncp_dir",
@@ -1303,6 +1308,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "git_host_pages",
+        label: "rngit pages",
+        help: "Serve NomadNet pages to browse the hosted repositories: their files with syntax colouring, READMEs, history and branches. Each visitor sees only what they may clone",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
         key: "rncp_listen",
         label: "Receive files with rncp",
         help: "Take files sent to your rncp address (see the Network tab) from the identities allowed below, and save them in the folder below; off, nothing is taken. Turned on in the terminal only",
@@ -1628,6 +1640,7 @@ impl Settings {
             "git_host_push_mb" => self.git_host_push_mb.to_string(),
             "git_host_repo_mb" => self.git_host_repo_mb.to_string(),
             "git_host_prune" => self.git_host_prune.to_string(),
+            "git_host_pages" => self.git_host_pages.to_string(),
             "hub_enabled" => self.hub_enabled.to_string(),
             "hub_name" => self.hub_name.clone().unwrap_or_default(),
             "hub_greeting" => self.hub_greeting.clone().unwrap_or_default(),
@@ -1762,6 +1775,7 @@ impl Settings {
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
             "git_host_enabled" => self.git_host_enabled = toggle(value).map_err(fail)?,
             "git_host_prune" => self.git_host_prune = toggle(value).map_err(fail)?,
+            "git_host_pages" => self.git_host_pages = toggle(value).map_err(fail)?,
             "rncp_listen" => self.rncp_listen = toggle(value).map_err(fail)?,
             "rncp_allowed" => {
                 self.rncp_allowed = match optional(value) {

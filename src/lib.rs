@@ -11,6 +11,7 @@ mod clock;
 mod config;
 mod emoji;
 mod games;
+mod highlight;
 mod https;
 mod icons;
 mod identities;

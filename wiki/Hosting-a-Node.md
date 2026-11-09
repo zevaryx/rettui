@@ -366,9 +366,32 @@ changing who may do what, and forks, mirrors and sync.
   node reads for each request, so it applies at once; comments in it are
   dropped. A mirror or fork you make has no `.allowed` of its own, so until you
   tick something, the group's rules and *rngit access* decide who reads it.
+- **Its pages:** as stock rngit does with `serve_nomadnet`, the node also
+  serves NomadNet pages to browse what it hosts, at a NomadNet address of the
+  same identity, announced with the node's name. They list its groups and
+  repositories (with each one's description, from its `description` file),
+  and for each repository its clone command, its files, its README (Markdown
+  formatted, with links to other files in it made into page links), each file
+  with its lines numbered and its syntax coloured, its history 50 commits a page,
+  each commit with the files it changed, and its branches and tags. A file is
+  shown 1,000 lines a page; one over 8 MB can only be downloaded, and one over
+  1 MB is shown without colour. Markdown and Micron files are shown formatted,
+  with a link to their source. Every visitor sees only the repositories they may
+  read, as for a clone, and anyone who doesn't identify sees what
+  `d7db22f63b453c23bb0688dde565b7c1` may. The pages use stock rngit's paths and
+  page variables (`/page/repo.mu` with `g` and `r`, `/page/blob.mu` with `ref`
+  and `path`...), so links made for one work on the other. `b` in the list of
+  what's hosted (**Pages** in the web UI) opens them in the Browser: a
+  repository's, or with nothing picked the list of them all. You see them as a
+  visitor would, made here, since a client can't open a link to itself.
+  *rngit pages* (`git_host_pages`, on) in Settings › Hosting turns them off.
+  Colouring knows Rust, Python, C and C++, Go, JavaScript and TypeScript, Java,
+  Kotlin, C#, Swift, Zig, shell, Lua, Ruby, SQL, TOML, INI, YAML, JSON, HTML,
+  XML, CSS, Makefiles, Dockerfiles, diffs, Markdown and Micron, by a file's
+  name, or for a script by its `#!` line.
 - **Security:** the web UI can switch it on and off, name it, make, mirror,
-  fork, sync, rename and delete repositories, and say who may use them, but
-  can't pick the folder. Nothing in a repository is run: hooks are never
+  fork, sync, rename and delete repositories, say who may use them and turn its
+  pages on or off, but can't pick the folder. Nothing in a repository is run: hooks are never
   called. Names that aren't plain folder names (`..`, a leading dot, a path)
   are refused.
 

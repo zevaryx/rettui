@@ -1793,6 +1793,32 @@ async fn the_copy_of_a_repository_is_read_in_the_web_ui_without_the_node() {
 }
 
 #[tokio::test]
+async fn the_owner_browses_the_pages_of_what_is_hosted_here() {
+    use crate::config::Settings;
+    use crate::net::githost::GitHostEvent;
+    let web =
+        TestWeb::start_with("hosted-pages", Settings { git_host_enabled: true, ..Settings::default() }, crate::store::Store::default());
+    let root = web.with(|app| app.paths.git_host.clone()).await;
+    let node = rngit::server::Node::new(root);
+    node.make_repository("public", "demo.git", None).unwrap();
+    node.set_rules("public", None, "r:all").unwrap();
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: Some([8; 16]) }))).await;
+    let repos = web.get("/api/repos").await.json();
+    assert_eq!(repos["hosted"]["pages"], "08".repeat(16));
+    // Its own node in the list of nodes knows where its pages are.
+    let pages = format!("{}:/page/repo.mu", "08".repeat(16));
+    let page = web.post("/api/page", json!({ "url": pages, "fields": { "var_g": "public", "var_r": "demo" } })).await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.text());
+    assert!(page.text().contains("Nothing has been pushed here yet"), "{}", page.text());
+    let index = web.get(&format!("/api/page?url={}", "08".repeat(16))).await;
+    assert!(index.text().contains("demo") && index.text().contains("Repositories"), "{}", index.text());
+    // Stopped, the address is just another node's.
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Stopped))).await;
+    assert!(web.get("/api/repos").await.json()["hosted"]["pages"].is_null());
+    assert!(!web.with(|app| app.is_own_node([8; 16])).await);
+}
+
+#[tokio::test]
 async fn the_owner_mirrors_and_manages_the_repositories_hosted_here() {
     use crate::config::Settings;
     use crate::net::githost::{GitHostEvent, owner_tests};
@@ -1805,7 +1831,7 @@ async fn the_owner_mirrors_and_manages_the_repositories_hosted_here() {
     assert!(early.error().contains("Host rngit repositories first"));
 
     owner_tests::source(&web.dir, "public", "demo");
-    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16] }))).await;
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: None }))).await;
     let hosted = web.get("/api/repos").await.json()["hosted"].clone();
     assert_eq!((hosted["state"].as_str(), hosted["repos"].as_array().map(Vec::len)), (Some("running"), Some(0)));
 
@@ -1852,7 +1878,7 @@ async fn the_owner_says_who_may_use_what_is_hosted_here() {
     let web =
         TestWeb::start_with("hosted-access", Settings { git_host_enabled: true, ..Settings::default() }, crate::store::Store::default());
     owner_tests::source(&web.dir, "public", "demo");
-    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16] }))).await;
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: None }))).await;
     web.post("/api/hosted/new", json!({ "name": "team/empty" })).await;
     // Nobody may clone it yet: the list says so.
     assert_eq!(web.get("/api/repos").await.json()["hosted"]["repos"][0]["open"], false);
