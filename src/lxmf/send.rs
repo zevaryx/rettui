@@ -7,8 +7,9 @@ use lxmf_core::constants::{
     FIELD_COMMANDS, FIELD_CUSTOM_META, FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE,
     FIELD_REPLY_TO, FIELD_TELEMETRY, FIELD_TELEMETRY_STREAM, FIELD_TICKET, RENDERER_MARKDOWN, RENDERER_MICRON,
 };
-use lxmf_core::handlers::{parse_pn_announce_data, stamp_cost_from_app_data};
-use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
+use lxmf_core::handlers::{compression_support_from_app_data, parse_pn_announce_data, stamp_cost_from_app_data};
+use lxmf_core::message_api::{DeliveryMethod, LxMessage, LxMessageDraft, MessageError, SignedLxMessage};
+use lxmf_core::propagation_send::{AdvertisedNodePolicy, PreparedNode, PropagationEnvelope};
 use rmpv::Value;
 use rns_runtime::prelude::*;
 use tokio::sync::{mpsc, watch};
@@ -60,11 +61,11 @@ pub(super) async fn build_message(
     source: Hash,
     outgoing: &Outgoing,
     app_data: Option<&[u8]>,
-) -> Result<LxMessage, String> {
-    let mut message = LxMessage::new(outgoing.to, source, "", &outgoing.content, DeliveryMethod::Direct);
-    message.timestamp = outgoing.timestamp;
+) -> Result<SignedLxMessage, String> {
+    let mut message = LxMessageDraft::new(outgoing.to, source, "", &outgoing.content, DeliveryMethod::Direct).map_err(|e| e.to_string())?;
+    message.set_timestamp(outgoing.timestamp).map_err(|e| e.to_string())?;
     message.stamp_cost = app_data.and_then(stamp_cost_from_app_data);
-    message.determine_compression_support(app_data);
+    message.auto_compress = app_data.is_none_or(compression_support_from_app_data);
 
     // The first image goes in FIELD_IMAGE (shown inline by Sideband and
     // MeshChat); everything else is a file attachment.
@@ -87,9 +88,9 @@ pub(super) async fn build_message(
     }
     // Both as bytes (msgpack `bin`), as Columba and MeshChatX send them.
     if let Some(reply) = &outgoing.reply {
-        message.set_field(FIELD_REPLY_TO, reply.to.to_vec());
+        message.set_field(FIELD_REPLY_TO, reply.to.to_vec()).map_err(|e| e.to_string())?;
         if let Some(quote) = &reply.quote {
-            message.set_field(FIELD_REPLY_QUOTE, quote.as_bytes().to_vec());
+            message.set_field(FIELD_REPLY_QUOTE, quote.as_bytes().to_vec()).map_err(|e| e.to_string())?;
         }
     }
     if let Some(reaction) = &outgoing.reaction {
@@ -100,11 +101,13 @@ pub(super) async fn build_message(
     }
     // As Columba sends it: `{"cease": true}`, in bytes.
     if outgoing.cease {
-        message.set_field(FIELD_CUSTOM_META, super::fields::cease_field());
+        message.set_field(FIELD_CUSTOM_META, super::fields::cease_field()).map_err(|e| e.to_string())?;
     }
     // As Sideband sends it: the readings in bytes (msgpack `bin`).
     if let Some(location) = &outgoing.location {
-        message.set_field(FIELD_TELEMETRY, super::fields::telemetry_field(location, &outgoing.sensors, outgoing.timestamp as i64));
+        message
+            .set_field(FIELD_TELEMETRY, super::fields::telemetry_field(location, &outgoing.sensors, outgoing.timestamp as i64))
+            .map_err(|e| e.to_string())?;
     }
     // A game's move: the protocol's name and the envelope, both native
     // msgpack (as bytes they wouldn't be LRGP).
@@ -143,8 +146,15 @@ pub(super) async fn build_message(
     message.outbound_ticket = outgoing.stamp_ticket;
 
     let key = identity.get_signing_key().ok_or("Local identity has no signing key")?;
-    message.sign(&key).map_err(|e| e.to_string())?;
-    Ok(message)
+    message.sign(&key).map_err(|e| e.to_string())
+}
+
+/// A signed message, stamped (if its recipient asks for a stamp) and
+/// finished. A proof-of-work stamp can take a while, so this runs off the
+/// async threads.
+pub(super) fn finish(message: SignedLxMessage) -> Result<LxMessage, MessageError> {
+    let stamp = message.generate_recipient_stamp()?;
+    message.finalize(stamp)
 }
 
 pub async fn send(
@@ -175,11 +185,6 @@ pub async fn send(
     }
 }
 
-/// A built message's hash (signing sets it).
-fn hash_of(message: &LxMessage) -> Result<[u8; 32], String> {
-    message.hash.ok_or_else(|| "The message has no hash after signing".to_string())
-}
-
 async fn send_direct(
     runtime: &ReticulumHandle,
     known: &Known,
@@ -192,21 +197,18 @@ async fn send_direct(
     (sending.progress)("finding a path".into());
     sending.unless_cancelled(find_path(runtime, outgoing.to, sending.progress)).await?;
     let recipient = lookup(runtime, known, outgoing.to).await?;
-    let mut message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
-    let hash = hash_of(&message)?;
+    let message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
+    let hash = message.message_id();
     // Proof-of-work stamps can take a while at higher costs.
-    if message.stamp_cost.is_some_and(|cost| cost > 0) {
+    if message.stamp_cost().is_some_and(|cost| cost > 0) {
         (sending.progress)("working out the stamp".into());
     }
     let packed = sending
         .unless_cancelled(async {
-            tokio::task::spawn_blocking(move || {
-                message.get_stamp();
-                message.pack()
-            })
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())
+            tokio::task::spawn_blocking(move || finish(message).map(|message| message.wire_bytes().to_vec()))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())
         })
         .await?;
 
@@ -255,29 +257,31 @@ async fn propagate(
         }
     };
 
-    let mut message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
-    let hash = hash_of(&message)?;
+    let message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
+    let hash = message.message_id();
     let (recipient_identity, ratchet) = (recipient.identity, recipient.ratchet);
-    if stamp_cost > 0 || message.stamp_cost.is_some_and(|cost| cost > 0) {
+    if stamp_cost > 0 || message.stamp_cost().is_some_and(|cost| cost > 0) {
         (sending.progress)("working out the stamp".into());
     }
     let packed = sending
         .unless_cancelled(async {
             tokio::task::spawn_blocking(move || {
-                message.get_stamp();
-                message.pack_propagated_encrypted_with_stamp(
-                    |plaintext| {
-                        recipient_identity.encrypt(plaintext, ratchet.as_ref()).map_err(|e| MessageError::PackFailed(e.to_string()))
-                    },
-                    stamp_cost,
-                )
+                let message = finish(message)?;
+                // The binding only tells envelopes apart when one is kept to
+                // send again, which rettui doesn't do.
+                let binding = message.message_id();
+                let mut envelope = PropagationEnvelope::new(message, binding, stamp_cost, |plaintext| {
+                    recipient_identity.encrypt(plaintext, ratchet.as_ref()).map_err(|e| MessageError::PackFailed(e.to_string()))
+                })?;
+                // No transfer limit here: the node refuses what it won't take.
+                let policy = AdvertisedNodePolicy { stamp_cost, transfer_limit_kb: f64::MAX, recorded_at: 0. };
+                envelope.pack_for(PreparedNode { node, policy }, crate::app::now())
             })
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())
         })
-        .await?
-        .0;
+        .await?;
 
     if let Some(local) = local {
         tokio::task::spawn_blocking(move || local.submit(&packed)).await.map_err(|e| e.to_string())??;

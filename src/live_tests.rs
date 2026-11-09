@@ -666,7 +666,9 @@ async fn while_running<T>(amy: &mut Peer, work: impl std::future::Future<Output 
 async fn the_command_line_against_a_running_rettui() {
     use crate::app::node::NodeStatus;
     let port = free_port();
-    let server = format!("  [[Server]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n{TAKE_ALL}");
+    let server = format!(
+        "  [[Server]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n{TAKE_ALL}"
+    );
     let mut amy = Peer::start("cli-amy", &server, |s| {
         s.node_enabled = true;
         s.node_name = Some("Amy's node".into());
@@ -692,7 +694,7 @@ async fn the_command_line_against_a_running_rettui() {
         rns.join("config"),
         format!(
             "[reticulum]\n  share_instance = No\n\n[interfaces]\n  [[To Amy]]\n    type = TCPClientInterface\n    \
-             target_host = 127.0.0.1\n    target_port = {port}\n{TAKE_ALL}"
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n{TAKE_ALL}"
         ),
     )
     .unwrap();
@@ -1163,9 +1165,9 @@ async fn the_network_actor_command_by_command() {
     // Interface discovery on, with an entry point to bring back (one that
     // isn't there) and one that can't be.
     let interfaces = format!(
-        "  [[Server]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n\
-         \n  [[Entry]]\n    type = TCPClientInterface\n    bootstrap_only = Yes\n    target_host = 127.0.0.1\n    target_port = 1\n    networkname = net\n    passphrase = pass\n\
-         \n  [[Odd]]\n    type = UDPInterface\n    bootstrap_only = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {}\n    forward_ip = 127.0.0.1\n    forward_port = {}\n",
+        "  [[Server]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n\
+         \n  [[Entry]]\n    type = TCPClientInterface\n    enabled = Yes\n    bootstrap_only = Yes\n    target_host = 127.0.0.1\n    target_port = 1\n    networkname = net\n    passphrase = pass\n\
+         \n  [[Odd]]\n    type = UDPInterface\n    enabled = Yes\n    bootstrap_only = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {}\n    forward_ip = 127.0.0.1\n    forward_port = {}\n",
         free_port(),
         free_port()
     );

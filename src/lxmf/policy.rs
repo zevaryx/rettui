@@ -96,12 +96,12 @@ impl Policy {
 
     /// Whether a message has what it must: a valid stamp (by proof of work
     /// or a ticket of yours), unless none is asked or it's from a contact.
-    pub fn stamp_accepted(&self, message: &mut LxMessage) -> bool {
+    pub fn stamp_accepted(&self, message: &LxMessage) -> bool {
         let Some(cost) = self.stamp_cost else { return true };
-        if self.exempt.contains(&message.source_hash) {
+        if self.exempt.contains(&message.source_hash()) {
             return true;
         }
-        let tokens: Vec<Vec<u8>> = self.tickets.inbound_tokens(&message.source_hash, now()).into_iter().map(|t| t.to_vec()).collect();
+        let tokens: Vec<Vec<u8>> = self.tickets.inbound_tokens(&message.source_hash(), now()).into_iter().map(|t| t.to_vec()).collect();
         message.validate_stamp_with_tickets(cost, Some(&tokens))
     }
 
@@ -109,7 +109,7 @@ impl Policy {
     /// sender with.
     pub fn take_ticket(&mut self, message: &LxMessage) {
         let Some(field) = message.get_field(FIELD_TICKET) else { return };
-        if let Some(ticket) = Ticket::decode_field(message.source_hash, field, now()) {
+        if let Some(ticket) = Ticket::decode_field(message.source_hash(), super::fields::raw(field), now()) {
             self.tickets.remember_outbound(ticket);
             self.dirty = true;
         }
@@ -167,17 +167,17 @@ impl Policy {
 
 #[cfg(test)]
 mod tests {
-    use lxmf_core::message_api::DeliveryMethod;
+    use lxmf_core::message_api::{DeliveryMethod, LxMessageDraft};
     use rns_runtime::prelude::Identity;
 
     use super::*;
 
     /// A message from `from`, as received, stamped with `stamp` if any.
-    fn received(from: Hash, stamp: impl FnOnce(&mut LxMessage)) -> LxMessage {
-        let mut message = LxMessage::new([1; 16], from, "", "hi", DeliveryMethod::Direct);
-        message.sign(&Identity::new().get_signing_key().unwrap()).unwrap();
+    fn received(from: Hash, stamp: impl FnOnce(&mut LxMessageDraft)) -> LxMessage {
+        let mut message = LxMessageDraft::new([1; 16], from, "", "hi", DeliveryMethod::Direct).unwrap();
         stamp(&mut message);
-        LxMessage::unpack(&message.pack().unwrap()).unwrap()
+        let message = super::super::send::finish(message.sign(&Identity::new().get_signing_key().unwrap()).unwrap()).unwrap();
+        LxMessage::unpack(message.wire_bytes()).unwrap()
     }
 
     fn policy(name: &str, cost: Option<u8>) -> (PathBuf, SharedPolicy) {
@@ -192,18 +192,17 @@ mod tests {
         let (path, policy) = policy("stamps", Some(4));
         let mut policy = policy.lock().unwrap();
         // No stamp: dropped; a valid one (cost 4 takes a moment): taken.
-        assert!(!policy.stamp_accepted(&mut received([2; 16], |_| {})));
-        let mut stamped = received([2; 16], |m| {
+        assert!(!policy.stamp_accepted(&received([2; 16], |_| {})));
+        let stamped = received([2; 16], |m| {
             m.stamp_cost = Some(4);
-            m.get_stamp();
         });
-        assert!(policy.stamp_accepted(&mut stamped));
+        assert!(policy.stamp_accepted(&stamped));
         // A contact needs none.
         policy.set_contacts(Vec::new(), vec![[2; 16]]);
-        assert!(policy.stamp_accepted(&mut received([2; 16], |_| {})));
+        assert!(policy.stamp_accepted(&received([2; 16], |_| {})));
         // Nor does anyone when no stamp is asked.
         policy.stamp_cost = None;
-        assert!(policy.stamp_accepted(&mut received([3; 16], |_| {})));
+        assert!(policy.stamp_accepted(&received([3; 16], |_| {})));
         let _ = std::fs::remove_file(path);
     }
 
@@ -223,18 +222,17 @@ mod tests {
         };
         // Alice's client keeps it, and stamps her messages to us with it.
         let ticket = Ticket::decode_field([1; 16], &field, now()).unwrap();
-        let mut reply = received(alice, |m| {
+        let reply = received(alice, |m| {
             m.outbound_ticket = Some(ticket.token);
-            m.get_stamp();
         });
         // Cost 20 would take a long time by proof of work: the ticket does it.
         shared.lock().unwrap().set_contacts(Vec::new(), Vec::new());
-        assert!(shared.lock().unwrap().stamp_accepted(&mut reply));
-        assert!(!shared.lock().unwrap().stamp_accepted(&mut received(alice, |_| {})));
+        assert!(shared.lock().unwrap().stamp_accepted(&reply));
+        assert!(!shared.lock().unwrap().stamp_accepted(&received(alice, |_| {})));
         // Tickets survive a restart.
         Policy::save_in_background(&shared).await;
         let again = Policy::load(&path, Some(20), 0);
-        assert!(again.lock().unwrap().stamp_accepted(&mut reply));
+        assert!(again.lock().unwrap().stamp_accepted(&reply));
         let _ = std::fs::remove_file(path);
     }
 
@@ -243,10 +241,10 @@ mod tests {
         let (path, shared) = policy("outbound", None);
         let mut policy = shared.lock().unwrap();
         let ticket = Ticket::new([9; 16], [2; 16], now() + 3600.0);
-        let mut message = LxMessage::new([1; 16], [2; 16], "", "hi", DeliveryMethod::Direct);
+        let mut message = LxMessageDraft::new([1; 16], [2; 16], "", "hi", DeliveryMethod::Direct).unwrap();
         message.set_msgpack_field(FIELD_TICKET, ticket.encode_field().unwrap()).unwrap();
-        message.sign(&Identity::new().get_signing_key().unwrap()).unwrap();
-        let received = LxMessage::unpack(&message.pack().unwrap()).unwrap();
+        let message = message.sign(&Identity::new().get_signing_key().unwrap()).unwrap().finalize(None).unwrap();
+        let received = LxMessage::unpack(message.wire_bytes()).unwrap();
         policy.take_ticket(&received);
         assert_eq!(policy.for_outgoing([2; 16]).0, Some([9; 16]));
         assert_eq!(policy.for_outgoing([3; 16]).0, None);

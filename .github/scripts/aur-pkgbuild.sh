@@ -61,10 +61,12 @@ if [ "$kind" = desktop ]; then
   install_lines="  install -Dm755 rettui-desktop \"\$pkgdir/usr/bin/rettui-desktop\"
   install -Dm644 rettui-desktop.desktop \"\$pkgdir/usr/share/applications/rettui-desktop.desktop\"
   install -Dm644 rettui-desktop.png \"\$pkgdir/usr/share/icons/hicolor/512x512/apps/rettui-desktop.png\"
-  install -Dm644 README.md \"\$pkgdir/usr/share/doc/rettui-desktop/README.md\""
+  install -Dm644 README.md \"\$pkgdir/usr/share/doc/rettui-desktop/README.md\"
+  install -Dm644 LICENSE \"\$pkgdir/usr/share/licenses/rettui-desktop/LICENSE\""
 else
   install_lines="  install -Dm755 rettui \"\$pkgdir/usr/bin/rettui\"
-  install -Dm644 README.md \"\$pkgdir/usr/share/doc/rettui/README.md\""
+  install -Dm644 README.md \"\$pkgdir/usr/share/doc/rettui/README.md\"
+  install -Dm644 LICENSE \"\$pkgdir/usr/share/licenses/rettui/LICENSE\""
 fi
 
 mkdir -p "$out"
@@ -80,7 +82,7 @@ pkgrel=1
 pkgdesc="$desc"
 arch=('x86_64' 'aarch64')
 url="https://github.com/$repo"
-license=('AGPL-3.0-or-later')
+license=('LicenseRef-Reticulum')
 depends=(${quoted_depends% })
 provides=('$program')
 conflicts=('$program')
@@ -103,7 +105,7 @@ pkgbase = $pkgname
 	url = https://github.com/$repo
 	arch = x86_64
 	arch = aarch64
-	license = AGPL-3.0-or-later
+	license = LicenseRef-Reticulum
 $srcinfo_depends
 	provides = $program
 	conflicts = $program

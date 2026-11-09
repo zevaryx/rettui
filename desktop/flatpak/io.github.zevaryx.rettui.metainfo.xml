@@ -4,7 +4,7 @@
   <name>rettui</name>
   <summary>Reticulum client: LXMF messaging, NomadNet browsing and RRC chat</summary>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>AGPL-3.0-or-later</project_license>
+  <project_license>LicenseRef-Reticulum=https://github.com/zevaryx/rettui/blob/main/LICENSE</project_license>
   <developer id="io.github.zevaryx">
     <name>zevaryx</name>
   </developer>

@@ -139,7 +139,7 @@ mod tests {
         let profiles = Profiles::new(dir.join("interface-profiles.json"));
         let home = profiles.save(" Home ", CONFIG).unwrap();
         assert_eq!(home.name, "Home");
-        assert_eq!(home.interfaces, BTreeMap::from([("Default Interface".into(), true), ("Hill".into(), false), ("Radio".into(), true)]));
+        assert_eq!(home.interfaces, BTreeMap::from([("Default Interface".into(), true), ("Hill".into(), false), ("Radio".into(), false)]));
         assert!(home.matches(CONFIG));
 
         let (away, changed) = apply(

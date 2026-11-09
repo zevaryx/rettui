@@ -165,7 +165,7 @@ impl App {
                 if ours == 1 { "" } else { "s" }
             ));
         }
-        for warning in rns::bootstrap_warnings(&config) {
+        for warning in rns::enable_warnings(&config).into_iter().chain(rns::bootstrap_warnings(&config)) {
             self.log(format!("Interface {warning}"));
         }
     }

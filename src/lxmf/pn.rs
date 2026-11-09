@@ -519,7 +519,8 @@ impl HostedPn {
 
 #[cfg(test)]
 mod tests {
-    use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
+    use lxmf_core::message_api::{DeliveryMethod, LxMessage, LxMessageDraft, MessageError};
+    use lxmf_core::propagation_send::{AdvertisedNodePolicy, PreparedNode, PropagationEnvelope};
 
     use super::*;
 
@@ -573,15 +574,15 @@ mod tests {
     /// [`transfer`], and what its stamp is worth (at least `cost`; a stamp
     /// of no work is worth whatever its hash happens to be).
     fn stamped(to: Hash, recipient: &Identity, cost: u8) -> (Vec<u8>, u32) {
-        let mut message = LxMessage::new(to, [3; 16], "", "kept for you", DeliveryMethod::Propagated);
-        message.sign(&Identity::new().get_signing_key().unwrap()).unwrap();
-        let (packed, _, value) = message
-            .pack_propagated_encrypted_with_stamp(
-                |plain| recipient.encrypt(plain, None).map_err(|e| MessageError::PackFailed(e.to_string())),
-                cost,
-            )
-            .unwrap();
-        (packed, value)
+        let message = LxMessageDraft::new(to, [3; 16], "", "kept for you", DeliveryMethod::Propagated).unwrap();
+        let message = message.sign(&Identity::new().get_signing_key().unwrap()).unwrap().finalize(None).unwrap();
+        let mut envelope = PropagationEnvelope::new(message, [0; 32], cost, |plain| {
+            recipient.encrypt(plain, None).map_err(|e| MessageError::PackFailed(e.to_string()))
+        })
+        .unwrap();
+        let policy = AdvertisedNodePolicy { stamp_cost: cost, transfer_limit_kb: f64::MAX, recorded_at: 0. };
+        let packed = envelope.pack_for(PreparedNode { node: [9; 16], policy }, 1_800_000_000.).unwrap();
+        (packed, envelope.stamp_value())
     }
 
     #[test]
@@ -607,7 +608,7 @@ mod tests {
         local.submit(&transfer(us, &ours, 13)).unwrap();
         let full = delivered.try_recv().unwrap();
         assert_eq!(&full[..16], &us);
-        assert_eq!(LxMessage::unpack(&full).unwrap().content, "kept for you");
+        assert_eq!(LxMessage::unpack(&full).unwrap().content_text(), "kept for you");
         // Too little work: turned away. (A stamp of no work has enough by
         // chance about one time in a thousand: one that hasn't.) Several at
         // once: only from a peer.

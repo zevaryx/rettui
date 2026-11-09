@@ -5,7 +5,7 @@
 [![Release](https://github.com/zevaryx/rettui/actions/workflows/release.yml/badge.svg)](https://github.com/zevaryx/rettui/actions/workflows/release.yml)
 [![Latest release](https://img.shields.io/github/v/release/zevaryx/rettui)](https://github.com/zevaryx/rettui/releases/latest)
 [![Docker image](https://img.shields.io/badge/docker-ghcr.io%2Fzevaryx%2Frettui-blue?logo=docker)](https://github.com/zevaryx/rettui/pkgs/container/rettui)
-[![License: AGPL-3.0-or-later](https://img.shields.io/github/license/zevaryx/rettui)](LICENSE)
+[![License: Reticulum License](https://img.shields.io/badge/license-Reticulum%20License-blue.svg)](LICENSE)
 
 A [Reticulum](https://reticulum.network/) client written in Rust, for the terminal
 and the browser. It does LXMF messaging, RRC (Reticulum Relay Chat), NomadNet
@@ -107,7 +107,14 @@ Everything else is on the documentation site,
 
 ## License
 
-AGPL-3.0-or-later, the same as the libraries it links.
+The [Reticulum License](LICENSE), the license of Reticulum, LXMF, rsReticulum and
+rsLXMF. It allows using, changing and passing on rettui, except in systems built to
+harm people, and in making or training AI or machine-learning models. The copyright
+and license notice must stay in every copy.
+
+Some parts are under licenses of their own: rsNomad (`deps/rsNomad`) is
+AGPL-3.0-or-later, the vendored Codec2 (`vendor/codec2`) is LGPL-2.1, and the
+games library (`deps/lrgp-rs`) and the RRC libraries are MIT.
 
 The web UI bundles [Fira Code](https://github.com/tonsky/FiraCode) as patched by
 [Nerd Fonts](https://github.com/ryanoasis/nerd-fonts), under the SIL Open Font

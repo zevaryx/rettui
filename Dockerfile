@@ -33,6 +33,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 # setpriv (util-linux, already in the image) drops to PUID/PGID at start.
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY LICENSE /usr/share/doc/rettui/LICENSE
 
 # Everything rettui keeps (identity, settings, messages, Reticulum config)
 # lives in /data; HOME points there too so nothing is written elsewhere.

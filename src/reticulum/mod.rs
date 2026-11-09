@@ -89,8 +89,21 @@ pub fn check(text: &str) -> (Option<Config>, Check) {
             Err(e) => result.warnings.push(format!("{name}: {e}")),
         }
     }
+    result.warnings.extend(enable_warnings(&config));
     result.warnings.extend(bootstrap_warnings(&config));
     (Some(config), result)
+}
+
+/// Interfaces that are off only because they don't say `enabled`:
+/// Reticulum starts an interface only when `enabled` (or
+/// `interface_enabled`) is yes, and older rsReticulum started these.
+pub fn enable_warnings(config: &Config) -> Vec<String> {
+    config
+        .subsections("interfaces")
+        .into_iter()
+        .filter(|(_, section)| !section.has_enable_key())
+        .map(|(name, _)| format!("{name}: off, because it has no enabled line. Add enabled = Yes to use it"))
+        .collect()
 }
 
 /// How many entry points interface discovery connects to by itself (0
@@ -115,10 +128,7 @@ pub fn bootstrap_warnings(config: &Config) -> Vec<String> {
     config
         .subsections("interfaces")
         .into_iter()
-        .filter(|(_, section)| {
-            let on = section.get_bool("enabled").or_else(|| section.get_bool("interface_enabled")).unwrap_or(true);
-            on && section.get_bool("bootstrap_only") == Some(true)
-        })
+        .filter(|(_, section)| section.interface_enabled() && section.get_bool("bootstrap_only") == Some(true))
         .map(|(name, _)| {
             format!(
                 "{name}: Bootstrap only: dropped as soon as Reticulum starts connecting to {connects} discovered entry point{}, \
@@ -357,9 +367,8 @@ fn pipe_commands(config: Option<&Config>) -> BTreeMap<String, usize> {
             continue;
         }
         let Some(command) = section.get("command") else { continue };
-        // On unless it says otherwise, as Reticulum reads it.
-        let on = section.get_bool("enabled").or_else(|| section.get_bool("interface_enabled")).unwrap_or(true);
-        *commands.entry(command.to_string()).or_default() += usize::from(on);
+        // On only if it says so, as Reticulum reads it.
+        *commands.entry(command.to_string()).or_default() += usize::from(section.interface_enabled());
     }
     commands
 }
@@ -452,13 +461,12 @@ pub fn remove_interface(text: &str, name: &str) -> Result<String, String> {
     Ok(doc.text())
 }
 
-/// Whether an interface is on: rsReticulum starts it unless `enabled` (or
-/// `interface_enabled`) says no.
+/// Whether an interface is on: Reticulum starts it only when `enabled` (or
+/// `interface_enabled`) says yes.
 pub(crate) fn interface_on(doc: &Doc, name: &str) -> bool {
-    ["enabled", "interface_enabled"]
-        .iter()
-        .find_map(|key| doc.raw_value(&["interfaces", name], key))
-        .is_none_or(|value| crate::app::reticulum::rns_truthy(value.trim_matches(['"', '\''])))
+    ["enabled", "interface_enabled"].iter().any(|key| {
+        doc.raw_value(&["interfaces", name], key).is_some_and(|value| crate::app::reticulum::rns_truthy(value.trim_matches(['"', '\''])))
+    })
 }
 
 /// Whether an interface that's on connects to `host` (a TCP client's

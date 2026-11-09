@@ -36,7 +36,7 @@ use lxmf_core::constants::{
     FIELD_FILE_ATTACHMENTS, FIELD_ICON_APPEARANCE, FIELD_IMAGE, FIELD_REACTION, FIELD_RENDERER, FIELD_REPLY_QUOTE, FIELD_REPLY_TO,
     FIELD_TELEMETRY, FIELD_TELEMETRY_STREAM, FIELD_TICKET, REACTION_CONTENT, REACTION_TO,
 };
-use lxmf_core::message_api::LxMessage;
+use lxmf_core::message_api::{FieldValueRef, LxMessage};
 use std::collections::HashMap;
 
 use rmpv::Value;
@@ -51,12 +51,17 @@ pub(super) const FIELD_COLUMBA_EXTENSIONS: u8 = 0x10;
 /// A field's value: bytes as they were sent (a field whose value is msgpack
 /// `bin`), anything else decoded.
 pub(super) fn value(message: &LxMessage, id: u8) -> Option<Value> {
-    let raw = message.get_field(id)?;
-    if message.msgpack_field_ids.contains(&id) {
-        rmpv::decode::read_value(&mut raw.as_slice()).ok()
-    } else {
-        Some(Value::Binary(raw.clone()))
+    let field = message.get_field(id)?;
+    match field.as_binary() {
+        Some(bytes) => Some(Value::Binary(bytes.to_vec())),
+        None => rmpv::decode::read_value(&mut field.encoded()).ok(),
     }
+}
+
+/// A field's bytes: as sent, if the value is msgpack `bin`, otherwise the
+/// msgpack value itself.
+pub(super) fn raw(field: FieldValueRef<'_>) -> &[u8] {
+    field.as_binary().unwrap_or(field.encoded())
 }
 
 /// A value that may have been packed once more into bytes (as Sideband
@@ -721,7 +726,7 @@ const KNOWN_FIELDS: [u8; 18] = [
 /// protocol's name as a msgpack string, and a msgpack map. The same sent
 /// as bytes isn't LRGP (lrgp-py ignores it too).
 pub fn game_of(message: &LxMessage) -> Option<HashMap<u8, Vec<u8>>> {
-    let native = |id| message.msgpack_field_ids.contains(&id);
+    let native = |id| message.get_field(id).is_some_and(|field| field.as_binary().is_none());
     if !native(FIELD_CUSTOM_TYPE) || !native(FIELD_CUSTOM_META) {
         return None;
     }
@@ -729,7 +734,7 @@ pub fn game_of(message: &LxMessage) -> Option<HashMap<u8, Vec<u8>>> {
     if name.as_str() != Some(lrgp::constants::PROTOCOL_TYPE) {
         return None;
     }
-    let fields = [FIELD_CUSTOM_TYPE, FIELD_CUSTOM_META].map(|id| message.get_field(id).map(|raw| (id, raw.clone())));
+    let fields = [FIELD_CUSTOM_TYPE, FIELD_CUSTOM_META].map(|id| message.get_field(id).map(|field| (id, raw(field).to_vec())));
     fields.into_iter().collect()
 }
 
@@ -775,7 +780,7 @@ impl Extras {
             game: game_of(message),
             comment_on: about(message, FIELD_COMMENT, COMMENT_FOR),
             continues: about(message, FIELD_CONTINUATION, CONTINUATION_OF),
-            unknown: message.fields.keys().copied().filter(|id| !KNOWN_FIELDS.contains(id)).collect(),
+            unknown: message.fields().iter().filter_map(|(id, _)| id.as_standard()).filter(|id| !KNOWN_FIELDS.contains(id)).collect(),
         }
     }
 
@@ -812,20 +817,19 @@ impl Extras {
 
 #[cfg(test)]
 mod tests {
-    use lxmf_core::message_api::DeliveryMethod;
+    use lxmf_core::message_api::{DeliveryMethod, LxMessageDraft};
 
     use super::*;
 
-    fn message() -> LxMessage {
-        LxMessage::new([1; 16], [2; 16], "", "", DeliveryMethod::Direct)
+    fn message() -> LxMessageDraft {
+        LxMessageDraft::new([1; 16], [2; 16], "", "", DeliveryMethod::Direct).unwrap()
     }
 
     /// Through the wire and back, as a receiver sees it.
-    fn received(message: &LxMessage) -> LxMessage {
-        let mut signed = message.clone();
+    fn received(message: &LxMessageDraft) -> LxMessage {
         let key = rns_runtime::prelude::Identity::new().get_signing_key().unwrap();
-        signed.sign(&key).unwrap();
-        LxMessage::unpack(&signed.pack().unwrap()).unwrap()
+        let signed = message.clone().sign(&key).unwrap().finalize(None).unwrap();
+        LxMessage::unpack(signed.wire_bytes()).unwrap()
     }
 
     #[test]
@@ -847,8 +851,8 @@ mod tests {
         assert!(wire.windows(marker.len()).any(|w| w == marker));
         // The same as bytes (msgpack `bin`) isn't a game's.
         let mut wrapped = message();
-        wrapped.set_field(FIELD_CUSTOM_TYPE, b"lrgp.v1".to_vec());
-        wrapped.set_field(FIELD_CUSTOM_META, packed);
+        wrapped.set_field(FIELD_CUSTOM_TYPE, b"lrgp.v1".to_vec()).unwrap();
+        wrapped.set_field(FIELD_CUSTOM_META, packed).unwrap();
         assert_eq!(game_of(&received(&wrapped)), None);
     }
 
@@ -921,10 +925,10 @@ mod tests {
         assert_eq!(said, vec!["Interfaces: Hill (Backbone · hill.example.net:4242)".to_string()]);
     }
 
-    fn telemetry(location: Value) -> LxMessage {
+    fn telemetry(location: Value) -> LxMessageDraft {
         let sensors = Value::Map(vec![(Value::from(1), Value::from(1_790_000_000)), (Value::from(2), location)]);
         let mut message = message();
-        message.set_field(FIELD_TELEMETRY, encode(&sensors));
+        message.set_field(FIELD_TELEMETRY, encode(&sensors)).unwrap();
         message
     }
 
@@ -960,7 +964,7 @@ mod tests {
     fn a_location_sent_as_sideband_packs_it() {
         let at = Location { altitude: Some(35.5), accuracy: Some(12.0), ..Location::at(51.50735, -0.127758) };
         let mut sent = message();
-        sent.set_field(FIELD_TELEMETRY, telemetry_field(&at, &[], 1_790_000_000));
+        sent.set_field(FIELD_TELEMETRY, telemetry_field(&at, &[], 1_790_000_000)).unwrap();
         let got = telemetry_of(&received(&sent)).unwrap();
         assert_eq!(got.time, Some(1_790_000_000));
         let back = got.location.unwrap();
@@ -974,12 +978,12 @@ mod tests {
         // An accuracy too big for its two bytes is as big as they hold.
         let rough = Location { accuracy: Some(5000.0), ..at };
         let mut sent = message();
-        sent.set_field(FIELD_TELEMETRY, telemetry_field(&rough, &[], 1));
+        sent.set_field(FIELD_TELEMETRY, telemetry_field(&rough, &[], 1)).unwrap();
         assert_eq!(telemetry_of(&received(&sent)).unwrap().location.unwrap().accuracy, Some(655.35));
         // With this computer's readings beside it.
         let local = super::super::sensors::Local { battery: Some((60.0, true)), ..Default::default() };
         let mut sent = message();
-        sent.set_field(FIELD_TELEMETRY, telemetry_field(&at, &local.entries(), 1));
+        sent.set_field(FIELD_TELEMETRY, telemetry_field(&at, &local.entries(), 1)).unwrap();
         let got = telemetry_of(&received(&sent)).unwrap();
         assert!(got.location.is_some());
         assert_eq!((got.sensors[0].sensor.as_str(), got.sensors[0].value.as_str()), ("Battery", "60%, charging"));
@@ -1149,7 +1153,7 @@ mod tests {
         // A field nobody knows, on an empty message, is named; an icon's
         // appearance isn't.
         let mut odd = message();
-        odd.set_field(0x77, vec![1]);
+        odd.set_field(0x77, vec![1]).unwrap();
         odd.set_msgpack_field(FIELD_ICON_APPEARANCE, encode(&Value::Array(Vec::new()))).unwrap();
         let extras = Extras::of(&received(&odd));
         assert_eq!(extras.unknown, [0x77]);
@@ -1161,7 +1165,7 @@ mod tests {
     #[test]
     fn a_stopped_location_share() {
         let mut stop = message();
-        stop.set_field(FIELD_CUSTOM_META, cease_field());
+        stop.set_field(FIELD_CUSTOM_META, cease_field()).unwrap();
         assert!(ceased(&received(&stop)));
         assert!(!ceased(&received(&message())));
     }

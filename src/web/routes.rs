@@ -1610,9 +1610,9 @@ async fn read_paper_link(state: &WebState, link: String) -> ApiResult {
     let ring = crate::lxmf::ratchets::ring_path(&ratchets, &own);
     let data = crate::lxmf::paper::open(&state.identity, own, &ring, &link).map_err(bad)?;
     let message = lxmf_core::message_api::LxMessage::unpack(&data).map_err(|_| bad("Not a message rettui can read"))?;
-    let key = hex::encode(message.source_hash);
+    let key = hex::encode(message.source_hash());
     // Read in before: said, rather than nothing happening.
-    let id = message.message_id.or(message.hash).map(hex::encode);
+    let id = Some(hex::encode(message.message_id()));
     let known = state
         .write(move |o| {
             let conversation = o.app.store.conversations.get(&key);

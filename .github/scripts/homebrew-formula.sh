@@ -28,7 +28,7 @@ class Rettui < Formula
   desc "Reticulum client for the terminal and the browser"
   homepage "https://github.com/$repo"
   version "${tag#v}"
-  license "AGPL-3.0-or-later"
+  license :cannot_represent
 
   on_macos do
     on_arm do
