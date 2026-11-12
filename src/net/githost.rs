@@ -208,7 +208,7 @@ async fn serve_pages(
             .register_request_handler(path, AllowPolicy::AllowAll, Vec::new(), false, move |request| {
                 let peer = request.remote_identity.as_ref().map(|identity| identity.hash);
                 // Bad form data is answered as a page with no variables.
-                let vars = nomad_core::decode_request_fields(&request.data).map(|f| f.fields).unwrap_or_default();
+                let vars = crate::nomad::request::decode_fields(&request.data);
                 let answer = || super::gitpages::answer(&node, &site, &request.path, &vars, peer);
                 // Reading a big repository takes a while: let the runtime's other threads carry on meanwhile.
                 // This holds up only the pages' own link manager. Reticulum 1.4's deferred requests would

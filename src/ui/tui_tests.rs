@@ -618,7 +618,7 @@ fn browsing_this_clients_own_node() {
 
 /// A script page of this client's own node runs as it would for a visitor
 /// (with what a form sends), when scripts are on; when they're off, a note
-/// says visitors get its text.
+/// says visitors are told it isn't there.
 #[cfg(unix)]
 #[test]
 fn browsing_this_clients_own_script_pages() {
@@ -2081,7 +2081,7 @@ fn who_may_see_a_page_on_the_node() {
 #[test]
 fn the_node_counts_what_it_serves_across_restarts_until_reset() {
     use crate::net::{HostEvent, NetEvent};
-    let stats = |requests, pages, files, media| nomad_core::NomadServeStats {
+    let stats = |requests, pages, files, media| crate::nomad::host::Stats {
         request_count: requests,
         page_hits: pages,
         file_hits: files,
@@ -2103,7 +2103,7 @@ fn the_node_counts_what_it_serves_across_restarts_until_reset() {
     assert!(screen.contains("3 pages · 1 file · 2 pic") && screen.contains("7 · 1 not found"), "{screen}");
     assert!(!screen.contains("identified"), "nobody has identified yet");
     // Visitors who identified are counted by the running node.
-    tui.app.on_net(NetEvent::Host(HostEvent::Stats(nomad_core::NomadServeStats { visitors: 2, ..stats(7, 3, 1, 2) })));
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(crate::nomad::host::Stats { visitors: 2, ..stats(7, 3, 1, 2) })));
     let shown = tui.draw();
     assert!(shown.contains("2 identified since"), "{shown}");
     tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(7, 3, 1, 2))));

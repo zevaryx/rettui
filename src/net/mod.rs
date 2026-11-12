@@ -26,8 +26,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use crate::nomad::paths::NODE_ASPECT as NOMAD_NODE_ASPECT;
 use lxmf_core::handlers::parse_pn_announce_data;
-use nomad_core::NOMAD_NODE_ASPECT;
 use rns_runtime::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
@@ -512,7 +512,7 @@ pub enum HostEvent {
     Started { hash: Hash },
     Stopped,
     Failed(String),
-    Stats(nomad_core::NomadServeStats),
+    Stats(host::Stats),
 }
 
 /// What the hosted propagation node is doing.
@@ -745,9 +745,9 @@ async fn run(
 
     // The hosted node starts in a task (it announces first) and comes back
     // here; `host_generation` drops nodes from superseded starts.
-    let (host_tx, mut host_rx) = mpsc::unbounded_channel::<(u64, Result<nomad_core::NomadNode, String>)>();
+    let (host_tx, mut host_rx) = mpsc::unbounded_channel::<(u64, Result<host::Node, String>)>();
     let mut host_generation = 0u64;
-    let mut hosted: Option<nomad_core::NomadNode> = None;
+    let mut hosted: Option<host::Node> = None;
     // Taking speed tests from someone, while asked to.
     let mut speed_listener: Option<speedtest::Listener> = None;
     let launch = |generation: u64, config: HostConfig| {
@@ -994,7 +994,9 @@ async fn run(
                 }
             }
             _ = node_rescan.tick(), if hosted.is_some() => {
-                if let Some(Err(e)) = hosted.as_ref().map(|node| node.reload_routes()) {
+                if let Some(node) = hosted.as_ref()
+                    && let Err(e) = node.reload().await
+                {
                     let _ = ev.send(NetEvent::Log(format!("Could not reload node pages: {e}")));
                 }
             }
@@ -1273,7 +1275,7 @@ async fn run(
                     NetCommand::Host(config) => {
                         host_generation += 1;
                         if let Some(node) = hosted.take() {
-                            node.shutdown();
+                            node.stop().await;
                         }
                         match config {
                             Some(config) => launch(host_generation, config),
@@ -1283,13 +1285,15 @@ async fn run(
                         }
                     }
                     NetCommand::HostReload => {
-                        if let Some(Err(e)) = hosted.as_ref().map(|node| node.reload_routes()) {
+                        if let Some(node) = hosted.as_ref()
+                            && let Err(e) = node.reload().await
+                        {
                             let _ = ev.send(NetEvent::Log(format!("Could not reload node pages: {e}")));
                         }
                     }
                     NetCommand::HostAnnounce => {
                         let result = match &hosted {
-                            Some(node) => node.announce_now().await.map_err(|e| e.to_string()),
+                            Some(node) => node.announce_now().await,
                             None => Err("the node is not running".to_string()),
                         };
                         let line = match result {
@@ -1419,7 +1423,7 @@ async fn run(
                 let name = announce
                     .app_data
                     .as_deref()
-                    .and_then(|d| crate::names::clean(&nomad_core::clamp_node_name(&String::from_utf8_lossy(d))));
+                    .and_then(|d| crate::names::clean(&crate::nomad::paths::clamp_name(&String::from_utf8_lossy(d))));
                 let _ = ev.send(NetEvent::Announce {
                     kind: PeerKind::Nomad,
                     hash: announce.destination_hash,
@@ -1548,7 +1552,9 @@ async fn run(
     if let Some(node) = git_slot.lock().await.take() {
         node.stop().await;
     }
-    drop(hosted);
+    if let Some(node) = hosted {
+        node.stop().await;
+    }
     let quick = Duration::from_millis(500);
     let _ = tokio::time::timeout(quick, async {
         if let Some(node) = pn_slot.lock().await.take() {

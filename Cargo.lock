@@ -4914,27 +4914,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nomad-core"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "hex",
- "image",
- "libc",
- "rmpv",
- "rns-crypto",
- "rns-identity",
- "rns-runtime",
- "rns-transport",
- "rns-wire",
- "serde",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "nonempty"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6420,7 +6399,6 @@ dependencies = [
  "lrgp",
  "lxmf-core",
  "lxmface",
- "nomad-core",
  "notify-rust",
  "p256",
  "pulldown-cmark",

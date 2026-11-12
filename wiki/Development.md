@@ -11,7 +11,7 @@ state as the TUI.
 | --- | --- | --- |
 | `net/` | Network actor, on its own threads so heavy traffic can't hold up either UI: runtime, announces, paths and keys, commands and events; rngit requests over Links (`git`) | rsReticulum, rngit-rs |
 | `lxmf/` | Sending, receiving and propagation node sync | rsLXMF |
-| `nomad/` | Page and file fetching, Micron parsing and layout, page cache, hosting a node and its pages | rsNomad |
+| `nomad/` | Page and file fetching, Micron parsing and layout, page cache, hosting a node and its pages | rsReticulum |
 | `rrc/` | RRC wire format, hub replies, hub sessions | rsReticulum |
 | `reticulum/` | Reticulum config file: the options it has, editing it in place, and checking it | rsReticulum |
 | `app/` | Application state per tab (`messages`, `channels`, `network`, `browser`, `node`, `reticulum`, `repos`), the page editor's formatting (`format`), notifications (`notify`) and input routing | |

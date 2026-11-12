@@ -10,7 +10,7 @@
 
 FROM rust:1-slim-bookworm AS build
 WORKDIR /src
-# The Reticulum, LXMF and NomadNet libraries are git submodules in deps/;
+# The Reticulum and LXMF libraries are git submodules in deps/;
 # Codec2 is vendored in vendor/.
 COPY Cargo.toml Cargo.lock ./
 COPY deps ./deps

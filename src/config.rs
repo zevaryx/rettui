@@ -1907,8 +1907,8 @@ impl Settings {
                 self.node_announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?;
             }
             "node_name" => {
-                if optional(value).is_some_and(|n| n.len() > nomad_core::MAX_ANNOUNCE_NAME_BYTES) {
-                    return Err(fail(format!("at most {} bytes", nomad_core::MAX_ANNOUNCE_NAME_BYTES)));
+                if optional(value).is_some_and(|n| n.len() > crate::nomad::paths::MAX_NAME_BYTES) {
+                    return Err(fail(format!("at most {} bytes", crate::nomad::paths::MAX_NAME_BYTES)));
                 }
                 self.node_name = optional(value);
             }

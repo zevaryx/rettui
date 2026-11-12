@@ -5,7 +5,7 @@ node (git repositories, read over Reticulum), with another of its own.
 
 ## NomadNet node
 
-rettui hosts a NomadNet node using rsNomad's node. Pages are Micron
+rettui hosts a NomadNet node itself. Pages are Micron
 files in `node/pages/` (and downloads in `node/files/`) in the data directory,
 or the folder set in `node_dir`.
 

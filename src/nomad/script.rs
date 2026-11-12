@@ -1,10 +1,10 @@
 //! Running a hosted node's script pages for its owner, the way visitors get
 //! them.
 //!
-//! rsNomad runs a visitor's script page itself (when "Run page scripts" is
-//! on), but a client can't reach the node it hosts over Reticulum, so the
-//! Browser runs the owner's own script pages here. It copies how rsNomad runs
-//! them, so what the owner sees is what visitors get: no shell, nothing on
+//! The node runs a visitor's script page (when "Run page scripts" is on),
+//! but a client can't reach the node it hosts over Reticulum, so the
+//! Browser runs the owner's own script pages too. Both run them the same
+//! way here, so what the owner sees is what visitors get: no shell, nothing on
 //! standard input, a cleared environment with only `PATH` (`/usr/bin:/bin`
 //! unless "Script PATH" says otherwise), `link_id`, `remote_identity` and the
 //! request's `field_*` and `var_*` values, as NomadNet passes them, and 10
@@ -18,10 +18,10 @@ use std::time::Duration;
 
 use crate::config::Settings;
 
-/// How long a script may run by default (rsNomad's limit for visitors).
+/// How long a script may run by default.
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Where scripts find programs by default (rsNomad's, for visitors).
+/// Where scripts find programs by default.
 pub const PATH: &str = "/usr/bin:/bin";
 
 /// What `node_script_path` is set to for rettui's own `PATH`.
@@ -68,18 +68,30 @@ pub struct Run {
     pub failure: Option<String>,
 }
 
-/// Run a script page with a request's values, as rsNomad would for a
-/// visitor. `remote_identity` is the identity hash of a visitor who
-/// identified.
-#[cfg(unix)]
+/// Run a script page with a request's values, as the node does for a
+/// visitor on a Link of its own. `remote_identity` is the identity hash of
+/// a visitor who identified.
 pub fn run(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeMap<String, String>, max_stdout: usize, limits: &Limits) -> Run {
+    run_on(rand::random(), script, remote_identity, fields, max_stdout, limits)
+}
+
+/// [`run`], for a request that came over the Link `link_id`.
+#[cfg(unix)]
+pub fn run_on(
+    link_id: [u8; 16],
+    script: &Path,
+    remote_identity: Option<[u8; 16]>,
+    fields: &BTreeMap<String, String>,
+    max_stdout: usize,
+    limits: &Limits,
+) -> Run {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::Instant;
 
     let mut command = Command::new(script);
-    command.env_clear().env("PATH", &limits.path).env("link_id", hex::encode(rand::random::<[u8; 16]>()));
+    command.env_clear().env("PATH", &limits.path).env("link_id", hex::encode(link_id));
     if let Some(hash) = remote_identity {
         command.env("remote_identity", hex::encode(hash));
     }
@@ -152,9 +164,10 @@ pub fn run(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeMap<S
     Run { stdout, stderr, failure }
 }
 
-/// Scripts don't run on this system: rsNomad runs them only on Unix.
+/// Scripts don't run on this system: only on Unix.
 #[cfg(not(unix))]
-pub fn run(
+pub fn run_on(
+    _link_id: [u8; 16],
     _script: &Path,
     _remote_identity: Option<[u8; 16]>,
     _fields: &BTreeMap<String, String>,
@@ -167,7 +180,7 @@ pub fn run(
 /// The page the owner sees for a script page: what it printed, or, when
 /// visitors would get nothing, why.
 pub fn preview(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeMap<String, String>, limits: &Limits) -> Vec<u8> {
-    let run = run(script, remote_identity, fields, nomad_core::DEFAULT_MAX_PAGE_BYTES, limits);
+    let run = run(script, remote_identity, fields, crate::nomad::store::MAX_PAGE_BYTES, limits);
     if run.failure.is_none() && !run.stdout.is_empty() {
         return run.stdout;
     }
@@ -176,9 +189,9 @@ pub fn preview(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeM
 
 fn explain(script: &Path, run: &Run, scripts_path: &str) -> String {
     let why = run.failure.as_deref().unwrap_or("it printed nothing");
-    let mut page = format!("#!c=0\n>Script page\n\nVisitors get nothing from this page: {}.\n", nomad_core::sanitize_micron_text(why));
+    let mut page = format!("#!c=0\n>Script page\n\nVisitors get nothing from this page: {}.\n", crate::nomad::paths::clean_text(why));
     if let Some(hint) = interpreter_hint(script, scripts_path, std::env::var_os("PATH").as_deref()) {
-        page.push_str(&format!("\n{}\n", nomad_core::sanitize_micron_text(&hint)));
+        page.push_str(&format!("\n{}\n", crate::nomad::paths::clean_text(&hint)));
     }
     let stderr = String::from_utf8_lossy(&run.stderr);
     if !stderr.trim().is_empty() {

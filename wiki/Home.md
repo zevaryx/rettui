@@ -5,7 +5,6 @@ it can edit your Reticulum configuration. It is built on:
 
 - [rsReticulum](https://github.com/ratspeak/rsReticulum): the Reticulum protocol
 - [rsLXMF](https://github.com/ratspeak/rsLXMF): LXMF messages
-- [rsNomad](https://github.com/Colorado-Mesh/rsNomad): NomadNet requests and hosting
 - [ratatui](https://github.com/ratatui/ratatui): the terminal UI
 
 > [!WARNING]

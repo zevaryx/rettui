@@ -14,8 +14,8 @@ members = ["desktop"]
 exclude = ["deps", "vendor"]
 
 [dependencies]
-# Reticulum / LXMF / NomadNet, vendored as git submodules under deps/
-# (the libraries expect rsReticulum as a sibling of rsLXMF and rsNomad).
+# Reticulum and LXMF, vendored as git submodules under deps/ (rsLXMF
+# expects rsReticulum as its sibling).
 rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime", features = ["serial", "rnode-tcp"] }
 rns-identity = { path = "deps/rsReticulum/crates/rns-identity" }
 rns-crypto = { path = "deps/rsReticulum/crates/rns-crypto" }
@@ -24,7 +24,6 @@ rns-transport = { path = "deps/rsReticulum/crates/rns-transport" }
 # A packet's hash, to ask how it was heard.
 rns-wire = { path = "deps/rsReticulum/crates/rns-wire" }
 lxmf-core = { path = "deps/rsLXMF/crates/lxmf-core" }
-nomad-core = { path = "deps/rsNomad/crates/nomad-core" }
 # Hosting an RRC hub: rsRRCD's hub logic (it expects rsReticulum and rsRRC
 # as its siblings), and the YAML its configuration file is written in.
 rsrrcd = { path = "deps/rsRRCD", default-features = false }
@@ -47,8 +46,8 @@ unicode-segmentation = "1"
 unicode-normalization = "0.1"
 # Emoji names, groups and shortcodes, for the emoji pickers.
 emojis = "0.9"
-# Same decoders nomad-core already builds (NomadNet serves WebP media).
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+# Pictures in pages and messages, and a hosted node's pictures made into WebP.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "webp"] }
 rmpv = "1"
 # Terminal graphics (Kitty) with capability detection.
 ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }

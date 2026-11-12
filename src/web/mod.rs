@@ -130,8 +130,9 @@ impl Owner {
             }
             return;
         }
-        let cacheable =
-            location.fields.is_empty() && !location.path.starts_with(nomad_core::FILE_PREFIX) && !self.app.is_own_node(location.node);
+        let cacheable = location.fields.is_empty()
+            && !location.path.starts_with(crate::nomad::paths::FILE_PREFIX)
+            && !self.app.is_own_node(location.node);
         if cacheable
             && !refresh
             && let Some(cached) = self.app.page_cache().get(location.node, &location.path, identified)

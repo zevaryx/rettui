@@ -285,7 +285,7 @@ async fn amys_node_propagation_node_and_hub() {
         tokio::time::sleep(Duration::from_secs(2)).await;
         ben.app.navigate(crate::app::resolve_url(&format!("{node}:/page/slow.mu"), None).unwrap());
         until(&mut amy, &mut ben, "Ben told the script failed", |_, b| {
-            b.app.browser.tab.loading.is_none() && b.app.browser.tab.source.as_deref().is_some_and(|s| s.contains("could not be generated"))
+            b.app.browser.tab.loading.is_none() && b.app.browser.tab.source.as_deref().is_some_and(|s| s.contains("Page failed"))
         })
         .await;
     }

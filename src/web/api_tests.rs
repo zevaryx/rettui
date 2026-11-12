@@ -1461,7 +1461,7 @@ async fn the_nodes_statistics_and_resetting_them() {
     web.with(|app| {
         app.node.served.pages = 5;
         app.node.served.requests = 6;
-        app.node.stats = Some(nomad_core::NomadServeStats { request_count: 6, visitors: 3, ..Default::default() });
+        app.node.stats = Some(crate::nomad::host::Stats { request_count: 6, visitors: 3, ..Default::default() });
     })
     .await;
     let node = web.get("/api/node").await.json();

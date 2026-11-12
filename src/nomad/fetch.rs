@@ -3,10 +3,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use nomad_core::NomadEgress;
 use rns_runtime::prelude::*;
 use tokio::sync::Mutex;
 
+use super::{paths, request};
 use crate::net::{Hash, Progress, link_options};
 
 #[derive(Debug, Clone)]
@@ -31,20 +31,17 @@ pub async fn fetch(
     progress: Progress<'_>,
 ) -> Result<FetchedContent, String> {
     let request = if let Some(media) = path.strip_prefix("/media/") {
-        Ok(nomad_core::build_media_request(media))
-    } else if path.starts_with(nomad_core::FILE_PREFIX) {
-        nomad_core::build_file_request(path)
+        Ok(request::media(media))
+    } else if path.starts_with(paths::FILE_PREFIX) {
+        request::file(path)
     } else {
-        nomad_core::build_page_request(path, Some(fields))
+        request::page(path, fields)
     }
     .map_err(|e| e.to_string())?;
 
-    let hops = runtime.hops_to(node).await.unwrap_or(1);
-    let timeout = nomad_core::overall_timeout(NomadEgress::Network, hops);
-
     for attempt in 0..2 {
         let handle = node_link(runtime, links, node, identity.as_ref(), progress).await?;
-        match handle.request(&request.route, &request.body, Some(timeout)).await {
+        match handle.request(&request.path, &request.data, Some(request::TIMEOUT)).await {
             Ok(response) => {
                 return Ok(FetchedContent { data: response.data, metadata: response.metadata });
             }

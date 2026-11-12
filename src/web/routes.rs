@@ -2111,7 +2111,7 @@ struct PageQuery {
 
 async fn page(State(state): State<WebState>, Query(query): Query<PageQuery>) -> ApiResult {
     let location = location(&query.url)?;
-    if location.path.starts_with(nomad_core::FILE_PREFIX) {
+    if location.path.starts_with(crate::nomad::paths::FILE_PREFIX) {
         return Ok(axum::Json(json!({ "download": location.url() })));
     }
     let fetched = state.fetch(location.clone(), query.refresh).await?;
@@ -2177,7 +2177,7 @@ async fn download(State(state): State<WebState>, Query(query): Query<DownloadQue
         return Ok(if query.prepare { axum::Json(json!({ "name": name })).into_response() } else { file_response(data, &name, false) });
     }
     let fetched = state.fetch(location, false).await?;
-    let name = nomad_core::reply_file_name(fetched.metadata.as_deref()).unwrap_or(fallback);
+    let name = crate::nomad::request::reply_file_name(fetched.metadata.as_deref()).unwrap_or(fallback);
     *LAST_DOWNLOAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
         Some((url, std::time::Instant::now(), fetched.data.clone(), name.clone()));
     if query.prepare {

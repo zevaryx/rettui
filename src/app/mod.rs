@@ -785,7 +785,7 @@ impl App {
         }
         // The node uses this client's identity, so its address is known now.
         let node_hash =
-            rns_identity::destination::Destination::hash_from_name_and_identity(nomad_core::NOMAD_NODE_ASPECT, Some(&identity_hash));
+            rns_identity::destination::Destination::hash_from_name_and_identity(crate::nomad::paths::NODE_ASPECT, Some(&identity_hash));
         let mut node = node::Node::new(node_hash, settings.node_enabled);
         node.served = node_stats::Served::load(&paths.node_stats);
         let pn_hash =

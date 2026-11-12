@@ -14,7 +14,6 @@ configuration. It is built on:
 
 - [rsReticulum](https://github.com/ratspeak/rsReticulum): the Reticulum protocol
 - [rsLXMF](https://github.com/ratspeak/rsLXMF): LXMF messages
-- [rsNomad](https://github.com/Colorado-Mesh/rsNomad): NomadNet requests and hosting
 - [ratatui](https://github.com/ratatui/ratatui): the terminal UI
 
 > [!WARNING]
@@ -112,9 +111,9 @@ rsLXMF. It allows using, changing and passing on rettui, except in systems built
 harm people, and in making or training AI or machine-learning models. The copyright
 and license notice must stay in every copy.
 
-Some parts are under licenses of their own: rsNomad (`deps/rsNomad`) is
-AGPL-3.0-or-later, the vendored Codec2 (`vendor/codec2`) is LGPL-2.1, and the
-games library (`deps/lrgp-rs`) and the RRC libraries are MIT.
+Some parts are under licenses of their own: the vendored Codec2
+(`vendor/codec2`) is LGPL-2.1, and the games library (`deps/lrgp-rs`) and the
+RRC libraries are MIT.
 
 The web UI bundles [Fira Code](https://github.com/tonsky/FiraCode) as patched by
 [Nerd Fonts](https://github.com/ryanoasis/nerd-fonts), under the SIL Open Font

@@ -331,7 +331,7 @@ pub async fn fetch(settings: &Settings, url: &str, raw: bool, identity: Option<I
     let Some(node) = net::parse_hash(node) else {
         bail!("expected <32 hex char node hash>[:/page/path.mu]");
     };
-    let path = if path.is_empty() { nomad_core::DEFAULT_INDEX_ROUTE } else { path };
+    let path = if path.is_empty() { crate::nomad::paths::INDEX_PATH } else { path };
     let runtime = net::start_runtime(settings.rns_config.as_deref()).await.map_err(anyhow::Error::msg)?;
     let result = nomad::fetch_once(&runtime, node, path, identity, &|text| eprintln!("{text}")).await;
     runtime.shutdown_and_wait().await;

@@ -188,8 +188,8 @@ impl App {
         };
         let location = &pending.location;
         match result {
-            Ok(content) if location.path.starts_with(nomad_core::FILE_PREFIX) => {
-                let name = nomad_core::reply_file_name(content.metadata.as_deref())
+            Ok(content) if location.path.starts_with(crate::nomad::paths::FILE_PREFIX) => {
+                let name = crate::nomad::request::reply_file_name(content.metadata.as_deref())
                     .or_else(|| location.path.rsplit('/').next().map(str::to_string))
                     .unwrap_or_else(|| "download".to_string());
                 let folder =
@@ -602,7 +602,7 @@ impl App {
         self.browser.focus = BrowserFocus::Page;
         // Pages from this client's own node skip the cache, so edits show.
         let cacheable =
-            location.fields.is_empty() && !location.path.starts_with(nomad_core::FILE_PREFIX) && !self.is_own_node(location.node);
+            location.fields.is_empty() && !location.path.starts_with(crate::nomad::paths::FILE_PREFIX) && !self.is_own_node(location.node);
         let id = self.request_id();
         let pending = Pending { id, location, started: Instant::now(), record_history, identified, refresh, status: None };
         if cacheable
@@ -646,10 +646,10 @@ impl App {
     /// A name for a saved page: the node's name, plus the page path.
     pub fn bookmark_name(&self, location: &Location) -> String {
         let node = self.store.display_name(&hex::encode(location.node));
-        if location.path == nomad_core::DEFAULT_INDEX_ROUTE {
+        if location.path == crate::nomad::paths::INDEX_PATH {
             node
         } else {
-            format!("{node} · {}", location.path.trim_start_matches(nomad_core::PAGE_PREFIX))
+            format!("{node} · {}", location.path.trim_start_matches(crate::nomad::paths::PAGE_PREFIX))
         }
     }
 
@@ -1189,7 +1189,7 @@ pub fn resolve_url(url: &str, current: Option<Hash>) -> Option<Location> {
         None if url.starts_with('/') => (current?, url.to_string()),
         None => (parse_hash(url)?, String::new()),
     };
-    let path = if path.is_empty() || path == "/" { nomad_core::DEFAULT_INDEX_ROUTE.to_string() } else { path };
+    let path = if path.is_empty() || path == "/" { crate::nomad::paths::INDEX_PATH.to_string() } else { path };
     Some(Location { node, path, fields: BTreeMap::new() })
 }
 
