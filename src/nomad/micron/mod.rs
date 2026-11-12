@@ -1109,8 +1109,8 @@ mod tests {
         let blank = " ".repeat(10);
         assert_eq!(out, [&rule, "   Logo   ", &blank, "  Head    ", "  body", "plain"]);
         // The background fills the whole row, the rule's too.
-        for row in 0..3 {
-            assert!(layout.lines[row].spans.iter().all(|s| s.style.bg == black), "row {row}");
+        for (row, line) in layout.lines.iter().enumerate().take(3) {
+            assert!(line.spans.iter().all(|s| s.style.bg == black), "row {row}");
         }
         // A heading keeps its own colours over the page's, across the
         // row and its indent.
