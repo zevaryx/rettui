@@ -205,8 +205,9 @@ impl Shared {
         if metadata.file_type().is_symlink() {
             return false;
         }
+        // Anything else there (a folder, a pipe) can't be read as a list, so it lets no one in.
         if !metadata.is_file() {
-            return true;
+            return false;
         }
         let Some(who) = who else { return false };
         let text = if self.scripts && is_executable(&list) {
@@ -672,6 +673,23 @@ mod tests {
         // A list too long to be one is no one too.
         node.put("pages/club.mu.allowed", format!("{}\n", hex::encode(ann.hash)).repeat(2000).as_bytes());
         assert_eq!(node.page("/page/club.mu", Some(&ann)), NOT_ALLOWED);
+    }
+
+    #[test]
+    fn copies_of_a_restricted_page_and_odd_lists_never_let_anyone_in() {
+        let node = node("copies", false);
+        let ann = Identity::new();
+        node.put("pages/secret.mu", b">Secret\n");
+        node.put("pages/secret.mu.allowed", hex::encode(ann.hash).as_bytes());
+        // What an editor leaves beside it isn't a page the node has.
+        for copy in ["secret.mu~", "secret.mu.bak", "secret.mu.allowed~", "secret.mu.ALLOWED", "secret.mu.tmp"] {
+            node.put(&format!("pages/{copy}"), b">Secret\n");
+            assert!(node.page(&format!("/page/{copy}"), None).contains(">Not found"), "{copy}");
+        }
+        // A list that is a folder can't be read, so no one gets in.
+        node.put("pages/folder.mu", b">Folder\n");
+        std::fs::create_dir_all(node.dir.join("pages/folder.mu.allowed")).unwrap();
+        assert_eq!(node.page("/page/folder.mu", Some(&ann)), NOT_ALLOWED);
     }
 
     #[cfg(unix)]

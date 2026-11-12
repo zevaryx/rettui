@@ -2037,9 +2037,16 @@ pub fn load_identity(path: &Path) -> Result<Identity> {
     Ok(identity)
 }
 
+/// Where `path` is written before it takes the place of the old file:
+/// beside it, with a dot in front, so a node serving the folder never lists it.
+pub fn temp_beside(path: &Path) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{name}.tmp"))
+}
+
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("tmp");
+    let tmp = temp_beside(path);
     let mut file = fs::File::create(&tmp)?;
     file.write_all(bytes)?;
     // On the disk before it takes the old one's place: otherwise a power
@@ -2071,7 +2078,7 @@ pub fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
 /// moment it's created (on Unix).
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("tmp");
+    let tmp = temp_beside(path);
     let _ = fs::remove_file(&tmp);
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);

@@ -427,7 +427,13 @@ impl Pages {
     /// Rename a page or picture, leaving no empty folder behind.
     fn rename_page(&self, from: &str, to: &str, scripts: bool) -> Result<(), String> {
         self.rename(from, to, scripts)?;
-        self.carry_allowed(Root::Pages, from, Some(to))?;
+        if let Err(e) = self.carry_allowed(Root::Pages, from, Some(to)) {
+            // Put it back: moved without its list, it would be open to everyone.
+            if let (Ok(source), Ok(target)) = (self.resolve(from), self.resolve(to)) {
+                let _ = std::fs::rename(target, source);
+            }
+            return Err(e);
+        }
         self.prune(Root::Pages, from);
         Ok(())
     }
@@ -477,7 +483,11 @@ impl Pages {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::rename(&source, &target).map_err(|e| format!("Could not move {from}: {e}"))?;
-        self.carry_allowed(root, from, Some(to))?;
+        if let Err(e) = self.carry_allowed(root, from, Some(to)) {
+            // Put it back: moved without its list, it would be open to everyone.
+            let _ = std::fs::rename(&target, &source);
+            return Err(e);
+        }
         self.prune(root, from);
         Ok(())
     }
@@ -508,7 +518,10 @@ impl Pages {
         }
         let list = self.allowed_path(root, path)?;
         let Ok(metadata) = std::fs::symlink_metadata(&list) else { return Ok(Allowed::Everyone) };
-        if !metadata.is_file() || is_executable(&list) {
+        if !metadata.is_file() {
+            return Err(format!("{path}'s list of who may see it isn't a file, so the node lets no one see it; remove it on the host"));
+        }
+        if is_executable(&list) {
             return Ok(Allowed::Script);
         }
         if metadata.len() > MAX_ALLOWED {

@@ -87,7 +87,11 @@ or the folder set in `node_dir`.
   one on it lets no one see it (you still can, in the Browser). The node
   reads the list for each visit, so a change applies at once, and the list
   goes along when what it's for is renamed, moved or deleted. A list that's
-  itself a program (executable) is left as it is: change it on the host.
+  itself a program (executable) is left as it is: change it on the host. A
+  list that isn't a file at all (a folder, a pipe) lets no one in. Copies an
+  editor leaves beside a file are never served, as they have no list of their
+  own: names ending in `~`, `.bak`, `.orig`, `.old`, `.tmp`, `.swp`, `.save`
+  or `.rej`, names wrapped in `#`, and any name with `.allowed` in it.
 - **Statistics:** the Node tab says how many pages, files and pictures the
   node has served, how many requests it had (and how many were for
   something not there), when the last one came, and since when it has

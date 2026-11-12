@@ -60,9 +60,18 @@ impl From<std::io::Error> for PathError {
     }
 }
 
-/// Whether a file is kept out of sight: a dotfile, or an `.allowed` list.
+/// What an editor or a person leaves beside a file: a copy that has no
+/// `.allowed` list of its own, so serving it would show what the list hides.
+const COPY_ENDINGS: [&str; 8] = ["~", ".bak", ".orig", ".old", ".tmp", ".swp", ".save", ".rej"];
+
+/// Whether a file is kept out of sight: a dotfile, an `.allowed` list (or a
+/// copy of one, in any case), or a backup or temporary copy of a file.
 pub fn kept_aside(name: &str) -> bool {
-    name.starts_with('.') || name.ends_with(".allowed")
+    let lower = name.to_lowercase();
+    name.starts_with('.')
+        || lower.contains(".allowed")
+        || COPY_ENDINGS.iter().any(|ending| lower.ends_with(ending))
+        || (lower.len() > 2 && lower.starts_with('#') && lower.ends_with('#'))
 }
 
 /// Check a name on the node: a relative path of plain parts.
@@ -169,6 +178,12 @@ mod tests {
         assert!(check_name(&"a".repeat(MAX_PART_BYTES + 1)).is_err());
         assert!(check_name(&format!("{}/x", "a/".repeat(600))).is_err());
         assert!(kept_aside(".well") && kept_aside("page.mu.allowed") && !kept_aside("allowed.mu"));
+        // Copies of a page or of its list are never served, so they can't undo an `.allowed` list.
+        for name in ["secret.mu~", "secret.mu.bak", "a.ORIG", "x.mu.allowed~", "x.mu.allowed.bak", "x.mu.ALLOWED", "x.mu.tmp", "#x.mu#"] {
+            assert!(kept_aside(name), "{name}");
+            assert!(check_name(&format!("blog/{name}")).is_err(), "{name}");
+        }
+        assert!(!kept_aside("backup.mu") && !kept_aside("old.mu") && !kept_aside("notes.txt"));
     }
 
     #[test]

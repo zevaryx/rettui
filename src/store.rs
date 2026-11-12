@@ -1257,7 +1257,7 @@ mod tests {
         let (path, legacy) = (dir.join("store.json.gz"), dir.join("store.json"));
         std::fs::write(&legacy, legacy_json(&sample())).unwrap();
         // Block the temporary file the new store is written through.
-        std::fs::create_dir(path.with_extension("tmp")).unwrap();
+        std::fs::create_dir(crate::config::temp_beside(&path)).unwrap();
         let store = Store::load(&path).unwrap();
         assert!(legacy.exists(), "the old file stays");
         assert!(!path.exists());
