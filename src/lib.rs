@@ -362,11 +362,11 @@ async fn run(cli: Cli) -> Result<()> {
     }
     let settings = load_settings(&paths, cli.rns_config.clone())?;
 
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&paths.log)
-        .with_context(|| format!("opening {}", paths.log.display()))?;
+    let mut log_options = std::fs::OpenOptions::new();
+    log_options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut log_options, 0o600);
+    let log_file = log_options.open(&paths.log).with_context(|| format!("opening {}", paths.log.display()))?;
     // Everything goes to the log file, at the level set (changed while
     // running); interface trouble also goes to the log on screen.
     let (filter, reload) = tracing_subscriber::reload::Layer::new(logging::starting_filter(&settings.log_level));

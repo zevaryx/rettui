@@ -77,7 +77,7 @@ impl KnownIdentities {
         let (path, entries) = snapshot;
         let saved = tokio::task::spawn_blocking(move || {
             let text = serde_json::to_string(&entries)?;
-            crate::config::write_atomic(&path, text.as_bytes())
+            crate::config::write_private(&path, text.as_bytes())
         })
         .await;
         match saved {

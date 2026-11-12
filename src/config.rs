@@ -447,6 +447,12 @@ impl Paths {
             }
         };
         fs::create_dir_all(&base).with_context(|| format!("creating {}", base.display()))?;
+        // Messages, contacts and keys live here: other users on the machine have no business in it.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&base, fs::Permissions::from_mode(0o700));
+        }
         let root = base;
         let base = crate::identities::active_dir(&root);
         Ok(Self {
@@ -567,7 +573,7 @@ impl Settings {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        write_atomic(path, serde_json::to_string_pretty(self)?.as_bytes())
+        write_private(path, serde_json::to_string_pretty(self)?.as_bytes())
     }
 }
 
@@ -2028,6 +2034,14 @@ pub fn load_identity(path: &Path) -> Result<Identity> {
         return Identity::from_file(path).map_err(|e| anyhow::anyhow!("loading identity {}: {e}", path.display()));
     }
     let identity = Identity::new();
+    // Made private first, so the key is never readable by others, even for a moment.
+    #[cfg(unix)]
+    {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let _ = options.open(path);
+    }
     identity.to_file(path).map_err(|e| anyhow::anyhow!("saving identity {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
@@ -2095,6 +2109,24 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn what_rettui_keeps_is_private_to_its_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rettui-test-private-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let paths = Paths::new(Some(dir.clone())).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        load_identity(&paths.identity).unwrap();
+        assert_eq!(mode(&paths.identity), 0o600);
+        crate::store::Store::default().save(&paths.store).unwrap();
+        assert_eq!(mode(&paths.store), 0o600);
+        Settings::default().save(&paths.settings).unwrap();
+        assert_eq!(mode(&paths.settings), 0o600);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn every_setting_is_in_one_group() {

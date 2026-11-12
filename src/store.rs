@@ -24,7 +24,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 
-use crate::config::write_atomic;
+use crate::config::write_private;
 use crate::net::PeerKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -707,7 +707,7 @@ pub fn remove_from_archive(dir: &Path, conversation: &str, owned: &[PathBuf]) ->
         if kept.is_empty() {
             std::fs::remove_file(&path)?;
         } else {
-            write_atomic(&path, &gzip(format!("{}\n", kept.join("\n")).as_bytes())?)?;
+            write_private(&path, &gzip(format!("{}\n", kept.join("\n")).as_bytes())?)?;
         }
     }
     Ok(if removed > 0 { vec![format!("Deleted {removed} archived message(s) of the deleted conversation")] } else { Vec::new() })
@@ -943,7 +943,7 @@ impl Store {
                 }
             }
         } else if !self.peers.is_empty() {
-            match encode_peers(&self.peers).and_then(|bytes| write_atomic(path, &bytes)) {
+            match encode_peers(&self.peers).and_then(|bytes| write_private(path, &bytes)) {
                 Ok(()) => {
                     self.rewrite_store = holds_peers;
                     self.migration_notes.push(format!("Moved {} peers from store.json.gz to peers.json.gz", self.peers.len()));
@@ -1026,7 +1026,7 @@ impl Store {
         let peers = peers_path(path);
         if !store.peers.is_empty()
             && !peers.exists()
-            && let Err(e) = encode_peers(&store.peers).and_then(|bytes| write_atomic(&peers, &bytes))
+            && let Err(e) = encode_peers(&store.peers).and_then(|bytes| write_private(&peers, &bytes))
         {
             let _ = std::fs::remove_file(path);
             bail!("could not write peers.json.gz: {e:#}");
@@ -1044,7 +1044,7 @@ impl Store {
 
     /// Write the store file (not the peers).
     pub fn save(&self, path: &Path) -> Result<()> {
-        write_atomic(path, &self.encode()?)
+        write_private(path, &self.encode()?)
     }
 
     /// Who someone is: your name for them, else the one they announce,
@@ -1273,7 +1273,7 @@ mod tests {
         let mut peers = sample().peers;
         peers.get_mut(&"ab".repeat(16)).unwrap().name = Some("Ali\u{202E}ce\u{200B}".into());
         Store::default().save(&path).unwrap();
-        write_atomic(&peers_path(&path), &encode_peers(&peers).unwrap()).unwrap();
+        write_private(&peers_path(&path), &encode_peers(&peers).unwrap()).unwrap();
         assert_eq!(Store::load(&path).unwrap().display_name(&"ab".repeat(16)), "Alice");
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1327,7 +1327,7 @@ mod tests {
         store.save(&path).unwrap();
         assert!(!unzip(&path).contains("Alice"), "the store file leaves the peers out");
         assert!(store.snapshot().peers.is_empty());
-        write_atomic(&peers_path(&path), &encode_peers(&store.peers).unwrap()).unwrap();
+        write_private(&peers_path(&path), &encode_peers(&store.peers).unwrap()).unwrap();
         let loaded = Store::load(&path).unwrap();
         assert_eq!(loaded.peers.len(), 1);
         assert_eq!(loaded.display_name(&"ab".repeat(16)), "Alice");
@@ -1349,7 +1349,7 @@ mod tests {
         // and the store is still due to be rewritten.
         let mut newer = sample();
         newer.peers.values_mut().for_each(|p| p.name = Some("Alice B".into()));
-        write_atomic(&peers_path(&path), &encode_peers(&newer.peers).unwrap()).unwrap();
+        write_private(&peers_path(&path), &encode_peers(&newer.peers).unwrap()).unwrap();
         let again = Store::load(&path).unwrap();
         assert_eq!(again.display_name(&"ab".repeat(16)), "Alice B");
         assert!(again.rewrite_store && again.migration_notes.is_empty());
