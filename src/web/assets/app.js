@@ -1980,12 +1980,13 @@ function microned(text, from, to, micron) {
   return out;
 }
 
-function linkNode(text, url) {
-  return el('a', { class: 'chat-link', href: '#', text, title: url, onclick: (e) => {
+// A link to `url` showing `content` (text, or a list of nodes and text).
+function linkNode(content, url) {
+  return el('a', { class: 'chat-link', href: '#', title: url, onclick: (e) => {
     e.preventDefault();
     e.stopPropagation();
     openLink(url);
-  } });
+  } }, content);
 }
 
 // Beside a link to a repository: copy it to this computer, after asking.
@@ -5492,7 +5493,9 @@ app.views.channels = {
     for (const [start, end, attrs] of ranges) {
       if (start < at || end <= start) continue;
       if (start > at) plain(at, start);
-      out.push(attrs.url ? linkNode(text.slice(start, end), attrs.url) : el('span', { ...attrs, text: text.slice(start, end) }));
+      // Its Micron styles inside, so it keeps the message's colours.
+      const inner = microned(text, start, end, micron);
+      out.push(attrs.url ? linkNode(inner, attrs.url) : el('span', attrs, ...inner));
       at = end;
     }
     if (at < text.length) plain(at, text.length);

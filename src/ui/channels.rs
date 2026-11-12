@@ -33,16 +33,17 @@ fn nick_color(src: Option<&str>) -> Color {
 }
 
 /// Split a piece of text (starting at byte `offset` of the message) into
-/// spans, with the parts inside `marks` (sorted byte ranges) in their style,
-/// and the rest in `style` patched with the Micron styles of `base` (also
-/// sorted byte ranges) it falls in.
+/// spans, with the parts inside `marks` (sorted byte ranges) in their style
+/// and the rest in `style`, each patched with the Micron styles of `base`
+/// (also sorted byte ranges) it falls in, so a mention or link in coloured
+/// Micron keeps its colour.
 fn marked(piece: &str, offset: usize, marks: &[(usize, usize, Style)], base: &[(usize, usize, Style)], style: Style) -> Vec<Span<'static>> {
     let end = offset + piece.len();
     let mut spans = Vec::new();
     let mut at = offset;
     // The text from `at` to `to` (bytes of the message), in `style` and its
     // Micron styles.
-    let plain = |spans: &mut Vec<Span<'static>>, at: usize, to: usize| {
+    let paint = |spans: &mut Vec<Span<'static>>, at: usize, to: usize, style: Style| {
         let mut from = at;
         for &(start, stop, micron) in base {
             let (start, stop) = (start.max(from), stop.min(to));
@@ -65,13 +66,13 @@ fn marked(piece: &str, offset: usize, marks: &[(usize, usize, Style)], base: &[(
             continue;
         }
         if start > at {
-            plain(&mut spans, at, start);
+            paint(&mut spans, at, start, style);
         }
-        spans.push(Span::styled(piece[start - offset..stop - offset].to_string(), mark));
+        paint(&mut spans, start, stop, mark);
         at = stop;
     }
     if at < end {
-        plain(&mut spans, at, end);
+        paint(&mut spans, at, end, style);
     }
     spans
 }
@@ -626,4 +627,22 @@ fn draw_popup(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.channel_popup = popup_block.inner(rect);
     let widget = List::new(items).block(popup_block).highlight_style(picked_style());
     frame.render_stateful_widget(widget, rect, list);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mention or link inside coloured Micron keeps the Micron colour, and
+    /// the mark's own style (its underline here) under it.
+    #[test]
+    fn a_mark_in_micron_keeps_its_colour() {
+        let red = Style::default().fg(Color::Red);
+        let link = Style::default().fg(Color::Blue).add_modifier(ratatui::style::Modifier::UNDERLINED);
+        let spans = marked("ab cd ef", 0, &[(3, 5, link)], &[(0, 8, red)], Style::default());
+        let text: Vec<_> = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, ["ab ", "cd", " ef"]);
+        assert!(spans.iter().all(|s| s.style.fg == Some(Color::Red)));
+        assert!(spans[1].style.add_modifier.contains(ratatui::style::Modifier::UNDERLINED));
+    }
 }

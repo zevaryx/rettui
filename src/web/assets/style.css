@@ -666,7 +666,9 @@ header .avatar.icon { font-size: 17px; }
 .chat-line .mention { background: var(--yellow-bg); color: #111; }
 /* Coloured Micron, often art: every space kept, no wrapping, cut off at the
    edge, in the monospace font (phones use the sans one for chat). */
-.chat-line.art { white-space: pre; overflow-wrap: normal; overflow: hidden; }
+/* Rows that touch, so half-block art (▀ ▄ on background colours) shows no
+   gaps between lines. */
+.chat-line.art { white-space: pre; overflow-wrap: normal; overflow: hidden; line-height: 1; padding: 0; }
 .chat-line.art .text { font-family: var(--mono); }
 .hub-info { display: grid; grid-template-columns: 90px 1fr; gap: 2px 12px; padding: 12px; }
 .hub-info .label { color: var(--dim); }

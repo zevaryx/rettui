@@ -746,10 +746,26 @@ fn line_kind(kind: LineKind) -> &'static str {
     }
 }
 
-/// Byte ranges of `text` as UTF-16 offsets (what JavaScript strings index).
-fn utf16_ranges(text: &str, ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    let at = |byte: usize| text.get(..byte).map_or(0, |t| t.encode_utf16().count());
-    ranges.iter().map(|&(start, end)| (at(start), at(end))).collect()
+/// The UTF-16 offsets (what JavaScript strings index) of byte offsets into
+/// `text`, counted in one pass over it: a lookup from each of `bytes` to its
+/// offset (0 for one that isn't on a character boundary of `text`).
+fn utf16_offsets(text: &str, bytes: impl IntoIterator<Item = usize>) -> impl Fn(usize) -> usize {
+    let mut wanted: Vec<usize> = bytes.into_iter().collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    let mut found = Vec::with_capacity(wanted.len());
+    let mut wanted = wanted.into_iter().peekable();
+    let mut units = 0;
+    let boundaries = text.char_indices().map(|(at, c)| (at, c.len_utf16())).chain(std::iter::once((text.len(), 0)));
+    for (at, len) in boundaries {
+        while let Some(byte) = wanted.next_if(|&byte| byte <= at) {
+            if byte == at {
+                found.push((byte, units));
+            }
+        }
+        units += len;
+    }
+    move |byte| found.binary_search_by_key(&byte, |&(b, _)| b).map_or(0, |i| found[i].1)
 }
 
 /// A Micron style in a chat message: its colours as `#rrggbb` and which of
@@ -787,25 +803,23 @@ pub fn room(app: &App, hub: &Hub, room: &str, last: Option<usize>) -> Value {
             let micron = line.is_message().then(|| crate::nomad::micron::chat::parse(&line.text)).flatten();
             let stripped = micron.as_ref().map(|m| ChatLine { text: m.text.clone(), mention_at: Vec::new(), ..line.clone() });
             let line = stripped.as_ref().unwrap_or(line);
-            let styles: Vec<Value> = micron
-                .as_ref()
-                .map_or(&[][..], |m| m.spans.as_slice())
-                .iter()
-                .map(|&(start, end, style)| {
-                    let (start, end) = utf16_ranges(&line.text, &[(start, end)])[0];
-                    json!([start, end, micron_style(style)])
-                })
-                .collect();
+            let spans = micron.as_ref().map_or(&[][..], |m| m.spans.as_slice());
             let highlights = line.highlights(&own_nick);
             // `@name` mentions of others, drawn in that person's colour.
-            let mentions: Vec<Value> = line
-                .user_mentions(&people, &highlights)
-                .into_iter()
-                .map(|(start, end, id)| {
-                    let (start, end) = utf16_ranges(&line.text, &[(start, end)])[0];
-                    json!([start, end, hex::encode(id)])
-                })
-                .collect();
+            let user_mentions = line.user_mentions(&people, &highlights);
+            // Every range's ends as UTF-16 offsets, counted in one pass.
+            let ends = spans
+                .iter()
+                .map(|&(start, end, _)| (start, end))
+                .chain(highlights.iter().copied())
+                .chain(user_mentions.iter().map(|&(start, end, _)| (start, end)))
+                .flat_map(|(start, end)| [start, end]);
+            let utf16 = utf16_offsets(&line.text, ends);
+            let styles: Vec<Value> =
+                spans.iter().map(|&(start, end, style)| json!([utf16(start), utf16(end), micron_style(style)])).collect();
+            let mentions: Vec<Value> =
+                user_mentions.iter().map(|&(start, end, id)| json!([utf16(start), utf16(end), hex::encode(id)])).collect();
+            let highlights: Vec<(usize, usize)> = highlights.iter().map(|&(start, end)| (utf16(start), utf16(end))).collect();
             json!({
                 "kind": line_kind(line.kind),
                 "src": line.src,
@@ -815,7 +829,7 @@ pub fn room(app: &App, hub: &Hub, room: &str, last: Option<usize>) -> Value {
                 "text": line.text,
                 "ts": line.ts,
                 "mention": line.mention,
-                "highlights": utf16_ranges(&line.text, &highlights),
+                "highlights": highlights,
                 "mentions": mentions,
                 "own": line.own,
                 "pending": line.pending.is_some(),
@@ -1190,6 +1204,16 @@ pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_offsets_as_utf16() {
+        // é is 2 bytes and 1 unit, 🎨 4 bytes and 2 units.
+        let text = "aé🎨b";
+        let utf16 = utf16_offsets(text, [7, 0, 1, 3, 7, 8, 2, 99]);
+        assert_eq!([0, 1, 3, 7, 8].map(&utf16), [0, 1, 2, 4, 5]);
+        // Inside a character, past the end, or not asked for: 0.
+        assert_eq!([2, 99, 5].map(&utf16), [0, 0, 0]);
+    }
 
     #[test]
     fn the_newest_part_of_a_history() {
