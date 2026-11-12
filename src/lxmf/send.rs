@@ -56,6 +56,13 @@ async fn stopped(cancel: &mut watch::Receiver<bool>) -> bool {
     cancel.wait_for(|stop| *stop).await.is_ok()
 }
 
+/// Whether a message to someone who announced `app_data` is compressed on
+/// the way: yes, unless their announce lists what they take and leaves
+/// compression out, as Python LXMF decides it.
+fn compressed_for(app_data: Option<&[u8]>) -> bool {
+    app_data.is_none_or(compression_support_from_app_data)
+}
+
 pub(super) async fn build_message(
     identity: &Identity,
     source: Hash,
@@ -65,7 +72,6 @@ pub(super) async fn build_message(
     let mut message = LxMessageDraft::new(outgoing.to, source, "", &outgoing.content, DeliveryMethod::Direct).map_err(|e| e.to_string())?;
     message.set_timestamp(outgoing.timestamp).map_err(|e| e.to_string())?;
     message.stamp_cost = app_data.and_then(stamp_cost_from_app_data);
-    message.auto_compress = app_data.is_none_or(compression_support_from_app_data);
 
     // The first image goes in FIELD_IMAGE (shown inline by Sideband and
     // MeshChat); everything else is a file attachment.
@@ -198,6 +204,7 @@ async fn send_direct(
     sending.unless_cancelled(find_path(runtime, outgoing.to, sending.progress)).await?;
     let recipient = lookup(runtime, known, outgoing.to).await?;
     let message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
+    let compress = compressed_for(recipient.app_data.as_deref());
     let hash = message.message_id();
     // Proof-of-work stamps can take a while at higher costs.
     if message.stamp_cost().is_some_and(|cost| cost > 0) {
@@ -228,7 +235,7 @@ async fn send_direct(
             Err(e) => Err(e.to_string()),
         }
     } else {
-        send_resource(&handle, packed, sending).await
+        send_resource(&handle, packed, compress, sending).await
     };
     handle.close().await;
     result.map(|()| hash)
@@ -295,16 +302,17 @@ async fn propagate(
                 .map_err(|e| format!("Link to propagation node failed: {e}"))
         })
         .await?;
-    let result = send_resource(&handle, packed, sending).await;
+    // A propagation node always takes it compressed.
+    let result = send_resource(&handle, packed, true, sending).await;
     handle.close().await;
     result.map(|()| Sent { delivered: Delivered::Propagated, hash })
 }
 
 /// Send `data` as a Resource, saying how much of it is sent, in whole
 /// percent. Cancelled, the Link is closed, which stops the transfer.
-async fn send_resource(handle: &LinkSessionHandle, data: Vec<u8>, sending: &Sending<'_>) -> Result<(), String> {
-    let transfer =
-        handle.send_resource_bytes(data, ResourceOptions { auto_compress: true, metadata: None }).await.map_err(|e| e.to_string())?;
+async fn send_resource(handle: &LinkSessionHandle, data: Vec<u8>, compress: bool, sending: &Sending<'_>) -> Result<(), String> {
+    let options = ResourceOptions { auto_compress: compress, metadata: None };
+    let transfer = handle.send_resource_bytes(data, options).await.map_err(|e| e.to_string())?;
     let mut progress = transfer.progress();
     let mut cancel = sending.cancel.clone();
     let concluded = transfer.concluded();
@@ -353,6 +361,20 @@ async fn wait_for_proof(events: &mut mpsc::Receiver<LinkSessionEvent>, packet_ha
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_message_is_compressed_unless_its_recipient_says_it_cant_take_that() {
+        let announce = |features: Option<Vec<u8>>| {
+            let mut parts = vec![Value::Binary(b"Amy".to_vec()), Value::Nil];
+            parts.extend(features.map(|list| Value::Array(list.into_iter().map(Value::from).collect())));
+            encode(&Value::Array(parts))
+        };
+        // Never heard, an older client with no list, or nonsense: compressed.
+        assert!(compressed_for(None) && compressed_for(Some(&announce(None))) && compressed_for(Some(b"\xc1")));
+        assert!(compressed_for(Some(&announce(Some(vec![lxmf_core::constants::SF_COMPRESSION, 7])))));
+        // A list without it: sent as it is.
+        assert!(!compressed_for(Some(&announce(Some(vec![7])))) && !compressed_for(Some(&announce(Some(vec![])))));
+    }
 
     #[tokio::test]
     async fn a_send_stops_when_cancelled_and_not_when_nobody_can_cancel() {
