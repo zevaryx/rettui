@@ -123,7 +123,6 @@ allow = [
   'GPL-3.0',
   'GPL-3.0-only',
   'GPL-3.0-or-later',
-  'AGPL-3.0-or-later',
   # rettui's own license, and rsReticulum's and rsLXMF's (see the clarify
   # entries below).
   'LicenseRef-Reticulum',
