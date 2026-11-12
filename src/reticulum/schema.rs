@@ -264,7 +264,7 @@ const INGRESS_TUNING: &[Opt] = &[
 pub const INTERFACE_BASIC: Group = Group {
     title: "Interface",
     opts: &[
-        alias("enabled", &["interface_enabled"], "Enabled", Bool, "Yes", "Start this interface with Reticulum"),
+        alias("enabled", &["interface_enabled"], "Enabled", Bool, "No", "Start this interface with Reticulum"),
         alias(
             "mode",
             &["interface_mode"],

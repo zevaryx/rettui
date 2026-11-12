@@ -325,6 +325,37 @@ fn reticulums_path_and_announce_rate_tables() {
     assert!(!tui.app.tables.open && tui.draw().contains("Heard announces"));
 }
 
+/// The config, written as someone might by hand, and read in.
+fn with_rns_config(app: &mut crate::app::App, text: &str) {
+    let path = app.rns_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+    app.rns_reload();
+}
+
+#[test]
+fn an_interface_that_doesnt_say_enabled_is_off() {
+    let mut tui = Tui::new("rns-unsaid");
+    with_rns_config(&mut tui.app, "[reticulum]\n  share_instance = No\n\n[interfaces]\n  [[Quiet]]\n    type = AutoInterface\n");
+    tui.tab(Tab::Reticulum);
+    while tui.app.rns.section() != Some(&crate::reticulum::Section::Interface("Quiet".into())) {
+        tui.key(KeyCode::Down);
+    }
+    // Shown as off, as Reticulum takes it, and the option reads no.
+    let drawn = tui.draw();
+    assert!(drawn.contains("○ Quiet") && !drawn.contains("● Quiet"), "{drawn}");
+    assert!(tui.app.rns.check.warnings.iter().any(|w| w.contains("Quiet: off")), "{:?}", tui.app.rns.check.warnings);
+    // Space turns it on, rather than writing that it's off.
+    tui.key(KeyCode::Char(' '));
+    let config = std::fs::read_to_string(tui.app.rns_path()).unwrap();
+    assert!(crate::reticulum::interface_on(&crate::reticulum::doc::Doc::new(&config), "Quiet"), "{config}");
+    assert!(tui.draw().contains("● Quiet"));
+    // And off again.
+    tui.key(KeyCode::Char(' '));
+    let config = std::fs::read_to_string(tui.app.rns_path()).unwrap();
+    assert!(!crate::reticulum::interface_on(&crate::reticulum::doc::Doc::new(&config), "Quiet"), "{config}");
+}
+
 #[test]
 fn interface_profiles_kept_switched_and_deleted() {
     let mut tui = Tui::new("rns-profiles");

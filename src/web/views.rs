@@ -1126,7 +1126,7 @@ pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
             "title": s.title(),
             "interface": matches!(s, Section::Interface(_)),
             "type": values.and_then(|v| v.get("type")),
-            "enabled": values.map(|v| v.get("enabled").or_else(|| v.get("interface_enabled")).is_none_or(crate::app::reticulum::rns_truthy)),
+            "enabled": values.map(|v| v.interface_enabled()),
         })
     };
     let options = rns::options(config.as_ref(), &current);

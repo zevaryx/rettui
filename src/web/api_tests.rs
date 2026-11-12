@@ -154,6 +154,26 @@ async fn state_settings_and_the_little_things() {
 }
 
 #[tokio::test]
+async fn an_interface_that_doesnt_say_enabled_is_listed_as_off() {
+    let web = TestWeb::start("rns-unsaid");
+    web.with(|app| {
+        let path = app.rns_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text = "[reticulum]\n  share_instance = No\n\n[interfaces]\n  [[Quiet]]\n    type = AutoInterface\n  [[Loud]]\n    type = AutoInterface\n    interface_enabled = Yes\n";
+        std::fs::write(path, text).unwrap();
+        app.rns_reload();
+    })
+    .await;
+    let rns = web.get("/api/reticulum?section=interface:Quiet").await.json();
+    let on = |name: &str| rns["sections"].as_array().unwrap().iter().find(|s| s["title"] == name).unwrap()["enabled"].clone();
+    assert_eq!((on("Quiet"), on("Loud")), (json!(false), json!(true)), "{rns}");
+    // Its Enabled option is off until set, and the config's warnings say why.
+    let enabled = rns["options"].as_array().unwrap().iter().find(|o| o["key"] == "enabled").unwrap();
+    assert_eq!((&enabled["value"], &enabled["default"]), (&json!(null), &json!("No")), "{rns}");
+    assert!(rns["warnings"].to_string().contains("Quiet: off"), "{rns}");
+}
+
+#[tokio::test]
 async fn conversations_from_first_message_to_deleting_them() {
     let web = TestWeb::start("conversations");
     // A new one by address; nonsense isn't one.

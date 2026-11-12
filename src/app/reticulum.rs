@@ -497,7 +497,8 @@ impl App {
             KeyCode::Enter => self.rns.focus = RnsFocus::Options,
             KeyCode::Char(' ') => {
                 let enabled = self.rns.options.iter().find(|o| o.key == "enabled");
-                let on = enabled.and_then(|o| o.value.as_deref()).is_none_or(rns_truthy);
+                // Off unless it says yes, as Reticulum reads it.
+                let on = enabled.and_then(|o| o.value.as_deref()).is_some_and(rns_truthy);
                 let section = Section::Interface(name.clone());
                 let result = self.rns_set_options(&section, &[("enabled", if on { "no" } else { "yes" })], false);
                 self.rns_report(result, &format!("{name} {}", if on { "disabled" } else { "enabled" }));
