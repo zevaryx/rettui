@@ -328,10 +328,19 @@ impl HostedHub {
             .map_err(|e| format!("Could not register the hub: {e}"))?;
         let (actions_tx, actions) = mpsc::unbounded_channel();
         let (stop, stopped) = oneshot::channel();
+        let failures = events.clone();
         let mut core = Core::new(router, identity.hash, config.clone(), events);
         core.open_console();
         let hub = Hub { handle: destination.handle.clone(), core };
-        let task = tokio::spawn(hub.run(destination, actions, stopped));
+        // If the hub's task panics, say so: otherwise the panel keeps showing it running.
+        let task = tokio::spawn(async move {
+            if let Err(e) = tokio::spawn(hub.run(destination, actions, stopped)).await
+                && e.is_panic()
+            {
+                let _ = failures
+                    .send(NetEvent::Hub(HubEvent::Failed("The hub stopped after an error. Turn it off and on to start it again.".into())));
+            }
+        });
         Ok(Self { hash, public_key, actions: actions_tx, stop: Some(stop), task: Some(task) })
     }
 
@@ -582,7 +591,9 @@ impl Core {
     ///   for a room there isn't, and those naming someone nobody here
     ///   matches (see [`Core::unmatched`]).
     fn screen(&mut self, link: [u8; 16], data: &[u8]) -> Option<Vec<Action>> {
-        let env = Envelope::decode(data).ok()?;
+        // A frame the router might read differently from this screen is
+        // refused, not passed on unscreened.
+        let Ok(env) = Envelope::decode_strict(data) else { return Some(Vec::new()) };
         let state = &self.router.state;
         let session = state.sessions.get(&link)?;
         let peer = session.peer?;
@@ -1385,6 +1396,48 @@ mod tests {
         join(&mut core, 2, YOU, "lobby");
         join(&mut core, 1, AMY, "lobby");
         assert_eq!(core.router.state.rooms["lobby"].members.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A frame whose body the screen and the router could read differently
+    /// (a key twice, a tag): a MSG from `AMY` in "lobby" with `body` bytes.
+    fn raw_message(body_pairs: &[u8], pairs: u8) -> Vec<u8> {
+        let mut frame = vec![0xa0 + pairs, 0x00, 0x01, 0x01, 0x14, 0x02, 0x48, 1, 2, 3, 4, 5, 6, 7, 8, 0x03, 0x00, 0x04, 0x50];
+        frame.extend_from_slice(&AMY);
+        frame.extend_from_slice(&[0x05, 0x65]);
+        frame.extend_from_slice(b"lobby");
+        frame.extend_from_slice(body_pairs);
+        frame
+    }
+
+    #[test]
+    fn frames_the_router_could_read_differently_are_refused() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-ambiguous-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, false);
+        connect(&mut core, 1, AMY, "amy");
+        let ban = b"\x6d/ban zzz list";
+        // The body given twice: "hello", then a command.
+        let mut twice = vec![0x06, 0x65];
+        twice.extend_from_slice(b"hello");
+        twice.push(0x06);
+        twice.extend_from_slice(ban);
+        // The body under a CBOR tag.
+        let mut tagged = vec![0x06, 0xc1];
+        tagged.extend_from_slice(ban);
+        // The same frames, with one body, are fine: the refusals are for what they do.
+        let mut once = vec![0x06, 0x65];
+        once.extend_from_slice(b"hello");
+        assert!(Envelope::decode_strict(&raw_message(&once, 7)).is_ok());
+        for (frame, why) in [(raw_message(&twice, 8), "twice"), (raw_message(&tagged, 7), "tagged")] {
+            assert!(Envelope::decode_strict(&frame).is_err(), "{why}");
+            assert!(core.screen([1; 16], &frame).is_some_and(|actions| actions.is_empty()), "{why}");
+        }
+        // Bytes after the map are refused too, and a plain frame still passes.
+        let plain = Envelope::new(t::MSG, &AMY).room("lobby").text("hi").encode();
+        assert!(core.screen([1; 16], &plain).is_none());
+        let mut trailing = plain.clone();
+        trailing.push(0);
+        assert!(core.screen([1; 16], &trailing).is_some_and(|actions| actions.is_empty()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
