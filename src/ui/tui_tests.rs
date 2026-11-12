@@ -47,6 +47,11 @@ impl Tui {
         (0..HEIGHT).map(|y| (0..WIDTH).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
     }
 
+    /// The screen's cells as last drawn, for their colours and styles.
+    pub fn buffer(&self) -> &ratatui::buffer::Buffer {
+        self.terminal.backend().buffer()
+    }
+
     /// A key, then the screen drawn.
     pub fn key(&mut self, code: KeyCode) -> &mut Self {
         self.app.on_key(KeyEvent::from(code));
@@ -2408,4 +2413,74 @@ fn ask_where_someone_is_from_the_map_and_see_what_runs_a_propagation_node() {
     tui.key(KeyCode::Char('a'));
     let shown = tui.draw();
     assert!(shown.contains("Hill node") && shown.contains("lxmd 1.2.1"), "{shown}");
+}
+
+/// Art sent to a room as Micron in NomadNet's `¦` form, a message a line, as
+/// an art bot sends it: drawn in its colours, a row a message, every space
+/// kept, lined up under the sender's name. Messages without a `¦` tag, and
+/// formatting without colour, wrap as before.
+#[test]
+fn micron_art_in_a_room_keeps_its_shape() {
+    use crate::app::channels::ChatLine;
+    use ratatui::style::{Color, Modifier};
+    let mut tui = Tui::new("micron-art");
+    with_hilltop(&mut tui);
+    let carol = hex::encode(CAROL);
+    let said = |text: &str| -> ChatLine {
+        serde_json::from_value(
+            serde_json::json!({ "kind": "Msg", "src": carol, "nick": "carol", "text": text, "ts": 1_800_000_000_000u64 }),
+        )
+        .unwrap()
+    };
+    let art: Vec<&str> = include_str!("testdata/micron-art.txt").lines().collect();
+    let mut lines: Vec<ChatLine> = art.iter().map(|l| said(l)).collect();
+    lines.push(said("plain words with `F00 backticks` and a ¦ bar, long enough that the chat view has to wrap them onto a second row"));
+    lines.push(said("¦!bold¦! words but no colour wrap like any other message, so this one is made long enough to need a second row"));
+    tui.app.channels.hubs[0].buffers.insert("lobby".into(), lines);
+    let screen = tui.draw();
+    let rows: Vec<&str> = screen.lines().collect();
+    let said_at: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.contains("<carol> ")).map(|(y, _)| y).collect();
+    assert_eq!(said_at.len(), art.len() + 2, "{screen}");
+    // A row each, one under the other: none wrapped.
+    assert!(said_at.windows(2).take(art.len()).all(|w| w[1] == w[0] + 1), "{screen}");
+    let history = tui.app.regions.channel_history;
+    let buffer = tui.buffer();
+    // The column a row's message starts in, after the sender's name.
+    let body = |y: usize| (rows[y][..rows[y].find("<carol> ").unwrap()].chars().count() + "<carol> ".len()) as u16;
+    for (line, &y) in art.iter().zip(&said_at) {
+        let row = rows[y];
+        let body = body(y);
+        let micron = crate::nomad::micron::chat::parse(line).unwrap();
+        // Its text from the same column, every space kept, up to the view's
+        // edge; never a tag.
+        let shown: String = (body..history.right()).map(|x| buffer[(x, y as u16)].symbol()).collect();
+        let text: String = micron.text.chars().take(shown.chars().count()).collect();
+        assert_eq!(shown.trim_end(), text.trim_end(), "row {y}");
+        assert!(!row.contains('\u{a6}'), "{row}");
+    }
+    // Colours as sent: `¦Bf00¦Faf0▄¦B0f9▀ `.
+    let (x, y) = (body(said_at[0]), said_at[0] as u16);
+    assert_eq!((buffer[(x, y)].symbol(), buffer[(x, y)].fg, buffer[(x, y)].bg), ("▄", Color::Rgb(0xaa, 0xff, 0), Color::Rgb(0xff, 0, 0)));
+    assert_eq!((buffer[(x + 1, y)].symbol(), buffer[(x + 1, y)].bg), ("▀", Color::Rgb(0, 0xff, 0x99)));
+    assert_eq!((buffer[(x + 2, y)].symbol(), buffer[(x + 2, y)].bg), (" ", Color::Rgb(0, 0xff, 0x99)));
+    // The banner below it, in the same column, each letter of "RRC" in its
+    // own colour on black.
+    let banner = said_at[art.len() - 2];
+    assert_eq!(body(banner), x);
+    assert!(rows[banner].contains("| RRC art over Reticulum"), "{screen}");
+    for (i, (letter, fg)) in
+        [("R", Color::Rgb(0xff, 0xff, 0)), ("R", Color::Rgb(0, 0xff, 0)), ("C", Color::Rgb(0xff, 0, 0xff))].into_iter().enumerate()
+    {
+        let cell = &buffer[(x + 3 + i as u16, banner as u16)];
+        assert_eq!((cell.symbol(), cell.fg, cell.bg), (letter, fg, Color::Rgb(0, 0, 0)));
+    }
+    // Plain text: backticks and a lone bar shown as written, and wrapped.
+    let plain = said_at[art.len()];
+    assert!(rows[plain].contains("with `F00"), "{screen}");
+    assert!(!rows[plain + 1].contains("<carol>") && rows[plain + 1].contains("backticks` and a \u{a6} bar"), "{screen}");
+    // Bold without colour: bold, and wrapped like the plain message.
+    let bold = said_at[art.len() + 1];
+    let at = rows[bold][..rows[bold].find("bold").unwrap()].chars().count() as u16;
+    assert!(buffer[(at, bold as u16)].modifier.contains(Modifier::BOLD));
+    assert!(!rows[bold].contains('\u{a6}') && !rows[bold + 1].contains("<carol>") && rows[bold + 1].contains("like any"), "{screen}");
 }

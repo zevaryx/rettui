@@ -698,6 +698,12 @@ mod tests {
 
     const ME: [u8; 16] = [5; 16];
 
+    /// A file name links can't carry as it is. Windows won't make one with a bar
+    /// in it, so there it's a space only.
+    fn odd_name() -> &'static str {
+        if cfg!(windows) { "we ird name.txt" } else { "we|ird name.txt" }
+    }
+
     fn git(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")
             .args(["-c", "user.name=Ann", "-c", "user.email=ann@example.org", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
@@ -725,7 +731,7 @@ mod tests {
         std::fs::write(work.join("src/main.rs"), "// The start.\nfn main() {\n    println!(\"hi `there`\");\n}\n").unwrap();
         std::fs::write(work.join("long.txt"), (1..=2500).map(|n| format!("line {n}\n")).collect::<String>()).unwrap();
         std::fs::write(work.join("blob.bin"), [0u8, 1, 2]).unwrap();
-        std::fs::write(work.join("we|ird name.txt"), "odd").unwrap();
+        std::fs::write(work.join(odd_name()), "odd").unwrap();
         git(&work, &["add", "."]);
         git(&work, &["commit", "-q", "-m", "First\n\nWith a body."]);
         std::fs::write(work.join("src/main.rs"), "fn main() {}\n").unwrap();
@@ -869,7 +875,7 @@ mod tests {
         let (binary, _) = page(&node, BLOB, &demo(&[("ref", &first), ("path", "blob.bin")]), None);
         assert!(binary.contains("A binary file of 3 B"), "{binary}");
         let (top, _) = page(&node, TREE, &demo(&[]), None);
-        let weird = follow(&node, &top, BLOB, "path", "we|ird name.txt");
+        let weird = follow(&node, &top, BLOB, "path", odd_name());
         assert!(weird.contains("odd"), "{weird}");
         // Markdown is formatted unless its source is asked for.
         let (readme, _) = page(&node, BLOB, &demo(&[("path", "README.md")]), None);
