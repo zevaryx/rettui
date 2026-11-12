@@ -87,7 +87,10 @@ impl App {
             }
         }
         let extras = &message.extras;
-        if let Some(appearance) = &extras.appearance {
+        // Without their key to check the signature, the sender is only who the message says:
+        // it may speak in their conversation, but not answer for, move or change them.
+        let acts = paper || message.verified;
+        if let Some(appearance) = extras.appearance.as_ref().filter(|_| acts) {
             self.keep_appearance(&key, appearance, message.timestamp);
         }
         let location = extras.telemetry.as_ref().and_then(|t| t.location);
@@ -107,7 +110,17 @@ impl App {
         let mut notes = extras.notes(bare);
         // Sideband's commands: answered if set to, and said so either way.
         let answers: Vec<String> = extras.commands.iter().filter_map(|c| c.answer(message.signal.as_ref())).collect();
-        if !answers.is_empty() && !paper {
+        let wants_action = !answers.is_empty()
+            || !extras.stream.is_empty()
+            || extras.appearance.is_some()
+            || extras
+                .commands
+                .iter()
+                .any(|c| matches!(c, lxmf::fields::Command::CollectorRequest(_) | lxmf::fields::Command::TelemetryRequest));
+        if wants_action && !acts {
+            notes.push("Not acted on: the sender isn't verified yet".into());
+        }
+        if !answers.is_empty() && acts && !paper {
             notes.push(match self.answer_commands(&key, answers) {
                 Ok(()) => "Answered automatically (Answer commands)".into(),
                 Err(why) => why,
@@ -120,19 +133,19 @@ impl App {
             _ => None,
         });
         let serving = self.settings.collector_serve != "off";
-        if let (Some(since), true, false) = (collector_request, serving, paper) {
+        if let (Some(since), true, true, false) = (collector_request, serving, acts, paper) {
             notes.push(match self.answer_collector_request(&key, since) {
                 Ok(note) => format!("Answered: {note}"),
                 Err(why) => why,
             });
-        } else if (collector_request.is_some() || extras.commands.contains(&lxmf::fields::Command::TelemetryRequest)) && !paper {
+        } else if (collector_request.is_some() || extras.commands.contains(&lxmf::fields::Command::TelemetryRequest)) && acts && !paper {
             notes.push(match self.answer_location_request(&key) {
                 Ok(()) => "Answered with this station's location (Location requests)".into(),
                 Err(why) => why,
             });
         }
         // Others' locations, passed on by a collector.
-        if !extras.stream.is_empty() && !paper {
+        if !extras.stream.is_empty() && acts && !paper {
             notes.push(self.take_stream(&key, &extras.stream));
         }
         // Their icon alone isn't a message either (it's kept, above).

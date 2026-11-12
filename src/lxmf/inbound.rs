@@ -9,9 +9,12 @@ use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
 use super::fields::{self, FIELD_COLUMBA_EXTENSIONS};
-use super::policy::SharedPolicy;
+use super::policy::{SharedPolicy, StampCheck};
 use super::{Attachment, Extras, InboundMessage, Reply, bytes_of, is_image_name};
 use crate::net::{Hash, Known, NetEvent, lookup};
+
+/// How many stamps are worked out at once.
+static STAMP_CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 /// How long to look for an unknown sender's announce to verify a message.
 const SENDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -88,23 +91,34 @@ pub(super) async fn parse_inbound(
     policy: Option<&SharedPolicy>,
     data: &[u8],
 ) -> Result<InboundMessage, String> {
-    let message = LxMessage::unpack(data).map_err(|e| e.to_string())?;
+    let mut message = LxMessage::unpack(data).map_err(|e| e.to_string())?;
     if let Some(policy) = policy {
-        let policy = policy.lock().unwrap();
-        if policy.too_big(data.len()) {
-            return Err(format!(
-                "Dropped a message from {}: {} KB, over your limit of {} KB",
-                hex::encode(message.source_hash()),
-                data.len() / 1000,
-                policy.max_bytes / 1000
-            ));
-        }
-        if !policy.stamp_accepted(&message) {
-            return Err(format!(
-                "Dropped a message from {}: it had no valid stamp (you ask for stamp cost {})",
-                hex::encode(message.source_hash()),
-                policy.stamp_cost.unwrap_or_default()
-            ));
+        // The policy is let go before the stamp is worked out: that takes a while, and
+        // the link manager asks the policy too.
+        let check = {
+            let policy = policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if policy.too_big(data.len()) {
+                return Err(format!(
+                    "Dropped a message from {}: {} KB, over your limit of {} KB",
+                    hex::encode(message.source_hash()),
+                    data.len() / 1000,
+                    policy.max_bytes / 1000
+                ));
+            }
+            policy.stamp_check(&message)
+        };
+        if let StampCheck::Needs { cost, .. } = &check {
+            let cost = *cost;
+            // A few at a time, so a flood of stamps can't take every thread.
+            let _turn = STAMP_CHECKS.acquire().await.map_err(|e| e.to_string())?;
+            let (passes, back) = tokio::task::spawn_blocking(move || (check.passes(&message), message)).await.map_err(|e| e.to_string())?;
+            message = back;
+            if !passes {
+                return Err(format!(
+                    "Dropped a message from {}: it had no valid stamp (you ask for stamp cost {cost})",
+                    hex::encode(message.source_hash())
+                ));
+            }
         }
     }
     // Senders of propagated messages are often offline; a bounded lookup
@@ -121,7 +135,7 @@ pub(super) async fn parse_inbound(
     tracing::debug!("message from {} verified={verified}", hex::encode(message.source_hash()));
     // Only from who it says, a ticket can be used for messages to them.
     if verified && let Some(policy) = policy {
-        policy.lock().unwrap().take_ticket(&message);
+        policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take_ticket(&message);
     }
     let attachments = attachments_of(&message);
     let reply = reply_of(&message);

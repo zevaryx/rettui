@@ -22,6 +22,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::net::Hash;
 
+/// What [`Policy::stamp_check`] found.
+pub enum StampCheck {
+    Accepted,
+    Needs { cost: u8, tokens: Vec<Vec<u8>> },
+}
+
+impl StampCheck {
+    /// Whether `message` has what is needed (the slow part).
+    pub fn passes(&self, message: &LxMessage) -> bool {
+        match self {
+            StampCheck::Accepted => true,
+            StampCheck::Needs { cost, tokens } => message.validate_stamp_with_tickets(*cost, Some(tokens)),
+        }
+    }
+}
+
 pub struct Policy {
     /// The stamp cost asked of senders, if any.
     pub stamp_cost: Option<u8>,
@@ -94,15 +110,24 @@ impl Policy {
         self.max_bytes > 0 && size as u64 > self.max_bytes
     }
 
+    /// What a message must have: nothing more, or a stamp of this cost (or
+    /// one of these tickets), unless none is asked or it's from a contact.
+    /// Checking the stamp takes a while, so it's left to the caller, after the
+    /// policy is let go.
+    pub fn stamp_check(&self, message: &LxMessage) -> StampCheck {
+        let Some(cost) = self.stamp_cost else { return StampCheck::Accepted };
+        if self.exempt.contains(&message.source_hash()) {
+            return StampCheck::Accepted;
+        }
+        let tokens = self.tickets.inbound_tokens(&message.source_hash(), now()).into_iter().map(|t| t.to_vec()).collect();
+        StampCheck::Needs { cost, tokens }
+    }
+
     /// Whether a message has what it must: a valid stamp (by proof of work
     /// or a ticket of yours), unless none is asked or it's from a contact.
+    #[cfg(test)]
     pub fn stamp_accepted(&self, message: &LxMessage) -> bool {
-        let Some(cost) = self.stamp_cost else { return true };
-        if self.exempt.contains(&message.source_hash()) {
-            return true;
-        }
-        let tokens: Vec<Vec<u8>> = self.tickets.inbound_tokens(&message.source_hash(), now()).into_iter().map(|t| t.to_vec()).collect();
-        message.validate_stamp_with_tickets(cost, Some(&tokens))
+        self.stamp_check(message).passes(message)
     }
 
     /// Keep a ticket a (verified) message brought, to stamp messages to its

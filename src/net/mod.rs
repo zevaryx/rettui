@@ -681,7 +681,7 @@ async fn run(
     let size_gate = {
         let (policy, ev) = (policy.clone(), ev.clone());
         ResourceAcceptPolicy::new(move |_link, advertisement| {
-            let policy = policy.lock().unwrap();
+            let policy = policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if !policy.too_big(advertisement.data_size) {
                 return true;
             }
@@ -1089,7 +1089,7 @@ async fn run(
                     }
                     NetCommand::SetPolicy { stamp_cost, max_bytes } => {
                         let changed = {
-                            let mut policy = policy.lock().unwrap();
+                            let mut policy = policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             policy.max_bytes = max_bytes;
                             std::mem::replace(&mut policy.stamp_cost, stamp_cost) != stamp_cost
                         };
