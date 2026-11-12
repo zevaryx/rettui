@@ -7764,11 +7764,15 @@ app.views.status = {
     const noInterfaces = s.net.state !== 'online' ? 'Reticulum is starting…'
       : s.external_shared_instance ? 'None here: the program running the shared instance (such as rnsd) has them.'
         : 'None: add one in the Reticulum section to reach other peers.';
-    this.interfaces.replaceChildren(...(s.interfaces.length ? s.interfaces.map((i) => el('div', { class: 'iface' },
+    // Off for want of an enabled line: older versions started these.
+    const off = (s.interfaces_off || []).map((name) => el('div', { class: 'iface' },
+      el('span', { class: 'state-warn', text: '○ ' }), name,
+      el('span', { class: 'dim', text: '  off: no enabled line. Add enabled = Yes in the Reticulum section' })));
+    this.interfaces.replaceChildren(...(s.interfaces.length || off.length ? s.interfaces.map((i) => el('div', { class: 'iface' },
       el('span', { class: i.online ? 'online' : 'offline', text: i.online ? '● ' : '○ ' }), i.name,
       el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` }),
       i.details?.length ? el('div', { class: 'iface-details dim', text: i.details.join(' · ') }) : null,
-      trafficGraph(i.history)))
+      trafficGraph(i.history))).concat(off)
       : [el('div', { class: 'empty', text: noInterfaces })]));
     // Fetched for Status only, and drawn again only when it changed.
     const log = s.log && JSON.stringify([s.log.length, s.log.at(-1), s.log[0]]);

@@ -138,19 +138,39 @@ impl RnsState {
 
 impl App {
     /// Once per start of rettui's own Reticulum: whether interface
-    /// discovery is on (it connects to hosts the user didn't choose), and
-    /// which Bootstrap only interfaces it will drop early. A shared instance
-    /// run by another program has its own config, and its own discovery.
+    /// discovery is on (it connects to hosts the user didn't choose), which
+    /// Bootstrap only interfaces it will drop early, and which interfaces
+    /// are off for want of an `enabled` line. A shared instance run by
+    /// another program has its own config, and its own discovery.
     pub(super) fn note_discovery(&mut self) {
-        if self.discovery_noted || self.interfaces.is_empty() {
+        if self.discovery_noted {
+            return;
+        }
+        // None running may be just that: every one of them left off.
+        let config = rns::load(&self.rns_path()).ok().and_then(|(text, _)| rns::check(&text).0);
+        let off = config.as_ref().map(rns::without_enabled).unwrap_or_default();
+        if self.interfaces.is_empty() && off.is_empty() {
             return;
         }
         self.discovery_noted = true;
         if self.uses_external_shared_instance() {
             return;
         }
-        let Ok((text, _)) = rns::load(&self.rns_path()) else { return };
-        let Some(config) = rns::check(&text).0 else { return };
+        let Some(config) = config else { return };
+        // Older versions started these, so it's said where it's seen: in
+        // the footer now, and on the Status page until they're turned on.
+        match off.as_slice() {
+            [] => {}
+            [name] => {
+                self.warn(format!("Interface {name} is off: it has no enabled line. Add enabled = Yes in the Reticulum config to use it"))
+            }
+            names => self.warn(format!(
+                "{} interfaces are off: they have no enabled line ({}). Add enabled = Yes in the Reticulum config to use them",
+                names.len(),
+                names.join(", ")
+            )),
+        }
+        self.interfaces_off = off;
         let connects = rns::discovery_autoconnect(&config);
         let ours = self.settings.discovered_entry_points;
         let finds = config.section("reticulum").and_then(|r| r.get_bool("discover_interfaces")) == Some(true);
@@ -165,7 +185,7 @@ impl App {
                 if ours == 1 { "" } else { "s" }
             ));
         }
-        for warning in rns::enable_warnings(&config).into_iter().chain(rns::bootstrap_warnings(&config)) {
+        for warning in rns::bootstrap_warnings(&config) {
             self.log(format!("Interface {warning}"));
         }
     }

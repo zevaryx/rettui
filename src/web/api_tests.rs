@@ -171,6 +171,17 @@ async fn an_interface_that_doesnt_say_enabled_is_listed_as_off() {
     let enabled = rns["options"].as_array().unwrap().iter().find(|o| o["key"] == "enabled").unwrap();
     assert_eq!((&enabled["value"], &enabled["default"]), (&json!(null), &json!("No")), "{rns}");
     assert!(rns["warnings"].to_string().contains("Quiet: off"), "{rns}");
+
+    // Once Reticulum has started without it, Status lists it as off.
+    assert_eq!(web.get("/api/state").await.json()["interfaces_off"], json!([]));
+    web.with(|app| {
+        let known = crate::net::remote::KnownIdentities::none();
+        app.on_net(crate::net::NetEvent::Started { lxmf_hash: [9; 16], public_key: [1; 64], known });
+        let loud = crate::net::InterfaceInfo { name: "Loud".into(), online: true, ..Default::default() };
+        app.on_net(crate::net::NetEvent::Interfaces(vec![loud]));
+    })
+    .await;
+    assert_eq!(web.get("/api/state").await.json()["interfaces_off"], json!(["Quiet"]));
 }
 
 #[tokio::test]

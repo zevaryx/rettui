@@ -139,6 +139,8 @@ pub fn state(app: &App) -> Value {
         "rns_config": app.settings.rns_config,
         "data_dir": app.paths.store.parent().map(|p| p.display().to_string()),
         "known": app.store.peers.len(),
+        // Off only because they have no `enabled` line.
+        "interfaces_off": app.interfaces_off,
         "interfaces": app.interfaces.iter().map(|i| json!({
             "name": i.name, "online": i.online, "rx": i.rx_bytes, "tx": i.tx_bytes,
             // Its rate, MTU and the rest, as rnstatus shows them.

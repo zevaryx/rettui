@@ -98,11 +98,20 @@ pub fn check(text: &str) -> (Option<Config>, Check) {
 /// Reticulum starts an interface only when `enabled` (or
 /// `interface_enabled`) is yes, and older rsReticulum started these.
 pub fn enable_warnings(config: &Config) -> Vec<String> {
+    without_enabled(config)
+        .into_iter()
+        .map(|name| format!("{name}: off, because it has no enabled line. Add enabled = Yes to use it"))
+        .collect()
+}
+
+/// The names of the interfaces with no `enabled` (or `interface_enabled`)
+/// line.
+pub fn without_enabled(config: &Config) -> Vec<String> {
     config
         .subsections("interfaces")
         .into_iter()
         .filter(|(_, section)| !section.has_enable_key())
-        .map(|(name, _)| format!("{name}: off, because it has no enabled line. Add enabled = Yes to use it"))
+        .map(|(name, _)| name.to_string())
         .collect()
 }
 
