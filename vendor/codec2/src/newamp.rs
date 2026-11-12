@@ -599,13 +599,15 @@ pub fn newamp2_indexes_to_model(
 ) {
     let k_len = state.rate_k_sample_freqs_khz.len();
     let codebook1 = NEWAMP2VQ_CB[0].cb;
-    let n1 = indexes[0] as usize;
+    // The index is 9 bits (0..=511) but the codebook has 500 rows: a voice message from
+    // anyone can carry a larger one, so it is held to the last row.
+    let n1 = (indexes[0].max(0) as usize).min(NEWAMP2VQ_CB[0].m - 1);
     let stride = NEWAMP2_16K_K + 1;
     let mut rate_k_vec_no_mean_ = vec![0.0f32; k_len];
     for k in 0..k_len {
         rate_k_vec_no_mean_[k] = codebook1[stride * n1 + k];
     }
-    let mean_ = NEWAMP2_ENERGY_CB[0].cb[indexes[2] as usize];
+    let mean_ = NEWAMP2_ENERGY_CB[0].cb[(indexes[2].max(0) as usize).min(NEWAMP2_ENERGY_CB[0].m - 1)];
     let mut rate_k_vec_ = vec![0.0f32; k_len];
     post_filter_newamp1(&mut rate_k_vec_no_mean_, &state.rate_k_sample_freqs_khz, k_len, pf_gain);
     if !wideband {

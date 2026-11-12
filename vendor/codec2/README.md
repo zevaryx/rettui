@@ -18,6 +18,10 @@ changes:
   thread, not one shared by all (without `micromath`). Decoding the same
   bits gave different sounds depending on what other threads were decoding,
   which made a test of the encoder fail now and then.
+- The 450 and 450PWB decoders hold a 9-bit codebook index (0 to 511) to the
+  500 rows the codebook has, and the energy index to its table, instead of
+  reading past the end. The C code has the same flaw; in rettui a voice
+  message from anyone could carry such an index and panic the decoder.
 
 The newamp code and codebooks are under the LGPL 2.1, as Codec2 is (see
 `COPYING`).
