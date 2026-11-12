@@ -112,6 +112,8 @@ pub struct ResourceAnnouncement {
     pub sha256: Option<Vec<u8>>,
     pub encoding: String,
     pub room: Option<String>,
+    /// Who it says sent it: the hub, for a notice of the hub's own; a member's text can pass through too.
+    pub src: Vec<u8>,
 }
 
 pub fn parse_resource_envelope(env: &Envelope) -> Option<ResourceAnnouncement> {
@@ -126,6 +128,7 @@ pub fn parse_resource_envelope(env: &Envelope) -> Option<ResourceAnnouncement> {
         sha256: get(map, B_RES_SHA256).and_then(bytes),
         encoding: get(map, B_RES_ENCODING).and_then(text).unwrap_or_else(|| "utf-8".into()),
         room: env.room.as_deref().map(normalize_room).filter(|r| !r.is_empty()),
+        src: env.src.clone(),
     })
 }
 
@@ -304,6 +307,18 @@ pub fn parse_room_info(text: &str) -> Option<RoomInfo> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_resource_announcement_says_who_it_is_from() {
+        let body = Value::Map(vec![
+            (key(B_RES_ID), Value::Bytes(vec![1; 8])),
+            (key(B_RES_KIND), Value::Text("notice".into())),
+            (key(B_RES_SIZE), key(400)),
+        ]);
+        let env = Envelope::new(crate::rrc::t::RESOURCE_ENVELOPE, &[7; 16]).room("lobby").body(body);
+        let announcement = parse_resource_envelope(&env).unwrap();
+        assert_eq!((announcement.src, announcement.kind.as_str(), announcement.size), (vec![7; 16], "notice", 400));
+    }
+
     use super::*;
 
     #[test]
