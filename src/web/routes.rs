@@ -288,6 +288,27 @@ fn presented_tokens(headers: &axum::http::HeaderMap) -> impl Iterator<Item = &st
     cookies.chain(bearer).chain(custom)
 }
 
+/// Whether a request that changes something comes from this page's own site.
+/// SameSite=Strict keeps other sites out, but a page on another port of the same
+/// host is the same site, so browsers say where a request came from and it's
+/// checked: `Sec-Fetch-Site` where they send it, else `Origin` against `Host`. A
+/// client that sends neither (curl, a script) isn't a browser page and passes.
+fn same_origin(request: &Request) -> bool {
+    use axum::http::Method;
+    if matches!(*request.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
+        return true;
+    }
+    let headers = request.headers();
+    let text = |name| headers.get(name).and_then(|v| v.to_str().ok());
+    if let Some(site) = text("sec-fetch-site") {
+        return matches!(site, "same-origin" | "none");
+    }
+    match text("origin") {
+        Some(origin) => origin.split_once("://").is_some_and(|(_, authority)| Some(authority) == text("host")),
+        None => true,
+    }
+}
+
 async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     let query_token = request.uri().query().and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")).map(str::to_string));
@@ -302,7 +323,9 @@ async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Re
     } else {
         let current = state.token();
         let logged_in = presented_tokens(request.headers()).any(|t| same(t, &current));
-        if logged_in || PUBLIC.contains(&path.as_str()) {
+        if logged_in && !same_origin(&request) {
+            ApiError(StatusCode::FORBIDDEN, "that request came from another site".into()).into_response()
+        } else if logged_in || PUBLIC.contains(&path.as_str()) {
             next.run(request).await
         } else if path.starts_with("/api/") {
             let mut response = ApiError(StatusCode::UNAUTHORIZED, "not logged in".into()).into_response();

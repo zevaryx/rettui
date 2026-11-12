@@ -25,6 +25,23 @@ fn from_bob(n: u8, content: &str) -> InboundMessage {
 }
 
 #[tokio::test]
+async fn requests_that_change_things_must_come_from_the_page_itself() {
+    let web = TestWeb::start("origin");
+    let post = |headers: &'static [(&'static str, &'static str)]| web.send_with(Method::POST, "/api/cache/clear", None, false, headers);
+    // A page on another port of the same host: same site, so the cookie goes, but not the same origin.
+    assert_eq!(post(&[("origin", "http://127.0.0.1:9999"), ("host", "127.0.0.1:8740")]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(post(&[("sec-fetch-site", "same-site")]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(post(&[("sec-fetch-site", "cross-site")]).await.status, StatusCode::FORBIDDEN);
+    // Its own page, a browser that says so, or a script that sends neither.
+    assert_eq!(post(&[("origin", "http://127.0.0.1:8740"), ("host", "127.0.0.1:8740")]).await.status, StatusCode::OK);
+    assert_eq!(post(&[("sec-fetch-site", "same-origin")]).await.status, StatusCode::OK);
+    assert_eq!(post(&[]).await.status, StatusCode::OK);
+    // Reading is not refused.
+    let read = web.send_with(Method::GET, "/api/state", None, false, &[("origin", "http://elsewhere.example")]).await;
+    assert_eq!(read.status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn logging_in_and_the_files_every_page_needs() {
     let web = TestWeb::start("login");
     // The link logs in: a cookie, and on to the page.

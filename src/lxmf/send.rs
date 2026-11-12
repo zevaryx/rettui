@@ -63,6 +63,19 @@ fn compressed_for(app_data: Option<&[u8]>) -> bool {
     app_data.is_none_or(compression_support_from_app_data)
 }
 
+/// The most a stamp may cost to work out. Each step doubles the work: 28 is
+/// minutes, and a cost beyond it, announced by anyone, could keep a thread
+/// busy for good.
+pub const MAX_STAMP_COST: u8 = 28;
+
+/// `cost` as announced, if it is one that can be worked out.
+fn workable(cost: u8, whose: &str) -> Result<u8, String> {
+    if cost > MAX_STAMP_COST {
+        return Err(format!("{whose} asks for a stamp cost of {cost}, more than rettui will work out ({MAX_STAMP_COST})"));
+    }
+    Ok(cost)
+}
+
 pub(super) async fn build_message(
     identity: &Identity,
     source: Hash,
@@ -72,6 +85,9 @@ pub(super) async fn build_message(
     let mut message = LxMessageDraft::new(outgoing.to, source, "", &outgoing.content, DeliveryMethod::Direct).map_err(|e| e.to_string())?;
     message.set_timestamp(outgoing.timestamp).map_err(|e| e.to_string())?;
     message.stamp_cost = app_data.and_then(stamp_cost_from_app_data);
+    if let Some(cost) = message.stamp_cost {
+        workable(cost, "The recipient")?;
+    }
 
     // The first image goes in FIELD_IMAGE (shown inline by Sideband and
     // MeshChat); everything else is a file attachment.
@@ -255,12 +271,12 @@ async fn propagate(
     // This client's own node takes it without a Link.
     let local = outgoing.local_node.clone().filter(|local| local.hash == node);
     let stamp_cost = match &local {
-        Some(local) => local.stamp_cost(),
+        Some(local) => workable(local.stamp_cost(), "The propagation node")?,
         None => {
             (sending.progress)("finding a path to the propagation node".into());
             sending.unless_cancelled(ensure_path(runtime, node)).await?;
             let node_info = lookup(runtime, known, node).await?;
-            node_info.app_data.as_deref().and_then(parse_pn_announce_data).map_or(0, |d| d.stamp_cost)
+            workable(node_info.app_data.as_deref().and_then(parse_pn_announce_data).map_or(0, |d| d.stamp_cost), "The propagation node")?
         }
     };
 
@@ -360,6 +376,14 @@ async fn wait_for_proof(events: &mut mpsc::Receiver<LinkSessionEvent>, packet_ha
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stamp_cost_too_high_to_work_out_is_refused() {
+        assert_eq!(workable(0, "x"), Ok(0));
+        assert_eq!(workable(MAX_STAMP_COST, "x"), Ok(MAX_STAMP_COST));
+        assert!(workable(MAX_STAMP_COST + 1, "The recipient").unwrap_err().contains("more than rettui will work out"));
+        assert!(workable(255, "x").is_err());
+    }
+
     use super::*;
 
     #[test]
