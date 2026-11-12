@@ -1957,6 +1957,29 @@ function openLink(url) {
   browse(url);
 }
 
+// The text from `from` to `to`, in the Micron styles (`micron`: sorted
+// ranges with their style) it falls in. Colours are used only as the
+// `#rrggbb` the server sends.
+function microned(text, from, to, micron) {
+  const hex = (c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : null;
+  const out = [];
+  for (const [start, end, style] of micron) {
+    const [s, e] = [Math.max(start, from), Math.min(end, to)];
+    if (s >= e) continue;
+    if (s > from) out.push(text.slice(from, s));
+    const css = [];
+    if (hex(style.fg)) css.push(`color:${hex(style.fg)}`);
+    if (hex(style.bg)) css.push(`background:${hex(style.bg)}`);
+    if (style.bold) css.push('font-weight:700');
+    if (style.italic) css.push('font-style:italic');
+    if (style.underline) css.push('text-decoration:underline');
+    out.push(el('span', { style: css.join(';'), text: text.slice(s, e) }));
+    from = e;
+  }
+  if (from < to) out.push(text.slice(from, to));
+  return out;
+}
+
 function linkNode(text, url) {
   return el('a', { class: 'chat-link', href: '#', text, title: url, onclick: (e) => {
     e.preventDefault();
@@ -5345,10 +5368,11 @@ app.views.channels = {
         case 'error': prefix = el('span', { class: 'prefix', text: '! ' }); break;
         default: prefix = el('span', { class: 'prefix', text: '— ' });
       }
-      return el('div', { class: 'chat-line ' + kind, dataset: { ts: line.ts } },
+      // Coloured Micron, often art, keeps its lines: not wrapped.
+      return el('div', { class: 'chat-line ' + kind + (line.art ? ' art' : ''), dataset: { ts: line.ts } },
         el('span', { class: 'time', text: time, title: full }),
         el('span', { class: 'body' }, prefix,
-          el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [], line.mentions || [])),
+          el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [], line.mentions || [], line.micron || [])),
           line.pending ? el('span', { class: 'pending', text: ' …' }) : null));
     }));
   },
@@ -5447,7 +5471,10 @@ app.views.channels = {
 
   // Text with the mentions of us highlighted, and `@name` mentions of
   // others in their colour (both as UTF-16 ranges from the server).
-  marked(text, highlights, mentions = []) {
+  // The text of a chat line, with mentions of us, `@name` mentions and
+  // links marked, and the rest in its Micron styles (`micron`: ranges and
+  // the colours and text styles the server read from the message).
+  marked(text, highlights, mentions = [], micron = []) {
     const marks = [
       ...highlights.map(([start, end]) => [start, end, { class: 'mention' }]),
       ...mentions.map(([start, end, src]) => [start, end, {
@@ -5460,14 +5487,15 @@ app.views.channels = {
       .map(([start, end, url]) => [start, end, { url }]);
     const ranges = [...marks, ...links].sort((a, b) => a[0] - b[0]);
     const out = [];
+    const plain = (from, to) => out.push(...microned(text, from, to, micron));
     let at = 0;
     for (const [start, end, attrs] of ranges) {
       if (start < at || end <= start) continue;
-      if (start > at) out.push(text.slice(at, start));
+      if (start > at) plain(at, start);
       out.push(attrs.url ? linkNode(text.slice(start, end), attrs.url) : el('span', { ...attrs, text: text.slice(start, end) }));
       at = end;
     }
-    if (at < text.length) out.push(text.slice(at));
+    if (at < text.length) plain(at, text.length);
     return out;
   },
 

@@ -33,24 +33,45 @@ fn nick_color(src: Option<&str>) -> Color {
 }
 
 /// Split a piece of text (starting at byte `offset` of the message) into
-/// spans, with the parts inside `marks` (sorted byte ranges) in their style.
-fn marked(piece: &str, offset: usize, marks: &[(usize, usize, Style)], style: Style) -> Vec<Span<'static>> {
+/// spans, with the parts inside `marks` (sorted byte ranges) in their style,
+/// and the rest in `style` patched with the Micron styles of `base` (also
+/// sorted byte ranges) it falls in.
+fn marked(piece: &str, offset: usize, marks: &[(usize, usize, Style)], base: &[(usize, usize, Style)], style: Style) -> Vec<Span<'static>> {
     let end = offset + piece.len();
     let mut spans = Vec::new();
     let mut at = offset;
+    // The text from `at` to `to` (bytes of the message), in `style` and its
+    // Micron styles.
+    let plain = |spans: &mut Vec<Span<'static>>, at: usize, to: usize| {
+        let mut from = at;
+        for &(start, stop, micron) in base {
+            let (start, stop) = (start.max(from), stop.min(to));
+            if start >= stop || !piece.is_char_boundary(start - offset) || !piece.is_char_boundary(stop - offset) {
+                continue;
+            }
+            if start > from {
+                spans.push(Span::styled(piece[from - offset..start - offset].to_string(), style));
+            }
+            spans.push(Span::styled(piece[start - offset..stop - offset].to_string(), style.patch(micron)));
+            from = stop;
+        }
+        if from < to {
+            spans.push(Span::styled(piece[from - offset..to - offset].to_string(), style));
+        }
+    };
     for &(start, stop, mark) in marks {
         let (start, stop) = (start.max(at), stop.min(end));
         if start >= stop || !piece.is_char_boundary(start - offset) || !piece.is_char_boundary(stop - offset) {
             continue;
         }
         if start > at {
-            spans.push(Span::styled(piece[at - offset..start - offset].to_string(), style));
+            plain(&mut spans, at, start);
         }
         spans.push(Span::styled(piece[start - offset..stop - offset].to_string(), mark));
         at = stop;
     }
     if at < end {
-        spans.push(Span::styled(piece[at - offset..].to_string(), style));
+        plain(&mut spans, at, end);
     }
     spans
 }
@@ -71,6 +92,16 @@ fn chat_lines(
     (whisper, dates): (bool, bool),
 ) -> ChatRows {
     let (own_nick, own_id) = own;
+    // A message written in Micron (NomadNet's `¦` tags): its text without
+    // the tags, which mentions and links are found in, and its styles.
+    let micron = line.is_message().then(|| crate::nomad::micron::chat::parse(&line.text)).flatten();
+    let stripped = micron.as_ref().map(|m| ChatLine { text: m.text.clone(), mention_at: Vec::new(), ..line.clone() });
+    let line = stripped.as_ref().unwrap_or(line);
+    let base = micron.as_ref().map_or(&[][..], |m| m.spans.as_slice());
+    // Coloured Micron is often art, which keeps its shape: it isn't wrapped
+    // (the view cuts it off at its edge), and its rows line up under the
+    // first.
+    let art = micron.as_ref().is_some_and(|m| m.colour);
     let time = crate::clock::local(line.ts as f64 / 1000.0)
         .map(|t| format!("{} ", if dates { crate::clock::dated(&t, true) } else { crate::clock::time(&t, true) }))
         .unwrap_or_default();
@@ -124,7 +155,7 @@ fn chat_lines(
         .then(|| (time.width(), time.width() + prefix_width));
     // In a narrow view, continuation lines start near the left edge instead
     // of under the text, so the message isn't squeezed into a sliver.
-    let narrow = width.saturating_sub(lead) < 24;
+    let narrow = !art && width.saturating_sub(lead) < 24;
     let indent = if narrow { 2 } else { lead };
     let body_width = width.saturating_sub(lead).max(8);
     let rest_width = width.saturating_sub(indent).max(8);
@@ -137,12 +168,16 @@ fn chat_lines(
         // Where each wrapped piece is in the message, to place highlights.
         let mut cursor = 0;
         // The first row is narrower than the rest when they're indented less.
-        let pieces = match wrap(paragraph, if first { body_width } else { rest_width }).split_first() {
-            Some((head, _)) if first && narrow => {
-                let rest = paragraph[head.len()..].trim_start();
-                std::iter::once(head.clone()).chain(if rest.is_empty() { Vec::new() } else { wrap(rest, rest_width) }).collect()
+        let pieces = if art {
+            vec![paragraph.to_string()]
+        } else {
+            match wrap(paragraph, if first { body_width } else { rest_width }).split_first() {
+                Some((head, _)) if first && narrow => {
+                    let rest = paragraph[head.len()..].trim_start();
+                    std::iter::once(head.clone()).chain(if rest.is_empty() { Vec::new() } else { wrap(rest, rest_width) }).collect()
+                }
+                _ => wrap(paragraph, if first { body_width } else { rest_width }),
             }
-            _ => wrap(paragraph, if first { body_width } else { rest_width }),
         };
         for piece in pieces {
             let at = paragraph[cursor..].find(piece.as_str()).map_or(cursor, |i| cursor + i);
@@ -156,7 +191,7 @@ fn chat_lines(
                 vec![Span::raw(" ".repeat(indent))]
             };
             first = false;
-            spans.extend(marked(&piece, paragraph_start + at, &marks, text_style));
+            spans.extend(marked(&piece, paragraph_start + at, &marks, base, text_style));
             out.push(Line::from(spans));
         }
         paragraph_start += raw.len() + 1;
