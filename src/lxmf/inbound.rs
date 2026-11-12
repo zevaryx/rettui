@@ -62,12 +62,16 @@ pub fn reply_of(message: &LxMessage) -> Option<Reply> {
 /// matches the sender's key, `Ok(false)` if the key isn't known (kept, shown
 /// as unverified), and an error if the key is known and the signature
 /// doesn't match: someone else wrote it, so it's dropped, as Python LXMF
-/// does.
+/// does. The key is the one known for the address it's from, whatever
+/// that address is of: Python LXMF asks no more, so neither does this.
 fn check_signature(message: &LxMessage, sender: Option<&Identity>) -> Result<bool, String> {
     let Some(sender) = sender else {
         return Ok(false);
     };
-    if message.verify(&sender.get_public_key()).is_ok() {
+    let public = sender.get_public_key();
+    // Its second half is the signing key.
+    let key = public[32..].try_into().ok().and_then(|half| rns_crypto::ed25519::Ed25519PublicKey::from_bytes(half).ok());
+    if key.is_some_and(|key| message.verify_signature(&key)) {
         Ok(true)
     } else {
         Err(format!("Dropped a message claiming to be from {}: its signature doesn't match their key", hex::encode(message.source_hash())))
@@ -203,6 +207,10 @@ mod tests {
     /// A message from `sender`'s address, signed with `key`'s, as it arrives.
     fn signed_by(sender: &Identity, key: &Identity, content: &str) -> Vec<u8> {
         let from = rns_identity::destination::Destination::hash_from_name_and_identity(super::super::LXMF_ASPECT, Some(&sender.hash));
+        signed_from(from, key, content)
+    }
+
+    fn signed_from(from: Hash, key: &Identity, content: &str) -> Vec<u8> {
         let message = LxMessageDraft::new([1; 16], from, "", content, DeliveryMethod::Direct).unwrap();
         message.sign(&key.get_signing_key().unwrap()).unwrap().finalize(None).unwrap().pack().unwrap()
     }
@@ -224,5 +232,10 @@ mod tests {
         let mut changed = data.clone();
         changed[at..at + 5].copy_from_slice(b"jello");
         assert!(check(&changed, Some(&alice)).is_err());
+        // From another of Alice's addresses, signed by her: hers, as in
+        // Python LXMF, which checks the signature and no more.
+        let node = rns_identity::destination::Destination::hash_from_name_and_identity("nomadnetwork.node", Some(&alice.hash));
+        assert_eq!(check(&signed_from(node, &alice, "hello"), Some(&alice)), Ok(true));
+        assert!(check(&signed_from(node, &mallory, "hello"), Some(&alice)).is_err());
     }
 }
