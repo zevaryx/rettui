@@ -511,7 +511,13 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     let identity_hash = identity.hash;
     let store = Store::load_or_empty(&paths.store);
     let (mut net_tx, mut net_rx) = net::spawn(net_options(&settings, &paths, identity.clone()));
+    // ratatui's panic hook gives the terminal back on a panic in any thread, but only the
+    // UI thread's panic ends the UI: a worker's must not wreck the screen.
+    let default_hook: std::sync::Arc<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync> = std::sync::Arc::from(std::panic::take_hook());
+    let kept = default_hook.clone();
+    std::panic::set_hook(Box::new(move |info| kept(info)));
     let mut terminal = ratatui::init();
+    let ratatui_hook = std::panic::take_hook();
     // Probe for Kitty graphics while in raw mode, before EventStream starts
     // reading stdin (it would swallow the terminal's replies).
     let graphics = term::images::Graphics::detect();
@@ -521,11 +527,15 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     // Focus reports (where the terminal sends them) tell notifications
     // whether the user is looking.
     execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste, EnableFocusChange)?;
-    // ratatui's panic hook restores the terminal; also release the mouse.
-    let hook = std::panic::take_hook();
+    let ui_thread = std::thread::current().id();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
-        hook(info);
+        if std::thread::current().id() == ui_thread {
+            let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
+            ratatui_hook(info);
+        } else {
+            // On the screen it would only be garbage; the log has it.
+            tracing::error!("a thread panicked: {info}");
+        }
     }));
     let desktop = term::desktop::Desktop::start(&app.paths.cache);
     let mut events = EventStream::new();
