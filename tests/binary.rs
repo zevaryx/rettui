@@ -449,7 +449,8 @@ fn propagation_nodes_pass_messages_on_to_their_peers() {
     );
     let (a, b) = (folder("peer-a", &server), folder("peer-b", &client));
     for (dir, name) in [(&a, "Alice"), (&b, "Bob")] {
-        let settings = serde_json::json!({ "update_check": false, "welcomed": true, "display_name": name, "pn_enabled": true });
+        let settings =
+            serde_json::json!({ "update_check": false, "welcomed": true, "display_name": name, "pn_enabled": true, "pn_autopeer": true });
         std::fs::write(dir.join("data/settings.json"), settings.to_string()).unwrap();
     }
     let address = |dir: &Path| String::from_utf8_lossy(&run(dir, &["address"]).stdout).trim().to_string();

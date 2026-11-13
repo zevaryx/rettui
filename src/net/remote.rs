@@ -39,6 +39,12 @@ struct KnownEntry {
     app_data: Option<String>,
 }
 
+/// The most destinations kept, and the most announce data kept for one: anyone
+/// can announce as many destinations as they like. Once it's full, those not
+/// known yet aren't kept.
+const MAX_KNOWN: usize = 100_000;
+const MAX_KNOWN_DATA: usize = 4096;
+
 #[derive(Default)]
 pub struct KnownIdentities {
     path: PathBuf,
@@ -104,6 +110,10 @@ impl KnownIdentities {
     }
 
     pub(crate) fn remember(&mut self, destination: Hash, key: &[u8; 64], app_data: Option<&[u8]>) {
+        if self.entries.len() >= MAX_KNOWN && !self.entries.contains_key(&hex::encode(destination)) {
+            return;
+        }
+        let app_data = app_data.filter(|data| data.len() <= MAX_KNOWN_DATA);
         let slot = self.entries.entry(hex::encode(destination)).or_default();
         let key = hex::encode(key);
         // Announces without app data (such as the automatic path responses
@@ -545,6 +555,22 @@ mod tests {
         assert_eq!(known.entries[&hex::encode(dest)].app_data, Some(hex::encode(b"renamed")));
         known.remember(dest, &other_key, None);
         assert_eq!(known.entries[&hex::encode(dest)].app_data, None);
+    }
+
+    #[test]
+    fn what_is_kept_of_announces_has_a_limit() {
+        let known = KnownIdentities::load(&std::env::temp_dir().join(format!("rettui-known-limit-{}", std::process::id())));
+        let mut known = known.lock().unwrap();
+        known.remember([1; 16], &[7; 64], Some(&vec![0; MAX_KNOWN_DATA + 1]));
+        assert!(known.public_key_of([1; 16]).is_some());
+        assert!(known.app_data_of([1; 16]).is_none(), "announce data over the limit isn't kept");
+        for n in 0..MAX_KNOWN {
+            known.entries.insert(format!("{n:032x}-filler"), KnownEntry::default());
+        }
+        known.remember([2; 16], &[8; 64], None);
+        assert!(known.public_key_of([2; 16]).is_none(), "a full list takes no more");
+        known.remember([1; 16], &[7; 64], Some(b"name"));
+        assert_eq!(known.app_data_of([1; 16]), Some(b"name".to_vec()), "one already kept still updates");
     }
 }
 

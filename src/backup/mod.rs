@@ -218,6 +218,11 @@ pub fn is_sealed(path: &Path) -> bool {
 /// `passphrase` if it's sealed. One that has an identity or a store
 /// already is left alone unless `force`, and then what the backup would
 /// replace is moved aside first. What was done.
+/// The most a backup may hold when restored, in bytes and in entries: a
+/// backup from someone else can't fill the disk.
+const MAX_RESTORE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_RESTORE_ENTRIES: usize = 200_000;
+
 pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str>) -> Result<String, String> {
     let file = || std::fs::File::open(archive).map_err(|e| format!("Couldn't open {}: {e}", archive.display()));
     // Sealed: the passphrase is checked once (it's slow), then each reading
@@ -244,12 +249,18 @@ pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str
     // backup keeps.
     let mut manifest: Option<Manifest> = None;
     let mut names: Vec<String> = Vec::new();
+    let (mut bytes, mut entries) = (0u64, 0usize);
     for entry in open()?.entries().map_err(|e| bad(&e))? {
         let mut entry = entry.map_err(|e| bad(&e))?;
         let path = entry.path().map_err(|e| bad(&e))?.into_owned();
         let Some(rel) = destination(&path) else {
             return Err(bad(&format!("it holds {}", path.display())));
         };
+        bytes = bytes.saturating_add(entry.size());
+        entries += 1;
+        if bytes > MAX_RESTORE_BYTES || entries > MAX_RESTORE_ENTRIES {
+            return Err(bad(&"it is bigger than a backup should be"));
+        }
         if !wanted(&entry) {
             continue;
         }
@@ -299,6 +310,12 @@ pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str
         entry.unpack(&target).map_err(|e| format!("Couldn't restore {}: {e}", rel.display()))?;
         if entry.header().entry_type().is_file() {
             count += 1;
+            // Backups hold data, never programs: no execute bits, and private.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600));
+            }
         }
     }
     // Identities are the owner's to read only.
@@ -514,6 +531,49 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&saved).unwrap().permissions().mode() & 0o777, 0o600);
         assert!(write_file(&to, &saved, Options::default(), None).unwrap_err().contains("exists already"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_backup_restores_as_data_and_one_asking_for_too_much_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("rettui-backup-modes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let manifest = br#"{"version":"1.6.0","created":0,"identity":false,"files":false}"#;
+        let build = |name: &str, size: Option<u64>| {
+            let file = base.join(name);
+            let mut tar =
+                tar::Builder::new(flate2::write::GzEncoder::new(std::fs::File::create(&file).unwrap(), flate2::Compression::fast()));
+            let mut header = tar::Header::new_gnu();
+            header.set_size(manifest.len() as u64);
+            header.set_cksum();
+            tar.append_data(&mut header, format!("{ROOT}/{MANIFEST}"), &manifest[..]).unwrap();
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o4755);
+            match size {
+                None => {
+                    header.set_size(2);
+                    header.set_cksum();
+                    tar.append_data(&mut header, format!("{ROOT}/node/run.sh"), &b"hi"[..]).unwrap();
+                }
+                Some(size) => {
+                    header.set_size(size);
+                    header.set_path(format!("{ROOT}/node/huge")).unwrap();
+                    header.set_cksum();
+                    tar.append(&header, &b""[..]).unwrap();
+                }
+            }
+            tar.into_inner().unwrap().finish().unwrap();
+            file
+        };
+        let to = base.join("to");
+        restore(&build("fine.tar.gz", None), &to, false, None).unwrap();
+        assert_eq!(std::fs::metadata(to.join("node/run.sh")).unwrap().permissions().mode() & 0o7777, 0o600);
+        let error = restore(&build("huge.tar.gz", Some(MAX_RESTORE_BYTES + 1)), &base.join("to2"), false, None).unwrap_err();
+        assert!(error.contains("bigger than a backup should be"), "{error}");
+        assert!(!base.join("to2").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 }
