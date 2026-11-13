@@ -435,7 +435,7 @@ impl WebState {
             let _ = tx.send(f(owner));
         });
         self.jobs.send(Job { run, changes }).map_err(|_| "rettui is shutting down".to_string())?;
-        rx.await.map_err(|_| "rettui is shutting down".to_string())
+        rx.await.map_err(|_| "That failed inside rettui (or rettui is shutting down)".to_string())
     }
 
     /// Read app state (browsers are not told to refresh).
@@ -648,7 +648,10 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     let result = loop {
         tokio::select! {
             Some(job) = jobs.recv() => {
-                (job.run)(&mut owner);
+                // A job that panics fails its own request, not the whole web UI.
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (job.run)(&mut owner))).is_err() {
+                    tracing::error!("a web job panicked; the request failed");
+                }
                 owner.app.tab = Tab::Status;
                 if job.changes {
                     notify(&changes, Scope::ALL);
