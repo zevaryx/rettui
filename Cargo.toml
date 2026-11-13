@@ -1,6 +1,6 @@
 [package]
 name = "rettui"
-version = "1.11.0"
+version = "1.11.0-dev.2"
 edition = "2024"
 description = "Terminal Reticulum client: LXMF messaging and NomadNet browsing"
 # The Reticulum License, as rsReticulum and rsLXMF are.
