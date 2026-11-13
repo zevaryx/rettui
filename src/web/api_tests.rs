@@ -116,6 +116,17 @@ async fn state_settings_and_the_little_things() {
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
     assert_eq!(web.get("/api/state").await.json()["display_name"], "Amy");
 
+    // A map tile source on this computer's own network isn't set from the web;
+    // the one already set is sent back unchanged without trouble.
+    for source in ["http://example.org/{z}/{x}/{y}.png", "https://127.0.0.1:8080/{z}/{x}/{y}.png", "https://192.168.1.9/{z}/{x}/{y}.png"] {
+        let refused = web.post("/api/settings", json!({ "values": { "map_tiles": source } })).await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{source}");
+    }
+    let current = web.get("/api/settings").await.json();
+    assert!(current.to_string().contains("map_tiles"));
+    let same = web.post("/api/settings", json!({ "values": { "map_tiles": crate::config::OSM_TILES } })).await;
+    assert_eq!(same.status, StatusCode::OK, "{}", same.text());
+
     // Icons, emoji picked lately, a QR code.
     let icons = web.get("/api/icons?q=radio").await.json();
     assert!(icons.as_array().unwrap().iter().any(|i| i["name"].as_str().unwrap().contains("radio")));

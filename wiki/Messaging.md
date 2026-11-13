@@ -603,7 +603,8 @@ Sideband 2.x shows them.
 
 The web map's pictures (tiles) come from *Map tiles* (Status, `map_tiles`):
 OpenStreetMap's by default, or any other address with `{z}`, `{x}` and
-`{y}` in it. rettui fetches them itself, so a phone with no internet of its
+`{y}` in it. From the web UI a new source must be an `https://` address on
+the public internet; one on a local network is set in the terminal UI. rettui fetches them itself, so a phone with no internet of its
 own still gets them as long as the computer running rettui has it, and the
 page loads nothing from elsewhere. They're kept a month in `map-tiles/`
 (up to 200 MB, the oldest going first), so places looked at before still

@@ -1892,6 +1892,13 @@ struct SettingsBody {
 }
 
 async fn save_settings(State(state): State<WebState>, axum::Json(body): axum::Json<SettingsBody>) -> ApiResult {
+    // A new tile source is fetched by this computer: only from the public internet.
+    if let Some(source) = body.values.get("map_tiles").map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+        let current = state.read(|o| o.app.settings.map_tiles.clone()).await?;
+        if current.as_deref() != Some(source.as_str()) {
+            super::tiles::public_source(&source).await.map_err(bad)?;
+        }
+    }
     let notes = state
         .write(move |o| {
             let changes: Vec<(&str, &str)> = body.values.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
