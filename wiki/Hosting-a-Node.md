@@ -197,7 +197,7 @@ peer protocol).
 - **Passing messages on (peering):** yours peers with other propagation
   nodes too, as `lxmd` does, so a message sent through it reaches its
   recipient whichever node they collect from. With *Auto-peer*
-  (`pn_autopeer`, on) it peers with each propagation node it hears
+  (`pn_autopeer`, off until you turn it on) it peers with each propagation node it hears
   announcing within *Auto-peer depth* (`pn_autopeer_depth`, 4 hops), up to
   *Most peers* (`pn_max_peers`, 20). One that moves further away, or stops
   being a propagation node, is no longer peered with, and one asking for
@@ -238,9 +238,10 @@ and the other RRC clients can join it as they join rrcd.
 - **You on it:** the hub is added to your hubs in Channels once it's up, and
   rettui joins it straight away (a client can't find a path to a destination
   it hosts, so yours connects with the hub's key). Stopping the hub leaves it.
-- **Who makes rooms:** as on most hubs, anyone may make a room by joining one
-  that isn't there, and is its founder (an operator of it). With "Anyone makes
-  rooms" off, only you can: others join the rooms there are.
+- **Who makes rooms:** only you, to start with: others join the rooms there
+  are. With "Anyone makes rooms" (`hub_open_rooms`) on, as on most hubs, anyone
+  may make a room by joining one that isn't there, and is its founder (an
+  operator of it). A hub set up before this kept its setting.
 - **The Hub tab:** who's connected (their nick, identity, rooms and when they
   came), the rooms (registered or not, modes, topic, who's in them, their
   operators) and the bans, of the whole hub and of each room. Pick someone

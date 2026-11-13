@@ -100,7 +100,8 @@ shows your identity, your interfaces and the log.
   path, `-d` forgets it, and `-t` lists every path known; `rettui probe
   <address>` probes (see [Running](Running#commands)). While rettui is the
   shared instance (the first Reticulum program started with
-  `share_instance` on), these use its paths, and Reticulum's own `rnpath`
+  `share_instance` on; a config rettui makes for you has it off, so other
+  programs on the machine can't use rettui until you turn it on), these use its paths, and Reticulum's own `rnpath`
   and `rnprobe` work against it too.
 - **Sending a file with rncp:** `F` in the Network tab (in the list, the
   announces or the tables), or **Send a file…** in the web UI, sends a file

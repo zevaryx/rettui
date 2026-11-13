@@ -34,12 +34,34 @@ pub fn config_path(rns_config: Option<&str>) -> PathBuf {
     rns_runtime::platform::resolve_config_dir(dir.as_deref()).join("config")
 }
 
-/// The file's text, or rsReticulum's default config when there is none yet
-/// (saving then creates it).
+/// The config a new install starts with: rsReticulum's default, except that
+/// other programs on the machine can't use this instance until you say so.
+pub fn default_text() -> String {
+    Config::default_config().replace("share_instance = Yes", "share_instance = No")
+}
+
+/// Makes the config file if there is none yet, from `default_text`. One that
+/// exists (rettui's own, or another program's) is never touched.
+pub fn seed_default(rns_config: Option<&str>) {
+    let path = config_path(rns_config);
+    if path.exists() {
+        return;
+    }
+    if let Some(dir) = path.parent()
+        && std::fs::create_dir_all(dir).is_err()
+    {
+        return;
+    }
+    // A failure leaves rsReticulum to make its own default.
+    let _ = crate::config::write_private(&path, default_text().as_bytes());
+}
+
+/// The file's text, or the default config when there is none yet (saving
+/// then creates it).
 pub fn load(path: &Path) -> Result<(String, bool), String> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok((text, true)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Config::default_config().to_string(), false)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((default_text(), false)),
         Err(e) => Err(format!("Could not read {}: {e}", path.display())),
     }
 }
@@ -682,6 +704,24 @@ mod tests {
     use super::*;
 
     const DEFAULT: &str = "[reticulum]\n  enable_transport = False\n  share_instance = Yes\n\n[logging]\n  loglevel = 4\n\n[interfaces]\n  [[Default Interface]]\n    type = AutoInterface\n    enabled = Yes\n";
+
+    #[test]
+    fn a_new_install_does_not_share_its_instance_and_an_old_config_is_left_alone() {
+        let dir = std::env::temp_dir().join(format!("rettui-seed-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let arg = dir.to_string_lossy().into_owned();
+        seed_default(Some(&arg));
+        let text = std::fs::read_to_string(dir.join("config")).unwrap();
+        assert!(text.contains("share_instance = No") && !text.contains("share_instance = Yes"), "{text}");
+        assert!(Config::parse(&text).is_ok());
+        assert_eq!(load(&dir.join("config")).unwrap().0, text);
+        assert_eq!(load(&dir.join("nothing")).unwrap(), (default_text(), false));
+
+        std::fs::write(dir.join("config"), DEFAULT).unwrap();
+        seed_default(Some(&arg));
+        assert_eq!(std::fs::read_to_string(dir.join("config")).unwrap(), DEFAULT, "a config that exists stays as it is");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn options_show_values_defaults_and_unknown_keys() {

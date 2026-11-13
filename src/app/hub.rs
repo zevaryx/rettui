@@ -685,7 +685,7 @@ mod tests {
             _ => None,
         });
         let config = config.flatten().expect("a hub to start");
-        assert_eq!((config.name.as_str(), config.open_rooms, config.operator), ("rettui user", true, [0; 16]));
+        assert_eq!((config.name.as_str(), config.open_rooms, config.operator), ("rettui user", false, [0; 16]));
         assert_eq!(app.hub.status, NodeStatus::Starting);
 
         // Up: it's in your hub list, reached with its key, and connected.

@@ -351,7 +351,8 @@ impl Default for Settings {
             pn_stamp_cost: u64::from(lxmf_core::constants::PROPAGATION_COST),
             pn_storage_mb: 500,
             pn_transfer_kb: lxmf_core::constants::PROPAGATION_LIMIT as u64,
-            pn_autopeer: lxmf_core::constants::AUTOPEER,
+            // Off until you choose it: a node that peers by itself takes on other nodes' load and storage.
+            pn_autopeer: false,
             pn_autopeer_depth: lxmf_core::constants::AUTOPEER_MAXDEPTH as u64,
             pn_max_peers: lxmf_core::constants::MAX_PEERS as u64,
             pn_static_peers: None,
@@ -370,7 +371,7 @@ impl Default for Settings {
             hub_name: None,
             hub_greeting: None,
             hub_announce_interval_mins: 360,
-            hub_open_rooms: true,
+            hub_open_rooms: false,
         }
     }
 }

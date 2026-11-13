@@ -633,6 +633,7 @@ pub fn spawn(options: NetOptions) -> (mpsc::UnboundedSender<NetCommand>, mpsc::U
 
 /// Start the runtime without registering any destination, for one-shot CLI use.
 pub async fn start_runtime(rns_config: Option<&str>) -> Result<ReticulumHandle, String> {
+    crate::reticulum::seed_default(rns_config);
     init(rns_config, None, ShutdownSignal::new(), Arc::new(AtomicBool::new(true)))
         .await
         .map_err(|e| format!("Reticulum failed to start: {e}"))
