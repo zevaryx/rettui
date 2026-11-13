@@ -4,14 +4,34 @@ use std::path::{Path, PathBuf};
 
 use super::App;
 
+/// A file name someone else chose, made safe to save: its final component
+/// only (the `/` and `\\` of either system), without control or direction-
+/// changing characters (which can make `txt.exe` read as `exe.txt`), without
+/// characters Windows refuses, not hidden, not a Windows device name, and at
+/// most 120 characters with its extension kept.
+pub(crate) fn safe_file_name(name: &str) -> String {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let hidden = |c: char| c.is_control() || matches!(c as u32, 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2069 | 0xFEFF);
+    let cleaned: String = last.chars().filter(|&c| !hidden(c)).map(|c| if ":*?\"<>|".contains(c) { '_' } else { c }).collect();
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']).to_string();
+    if cleaned.is_empty() || cleaned.starts_with('.') {
+        return "download".to_string();
+    }
+    let (stem, ext) = match cleaned.rsplit_once('.') {
+        Some((stem, ext)) if ext.chars().count() <= 16 => (stem.to_string(), format!(".{ext}")),
+        _ => (cleaned.clone(), String::new()),
+    };
+    let stem: String = stem.chars().take(120usize.saturating_sub(ext.chars().count()).max(1)).collect();
+    let device = stem.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || (device.len() == 4 && (device.starts_with("COM") || device.starts_with("LPT")) && device.as_bytes()[3].is_ascii_digit());
+    if reserved { format!("_{stem}{ext}") } else { format!("{stem}{ext}") }
+}
+
 /// A path in `dir` for `name` that does not overwrite anything. The remote
-/// name is reduced to its final component so it cannot escape `dir`.
+/// name is made safe first (see [`safe_file_name`]).
 pub(crate) fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let name = Path::new(name)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|n| !n.starts_with('.'))
-        .unwrap_or_else(|| "download".to_string());
+    let name = safe_file_name(name);
     let candidate = dir.join(&name);
     if !candidate.exists() {
         return candidate;
@@ -164,6 +184,30 @@ mod tests {
         assert_eq!(unique_path(&dir, "a.txt"), dir.join("a-1.txt"));
         assert_eq!(unique_path(&dir, "../../etc/passwd"), dir.join("passwd"));
         assert_eq!(unique_path(&dir, ".bashrc"), dir.join("download"));
+        assert_eq!(unique_path(&dir, "..\\..\\evil.exe"), dir.join("evil.exe"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn names_from_others_are_made_safe() {
+        for (name, safe) in [
+            ("notes\u{202e}txt.exe", "notestxt.exe"),
+            ("a:b*c?.txt", "a_b_c_.txt"),
+            ("report.pdf. . ", "report.pdf"),
+            ("NUL.txt", "_NUL.txt"),
+            ("com1", "_com1"),
+            ("lpt10.txt", "lpt10.txt"),
+            ("  ", "download"),
+            ("", "download"),
+            ("\u{0}\u{7}x.bin", "x.bin"),
+        ] {
+            assert_eq!(super::safe_file_name(name), safe, "{name:?}");
+        }
+        let long = format!("{}.jpeg", "a".repeat(400));
+        let safe = super::safe_file_name(&long);
+        assert!(safe.chars().count() <= 120 && safe.ends_with(".jpeg"), "{safe}");
+        let dir = std::env::temp_dir().join(format!("rettui-safe-name-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
