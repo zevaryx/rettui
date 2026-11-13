@@ -15,6 +15,10 @@ pub struct FetchedContent {
     pub metadata: Option<Vec<u8>>,
 }
 
+/// The most a page or an image may be, to be kept or shown. (A file being
+/// downloaded isn't held to it.) A node can send more than it was asked for.
+pub const MAX_PAGE_BYTES: usize = 8 * 1024 * 1024;
+
 /// Open NomadNet Links, reused across page loads, with whether we identified.
 pub type LinkCache = Arc<Mutex<HashMap<Hash, (LinkSessionHandle, bool)>>>;
 
@@ -42,6 +46,9 @@ pub async fn fetch(
     for attempt in 0..2 {
         let handle = node_link(runtime, links, node, identity.as_ref(), progress).await?;
         match handle.request(&request.path, &request.data, Some(request::TIMEOUT)).await {
+            Ok(response) if response.data.len() > MAX_PAGE_BYTES && !path.starts_with(paths::FILE_PREFIX) => {
+                return Err(format!("The node sent {} MB for a page or image, more than rettui takes", response.data.len() / 1_000_000));
+            }
             Ok(response) => {
                 return Ok(FetchedContent { data: response.data, metadata: response.metadata });
             }

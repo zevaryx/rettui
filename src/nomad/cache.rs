@@ -20,6 +20,11 @@ struct Meta {
     ttl: u64,
 }
 
+/// The most one entry may be, and all of them together: a node can't fill
+/// the disk by sending big pages. The oldest entries go first.
+const MAX_ENTRY: usize = 4 * 1024 * 1024;
+const MAX_TOTAL: u64 = 128 * 1024 * 1024;
+
 pub struct Cached {
     pub data: Vec<u8>,
     pub age: Duration,
@@ -73,6 +78,9 @@ impl Cache {
     /// zero means the page asked not to be cached.
     pub fn put(&self, node: Hash, path: &str, identified: bool, data: &[u8], ttl: Option<Duration>) {
         let ttl = ttl.unwrap_or(self.default_ttl);
+        if data.len() > MAX_ENTRY {
+            return;
+        }
         let key = Self::key(node, path, identified);
         if ttl.is_zero() {
             self.remove(&key);
@@ -86,6 +94,31 @@ impl Cache {
         });
         if let Err(e) = result {
             tracing::warn!("could not cache {}: {e}", meta.url);
+        }
+        self.trim(MAX_TOTAL);
+    }
+
+    /// Drops the oldest entries until what's kept is at most `limit` bytes.
+    fn trim(&self, limit: u64) {
+        let Ok(entries) = fs::read_dir(&self.dir) else { return };
+        let mut kept: Vec<(u64, u64, PathBuf)> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "json") {
+                let size = |p: PathBuf| fs::metadata(p).map_or(0, |m| m.len());
+                let total = size(path.clone()) + size(path.with_extension("bin"));
+                kept.push((Self::read_meta(&path).map_or(0, |m| m.fetched), total, path));
+            }
+        }
+        let mut total: u64 = kept.iter().map(|(_, size, _)| size).sum();
+        kept.sort();
+        for (_, size, path) in kept {
+            if total <= limit {
+                break;
+            }
+            let _ = fs::remove_file(path.with_extension("bin"));
+            let _ = fs::remove_file(&path);
+            total = total.saturating_sub(size);
         }
     }
 
@@ -162,5 +195,20 @@ mod tests {
         assert!(cache.get(node, "/page/b.mu", false).is_none()); // expired
         assert_eq!(cache.clear(), 3);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn big_entries_are_not_kept_and_the_oldest_go_when_it_fills() {
+        let (cache, dir) = temp_cache("caps");
+        let node = [1; 16];
+        cache.put(node, "/page/big.mu", false, &vec![0; MAX_ENTRY + 1], None);
+        assert!(cache.get(node, "/page/big.mu", false).is_none());
+        for n in 0..4 {
+            cache.put(node, &format!("/page/{n}.mu"), false, &[7; 1000], None);
+        }
+        cache.trim(2500);
+        let left = (0..4).filter(|n| cache.get(node, &format!("/page/{n}.mu"), false).is_some()).count();
+        assert!((1..4).contains(&left), "{left} kept");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

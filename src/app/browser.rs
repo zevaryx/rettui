@@ -47,6 +47,12 @@ pub struct Pending {
     pub status: Option<String>,
 }
 
+/// The most images, and the most partials, one page loads, and the least
+/// seconds between a partial's reloads: a page can ask for any number.
+const MAX_PAGE_IMAGES: usize = 24;
+const MAX_PARTIALS: usize = 16;
+const MIN_PARTIAL_REFRESH: u64 = 5;
+
 /// The most Browser tabs open at once: each keeps its page and images.
 pub const MAX_TABS: usize = 12;
 
@@ -243,11 +249,11 @@ impl App {
         self.browser.tab.selection = None;
         self.browser.tab.scroll = 0;
         self.browser.tab.error = None;
-        for url in image_urls {
+        for url in image_urls.into_iter().take(MAX_PAGE_IMAGES) {
             self.request_image(url, pending.refresh);
         }
         self.browser.tab.partial_requests.clear();
-        let count = self.browser.tab.page.as_ref().map_or(0, |p| p.partials.len());
+        let count = self.browser.tab.page.as_ref().map_or(0, |p| p.partials.len()).min(MAX_PARTIALS);
         self.browser.tab.partials = vec![PartialState::default(); count];
         for index in 0..count {
             self.request_partial(index);
@@ -259,6 +265,9 @@ impl App {
     fn request_partial(&mut self, index: usize) {
         let (Some(page), Some(current)) = (&self.browser.tab.page, &self.browser.tab.location) else { return };
         let Some(partial) = page.partials.get(index) else { return };
+        if index >= self.browser.tab.partials.len() {
+            return;
+        }
         let Some(mut location) = self.resolve(&partial.url) else {
             let why = format!("`Ff66This part of the page has an address rettui can't read: {}`f", partial.url.replace('`', "'"));
             self.browser.tab.partials[index].content = Some(why);
@@ -299,7 +308,8 @@ impl App {
         let new_images: Vec<String> = page.image_urls().into_iter().filter(|u| !known.contains(u)).collect();
         self.browser.tab.selected = self.browser.tab.selected.filter(|&s| s < page.items.len()).or((!page.items.is_empty()).then_some(0));
         self.browser.tab.page = Some(page);
-        for url in new_images {
+        let room = MAX_PAGE_IMAGES.saturating_sub(self.browser.tab.images.len() + self.browser.tab.media_requests.len());
+        for url in new_images.into_iter().take(room) {
             self.request_image(url, false);
         }
     }
@@ -317,7 +327,10 @@ impl App {
             .zip(&self.browser.tab.partials)
             .enumerate()
             .filter(|(_, (partial, state))| {
-                !state.loading && partial.refresh.is_some_and(|every| state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every))
+                !state.loading
+                    && partial
+                        .refresh
+                        .is_some_and(|every| state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every.max(MIN_PARTIAL_REFRESH)))
             })
             .map(|(index, _)| index)
             .collect();

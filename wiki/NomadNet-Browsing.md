@@ -97,6 +97,10 @@ network.
   - `r` refetches the page and its images. The cached copy is only replaced
     once the new one arrives, so it still works while a node is unreachable.
   - `R` clears the whole cache.
+  - Limits, so a node can't fill the disk or memory: a page or image over 8 MB is
+    refused, an entry over 4 MB isn't cached, and past 128 MB the oldest entries
+    go. A page loads at most 24 images and 16 partials, and a partial reloads no
+    more often than every 5 seconds.
 - **Images:**
   - Page images and image attachments are drawn with
     [ratatui-image](https://crates.io/crates/ratatui-image) in the best
