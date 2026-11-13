@@ -436,10 +436,11 @@ impl Hub {
                     self.apply(actions).await;
                 }
                 Some((data, link)) = events.link_packets.recv() => {
-                    let actions = match self.core.screen(link, &data) {
+                    let mut actions = match self.core.screen(link, &data) {
                         Some(refusal) => refusal,
                         None => self.core.router.packet(link, &data),
                     };
+                    actions.extend(self.core.evict_banned());
                     self.apply(actions).await;
                 }
                 Some(done) = events.resource_completions.recv() => {
@@ -609,9 +610,15 @@ impl Core {
                 }
                 no_such_room(&room, "no such room (only the hub's host makes rooms here)")
             }
-            // Commands, once it has said hello (before, rsRRCD takes
-            // anything for one).
-            t::MSG | t::NOTICE if session.welcomed => {
+            // What someone outside a room may do in it, and commands, once
+            // it has said hello (before, rsRRCD takes anything for one).
+            t::MSG | t::NOTICE | t::ACTION if session.welcomed => {
+                if let Some(refusal) = self.outsider(link, peer, &env) {
+                    return Some(refusal);
+                }
+                if env.t == t::ACTION {
+                    return None;
+                }
                 let text = env.body_text()?.trim();
                 if !text.starts_with('/') {
                     return None;
@@ -623,6 +630,69 @@ impl Core {
             }
             _ => None,
         }
+    }
+
+    /// What rsRRCD lets through that a room's rules say it shouldn't: someone
+    /// not in an invite-only, keyed or private room posting to it, reading who
+    /// is in it or its topic, or someone banned from a room (or not in it)
+    /// setting its topic. `None`: nothing against it.
+    fn outsider(&self, link: [u8; 16], peer: Hash, env: &Envelope) -> Option<Vec<Action>> {
+        if peer == self.config.operator {
+            return None;
+        }
+        let state = &self.router.state;
+        let text = env.body_text().unwrap_or_default().trim();
+        let parts: Vec<&str> = text.split_whitespace().collect();
+        let command = parts.first().filter(|_| text.starts_with('/')).map(|c| c.to_ascii_lowercase());
+        // The room the frame is about, and whether it changes the topic.
+        let (named, sets_topic) = match command.as_deref() {
+            Some("/topic") => (parts.get(1).copied()?, parts.len() > 2),
+            Some("/who" | "/names") => (parts.get(1).copied().or(env.room.as_deref())?, false),
+            Some(_) => return None,
+            None => (env.room.as_deref()?, false),
+        };
+        let room_name = state.normalize_room(named, &self.router.config).ok()?;
+        let room = state.rooms.get(&room_name)?;
+        let member = state.sessions.get(&link)?.rooms.contains(&room_name);
+        let closed = room.invite_only || room.private || room.key.is_some();
+        let why = if room.banned.contains(&peer) && command.is_some() {
+            "banned from room"
+        } else if sets_topic && !member && !room.is_operator(&peer) {
+            "not authorized: join the room first"
+        } else if !member && closed && !room.is_operator(&peer) {
+            "not in this room"
+        } else {
+            return None;
+        };
+        let error = Envelope::new(t::ERROR, &self.identity).room(&room_name).text(why);
+        Some(vec![Action::Send(link, error.encode())])
+    }
+
+    /// Takes anyone banned from a room out of it. rsRRCD removes only the
+    /// newest link of an identity, so one connected twice would go on
+    /// reading it.
+    fn evict_banned(&mut self) -> Vec<Action> {
+        let state = &self.router.state;
+        let mut gone = Vec::new();
+        for (name, room) in &state.rooms {
+            for link in &room.members {
+                if state.sessions.get(link).and_then(|s| s.peer).is_some_and(|peer| room.banned.contains(&peer)) {
+                    gone.push((*link, name.clone()));
+                }
+            }
+        }
+        let mut actions = Vec::new();
+        for (link, name) in gone {
+            if let Some(room) = self.router.state.rooms.get_mut(&name) {
+                room.members.remove(&link);
+            }
+            if let Some(session) = self.router.state.sessions.get_mut(&link) {
+                session.rooms.remove(&name);
+            }
+            let error = Envelope::new(t::ERROR, &self.identity).room(&name).text(&format!("banned from {name}"));
+            actions.push(Action::Send(link, error.encode()));
+        }
+        actions
     }
 
     /// rsRRCD's commands naming someone (`/kick`, `/op`, `/deop`, `/voice`,
@@ -1408,6 +1478,56 @@ mod tests {
         frame.extend_from_slice(b"lobby");
         frame.extend_from_slice(body_pairs);
         frame
+    }
+
+    fn say(core: &mut Core, link: u8, who: Hash, room: &str, text: &str) -> Vec<Action> {
+        send(core, link, Envelope::new(t::MSG, &who).room(room).text(text))
+    }
+
+    #[test]
+    fn outsiders_stay_out_of_closed_rooms_and_the_banned_out_of_every_link() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-outsiders-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        connect(&mut core, 2, BOB, "bob");
+        let _ = join(&mut core, 1, AMY, "lobby");
+
+        // An open room: an outsider posts, as before.
+        let open = say(&mut core, 2, BOB, "lobby", "hello");
+        assert!(sent(&open).iter().any(|(link, kind, ..)| *link == 1 && *kind == t::MSG), "{:?}", sent(&open));
+
+        // Invite-only: he can't post, read who is in it, or set its topic.
+        let _ = say(&mut core, 1, AMY, "lobby", "/mode lobby +i");
+        for text in ["hello", "/who lobby", "/topic lobby mine", "/topic lobby"] {
+            let out = sent(&say(&mut core, 2, BOB, "lobby", text));
+            assert!(out.iter().all(|(link, kind, ..)| *link == 2 && *kind == t::ERROR) && !out.is_empty(), "{text}: {out:?}");
+        }
+        assert!(sent(&say(&mut core, 1, AMY, "lobby", "hello")).iter().any(|(_, kind, ..)| *kind == t::MSG), "members still post");
+        assert!(core.router.state.rooms["lobby"].topic.is_none());
+
+        // Open again: he can read, but only members set the topic.
+        let _ = say(&mut core, 1, AMY, "lobby", "/mode lobby -i");
+        let out = sent(&say(&mut core, 2, BOB, "lobby", "/topic lobby mine"));
+        assert!(out.iter().all(|(link, kind, ..)| *link == 2 && *kind == t::ERROR) && !out.is_empty(), "{out:?}");
+        assert!(core.router.state.rooms["lobby"].topic.is_none());
+
+        // Connected twice, a ban takes him out of the room on both links.
+        connect(&mut core, 3, BOB, "bob");
+        let _ = join(&mut core, 2, BOB, "lobby");
+        let _ = join(&mut core, 3, BOB, "lobby");
+        let ban = format!("/ban lobby add {}", hex::encode(BOB));
+        let mut out = say(&mut core, 1, AMY, "lobby", &ban);
+        out.extend(core.evict_banned());
+        let out = sent(&out);
+        for link in [2, 3] {
+            assert!(
+                out.iter().any(|(to, kind, _, text)| *to == link && *kind == t::ERROR && text.as_deref() == Some("banned from lobby")),
+                "{link}: {out:?}"
+            );
+        }
+        let members = &core.router.state.rooms["lobby"].members;
+        assert!(!members.contains(&[2; 16]) && !members.contains(&[3; 16]) && members.contains(&[1; 16]));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

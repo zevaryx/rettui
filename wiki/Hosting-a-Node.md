@@ -242,6 +242,7 @@ and the other RRC clients can join it as they join rrcd.
   are. With "Anyone makes rooms" (`hub_open_rooms`) on, as on most hubs, anyone
   may make a room by joining one that isn't there, and is its founder (an
   operator of it). A hub set up before this kept its setting.
+- **Closed rooms and bans:** someone who isn't in a room that is invite-only, has a key or is private can't post to it, list who's in it or read its topic, and only people in a room (or its operators) set its topic. A ban takes the person out on every connection they have.
 - **The Hub tab:** who's connected (their nick, identity, rooms and when they
   came), the rooms (registered or not, modes, topic, who's in them, their
   operators) and the bans, of the whole hub and of each room. Pick someone
