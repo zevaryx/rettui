@@ -113,6 +113,7 @@ impl App {
                     self.settings.message_storage_mb = after.message_storage_mb;
                     archive = true;
                 }
+                "downloads_quota_mb" => self.settings.downloads_quota_mb = after.downloads_quota_mb,
                 "cache_hours" => {
                     self.settings.cache_hours = after.cache_hours;
                     self.cache.set_default_ttl(Duration::from_secs(after.cache_hours * 3600));

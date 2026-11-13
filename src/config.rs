@@ -48,6 +48,9 @@ pub struct Settings {
     /// Megabytes the store and the archive may use together; the oldest
     /// archived months are deleted to stay within it. 0 is no limit.
     pub message_storage_mb: u64,
+    /// Megabytes the received files folder may use; a file that would take it
+    /// over is not saved (the message is kept). 0 is no limit.
+    pub downloads_quota_mb: u64,
     /// How long NomadNet pages and images stay cached (pages can ask for
     /// less with `#!c=`).
     pub cache_hours: u64,
@@ -289,6 +292,7 @@ impl Default for Settings {
             auto_propagation_node: false,
             messages_kept: 1000,
             message_storage_mb: 0,
+            downloads_quota_mb: 2000,
             cache_hours: 24,
             rngit_identity: false,
             rngit_timeout_secs: 120,
@@ -745,6 +749,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "print_command",
             "messages_kept",
             "message_storage_mb",
+            "downloads_quota_mb",
             "rrc_messages_kept",
         ],
     ),
@@ -1073,6 +1078,13 @@ pub const FIELDS: &[Field] = &[
         key: "message_storage_mb",
         label: "Message storage (MB)",
         help: "Most disk messages may use (the store and the archive together); the oldest archived months are deleted to stay within it. Attachments aren't counted. 0 is no limit",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "downloads_quota_mb",
+        label: "Received files limit (MB)",
+        help: "Most disk the files and pictures that come with messages may use together. One that would take it over isn't saved (the message is kept, and says so). 0 is no limit",
         kind: FieldKind::Number,
         effect: Effect::Now,
     },
@@ -1578,6 +1590,7 @@ impl Settings {
             "messages_kept" => self.messages_kept.to_string(),
             "rrc_messages_kept" => self.rrc_messages_kept.to_string(),
             "message_storage_mb" => self.message_storage_mb.to_string(),
+            "downloads_quota_mb" => self.downloads_quota_mb.to_string(),
             "cache_hours" => self.cache_hours.to_string(),
             "rngit_identity" => self.rngit_identity.to_string(),
             "rngit_timeout_secs" => self.rngit_timeout_secs.to_string(),
@@ -1943,6 +1956,7 @@ impl Settings {
                 self.rrc_messages_kept = n;
             }
             "message_storage_mb" => self.message_storage_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
+            "downloads_quota_mb" => self.downloads_quota_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
             "cache_hours" => self.cache_hours = number(value, MAX_HOURS).map_err(fail)?,
             "rngit_identity" => self.rngit_identity = toggle(value).map_err(fail)?,
             "rngit_timeout_secs" => {

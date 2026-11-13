@@ -246,4 +246,9 @@ writes outside the data directory.
   Past it, the oldest months of the archive are deleted, oldest first. If
   the messages kept alone take more, the log says so: lower *Messages kept*.
   Attachments (`downloads/`, `uploads/`) aren't counted.
+- **Received files limit** (`downloads_quota_mb`, 2000 by default): the most
+  disk, in megabytes, that `downloads/` may use. A file that came with a
+  message and would take it over isn't saved: the message is kept, and the
+  log and a notice say which file wasn't. Nothing is deleted to make room. 0 is
+  no limit.
 - Both settings apply straight away, from the Status tab of either UI.

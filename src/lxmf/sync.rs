@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use lxmf_core::constants::MESSAGE_GET_PATH;
 use rmpv::Value;
 use rns_runtime::prelude::*;
@@ -22,6 +23,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const SYNC_LIMIT_KB: f64 = 512.0;
 /// Downloads in one sync, at most (should a node keep sending the same).
 const MAX_ROUNDS: usize = 100;
+/// Messages from a sync worked on at once, at most.
+const MAX_PARALLEL: usize = 16;
 /// Why a sync ended before it had connected, when it was stopped.
 const STOPPED: &str = "Stopped";
 
@@ -128,12 +131,13 @@ impl Syncer {
             {
                 Ok(messages) => {
                     let count = messages.len();
-                    // Parse concurrently: verifying an unknown sender can wait
-                    // on a path lookup.
-                    futures_util::future::join_all(
-                        messages.iter().map(|data| deliver_inbound(&runtime, &known, &policy, data, super::Heard::Unknown, &ev)),
-                    )
-                    .await;
+                    // Parse a few at a time: verifying an unknown sender can wait
+                    // on a path lookup, and a node can hold thousands of messages.
+                    futures_util::stream::iter(messages.iter())
+                        .for_each_concurrent(MAX_PARALLEL, |data| {
+                            deliver_inbound(&runtime, &known, &policy, data, super::Heard::Unknown, &ev)
+                        })
+                        .await;
                     Ok(count)
                 }
                 // Stopped before anything came: nothing to report as wrong.

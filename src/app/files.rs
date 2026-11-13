@@ -28,6 +28,23 @@ pub(crate) fn safe_file_name(name: &str) -> String {
     if reserved { format!("_{stem}{ext}") } else { format!("{stem}{ext}") }
 }
 
+/// Bytes the files under `dir` take (folders inside it counted too, to a few
+/// levels).
+pub(crate) fn folder_size(dir: &Path) -> u64 {
+    fn walk(dir: &Path, depth: usize) -> u64 {
+        let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+        entries
+            .flatten()
+            .map(|entry| match entry.metadata() {
+                Ok(meta) if meta.is_file() => meta.len(),
+                Ok(meta) if meta.is_dir() && depth < 4 => walk(&entry.path(), depth + 1),
+                _ => 0,
+            })
+            .sum()
+    }
+    walk(dir, 0)
+}
+
 /// A path in `dir` for `name` that does not overwrite anything. The remote
 /// name is made safe first (see [`safe_file_name`]).
 pub(crate) fn unique_path(dir: &Path, name: &str) -> PathBuf {
@@ -193,6 +210,18 @@ mod tests {
         assert_eq!(unique_path(&dir, "../../etc/passwd"), dir.join("passwd"));
         assert_eq!(unique_path(&dir, ".bashrc"), dir.join("download"));
         assert_eq!(unique_path(&dir, "..\\..\\evil.exe"), dir.join("evil.exe"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_folders_size_counts_what_is_inside_it() {
+        let dir = std::env::temp_dir().join(format!("rettui-folder-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a/b")).unwrap();
+        std::fs::write(dir.join("x"), [0; 10]).unwrap();
+        std::fs::write(dir.join("a/b/y"), [0; 5]).unwrap();
+        assert_eq!(super::folder_size(&dir), 15);
+        assert_eq!(super::folder_size(&dir.join("none")), 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

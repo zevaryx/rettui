@@ -189,7 +189,14 @@ impl App {
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 self.log(format!("Could not create {}: {e}", dir.display()));
             }
+            let quota = self.settings.downloads_quota_mb.saturating_mul(1_000_000);
+            let mut used = if quota > 0 { super::files::folder_size(&self.paths.downloads) } else { 0 };
             for (name, data, image, voice) in files {
+                if quota > 0 && used.saturating_add(data.len() as u64) > quota {
+                    self.warn(format!("Not saved: {name} would take the received files folder over its {} MB limit", quota / 1_000_000));
+                    continue;
+                }
+                used = used.saturating_add(data.len() as u64);
                 let path = unique_path(&dir, &name);
                 match std::fs::write(&path, data) {
                     Ok(()) => attachments.push(StoredAttachment { name, path, size: data.len() as u64, image, voice }),
@@ -2406,6 +2413,35 @@ mod tests {
         app.update_settings(&[("resend_on_announce", "false")]).unwrap();
         announce(&mut app);
         assert!(matches!(state(&mut app, text), MessageState::Failed(_)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_past_the_received_files_limit_are_not_saved() {
+        use crate::lxmf::Attachment;
+        let dir = temp_dir("quota");
+        let mut app = app(&dir, store_of(Vec::new()), 20, 0);
+        app.update_settings(&[("downloads_quota_mb", "1")]).unwrap();
+        let mut first = from_them(1, "one", crate::lxmf::Extras::default());
+        first.attachments = vec![Attachment { name: "a.bin".into(), data: vec![0; 700_000], image: false }];
+        first.timestamp = 1_900_000_000.0;
+        app.on_message(first);
+        let mut second = from_them(2, "two", crate::lxmf::Extras::default());
+        second.attachments = vec![Attachment { name: "b.bin".into(), data: vec![0; 700_000], image: false }];
+        second.timestamp = 1_900_000_001.0;
+        app.on_message(second);
+        let messages = &app.store.conversations[&key()].messages;
+        assert_eq!(messages.len(), 2, "the message itself is kept");
+        assert_eq!(messages[0].attachments.len(), 1);
+        assert!(messages[1].attachments.is_empty());
+        assert!(super::super::files::folder_size(&app.paths.downloads) <= 1_000_000);
+        // No limit: saved.
+        app.update_settings(&[("downloads_quota_mb", "0")]).unwrap();
+        let mut third = from_them(3, "three", crate::lxmf::Extras::default());
+        third.attachments = vec![Attachment { name: "c.bin".into(), data: vec![0; 700_000], image: false }];
+        third.timestamp = 1_900_000_002.0;
+        app.on_message(third);
+        assert_eq!(app.store.conversations[&key()].messages[2].attachments.len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
