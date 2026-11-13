@@ -1319,7 +1319,7 @@ impl App {
         };
         if let Some(attachment) = message.attachments.first() {
             let path = attachment.path.clone();
-            self.open_file(&path);
+            self.ask_open_file(&path);
         } else if let Some(location) = message.location {
             self.open_url(&location.map_url());
         } else {
@@ -1579,7 +1579,7 @@ impl App {
             .and_then(|c| c.messages.iter().rev().find_map(|m| m.attachments.last()))
             .map(|a| a.path.clone());
         match latest {
-            Some(path) => self.open_file(&path),
+            Some(path) => self.ask_open_file(&path),
             None => self.warn("No attachments in this conversation"),
         }
     }
@@ -1687,7 +1687,7 @@ impl App {
             let row = (at.y - self.regions.history.y) as usize;
             let button = self.regions.history_buttons.iter().find(|(rect, _)| rect.contains(at)).map(|(_, hit)| hit.clone());
             match button.or_else(|| self.regions.history_rows.get(row).cloned().flatten()) {
-                Some(HistoryHit::File(path)) => self.open_file(&path),
+                Some(HistoryHit::File(path)) => self.ask_open_file(&path),
                 Some(HistoryHit::Pick(index)) => self.pick_index(index),
                 Some(HistoryHit::Original(index)) => self.scroll_to = Some(index),
                 Some(HistoryHit::Link(url)) => self.open_url(&url),

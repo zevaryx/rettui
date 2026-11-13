@@ -132,6 +132,14 @@ fn open_external(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
 }
 
 impl App {
+    /// Ask before opening a file someone sent, with the program the system
+    /// uses for its type: the program may do more than show it.
+    pub(super) fn ask_open_file(&mut self, path: &Path) {
+        let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+        let question = format!("Open {name} with the program your system uses for it? (y/n)");
+        self.open_prompt(super::PromptKind::ConfirmOpenFile(path.to_path_buf()), &question, "");
+    }
+
     pub(super) fn open_file(&mut self, path: &Path) {
         match open_external(path) {
             Ok(()) => self.log(format!("Opened {}", path.display())),

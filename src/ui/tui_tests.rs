@@ -930,6 +930,12 @@ fn messages_at_the_keyboard_and_with_the_mouse() {
     ] {
         tui.key(code);
     }
+    // `o` asks before opening what Bob sent; no leaves it shut.
+    assert!(matches!(tui.app.prompt.as_ref().map(|p| &p.kind), Some(crate::app::PromptKind::ConfirmOpenFile(_))));
+    tui.key(KeyCode::Esc);
+    assert!(tui.app.prompt.is_none());
+    tui.ask(crate::app::PromptKind::ConfirmOpenFile(std::path::PathBuf::from("note.txt")), "y");
+    assert!(tui.app.prompt.is_none());
 
     // Writing: an emoji picked, a shortcode, a reply chosen, sent (as
     // messages to Bob go: automatically, after cycling through the modes).

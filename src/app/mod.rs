@@ -270,6 +270,8 @@ pub enum PromptKind {
     Track(String),
     /// Install the newer release found, in this one's place.
     ConfirmInstallUpdate,
+    /// Open a file that came from someone with the program the system uses for it.
+    ConfirmOpenFile(PathBuf),
     /// Stop sharing a location live with someone (by address).
     ConfirmStopLive(String),
     /// Delete what's known of where someone (by address) has been.
@@ -1479,6 +1481,11 @@ impl App {
                 }
             }
             PromptKind::Hub(prompt) => self.hub_prompt(prompt, &text),
+            PromptKind::ConfirmOpenFile(path) => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    self.open_file(&path);
+                }
+            }
             PromptKind::ConfirmInstallUpdate => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
                     match self.install_update() {
