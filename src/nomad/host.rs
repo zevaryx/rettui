@@ -132,6 +132,8 @@ struct Shared {
     /// When the current window began, and the requests taken in it.
     window: Mutex<(Instant, u32)>,
     converted: Mutex<Converted>,
+    /// Who you've blocked.
+    blocked: crate::store::Blocked,
 }
 
 /// A lock's contents, even if something panicked while holding it.
@@ -151,8 +153,9 @@ fn is_executable(_path: &Path) -> bool {
 }
 
 impl Shared {
-    fn new(config: &HostConfig) -> Self {
+    fn new(config: &HostConfig, blocked: crate::store::Blocked) -> Self {
         Self {
+            blocked,
             pages: config.dir.join("pages"),
             files: config.dir.join("files"),
             scripts: config.executable_pages,
@@ -240,7 +243,8 @@ impl Shared {
     }
 
     fn answer(&self, link_id: [u8; 16], path_hash: [u8; 16], data: &[u8], who: Option<[u8; 16]>) -> RequestOutcome {
-        if !self.admit() {
+        // Someone you've blocked gets no answer.
+        if who.is_some_and(|who| self.blocked.has_identity(&who)) || !self.admit() {
             return RequestOutcome::Drop;
         }
         self.counts.requests.fetch_add(1, Ordering::Relaxed);
@@ -439,10 +443,15 @@ async fn announce(commands: &mpsc::Sender<LinkManagerCommand>, name: &str) -> Re
 }
 
 /// Start the node on the running Reticulum instance.
-pub async fn start(runtime: &ReticulumHandle, identity: &Identity, config: &HostConfig) -> Result<Node, String> {
+pub async fn start(
+    runtime: &ReticulumHandle,
+    identity: &Identity,
+    config: &HostConfig,
+    blocked: crate::store::Blocked,
+) -> Result<Node, String> {
     let name = paths::clamp_name(&config.name);
     pages::Pages::open(&config.dir)?.ensure_index(&name)?;
-    let shared = Arc::new(Shared::new(config));
+    let shared = Arc::new(Shared::new(config, blocked));
     let listing = shared.clone();
     tokio::task::spawn_blocking(move || listing.reload())
         .await
@@ -565,7 +574,7 @@ mod tests {
             limits: script::Limits::default(),
         };
         pages::Pages::open(&dir).unwrap();
-        Fixture { shared: Shared::new(&config), dir }
+        Fixture { shared: Shared::new(&config, Default::default()), dir }
     }
 
     impl Fixture {
@@ -603,6 +612,19 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn someone_blocked_gets_no_answer() {
+        let node = node("blocked", false);
+        node.put("pages/index.mu", b">Home\n");
+        let (amy, bob) = (Identity::new(), Identity::new());
+        let mut blocked = std::collections::HashSet::new();
+        blocked.insert(rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&bob.hash)));
+        node.shared.blocked.replace(blocked);
+        assert_eq!(node.page("/page/index.mu", Some(&amy)), ">Home\n");
+        assert_eq!(node.page("/page/index.mu", None), ">Home\n", "someone who hasn't identified can't be told apart");
+        assert!(matches!(node.ask("/page/index.mu", b"", Some(&bob)), RequestOutcome::Drop));
     }
 
     #[test]

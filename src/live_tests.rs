@@ -71,8 +71,9 @@ impl Peer {
         settings(&mut chosen);
         chosen.save(&paths.settings).unwrap();
         let identity = crate::config::load_identity(&paths.identity).unwrap();
-        let (net, events) = net::spawn(crate::net_options(&chosen, &paths, identity.clone()));
-        let mut app = App::new(chosen, paths, Store::default(), net, None, identity.hash);
+        let store = Store::default();
+        let (net, events) = net::spawn(crate::net_options(&chosen, &paths, identity.clone(), store.blocked.clone()));
+        let mut app = App::new(chosen, paths, store, net, None, identity.hash);
         app.updates.fetch = |_| Err("no update checks in tests".into());
         Peer { app, events, dir, identity }
     }

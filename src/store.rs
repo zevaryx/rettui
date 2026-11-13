@@ -14,9 +14,10 @@
 //!   deleted, oldest first, to keep within the storage limit (see
 //!   [`keep_within`]).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Result, bail};
 use flate2::Compression;
@@ -517,9 +518,35 @@ impl Contact {
 pub const MAX_ALIAS: usize = 128;
 pub const MAX_NOTES: usize = 10_000;
 
+/// The LXMF addresses you've blocked, as the services you host see them: kept
+/// up to date by the [`Store`], read by each service when someone connects.
+/// (They know who connects by identity; an address is made from one.)
+#[derive(Debug, Clone, Default)]
+pub struct Blocked(Arc<RwLock<HashSet<[u8; 16]>>>);
+
+impl Blocked {
+    pub fn replace(&self, addresses: HashSet<[u8; 16]>) {
+        *self.0.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = addresses;
+    }
+
+    /// Whether the identity with this hash is someone blocked.
+    pub fn has_identity(&self, identity: &[u8; 16]) -> bool {
+        let set = self.0.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        !set.is_empty()
+            && set.contains(&rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(identity)))
+    }
+
+    pub fn addresses(&self) -> Vec<[u8; 16]> {
+        self.0.read().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().copied().collect()
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Store {
+    /// Who is blocked, for the services you host (see [`Store::sync_blocked`]).
+    #[serde(skip)]
+    pub blocked: Blocked,
     /// Keyed by destination hash (hex). Saved in `peers.json.gz` (see
     /// [`encode_peers`]); only read here, from stores of earlier versions.
     #[serde(skip_serializing)]
@@ -993,6 +1020,7 @@ impl Store {
     pub fn snapshot(&self) -> Self {
         Self {
             peers: HashMap::new(),
+            blocked: Blocked::default(),
             conversations: self.conversations.clone(),
             contacts: self.contacts.clone(),
             relayed: self.relayed.clone(),
@@ -1076,6 +1104,13 @@ impl Store {
         } else {
             self.contacts.insert(hash.to_string(), contact);
         }
+        self.sync_blocked();
+    }
+
+    /// Tell the services you host who is blocked now.
+    pub fn sync_blocked(&self) {
+        let blocked = self.contacts.iter().filter(|(_, c)| c.trust == Trust::Blocked).filter_map(|(key, _)| crate::net::parse_hash(key));
+        self.blocked.replace(blocked.collect());
     }
 
     /// Conversation keys, most recent activity first.
@@ -1511,5 +1546,18 @@ mod tests {
         // No archive yet is fine.
         assert_eq!(keep_within(&store, &dir.join("none"), 5000).unwrap(), (Vec::new(), false));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn blocking_someone_tells_the_services_you_host() {
+        let mut store = Store::default();
+        let identity = [9u8; 16];
+        let address = rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&identity));
+        assert!(!store.blocked.has_identity(&identity));
+        store.update_contact(&hex::encode(address), |c| c.trust = Trust::Blocked);
+        assert!(store.blocked.has_identity(&identity));
+        assert!(!store.blocked.has_identity(&[8; 16]));
+        store.update_contact(&hex::encode(address), |c| c.trust = Trust::Trusted);
+        assert!(!store.blocked.has_identity(&identity), "unblocked");
     }
 }

@@ -233,6 +233,16 @@ async fn serve_pages(
     Ok(registered)
 }
 
+/// The identities of the blocked addresses that have been heard announcing.
+fn blocked_identities(blocked: &crate::store::Blocked, known: &crate::net::Known) -> std::collections::HashSet<[u8; 16]> {
+    let known = known.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    blocked
+        .addresses()
+        .into_iter()
+        .filter_map(|address| Identity::from_public_key(&known.public_key_of(address)?).ok().map(|identity| identity.hash))
+        .collect()
+}
+
 /// A running git node.
 pub struct HostedGit {
     pub hash: [u8; 16],
@@ -249,7 +259,16 @@ pub struct HostedGit {
 }
 
 impl HostedGit {
-    pub async fn start(runtime: &ReticulumHandle, config: &GitHostConfig, ev: mpsc::UnboundedSender<NetEvent>) -> Result<Self, String> {
+    /// `blocked` is turned away: the node reads who is blocked when it
+    /// starts (so a change applies when it next does), by the identity
+    /// heard announcing at each blocked address.
+    pub async fn start(
+        runtime: &ReticulumHandle,
+        config: &GitHostConfig,
+        ev: mpsc::UnboundedSender<NetEvent>,
+        blocked: &crate::store::Blocked,
+        known: &crate::net::Known,
+    ) -> Result<Self, String> {
         let (path, dir) = (config.identity.clone(), config.dir.clone());
         let identity = tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't make {}: {e}", dir.display()))?;
@@ -258,6 +277,7 @@ impl HostedGit {
         .await
         .map_err(|e| e.to_string())??;
         let mut node = Node::new(config.dir.clone());
+        node.blocked = blocked_identities(blocked, known);
         node.default_rules = Rule::parse(&config.access);
         node.max_bundle_bytes = config.push_bytes;
         node.quotas.max_push_bytes = config.push_bytes;

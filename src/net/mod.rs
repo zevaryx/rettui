@@ -525,6 +525,8 @@ pub enum PnEvent {
 }
 
 pub struct NetOptions {
+    /// Who you've blocked, for the services you host.
+    pub blocked: crate::store::Blocked,
     pub rns_config: Option<String>,
     pub identity: Identity,
     pub display_name: String,
@@ -657,6 +659,7 @@ async fn run(
     ev: mpsc::UnboundedSender<NetEvent>,
 ) -> Result<(), String> {
     let runtime = start_runtime(options.rns_config.as_deref()).await?;
+    let blocked = options.blocked.clone();
     for note in &options.notes {
         let _ = ev.send(NetEvent::Log(note.clone()));
     }
@@ -752,9 +755,9 @@ async fn run(
     // Taking speed tests from someone, while asked to.
     let mut speed_listener: Option<speedtest::Listener> = None;
     let launch = |generation: u64, config: HostConfig| {
-        let (runtime, identity, tx) = (runtime.clone(), identity.clone(), host_tx.clone());
+        let (runtime, identity, tx, blocked) = (runtime.clone(), identity.clone(), host_tx.clone(), blocked.clone());
         tokio::spawn(async move {
-            let _ = tx.send((generation, host::start(&runtime, &identity, &config).await));
+            let _ = tx.send((generation, host::start(&runtime, &identity, &config, blocked).await));
         });
     };
     if let Some(config) = options.host.clone() {
@@ -771,7 +774,7 @@ async fn run(
     let mut pn_local: Option<LocalNode> = None;
     let launch_pn = |config: Option<PnConfig>| {
         let generation = pn_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let (runtime, identity, ring, slot, current, tx, deliver, known) = (
+        let (runtime, identity, ring, slot, current, tx, deliver, known, blocked) = (
             runtime.clone(),
             identity.clone(),
             ring.clone(),
@@ -780,6 +783,7 @@ async fn run(
             pn_tx.clone(),
             pn_deliver_tx.clone(),
             known.clone(),
+            blocked.clone(),
         );
         tokio::spawn(async move {
             let mut slot = slot.lock().await;
@@ -792,11 +796,13 @@ async fn run(
             }
             let result = match config {
                 None => Ok(None),
-                Some(config) => HostedPn::start(&runtime, &identity, lxmf_hash, &ring, &config, &known, deliver).await.map(|node| {
-                    let local = node.local();
-                    *slot = Some(node);
-                    Some(local)
-                }),
+                Some(config) => {
+                    HostedPn::start(&runtime, &identity, lxmf_hash, &ring, &config, &known, deliver, blocked).await.map(|node| {
+                        let local = node.local();
+                        *slot = Some(node);
+                        Some(local)
+                    })
+                }
             };
             let _ = tx.send((generation, result));
         });
@@ -811,7 +817,8 @@ async fn run(
     let mut hub_config = options.hub.clone();
     let launch_hub = |config: Option<HubHostConfig>| {
         let generation = hub_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let (runtime, slot, current, tx, ev) = (runtime.clone(), hub_slot.clone(), hub_generation.clone(), hub_tx.clone(), ev.clone());
+        let (runtime, slot, current, tx, ev, blocked) =
+            (runtime.clone(), hub_slot.clone(), hub_generation.clone(), hub_tx.clone(), ev.clone(), blocked.clone());
         tokio::spawn(async move {
             let mut slot = slot.lock().await;
             if let Some(old) = slot.take() {
@@ -822,7 +829,7 @@ async fn run(
             }
             let result = match config {
                 None => Ok(None),
-                Some(config) => HostedHub::start(&runtime, &config, ev).await.map(|hub| {
+                Some(config) => HostedHub::start(&runtime, &config, ev, blocked).await.map(|hub| {
                     let started = (hub.hash, hub.public_key);
                     *slot = Some(hub);
                     Some(started)
@@ -840,7 +847,7 @@ async fn run(
     let git_slot: Arc<Mutex<Option<githost::HostedGit>>> = Arc::default();
     let mut git_config = options.git_host.clone();
     let launch_git = |config: Option<githost::GitHostConfig>| {
-        let (runtime, slot, ev) = (runtime.clone(), git_slot.clone(), ev.clone());
+        let (runtime, slot, ev, blocked, known) = (runtime.clone(), git_slot.clone(), ev.clone(), blocked.clone(), known.clone());
         tokio::spawn(async move {
             let mut slot = slot.lock().await;
             if let Some(old) = slot.take() {
@@ -848,7 +855,7 @@ async fn run(
             }
             let event = match config {
                 None => githost::GitHostEvent::Stopped,
-                Some(config) => match githost::HostedGit::start(&runtime, &config, ev.clone()).await {
+                Some(config) => match githost::HostedGit::start(&runtime, &config, ev.clone(), &blocked, &known).await {
                     Ok(node) => {
                         let (hash, pages) = (node.hash, node.pages);
                         *slot = Some(node);

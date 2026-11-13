@@ -300,7 +300,12 @@ pub struct HostedHub {
 impl HostedHub {
     /// Start the hub on the running Reticulum instance; it reports on
     /// `events` (as [`NetEvent::Hub`]) until it stops.
-    pub async fn start(runtime: &ReticulumHandle, config: &HubHostConfig, events: mpsc::UnboundedSender<NetEvent>) -> Result<Self, String> {
+    pub async fn start(
+        runtime: &ReticulumHandle,
+        config: &HubHostConfig,
+        events: mpsc::UnboundedSender<NetEvent>,
+        blocked: crate::store::Blocked,
+    ) -> Result<Self, String> {
         let prepare = config.clone();
         let (identity, router) = tokio::task::spawn_blocking(move || -> Result<(Identity, Router), String> {
             let identity = identity(&prepare.identity)?;
@@ -330,6 +335,7 @@ impl HostedHub {
         let (stop, stopped) = oneshot::channel();
         let failures = events.clone();
         let mut core = Core::new(router, identity.hash, config.clone(), events);
+        core.blocked = blocked;
         core.open_console();
         let hub = Hub { handle: destination.handle.clone(), core };
         // If the hub's task panics, say so: otherwise the panel keeps showing it running.
@@ -376,6 +382,8 @@ struct Core {
     connected: HashMap<[u8; 16], i64>,
     /// The snapshot last sent.
     shown: Option<HubSnapshot>,
+    /// Who you've blocked: turned away.
+    blocked: crate::store::Blocked,
 }
 
 fn unix_now() -> f64 {
@@ -432,7 +440,11 @@ impl Hub {
                     self.core.router.established(link);
                 }
                 Some((link, peer)) = events.links_identified.recv() => {
-                    let actions = self.core.router.identified(link, peer);
+                    let actions = if self.core.blocked.has_identity(&peer) {
+                        vec![Action::Close(link)]
+                    } else {
+                        self.core.router.identified(link, peer)
+                    };
                     self.apply(actions).await;
                 }
                 Some((data, link)) = events.link_packets.recv() => {
@@ -570,7 +582,7 @@ impl Hub {
 
 impl Core {
     fn new(router: Router, identity: Hash, config: HubHostConfig, events: mpsc::UnboundedSender<NetEvent>) -> Self {
-        Self { router, identity, config, events, connected: HashMap::new(), shown: None }
+        Self { router, identity, config, events, connected: HashMap::new(), shown: None, blocked: crate::store::Blocked::default() }
     }
 
     fn emit(&self, event: HubEvent) {
@@ -598,6 +610,9 @@ impl Core {
         let state = &self.router.state;
         let session = state.sessions.get(&link)?;
         let peer = session.peer?;
+        if self.blocked.has_identity(&peer) {
+            return Some(vec![Action::Close(link)]);
+        }
         let no_such_room = |room: &str, text: &str| {
             let error = Envelope::new(t::ERROR, &self.identity).room(room).text(text);
             Some(vec![Action::Send(link, error.encode())])
@@ -1478,6 +1493,24 @@ mod tests {
         frame.extend_from_slice(b"lobby");
         frame.extend_from_slice(body_pairs);
         frame
+    }
+
+    #[test]
+    fn someone_blocked_is_turned_away() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-blocked-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        connect(&mut core, 2, BOB, "bob");
+        let mut blocked = std::collections::HashSet::new();
+        blocked.insert(rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&BOB)));
+        core.blocked.replace(blocked);
+        let from_bob = Envelope::new(t::JOIN, &BOB).room("lobby").encode();
+        assert!(
+            core.screen([2; 16], &from_bob).is_some_and(|actions| matches!(actions.as_slice(), [Action::Close(link)] if *link == [2; 16]))
+        );
+        let from_amy = Envelope::new(t::JOIN, &AMY).room("lobby").encode();
+        assert!(core.screen([1; 16], &from_amy).is_none(), "everyone else goes on as before");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn say(core: &mut Core, link: u8, who: Hash, room: &str, text: &str) -> Vec<Action> {

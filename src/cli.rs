@@ -18,6 +18,7 @@ use crate::nomad::{self, micron};
 
 fn options(settings: &Settings, paths: &Paths, identity: Identity, announce: bool, node: Option<Hash>) -> NetOptions {
     NetOptions {
+        blocked: Default::default(),
         rns_config: settings.rns_config.clone(),
         identity,
         display_name: settings.display_name.clone(),

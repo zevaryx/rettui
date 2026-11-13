@@ -403,3 +403,7 @@ changing who may do what, and forks, mirrors and sync.
 
 `rngit serve DIR [RULES]` of the `rngit` command serves a folder the same way
 without rettui.
+
+## Blocked contacts
+
+Someone you've blocked (in Contacts) is turned away by everything you host: your node doesn't answer them, your hub closes their connection, your propagation node refuses their requests, and your git host refuses them. They can only be told apart once they identify themselves to the service, so a visitor who doesn't is treated as anyone. The git host reads the block list when it starts: switch it off and on to apply a change, and it knows only people rettui has heard announce.

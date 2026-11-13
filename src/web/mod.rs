@@ -570,7 +570,8 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
 
     let identity_hash = identity.hash;
     let store = Store::load_or_empty(&paths.store);
-    let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone()));
+    store.sync_blocked();
+    let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone(), store.blocked.clone()));
     let mut app = App::new(settings, paths.clone(), store, net_tx.clone(), None, identity_hash);
     // No tab is "on screen" in the web UI: unread counts are cleared by
     // browsers when they show a conversation or room.
@@ -717,7 +718,8 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 let _ = pending.reply.send(Err("Reticulum restarted while loading; load the page again".into()));
             }
             net::shutdown(&net_tx, &mut net_rx, net::Stop::Restart).await;
-            (net_tx, net_rx) = net::spawn(crate::net_options(&owner.app.settings, &owner.app.paths, identity.clone()));
+            (net_tx, net_rx) =
+                net::spawn(crate::net_options(&owner.app.settings, &owner.app.paths, identity.clone(), owner.app.store.blocked.clone()));
             owner.app.set_network(net_tx.clone());
             notify(&changes, Scope::ALL);
         }
