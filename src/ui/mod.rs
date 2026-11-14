@@ -187,6 +187,35 @@ fn block(title: &str, focused: bool) -> Block<'_> {
     if title.is_empty() { block } else { block.title(Span::styled(format!(" {title} "), Style::default().bold())) }
 }
 
+/// Clear the screen under a popup, and a column and a row around it, so
+/// nothing behind it shows at its edges; a popup that nearly reaches the
+/// screen's edge is cleared to it, so no scraps of borders are left in the
+/// gap. The footer stays: it has the popup's keys.
+fn clear_popup(frame: &mut Frame, rect: ratatui::layout::Rect) {
+    let screen = frame.area();
+    let screen = ratatui::layout::Rect { height: screen.height.saturating_sub(1), ..screen };
+    let mut around = rect.outer(ratatui::layout::Margin::new(1, 1)).intersection(screen);
+    if around.is_empty() {
+        return frame.render_widget(ratatui::widgets::Clear, rect);
+    }
+    const NEAR: u16 = 4;
+    if around.x - screen.x < NEAR {
+        around.width += around.x - screen.x;
+        around.x = screen.x;
+    }
+    if around.y - screen.y < NEAR {
+        around.height += around.y - screen.y;
+        around.y = screen.y;
+    }
+    if screen.right() - around.right() < NEAR {
+        around.width = screen.right() - around.x;
+    }
+    if screen.bottom() - around.bottom() < NEAR {
+        around.height = screen.bottom() - around.y;
+    }
+    frame.render_widget(ratatui::widgets::Clear, around);
+}
+
 /// A pane with nothing in it yet: a box saying what goes there and how to
 /// put something in it.
 fn empty_pane(frame: &mut Frame, area: ratatui::layout::Rect, hint: &str) {

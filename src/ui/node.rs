@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use super::browser::token_style;
 use super::editor::draw_text_editor;
@@ -61,7 +61,7 @@ fn draw_allowed(frame: &mut Frame, app: &mut App, area: Rect) {
         width,
         height: height.min(area.height),
     };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let list_block = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
     app.regions.node_allowed = list_block.inner(rect);
     let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));

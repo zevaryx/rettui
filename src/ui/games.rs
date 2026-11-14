@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, selected_bg};
@@ -277,7 +277,7 @@ pub(super) fn draw_game_menu(frame: &mut Frame, app: &mut App) {
     };
     let outer = block(&title, true).title_bottom(Line::styled(" Enter pick · ↑↓ choose · Esc cancel ", Style::default().fg(dim())));
     let inner = outer.inner(rect);
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     frame.render_widget(outer, rect);
     app.regions.game_menu_box = rect;
     let list = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner };

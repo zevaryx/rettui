@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use super::editor::{Highlighted, draw_text_editor};
 use super::{accent, block, dim, selected_bg};
@@ -232,7 +232,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App, area: Rect) {
         width: width.min(area.width),
         height: height.min(area.height),
     };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let picker_block = block(&picker.title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
     app.regions.rns_picker = picker_block.inner(rect);
     let items: Vec<ListItem> = picker.choices.iter().map(|(_, label)| ListItem::new(format!(" {label}"))).collect();
