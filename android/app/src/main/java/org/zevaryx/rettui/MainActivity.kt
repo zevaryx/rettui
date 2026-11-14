@@ -420,6 +420,8 @@ class MainActivity : Activity() {
     private fun local(uri: Uri) = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == Rettui.port(this)
 
     private fun setUpWebView() {
+        // Only a debug build's page can be inspected from a computer (chrome://inspect).
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) WebView.setWebContentsDebuggingEnabled(true)
         web.setBackgroundColor(BACKGROUND)
         web.settings.apply {
             javaScriptEnabled = true
