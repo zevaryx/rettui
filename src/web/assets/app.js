@@ -5486,7 +5486,9 @@ app.views.channels = {
       const name = line.nick || '';
       const color = line.own ? 'var(--accent)' : nickColor(line.src);
       const date = new Date(line.ts);
-      const full = this.view?.chat_dates === false ? clockTime(date, true)
+      // The date only for an earlier day's line: today's would all say the same.
+      const today = date.toDateString() === new Date().toDateString();
+      const full = this.view?.chat_dates === false || today ? clockTime(date, true)
         : clockDay(date, date.getFullYear() !== new Date().getFullYear()) + ' ' + clockTime(date, true);
       // A phone has no room for a column of dates: the time, and the rest
       // when held on.
