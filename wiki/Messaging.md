@@ -630,9 +630,9 @@ To react, pick a message and choose an emoji:
   reply, `e` react, `y` copy its text, `o` open its file or location. `e`
   opens the emoji picker; `Enter` sends the reaction. `Esc` puts the
   message down.
-- **In the web UI:** hover over a message and click **🙂 React**. On a
-  touch screen, tap the message to pick an emoji, or hold it for a menu
-  (**React…** is in it too).
+- **In the web UI:** hover over a message and click **🙂 React**. The
+  button stays on a touch screen too; holding a message opens a menu with
+  **React…** as well.
 
 A reaction is sent as an LXMF message with no text and the reaction field,
 the way Columba does, so clients that don't know reactions (Sideband,

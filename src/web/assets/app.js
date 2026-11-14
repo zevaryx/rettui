@@ -3632,39 +3632,43 @@ function emojiButton(input) {
 // A click puts one in at the input's caret and closes it (Shift keeps it
 // open). Arrows and Enter work from the search, Esc closes. Given
 // `onPick` (a reaction), it hands the emoji to that instead, by `button`.
-// On a touch screen a message has no buttons under it: a tap reacts and
-// holding it opens a menu with the rest, Reply among them (see messageMenu). The pointer
-// moving more than a few px is a scroll, and a tap on a link, a picture or
-// a button does what that does.
+// On a touch screen a message keeps only its React button: holding the
+// message opens a menu with the rest, Reply among them (see messageMenu). A
+// tap on the message itself does nothing, so that touching it while
+// scrolling or reading can't do anything by accident. The pointer moving
+// more than a few px is a scroll, and a link, a picture or a button does
+// what it does.
 const touchScreen = window.matchMedia('(pointer: coarse)');
 let hinted = false;
 
 const HOLD_MS = 450;
-function messageGestures(node, { tap, hold }) {
+function messageGestures(node, { hold }) {
   let down = null;
   let timer = 0;
+  // The phone selects a word under a long press (and shows its handles)
+  // wherever it can find one: not while a message is held.
+  const noSelect = (e) => e.preventDefault();
   const cancel = () => {
     clearTimeout(timer);
     down = null;
+    setTimeout(() => document.removeEventListener('selectstart', noSelect, true), 1000);
   };
   node.addEventListener('pointerdown', (e) => {
     if (e.button > 0 || e.target.closest('a, button, audio, video, img, input, textarea, select')) return;
     down = { x: e.clientX, y: e.clientY, held: false };
+    document.addEventListener('selectstart', noSelect, true);
     timer = setTimeout(() => {
       if (!down) return;
       down.held = true;
       navigator.vibrate?.(12);
+      getSelection()?.removeAllRanges();
       hold();
     }, HOLD_MS);
   });
   node.addEventListener('pointermove', (e) => {
     if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 10) cancel();
   });
-  node.addEventListener('pointerup', () => {
-    const was = down;
-    cancel();
-    if (was && !was.held) tap();
-  });
+  node.addEventListener('pointerup', cancel);
   node.addEventListener('pointercancel', cancel);
   // The phone's own menu for a long press would come up over ours.
   node.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -4521,7 +4525,7 @@ app.views.messages = {
     const base = `api/conversations/${conversation.key}/attachments/${encodeURIComponent(m.id)}/`;
     const author = m.incoming ? conversation.name : 'You';
     const actions = !archived;
-    const reactButton = actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '🙂 React', title: 'React to this message' }) : null;
+    const reactButton = actions && m.can_reply ? el('button', { class: 'inline reply-button react-button', text: '🙂 React', title: 'React to this message' }) : null;
     reactButton?.addEventListener('click', () => emojiPicker.toggle(reactButton, reactButton, (e) => this.react(conversation.key, m.id, e)));
     const node = el('div', { class: 'message ' + (m.incoming ? 'in' : 'out') + (archived ? ' archived' : '') + (m.joined ? ' joined' : ''), dataset: { id: m.id } },
       el('div', { class: 'meta' },
@@ -4568,17 +4572,13 @@ app.views.messages = {
       }),
       this.reactions(m, conversation));
     if (actions && touchScreen.matches) {
-      messageGestures(node, {
-        tap: () => m.can_reply && emojiPicker.toggle(node, node, (e) => this.react(conversation.key, m.id, e)),
-        hold: () => this.messageMenu(m, conversation, node, true),
-      });
+      messageGestures(node, { hold: () => this.messageMenu(m, conversation, node, true) });
       this.hintMessageGestures();
     }
     return node;
   },
 
-  // Once, on a touch screen: the buttons under a message are gone, so say
-  // what to do instead.
+  // Once, on a touch screen: Reply and … are in the menu, so say how to open it.
   hintMessageGestures() {
     if (hinted) return;
     hinted = true;
@@ -4586,7 +4586,7 @@ app.views.messages = {
       if (localStorage.getItem('rettui.hint.messages')) return;
       localStorage.setItem('rettui.hint.messages', '1');
     } catch { /* no storage: the hint comes every start */ }
-    toast('Tap a message to react, hold it for more');
+    toast('Hold a message for more: reply, copy, forward, delete');
   },
 
   // A message's reactions: each emoji, with who reacted (a failed one of

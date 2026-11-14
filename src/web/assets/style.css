@@ -1425,9 +1425,10 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .more-button { min-width: 40px; }
   .page-tab-close { min-width: 32px; min-height: 36px; }
   .page-tab-new { min-width: 36px; min-height: 36px; }
-  /* A message has no Reply, React and … buttons on a touch screen: a tap reacts,
-     and holding it opens a menu (see messageGestures). Its text isn't selected by the hold. */
-  .message .meta .reply-button { display: none; }
+  /* A message keeps only its React button on a touch screen (a big one to tap);
+     holding it opens a menu with the rest (see messageGestures). Its text isn't selected by the hold. */
+  .message .meta .reply-button:not(.react-button) { display: none; }
+  .message .meta .react-button { min-height: 32px; min-width: 44px; }
   .message { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
 }
 /* A phone turned sideways with its keyboard up has almost no height left (under
