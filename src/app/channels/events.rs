@@ -945,12 +945,15 @@ mod tests {
     fn earlier_chat_lines_show_their_date_unless_turned_off() {
         let mut hubs = Hubs::connected("dates");
         hubs.join("lobby", &[OWN, AMY]);
-        let said = hubs.said("lobby", AMY, "amy", "hello there");
+        hubs.said("lobby", AMY, "amy", "hello there");
         let app = &mut hubs.app;
         app.tab = crate::app::Tab::Channels;
         app.channels.selected = Some(super::super::Target { hub: HUB, room: Some("lobby".into()) });
         app.channels.typing = false;
-        let when = chrono::TimeZone::timestamp_millis_opt(&chrono::Local, said.ts as i64).single().unwrap();
+        // When it arrived: a line said live is stamped on arrival, which can
+        // be a millisecond (or a second) after the envelope was made.
+        let said = app.channels.hubs[0].buffers["lobby"].iter().find(|l| l.text == "hello there").unwrap().ts;
+        let when = chrono::TimeZone::timestamp_millis_opt(&chrono::Local, said as i64).single().unwrap();
         let line = |app: &mut App| {
             let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
             terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
@@ -964,8 +967,8 @@ mod tests {
         // same date.
         assert!(app.settings.chat_dates && line(app).contains(&format!("{} <amy> hello there", crate::clock::time(&when, true))));
         // An earlier day's: its date too.
-        let earlier = said.ts - 3 * 86_400_000;
-        app.channels.hubs[0].buffers.get_mut("lobby").unwrap().iter_mut().filter(|l| l.ts == said.ts).for_each(|l| l.ts = earlier);
+        let earlier = said - 3 * 86_400_000;
+        app.channels.hubs[0].buffers.get_mut("lobby").unwrap().iter_mut().filter(|l| l.ts == said).for_each(|l| l.ts = earlier);
         let when = chrono::TimeZone::timestamp_millis_opt(&chrono::Local, earlier as i64).single().unwrap();
         let dated = format!("{} <amy> hello there", crate::clock::dated(&when, true));
         assert!(line(app).contains(&dated), "{}", line(app));
