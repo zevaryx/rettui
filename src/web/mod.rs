@@ -163,7 +163,13 @@ impl Owner {
                 self.on_net(event);
                 Scope::NONE
             }
+            // Browsers ask for how a copy is going; they aren't told.
+            NetEvent::GitProgress { .. } => {
+                self.on_net(event);
+                Scope::NONE
+            }
             NetEvent::Git { id, result } if self.git.contains_key(&id) => {
+                self.app.git_over(id);
                 let _ = self.git.remove(&id).expect("checked above").send(result);
                 Scope::NONE
             }
@@ -262,7 +268,7 @@ impl Scope {
             // (its starting and stopping touch more).
             NetEvent::Hub(HubEvent::State(_) | HubEvent::Reply { .. }) => Scope::HUB,
             // Only the terminal UI's browser shows it.
-            NetEvent::FetchProgress { .. } => Scope::NONE,
+            NetEvent::FetchProgress { .. } | NetEvent::GitProgress { .. } => Scope::NONE,
             NetEvent::SyncProgress(_) => Scope::STATUS,
             // The announce viewer asks for those after the last it has
             // (they come several a second on a busy network); the Network
