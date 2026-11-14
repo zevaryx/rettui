@@ -1,6 +1,7 @@
 package org.zevaryx.rettui
 
 import android.app.Notification
+import android.app.Person
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -9,6 +10,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -44,6 +48,8 @@ class RettuiService : Service() {
         const val ACTION_STOP = "org.zevaryx.rettui.STOP"
         private const val CHANNEL_SERVICE = "service"
         const val CHANNEL_MESSAGES = "messages"
+        private const val CHANNEL_ROOMS = "rooms"
+        private const val CHANNEL_GAMES = "games"
         private const val ID_SERVICE = 1
 
         /** What rettui printed last run, shown if it stops. */
@@ -99,6 +105,13 @@ class RettuiService : Service() {
         )
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_MESSAGES, getString(R.string.channel_messages), NotificationManager.IMPORTANCE_HIGH),
+        )
+        // Apart from messages, so each can be turned off (or made quiet) on its own.
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ROOMS, getString(R.string.channel_rooms), NotificationManager.IMPORTANCE_HIGH),
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_GAMES, getString(R.string.channel_games), NotificationManager.IMPORTANCE_DEFAULT),
         )
     }
 
@@ -253,6 +266,10 @@ class RettuiService : Service() {
         val pending = PendingIntent.getBroadcast(this, (name + tag).hashCode(), intent, flags)
         val builder = Notification.Action.Builder(null, getString(label), pending)
         if (reply) builder.addRemoteInput(RemoteInput.Builder(NotificationActions.REPLY).setLabel(getString(R.string.reply)).build())
+        // What they are, for a watch or a car to show them as such.
+        if (Build.VERSION.SDK_INT >= 28) {
+            builder.setSemanticAction(if (reply) Notification.Action.SEMANTIC_ACTION_REPLY else Notification.Action.SEMANTIC_ACTION_MARK_AS_READ)
+        }
         return builder.build()
     }
 
@@ -344,6 +361,7 @@ class RettuiService : Service() {
             while (lines.size > 8) lines.removeAt(0)
             lines.toList()
         }
+        if (Build.VERSION.SDK_INT >= 28) return personStyle(kind, room, title, target.optString("key"), lines)
         // By name: Android's Person is only from Android 9 on.
         @Suppress("DEPRECATION")
         val style = Notification.MessagingStyle(getString(R.string.you))
@@ -354,6 +372,60 @@ class RettuiService : Service() {
         @Suppress("DEPRECATION")
         for (line in lines) style.addMessage(Notification.MessagingStyle.Message(line.text, line.at, line.who))
         return style
+    }
+
+    /**
+     * The same as a chat, with a Person for each side: Android shows the
+     * contact's picture by their messages, and (with a shortcut, see
+     * [publishShortcut]) treats it as a conversation.
+     */
+    @android.annotation.TargetApi(28)
+    private fun personStyle(kind: String, room: String, title: String, key: String, lines: List<Line>): Notification.Style {
+        val style = Notification.MessagingStyle(Person.Builder().setName(getString(R.string.you)).build())
+        if (kind == "room" && room.isNotEmpty() && !title.endsWith("(whisper)")) {
+            style.setConversationTitle("#$room")
+            style.setGroupConversation(true)
+        }
+        val others = mutableMapOf<String, Person>()
+        for (line in lines) {
+            val person = others.getOrPut(line.who) { person(if (kind == "conversation") key else "", line.who) }
+            style.addMessage(Notification.MessagingStyle.Message(line.text, line.at, person))
+        }
+        return style
+    }
+
+    /** Someone, with their face if `key` is an address rettui has one for. */
+    @android.annotation.TargetApi(28)
+    private fun person(key: String, name: String): Person {
+        val builder = Person.Builder().setName(name)
+        if (key.isNotEmpty()) {
+            builder.setKey(key)
+            Avatars.face(this, key)?.let { builder.setIcon(Icon.createWithBitmap(it)) }
+        }
+        return builder.build()
+    }
+
+    /**
+     * What makes Android 11 and later treat a notification as a conversation
+     * (in their own section, with their own settings, and shown in sharing):
+     * a long-lived shortcut for the person, which the notification names.
+     * Opening it opens the conversation, as tapping the notification does.
+     */
+    @android.annotation.TargetApi(30)
+    private fun publishShortcut(key: String, name: String, target: String): String {
+        val id = "conversation:$key"
+        runCatching {
+            val open = Intent(this, MainActivity::class.java).setAction(Intent.ACTION_VIEW).putExtra(MainActivity.EXTRA_TARGET, target)
+            val info = ShortcutInfo.Builder(this, id)
+                .setShortLabel(name.take(40))
+                .setLongLived(true)
+                .setPerson(person(key, name))
+                .setIntent(open)
+                .apply { Avatars.face(this@RettuiService, key)?.let { setIcon(Icon.createWithBitmap(it)) } }
+                .build()
+            getSystemService(ShortcutManager::class.java).pushDynamicShortcut(info)
+        }.onFailure { Log.i(TAG, "Couldn't make a shortcut: $it") }
+        return id
     }
 
     private fun handle(event: String, data: String) {
@@ -373,7 +445,12 @@ class RettuiService : Service() {
                     )
                     val title = json.optString("title").take(200)
                     val body = json.optString("body").take(1000)
-                    val builder = Notification.Builder(this, CHANNEL_MESSAGES)
+                    val channel = when (json.optJSONObject("target")?.optString("kind")) {
+                        "room" -> CHANNEL_ROOMS
+                        "game" -> CHANNEL_GAMES
+                        else -> CHANNEL_MESSAGES
+                    }
+                    val builder = Notification.Builder(this, channel)
                         .setSmallIcon(R.drawable.ic_notification)
                         .setColor(getColor(R.color.accent))
                         .setContentTitle(title)
@@ -383,9 +460,14 @@ class RettuiService : Service() {
                         .setAutoCancel(true)
                         // A message: Do Not Disturb's "messages" exceptions apply.
                         .setCategory(Notification.CATEGORY_MESSAGE)
+                    val kind = json.optJSONObject("target")?.optString("kind")
+                    if (kind == "conversation" && Build.VERSION.SDK_INT >= 30) {
+                        val key = json.optJSONObject("target")?.optString("key").orEmpty()
+                        if (key.isNotEmpty()) builder.setShortcutId(publishShortcut(key, title, target))
+                    }
                     // A conversation or a room can be answered, or marked
                     // read, from here.
-                    if (json.optJSONObject("target")?.optString("kind") in setOf("conversation", "room")) {
+                    if (kind in setOf("conversation", "room")) {
                         builder.addAction(action(NotificationActions.ACTION_REPLY, R.string.reply, tag, target, reply = true))
                         builder.addAction(action(NotificationActions.ACTION_READ, R.string.mark_read, tag, target, reply = false))
                     }

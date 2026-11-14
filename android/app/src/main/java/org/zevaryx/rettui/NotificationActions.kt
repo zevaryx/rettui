@@ -37,7 +37,24 @@ class NotificationActions : BroadcastReceiver() {
                 val said = act(context, target, text)
                 val manager = context.getSystemService(NotificationManager::class.java)
                 if (said.ok) {
-                    manager.cancel(tag, 0)
+                    if (text != null) {
+                        // Android keeps a notification that was answered from itself, spinner and all,
+                        // and ignores a cancel of it: it's replaced by what was sent, which goes by itself.
+                        manager.notify(
+                            tag, 0,
+                            Notification.Builder(context, RettuiService.CHANNEL_MESSAGES)
+                                .setSmallIcon(R.drawable.ic_notification)
+                                .setColor(context.getColor(R.color.accent))
+                                .setContentTitle(context.getString(R.string.reply_sent))
+                                .setContentText(text.take(300))
+                                .setCategory(Notification.CATEGORY_MESSAGE)
+                                .setOnlyAlertOnce(true)
+                                .setTimeoutAfter(3000)
+                                .build(),
+                        )
+                    } else {
+                        manager.cancel(tag, 0)
+                    }
                 } else {
                     // Kept, saying why, so the reply can be written again.
                     manager.notify(
