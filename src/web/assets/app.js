@@ -1592,7 +1592,7 @@ const notifications = {
 
   // Whether what it's about is on screen, in a window that has the focus.
   onScreen(target) {
-    if (!document.hasFocus()) return false;
+    if (!document.hasFocus() || window.rettuiWindowFocused === false) return false;
     if (target.kind === 'conversation') {
       return showing('messages') && app.views.messages.selected === target.key;
     }

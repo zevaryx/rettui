@@ -160,6 +160,14 @@ fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
             {
                 let _ = window.hide();
             }
+            // The webview's own idea of focus stays true on Linux while the
+            // window is behind others, so the page is told (it won't
+            // notify of what's on screen in a window with the focus).
+            WindowEvent::Focused(focused) if window.label() == "main" => {
+                if let Some(page) = window.get_webview_window("main") {
+                    let _ = page.eval(format!("window.rettuiWindowFocused={focused}"));
+                }
+            }
             _ => {}
         })
         .build(tauri::generate_context!());
