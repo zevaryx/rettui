@@ -203,6 +203,14 @@ pub fn parse_link(link: &str) -> Option<(crate::net::Hash, String, Option<String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_default_name_fits_a_nick_whole_on_most_hubs() {
+        let name = crate::config::default_name(&[0xab; 16]);
+        assert_eq!(nick_from_name(&name, 32).as_deref(), Some("rettui ababababab"));
+        // A hub allowing 16 bytes cuts the last character, 9 of the 10 stay.
+        assert_eq!(nick_from_name(&name, 16).as_deref(), Some("rettui ababababa"));
+    }
+
     use super::*;
 
     #[test]

@@ -9,7 +9,11 @@ usually hears no one. The first time rettui starts, in either UI, it opens a
 **Getting started** guide (`g` in the Status tab, or **Getting started** on
 the web UI's Status page, opens it again):
 
-- **Your name:** the display name others see in your announces.
+- **Your name:** the display name others see in your announces. Until you
+  choose one it is `rettui` and the first 10 characters of your LXMF
+  address (such as `rettui 3fa9c2e1b7`), so it differs from everyone
+  else's. An older install still called `rettui user` gets this name too
+  when it next starts; a name you chose stays.
 - **Identity** (terminal UI): use the identity file from Sideband,
   NomadNet, MeshChat or another rettui, to keep that address (see
   [Data and Storage](Data-and-Storage)). The web UI says where the file is

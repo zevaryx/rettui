@@ -274,7 +274,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            display_name: "rettui user".to_string(),
+            display_name: PLACEHOLDER_NAME.to_string(),
             icon: None,
             // Dark on rettui's own colour, as its buttons are.
             icon_color: "#0b0b10".into(),
@@ -497,7 +497,32 @@ impl Paths {
     }
 }
 
+/// The display name a new or older settings file holds until the identity is
+/// known: [`Settings::name_by_address`] swaps it for one made from the address.
+pub const PLACEHOLDER_NAME: &str = "rettui user";
+
+/// The name given to someone who hasn't chosen one: "rettui" and the first
+/// 10 hex characters (40 bits) of their LXMF address, 17 characters in all.
+/// Among 25,000 nodes the chance that any two share one is about 0.03%
+/// (8 characters would be 7%), and it fits the 32 bytes hubs usually allow
+/// for a nick with room to spare.
+pub fn default_name(lxmf_address: &[u8]) -> String {
+    let hex = hex::encode(&lxmf_address[..lxmf_address.len().min(5)]);
+    format!("rettui {hex}")
+}
+
 impl Settings {
+    /// Give someone still on the placeholder name ([`PLACEHOLDER_NAME`], or
+    /// none) the one made from their address. A name they chose stays.
+    /// Whether it changed.
+    pub fn name_by_address(&mut self, lxmf_address: &[u8]) -> bool {
+        if self.display_name.trim().is_empty() || self.display_name == PLACEHOLDER_NAME {
+            self.display_name = default_name(lxmf_address);
+            return true;
+        }
+        false
+    }
+
     /// The propagation nodes always peered with ([`Settings::pn_static_peers`]).
     pub fn static_peers(&self) -> Vec<crate::net::Hash> {
         let text = self.pn_static_peers.as_deref().unwrap_or_default();
@@ -2123,6 +2148,27 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_name_made_from_the_address_is_short_and_spares_a_chosen_one() {
+        let address: Vec<u8> = (0..16).map(|b| 0xa0 + b).collect();
+        assert_eq!(default_name(&address), "rettui a0a1a2a3a4");
+        // Under 18 characters, and under a hub's smallest usual nick limit but one.
+        assert!(default_name(&address).len() < 18);
+        // Different addresses, different names, in the part that's used.
+        assert_ne!(default_name(&[1; 16]), default_name(&[2; 16]));
+
+        let mut settings = Settings::default();
+        assert_eq!(settings.display_name, PLACEHOLDER_NAME);
+        assert!(settings.name_by_address(&address));
+        assert_eq!(settings.display_name, "rettui a0a1a2a3a4");
+        // Done once: the name is now its own.
+        assert!(!settings.name_by_address(&[9; 16]));
+        let mut chosen = Settings { display_name: "Zev".into(), ..Settings::default() };
+        assert!(!chosen.name_by_address(&address) && chosen.display_name == "Zev");
+        let mut blank = Settings { display_name: "  ".into(), ..Settings::default() };
+        assert!(blank.name_by_address(&address) && blank.display_name == "rettui a0a1a2a3a4");
+    }
+
     use super::*;
 
     #[cfg(unix)]
