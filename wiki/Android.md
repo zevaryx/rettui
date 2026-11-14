@@ -60,8 +60,8 @@ repository.
   goes into the message, and isn't kept in the phone's gallery.
 - With rettui's notifications turned off, the app says so once, with
   **Turn them on**. Messages still arrive; they show when you open it.
-- Recording voice messages and sharing your location ask for the
-  microphone or location the first time.
+- Recording voice messages, sharing your location and scanning a QR code
+  with the camera ask for the microphone, location or camera the first time.
 - Downloads (exports, backups, files from messages and NomadNet pages) go in
   Downloads. **Where files are saved** (Status, under Backup) changes that:
   pick a folder once with Android's own folder picker, or turn on **Ask each
