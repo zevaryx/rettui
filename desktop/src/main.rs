@@ -14,6 +14,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod manage;
+mod notify;
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -91,6 +92,7 @@ fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
                 let handle = handle.clone();
                 app.notification().on_action(move |_| show(&handle))?;
             }
+            app.manage(notify::start(&handle));
             app.manage(manage::Downloads(downloads.clone()));
             app.manage(manage::Runner { data_dir, token_path, port, server: started });
             add_tray(app);
@@ -126,6 +128,8 @@ fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            notify::notify_show,
+            notify::notify_close,
             manage::manage_defaults,
             manage::manage_identities,
             manage::manage_keep_identity,
@@ -155,6 +159,17 @@ fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
                 if rettui::minimize_to_tray() && TRAY.load(Ordering::Relaxed) && window.is_minimized().unwrap_or(false) =>
             {
                 let _ = window.hide();
+            }
+            // The webview's own idea of focus stays true on Linux while the
+            // window is behind others, so the page is told (it won't
+            // notify of what's on screen in a window with the focus).
+            WindowEvent::Focused(focused) if window.label() == "main" => {
+                if let Some(page) = window.get_webview_window("main") {
+                    // Coming back catches the page up (and reads what's on screen).
+                    let _ = page.eval(format!(
+                        "window.rettuiWindowFocused={focused};if({focused})document.dispatchEvent(new Event('visibilitychange'))"
+                    ));
+                }
             }
             _ => {}
         })
@@ -344,7 +359,7 @@ fn add_tray(app: &App) {
 }
 
 /// Brings the window back: from the tray, the taskbar or behind others.
-fn show(app: &AppHandle) {
+pub(crate) fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();

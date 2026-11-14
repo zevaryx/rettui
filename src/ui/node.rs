@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use super::browser::token_style;
 use super::editor::draw_text_editor;
@@ -61,11 +61,12 @@ fn draw_allowed(frame: &mut Frame, app: &mut App, area: Rect) {
         width,
         height: height.min(area.height),
     };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let list_block = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
     app.regions.node_allowed = list_block.inner(rect);
     let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, rect, &mut view.list);
+    super::mark_selected(frame, app.regions.node_allowed, &view.list, 1);
 }
 
 /// Different visitors who identified, since the node started: only the
@@ -114,6 +115,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         let text = format!("{identified} identified since the node started");
         lines.insert(5, Line::from(vec![label("Visitors"), Span::raw(text)]));
     }
+    let lines = super::fit_lines(lines, area.width.saturating_sub(2) as usize);
     frame.render_widget(Paragraph::new(lines).block(block("Hosting", false)), area);
 }
 
@@ -165,6 +167,7 @@ fn draw_pages(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, area, &mut app.node.list);
+    super::mark_selected(frame, app.regions.node_pages, &app.node.list, 1);
 }
 
 fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {

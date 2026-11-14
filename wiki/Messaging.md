@@ -15,6 +15,10 @@ MeshChat, NomadNet and other LXMF clients).
   In the web UI, drafts also outlive reloading the page (which phones do to
   pages left in the background) and restarting rettui: their text, and
   what they reply to, are kept in that browser. Files attached aren't.
+- **Messages in a row:** in the TUI, messages from the same side sent
+  within five minutes of each other show under one heading, without a gap,
+  as chat apps do. Each starts a new heading again when its state, its
+  signal or a reply sets it apart.
 - **Message states:** your messages show *sending…*, ✓ (delivered), *✓ via
   propagation node*, *cancelled*, or *failed* with the reason. While one is
   being sent, *sending…* says how it's going: finding a path, working out
@@ -166,8 +170,8 @@ it's with, when, and the part that matched.
 
 ## Links in messages
 
-NomadNet pages and files, LXMF addresses and RRC hubs written in a message
-are links, in both UIs and in RRC rooms too:
+NomadNet pages and files, LXMF addresses, RRC hubs and web pages written in
+a message are links, in both UIs and in RRC rooms too:
 
 - **Pages and files:** `<node>:/page/index.mu` or `<node>:/file/name`
   (also after `nomadnetwork://`) open in the Browser.
@@ -178,6 +182,10 @@ are links, in both UIs and in RRC rooms too:
 - **Hubs:** `rrc://<hub>`, `rrc://<hub>/room` or `rrc@<hub>` open the hub
   in Channels (and join the room); a hub you haven't added asks first, as
   connecting tells it who you are.
+- **Web pages:** `https://…` and `http://…` open in your browser: from the
+  terminal UI, the computer's default browser; from the web UI, a new tab
+  that isn't told where the link came from (the Android and desktop apps
+  hand it to the system's browser).
 
 A bare hash isn't a link (it could be any destination), and punctuation
 after a link (a full stop, a closing bracket) isn't part of it.
@@ -630,8 +638,9 @@ To react, pick a message and choose an emoji:
   reply, `e` react, `y` copy its text, `o` open its file or location. `e`
   opens the emoji picker; `Enter` sends the reaction. `Esc` puts the
   message down.
-- **In the web UI:** hover over a message (on a phone the buttons always
-  show) and click **🙂 React**.
+- **In the web UI:** hover over a message and click **🙂 React**. The
+  button stays on a touch screen too; holding a message opens a menu with
+  **React…** as well.
 
 A reaction is sent as an LXMF message with no text and the reaction field,
 the way Columba does, so clients that don't know reactions (Sideband,
@@ -707,8 +716,8 @@ support replies yet (Sideband, NomadNet, MeshChat) show an ordinary message.
   in the history), and `Esc` stops replying. To reply to a message further
   back, pick it (`m`, or click its name line) and press `r` or click
   **↩ Reply**.
-- **In the web UI:** hover over a message (on a phone it's always shown) and
-  click **↩ Reply**. The box shows what you're replying to; `Esc` or **×**
+- **In the web UI:** hover over a message and click **↩ Reply**. On a touch
+  screen, hold the message and choose **Reply**. The box shows what you're replying to; `Esc` or **×**
   stops replying.
 - **Showing them:** a reply shows the first line of what it answers, under
   who wrote it. That's taken from the message itself when it's here, and

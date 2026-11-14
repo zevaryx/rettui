@@ -7,8 +7,8 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::canvas::{Canvas, Line as CanvasLine, Map, MapResolution};
-use ratatui::widgets::{Clear, Paragraph};
 
 use super::{accent, ago, block, dim, selected_bg};
 use crate::app::App;
@@ -95,7 +95,7 @@ pub(super) fn draw_map(frame: &mut Frame, app: &mut App) {
             ctx.print(place.location.longitude, place.location.latitude, Line::styled(format!("{mark} {name}"), style));
         }
     });
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     frame.render_widget(canvas, map_area);
 
     // The places: name, then when and how far.

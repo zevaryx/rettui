@@ -44,7 +44,14 @@ impl Tui {
     pub fn draw(&mut self) -> String {
         self.terminal.draw(|frame| super::draw(frame, &mut self.app)).unwrap();
         let buffer = self.terminal.backend().buffer();
-        (0..HEIGHT).map(|y| (0..WIDTH).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+        let area = buffer.area;
+        (0..area.height).map(|y| (0..area.width).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    /// The terminal made `width` by `height`, and the screen drawn.
+    pub fn resize(&mut self, width: u16, height: u16) -> String {
+        self.terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        self.draw()
     }
 
     /// The screen's cells as last drawn, for their colours and styles.
@@ -2489,4 +2496,194 @@ fn micron_art_in_a_room_keeps_its_shape() {
     let at = rows[bold][..rows[bold].find("bold").unwrap()].chars().count() as u16;
     assert!(buffer[(at, bold as u16)].modifier.contains(Modifier::BOLD));
     assert!(!rows[bold].contains('\u{a6}') && !rows[bold + 1].contains("<carol>") && rows[bold + 1].contains("like any"), "{screen}");
+}
+
+/// Every tab reads in each theme: nothing pale on a light terminal's
+/// background, and only the 16 colours every terminal has in the basic one.
+#[test]
+fn every_tab_in_the_light_and_basic_themes() {
+    use ratatui::style::Color;
+    let pale = |colour: Color| match colour {
+        Color::Yellow | Color::LightYellow | Color::LightGreen | Color::LightCyan | Color::Gray | Color::White => true,
+        Color::Rgb(r, g, b) => (299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000 > 110,
+        _ => false,
+    };
+    for theme in ["light", "basic"] {
+        let mut tui = Tui::with(&format!("theme-{theme}"), |s| s.tui_theme = theme.into());
+        with_bob(&mut tui);
+        with_hilltop(&mut tui);
+        for tab in Tab::ALL {
+            tui.settle().tab(tab);
+            for cell in &tui.buffer().content {
+                let block = cell.symbol().chars().next().is_some_and(|c| ('\u{2580}'..='\u{259f}').contains(&c));
+                if theme == "basic" {
+                    let full = |c: Color| matches!(c, Color::Rgb(..) | Color::Indexed(_));
+                    assert!(!full(cell.fg) && !full(cell.bg), "{tab:?} in basic: {cell:?}");
+                } else if cell.bg == Color::Reset && !block {
+                    assert!(!pale(cell.fg), "{tab:?} in light: {cell:?}");
+                }
+            }
+        }
+    }
+}
+
+/// The Status and Reticulum tabs at 80×24 and at 200×50: help seen whole,
+/// the config file's path kept, and a tall terminal's rows going to the
+/// interfaces and the log rather than to empty settings.
+#[test]
+fn status_and_reticulum_on_small_and_large_terminals() {
+    let mut tui = Tui::new("sizes-status");
+    tui.tab(Tab::Status);
+    let screen = tui.resize(80, 24);
+    assert!(screen.contains("Name sent in your LXMF announces (and your RRC nick") && screen.contains(" its own)"), "{screen}");
+    let screen = tui.resize(200, 50);
+    let rows: Vec<&str> = screen.lines().collect();
+    let log = rows.iter().position(|r| r.contains("╭ Log")).unwrap();
+    assert!(rows.len() - log > 15, "the log is {} rows:\n{screen}", rows.len() - log);
+    // The settings box is as tall as its group, not the largest group.
+    let settings = rows.iter().position(|r| r.contains("╭ Settings")).unwrap();
+    assert!(log - settings <= tui.app.section_fields().len() + 5, "{screen}");
+
+    tui.tab(Tab::Reticulum);
+    let screen = tui.resize(80, 24);
+    // The path has the platform's separator (a backslash on Windows).
+    let config = format!("rns{}config", std::path::MAIN_SEPARATOR);
+    assert!(screen.contains(&config) && screen.contains("not created yet"), "{screen}");
+    assert!(screen.contains("╰ ? lists the keys ─") && screen.contains("to apply ch…"), "{screen}");
+}
+
+/// Panes with nothing in them yet say what goes there, and a value too long
+/// for its box is cut with an ellipsis, at 80×24.
+#[test]
+fn empty_panes_and_cut_values_at_80_columns() {
+    let mut tui = Tui::new("empty-panes");
+    let screen = tui.resize(80, 24);
+    assert!(screen.contains("Your messages show here") && !screen.contains("╭  ─"), "{screen}");
+    with_bob(&mut tui);
+    assert!(tui.draw().contains("Pick a conversation"));
+    tui.tab(Tab::Games);
+    assert!(tui.draw().contains("A game's board shows here"));
+    tui.tab(Tab::Browser);
+    let screen = tui.draw();
+    assert!(screen.contains("No page open") && screen.contains("g or click: enter an address"), "{screen}");
+    tui.tab(Tab::Hub);
+    assert!(tui.draw().contains("Pick someone above"));
+    // The node's folder is a long temporary path: cut, and saying so.
+    tui.tab(Tab::Node);
+    let screen = tui.draw();
+    let folder = screen.lines().find(|l| l.contains("Folder")).unwrap();
+    assert!(folder.contains("…│"), "{screen}");
+}
+
+/// Popups on a small terminal: the contact card keeps its buttons, the
+/// list of keys uses more columns (and says when some don't fit), and
+/// nothing behind a popup shows at its edges.
+#[test]
+fn popups_on_a_small_terminal() {
+    let mut tui = Tui::new("small-popups");
+    with_bob(&mut tui);
+    tui.app.open_newest_conversation();
+    tui.key(KeyCode::Char('c'));
+    let screen = tui.resize(50, 16);
+    assert!(screen.contains("Close (Esc)") && screen.contains("Block (b)") && screen.contains("Address"), "{screen}");
+    tui.settle();
+    tui.key(KeyCode::Char('?'));
+    let screen = tui.resize(80, 24);
+    assert!(screen.contains("Home/End") && screen.contains("Any key closes"), "{screen}");
+    // Nothing of the screen behind shows beside it, but the footer stays.
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[0].trim_end().ends_with('╮') && rows[23].contains("? keys"), "{screen}");
+    let screen = tui.resize(50, 16);
+    assert!(screen.contains("… more in a bigger terminal"), "{screen}");
+}
+
+/// Messages in a row from the same side share a heading; a chat line from
+/// today shows its time alone, and a narrow room leaves out the seconds.
+#[test]
+fn messages_in_a_row_and_chat_times() {
+    use crate::store::{Conversation, Message, MessageState};
+    let mut tui = Tui::new("grouped");
+    let at = crate::app::now() - 600.0;
+    let received = MessageState::Received { verified: true };
+    let message = |id: &str, content: &str, at: f64| Message {
+        id: id.repeat(64),
+        incoming: true,
+        content: content.into(),
+        timestamp: at,
+        state: received.clone(),
+        ..Message::default()
+    };
+    let messages = vec![message("a", "first", at), message("b", "second", at + 30.0), message("c", "much later", at + 400.0)];
+    tui.app.store.conversations.insert(BOB.into(), Conversation { messages, ..Conversation::default() });
+    tui.app.store.contacts.entry(BOB.into()).or_default().alias = Some("Bob".into());
+    tui.app.open_newest_conversation();
+    let screen = tui.draw();
+    let rows: Vec<&str> = screen.lines().collect();
+    let first = rows.iter().position(|r| r.contains("first")).unwrap();
+    assert!(rows[first + 1].contains("second"), "{screen}");
+    assert_eq!(screen.matches("│ Bob  ").count(), 2, "{screen}");
+    // A click on the second (which has no heading) picks it.
+    let x = rows[first + 1].find("second").unwrap();
+    let x = rows[first + 1][..x].chars().count() as u16;
+    tui.click(x, (first + 1) as u16);
+    assert_eq!(tui.app.picked_message().map(|(i, _)| i), Some(1));
+
+    tui.settle();
+    let mut tui = Tui::new("chat-times");
+    with_hilltop(&mut tui);
+    let hub = &mut tui.app.channels.hubs[0];
+    let now = (crate::app::now() * 1000.0) as u64;
+    let today: Vec<crate::app::channels::ChatLine> = serde_json::from_value(
+        serde_json::json!([{ "kind": "Msg", "nick": "carol", "src": hex::encode(CAROL), "text": "today's", "ts": now }]),
+    )
+    .unwrap();
+    hub.buffers.get_mut("lobby").unwrap().extend(today);
+    let screen = tui.draw();
+    let row = screen.lines().find(|r| r.contains("today's")).unwrap();
+    assert!(!row.contains(&crate::clock::day(&chrono::Local::now())), "today's line has no date:\n{screen}");
+    assert!(screen.contains("2027"), "an earlier day's line keeps its date:\n{screen}");
+    let screen = tui.resize(80, 24);
+    assert!(!screen.contains("08:00:00"), "no seconds when narrow:\n{screen}");
+}
+
+/// Every list marks its selected row the same way, with a bar at its left,
+/// and unread counts are drawn alike.
+#[test]
+fn selected_rows_and_badges_look_alike_everywhere() {
+    let mut tui = Tui::new("marks");
+    with_bob(&mut tui);
+    assert!(tui.draw().contains("Bob  2  "), "{}", tui.draw());
+    let bar = |tui: &mut Tui| {
+        let screen = tui.draw();
+        // Past the sidebar's own bar.
+        screen.lines().filter(|row| row.chars().skip(23).any(|c| c == '▌')).count()
+    };
+    tui.tab(Tab::Status);
+    assert_eq!(bar(&mut tui), 1, "{}", tui.draw());
+    tui.tab(Tab::Reticulum);
+    assert!(bar(&mut tui) >= 1, "{}", tui.draw());
+    with_hilltop(&mut tui);
+    assert_eq!(bar(&mut tui), 1, "{}", tui.draw());
+}
+
+/// A terminal too small for the tabs asks for more room, and the footer
+/// only offers what can be done while there's nothing to pick.
+#[test]
+fn a_tiny_terminal_and_footers_with_nothing_to_pick() {
+    let mut tui = Tui::new("tiny");
+    let screen = tui.resize(30, 8);
+    assert!(screen.contains("Make the terminal") && screen.contains("30×8"), "{screen}");
+    assert!(tui.app.regions.tabs.is_empty());
+    let screen = tui.resize(80, 24);
+    let footer = screen.lines().last().unwrap();
+    assert!(footer.contains("n new conversation") && !footer.contains("reply"), "{footer}");
+    tui.tab(Tab::Channels);
+    let footer = tui.draw().lines().last().unwrap().to_string();
+    assert!(footer.contains("n add hub") && !footer.contains("connect"), "{footer}");
+    tui.tab(Tab::Games);
+    let footer = tui.draw().lines().last().unwrap().to_string();
+    assert!(footer.contains("n new game") && !footer.contains("play"), "{footer}");
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    assert!(tui.draw().lines().last().unwrap().contains("r reply"));
 }

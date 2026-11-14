@@ -1,6 +1,7 @@
 package org.zevaryx.rettui
 
 import android.app.Notification
+import android.app.Person
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -9,9 +10,13 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -44,6 +49,55 @@ class RettuiService : Service() {
         const val ACTION_STOP = "org.zevaryx.rettui.STOP"
         private const val CHANNEL_SERVICE = "service"
         const val CHANNEL_MESSAGES = "messages"
+        /** All of rettui's notifications about messages, rooms and games, for Android to show as one stack. */
+        const val GROUP = "rettui"
+        private const val ID_SUMMARY = 2
+
+    /**
+     * One notification to stand for the others when there are two or more:
+     * "3 notifications", with what each says. Android shows them as a stack
+     * under it, and takes it away with the last of them.
+     */
+    fun refreshSummary(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val children = try {
+            manager.activeNotifications.filter {
+                it.tag != null && it.notification.group == GROUP && it.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0
+            }
+        } catch (e: Exception) {
+            return
+        }
+        // Android takes a summary's others with it when it goes: only when none are left.
+        // (One alone is shown without it.)
+        if (children.size < 2) {
+            if (children.isEmpty()) manager.cancel(ID_SUMMARY)
+            return
+        }
+        val inbox = Notification.InboxStyle().setSummaryText(context.getString(R.string.notifications_waiting, children.size))
+        for (child in children.take(6)) {
+            val extras = child.notification.extras
+            inbox.addLine("${extras.getCharSequence(Notification.EXTRA_TITLE) ?: ""}: ${extras.getCharSequence(Notification.EXTRA_TEXT) ?: ""}")
+        }
+        val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        manager.notify(
+            ID_SUMMARY,
+            Notification.Builder(context, CHANNEL_MESSAGES)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setColor(context.getColor(R.color.accent))
+                .setContentTitle(context.getString(R.string.app_name))
+                .setContentText(context.getString(R.string.notifications_waiting, children.size))
+                .setStyle(inbox)
+                .setGroup(GROUP)
+                .setGroupSummary(true)
+                // Quiet itself: the ones under it make the sound.
+                .setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+        private const val CHANNEL_ROOMS = "rooms"
+        private const val CHANNEL_GAMES = "games"
         private const val ID_SERVICE = 1
 
         /** What rettui printed last run, shown if it stops. */
@@ -99,6 +153,13 @@ class RettuiService : Service() {
         )
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_MESSAGES, getString(R.string.channel_messages), NotificationManager.IMPORTANCE_HIGH),
+        )
+        // Apart from messages, so each can be turned off (or made quiet) on its own.
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ROOMS, getString(R.string.channel_rooms), NotificationManager.IMPORTANCE_HIGH),
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_GAMES, getString(R.string.channel_games), NotificationManager.IMPORTANCE_DEFAULT),
         )
     }
 
@@ -253,6 +314,10 @@ class RettuiService : Service() {
         val pending = PendingIntent.getBroadcast(this, (name + tag).hashCode(), intent, flags)
         val builder = Notification.Action.Builder(null, getString(label), pending)
         if (reply) builder.addRemoteInput(RemoteInput.Builder(NotificationActions.REPLY).setLabel(getString(R.string.reply)).build())
+        // What they are, for a watch or a car to show them as such.
+        if (Build.VERSION.SDK_INT >= 28) {
+            builder.setSemanticAction(if (reply) Notification.Action.SEMANTIC_ACTION_REPLY else Notification.Action.SEMANTIC_ACTION_MARK_AS_READ)
+        }
         return builder.build()
     }
 
@@ -283,6 +348,7 @@ class RettuiService : Service() {
                         // A line at least every 15 s (the stream's keep-alive):
                         // a changed setting takes effect by then.
                         applyLocks()
+                        refreshSummary(this)
                         when {
                             line.isEmpty() -> {
                                 if (event.isNotEmpty() && data.isNotEmpty()) {
@@ -344,6 +410,7 @@ class RettuiService : Service() {
             while (lines.size > 8) lines.removeAt(0)
             lines.toList()
         }
+        if (Build.VERSION.SDK_INT >= 28) return personStyle(kind, room, title, target.optString("key"), lines)
         // By name: Android's Person is only from Android 9 on.
         @Suppress("DEPRECATION")
         val style = Notification.MessagingStyle(getString(R.string.you))
@@ -354,6 +421,118 @@ class RettuiService : Service() {
         @Suppress("DEPRECATION")
         for (line in lines) style.addMessage(Notification.MessagingStyle.Message(line.text, line.at, line.who))
         return style
+    }
+
+    /**
+     * The same as a chat, with a Person for each side: Android shows the
+     * contact's picture by their messages, and (with a shortcut, see
+     * [publishShortcut]) treats it as a conversation.
+     */
+    @android.annotation.TargetApi(28)
+    private fun personStyle(kind: String, room: String, title: String, key: String, lines: List<Line>): Notification.Style {
+        val style = Notification.MessagingStyle(Person.Builder().setName(getString(R.string.you)).build())
+        if (kind == "room" && room.isNotEmpty() && !title.endsWith("(whisper)")) {
+            style.setConversationTitle("#$room")
+            style.setGroupConversation(true)
+        }
+        val others = mutableMapOf<String, Person>()
+        for (line in lines) {
+            val person = others.getOrPut(line.who) { person(if (kind == "conversation") key else "", line.who) }
+            style.addMessage(Notification.MessagingStyle.Message(line.text, line.at, person))
+        }
+        return style
+    }
+
+    /** Someone, with their face if `key` is an address rettui has one for. */
+    @android.annotation.TargetApi(28)
+    private fun person(key: String, name: String): Person {
+        val builder = Person.Builder().setName(name)
+        if (key.isNotEmpty()) {
+            builder.setKey(key)
+            Avatars.face(this, key)?.let { builder.setIcon(Icon.createWithBitmap(it)) }
+        }
+        return builder.build()
+    }
+
+    /**
+     * What makes Android 11 and later treat a notification as a conversation
+     * (in their own section, with their own settings, and shown in sharing):
+     * a long-lived shortcut for the person, which the notification names.
+     * Opening it opens the conversation, as tapping the notification does.
+     */
+    @android.annotation.TargetApi(30)
+    private fun publishShortcut(key: String, name: String, target: String): String {
+        val id = "conversation:$key"
+        runCatching {
+            val open = Intent(this, MainActivity::class.java).setAction(Intent.ACTION_VIEW).putExtra(MainActivity.EXTRA_TARGET, target)
+            val info = ShortcutInfo.Builder(this, id)
+                .setShortLabel(name.take(40))
+                .setLongLived(true)
+                .setPerson(person(key, name))
+                .setIntent(open)
+                .apply { Avatars.face(this@RettuiService, key)?.let { setIcon(Icon.createWithBitmap(it)) } }
+                .build()
+            getSystemService(ShortcutManager::class.java).pushDynamicShortcut(info)
+        }.onFailure { Log.i(TAG, "Couldn't make a shortcut: $it") }
+        return id
+    }
+
+    /**
+     * A conversation as a bubble, if the phone offers them (Android 11 and
+     * later, and turned on for rettui or this person): a button on the
+     * notification floats the conversation over other apps.
+     */
+    @android.annotation.TargetApi(30)
+    private fun bubble(key: String, tag: String, target: String): Notification.BubbleMetadata? {
+        val face = Avatars.face(this, key) ?: return null
+        val open = PendingIntent.getActivity(
+            this,
+            ("bubble:" + tag).hashCode(),
+            Intent(this, BubbleActivity::class.java).setAction(Intent.ACTION_VIEW).putExtra(MainActivity.EXTRA_TARGET, target),
+            // A bubble's intent has to be mutable: Android fills in its size.
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return Notification.BubbleMetadata.Builder(open, Icon.createWithAdaptiveBitmap(face)).setDesiredHeight(640).build()
+    }
+
+    /**
+     * A conversation read in its own bubble keeps the bubble: cancelling the
+     * notification would close it. The notification goes out of the shade
+     * instead (Android's "suppress"), and comes back with the next message.
+     * Whether it did (else the notification should go).
+     */
+    private fun keepBubble(manager: NotificationManager, tag: String): Boolean {
+        if (Build.VERSION.SDK_INT < 30 || !Rettui.bubbleShowing(this)) return false
+        return try {
+            val shown = manager.activeNotifications.firstOrNull { it.tag == tag } ?: return false
+            val bubble = shown.notification.bubbleMetadata ?: return false
+            val intent = bubble.intent ?: return false
+            val icon = bubble.icon ?: return false
+            val updated = Notification.Builder.recoverBuilder(this, shown.notification)
+                .setBubbleMetadata(Notification.BubbleMetadata.Builder(intent, icon).setDesiredHeight(640).setSuppressNotification(true).build())
+                .setOnlyAlertOnce(true)
+                .build()
+            manager.notify(tag, 0, updated)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Accept and Decline on a notification about a challenge: only while it
+     * waits for an answer (the game itself says which buttons it has).
+     */
+    private fun gameActions(builder: Notification.Builder, tag: String, target: String, json: JSONObject?) {
+        val app = Uri.encode(json?.optString("app").orEmpty())
+        val session = Uri.encode(json?.optString("session").orEmpty())
+        if (app.isEmpty() || session.isEmpty()) return
+        val game = runCatching { JSONObject(Rettui.api(this, "games/$app/$session").text) }.getOrNull() ?: return
+        val buttons = game.optJSONArray("actions") ?: return
+        val offered = (0 until buttons.length()).map { buttons.optString(it) }
+        if (game.optString("status") != "pending" || "accept" !in offered) return
+        builder.addAction(action(NotificationActions.ACTION_ACCEPT, R.string.accept, tag, target, reply = false))
+        builder.addAction(action(NotificationActions.ACTION_DECLINE, R.string.decline, tag, target, reply = false))
     }
 
     private fun handle(event: String, data: String) {
@@ -373,7 +552,12 @@ class RettuiService : Service() {
                     )
                     val title = json.optString("title").take(200)
                     val body = json.optString("body").take(1000)
-                    val builder = Notification.Builder(this, CHANNEL_MESSAGES)
+                    val channel = when (json.optJSONObject("target")?.optString("kind")) {
+                        "room" -> CHANNEL_ROOMS
+                        "game" -> CHANNEL_GAMES
+                        else -> CHANNEL_MESSAGES
+                    }
+                    val builder = Notification.Builder(this, channel)
                         .setSmallIcon(R.drawable.ic_notification)
                         .setColor(getColor(R.color.accent))
                         .setContentTitle(title)
@@ -383,18 +567,33 @@ class RettuiService : Service() {
                         .setAutoCancel(true)
                         // A message: Do Not Disturb's "messages" exceptions apply.
                         .setCategory(Notification.CATEGORY_MESSAGE)
+                        .setGroup(GROUP)
+                    val kind = json.optJSONObject("target")?.optString("kind")
+                    if (kind == "conversation" && Build.VERSION.SDK_INT >= 30) {
+                        val key = json.optJSONObject("target")?.optString("key").orEmpty()
+                        if (key.isNotEmpty()) {
+                            builder.setShortcutId(publishShortcut(key, title, target))
+                            // Not auto-cancelled: opening the bubble counts as a tap, which would
+                            // take it away. Reading the conversation takes it away instead.
+                            bubble(key, tag, target)?.let { builder.setBubbleMetadata(it).setAutoCancel(false) }
+                        }
+                    }
+                    if (kind == "game") gameActions(builder, tag, target, json.optJSONObject("target"))
                     // A conversation or a room can be answered, or marked
                     // read, from here.
-                    if (json.optJSONObject("target")?.optString("kind") in setOf("conversation", "room")) {
+                    if (kind in setOf("conversation", "room")) {
                         builder.addAction(action(NotificationActions.ACTION_REPLY, R.string.reply, tag, target, reply = true))
                         builder.addAction(action(NotificationActions.ACTION_READ, R.string.mark_read, tag, target, reply = false))
                     }
                     manager.notify(tag, 0, builder.build())
+                    // Once Android has it (posting takes a moment).
+                    main.postDelayed({ refreshSummary(this) }, 500)
                 }
                 // Read, here or elsewhere: its notification goes.
                 "read" -> {
-                    manager.cancel(tag, 0)
+                    if (!keepBubble(manager, tag)) manager.cancel(tag, 0)
                     synchronized(said) { said.remove(tag) }
+                    main.postDelayed({ refreshSummary(this) }, 500)
                 }
             }
         } catch (e: Exception) {

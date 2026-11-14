@@ -11,7 +11,9 @@ host. rettui works with each of them, as they differ (see
   tells the hub who you are.
 - **Views:** the hub view shows its status, limits, MOTD, and public rooms,
   which you can click to join. Rooms show the topic, members (on wide
-  screens), `/me` actions and notices, with times to the second. Your own
+  screens; in the web UI, **Members** shows or hides them at any width, and
+  it's remembered), `/me` actions and notices, with times to the second (in
+  a narrow web UI chat, to the minute). Your own
   messages show `…` until the hub echoes them back. Only the hub's own
   notices are shown as the hub's (`-hub-`) and set the topic or the room
   list; another user's notice to a room shows as said by them.
@@ -23,7 +25,7 @@ host. rettui works with each of them, as they differ (see
   web UI) closes a conversation. Whispers saved in rooms by older versions
   are moved to their conversations.
 - **Commands:** the same set as NomadNet: `/join <room> [key]`, `/part`,
-  `/me`, `/nick` (per hub, defaulting to your display name), `/who` (or
+  `/me`, `/nick` (per hub, defaulting to your display name, cut to the hub's limit if it's longer; the default name is 17 characters), `/who` (or
   `/names`), `/list`, `/topic`, `/ping`, `/clear`, `/connect`,
   `/disconnect`, and hub moderation commands such as `/mode`, `/kick` and
   `/op`. `/msg <nick> [text]` (also `/w`) whispers on hubs that support it
@@ -59,10 +61,11 @@ host. rettui works with each of them, as they differ (see
   joins and leaves" under Status), and hiding them loses nothing: they come
   back when turned on again. The [Android app](Android) starts with them
   hidden.
-- **Times and dates:** each line shows the date it was said with its time
-  (as the *Dates* and *Clock* settings write them; the year too, for
-  another year's). `D` (TUI), or "Dates on chat lines" under Status, shows
-  the time alone instead.
+- **Times and dates:** each line shows the time it was said, and a line
+  from an earlier day its date too (as the *Dates* and *Clock* settings
+  write them; the year too, for another year's). `D` (TUI), or "Dates on
+  chat lines" under Status, shows the time alone instead. In a narrow
+  terminal the seconds are left out.
 - **How much is kept:** the newest 500 messages of each room and whisper
   conversation, also across restarts: "Chat messages kept" (Status ›
   Messages, `rrc_messages_kept`, 50 to 100000) says how many, and when it

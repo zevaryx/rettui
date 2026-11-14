@@ -2,6 +2,8 @@
 <resources>
     <string name="app_name">rettui</string>
     <string name="channel_service">Running</string>
+    <string name="channel_rooms">Channels</string>
+    <string name="channel_games">Games</string>
     <string name="channel_messages">Messages</string>
     <string name="running">Reticulum is running</string>
     <string name="running_detail">Tap to open. Messages keep arriving while the app is closed.</string>
@@ -110,7 +112,12 @@
     <string name="reply">Reply</string>
     <string name="mark_read">Mark read</string>
     <string name="you">You</string>
+    <string name="reply_sent">Reply sent</string>
     <string name="reply_failed">Your reply wasn\'t sent</string>
+    <string name="accept">Accept</string>
+    <string name="decline">Decline</string>
+    <string name="game_failed">Couldn\'t answer the challenge</string>
+    <string name="notifications_waiting">%1$d notifications</string>
     <string name="read_failed">Couldn\'t mark it read</string>
     <string name="nothing_to_do">Nothing to do for this notification</string>
     <string name="share_left_out">Left out (too big, or unreadable): %1$s</string>

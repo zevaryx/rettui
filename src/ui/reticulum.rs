@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use super::editor::{Highlighted, draw_text_editor};
 use super::{accent, block, dim, selected_bg};
@@ -42,7 +42,10 @@ pub(super) fn draw_reticulum(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     // Borders, the file, the check, the restart note, warnings, and the
     // note about another program's shared instance.
-    let status_height = 5 + app.rns.check.warnings.len().min(3) as u16 + u16::from(app.uses_external_shared_instance());
+    let status_height = 5
+        + app.rns.check.warnings.len().min(3) as u16
+        + u16::from(app.uses_external_shared_instance())
+        + u16::from(!missing_beside_path(app, area.width));
     let [status, body] = Layout::vertical([Constraint::Length(status_height), Constraint::Min(5)]).areas(area);
     draw_file_status(frame, app, status);
     let [sections, options] = Layout::horizontal([Constraint::Length(super::side_width(app, body, 34)), Constraint::Min(20)]).areas(body);
@@ -61,25 +64,42 @@ fn fit_path(path: &str, width: usize) -> String {
     format!("…{keep}")
 }
 
+const MISSING: &str = "  not created yet: showing rsReticulum's defaults, saving creates it";
+
+/// Whether the note that the file isn't there yet (if it isn't) fits after
+/// its path in a box `width` wide; if not, it gets a row of its own.
+fn missing_beside_path(app: &App, width: u16) -> bool {
+    app.rns.exists || app.rns.path.display().to_string().chars().count() + MISSING.len() <= (width as usize).saturating_sub(8)
+}
+
 fn draw_file_status(frame: &mut Frame, app: &App, area: Rect) {
     let state = &app.rns;
-    let missing = "  not created yet: showing rsReticulum's defaults, saving creates it";
-    let room = (area.width as usize).saturating_sub(8 + if state.exists { 0 } else { missing.len() });
+    let missing = MISSING;
+    let path = state.path.display().to_string();
+    let beside = missing_beside_path(app, area.width);
+    let room = (area.width as usize).saturating_sub(8 + if beside && !state.exists { missing.len() } else { 0 });
     let mut lines = vec![Line::from(vec![
         Span::styled("File  ", Style::default().fg(dim())),
-        Span::raw(fit_path(&state.path.display().to_string(), room)),
-        if state.exists { Span::raw("") } else { Span::styled(missing, Style::default().fg(Color::Yellow)) },
+        Span::raw(fit_path(&path, room)),
+        if beside && !state.exists { Span::styled(missing, Style::default().fg(Color::Yellow)) } else { Span::raw("") },
     ])];
+    if !beside {
+        lines.push(Line::styled(missing.trim_start(), Style::default().fg(Color::Yellow)));
+    }
+    // One row each, cut with an ellipsis where the box is too narrow.
+    let fit = |text: &str| super::clipped(text, (area.width as usize).saturating_sub(2));
     match &state.check.error {
-        Some(error) => lines.push(Line::styled(format!("✗ Reticulum cannot load this file: {error}"), Style::default().fg(Color::Red))),
+        Some(error) => {
+            lines.push(Line::styled(fit(&format!("✗ Reticulum cannot load this file: {error}")), Style::default().fg(Color::Red)))
+        }
         None => lines.push(Line::styled("✓ The file loads", Style::default().fg(Color::Green))),
     }
     for warning in state.check.warnings.iter().take(3) {
-        lines.push(Line::styled(format!("! {warning}"), Style::default().fg(Color::Yellow)));
+        lines.push(Line::styled(fit(&format!("! {warning}")), Style::default().fg(Color::Yellow)));
     }
-    lines.push(Line::styled(format!("{RESTART_NOTE} (Ctrl-R)"), Style::default().fg(dim()).italic()));
+    lines.push(Line::styled(fit(&format!("{RESTART_NOTE} (Ctrl-R)")), Style::default().fg(dim()).italic()));
     if app.uses_external_shared_instance() {
-        lines.push(Line::styled(EXTERNAL_NOTE, Style::default().fg(Color::Yellow).italic()));
+        lines.push(Line::styled(fit(EXTERNAL_NOTE), Style::default().fg(Color::Yellow).italic()));
     }
     frame.render_widget(Paragraph::new(lines).block(block("Reticulum config", false)), area);
 }
@@ -117,6 +137,7 @@ fn draw_sections(frame: &mut Frame, app: &mut App, area: Rect) {
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_widget(list_block, area);
     frame.render_stateful_widget(list, app.regions.rns_sections, &mut app.rns.section_list);
+    super::mark_selected(frame, app.regions.rns_sections, &app.rns.section_list, 1);
 }
 
 fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -130,14 +151,19 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(Section::Interface(_)) => " Enter edit · d default · Space on/off · r rename · x delete · t text · H history · P profiles ",
         _ => " Enter edit · d default · t edit as text · H history · P profiles ",
     };
+    // Cut short, the hints would end mid-word: `?` lists them all.
+    let hints = if hints.chars().count() + 2 > area.width as usize { " ? lists the keys " } else { hints };
     let options_block = block(&title, focused).title_bottom(Line::styled(hints, Style::default().fg(dim())));
     let inner = options_block.inner(area);
+    // The selected option's help, whole, up to four rows.
+    let help_text = app.rns.selected_option().map(|o| format!(" {} {}", o.key, o.help));
+    let help_height = help_text.map_or(0, |text| super::wrap(&text, inner.width as usize).len().min(4)) as u16;
     frame.render_widget(options_block, area);
     // An RNode's settings worked out, under its options.
     let radio = rns::lora::for_options(&state.options).map(|e| e.lines()).unwrap_or_default();
     let radio_height = if radio.is_empty() { 0 } else { radio.len() as u16 + 1 };
     let [list_area, radio_area, help_area] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(radio_height), Constraint::Length(2)]).areas(inner);
+        Layout::vertical([Constraint::Min(1), Constraint::Length(radio_height), Constraint::Length(help_height)]).areas(inner);
     let radio: Vec<Line> = std::iter::once(Line::styled(" What these settings come to", Style::default().fg(accent()).bold()))
         .chain(radio.into_iter().map(|l| Line::styled(format!("  {l}"), Style::default().fg(dim()))))
         .collect();
@@ -146,9 +172,13 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     app.regions.rns_options = list_area;
 
-    // Labels get at most half the width, so the values always show.
+    // Labels get what the values leave, and at least half the width, so
+    // short values ("no (default)") don't cut labels that would fit.
     let widest = state.options.iter().map(|o| o.label.chars().count()).max().unwrap_or(10).min(28);
-    let label_width = widest.min((list_area.width as usize).saturating_sub(4) / 2).max(6) + 2;
+    let values =
+        state.options.iter().map(|o| o.shown().unwrap_or_else(|| format!("{} (default)", o.default)).chars().count()).max().unwrap_or(0);
+    let room = (list_area.width as usize).saturating_sub(4);
+    let label_width = widest.min(room.saturating_sub(values).max(room / 2)).max(6) + 2;
     let items: Vec<ListItem> = state
         .rows
         .iter()
@@ -177,6 +207,7 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, list_area, &mut app.rns.option_list);
+    super::mark_selected(frame, list_area, &app.rns.option_list, 1);
 
     let help = app.rns.selected_option().map_or_else(Vec::new, |o| {
         vec![Line::from(vec![
@@ -203,12 +234,13 @@ fn draw_picker(frame: &mut Frame, app: &mut App, area: Rect) {
         width: width.min(area.width),
         height: height.min(area.height),
     };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let picker_block = block(&picker.title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
     app.regions.rns_picker = picker_block.inner(rect);
     let items: Vec<ListItem> = picker.choices.iter().map(|(_, label)| ListItem::new(format!(" {label}"))).collect();
     let list = List::new(items).block(picker_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, rect, &mut picker.list);
+    super::mark_selected(frame, app.regions.rns_picker, &picker.list, 1);
 }
 
 /// Earlier versions (`H`): the list, newest first, and how the selected
@@ -236,6 +268,7 @@ fn draw_history(frame: &mut Frame, app: &mut App, area: Rect) {
     // Two lines a version: clicks find theirs by halving.
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()));
     frame.render_stateful_widget(list, inner, &mut view.list);
+    super::mark_selected(frame, inner, &view.list, 2);
 
     let title = if view.against_current { "What putting it back would change" } else { "What it changed" };
     let other = if view.against_current { "the version before" } else { "the file now" };

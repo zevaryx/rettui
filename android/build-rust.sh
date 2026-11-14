@@ -42,8 +42,10 @@ done
 
 # btleplug (Bluetooth RNodes) calls Java classes of its own, which the app
 # carries: taken from the btleplug crate Cargo.lock has, so the two match.
+# python3, or python where that is only the Windows Store stub.
+py="$(for p in python3 python; do "$p" -c 'import sys' >/dev/null 2>&1 && echo "$p" && break; done)"
 btleplug="$(cargo metadata --locked --format-version 1 --manifest-path "$here/../Cargo.toml" --filter-platform aarch64-linux-android |
-  "$(command -v python3 || command -v python)" -c'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "btleplug"))')"
+  "$py" -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "btleplug"))')"
 rm -rf "$here/btleplug/java"
 cp -R "$(dirname "$btleplug")/src/droidplug/java/src/main/java" "$here/btleplug/java"
 cp "$(dirname "$btleplug")/LICENSE.md" "$here/btleplug/java/LICENSE.md"

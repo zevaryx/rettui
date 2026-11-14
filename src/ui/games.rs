@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, selected_bg};
@@ -66,8 +66,11 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let width = (label.width() as u16).min(inner.right().saturating_sub(x));
         app.regions.games_filters.push((Rect { x, y: inner.y, width, height: 1 }, filter));
         x += width;
-        let style =
-            if filter == app.game_filter { Style::default().fg(Color::Black).bg(accent()).bold() } else { Style::default().fg(dim()) };
+        let style = if filter == app.game_filter {
+            Style::default().fg(super::on_accent()).bg(accent()).bold()
+        } else {
+            Style::default().fg(dim())
+        };
         filters.push(Span::styled(label, style));
     }
     frame.render_widget(Paragraph::new(Line::from(filters)), Rect { height: 1, ..inner });
@@ -130,7 +133,12 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.game_board = BoardRegion::default();
     let game = app.game_view.clone().and_then(|screen| app.games.view(&screen.app, &screen.session).map(|game| (screen, game)));
     let Some((screen, game)) = game else {
-        frame.render_widget(block("", false), area);
+        let hint = if !app.game_list().is_empty() {
+            "Pick a game on the left to see its board."
+        } else {
+            "A game's board shows here. Press n to start one."
+        };
+        super::empty_pane(frame, area, hint);
         return;
     };
     let name = app.store.display_name(&game.peer);
@@ -269,7 +277,7 @@ pub(super) fn draw_game_menu(frame: &mut Frame, app: &mut App) {
     };
     let outer = block(&title, true).title_bottom(Line::styled(" Enter pick · ↑↓ choose · Esc cancel ", Style::default().fg(dim())));
     let inner = outer.inner(rect);
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     frame.render_widget(outer, rect);
     app.regions.game_menu_box = rect;
     let list = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner };

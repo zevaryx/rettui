@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, selected_bg};
@@ -180,7 +180,7 @@ pub(super) fn draw_prompt(frame: &mut Frame, app: &App) {
         width,
         height: (3 + question.len() as u16).min(area.height),
     };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let prompt_block = if question.is_empty() {
         block(&prompt.title, true)
     } else {

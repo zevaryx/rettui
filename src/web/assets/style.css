@@ -88,9 +88,9 @@
   --border: #c8c8d4;
   --text: #1b1b24;
   --dim: #5d5d6e;
-  --accent: #00727c;
-  --green: #17784a;
-  --yellow: #8a6400;
+  --accent: #006a73;
+  --green: #146c42;
+  --yellow: #7a5800;
   --red: #c02626;
   --magenta: #9a2f99;
   --cyan: #12698e;
@@ -104,7 +104,7 @@
   --bubble-out: #d4ecef;
   --syn-directive: #9a2f99;
   --syn-link: #1a5fb4;
-  --syn-field: #17784a;
+  --syn-field: #146c42;
   color-scheme: light;
 }
 /* The wordmark's white letters, dark on a light page (its cyan stays near). */
@@ -153,6 +153,8 @@ input[type=text], input[type=search], input[type=password], input[type=number], 
 input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 
 a { color: var(--accent); }
+/* Where the keyboard is, on rows and sections as on buttons. */
+[data-press]:focus-visible, .scroll[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .dim { color: var(--dim); }
 .mono { font-family: var(--mono); }
 .grow { flex: 1; min-width: 0; }
@@ -231,7 +233,14 @@ a { color: var(--accent); }
   flex-wrap: wrap;
   row-gap: 6px;
 }
+/* A pane's and a dialog's titles are headings, for screen readers to go by,
+   in the header's own type. */
+h2.title { margin: 0; font: inherit; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .panel > header .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A title keeps room for a word or two: the buttons beside it go onto
+   another line before it's cut to a letter. */
+.panel > header > .title.grow { min-width: min(9em, 100%); }
 .panel > header .row { flex-wrap: wrap; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; }
 .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 10px; }
@@ -386,6 +395,16 @@ header .avatar.icon { font-size: 17px; }
 .quote-author { font-weight: 700; }
 .reply-button { opacity: 0; transition: opacity .1s; }
 .message:hover .reply-button, .reply-button:focus-visible { opacity: 1; }
+.msg-actions { display: contents; }
+/* With a mouse, a message's Reply, React and ⋯ float over its top right
+   corner rather than take room in its first line (where, under a long
+   name, they'd wrap and leave a blank line). */
+@media (hover: hover) and (pointer: fine) {
+  .message { position: relative; }
+  .msg-actions { display: flex; gap: 4px; position: absolute; top: -2px; right: 0; padding-left: 6px; background: var(--panel); }
+  .msg-actions .inline { margin-left: 0; }
+  .message:not(:hover):not(:focus-within) .msg-actions { pointer-events: none; background: none; }
+}
 @media (hover: none) { .reply-button { opacity: .75; } }
 .reply-bar { display: flex; align-items: baseline; gap: 5px; font-size: 12.5px; color: var(--dim); border-left: 3px solid var(--accent); padding: 2px 4px 2px 8px; }
 .reply-bar .reply-label { color: var(--accent); }
@@ -437,7 +456,7 @@ header .avatar.icon { font-size: 17px; }
 }
 .dialog.share-location input { width: 100%; }
 .dialog.share-location .live-heading { margin: 8px 0 0; font-size: 13px; }
-.live-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: var(--green-bg); color: var(--on-accent); font-size: 12px; white-space: nowrap; }
+.live-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: var(--green-bg); color: #111; font-size: 12px; white-space: nowrap; }
 .live-chip .inline { margin-left: 2px; }
 .message .note { font-style: italic; font-size: 12.5px; }
 .stranger { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px; margin-bottom: 10px; border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: 6px; font-size: 13px; }
@@ -488,7 +507,7 @@ header .avatar.icon { font-size: 17px; }
 .game-note { font-size: 12.5px; text-align: center; max-width: 100%; }
 .game-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 .game-rules { max-width: 60ch; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border); color: var(--dim); font-size: 13px; }
-.game-rules h4 { margin: 0 0 4px; font-size: 13px; color: var(--text); }
+.game-rules h3 { margin: 0 0 4px; font-size: 13px; color: var(--text); }
 .game-rules p { margin: 0; line-height: 1.5; }
 .board button { padding: 0; border-radius: 0; min-height: 0; }
 .board button:disabled { opacity: 1; cursor: default; }
@@ -497,6 +516,10 @@ header .avatar.icon { font-size: 17px; }
 .board.ttt { display: grid; grid-template-columns: repeat(3, 72px); grid-template-rows: repeat(3, 72px); gap: 4px; }
 .board.ttt .cell { font-size: 34px; font-weight: 700; border-radius: 6px; }
 .board.ttt .cell:not(:disabled):hover { border-color: var(--accent); }
+/* On a phone the board fills the width, rather than staying at 72px a cell. */
+@media (max-width: 480px) {
+  .board.ttt { grid-template-columns: repeat(3, min(96px, calc((100vw - 64px) / 3))); grid-template-rows: repeat(3, min(96px, calc((100vw - 64px) / 3))); }
+}
 .board.four { display: flex; gap: 2px; padding: 6px; border-radius: 8px; background: var(--raised); }
 .board.four .column { display: flex; flex-direction: column; gap: 4px; padding: 3px; background: none; border: 1px solid transparent; border-radius: 6px; }
 .board.four.playing .column:hover { border-color: var(--accent); }
@@ -545,9 +568,12 @@ header .avatar.icon { font-size: 17px; }
 .board.reversi .point.last { background: #4f8a4a; }
 .board.reversi .point.open::after { content: ''; width: 20%; height: 20%; border-radius: 50%; background: #fff6; }
 .board.reversi .point.open:hover { background: #3b7f48; }
-.board.dots { --gap: min(9vw, 44px); display: grid; grid-template-columns: repeat(5, 10px var(--gap)) 10px; grid-template-rows: repeat(5, 10px var(--gap)) 10px; padding: 6px; }
+.board.dots { --gap: clamp(20px, calc((100vw - 110px) / 5), 44px); display: grid; grid-template-columns: repeat(5, 10px var(--gap)) 10px; grid-template-rows: repeat(5, 10px var(--gap)) 10px; padding: 6px; }
 .board.dots .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text); }
-.board.dots .line { border: 0; border-radius: 3px; background: transparent; margin: 2px; }
+.board.dots .line { border: 0; border-radius: 3px; background: transparent; margin: 2px; position: relative; }
+/* The line is thin: its touch area reaches past it, to the dots' gap on either side. */
+.board.dots .line.across::after { content: ''; position: absolute; inset: -9px 0; }
+.board.dots .line.down::after { content: ''; position: absolute; inset: 0 -9px; }
 .board.dots .line.across { margin: 2px 1px; }
 .board.dots .line.down { margin: 1px 2px; }
 .board.dots.playing .line:not(.drawn):hover { background: var(--dim); }
@@ -562,7 +588,7 @@ header .avatar.icon { font-size: 17px; }
 .board.go .point:not(:disabled):hover, .board.pente .point:not(:disabled):hover { background-color: #e6c587; }
 .board.go .point.last .stone, .board.pente .point.last .stone { outline: 2px solid var(--accent); outline-offset: 1px; }
 .board.ultimate { display: grid; grid-template-columns: repeat(3, auto); gap: 6px; padding: 6px; border-radius: 8px; background: var(--raised); }
-.board.ultimate .small { --cell: min(3.6vw, 30px); display: grid; grid-template-columns: repeat(3, var(--cell)); grid-template-rows: repeat(3, var(--cell)); gap: 1px; padding: 2px; border: 2px solid var(--border); border-radius: 6px; }
+.board.ultimate .small { --cell: clamp(14px, calc((100vw - 90px) / 9), 30px); display: grid; grid-template-columns: repeat(3, var(--cell)); grid-template-rows: repeat(3, var(--cell)); gap: 1px; padding: 2px; border: 2px solid var(--border); border-radius: 6px; }
 .board.ultimate .small.won { background: color-mix(in srgb, currentColor 18%, transparent); }
 .board.ultimate .small.won.mine { border-color: var(--accent); }
 .board.ultimate .small.won.theirs { border-color: var(--yellow); }
@@ -571,8 +597,8 @@ header .avatar.icon { font-size: 17px; }
 .board.ultimate .cell.open { box-shadow: inset 0 0 0 2px var(--accent); }
 .board.ultimate .cell.open:hover { background: var(--raised); }
 .board.ultimate .cell.last { outline: 2px solid var(--text); outline-offset: 1px; }
-.board.squares { --sq: min(9vw, 44px); display: grid; grid-template-columns: repeat(var(--n), var(--sq)); grid-template-rows: repeat(var(--n), var(--sq)); border: 1px solid var(--border); }
-.board.squares.amazons { --sq: min(8.4vw, 40px); }
+.board.squares { --sq: min(calc((100vw - 34px) / var(--n)), 44px); display: grid; grid-template-columns: repeat(var(--n), var(--sq)); grid-template-rows: repeat(var(--n), var(--sq)); border: 1px solid var(--border); }
+.board.squares.amazons { --sq: min(calc((100vw - 34px) / var(--n)), 40px); }
 .board.squares .square { border: 0; display: flex; align-items: center; justify-content: center; font-size: calc(var(--sq) * 0.7); line-height: 1; }
 .board.squares .square.light { background: #b58863; }
 .board.squares .square.dark { background: #7a553a; }
@@ -608,7 +634,7 @@ header .avatar.icon { font-size: 17px; }
 .board.quoridor .pawn.mine { background: var(--accent); }
 .board.quoridor .pawn.theirs { background: var(--yellow); }
 .board.battleship { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; }
-.board.battleship h4 { margin: 0 0 4px; font-size: 13px; text-align: center; }
+.board.battleship h3 { margin: 0 0 4px; font-size: 13px; text-align: center; }
 .board.battleship .ocean { --sea: min(6.4vw, 30px); display: grid; grid-template-columns: repeat(10, var(--sea)); grid-template-rows: repeat(10, var(--sea)); gap: 1px; background: #1b3a5c; border: 1px solid #1b3a5c; }
 .board.battleship .sea { background: #2a5d8f; border: 0; color: #fff; font-size: calc(var(--sea) * 0.6); line-height: 1; }
 .board.battleship .sea.ship { background: #8a96a3; }
@@ -704,7 +730,7 @@ header .avatar.icon { font-size: 17px; }
 /* A menu of choices: the tick in a column of its own. */
 .user-menu .menu-item .check { display: inline-block; width: 1.5em; color: var(--accent); }
 .members .member.clickable:hover, .chat-line .prefix.clickable:hover { text-decoration: underline; }
-.user-menu { position: fixed; z-index: 20; min-width: 240px; background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 6px 24px #0008; display: flex; flex-direction: column; }
+.user-menu { position: fixed; z-index: 55; min-width: 240px; background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 6px 24px #0008; display: flex; flex-direction: column; }
 .user-menu .menu-title { padding: 6px 10px; font-weight: 700; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
 .user-menu .menu-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: 6px; }
 .user-menu .menu-item:hover:not(:disabled) { background: var(--selected); }
@@ -722,11 +748,13 @@ header .avatar.icon { font-size: 17px; }
 .mention-item:hover { background: var(--selected); }
 .mention-item.selected { background: var(--selected-strong); box-shadow: inset 3px 0 var(--accent); }
 .user-mention { font-weight: 700; }
-.chat-input input { flex: 1; font-family: var(--mono); }
+.chat-input input { flex: 1; min-width: 0; font-family: var(--mono); }
+/* The way of delivery gives up room before Send is pushed off the edge. */
+.compose .row select { flex: 0 1 auto; min-width: 0; max-width: 12em; }
 
 /* Emoji: the picker, its button, and the `:name` list (a mention list). */
 .emoji-picker {
-  position: fixed; z-index: 30; display: flex; flex-direction: column;
+  position: fixed; z-index: 56; display: flex; flex-direction: column;
   background: var(--raised); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: 0 6px 24px #0008; overflow: hidden;
 }
@@ -761,7 +789,7 @@ td.name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
    the rest. */
 .net-table { table-layout: fixed; }
 .net-table th:nth-child(1) { width: 4.2em; }
-.net-table th:nth-child(3) { width: 25em; }
+.net-table th:nth-child(3) { width: 24em; }
 .net-table th:nth-child(4) { width: 5.5em; }
 .net-table th:nth-child(5) { width: 7em; }
 .net-table th:nth-child(6) { width: 10em; }
@@ -781,10 +809,45 @@ td.name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .heard-table th:nth-child(1) { width: 6.5em; }
 .heard-table th:nth-child(2) { width: 4.6em; }
 .heard-table th:nth-child(3) { width: auto; }
-.heard-table th:nth-child(4) { width: 25em; }
+.heard-table th:nth-child(4) { width: 24em; }
 .heard-table th:nth-child(5) { width: 5.5em; }
 .heard-table th:nth-child(6) { width: 10em; }
 .heard-table th:nth-child(7) { width: 19em; }
+/* Narrower than the columns need (a laptop with the sidebar, a tablet, a
+   phone): each row is a card, so the name is never squeezed out. */
+.net-scroll { container: net / inline-size; }
+@container net (max-width: 1080px) {
+  .net-table, .net-table tbody { display: block; }
+  .net-table thead { display: none; }
+  .net-table tr {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 10px; row-gap: 4px;
+    grid-template-areas: "tag name heard" "addr addr hops" "via via via" "actions actions actions";
+    padding: 10px 14px; border-bottom: 1px solid var(--line); align-items: center;
+  }
+  .net-table td { padding: 0; white-space: normal; min-width: 0; width: auto; }
+  .net-table td.c-tag { grid-area: tag; }
+  .net-table td.c-name { grid-area: name; font-weight: 600; max-width: none; overflow-wrap: anywhere; }
+  .net-table td.c-addr { grid-area: addr; font-size: 13px; overflow-wrap: anywhere; }
+  .net-table td.c-hops { grid-area: hops; font-size: 13px; text-align: right; white-space: nowrap; }
+  .net-table td.c-heard { grid-area: heard; font-size: 13px; text-align: right; white-space: nowrap; }
+  .net-table td.c-via { grid-area: via; font-size: 13px; overflow: visible; }
+  .net-table td.c-via:empty { display: none; }
+  .net-table td.c-actions { grid-area: actions; padding-top: 2px; }
+  .net-table .actions { flex-wrap: wrap; }
+}
+/* With room for it, a card's buttons sit beside its address rather than
+   under it. */
+@container net (min-width: 560px) and (max-width: 1080px) {
+  .net-table tr { grid-template-columns: auto minmax(0, 1fr) auto auto auto; grid-template-areas: "tag name hops heard actions" ". addr addr addr actions" ". via via via actions"; }
+  .net-table .actions { max-width: 22em; }
+  .net-table td.c-hops { text-align: left; }
+  .net-table td.c-actions { padding-top: 0; }
+  .net-table .actions { justify-content: flex-end; }
+}
+/* The Network list's search keeps room to type in, whatever is beside it. */
+.network-tools > input[type=search] { flex: 1 1 18em; min-width: 12em; }
+/* A header's less used tools are in its Tools menu (or ⋯ on a phone). */
+.panel > header button.tool, .toolbar button.tool { display: none; }
 mark { background: var(--yellow-bg); color: #111; border-radius: 2px; }
 .star { color: var(--yellow); }
 .actions { display: flex; gap: 6px; }
@@ -806,6 +869,8 @@ mark { background: var(--yellow-bg); color: #111; border-radius: 2px; }
 .toolbar { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
 /* The Browser's tabs, once there's more than one. */
 .page-tabs { display: flex; align-items: stretch; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: thin; }
+.page-tab-list { display: contents; }
+.page-tab-name:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .page-tab {
   display: flex; align-items: center; gap: 4px; flex: 0 1 180px; min-width: 70px; padding: 0 2px 0 10px;
   border: 1px solid var(--border); border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--dim); cursor: pointer;
@@ -890,6 +955,9 @@ a.chat-link:hover { filter: brightness(1.25); }
   background: var(--sunken);
 }
 .page-editor:disabled { opacity: .5; }
+.editor-split.nothing-open .preview { display: none; }
+.editor-split.nothing-open .page-editor { opacity: 1; background: none; font-family: var(--sans); padding: 18px; }
+.editor-split.nothing-open .page-editor::placeholder { color: var(--dim); opacity: 1; }
 .page-editor.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 .preview { flex: 1; min-width: 0; border-left: 1px solid var(--border); }
 .view-editor .preview, .view-preview .page-editor { display: none; }
@@ -927,22 +995,24 @@ a.chat-link:hover { filter: brightness(1.25); }
 
 /* ---- status ------------------------------------------------------------- */
 
-.info { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 6px 14px; padding: 14px; align-items: center; }
+.info { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 6px 14px; padding: 14px; align-items: baseline; }
 .info .label { color: var(--dim); }
 .info .row { flex-wrap: wrap; }
+/* An address in full, onto another line where it doesn't fit, not cut off. */
+.info > *, .info .row > .mono { min-width: 0; overflow-wrap: anywhere; }
 .log { font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; padding: 8px 12px; }
 .iface { padding: 4px 12px; font-family: var(--mono); font-size: 13px; }
 .iface .online { color: var(--green); }
 .iface .offline { color: var(--red); }
 
 .settings { padding: 6px 14px; }
-.setting { display: grid; grid-template-columns: 170px 1fr; gap: 4px 14px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.setting { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 4px 14px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: start; }
 .setting:last-child { border-bottom: 0; }
 .setting .label { color: var(--dim); padding-top: 5px; }
 .setting.changed .label { color: var(--yellow); }
 .setting input[type=text], .setting input[type=number] { width: 100%; max-width: 520px; }
 .setting input[type=checkbox] { margin-top: 8px; }
-.setting .help { color: var(--dim); font-size: 12.5px; margin-top: 3px; }
+.setting .help { color: var(--dim); font-size: 12.5px; margin-top: 3px; overflow-wrap: anywhere; }
 .setting .help.locked { color: var(--yellow); }
 .setting input:disabled { opacity: 0.6; cursor: not-allowed; }
 .next-start { display: inline-block; margin-left: 6px; font-size: 11px; padding: 0 5px; border: 1px solid var(--border); border-radius: 8px; }
@@ -962,7 +1032,8 @@ a.chat-link:hover { filter: brightness(1.25); }
 
 /* ---- toasts ------------------------------------------------------------- */
 
-#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; pointer-events: none; }
+/* Over dialogs too: what went wrong with something done in one shows. */
+#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 60; pointer-events: none; }
 /* The live connection is down: the page may be out of date. */
 #connection {
   position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 50;
@@ -981,7 +1052,21 @@ a.chat-link:hover { filter: brightness(1.25); }
   .tab .label, .brand, .who { display: none; }
   .mark { display: block; }
   .side { width: var(--side-w, 220px); }
-  .members { display: none; }
+}
+/* A room's members beside the chat while the window has room for both;
+   Members shows or hides them (data-members, kept by each browser). A
+   phone shows them as a pane of their own instead (see .view.panes). */
+@media (max-width: 1250px) {
+  .view[data-view=channels]:not([data-members=shown]) > .members { display: none; }
+}
+.view[data-view=channels][data-members=hidden] > .members { display: none; }
+.members-button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+/* A chat line's time: in full, or (in a narrow chat) to the minute. */
+.chat-line .t-short { display: none; }
+.view[data-view=channels] .pane-main { container: chat / inline-size; }
+@container chat (max-width: 560px) {
+  .chat-line .t-full { display: none; }
+  .chat-line .t-short { display: inline; }
 }
 .list-item .online { color: var(--green); }
 .whisper-icon { color: var(--magenta); font-weight: 700; }
@@ -1001,6 +1086,7 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 }
 .dialog > header { display: flex; align-items: center; gap: 8px; padding: 12px 0 0; font-weight: 700; }
 .dialog > header .close { border: 0; background: none; font-size: 20px; line-height: 1; padding: 2px 6px; }
+.dialog:focus { outline: none; }
 .dialog p { margin: 0; font-size: 13px; }
 .dialog .actions { flex-wrap: wrap; }
 .paper-link { width: 100%; resize: vertical; font-size: 12px; overflow-wrap: anywhere; }
@@ -1070,9 +1156,11 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
      its buttons. */
   .panel > header .title, .panel > header .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Search on a line of its own, then what's shown and in what order. */
-  .network-tools { flex-wrap: wrap; }
+  .panel > header.network-tools { flex-wrap: wrap; }
   .network-tools > input { flex: 1 1 100%; }
-  .network-tools > select { flex: 1 1 0; min-width: 0; }
+  /* Each filter as wide as its longest choice, onto another row rather than
+     cut short. */
+  .network-tools > select { flex: 1 1 auto; min-width: fit-content; }
   .toggle { font-size: 14px; min-height: 40px; }
   .toggle input { width: 20px; height: 20px; }
   .bell .bell-label { display: none; }
@@ -1163,6 +1251,10 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .column > .panel + .panel { border-top: 1px solid var(--border); }
   .panel > header { padding: 10px 14px; gap: 8px; min-height: 56px; }
   .panel > header .title { font-size: 16px; flex: 1 1 auto; }
+  .panel > header > .title.grow { min-width: min(5em, 100%); }
+  /* Someone's face and name share the first line; their address and
+     buttons go under them. */
+  .panel > header:has(> .avatar) > .title { flex: 1 1 calc(100% - 34px); min-width: 0; }
   .panel > header button, .panel > header .subtabs button { padding: 6px 11px; font-size: 14px; }
   .empty { padding: 24px 18px; font-size: 15px; line-height: 1.5; }
 
@@ -1181,6 +1273,9 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
     background: var(--raised); border-radius: 16px 16px 16px 4px;
   }
   .message.out { margin-left: auto; background: var(--bubble-out); border-radius: 16px 16px 4px 16px; }
+  /* A narrow window with a mouse: the hover buttons on the bubble's colour. */
+  .message .msg-actions { background: var(--raised); border-radius: 0 16px 0 0; }
+  .message.out .msg-actions { background: var(--bubble-out); }
   .message .meta { font-size: 12.5px; margin-bottom: 2px; }
   .message .content { font-size: 15.5px; line-height: 1.45; }
   .attachment img { max-width: 100%; }
@@ -1206,6 +1301,8 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .chat { font-size: 14px; padding: 10px 12px; line-height: 1.5; }
   .chat-line { padding: 1px 0; }
   .chat-line .time { font-size: 11.5px; padding-top: 2px; }
+  .chat-line .t-full { display: none; }
+  .chat-line .t-short { display: inline; }
   .chat-input { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); gap: 8px; align-items: center; }
   /* As the message box: a round field, and Send; phones' keyboards have
      emoji. */
@@ -1231,25 +1328,18 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .user-menu .menu-item { padding: 12px 14px; font-size: 15px; }
   .user-menu .menu-item .dim { font-size: 12.5px; }
 
-  /* Network: each heard announce is a card. */
+  /* Network: each heard announce is a card (see .net-scroll), bigger for
+     fingers. */
   .view[data-view=network] .panel > header input[type=search] { flex: 1 1 100%; }
-  .net-table, .net-table tbody { display: block; }
-  .net-table thead { display: none; }
   .net-table tr {
-    display: grid; grid-template-columns: auto 1fr auto; column-gap: 10px; row-gap: 4px;
+    padding: 12px 16px; grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas: "tag name heard" "addr addr hops" "via via via" "actions actions actions";
-    padding: 12px 16px; border-bottom: 1px solid var(--line); align-items: center;
   }
-  .net-table td { padding: 0; white-space: normal; min-width: 0; width: auto; }
-  .net-table td:nth-child(1) { grid-area: tag; }
-  .net-table td:nth-child(2) { grid-area: name; font-size: 16px; font-weight: 600; max-width: none; overflow-wrap: anywhere; }
-  .net-table td:nth-child(3) { grid-area: addr; font-size: 13px; overflow-wrap: anywhere; }
-  .net-table td:nth-child(4) { grid-area: hops; font-size: 13px; text-align: right; white-space: nowrap; }
-  .net-table td:nth-child(5) { grid-area: heard; font-size: 13px; text-align: right; white-space: nowrap; }
-  .net-table td:nth-child(6) { grid-area: via; font-size: 13px; }
-  .net-table td:nth-child(6):empty { display: none; }
-  .net-table td:nth-child(7) { grid-area: actions; padding-top: 4px; }
-  .net-table .actions { flex-wrap: wrap; gap: 8px; }
+  .net-table td.c-hops { text-align: right; }
+  .net-table td.c-actions { padding-top: 4px; }
+  .net-table .actions { max-width: none; justify-content: flex-start; }
+  .net-table td.c-name { font-size: 16px; }
+  .net-table .actions { gap: 8px; }
   .net-table .actions button { padding: 6px 14px; font-size: 14px; }
   .show-more { padding: 14px 16px; }
 
@@ -1315,7 +1405,7 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .dialog .actions button { min-height: 40px; }
 
   /* Notices go at the top, clear of the writing box. */
-  #toasts { left: 10px; right: 10px; bottom: auto; top: calc(62px + env(safe-area-inset-top)); z-index: 45; }
+  #toasts { left: 10px; right: 10px; bottom: auto; top: calc(62px + env(safe-area-inset-top)); }
   #connection { top: calc(62px + env(safe-area-inset-top)); font-size: 14px; }
   .toast { max-width: none; }
 }
@@ -1358,9 +1448,9 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   /* The list's search beside its tabs and buttons, not under them. */
   .panel > header .pane-search { flex: 1 1 140px; order: 0; }
   .panel > header:not(:has(.subtabs)) .pane-search { order: -1; }
-  .network-tools { flex-wrap: nowrap; }
-  .network-tools > input { flex: 2 1 0; }
-  .network-tools > select { min-width: 120px; }
+  /* The search and its filters share a row where they fit, uncut. */
+  .panel > header.network-tools { flex-wrap: wrap; }
+  .view[data-view=network] .panel > header input[type=search] { flex: 2 1 200px; }
   .toolbar { padding: 6px 10px; }
   .list-item { padding: 8px 16px; min-height: 48px; }
   .empty { padding: 14px 18px; }
@@ -1399,3 +1489,32 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 .repo-comment textarea { width: 100%; box-sizing: border-box; }
 .ask-dialog.wide { width: min(640px, 100%); }
 .ask-dialog.wide textarea { width: 100%; box-sizing: border-box; }
+
+/* A phone: an identity's label, address and Copy don't fit on one line, so the
+   label gets its own and the address wraps; touch targets are at least 40px. */
+@media (max-width: 480px), (max-height: 500px) {
+  .identity-rows .row { flex-wrap: wrap; }
+  .identity-rows .row .dim { flex: 1 0 100%; }
+  .identity-rows .row .mono { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+}
+@media (max-width: 480px) {
+  /* A first step's button under its text, not in the middle of the sentence. */
+  .first-steps button { display: block; margin: 6px 0 2px 1.4em; }
+}
+@media (pointer: coarse) {
+  .dialog > header .close { min-width: 40px; min-height: 40px; }
+  .more-button { min-width: 40px; }
+  .page-tab-close { min-width: 32px; min-height: 36px; }
+  .page-tab-new { min-width: 36px; min-height: 36px; }
+  /* A message keeps only its React button on a touch screen (a big one to tap);
+     holding it opens a menu with the rest (see messageGestures). Its text isn't selected by the hold. */
+  .message .meta .reply-button:not(.react-button) { display: none; }
+  .message .meta .react-button { min-height: 32px; min-width: 44px; }
+  .message { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+}
+/* A phone turned sideways with its keyboard up has almost no height left (under
+   100px): the side bar's icons would pile on each other, and the title bars would push a
+   conversation's text box off the screen. They go until the keyboard does. */
+@media (pointer: coarse) and (max-height: 260px) {
+  #bottombar, #appbar, .pane-main > header, .compose .reply-bar { display: none; }
+}

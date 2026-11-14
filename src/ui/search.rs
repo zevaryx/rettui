@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, highlighted, selected_bg};
@@ -69,7 +69,7 @@ fn draw_search(frame: &mut Frame, area: Rect, regions: &mut crate::app::Regions,
     let rect = Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height };
     let outer = block(&shown.title, true);
     let inner = outer.inner(rect);
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     frame.render_widget(outer, rect);
     regions.message_search_box = rect;
 

@@ -689,8 +689,11 @@ impl App {
 
     fn effective_nick(&self, index: usize) -> Option<String> {
         let hub = &self.channels.hubs[index];
-        let nick = hub.nick.clone().unwrap_or_else(|| self.settings.display_name.clone());
-        rrc::normalize_nick(&nick, hub.limits.max_nick_bytes)
+        match &hub.nick {
+            Some(nick) => rrc::normalize_nick(nick, hub.limits.max_nick_bytes),
+            // A display name longer than the hub allows is cut to fit, not dropped.
+            None => rrc::nick_from_name(&self.settings.display_name, hub.limits.max_nick_bytes),
+        }
     }
 
     /// Save hub list changes into the store.
@@ -770,7 +773,7 @@ impl App {
             format!("{name} in #{room}")
         };
         let target = Opens::Room { hub: hex::encode(hub.hash), room: room.to_string() };
-        Some(Notification { title, body: notify::body(&text), target })
+        Some(Notification::new(title, notify::body(&text), target))
     }
 
     /// Room for a reply that names no room: what the user is looking at on

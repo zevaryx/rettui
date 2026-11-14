@@ -1,21 +1,26 @@
 `rettui` starts the terminal UI: ten tabs (Messages, Games, Channels, Network,
 Browser, Node, Status, Reticulum, Hub, Repos) with keyboard and mouse control. Terminals
 narrower than 110 columns get a sidebar of icons and narrower side lists, so
-80×24 works well.
+80×24 works well. Below 40×10 there's no room for the tabs, and the screen
+asks for a bigger terminal instead.
 
 **Colours, times and dates** are settings (Status): *Terminal colours* is
 dark (for a dark terminal, the default), light (for a light one) or basic
 (16 colours, for a terminal without full colour); *Clock* is 24-hour or
 12-hour, and *Dates* month-day (Oct 07), day-month (07 Oct) or
 year-month-day (2025-10-07). Clock and Dates go for the web UI too, and
-for exported conversations.
+for exported conversations. The light theme darkens pale colours (from
+Micron pages and nicks, say) so they read on white, and basic uses only
+the 16 colours every terminal has, pictures and game boards too.
 
 ## Keys
 
-The footer shows the most used keys of what's on screen, as many as fit,
+The footer shows the most used keys of what's on screen (with nothing in a
+list yet, only how to add something), as many as fit,
 and `? keys` at its right edge: `?` lists them all, with those that work in
 every tab. While typing, `?` is typed, so it says `F1 keys` instead, and F1
-lists them. Any key, or a click, closes the list.
+lists them. Any key, or a click, closes the list. On a short terminal it
+uses more columns, and says so if some keys still don't fit.
 
 | Tab | Keys |
 | --- | ---- |

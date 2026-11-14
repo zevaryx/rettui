@@ -292,7 +292,7 @@ impl App {
         }
         if self.settings.notify_messages && !muted {
             let target = Target::Conversation { key };
-            self.push_notification(is_active, Notification { title: name, body: preview, target });
+            self.push_notification(is_active, Notification::new(name, preview, target));
         }
     }
 
@@ -326,7 +326,7 @@ impl App {
         {
             let on_screen = self.focused && self.tab == Tab::Messages && self.active_conversation.as_deref() == Some(key);
             let body = notify::body(&format!("Reacted {} to “{opening}”", reaction.emoji));
-            self.push_notification(on_screen, Notification { title: name, body, target: Target::Conversation { key: key.to_string() } });
+            self.push_notification(on_screen, Notification::new(name, body, Target::Conversation { key: key.to_string() }));
         }
     }
 
@@ -2067,6 +2067,45 @@ mod tests {
         assert!(came.contains(&message("from the far future").timestamp));
         assert!(came.contains(&message("an old friend's message").reactions[0].timestamp));
         assert!(came.contains(&saved.contacts[&key()].icon_at));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_notification_is_answered_from_where_it_is_shown() {
+        use crate::app::notify::{NoticeAction, Response, Target};
+        use crate::lxmf::Extras;
+        let dir = temp_dir("notification-actions");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        app.set_focus(false);
+        app.on_message(from_them(1, "Are you there?", Extras::default()));
+        let target = Target::Conversation { key: key() };
+        let notes = app.take_notifications();
+        assert_eq!(notes.len(), 1);
+        // A conversation can be answered and marked read from its notification.
+        assert_eq!(notes[0].actions, [NoticeAction::Reply, NoticeAction::MarkRead]);
+        // Unread (the app starts with it open, so it's said here).
+        app.store.conversations.get_mut(&key()).unwrap().unread = 1;
+        // A reply is sent, the way set for the conversation, and reads it.
+        app.take_reads();
+        app.respond(Response::Reply { target: target.clone(), text: "  On my way  ".into() }).unwrap();
+        let conversation = &app.store.conversations[&key()];
+        let sent = conversation.messages.last().unwrap();
+        assert_eq!((sent.incoming, sent.content.as_str()), (false, "On my way"));
+        assert_eq!(conversation.unread, 0);
+        assert_eq!(app.take_reads(), [target.tag()]);
+        // Nothing typed sends nothing; marking read without a reply works too.
+        let count = app.store.conversations[&key()].messages.len();
+        app.respond(Response::Reply { target: target.clone(), text: "   ".into() }).unwrap();
+        assert_eq!(app.store.conversations[&key()].messages.len(), count);
+        app.on_message(from_them(2, "Hello?", Extras::default()));
+        app.store.conversations.get_mut(&key()).unwrap().unread = 1;
+        app.respond(Response::MarkRead(target.clone())).unwrap();
+        assert_eq!(app.store.conversations[&key()].unread, 0);
+        // What can't be done says so; the rest of a summary is nothing to do.
+        assert!(app.respond(Response::Reply { target: Target::Summary, text: "x".into() }).is_err());
+        assert!(app.respond(Response::Accept(target)).is_err());
+        assert!(app.respond(Response::MarkRead(Target::Summary)).is_ok());
+        assert!(app.actions_for(&Target::Summary).is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

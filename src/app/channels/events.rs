@@ -864,7 +864,7 @@ mod tests {
         app.tab = crate::app::Tab::Channels;
         app.channels.selected = Some(super::super::Target { hub: HUB, room: Some("lobby".into()) });
         app.channels.typing = false;
-        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
         terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
         // Too long for the narrow view (beside the members): one link on
         // two rows, each part opening it.
@@ -942,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_lines_show_their_date_unless_turned_off() {
+    fn earlier_chat_lines_show_their_date_unless_turned_off() {
         let mut hubs = Hubs::connected("dates");
         hubs.join("lobby", &[OWN, AMY]);
         let said = hubs.said("lobby", AMY, "amy", "hello there");
@@ -960,8 +960,15 @@ mod tests {
                 .find(|row| row.contains("hello there"))
                 .unwrap_or_default()
         };
+        // Today's line: its time alone, as every line today would say the
+        // same date.
+        assert!(app.settings.chat_dates && line(app).contains(&format!("{} <amy> hello there", crate::clock::time(&when, true))));
+        // An earlier day's: its date too.
+        let earlier = said.ts - 3 * 86_400_000;
+        app.channels.hubs[0].buffers.get_mut("lobby").unwrap().iter_mut().filter(|l| l.ts == said.ts).for_each(|l| l.ts = earlier);
+        let when = chrono::TimeZone::timestamp_millis_opt(&chrono::Local, earlier as i64).single().unwrap();
         let dated = format!("{} <amy> hello there", crate::clock::dated(&when, true));
-        assert!(app.settings.chat_dates && line(app).contains(&dated), "{}", line(app));
+        assert!(line(app).contains(&dated), "{}", line(app));
         // D: the time alone.
         app.on_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char('D'), crossterm::event::KeyModifiers::SHIFT));
         assert!(!app.settings.chat_dates);

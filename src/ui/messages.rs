@@ -7,7 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use unicode_width::UnicodeWidthStr;
 
@@ -70,6 +70,29 @@ fn reaction_rows(reactions: &[Reaction], name: &str, width: usize) -> Vec<Line<'
     rows
 }
 
+/// Whether the message at `index` follows on from the one before it, the
+/// same side's, within a few minutes, with nothing its heading would say
+/// that the one before's doesn't (how it was sent, a radio's signal), and
+/// nothing it answers: it's shown under that one, without a heading of its
+/// own, as chat apps do.
+fn grouped(conversation: &crate::store::Conversation, index: usize) -> bool {
+    let Some(before) = index.checked_sub(1).and_then(|i| conversation.messages.get(i)) else { return false };
+    let Some(message) = conversation.messages.get(index) else { return false };
+    let quiet = |m: &Message| {
+        matches!(m.state, MessageState::Received { verified: true } | MessageState::Delivered)
+            && m.paper.is_none()
+            && m.signal.is_none()
+            && m.reply.is_none()
+            && m.continues.is_none()
+            && m.comment_on.is_none()
+    };
+    before.incoming == message.incoming
+        && before.state == message.state
+        && quiet(before)
+        && quiet(message)
+        && (0.0..300.0).contains(&(message.timestamp - before.timestamp))
+}
+
 pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let [list_area, chat_area] =
         Layout::horizontal([Constraint::Length(super::side_width(app, area, 30)), Constraint::Min(20)]).areas(area);
@@ -96,9 +119,11 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             .map(|key| {
                 let conversation = &app.store.conversations[key];
                 let mut spans = vec![Span::raw(format!("{gap}{}", app.store.display_name(key)))];
+                // Badges as the sidebar and Channels draw them: padded.
                 if conversation.unread > 0 {
+                    spans.push(Span::raw(" "));
                     spans.push(Span::styled(
-                        format!(" {}", conversation.unread),
+                        format!(" {} ", conversation.unread),
                         Style::default().fg(Color::Black).bg(Color::Yellow).bold(),
                     ));
                 }
@@ -112,7 +137,8 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(Span::styled(" pinned", Style::default().fg(accent())));
                 }
                 if app.is_request(key) {
-                    spans.push(Span::styled(" request", Style::default().fg(Color::Black).bg(Color::Yellow)));
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(" request ", Style::default().fg(Color::Black).bg(Color::Yellow)));
                 } else if !app.is_known(key) {
                     spans.push(Span::styled(" ?", Style::default().fg(Color::Yellow)));
                 }
@@ -142,7 +168,12 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let [history_area, compose_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);
 
     let Some(key) = app.active_conversation.clone() else {
-        frame.render_widget(block("", false), chat_area);
+        let hint = if order.is_empty() {
+            "Your messages show here. Press n to write to someone by their LXMF address."
+        } else {
+            "Pick a conversation on the left and press Enter to read it, or n to start a new one."
+        };
+        super::empty_pane(frame, chat_area, hint);
         app.regions.history = Rect::default();
         app.regions.compose = Rect::default();
         return;
@@ -198,8 +229,9 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         // carries on from, when that's just before it).
         let commented = conversation.commented(&message);
         let continued = conversation.continued(index);
-        let joined = conversation.joined(index);
-        let next_joined = conversation.joined(index + 1);
+        let under_before = grouped(conversation, index);
+        let joined = conversation.joined(index) || under_before;
+        let next_joined = conversation.joined(index + 1) || grouped(conversation, index + 1);
         // Each history line carries the attachment it belongs to (for clicks).
         let mut lines: Vec<HistoryRow> = Vec::new();
         let mut placements: Vec<Placement<PathBuf>> = Vec::new();
@@ -364,6 +396,12 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         if !message.reactions.is_empty() {
             lines.extend(reaction_rows(&message.reactions, &name, inner_width).into_iter().map(|row| (row, None)));
         }
+        // Without a heading to click, its rows pick it.
+        if under_before {
+            for (_, hit) in lines.iter_mut().filter(|(_, hit)| hit.is_none()) {
+                *hit = Some(HistoryHit::Pick(index));
+            }
+        }
         if !next_joined {
             lines.push((Line::raw(""), None));
         }
@@ -510,7 +548,7 @@ pub(super) fn draw_paper(frame: &mut Frame, app: &App) {
         width,
         height: height.min(area.height),
     };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let (title, caption) = match view.kind {
         QrKind::Paper => ("Paper message", "Scan it into the recipient's app (Sideband, rettui…)"),
         QrKind::Address => ("Your address", "Scan it in Columba or rettui to add you as a contact"),

@@ -56,12 +56,27 @@ repository.
   **Mark read** marks it read without opening rettui. A conversation's
   notification shows its last few messages, one under another, until it's
   read or swiped aside.
+- A person's messages are a conversation to Android (11 and later): their
+  picture (the same face as in rettui) is by the messages, and Android
+  lists them with your other conversations, with settings of their own.
+  After a reply, the notification shows what was sent for a moment, then
+  goes. Rooms (channels) and games have notification settings of their own
+  too, apart from Messages, so one can be turned off or made quiet without
+  the others (Android's settings for rettui, *Notifications*).
+- A challenge to a game has **Accept** and **Decline** in its notification
+  while it waits for an answer, and answers it as the Games tab does.
+- With two or more notifications waiting, Android shows them as one stack
+  ("3 notifications") that opens to each of them.
+- On Android 11 and later, a conversation's notification can float as a
+  **bubble** (the button in the notification, or Android's settings for
+  rettui, *Bubbles*): the conversation opens over other apps, and stays
+  there while you read it.
 - Attaching a file offers the camera beside the files. A photo taken
   goes into the message, and isn't kept in the phone's gallery.
 - With rettui's notifications turned off, the app says so once, with
   **Turn them on**. Messages still arrive; they show when you open it.
-- Recording voice messages and sharing your location ask for the
-  microphone or location the first time.
+- Recording voice messages, sharing your location and scanning a QR code
+  with the camera ask for the microphone, location or camera the first time.
 - Downloads (exports, backups, files from messages and NomadNet pages) go in
   Downloads. **Where files are saved** (Status, under Backup) changes that:
   pick a folder once with Android's own folder picker, or turn on **Ask each

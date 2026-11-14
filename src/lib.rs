@@ -31,6 +31,8 @@ mod reticulum;
 mod rrc;
 mod store;
 mod term;
+#[cfg(windows)]
+pub mod toast;
 mod ui;
 mod update;
 mod web;
@@ -363,7 +365,7 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Identity { action: IdentityAction::Import { file, name } }) => return cli::import_identity(&paths, file, name),
         _ => {}
     }
-    let settings = load_settings(&paths, cli.rns_config.clone())?;
+    let mut settings = load_settings(&paths, cli.rns_config.clone())?;
 
     let mut log_options = std::fs::OpenOptions::new();
     log_options.create(true).append(true);
@@ -382,6 +384,7 @@ async fn run(cli: Cli) -> Result<()> {
         .try_init();
 
     let identity = config::load_identity(&paths.identity)?;
+    settle_name(&mut settings, &paths, &identity);
 
     if let Some(address) = cli.web {
         if cli.command.is_some() {
@@ -456,12 +459,23 @@ fn load_settings(paths: &Paths, rns_config: Option<String>) -> Result<Settings> 
     Ok(settings)
 }
 
+/// A new identity, or one from before names were made from addresses, still
+/// has "rettui user": give it the name its address makes, and keep it.
+fn settle_name(settings: &mut Settings, paths: &Paths, identity: &rns_identity::identity::Identity) {
+    if settings.name_by_address(&app::identity::lxmf_address(identity))
+        && let Err(e) = settings.save(&paths.settings)
+    {
+        tracing::warn!("couldn't save the name {}: {e:#}", settings.display_name);
+    }
+}
+
 /// After switching identity: the identity now in use, its data directory
 /// and settings.
 fn switched(data_dir: &Option<PathBuf>, rns_config: Option<String>) -> Result<(Settings, Paths, rns_identity::identity::Identity)> {
     let paths = Paths::new(data_dir.clone())?;
-    let settings = load_settings(&paths, rns_config)?;
+    let mut settings = load_settings(&paths, rns_config)?;
     let identity = config::load_identity(&paths.identity)?;
+    settle_name(&mut settings, &paths, &identity);
     tracing::info!("now using the identity in {}", paths.base.display());
     Ok((settings, paths, identity))
 }
@@ -591,15 +605,19 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
         for notification in app.take_notifications() {
             desktop.show(notification);
         }
-        // Reads close notifications in the web UI's browsers; the desktop
-        // keeps its own.
-        app.take_reads();
+        // Reads close notifications in the web UI's browsers, and on the
+        // desktop.
+        for tag in app.take_reads() {
+            desktop.withdraw(tag);
+        }
         app.open_paper_read();
         if let Some(e) = desktop.failure() {
             app.log(format!("Could not show a desktop notification: {e}"));
         }
-        while let Some(target) = desktop.clicked() {
-            app.open_notified(target);
+        while let Some(response) = desktop.response() {
+            if let Err(e) = app.respond(response) {
+                app.log(format!("A notification's action didn't work: {e}"));
+            }
         }
         if app.should_quit {
             break Ok(None);
@@ -627,6 +645,27 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_new_identity_is_named_from_its_address_and_keeps_it() {
+        let dir = std::env::temp_dir().join(format!("rettui-settle-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = super::Paths::new(Some(dir.clone())).unwrap();
+        let identity = super::config::load_identity(&paths.identity).unwrap();
+        let mut settings = super::config::Settings::load(&paths.settings).unwrap();
+        assert_eq!(settings.display_name, "rettui user");
+        super::settle_name(&mut settings, &paths, &identity);
+        let name = super::config::default_name(&super::app::identity::lxmf_address(&identity));
+        assert_eq!(settings.display_name, name);
+        assert_eq!(super::config::Settings::load(&paths.settings).unwrap().display_name, name);
+        // Someone who chose a name keeps it.
+        settings.display_name = "Zev".into();
+        settings.save(&paths.settings).unwrap();
+        let mut again = super::config::Settings::load(&paths.settings).unwrap();
+        super::settle_name(&mut again, &paths, &identity);
+        assert_eq!(super::config::Settings::load(&paths.settings).unwrap().display_name, "Zev");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_desktop_app_finds_the_login_secret_in_the_data_folder() {
         let dir = std::env::temp_dir().join(format!("rettui-token-path-{}", std::process::id()));

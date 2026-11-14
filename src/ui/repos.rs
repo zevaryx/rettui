@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use rngit::client::WorkScope;
 use unicode_width::UnicodeWidthStr;
 
@@ -105,6 +105,7 @@ fn draw_hosted(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, body, &mut app.repos.hosted);
+    super::mark_selected(frame, body, &app.repos.hosted, 1);
 }
 
 /// Who may use a hosted repository or group: a row for each person, a column
@@ -124,7 +125,7 @@ fn draw_hosted_access(frame: &mut Frame, app: &mut App, area: Rect) {
         width,
         height: height.min(area.height),
     };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let hint = " Space tick · a add someone · Enter save · Esc cancel ";
     let title = format!("Who may use {}", access.whose());
     let popup = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));
@@ -223,6 +224,7 @@ fn draw_side(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, inner, &mut app.repos.side);
+    super::mark_selected(frame, inner, &app.repos.side, 1);
 }
 
 fn draw_repo(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -272,7 +274,8 @@ fn draw_repo(frame: &mut Frame, app: &mut App, area: Rect) {
         let width = label.width() as u16;
         tabs.push((Rect::new(x, tabs_row.y, width, 1), pane));
         x += width + 1;
-        let style = if pane == app.repos.pane { Style::default().fg(Color::Black).bg(accent()).bold() } else { Style::default().fg(dim()) };
+        let style =
+            if pane == app.repos.pane { Style::default().fg(super::on_accent()).bg(accent()).bold() } else { Style::default().fg(dim()) };
         spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
     }
@@ -314,6 +317,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, items: Vec<ListItem>, empty: &str
     }
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, area, &mut app.repos.items);
+    super::mark_selected(frame, area, &app.repos.items, 1);
 }
 
 /// What the copy on this computer is, above the branches and tags.

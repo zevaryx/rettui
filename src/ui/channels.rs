@@ -103,8 +103,14 @@ fn chat_lines(
     // (the view cuts it off at its edge), and its rows line up under the
     // first.
     let art = micron.as_ref().is_some_and(|m| m.colour);
+    // The date only for an earlier day's line (today's would all say the
+    // same), and seconds only where there's room for them.
+    let seconds = width >= 60;
     let time = crate::clock::local(line.ts as f64 / 1000.0)
-        .map(|t| format!("{} ", if dates { crate::clock::dated(&t, true) } else { crate::clock::time(&t, true) }))
+        .map(|t| {
+            let today = t.date_naive() == chrono::Local::now().date_naive();
+            format!("{} ", if dates && !today { crate::clock::dated(&t, seconds) } else { crate::clock::time(&t, seconds) })
+        })
         .unwrap_or_default();
     let name = line
         .nick
@@ -284,6 +290,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         app.channels.list.select(selected);
         let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold());
         frame.render_stateful_widget(list, list_area, &mut app.channels.list);
+        super::mark_selected(frame, app.regions.channel_list, &app.channels.list, 1);
     }
 
     let [history_area, input_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);

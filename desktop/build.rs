@@ -22,7 +22,12 @@ const MANAGE: &[&str] = &[
     "manage_restart_reticulum",
 ];
 
+/// The notification commands (src/notify.rs), which the web UI's page calls:
+/// showing a notification and taking it down are all it may ask.
+const NOTIFY: &[&str] = &["notify_show", "notify_close"];
+
 fn main() {
-    let app = tauri_build::AppManifest::new().commands(MANAGE);
+    let commands: &'static [&'static str] = Box::leak(MANAGE.iter().chain(NOTIFY).copied().collect::<Vec<_>>().into_boxed_slice());
+    let app = tauri_build::AppManifest::new().commands(commands);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app)).expect("failed to run the Tauri build script");
 }

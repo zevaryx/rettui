@@ -50,7 +50,7 @@ import java.net.URL
  * WebView: the same pages a browser shows, with the phone's microphone,
  * location and files where the pages ask for them.
  */
-class MainActivity : Activity() {
+open class MainActivity : Activity() {
     companion object {
         /**
          * Said in the WebView's user agent, so the web UI offers what only
@@ -417,9 +417,15 @@ class MainActivity : Activity() {
         colorBars(background, light)
     }
 
+    /** The Android permission behind a page's request for the microphone or the camera. */
+    private fun mediaPermission(resource: String) =
+        if (resource == PermissionRequest.RESOURCE_VIDEO_CAPTURE) Manifest.permission.CAMERA else Manifest.permission.RECORD_AUDIO
+
     private fun local(uri: Uri) = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == Rettui.port(this)
 
     private fun setUpWebView() {
+        // Only a debug build's page can be inspected from a computer (chrome://inspect).
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) WebView.setWebContentsDebuggingEnabled(true)
         web.setBackgroundColor(BACKGROUND)
         web.settings.apply {
             javaScriptEnabled = true
@@ -484,16 +490,16 @@ class MainActivity : Activity() {
             }
         }
         web.webChromeClient = object : WebChromeClient() {
+            // The microphone (voice messages) and the camera (scanning a QR code), for rettui's own page.
             override fun onPermissionRequest(request: PermissionRequest) {
-                if (!local(request.origin) || request.resources.toList() != listOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
-                    request.deny()
-                } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    request.grant(request.resources)
-                } else {
-                    pendingPermission?.deny()
-                    pendingPermission = request
-                    requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), ASK_MICROPHONE)
-                }
+                val wanted = request.resources.toList()
+                val allowed = setOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE, PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+                if (!local(request.origin) || wanted.isEmpty() || !allowed.containsAll(wanted)) return request.deny()
+                val needed = wanted.map { mediaPermission(it) }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+                if (needed.isEmpty()) return request.grant(request.resources)
+                pendingPermission?.deny()
+                pendingPermission = request
+                requestPermissions(needed.toTypedArray(), ASK_MICROPHONE)
             }
 
             override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
@@ -620,8 +626,11 @@ class MainActivity : Activity() {
         val granted = results.isNotEmpty() && results.any { it == PackageManager.PERMISSION_GRANTED }
         when (requestCode) {
             ASK_START -> begin()
-            ASK_MICROPHONE -> pendingPermission?.let { if (granted) it.grant(it.resources) else it.deny() }
-                .also { pendingPermission = null }
+            ASK_MICROPHONE -> pendingPermission?.let { asked ->
+                // Only what was allowed: a camera refused doesn't take the microphone with it.
+                val allowedNow = asked.resources.filter { checkSelfPermission(mediaPermission(it)) == PackageManager.PERMISSION_GRANTED }
+                if (allowedNow.isEmpty()) asked.deny() else asked.grant(allowedNow.toTypedArray())
+            }.also { pendingPermission = null }
             ASK_LOCATION -> pendingLocation?.let { (origin, callback) -> callback.invoke(origin, granted, false) }
                 .also { pendingLocation = null }
         }

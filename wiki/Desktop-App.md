@@ -8,8 +8,34 @@ SmartScreen and macOS Gatekeeper warn when you first open one.
 
 Closing the window leaves rettui running in the system tray, so messages
 keep arriving (*Keep running when closed* in Settings > System turns that
-off). Notifications are the system's own, and links that aren't rettui's
-open in your browser.
+off). Links that aren't rettui's open in your browser.
+
+## Notifications
+
+Notifications are the system's own. On Linux (any desktop with the
+freedesktop notification service) a notification about a conversation or
+room offers:
+
+- **a click**, which brings the window forward at that chat (or game);
+- **Mark read**, which marks it read, as opening it does;
+- **Reply**, typed in the notification itself on desktops that support
+  that (KDE Plasma does). The reply is sent as the chat's own box would
+  send it, and the chat is marked read. Where the desktop can't, a click
+  opens the chat;
+- **Accept** and **Decline** on a challenge to a game that's waiting for an
+  answer.
+
+A newer notification about the same chat replaces the older one, and one
+goes away when the chat is read here or on another device. Buttons show
+only where the desktop supports them (GNOME, for one, shows only the
+click).
+
+On Windows a notification is a toast with a box to write a **Reply** in and
+a **Reply** button, **Mark read**, and **Accept** and **Decline** on a
+challenge, as above. It's shown as Windows PowerShell's (a program that
+isn't installed can't have its own), so Windows PowerShell's notifications
+have to be on, and Do not disturb off, in Windows' settings. The buttons
+work while rettui runs. macOS shows a plain notification for now.
 
 ## Identities, backups and pipes
 

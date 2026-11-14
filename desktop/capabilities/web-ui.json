@@ -11,6 +11,8 @@
     ]
   },
   "permissions": [
+    "allow-notify-show",
+    "allow-notify-close",
     "notification:allow-notify",
     "notification:allow-is-permission-granted",
     "notification:allow-register-listener",

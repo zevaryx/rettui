@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
 use super::{block, dim, picked_style, wrap};
@@ -174,7 +174,7 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
 
     // The two buttons share a line.
     let button = |label: &str, row: GuideRow| {
-        let style = if Some(row) == selected { picked_style() } else { Style::default().fg(Color::Black).bg(dim()) };
+        let style = if Some(row) == selected { picked_style() } else { super::keycap_style() };
         Span::styled(format!(" {label} "), style)
     };
     let (apply, later) = (" Apply ", " Not now ");
@@ -243,7 +243,7 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
 
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect = Rect { x: area.x + area.width.saturating_sub(width) / 2, y: area.y + area.height.saturating_sub(height) / 2, width, height };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let guide_block = block("Getting started", true).padding(Padding::horizontal(1));
     let inner = guide_block.inner(rect);
     frame.render_widget(Paragraph::new(lines).block(guide_block), rect);
