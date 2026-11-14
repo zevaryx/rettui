@@ -6450,13 +6450,17 @@ name = "rettui-desktop"
 version = "1.11.0"
 dependencies = [
  "directories",
+ "futures-util",
  "rettui",
+ "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "tokio",
+ "zbus 6.0.0",
 ]
 
 [[package]]
