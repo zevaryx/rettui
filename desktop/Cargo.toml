@@ -25,5 +25,15 @@ serde_json = "1"
 # Notifications as the system shows them (the webview has no web ones).
 tauri-plugin-notification = "2.8"
 
+# Linux: the notification service over D-Bus, with buttons and inline reply.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "6", default-features = false, features = ["tokio"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["sync"] }
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
