@@ -246,9 +246,14 @@ fn draw_lists(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             let mut spans = vec![Span::styled(format!(" {tag} "), Style::default().fg(Color::Black).bg(color)), Span::raw(" ")];
             let shown = match &peer.name {
+                Some(name) if name.chars().count() > name_width => {
+                    spans.extend(highlighted(name, name_width.saturating_sub(1), &terms, Style::default()));
+                    spans.push(Span::styled("…", Style::default().fg(dim())));
+                    name_width
+                }
                 Some(name) => {
                     spans.extend(highlighted(name, name_width, &terms, Style::default()));
-                    name.chars().count().min(name_width)
+                    name.chars().count()
                 }
                 None => {
                     spans.push(Span::styled("(unnamed)", Style::default().fg(dim())));
@@ -349,9 +354,14 @@ fn draw_announces(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::raw(" "),
             ];
             let shown = match &heard.name {
+                Some(name) if name.chars().count() > name_width => {
+                    spans.extend(highlighted(name, name_width.saturating_sub(1), &terms, Style::default()));
+                    spans.push(Span::styled("…", Style::default().fg(dim())));
+                    name_width
+                }
                 Some(name) => {
                     spans.extend(highlighted(name, name_width, &terms, Style::default()));
-                    name.chars().count().min(name_width)
+                    name.chars().count()
                 }
                 None => {
                     spans.push(Span::styled("(unnamed)", Style::default().fg(dim())));

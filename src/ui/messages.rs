@@ -142,7 +142,12 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let [history_area, compose_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);
 
     let Some(key) = app.active_conversation.clone() else {
-        frame.render_widget(block("", false), chat_area);
+        let hint = if order.is_empty() {
+            "Your messages show here. Press n to write to someone by their LXMF address."
+        } else {
+            "Pick a conversation on the left and press Enter to read it, or n to start a new one."
+        };
+        super::empty_pane(frame, chat_area, hint);
         app.regions.history = Rect::default();
         app.regions.compose = Rect::default();
         return;

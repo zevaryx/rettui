@@ -133,7 +133,12 @@ fn draw_board_pane(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.game_board = BoardRegion::default();
     let game = app.game_view.clone().and_then(|screen| app.games.view(&screen.app, &screen.session).map(|game| (screen, game)));
     let Some((screen, game)) = game else {
-        frame.render_widget(block("", false), area);
+        let hint = if !app.game_list().is_empty() {
+            "Pick a game on the left to see its board."
+        } else {
+            "A game's board shows here. Press n to start one."
+        };
+        super::empty_pane(frame, area, hint);
         return;
     };
     let name = app.store.display_name(&game.peer);

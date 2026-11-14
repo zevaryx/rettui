@@ -57,7 +57,11 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
             let name = app.store.display_name(&hex::encode(location.node));
             (format!("{name}  {}", location.url()), Style::default())
         }
-        (None, None) => ("Pick a node on the left, or press g / click here to enter an address".to_string(), Style::default().fg(dim())),
+        (None, None) => {
+            let full = "Pick a node on the left, or press g / click here to enter an address";
+            let text = if full.len() + 2 <= address.width as usize { full } else { "g or click: enter an address" };
+            (text.to_string(), Style::default().fg(dim()))
+        }
     };
     // Badges live in the border so a long address cannot push them away.
     let mut badges = Vec::new();
@@ -156,6 +160,11 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let Some(page) = &app.browser.tab.page else {
         app.regions.page_hits.clear();
+        // Nothing open yet: how to open something.
+        if app.browser.tab.loading.is_none() && app.browser.tab.error.is_none() {
+            let hint = "No page open. Pick a saved page or a node on the left and press Enter, or press g to type an address.";
+            frame.render_widget(Paragraph::new(hint).style(Style::default().fg(dim())).wrap(Wrap { trim: true }), page_area);
+        }
         return;
     };
 
@@ -450,7 +459,8 @@ fn draw_pane_search(frame: &mut Frame, app: &mut App, area: Rect) {
     let search = &app.browser.search;
     let text = search.input.text();
     if text.is_empty() && !search.typing {
-        let hint = Span::styled("/ search by name or address", Style::default().fg(dim()));
+        let text = if area.width >= 27 { "/ search by name or address" } else { "/ search" };
+        let hint = Span::styled(text, Style::default().fg(dim()));
         frame.render_widget(Paragraph::new(hint), area);
         return;
     }

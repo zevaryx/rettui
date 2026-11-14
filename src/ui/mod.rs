@@ -34,7 +34,7 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders};
 use unicode_width::UnicodeWidthStr;
 
@@ -103,6 +103,34 @@ pub(super) fn clipped(text: &str, width: usize) -> String {
     out
 }
 
+/// Rows of a label-and-value box, each cut to `width` columns with an
+/// ellipsis (in the style of the text it cuts) where it's longer, so a
+/// value cut short says so.
+fn fit_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|line| {
+            if line.width() <= width {
+                return line;
+            }
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            let mut used = 0;
+            for span in line.spans {
+                let room = width.saturating_sub(used);
+                if span.width() < room {
+                    used += span.width();
+                    spans.push(span);
+                    continue;
+                }
+                // `clipped` keeps a column for its ellipsis.
+                spans.push(Span::styled(clipped(&span.content, room), span.style));
+                break;
+            }
+            Line::from(spans).style(line.style)
+        })
+        .collect()
+}
+
 /// What stays in the background: hints, times, addresses. A fixed grey
 /// rather than the terminal's "bright black", which some colour schemes
 /// (Solarized among them) make the same as the background.
@@ -151,11 +179,28 @@ fn side_width(app: &mut App, area: ratatui::layout::Rect, preferred: u16) -> u16
 }
 
 fn block(title: &str, focused: bool) -> Block<'_> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if focused { accent() } else { dim() }))
-        .title(Span::styled(format!(" {title} "), Style::default().bold()))
+    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(if focused {
+        accent()
+    } else {
+        dim()
+    }));
+    if title.is_empty() { block } else { block.title(Span::styled(format!(" {title} "), Style::default().bold())) }
+}
+
+/// A pane with nothing in it yet: a box saying what goes there and how to
+/// put something in it.
+fn empty_pane(frame: &mut Frame, area: ratatui::layout::Rect, hint: &str) {
+    let inner = block("", false).inner(area);
+    frame.render_widget(block("", false), area);
+    let text = ratatui::widgets::Paragraph::new(hint)
+        .style(Style::default().fg(dim()))
+        .wrap(ratatui::widgets::Wrap { trim: true })
+        .alignment(ratatui::layout::Alignment::Center);
+    // A third of the way down, where the eye goes.
+    let rows = wrap(hint, inner.width as usize).len() as u16;
+    let top = inner.height.saturating_sub(rows) / 3;
+    let area = ratatui::layout::Rect { y: inner.y + top, height: inner.height - top, ..inner };
+    frame.render_widget(text, area);
 }
 
 fn time_label(ts: f64) -> String {

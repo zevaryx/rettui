@@ -114,6 +114,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         let text = format!("{identified} identified since the node started");
         lines.insert(5, Line::from(vec![label("Visitors"), Span::raw(text)]));
     }
+    let lines = super::fit_lines(lines, area.width.saturating_sub(2) as usize);
     frame.render_widget(Paragraph::new(lines).block(block("Hosting", false)), area);
 }
 
