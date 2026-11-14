@@ -1682,7 +1682,8 @@ const notifications = {
 // app in the background), and on a phone it shows the conversation, not the
 // list. Only then does what arrives there count as read.
 function showing(tab) {
-  if (app.tab !== tab || document.visibilityState !== 'visible') return false;
+  // The desktop app's window behind others isn't looked at, though its page is visible.
+  if (app.tab !== tab || document.visibilityState !== 'visible' || window.rettuiWindowFocused === false) return false;
   return !phone.matches || app.views[tab].pane === 'detail';
 }
 

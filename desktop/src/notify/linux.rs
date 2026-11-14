@@ -65,16 +65,21 @@ async fn run(mut jobs: tokio::sync::mpsc::UnboundedReceiver<Job>, sink: Sink) {
         }
         let Some((connection, server)) = &bus else { continue };
         match job {
-            Job::Show(request) => match show(connection, *server, &request, shown.get(&request.tag).copied()).await {
-                Ok(id) => {
-                    shown.insert(request.tag.clone(), id);
-                    if let Ok(mut up) = up.lock() {
-                        up.insert(id, request);
+            Job::Show(request) => {
+                // Replacing one that has gone from the screen (timed out into
+                // the history) would update it without showing anything.
+                let replaces = shown.get(&request.tag).copied().filter(|id| up.lock().is_ok_and(|up| up.contains_key(id)));
+                match show(connection, *server, &request, replaces).await {
+                    Ok(id) => {
+                        shown.insert(request.tag.clone(), id);
+                        if let Ok(mut up) = up.lock() {
+                            up.insert(id, request);
+                        }
                     }
+                    // The bus went away: connected again for the next.
+                    Err(_) => bus = None,
                 }
-                // The bus went away: connected again for the next.
-                Err(_) => bus = None,
-            },
+            }
             Job::Close(tag) => {
                 if let Some(id) = shown.remove(&tag) {
                     let _ = connection.call_method(Some(SERVICE), PATH, Some(SERVICE), "CloseNotification", &(id,)).await;

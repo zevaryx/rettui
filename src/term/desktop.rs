@@ -337,7 +337,10 @@ mod xdg {
             }
             let Some(bus) = &connection else { continue };
             let tag = notification.target.tag();
-            match show(bus, server, &notification, &icon, shown.get(&tag).copied()).await {
+            // Not one that has gone from the screen: the server would update it
+            // in its history without showing anything.
+            let replaces = shown.get(&tag).copied().filter(|id| on_screen.lock().is_ok_and(|up| up.contains_key(id)));
+            match show(bus, server, &notification, &icon, replaces).await {
                 Ok(id) => {
                     shown.insert(tag, id);
                     if let Ok(mut on_screen) = on_screen.lock() {

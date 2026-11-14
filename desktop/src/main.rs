@@ -165,7 +165,10 @@ fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
             // notify of what's on screen in a window with the focus).
             WindowEvent::Focused(focused) if window.label() == "main" => {
                 if let Some(page) = window.get_webview_window("main") {
-                    let _ = page.eval(format!("window.rettuiWindowFocused={focused}"));
+                    // Coming back catches the page up (and reads what's on screen).
+                    let _ = page.eval(format!(
+                        "window.rettuiWindowFocused={focused};if({focused})document.dispatchEvent(new Event('visibilitychange'))"
+                    ));
                 }
             }
             _ => {}
