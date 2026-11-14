@@ -111,7 +111,7 @@ fn indexed(n: u8) -> (u8, u8, u8) {
     }
 }
 
-fn css_color(color: Color) -> Option<String> {
+pub(crate) fn css_color(color: Color) -> Option<String> {
     let (r, g, b) = match color {
         Color::Reset => return None,
         Color::Rgb(r, g, b) => (r, g, b),

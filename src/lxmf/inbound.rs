@@ -5,14 +5,16 @@ use std::time::Duration;
 use lxmf_core::constants::{FIELD_FILE_ATTACHMENTS, FIELD_REPLY_QUOTE, FIELD_REPLY_TO};
 use lxmf_core::message_api::LxMessage;
 use rmpv::Value;
-use rns_crypto::ed25519::Ed25519PublicKey;
 use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
 use super::fields::{self, FIELD_COLUMBA_EXTENSIONS};
-use super::policy::SharedPolicy;
+use super::policy::{SharedPolicy, StampCheck};
 use super::{Attachment, Extras, InboundMessage, Reply, bytes_of, is_image_name};
 use crate::net::{Hash, Known, NetEvent, lookup};
+
+/// How many stamps are worked out at once.
+static STAMP_CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 /// How long to look for an unknown sender's announce to verify a message.
 const SENDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -24,7 +26,7 @@ pub(super) fn attachments_of(message: &LxMessage) -> Vec<Attachment> {
         out.push(Attachment { name: format!("image.{ext}"), data: data.to_vec(), image: true });
     }
     if let Some(field) = message.get_field(FIELD_FILE_ATTACHMENTS)
-        && let Ok(Value::Array(entries)) = rmpv::decode::read_value(&mut field.as_slice())
+        && let Ok(Value::Array(entries)) = rmpv::decode::read_value(&mut super::fields::raw(field))
     {
         for entry in entries {
             let Value::Array(parts) = entry else { continue };
@@ -59,25 +61,23 @@ pub fn reply_of(message: &LxMessage) -> Option<Reply> {
     Some(Reply { to, quote })
 }
 
-fn signing_key(identity: &Identity) -> Option<Ed25519PublicKey> {
-    let public = identity.get_public_key();
-    let bytes: [u8; 32] = public[32..64].try_into().ok()?;
-    Ed25519PublicKey::from_bytes(&bytes).ok()
-}
-
 /// Whether a message is from who it says: `Ok(true)` if its signature
 /// matches the sender's key, `Ok(false)` if the key isn't known (kept, shown
 /// as unverified), and an error if the key is known and the signature
 /// doesn't match: someone else wrote it, so it's dropped, as Python LXMF
-/// does.
-fn check_signature(message: &mut LxMessage, sender: Option<&Identity>) -> Result<bool, String> {
-    let Some(key) = sender.and_then(signing_key) else {
+/// does. The key is the one known for the address it's from, whatever
+/// that address is of: Python LXMF asks no more, so neither does this.
+fn check_signature(message: &LxMessage, sender: Option<&Identity>) -> Result<bool, String> {
+    let Some(sender) = sender else {
         return Ok(false);
     };
-    if message.verify(&key) {
+    let public = sender.get_public_key();
+    // Its second half is the signing key.
+    let key = public[32..].try_into().ok().and_then(|half| rns_crypto::ed25519::Ed25519PublicKey::from_bytes(half).ok());
+    if key.is_some_and(|key| message.verify_signature(&key)) {
         Ok(true)
     } else {
-        Err(format!("Dropped a message claiming to be from {}: its signature doesn't match their key", hex::encode(message.source_hash)))
+        Err(format!("Dropped a message claiming to be from {}: its signature doesn't match their key", hex::encode(message.source_hash())))
     }
 }
 
@@ -93,38 +93,49 @@ pub(super) async fn parse_inbound(
 ) -> Result<InboundMessage, String> {
     let mut message = LxMessage::unpack(data).map_err(|e| e.to_string())?;
     if let Some(policy) = policy {
-        let policy = policy.lock().unwrap();
-        if policy.too_big(data.len()) {
-            return Err(format!(
-                "Dropped a message from {}: {} KB, over your limit of {} KB",
-                hex::encode(message.source_hash),
-                data.len() / 1000,
-                policy.max_bytes / 1000
-            ));
-        }
-        if !policy.stamp_accepted(&mut message) {
-            return Err(format!(
-                "Dropped a message from {}: it had no valid stamp (you ask for stamp cost {})",
-                hex::encode(message.source_hash),
-                policy.stamp_cost.unwrap_or_default()
-            ));
+        // The policy is let go before the stamp is worked out: that takes a while, and
+        // the link manager asks the policy too.
+        let check = {
+            let policy = policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if policy.too_big(data.len()) {
+                return Err(format!(
+                    "Dropped a message from {}: {} KB, over your limit of {} KB",
+                    hex::encode(message.source_hash()),
+                    data.len() / 1000,
+                    policy.max_bytes / 1000
+                ));
+            }
+            policy.stamp_check(&message)
+        };
+        if let StampCheck::Needs { cost, .. } = &check {
+            let cost = *cost;
+            // A few at a time, so a flood of stamps can't take every thread.
+            let _turn = STAMP_CHECKS.acquire().await.map_err(|e| e.to_string())?;
+            let (passes, back) = tokio::task::spawn_blocking(move || (check.passes(&message), message)).await.map_err(|e| e.to_string())?;
+            message = back;
+            if !passes {
+                return Err(format!(
+                    "Dropped a message from {}: it had no valid stamp (you ask for stamp cost {cost})",
+                    hex::encode(message.source_hash())
+                ));
+            }
         }
     }
     // Senders of propagated messages are often offline; a bounded lookup
     // (cache, remembered keys, then a path request) finds their key.
-    let sender = tokio::time::timeout(SENDER_LOOKUP_TIMEOUT, lookup(runtime, known, message.source_hash))
+    let sender = tokio::time::timeout(SENDER_LOOKUP_TIMEOUT, lookup(runtime, known, message.source_hash()))
         .await
         .unwrap_or_else(|_| Err("timed out".to_string()));
     let sender = sender
         .inspect_err(|e| {
-            tracing::debug!("sender {} not known ({e}); cannot verify signature", hex::encode(message.source_hash));
+            tracing::debug!("sender {} not known ({e}); cannot verify signature", hex::encode(message.source_hash()));
         })
         .ok();
-    let verified = check_signature(&mut message, sender.as_ref().map(|remote| &remote.identity))?;
-    tracing::debug!("message from {} verified={verified}", hex::encode(message.source_hash));
+    let verified = check_signature(&message, sender.as_ref().map(|remote| &remote.identity))?;
+    tracing::debug!("message from {} verified={verified}", hex::encode(message.source_hash()));
     // Only from who it says, a ticket can be used for messages to them.
     if verified && let Some(policy) = policy {
-        policy.lock().unwrap().take_ticket(&message);
+        policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take_ticket(&message);
     }
     let attachments = attachments_of(&message);
     let reply = reply_of(&message);
@@ -134,11 +145,11 @@ pub(super) async fn parse_inbound(
         extras.audio = Some(tokio::task::spawn_blocking(move || audio.decoded()).await.map_err(|e| e.to_string())?);
     }
     Ok(InboundMessage {
-        id: message.message_id.or(message.hash),
-        source: message.source_hash,
-        title: message.title,
-        content: message.content,
-        timestamp: message.timestamp,
+        id: Some(message.message_id()),
+        source: message.source_hash(),
+        title: message.title_text().into_owned(),
+        content: message.content_text().into_owned(),
+        timestamp: message.timestamp(),
         verified,
         attachments,
         paper: false,
@@ -203,30 +214,42 @@ pub fn spawn_inbound(
 
 #[cfg(test)]
 mod tests {
-    use lxmf_core::message_api::DeliveryMethod;
+    use lxmf_core::message_api::{DeliveryMethod, LxMessageDraft};
 
     use super::*;
 
-    /// A message from `sender`, signed, as it arrives.
-    fn signed_by(sender: &Identity, content: &str) -> Vec<u8> {
-        let mut message = LxMessage::new([1; 16], [2; 16], "", content, DeliveryMethod::Direct);
-        message.sign(&sender.get_signing_key().unwrap()).unwrap();
-        message.pack().unwrap()
+    /// A message from `sender`'s address, signed with `key`'s, as it arrives.
+    fn signed_by(sender: &Identity, key: &Identity, content: &str) -> Vec<u8> {
+        let from = rns_identity::destination::Destination::hash_from_name_and_identity(super::super::LXMF_ASPECT, Some(&sender.hash));
+        signed_from(from, key, content)
+    }
+
+    fn signed_from(from: Hash, key: &Identity, content: &str) -> Vec<u8> {
+        let message = LxMessageDraft::new([1; 16], from, "", content, DeliveryMethod::Direct).unwrap();
+        message.sign(&key.get_signing_key().unwrap()).unwrap().finalize(None).unwrap().pack().unwrap()
     }
 
     #[test]
     fn forged_messages_are_dropped_and_unknown_senders_unverified() {
         let (alice, mallory) = (Identity::new(), Identity::new());
-        let data = signed_by(&alice, "hello");
-        let check = |data: &[u8], sender: Option<&Identity>| check_signature(&mut LxMessage::unpack(data).unwrap(), sender);
+        let data = signed_by(&alice, &alice, "hello");
+        let check = |data: &[u8], sender: Option<&Identity>| check_signature(&LxMessage::unpack(data).unwrap(), sender);
         assert_eq!(check(&data, Some(&alice)), Ok(true));
         // Not known yet: kept, as unverified.
         assert_eq!(check(&data, None), Ok(false));
-        // Signed by someone else, or changed on the way: dropped.
-        assert!(check(&data, Some(&mallory)).unwrap_err().starts_with("Dropped a message claiming to be from 02020202"));
+        // Someone else's key for the address, signed by someone else, or
+        // changed on the way: dropped.
+        let from = hex::encode(&data[16..20]);
+        assert!(check(&data, Some(&mallory)).unwrap_err().starts_with(&format!("Dropped a message claiming to be from {from}")));
+        assert!(check(&signed_by(&alice, &mallory, "hello"), Some(&alice)).is_err());
         let at = data.windows(5).position(|w| w == b"hello").unwrap();
         let mut changed = data.clone();
         changed[at..at + 5].copy_from_slice(b"jello");
         assert!(check(&changed, Some(&alice)).is_err());
+        // From another of Alice's addresses, signed by her: hers, as in
+        // Python LXMF, which checks the signature and no more.
+        let node = rns_identity::destination::Destination::hash_from_name_and_identity("nomadnetwork.node", Some(&alice.hash));
+        assert_eq!(check(&signed_from(node, &alice, "hello"), Some(&alice)), Ok(true));
+        assert!(check(&signed_from(node, &mallory, "hello"), Some(&alice)).is_err());
     }
 }

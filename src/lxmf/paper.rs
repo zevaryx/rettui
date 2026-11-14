@@ -14,7 +14,7 @@ use lxmf_core::message_api::{LxMessage, MessageError};
 use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
-use super::send::build_message;
+use super::send::{build_message, finish};
 use super::{DeliveryMode, Outgoing, Reply, inbound};
 use crate::net::{Hash, Known, NetEvent, lookup};
 
@@ -46,10 +46,10 @@ pub async fn write(
     let outgoing = Outgoing { reply, format, ..Outgoing::text(to, content, Vec::new(), DeliveryMode::Paper, timestamp) };
     let mut message = build_message(identity, source, &outgoing, recipient.app_data.as_deref()).await?;
     message.method = DeliveryMethod::Paper;
-    let hash = message.hash.ok_or("The message has no hash after signing")?;
+    let hash = message.message_id();
     // A stamp, if the recipient asks for one; it can take a moment.
     let link = tokio::task::spawn_blocking(move || {
-        message.get_stamp();
+        let message = finish(message).map_err(|e| e.to_string())?;
         message.to_paper_uri(|data| recipient.identity.encrypt(data, None).map_err(|e| MessageError::PackFailed(e.to_string()))).map_err(
             |e| match e {
                 MessageError::PackFailed(e) if e.contains("maximum size") => {
@@ -193,6 +193,8 @@ impl Qr {
 
 #[cfg(test)]
 mod tests {
+    use lxmf_core::message_api::LxMessageDraft;
+
     use super::*;
 
     #[test]
@@ -240,8 +242,8 @@ mod tests {
     /// one was heard), as `write` makes it (without the network for the
     /// recipient's key).
     fn paper(sender: &Identity, recipient: &Identity, ratchet: Option<&[u8; 32]>, to: Hash, content: &str) -> String {
-        let mut message = LxMessage::new(to, [7; 16], "", content, DeliveryMethod::Paper);
-        message.sign(&sender.get_signing_key().unwrap()).unwrap();
+        let message = LxMessageDraft::new(to, [7; 16], "", content, DeliveryMethod::Paper).unwrap();
+        let message = message.sign(&sender.get_signing_key().unwrap()).unwrap().finalize(None).unwrap();
         message.to_paper_uri(|data| recipient.encrypt(data, ratchet).map_err(|e| MessageError::PackFailed(e.to_string()))).unwrap()
     }
 
@@ -257,8 +259,8 @@ mod tests {
         assert!(link.starts_with("lxm://"));
         let opened = open(&bob, bob_address, &ring, &format!("  {link}\n")).unwrap();
         let message = LxMessage::unpack(&opened).unwrap();
-        assert_eq!(message.content, "meet at noon");
-        assert_eq!(message.source_hash, [7; 16]);
+        assert_eq!(message.content_text(), "meet at noon");
+        assert_eq!(message.source_hash(), [7; 16]);
         // For someone else, or someone else's key.
         assert!(open(&eve, [3; 16], &ring, &link).unwrap_err().contains("not for you"));
         assert!(open(&eve, bob_address, &ring, &link).unwrap_err().contains("can't be decrypted"));
@@ -266,15 +268,15 @@ mod tests {
         // To the ratchet Bob announced.
         let announced = rns_identity::ratchet::PersistentRatchetRing::open(&ring, &bob).unwrap().ensure_current(&bob).unwrap();
         let link = paper(&alice, &bob, Some(&announced), bob_address, "after");
-        assert_eq!(LxMessage::unpack(&open(&bob, bob_address, &ring, &link).unwrap()).unwrap().content, "after");
+        assert_eq!(LxMessage::unpack(&open(&bob, bob_address, &ring, &link).unwrap()).unwrap().content_text(), "after");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn long_messages_dont_fit_on_paper() {
         let (alice, bob) = (Identity::new(), Identity::new());
-        let mut message = LxMessage::new([2; 16], [7; 16], "", &"x".repeat(3000), DeliveryMethod::Paper);
-        message.sign(&alice.get_signing_key().unwrap()).unwrap();
+        let message = LxMessageDraft::new([2; 16], [7; 16], "", &"x".repeat(3000), DeliveryMethod::Paper).unwrap();
+        let message = message.sign(&alice.get_signing_key().unwrap()).unwrap().finalize(None).unwrap();
         let result = message.to_paper_uri(|data| bob.encrypt(data, None).map_err(|e| MessageError::PackFailed(e.to_string())));
         assert!(matches!(result, Err(MessageError::PackFailed(e)) if e.contains("maximum size")));
     }

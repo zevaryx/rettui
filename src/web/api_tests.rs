@@ -25,6 +25,23 @@ fn from_bob(n: u8, content: &str) -> InboundMessage {
 }
 
 #[tokio::test]
+async fn requests_that_change_things_must_come_from_the_page_itself() {
+    let web = TestWeb::start("origin");
+    let post = |headers: &'static [(&'static str, &'static str)]| web.send_with(Method::POST, "/api/cache/clear", None, false, headers);
+    // A page on another port of the same host: same site, so the cookie goes, but not the same origin.
+    assert_eq!(post(&[("origin", "http://127.0.0.1:9999"), ("host", "127.0.0.1:8740")]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(post(&[("sec-fetch-site", "same-site")]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(post(&[("sec-fetch-site", "cross-site")]).await.status, StatusCode::FORBIDDEN);
+    // Its own page, a browser that says so, or a script that sends neither.
+    assert_eq!(post(&[("origin", "http://127.0.0.1:8740"), ("host", "127.0.0.1:8740")]).await.status, StatusCode::OK);
+    assert_eq!(post(&[("sec-fetch-site", "same-origin")]).await.status, StatusCode::OK);
+    assert_eq!(post(&[]).await.status, StatusCode::OK);
+    // Reading is not refused.
+    let read = web.send_with(Method::GET, "/api/state", None, false, &[("origin", "http://elsewhere.example")]).await;
+    assert_eq!(read.status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn logging_in_and_the_files_every_page_needs() {
     let web = TestWeb::start("login");
     // The link logs in: a cookie, and on to the page.
@@ -99,6 +116,17 @@ async fn state_settings_and_the_little_things() {
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
     assert_eq!(web.get("/api/state").await.json()["display_name"], "Amy");
 
+    // A map tile source on this computer's own network isn't set from the web;
+    // the one already set is sent back unchanged without trouble.
+    for source in ["http://example.org/{z}/{x}/{y}.png", "https://127.0.0.1:8080/{z}/{x}/{y}.png", "https://192.168.1.9/{z}/{x}/{y}.png"] {
+        let refused = web.post("/api/settings", json!({ "values": { "map_tiles": source } })).await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{source}");
+    }
+    let current = web.get("/api/settings").await.json();
+    assert!(current.to_string().contains("map_tiles"));
+    let same = web.post("/api/settings", json!({ "values": { "map_tiles": crate::config::OSM_TILES } })).await;
+    assert_eq!(same.status, StatusCode::OK, "{}", same.text());
+
     // Icons, emoji picked lately, a QR code.
     let icons = web.get("/api/icons?q=radio").await.json();
     assert!(icons.as_array().unwrap().iter().any(|i| i["name"].as_str().unwrap().contains("radio")));
@@ -151,6 +179,37 @@ async fn state_settings_and_the_little_things() {
     assert!(subscribed.status == StatusCode::OK || subscribed.status == StatusCode::BAD_REQUEST, "{}", subscribed.text());
     assert_eq!(web.post("/api/push/showing", json!({ "endpoint": endpoint, "showing": true })).await.status, StatusCode::OK);
     assert_eq!(web.post("/api/push/unsubscribe", json!({ "endpoint": endpoint })).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn an_interface_that_doesnt_say_enabled_is_listed_as_off() {
+    let web = TestWeb::start("rns-unsaid");
+    web.with(|app| {
+        let path = app.rns_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text = "[reticulum]\n  share_instance = No\n\n[interfaces]\n  [[Quiet]]\n    type = AutoInterface\n  [[Loud]]\n    type = AutoInterface\n    interface_enabled = Yes\n";
+        std::fs::write(path, text).unwrap();
+        app.rns_reload();
+    })
+    .await;
+    let rns = web.get("/api/reticulum?section=interface:Quiet").await.json();
+    let on = |name: &str| rns["sections"].as_array().unwrap().iter().find(|s| s["title"] == name).unwrap()["enabled"].clone();
+    assert_eq!((on("Quiet"), on("Loud")), (json!(false), json!(true)), "{rns}");
+    // Its Enabled option is off until set, and the config's warnings say why.
+    let enabled = rns["options"].as_array().unwrap().iter().find(|o| o["key"] == "enabled").unwrap();
+    assert_eq!((&enabled["value"], &enabled["default"]), (&json!(null), &json!("No")), "{rns}");
+    assert!(rns["warnings"].to_string().contains("Quiet: off"), "{rns}");
+
+    // Once Reticulum has started without it, Status lists it as off.
+    assert_eq!(web.get("/api/state").await.json()["interfaces_off"], json!([]));
+    web.with(|app| {
+        let known = crate::net::remote::KnownIdentities::none();
+        app.on_net(crate::net::NetEvent::Started { lxmf_hash: [9; 16], public_key: [1; 64], known });
+        let loud = crate::net::InterfaceInfo { name: "Loud".into(), online: true, ..Default::default() };
+        app.on_net(crate::net::NetEvent::Interfaces(vec![loud]));
+    })
+    .await;
+    assert_eq!(web.get("/api/state").await.json()["interfaces_off"], json!(["Quiet"]));
 }
 
 #[tokio::test]
@@ -1441,7 +1500,7 @@ async fn the_nodes_statistics_and_resetting_them() {
     web.with(|app| {
         app.node.served.pages = 5;
         app.node.served.requests = 6;
-        app.node.stats = Some(nomad_core::NomadServeStats { request_count: 6, visitors: 3, ..Default::default() });
+        app.node.stats = Some(crate::nomad::host::Stats { request_count: 6, visitors: 3, ..Default::default() });
     })
     .await;
     let node = web.get("/api/node").await.json();

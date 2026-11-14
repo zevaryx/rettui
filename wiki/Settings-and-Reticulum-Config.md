@@ -34,7 +34,11 @@ of the Reticulum instance it uses. Where files are kept is in
     AX.25, pipe), plus IFAC, announce, discovery and ingress control. Keys
     rettui doesn't know are listed and kept as written.
   - **Interfaces:** add (pick a name and a type), rename, enable or disable,
-    and delete them.
+    and delete them. Reticulum starts an interface only when it says
+    `enabled = Yes` (or `interface_enabled = Yes`), as Python Reticulum
+    does; one with neither is off, and rettui says so when Reticulum
+    starts, lists it as off on the Status page, and says so in its log and
+    among the config's warnings. Interfaces rettui adds always say which.
   - **Interface discovery:** with *Discover interfaces* in `[reticulum]`,
     Reticulum finds entry points that others announce as discoverable. It
     hears of them through the connections you already have, so it needs

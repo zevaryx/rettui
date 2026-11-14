@@ -26,8 +26,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use crate::nomad::paths::NODE_ASPECT as NOMAD_NODE_ASPECT;
 use lxmf_core::handlers::parse_pn_announce_data;
-use nomad_core::NOMAD_NODE_ASPECT;
 use rns_runtime::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
@@ -512,7 +512,7 @@ pub enum HostEvent {
     Started { hash: Hash },
     Stopped,
     Failed(String),
-    Stats(nomad_core::NomadServeStats),
+    Stats(host::Stats),
 }
 
 /// What the hosted propagation node is doing.
@@ -525,6 +525,8 @@ pub enum PnEvent {
 }
 
 pub struct NetOptions {
+    /// Who you've blocked, for the services you host.
+    pub blocked: crate::store::Blocked,
     pub rns_config: Option<String>,
     pub identity: Identity,
     pub display_name: String,
@@ -633,6 +635,7 @@ pub fn spawn(options: NetOptions) -> (mpsc::UnboundedSender<NetCommand>, mpsc::U
 
 /// Start the runtime without registering any destination, for one-shot CLI use.
 pub async fn start_runtime(rns_config: Option<&str>) -> Result<ReticulumHandle, String> {
+    crate::reticulum::seed_default(rns_config);
     init(rns_config, None, ShutdownSignal::new(), Arc::new(AtomicBool::new(true)))
         .await
         .map_err(|e| format!("Reticulum failed to start: {e}"))
@@ -656,6 +659,7 @@ async fn run(
     ev: mpsc::UnboundedSender<NetEvent>,
 ) -> Result<(), String> {
     let runtime = start_runtime(options.rns_config.as_deref()).await?;
+    let blocked = options.blocked.clone();
     for note in &options.notes {
         let _ = ev.send(NetEvent::Log(note.clone()));
     }
@@ -681,7 +685,7 @@ async fn run(
     let size_gate = {
         let (policy, ev) = (policy.clone(), ev.clone());
         ResourceAcceptPolicy::new(move |_link, advertisement| {
-            let policy = policy.lock().unwrap();
+            let policy = policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if !policy.too_big(advertisement.data_size) {
                 return true;
             }
@@ -745,15 +749,15 @@ async fn run(
 
     // The hosted node starts in a task (it announces first) and comes back
     // here; `host_generation` drops nodes from superseded starts.
-    let (host_tx, mut host_rx) = mpsc::unbounded_channel::<(u64, Result<nomad_core::NomadNode, String>)>();
+    let (host_tx, mut host_rx) = mpsc::unbounded_channel::<(u64, Result<host::Node, String>)>();
     let mut host_generation = 0u64;
-    let mut hosted: Option<nomad_core::NomadNode> = None;
+    let mut hosted: Option<host::Node> = None;
     // Taking speed tests from someone, while asked to.
     let mut speed_listener: Option<speedtest::Listener> = None;
     let launch = |generation: u64, config: HostConfig| {
-        let (runtime, identity, tx) = (runtime.clone(), identity.clone(), host_tx.clone());
+        let (runtime, identity, tx, blocked) = (runtime.clone(), identity.clone(), host_tx.clone(), blocked.clone());
         tokio::spawn(async move {
-            let _ = tx.send((generation, host::start(&runtime, &identity, &config).await));
+            let _ = tx.send((generation, host::start(&runtime, &identity, &config, blocked).await));
         });
     };
     if let Some(config) = options.host.clone() {
@@ -770,7 +774,7 @@ async fn run(
     let mut pn_local: Option<LocalNode> = None;
     let launch_pn = |config: Option<PnConfig>| {
         let generation = pn_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let (runtime, identity, ring, slot, current, tx, deliver, known) = (
+        let (runtime, identity, ring, slot, current, tx, deliver, known, blocked) = (
             runtime.clone(),
             identity.clone(),
             ring.clone(),
@@ -779,6 +783,7 @@ async fn run(
             pn_tx.clone(),
             pn_deliver_tx.clone(),
             known.clone(),
+            blocked.clone(),
         );
         tokio::spawn(async move {
             let mut slot = slot.lock().await;
@@ -791,11 +796,13 @@ async fn run(
             }
             let result = match config {
                 None => Ok(None),
-                Some(config) => HostedPn::start(&runtime, &identity, lxmf_hash, &ring, &config, &known, deliver).await.map(|node| {
-                    let local = node.local();
-                    *slot = Some(node);
-                    Some(local)
-                }),
+                Some(config) => {
+                    HostedPn::start(&runtime, &identity, lxmf_hash, &ring, &config, &known, deliver, blocked).await.map(|node| {
+                        let local = node.local();
+                        *slot = Some(node);
+                        Some(local)
+                    })
+                }
             };
             let _ = tx.send((generation, result));
         });
@@ -810,7 +817,8 @@ async fn run(
     let mut hub_config = options.hub.clone();
     let launch_hub = |config: Option<HubHostConfig>| {
         let generation = hub_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let (runtime, slot, current, tx, ev) = (runtime.clone(), hub_slot.clone(), hub_generation.clone(), hub_tx.clone(), ev.clone());
+        let (runtime, slot, current, tx, ev, blocked) =
+            (runtime.clone(), hub_slot.clone(), hub_generation.clone(), hub_tx.clone(), ev.clone(), blocked.clone());
         tokio::spawn(async move {
             let mut slot = slot.lock().await;
             if let Some(old) = slot.take() {
@@ -821,7 +829,7 @@ async fn run(
             }
             let result = match config {
                 None => Ok(None),
-                Some(config) => HostedHub::start(&runtime, &config, ev).await.map(|hub| {
+                Some(config) => HostedHub::start(&runtime, &config, ev, blocked).await.map(|hub| {
                     let started = (hub.hash, hub.public_key);
                     *slot = Some(hub);
                     Some(started)
@@ -839,7 +847,7 @@ async fn run(
     let git_slot: Arc<Mutex<Option<githost::HostedGit>>> = Arc::default();
     let mut git_config = options.git_host.clone();
     let launch_git = |config: Option<githost::GitHostConfig>| {
-        let (runtime, slot, ev) = (runtime.clone(), git_slot.clone(), ev.clone());
+        let (runtime, slot, ev, blocked, known) = (runtime.clone(), git_slot.clone(), ev.clone(), blocked.clone(), known.clone());
         tokio::spawn(async move {
             let mut slot = slot.lock().await;
             if let Some(old) = slot.take() {
@@ -847,7 +855,7 @@ async fn run(
             }
             let event = match config {
                 None => githost::GitHostEvent::Stopped,
-                Some(config) => match githost::HostedGit::start(&runtime, &config, ev.clone()).await {
+                Some(config) => match githost::HostedGit::start(&runtime, &config, ev.clone(), &blocked, &known).await {
                     Ok(node) => {
                         let (hash, pages) = (node.hash, node.pages);
                         *slot = Some(node);
@@ -994,7 +1002,9 @@ async fn run(
                 }
             }
             _ = node_rescan.tick(), if hosted.is_some() => {
-                if let Some(Err(e)) = hosted.as_ref().map(|node| node.reload_routes()) {
+                if let Some(node) = hosted.as_ref()
+                    && let Err(e) = node.reload().await
+                {
                     let _ = ev.send(NetEvent::Log(format!("Could not reload node pages: {e}")));
                 }
             }
@@ -1087,7 +1097,7 @@ async fn run(
                     }
                     NetCommand::SetPolicy { stamp_cost, max_bytes } => {
                         let changed = {
-                            let mut policy = policy.lock().unwrap();
+                            let mut policy = policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             policy.max_bytes = max_bytes;
                             std::mem::replace(&mut policy.stamp_cost, stamp_cost) != stamp_cost
                         };
@@ -1273,7 +1283,7 @@ async fn run(
                     NetCommand::Host(config) => {
                         host_generation += 1;
                         if let Some(node) = hosted.take() {
-                            node.shutdown();
+                            node.stop().await;
                         }
                         match config {
                             Some(config) => launch(host_generation, config),
@@ -1283,13 +1293,15 @@ async fn run(
                         }
                     }
                     NetCommand::HostReload => {
-                        if let Some(Err(e)) = hosted.as_ref().map(|node| node.reload_routes()) {
+                        if let Some(node) = hosted.as_ref()
+                            && let Err(e) = node.reload().await
+                        {
                             let _ = ev.send(NetEvent::Log(format!("Could not reload node pages: {e}")));
                         }
                     }
                     NetCommand::HostAnnounce => {
                         let result = match &hosted {
-                            Some(node) => node.announce_now().await.map_err(|e| e.to_string()),
+                            Some(node) => node.announce_now().await,
                             None => Err("the node is not running".to_string()),
                         };
                         let line = match result {
@@ -1419,7 +1431,7 @@ async fn run(
                 let name = announce
                     .app_data
                     .as_deref()
-                    .and_then(|d| crate::names::clean(&nomad_core::clamp_node_name(&String::from_utf8_lossy(d))));
+                    .and_then(|d| crate::names::clean(&crate::nomad::paths::clamp_name(&String::from_utf8_lossy(d))));
                 let _ = ev.send(NetEvent::Announce {
                     kind: PeerKind::Nomad,
                     hash: announce.destination_hash,
@@ -1548,7 +1560,9 @@ async fn run(
     if let Some(node) = git_slot.lock().await.take() {
         node.stop().await;
     }
-    drop(hosted);
+    if let Some(node) = hosted {
+        node.stop().await;
+    }
     let quick = Duration::from_millis(500);
     let _ = tokio::time::timeout(quick, async {
         if let Some(node) = pn_slot.lock().await.take() {

@@ -152,8 +152,8 @@ fn draw_hosted_access(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         let name_style = if i < 2 { Style::default().bold() } else { Style::default() };
         let mut spans = vec![Span::styled(format!(" {name:<w$}", w = name_width as usize - 1), name_style)];
-        for column in 0..columns {
-            let mark = if row.ticks[column] { "[x]" } else { "[ ]" };
+        for (column, &ticked) in row.ticks.iter().enumerate().take(columns) {
+            let mark = if ticked { "[x]" } else { "[ ]" };
             let style = if (i, column) == access.at { picked_style() } else { Style::default() };
             let x = body.x + name_width + cell * column as u16;
             app.regions.hosted_access_cells.push((Rect { x, y, width: cell, height: 1 }.intersection(body), i, column));

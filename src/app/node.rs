@@ -9,8 +9,8 @@
 //! linked to download), and anything can be moved between the folders of
 //! its root (`pages/` or `files/`): links to it in the pages follow.
 
+use crate::nomad::host::Stats as NomadServeStats;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use nomad_core::NomadServeStats;
 use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 
@@ -472,7 +472,7 @@ impl App {
             }
             Root::Files => {
                 let to = to.trim().trim_matches('/').to_string();
-                nomad_core::validate_content_relative_path(&to).map_err(|e| format!("Not a name for the node: {e}"))?;
+                crate::nomad::paths::check_name(&to).map_err(|e| format!("Not a name for the node: {e}"))?;
                 to
             }
         };

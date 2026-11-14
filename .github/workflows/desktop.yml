@@ -121,7 +121,7 @@ jobs:
           # updater unpacks. For Linux with its icon and menu entry, for the
           # AUR and the Flatpak.
           mkdir -p "dist/$name"
-          cp README.md "dist/$name/"
+          cp README.md LICENSE "dist/$name/"
           if [[ "$TARGET" == *windows* ]]; then
             cp "target/$TARGET/release/rettui-desktop.exe" "dist/$name/"
             (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)

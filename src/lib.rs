@@ -362,11 +362,11 @@ async fn run(cli: Cli) -> Result<()> {
     }
     let settings = load_settings(&paths, cli.rns_config.clone())?;
 
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&paths.log)
-        .with_context(|| format!("opening {}", paths.log.display()))?;
+    let mut log_options = std::fs::OpenOptions::new();
+    log_options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut log_options, 0o600);
+    let log_file = log_options.open(&paths.log).with_context(|| format!("opening {}", paths.log.display()))?;
     // Everything goes to the log file, at the level set (changed while
     // running); interface trouble also goes to the log on screen.
     let (filter, reload) = tracing_subscriber::reload::Layer::new(logging::starting_filter(&settings.log_level));
@@ -464,10 +464,11 @@ fn switched(data_dir: &Option<PathBuf>, rns_config: Option<String>) -> Result<(S
 }
 
 /// Network options for an interactive session (the TUI or the web UI).
-fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::identity::Identity) -> net::NetOptions {
+fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::identity::Identity, blocked: store::Blocked) -> net::NetOptions {
     let hub = rrc::host::HubHostConfig::from_settings(settings, paths, identity.hash);
     let git_host = net::githost::GitHostConfig::from_settings(settings, paths);
     net::NetOptions {
+        blocked,
         rns_config: settings.rns_config.clone(),
         identity,
         display_name: settings.display_name.clone(),
@@ -510,8 +511,15 @@ fn android_start(settings: &Settings, paths: &Paths) -> Vec<String> {
 async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::identity::Identity) -> Result<Option<String>> {
     let identity_hash = identity.hash;
     let store = Store::load_or_empty(&paths.store);
-    let (mut net_tx, mut net_rx) = net::spawn(net_options(&settings, &paths, identity.clone()));
+    store.sync_blocked();
+    let (mut net_tx, mut net_rx) = net::spawn(net_options(&settings, &paths, identity.clone(), store.blocked.clone()));
+    // ratatui's panic hook gives the terminal back on a panic in any thread, but only the
+    // UI thread's panic ends the UI: a worker's must not wreck the screen.
+    let default_hook: std::sync::Arc<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync> = std::sync::Arc::from(std::panic::take_hook());
+    let kept = default_hook.clone();
+    std::panic::set_hook(Box::new(move |info| kept(info)));
     let mut terminal = ratatui::init();
+    let ratatui_hook = std::panic::take_hook();
     // Probe for Kitty graphics while in raw mode, before EventStream starts
     // reading stdin (it would swallow the terminal's replies).
     let graphics = term::images::Graphics::detect();
@@ -521,11 +529,15 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     // Focus reports (where the terminal sends them) tell notifications
     // whether the user is looking.
     execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste, EnableFocusChange)?;
-    // ratatui's panic hook restores the terminal; also release the mouse.
-    let hook = std::panic::take_hook();
+    let ui_thread = std::thread::current().id();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
-        hook(info);
+        if std::thread::current().id() == ui_thread {
+            let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
+            ratatui_hook(info);
+        } else {
+            // On the screen it would only be garbage; the log has it.
+            tracing::error!("a thread panicked: {info}");
+        }
     }));
     let desktop = term::desktop::Desktop::start(&app.paths.cache);
     let mut events = EventStream::new();
@@ -596,7 +608,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
             // Show "restarting" while the old stack stops.
             let _ = terminal.draw(|frame| ui::draw(frame, &mut app));
             net::shutdown(&net_tx, &mut net_rx, net::Stop::Restart).await;
-            (net_tx, net_rx) = net::spawn(net_options(&app.settings, &app.paths, identity.clone()));
+            (net_tx, net_rx) = net::spawn(net_options(&app.settings, &app.paths, identity.clone(), app.store.blocked.clone()));
             app.set_network(net_tx.clone());
         }
     };

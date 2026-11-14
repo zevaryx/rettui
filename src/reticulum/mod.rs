@@ -34,12 +34,34 @@ pub fn config_path(rns_config: Option<&str>) -> PathBuf {
     rns_runtime::platform::resolve_config_dir(dir.as_deref()).join("config")
 }
 
-/// The file's text, or rsReticulum's default config when there is none yet
-/// (saving then creates it).
+/// The config a new install starts with: rsReticulum's default, except that
+/// other programs on the machine can't use this instance until you say so.
+pub fn default_text() -> String {
+    Config::default_config().replace("share_instance = Yes", "share_instance = No")
+}
+
+/// Makes the config file if there is none yet, from `default_text`. One that
+/// exists (rettui's own, or another program's) is never touched.
+pub fn seed_default(rns_config: Option<&str>) {
+    let path = config_path(rns_config);
+    if path.exists() {
+        return;
+    }
+    if let Some(dir) = path.parent()
+        && std::fs::create_dir_all(dir).is_err()
+    {
+        return;
+    }
+    // A failure leaves rsReticulum to make its own default.
+    let _ = crate::config::write_private(&path, default_text().as_bytes());
+}
+
+/// The file's text, or the default config when there is none yet (saving
+/// then creates it).
 pub fn load(path: &Path) -> Result<(String, bool), String> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok((text, true)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Config::default_config().to_string(), false)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((default_text(), false)),
         Err(e) => Err(format!("Could not read {}: {e}", path.display())),
     }
 }
@@ -89,8 +111,30 @@ pub fn check(text: &str) -> (Option<Config>, Check) {
             Err(e) => result.warnings.push(format!("{name}: {e}")),
         }
     }
+    result.warnings.extend(enable_warnings(&config));
     result.warnings.extend(bootstrap_warnings(&config));
     (Some(config), result)
+}
+
+/// Interfaces that are off only because they don't say `enabled`:
+/// Reticulum starts an interface only when `enabled` (or
+/// `interface_enabled`) is yes, and older rsReticulum started these.
+pub fn enable_warnings(config: &Config) -> Vec<String> {
+    without_enabled(config)
+        .into_iter()
+        .map(|name| format!("{name}: off, because it has no enabled line. Add enabled = Yes to use it"))
+        .collect()
+}
+
+/// The names of the interfaces with no `enabled` (or `interface_enabled`)
+/// line.
+pub fn without_enabled(config: &Config) -> Vec<String> {
+    config
+        .subsections("interfaces")
+        .into_iter()
+        .filter(|(_, section)| !section.has_enable_key())
+        .map(|(name, _)| name.to_string())
+        .collect()
 }
 
 /// How many entry points interface discovery connects to by itself (0
@@ -115,10 +159,7 @@ pub fn bootstrap_warnings(config: &Config) -> Vec<String> {
     config
         .subsections("interfaces")
         .into_iter()
-        .filter(|(_, section)| {
-            let on = section.get_bool("enabled").or_else(|| section.get_bool("interface_enabled")).unwrap_or(true);
-            on && section.get_bool("bootstrap_only") == Some(true)
-        })
+        .filter(|(_, section)| section.interface_enabled() && section.get_bool("bootstrap_only") == Some(true))
         .map(|(name, _)| {
             format!(
                 "{name}: Bootstrap only: dropped as soon as Reticulum starts connecting to {connects} discovered entry point{}, \
@@ -357,9 +398,8 @@ fn pipe_commands(config: Option<&Config>) -> BTreeMap<String, usize> {
             continue;
         }
         let Some(command) = section.get("command") else { continue };
-        // On unless it says otherwise, as Reticulum reads it.
-        let on = section.get_bool("enabled").or_else(|| section.get_bool("interface_enabled")).unwrap_or(true);
-        *commands.entry(command.to_string()).or_default() += usize::from(on);
+        // On only if it says so, as Reticulum reads it.
+        *commands.entry(command.to_string()).or_default() += usize::from(section.interface_enabled());
     }
     commands
 }
@@ -452,13 +492,12 @@ pub fn remove_interface(text: &str, name: &str) -> Result<String, String> {
     Ok(doc.text())
 }
 
-/// Whether an interface is on: rsReticulum starts it unless `enabled` (or
-/// `interface_enabled`) says no.
+/// Whether an interface is on: Reticulum starts it only when `enabled` (or
+/// `interface_enabled`) says yes.
 pub(crate) fn interface_on(doc: &Doc, name: &str) -> bool {
-    ["enabled", "interface_enabled"]
-        .iter()
-        .find_map(|key| doc.raw_value(&["interfaces", name], key))
-        .is_none_or(|value| crate::app::reticulum::rns_truthy(value.trim_matches(['"', '\''])))
+    ["enabled", "interface_enabled"].iter().any(|key| {
+        doc.raw_value(&["interfaces", name], key).is_some_and(|value| crate::app::reticulum::rns_truthy(value.trim_matches(['"', '\''])))
+    })
 }
 
 /// Whether an interface that's on connects to `host` (a TCP client's
@@ -665,6 +704,24 @@ mod tests {
     use super::*;
 
     const DEFAULT: &str = "[reticulum]\n  enable_transport = False\n  share_instance = Yes\n\n[logging]\n  loglevel = 4\n\n[interfaces]\n  [[Default Interface]]\n    type = AutoInterface\n    enabled = Yes\n";
+
+    #[test]
+    fn a_new_install_does_not_share_its_instance_and_an_old_config_is_left_alone() {
+        let dir = std::env::temp_dir().join(format!("rettui-seed-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let arg = dir.to_string_lossy().into_owned();
+        seed_default(Some(&arg));
+        let text = std::fs::read_to_string(dir.join("config")).unwrap();
+        assert!(text.contains("share_instance = No") && !text.contains("share_instance = Yes"), "{text}");
+        assert!(Config::parse(&text).is_ok());
+        assert_eq!(load(&dir.join("config")).unwrap().0, text);
+        assert_eq!(load(&dir.join("nothing")).unwrap(), (default_text(), false));
+
+        std::fs::write(dir.join("config"), DEFAULT).unwrap();
+        seed_default(Some(&arg));
+        assert_eq!(std::fs::read_to_string(dir.join("config")).unwrap(), DEFAULT, "a config that exists stays as it is");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn options_show_values_defaults_and_unknown_keys() {

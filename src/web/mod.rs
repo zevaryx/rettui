@@ -130,8 +130,9 @@ impl Owner {
             }
             return;
         }
-        let cacheable =
-            location.fields.is_empty() && !location.path.starts_with(nomad_core::FILE_PREFIX) && !self.app.is_own_node(location.node);
+        let cacheable = location.fields.is_empty()
+            && !location.path.starts_with(crate::nomad::paths::FILE_PREFIX)
+            && !self.app.is_own_node(location.node);
         if cacheable
             && !refresh
             && let Some(cached) = self.app.page_cache().get(location.node, &location.path, identified)
@@ -434,7 +435,7 @@ impl WebState {
             let _ = tx.send(f(owner));
         });
         self.jobs.send(Job { run, changes }).map_err(|_| "rettui is shutting down".to_string())?;
-        rx.await.map_err(|_| "rettui is shutting down".to_string())
+        rx.await.map_err(|_| "That failed inside rettui (or rettui is shutting down)".to_string())
     }
 
     /// Read app state (browsers are not told to refresh).
@@ -569,7 +570,8 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
 
     let identity_hash = identity.hash;
     let store = Store::load_or_empty(&paths.store);
-    let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone()));
+    store.sync_blocked();
+    let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone(), store.blocked.clone()));
     let mut app = App::new(settings, paths.clone(), store, net_tx.clone(), None, identity_hash);
     // No tab is "on screen" in the web UI: unread counts are cleared by
     // browsers when they show a conversation or room.
@@ -647,7 +649,10 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     let result = loop {
         tokio::select! {
             Some(job) = jobs.recv() => {
-                (job.run)(&mut owner);
+                // A job that panics fails its own request, not the whole web UI.
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (job.run)(&mut owner))).is_err() {
+                    tracing::error!("a web job panicked; the request failed");
+                }
                 owner.app.tab = Tab::Status;
                 if job.changes {
                     notify(&changes, Scope::ALL);
@@ -713,7 +718,8 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 let _ = pending.reply.send(Err("Reticulum restarted while loading; load the page again".into()));
             }
             net::shutdown(&net_tx, &mut net_rx, net::Stop::Restart).await;
-            (net_tx, net_rx) = net::spawn(crate::net_options(&owner.app.settings, &owner.app.paths, identity.clone()));
+            (net_tx, net_rx) =
+                net::spawn(crate::net_options(&owner.app.settings, &owner.app.paths, identity.clone(), owner.app.store.blocked.clone()));
             owner.app.set_network(net_tx.clone());
             notify(&changes, Scope::ALL);
         }

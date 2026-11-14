@@ -4,14 +4,51 @@ use std::path::{Path, PathBuf};
 
 use super::App;
 
+/// A file name someone else chose, made safe to save: its final component
+/// only (the `/` and `\\` of either system), without control or direction-
+/// changing characters (which can make `txt.exe` read as `exe.txt`), without
+/// characters Windows refuses, not hidden, not a Windows device name, and at
+/// most 120 characters with its extension kept.
+pub(crate) fn safe_file_name(name: &str) -> String {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let hidden = |c: char| c.is_control() || matches!(c as u32, 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2069 | 0xFEFF);
+    let cleaned: String = last.chars().filter(|&c| !hidden(c)).map(|c| if ":*?\"<>|".contains(c) { '_' } else { c }).collect();
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']).to_string();
+    if cleaned.is_empty() || cleaned.starts_with('.') {
+        return "download".to_string();
+    }
+    let (stem, ext) = match cleaned.rsplit_once('.') {
+        Some((stem, ext)) if ext.chars().count() <= 16 => (stem.to_string(), format!(".{ext}")),
+        _ => (cleaned.clone(), String::new()),
+    };
+    let stem: String = stem.chars().take(120usize.saturating_sub(ext.chars().count()).max(1)).collect();
+    let device = stem.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || (device.len() == 4 && (device.starts_with("COM") || device.starts_with("LPT")) && device.as_bytes()[3].is_ascii_digit());
+    if reserved { format!("_{stem}{ext}") } else { format!("{stem}{ext}") }
+}
+
+/// Bytes the files under `dir` take (folders inside it counted too, to a few
+/// levels).
+pub(crate) fn folder_size(dir: &Path) -> u64 {
+    fn walk(dir: &Path, depth: usize) -> u64 {
+        let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+        entries
+            .flatten()
+            .map(|entry| match entry.metadata() {
+                Ok(meta) if meta.is_file() => meta.len(),
+                Ok(meta) if meta.is_dir() && depth < 4 => walk(&entry.path(), depth + 1),
+                _ => 0,
+            })
+            .sum()
+    }
+    walk(dir, 0)
+}
+
 /// A path in `dir` for `name` that does not overwrite anything. The remote
-/// name is reduced to its final component so it cannot escape `dir`.
+/// name is made safe first (see [`safe_file_name`]).
 pub(crate) fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let name = Path::new(name)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|n| !n.starts_with('.'))
-        .unwrap_or_else(|| "download".to_string());
+    let name = safe_file_name(name);
     let candidate = dir.join(&name);
     if !candidate.exists() {
         return candidate;
@@ -112,6 +149,14 @@ fn open_external(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
 }
 
 impl App {
+    /// Ask before opening a file someone sent, with the program the system
+    /// uses for its type: the program may do more than show it.
+    pub(super) fn ask_open_file(&mut self, path: &Path) {
+        let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+        let question = format!("Open {name} with the program your system uses for it? (y/n)");
+        self.open_prompt(super::PromptKind::ConfirmOpenFile(path.to_path_buf()), &question, "");
+    }
+
     pub(super) fn open_file(&mut self, path: &Path) {
         match open_external(path) {
             Ok(()) => self.log(format!("Opened {}", path.display())),
@@ -164,6 +209,42 @@ mod tests {
         assert_eq!(unique_path(&dir, "a.txt"), dir.join("a-1.txt"));
         assert_eq!(unique_path(&dir, "../../etc/passwd"), dir.join("passwd"));
         assert_eq!(unique_path(&dir, ".bashrc"), dir.join("download"));
+        assert_eq!(unique_path(&dir, "..\\..\\evil.exe"), dir.join("evil.exe"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_folders_size_counts_what_is_inside_it() {
+        let dir = std::env::temp_dir().join(format!("rettui-folder-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a/b")).unwrap();
+        std::fs::write(dir.join("x"), [0; 10]).unwrap();
+        std::fs::write(dir.join("a/b/y"), [0; 5]).unwrap();
+        assert_eq!(super::folder_size(&dir), 15);
+        assert_eq!(super::folder_size(&dir.join("none")), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn names_from_others_are_made_safe() {
+        for (name, safe) in [
+            ("notes\u{202e}txt.exe", "notestxt.exe"),
+            ("a:b*c?.txt", "a_b_c_.txt"),
+            ("report.pdf. . ", "report.pdf"),
+            ("NUL.txt", "_NUL.txt"),
+            ("com1", "_com1"),
+            ("lpt10.txt", "lpt10.txt"),
+            ("  ", "download"),
+            ("", "download"),
+            ("\u{0}\u{7}x.bin", "x.bin"),
+        ] {
+            assert_eq!(super::safe_file_name(name), safe, "{name:?}");
+        }
+        let long = format!("{}.jpeg", "a".repeat(400));
+        let safe = super::safe_file_name(&long);
+        assert!(safe.chars().count() <= 120 && safe.ends_with(".jpeg"), "{safe}");
+        let dir = std::env::temp_dir().join(format!("rettui-safe-name-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

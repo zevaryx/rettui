@@ -1,13 +1,14 @@
 //! The pages of a node hosted by rettui, for the page editors.
 //!
-//! Paths are relative to the node's `pages/` folder and go through
-//! nomad-core's checks (no `..`, symlinks, hidden or `.allowed` files).
+//! Paths are relative to the node's `pages/` folder and go through the
+//! node's checks (no `..`, symlinks, hidden or `.allowed` files).
 //! Saving keeps a page's permissions, so executable pages (scripts) stay
 //! executable; the web editor is not allowed to change scripts at all.
 
 use std::path::{Path, PathBuf};
 
-use nomad_core::{NomadContentRoots, NomadContentStore, resolve_under_root};
+use super::paths::{self, PathError};
+use super::store::{self, MAX_FILE_BYTES, MAX_PAGE_BYTES};
 
 /// A file in `pages/`.
 #[derive(Debug, Clone)]
@@ -22,7 +23,8 @@ pub struct PageInfo {
 }
 
 pub struct Pages {
-    store: NomadContentStore,
+    pages: PathBuf,
+    files: PathBuf,
 }
 
 /// Who may see something on the node, as its `.allowed` list says (as
@@ -42,7 +44,7 @@ pub enum Allowed {
 const MAX_ALLOWED: u64 = 64 * 1024;
 
 /// The identities in an `.allowed` list: lines of 32 hex characters.
-fn allowed_hashes(text: &str) -> Vec<[u8; 16]> {
+pub(super) fn allowed_hashes(text: &str) -> Vec<[u8; 16]> {
     let mut hashes: Vec<[u8; 16]> = Vec::new();
     for hash in text.lines().filter_map(|line| crate::net::parse_hash(line.trim())) {
         if !hashes.contains(&hash) {
@@ -52,19 +54,17 @@ fn allowed_hashes(text: &str) -> Vec<[u8; 16]> {
     hashes
 }
 
-/// The page for a path that isn't there. (nomad-core's own wording quotes
-/// the path with backticks, which Micron reads as formatting codes.)
-fn not_found(path: &str) -> String {
-    let path = nomad_core::sanitize_micron_text(path);
+/// The page for a path that isn't there.
+pub(super) fn not_found(path: &str) -> String {
+    let path = paths::clean_text(path);
     format!("#!c=0\n>Not found\n\nThe page {path} is not available on this node.\n")
 }
 
-/// Shown when browsing your own node's script pages while scripts are off:
-/// rsNomad then sends visitors the script's text instead of running it.
-const SCRIPT_NOTICE: &str = "#!c=0\n>Script page\n\nThis page is a program, but \"Run page scripts\" is off, so visitors get its text instead of what it prints. Turn the setting on in the terminal (Status tab) to run it.\n";
+/// Shown when browsing your own node's script pages while scripts are off.
+const SCRIPT_NOTICE: &str = "#!c=0\n>Script page\n\nThis page is a program, but \"Run page scripts\" is off, so visitors are told it isn't there. Turn the setting on in the terminal (Status tab) to run it.\n";
 
 fn starter_index(name: &str) -> String {
-    let name = nomad_core::sanitize_micron_text(name.trim());
+    let name = paths::clean_text(name.trim());
     format!(
         ">{name}\n\n\
 Welcome to this NomadNet node, hosted with rettui.\n\n\
@@ -128,7 +128,7 @@ pub fn normalize_folder(folder: &str) -> Result<String, String> {
     if folder.is_empty() {
         return Ok(String::new());
     }
-    nomad_core::validate_content_relative_path(folder).map_err(|e| format!("Not a folder name: {e}"))?;
+    paths::check_name(folder).map_err(|e| format!("Not a folder name: {e}"))?;
     Ok(folder.to_string())
 }
 
@@ -264,7 +264,7 @@ pub fn upload_name(name: &str) -> Result<String, String> {
     if safe.ends_with(".allowed") {
         return Err("A file can't be called .allowed (NomadNet keeps who may see a page in those)".into());
     }
-    nomad_core::validate_content_relative_path(&safe).map_err(|e| format!("Not a name for the node: {e}"))?;
+    paths::check_name(&safe).map_err(|e| format!("Not a name for the node: {e}"))?;
     Ok(safe)
 }
 
@@ -294,16 +294,18 @@ pub fn normalize_name(name: &str) -> Result<String, String> {
     }
     let file = name.rsplit('/').next().unwrap_or(name);
     let name = if file.contains('.') { name.to_string() } else { format!("{name}.mu") };
-    nomad_core::validate_content_relative_path(&name).map_err(|e| format!("Not a page name: {e}"))?;
+    paths::check_name(&name).map_err(|e| format!("Not a page name: {e}"))?;
     Ok(name)
 }
 
 impl Pages {
     /// Open (creating if needed) a node folder with `pages/` and `files/`.
     pub fn open(dir: &Path) -> Result<Self, String> {
-        let store = NomadContentStore::new(NomadContentRoots::under(dir))
-            .map_err(|e| format!("Could not open node folder {}: {e}", dir.display()))?;
-        Ok(Self { store })
+        let (pages, files) = (dir.join("pages"), dir.join("files"));
+        for folder in [&pages, &files] {
+            std::fs::create_dir_all(folder).map_err(|e| format!("Could not open node folder {}: {e}", dir.display()))?;
+        }
+        Ok(Self { pages, files })
     }
 
     /// Write a starter `index.mu` if the node has none.
@@ -322,32 +324,33 @@ impl Pages {
         if let Some(rel) = path.strip_prefix("/media/") {
             return self.read_media(rel);
         }
-        if path.starts_with(nomad_core::FILE_PREFIX) {
-            return self.store.read_file_route(path).map_err(|e| format!("{path}: {e}"));
+        if path.starts_with(paths::FILE_PREFIX) {
+            let rel = paths::file_name(path).map_err(|e| format!("{path}: {e}"))?;
+            return store::read(&self.files, rel, MAX_FILE_BYTES).map_err(|e| format!("{path}: {e}"));
         }
-        let rel = nomad_core::strip_page_prefix(path).map_err(|e| format!("{path}: {e}"))?;
+        let rel = paths::page_name(path).map_err(|e| format!("{path}: {e}"))?;
         if self.is_executable(rel) {
             return Ok(SCRIPT_NOTICE.as_bytes().to_vec());
         }
-        match self.store.read_page_rel(rel) {
+        match store::read(&self.pages, rel, MAX_PAGE_BYTES) {
             Ok(bytes) => Ok(bytes),
-            Err(nomad_core::NomadError::NotFound(_) | nomad_core::NomadError::PathTraversal) => Ok(not_found(path).into_bytes()),
+            Err(PathError::NotFound | PathError::Outside) => Ok(not_found(path).into_bytes()),
             Err(e) => Err(format!("{path}: {e}")),
         }
     }
 
     /// The script a `/page/…` path runs, if it is one.
     pub fn script(&self, path: &str) -> Option<PathBuf> {
-        let rel = nomad_core::strip_page_prefix(path).ok()?;
+        let rel = paths::page_name(path).ok()?;
         self.resolve(rel).ok().filter(|p| is_executable(p))
     }
 
     pub fn pages_dir(&self) -> &Path {
-        &self.store.roots().pages_dir
+        &self.pages
     }
 
     fn resolve(&self, path: &str) -> Result<PathBuf, String> {
-        resolve_under_root(self.pages_dir(), path).map_err(|e| format!("{path}: {e}"))
+        paths::resolve(self.pages_dir(), path).map_err(|e| format!("{path}: {e}"))
     }
 
     pub fn exists(&self, path: &str) -> bool {
@@ -359,7 +362,7 @@ impl Pages {
     }
 
     pub fn list(&self) -> Result<Vec<PageInfo>, String> {
-        let entries = self.store.list_pages().map_err(|e| e.to_string())?;
+        let entries = store::list(&self.pages).map_err(|e| e.to_string())?;
         Ok(entries
             .into_iter()
             .map(|entry| PageInfo {
@@ -374,7 +377,7 @@ impl Pages {
 
     /// A page's text. Binary files (images) cannot be edited.
     pub fn read(&self, path: &str) -> Result<String, String> {
-        let bytes = self.store.read_page_rel(path).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = store::read(&self.pages, path, MAX_PAGE_BYTES).map_err(|e| format!("{path}: {e}"))?;
         String::from_utf8(bytes).map_err(|_| format!("{path} is not a text file"))
     }
 
@@ -386,7 +389,7 @@ impl Pages {
         if !scripts && is_executable(&target) {
             return Err(format!("{path} is a script; edit it on the host"));
         }
-        self.store.write_page_rel(path, content.as_bytes()).map_err(|e| format!("Could not save {path}: {e}"))?;
+        store::write(&self.pages, path, content.as_bytes(), MAX_PAGE_BYTES).map_err(|e| format!("Could not save {path}: {e}"))?;
         if let Some(metadata) = existing {
             // The write replaces the file; put its permissions back.
             let _ = std::fs::set_permissions(&target, metadata.permissions());
@@ -418,25 +421,31 @@ impl Pages {
     }
 
     pub fn delete(&self, path: &str) -> Result<(), String> {
-        self.store.delete_page_rel(path).map_err(|e| format!("Could not delete {path}: {e}"))
+        store::delete(&self.pages, path).map_err(|e| format!("Could not delete {path}: {e}"))
     }
 
     /// Rename a page or picture, leaving no empty folder behind.
     fn rename_page(&self, from: &str, to: &str, scripts: bool) -> Result<(), String> {
         self.rename(from, to, scripts)?;
-        self.carry_allowed(Root::Pages, from, Some(to))?;
+        if let Err(e) = self.carry_allowed(Root::Pages, from, Some(to)) {
+            // Put it back: moved without its list, it would be open to everyone.
+            if let (Ok(source), Ok(target)) = (self.resolve(from), self.resolve(to)) {
+                let _ = std::fs::rename(target, source);
+            }
+            return Err(e);
+        }
         self.prune(Root::Pages, from);
         Ok(())
     }
 
     /// An image or other file from `pages/`, for editor previews.
     pub fn read_media(&self, path: &str) -> Result<Vec<u8>, String> {
-        self.store.read_media_rel(path).map_err(|e| format!("{path}: {e}"))
+        store::read(&self.pages, path, MAX_FILE_BYTES).map_err(|e| format!("{path}: {e}"))
     }
 
     /// What's in `files/`, to download.
     pub fn list_files(&self) -> Result<Vec<PageInfo>, String> {
-        let entries = self.store.list_files().map_err(|e| e.to_string())?;
+        let entries = store::list(&self.files).map_err(|e| e.to_string())?;
         Ok(entries
             .into_iter()
             .map(|entry| PageInfo { executable: false, text: false, path: entry.path, size: entry.size, modified_ms: entry.modified_ms })
@@ -444,7 +453,7 @@ impl Pages {
     }
 
     fn files_dir(&self) -> &Path {
-        &self.store.roots().files_dir
+        &self.files
     }
 
     fn resolve_in(&self, root: Root, path: &str) -> Result<PathBuf, String> {
@@ -452,7 +461,7 @@ impl Pages {
             Root::Pages => self.pages_dir(),
             Root::Files => self.files_dir(),
         };
-        resolve_under_root(dir, path).map_err(|e| format!("{path}: {e}"))
+        paths::resolve(dir, path).map_err(|e| format!("{path}: {e}"))
     }
 
     /// Rename (or move to another folder) something in `pages/` or in
@@ -461,7 +470,7 @@ impl Pages {
         if root == Root::Pages {
             return self.rename_page(from, to, scripts);
         }
-        nomad_core::validate_content_relative_path(to).map_err(|e| format!("Not a name for the node: {e}"))?;
+        paths::check_name(to).map_err(|e| format!("Not a name for the node: {e}"))?;
         let source = self.resolve_in(root, from)?;
         if !source.is_file() {
             return Err(format!("{from} isn't a file on the node"));
@@ -474,7 +483,11 @@ impl Pages {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::rename(&source, &target).map_err(|e| format!("Could not move {from}: {e}"))?;
-        self.carry_allowed(root, from, Some(to))?;
+        if let Err(e) = self.carry_allowed(root, from, Some(to)) {
+            // Put it back: moved without its list, it would be open to everyone.
+            let _ = std::fs::rename(&target, &source);
+            return Err(e);
+        }
         self.prune(root, from);
         Ok(())
     }
@@ -483,7 +496,7 @@ impl Pages {
     pub fn delete_in(&self, root: Root, path: &str) -> Result<(), String> {
         match root {
             Root::Pages => self.delete(path),
-            Root::Files => self.store.delete_file_rel(path).map_err(|e| format!("Could not delete {path}: {e}")),
+            Root::Files => store::delete(&self.files, path).map_err(|e| format!("Could not delete {path}: {e}")),
         }?;
         self.carry_allowed(root, path, None)?;
         self.prune(root, path);
@@ -505,7 +518,10 @@ impl Pages {
         }
         let list = self.allowed_path(root, path)?;
         let Ok(metadata) = std::fs::symlink_metadata(&list) else { return Ok(Allowed::Everyone) };
-        if !metadata.is_file() || is_executable(&list) {
+        if !metadata.is_file() {
+            return Err(format!("{path}'s list of who may see it isn't a file, so the node lets no one see it; remove it on the host"));
+        }
+        if is_executable(&list) {
             return Ok(Allowed::Script);
         }
         if metadata.len() > MAX_ALLOWED {
@@ -586,29 +602,23 @@ impl Pages {
     /// name, or a free one like it: never over one there). Its path in
     /// `pages/`, which pages show as `:/media/<path>`.
     pub fn add_image(&self, name: &str, data: &[u8]) -> Result<String, String> {
-        let max = self.store.roots().max_page_bytes;
+        let max = MAX_PAGE_BYTES;
         if data.len() > max {
             return Err(format!("{name} is {}: a picture in a page can be {} at most", human_size(data.len()), human_size(max)));
         }
         let rel = unused(&format!("{IMAGES_FOLDER}/{name}"), |rel| self.exists(rel));
-        self.store.write_page_rel(&rel, data).map_err(|e| format!("Could not add {rel}: {e}"))?;
+        store::write(&self.pages, &rel, data, MAX_PAGE_BYTES).map_err(|e| format!("Could not add {rel}: {e}"))?;
         Ok(rel)
     }
 
     /// Add a file to download, in `files/` (never over one there). Its path
     /// in `files/`, which pages link to as `:/file/<path>`.
     pub fn add_file(&self, name: &str, data: &[u8]) -> Result<String, String> {
-        let roots = self.store.roots();
-        if data.len() > roots.max_file_bytes {
-            return Err(format!(
-                "{name} is {}: a file on the node can be {} at most",
-                human_size(data.len()),
-                human_size(roots.max_file_bytes)
-            ));
+        if data.len() > MAX_FILE_BYTES {
+            return Err(format!("{name} is {}: a file on the node can be {} at most", human_size(data.len()), human_size(MAX_FILE_BYTES)));
         }
-        let files = roots.files_dir.clone();
-        let rel = unused(name, |rel| resolve_under_root(&files, rel).is_ok_and(|p| p.exists()));
-        self.store.write_file_rel(&rel, data).map_err(|e| format!("Could not add {rel}: {e}"))?;
+        let rel = unused(name, |rel| paths::resolve(&self.files, rel).is_ok_and(|p| p.exists()));
+        store::write(&self.files, &rel, data, MAX_FILE_BYTES).map_err(|e| format!("Could not add {rel}: {e}"))?;
         Ok(rel)
     }
 }

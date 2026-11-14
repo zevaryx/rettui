@@ -3,7 +3,7 @@ name = "rettui-desktop"
 version = "1.11.0"
 edition = "2024"
 description = "rettui's web UI in a window of its own"
-license = "AGPL-3.0-or-later"
+license-file = "../LICENSE"
 publish = false
 
 [[bin]]

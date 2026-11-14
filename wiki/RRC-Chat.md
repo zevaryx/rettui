@@ -72,6 +72,18 @@ host. rettui works with each of them, as they differ (see
 - **Links:** NomadNet pages, LXMF addresses and RRC hubs written in a
   room are links, as in messages (see [Links in messages](Messaging#links-in-messages)).
   In the terminal UI, drag across the chat to select text and copy it.
+- **Colours and art (Micron):** messages written in Micron, as NomadNet
+  shows them in rooms, are drawn in their colours and with bold, italic and
+  underline. NomadNet writes Micron's tag character in messages as `¦`
+  (broken bar), not a backtick, since it reads messages as Markdown first:
+  `¦F0f0green¦f`, `¦Bfa0on orange¦b`, `¦FT86efac` for 24-bit colour, `¦!bold¦!`,
+  `¦*italic¦*`, `¦_underline¦_`, and `` ¦` `` back to plain. Only those are read:
+  a message without a `¦` tag shows as written, backticks and all, and
+  alignment, links and fields in Micron are left out. A message with
+  colours is often a picture or lettering drawn in characters, sent a line
+  a message, so it isn't wrapped: every space is kept, its lines stay lined
+  up under each other, and what doesn't fit is cut off at the edge of the
+  chat (widen the window, or hide the members list, to see more).
 - **Emoji:** `Ctrl-E` (or the 🙂 button) and `:name` work in the channel
   input as they do for messages (see [Emoji](Messaging#emoji)).
 - **Mentions and unread:** `@yournick` mentions are highlighted (just the

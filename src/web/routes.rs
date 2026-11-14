@@ -288,6 +288,27 @@ fn presented_tokens(headers: &axum::http::HeaderMap) -> impl Iterator<Item = &st
     cookies.chain(bearer).chain(custom)
 }
 
+/// Whether a request that changes something comes from this page's own site.
+/// SameSite=Strict keeps other sites out, but a page on another port of the same
+/// host is the same site, so browsers say where a request came from and it's
+/// checked: `Sec-Fetch-Site` where they send it, else `Origin` against `Host`. A
+/// client that sends neither (curl, a script) isn't a browser page and passes.
+fn same_origin(request: &Request) -> bool {
+    use axum::http::Method;
+    if matches!(*request.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
+        return true;
+    }
+    let headers = request.headers();
+    let text = |name| headers.get(name).and_then(|v| v.to_str().ok());
+    if let Some(site) = text("sec-fetch-site") {
+        return matches!(site, "same-origin" | "none");
+    }
+    match text("origin") {
+        Some(origin) => origin.split_once("://").is_some_and(|(_, authority)| Some(authority) == text("host")),
+        None => true,
+    }
+}
+
 async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     let query_token = request.uri().query().and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")).map(str::to_string));
@@ -302,7 +323,9 @@ async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Re
     } else {
         let current = state.token();
         let logged_in = presented_tokens(request.headers()).any(|t| same(t, &current));
-        if logged_in || PUBLIC.contains(&path.as_str()) {
+        if logged_in && !same_origin(&request) {
+            ApiError(StatusCode::FORBIDDEN, "that request came from another site".into()).into_response()
+        } else if logged_in || PUBLIC.contains(&path.as_str()) {
             next.run(request).await
         } else if path.starts_with("/api/") {
             let mut response = ApiError(StatusCode::UNAUTHORIZED, "not logged in".into()).into_response();
@@ -1610,9 +1633,9 @@ async fn read_paper_link(state: &WebState, link: String) -> ApiResult {
     let ring = crate::lxmf::ratchets::ring_path(&ratchets, &own);
     let data = crate::lxmf::paper::open(&state.identity, own, &ring, &link).map_err(bad)?;
     let message = lxmf_core::message_api::LxMessage::unpack(&data).map_err(|_| bad("Not a message rettui can read"))?;
-    let key = hex::encode(message.source_hash);
+    let key = hex::encode(message.source_hash());
     // Read in before: said, rather than nothing happening.
-    let id = message.message_id.or(message.hash).map(hex::encode);
+    let id = Some(hex::encode(message.message_id()));
     let known = state
         .write(move |o| {
             let conversation = o.app.store.conversations.get(&key);
@@ -1869,6 +1892,13 @@ struct SettingsBody {
 }
 
 async fn save_settings(State(state): State<WebState>, axum::Json(body): axum::Json<SettingsBody>) -> ApiResult {
+    // A new tile source is fetched by this computer: only from the public internet.
+    if let Some(source) = body.values.get("map_tiles").map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+        let current = state.read(|o| o.app.settings.map_tiles.clone()).await?;
+        if current.as_deref() != Some(source.as_str()) {
+            super::tiles::public_source(&source).await.map_err(bad)?;
+        }
+    }
     let notes = state
         .write(move |o| {
             let changes: Vec<(&str, &str)> = body.values.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -2111,7 +2141,7 @@ struct PageQuery {
 
 async fn page(State(state): State<WebState>, Query(query): Query<PageQuery>) -> ApiResult {
     let location = location(&query.url)?;
-    if location.path.starts_with(nomad_core::FILE_PREFIX) {
+    if location.path.starts_with(crate::nomad::paths::FILE_PREFIX) {
         return Ok(axum::Json(json!({ "download": location.url() })));
     }
     let fetched = state.fetch(location.clone(), query.refresh).await?;
@@ -2177,7 +2207,7 @@ async fn download(State(state): State<WebState>, Query(query): Query<DownloadQue
         return Ok(if query.prepare { axum::Json(json!({ "name": name })).into_response() } else { file_response(data, &name, false) });
     }
     let fetched = state.fetch(location, false).await?;
-    let name = nomad_core::reply_file_name(fetched.metadata.as_deref()).unwrap_or(fallback);
+    let name = crate::nomad::request::reply_file_name(fetched.metadata.as_deref()).unwrap_or(fallback);
     *LAST_DOWNLOAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
         Some((url, std::time::Instant::now(), fetched.data.clone(), name.clone()));
     if query.prepare {

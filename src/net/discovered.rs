@@ -287,7 +287,7 @@ pub fn from_config(config: &rns_runtime::config::Config) -> (Vec<Bootstrap>, Vec
     let mut others = Vec::new();
     let mut configured = Vec::new();
     for (name, section) in config.subsections("interfaces") {
-        let on = section.get_bool("enabled").or_else(|| section.get_bool("interface_enabled")).unwrap_or(true);
+        let on = section.interface_enabled();
         let kind = section.get("type").unwrap_or_default();
         let target = section.get("target_host").zip(section.get_uint("target_port").and_then(|p| u16::try_from(p).ok()));
         if let Some((host, port)) = target {
@@ -549,13 +549,13 @@ mod tests {
         for host in here.into_iter().chain(["a.localhost", "200:1234::1", "300:1::2", "abc.onion", "ABC.ONION.", ""]) {
             assert!(!reachable(host), "{host}");
         }
-        let text = "[reticulum]\n  discover_interfaces = Yes\n[interfaces]\n  [[Hub]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = hub.example\n    target_port = 4242\n    bootstrap_only = Yes\n    network_name = mesh\n  [[Mine]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = mine.example\n    target_port = 4243\n  [[Radio]]\n    type = RNodeInterface\n    enabled = No\n    bootstrap_only = Yes\n  [[Back]]\n    type = BackboneInterface\n    enabled = Yes\n    target_host = back.example\n    target_port = 4244\n    bootstrap_only = Yes\n";
+        let text = "[reticulum]\n  discover_interfaces = Yes\n[interfaces]\n  [[Hub]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = hub.example\n    target_port = 4242\n    bootstrap_only = Yes\n    network_name = mesh\n  [[Unsaid]]\n    type = TCPClientInterface\n    target_host = unsaid.example\n    target_port = 4245\n    bootstrap_only = Yes\n  [[Mine]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = mine.example\n    target_port = 4243\n  [[Radio]]\n    type = RNodeInterface\n    enabled = No\n    bootstrap_only = Yes\n  [[Back]]\n    type = BackboneInterface\n    enabled = Yes\n    target_host = back.example\n    target_port = 4244\n    bootstrap_only = Yes\n";
         let config = rns_runtime::config::Config::parse(text).unwrap();
         let (bootstrap, others, configured) = from_config(&config);
         assert_eq!(bootstrap.len(), 1);
         assert_eq!((bootstrap[0].name.as_str(), bootstrap[0].port, bootstrap[0].network_name.as_deref()), ("Hub", 4242, Some("mesh")));
-        assert_eq!(others, ["Back"], "a TCP client only can be brought back; one off is left out");
-        assert_eq!(configured.len(), 3);
+        assert_eq!(others, ["Back"], "a TCP client only can be brought back; one off (or that doesn't say it's on) is left out");
+        assert_eq!(configured.len(), 4);
     }
 
     #[test]

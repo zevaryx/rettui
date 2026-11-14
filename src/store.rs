@@ -14,9 +14,10 @@
 //!   deleted, oldest first, to keep within the storage limit (see
 //!   [`keep_within`]).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Result, bail};
 use flate2::Compression;
@@ -24,7 +25,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 
-use crate::config::write_atomic;
+use crate::config::write_private;
 use crate::net::PeerKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -517,9 +518,35 @@ impl Contact {
 pub const MAX_ALIAS: usize = 128;
 pub const MAX_NOTES: usize = 10_000;
 
+/// The LXMF addresses you've blocked, as the services you host see them: kept
+/// up to date by the [`Store`], read by each service when someone connects.
+/// (They know who connects by identity; an address is made from one.)
+#[derive(Debug, Clone, Default)]
+pub struct Blocked(Arc<RwLock<HashSet<[u8; 16]>>>);
+
+impl Blocked {
+    pub fn replace(&self, addresses: HashSet<[u8; 16]>) {
+        *self.0.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = addresses;
+    }
+
+    /// Whether the identity with this hash is someone blocked.
+    pub fn has_identity(&self, identity: &[u8; 16]) -> bool {
+        let set = self.0.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        !set.is_empty()
+            && set.contains(&rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(identity)))
+    }
+
+    pub fn addresses(&self) -> Vec<[u8; 16]> {
+        self.0.read().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().copied().collect()
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Store {
+    /// Who is blocked, for the services you host (see [`Store::sync_blocked`]).
+    #[serde(skip)]
+    pub blocked: Blocked,
     /// Keyed by destination hash (hex). Saved in `peers.json.gz` (see
     /// [`encode_peers`]); only read here, from stores of earlier versions.
     #[serde(skip_serializing)]
@@ -707,7 +734,7 @@ pub fn remove_from_archive(dir: &Path, conversation: &str, owned: &[PathBuf]) ->
         if kept.is_empty() {
             std::fs::remove_file(&path)?;
         } else {
-            write_atomic(&path, &gzip(format!("{}\n", kept.join("\n")).as_bytes())?)?;
+            write_private(&path, &gzip(format!("{}\n", kept.join("\n")).as_bytes())?)?;
         }
     }
     Ok(if removed > 0 { vec![format!("Deleted {removed} archived message(s) of the deleted conversation")] } else { Vec::new() })
@@ -943,7 +970,7 @@ impl Store {
                 }
             }
         } else if !self.peers.is_empty() {
-            match encode_peers(&self.peers).and_then(|bytes| write_atomic(path, &bytes)) {
+            match encode_peers(&self.peers).and_then(|bytes| write_private(path, &bytes)) {
                 Ok(()) => {
                     self.rewrite_store = holds_peers;
                     self.migration_notes.push(format!("Moved {} peers from store.json.gz to peers.json.gz", self.peers.len()));
@@ -993,6 +1020,7 @@ impl Store {
     pub fn snapshot(&self) -> Self {
         Self {
             peers: HashMap::new(),
+            blocked: Blocked::default(),
             conversations: self.conversations.clone(),
             contacts: self.contacts.clone(),
             relayed: self.relayed.clone(),
@@ -1026,7 +1054,7 @@ impl Store {
         let peers = peers_path(path);
         if !store.peers.is_empty()
             && !peers.exists()
-            && let Err(e) = encode_peers(&store.peers).and_then(|bytes| write_atomic(&peers, &bytes))
+            && let Err(e) = encode_peers(&store.peers).and_then(|bytes| write_private(&peers, &bytes))
         {
             let _ = std::fs::remove_file(path);
             bail!("could not write peers.json.gz: {e:#}");
@@ -1044,7 +1072,7 @@ impl Store {
 
     /// Write the store file (not the peers).
     pub fn save(&self, path: &Path) -> Result<()> {
-        write_atomic(path, &self.encode()?)
+        write_private(path, &self.encode()?)
     }
 
     /// Who someone is: your name for them, else the one they announce,
@@ -1076,6 +1104,13 @@ impl Store {
         } else {
             self.contacts.insert(hash.to_string(), contact);
         }
+        self.sync_blocked();
+    }
+
+    /// Tell the services you host who is blocked now.
+    pub fn sync_blocked(&self) {
+        let blocked = self.contacts.iter().filter(|(_, c)| c.trust == Trust::Blocked).filter_map(|(key, _)| crate::net::parse_hash(key));
+        self.blocked.replace(blocked.collect());
     }
 
     /// Conversation keys, most recent activity first.
@@ -1257,7 +1292,7 @@ mod tests {
         let (path, legacy) = (dir.join("store.json.gz"), dir.join("store.json"));
         std::fs::write(&legacy, legacy_json(&sample())).unwrap();
         // Block the temporary file the new store is written through.
-        std::fs::create_dir(path.with_extension("tmp")).unwrap();
+        std::fs::create_dir(crate::config::temp_beside(&path)).unwrap();
         let store = Store::load(&path).unwrap();
         assert!(legacy.exists(), "the old file stays");
         assert!(!path.exists());
@@ -1273,7 +1308,7 @@ mod tests {
         let mut peers = sample().peers;
         peers.get_mut(&"ab".repeat(16)).unwrap().name = Some("Ali\u{202E}ce\u{200B}".into());
         Store::default().save(&path).unwrap();
-        write_atomic(&peers_path(&path), &encode_peers(&peers).unwrap()).unwrap();
+        write_private(&peers_path(&path), &encode_peers(&peers).unwrap()).unwrap();
         assert_eq!(Store::load(&path).unwrap().display_name(&"ab".repeat(16)), "Alice");
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1327,7 +1362,7 @@ mod tests {
         store.save(&path).unwrap();
         assert!(!unzip(&path).contains("Alice"), "the store file leaves the peers out");
         assert!(store.snapshot().peers.is_empty());
-        write_atomic(&peers_path(&path), &encode_peers(&store.peers).unwrap()).unwrap();
+        write_private(&peers_path(&path), &encode_peers(&store.peers).unwrap()).unwrap();
         let loaded = Store::load(&path).unwrap();
         assert_eq!(loaded.peers.len(), 1);
         assert_eq!(loaded.display_name(&"ab".repeat(16)), "Alice");
@@ -1349,7 +1384,7 @@ mod tests {
         // and the store is still due to be rewritten.
         let mut newer = sample();
         newer.peers.values_mut().for_each(|p| p.name = Some("Alice B".into()));
-        write_atomic(&peers_path(&path), &encode_peers(&newer.peers).unwrap()).unwrap();
+        write_private(&peers_path(&path), &encode_peers(&newer.peers).unwrap()).unwrap();
         let again = Store::load(&path).unwrap();
         assert_eq!(again.display_name(&"ab".repeat(16)), "Alice B");
         assert!(again.rewrite_store && again.migration_notes.is_empty());
@@ -1511,5 +1546,18 @@ mod tests {
         // No archive yet is fine.
         assert_eq!(keep_within(&store, &dir.join("none"), 5000).unwrap(), (Vec::new(), false));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn blocking_someone_tells_the_services_you_host() {
+        let mut store = Store::default();
+        let identity = [9u8; 16];
+        let address = rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&identity));
+        assert!(!store.blocked.has_identity(&identity));
+        store.update_contact(&hex::encode(address), |c| c.trust = Trust::Blocked);
+        assert!(store.blocked.has_identity(&identity));
+        assert!(!store.blocked.has_identity(&[8; 16]));
+        store.update_contact(&hex::encode(address), |c| c.trust = Trust::Trusted);
+        assert!(!store.blocked.has_identity(&identity), "unblocked");
     }
 }

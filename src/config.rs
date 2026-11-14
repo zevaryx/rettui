@@ -48,6 +48,9 @@ pub struct Settings {
     /// Megabytes the store and the archive may use together; the oldest
     /// archived months are deleted to stay within it. 0 is no limit.
     pub message_storage_mb: u64,
+    /// Megabytes the received files folder may use; a file that would take it
+    /// over is not saved (the message is kept). 0 is no limit.
+    pub downloads_quota_mb: u64,
     /// How long NomadNet pages and images stay cached (pages can ask for
     /// less with `#!c=`).
     pub cache_hours: u64,
@@ -289,6 +292,7 @@ impl Default for Settings {
             auto_propagation_node: false,
             messages_kept: 1000,
             message_storage_mb: 0,
+            downloads_quota_mb: 2000,
             cache_hours: 24,
             rngit_identity: false,
             rngit_timeout_secs: 120,
@@ -351,7 +355,8 @@ impl Default for Settings {
             pn_stamp_cost: u64::from(lxmf_core::constants::PROPAGATION_COST),
             pn_storage_mb: 500,
             pn_transfer_kb: lxmf_core::constants::PROPAGATION_LIMIT as u64,
-            pn_autopeer: lxmf_core::constants::AUTOPEER,
+            // Off until you choose it: a node that peers by itself takes on other nodes' load and storage.
+            pn_autopeer: false,
             pn_autopeer_depth: lxmf_core::constants::AUTOPEER_MAXDEPTH as u64,
             pn_max_peers: lxmf_core::constants::MAX_PEERS as u64,
             pn_static_peers: None,
@@ -370,7 +375,7 @@ impl Default for Settings {
             hub_name: None,
             hub_greeting: None,
             hub_announce_interval_mins: 360,
-            hub_open_rooms: true,
+            hub_open_rooms: false,
         }
     }
 }
@@ -447,6 +452,12 @@ impl Paths {
             }
         };
         fs::create_dir_all(&base).with_context(|| format!("creating {}", base.display()))?;
+        // Messages, contacts and keys live here: other users on the machine have no business in it.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&base, fs::Permissions::from_mode(0o700));
+        }
         let root = base;
         let base = crate::identities::active_dir(&root);
         Ok(Self {
@@ -567,7 +578,7 @@ impl Settings {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        write_atomic(path, serde_json::to_string_pretty(self)?.as_bytes())
+        write_private(path, serde_json::to_string_pretty(self)?.as_bytes())
     }
 }
 
@@ -738,6 +749,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "print_command",
             "messages_kept",
             "message_storage_mb",
+            "downloads_quota_mb",
             "rrc_messages_kept",
         ],
     ),
@@ -1066,6 +1078,13 @@ pub const FIELDS: &[Field] = &[
         key: "message_storage_mb",
         label: "Message storage (MB)",
         help: "Most disk messages may use (the store and the archive together); the oldest archived months are deleted to stay within it. Attachments aren't counted. 0 is no limit",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "downloads_quota_mb",
+        label: "Received files limit (MB)",
+        help: "Most disk the files and pictures that come with messages may use together. One that would take it over isn't saved (the message is kept, and says so). 0 is no limit",
         kind: FieldKind::Number,
         effect: Effect::Now,
     },
@@ -1571,6 +1590,7 @@ impl Settings {
             "messages_kept" => self.messages_kept.to_string(),
             "rrc_messages_kept" => self.rrc_messages_kept.to_string(),
             "message_storage_mb" => self.message_storage_mb.to_string(),
+            "downloads_quota_mb" => self.downloads_quota_mb.to_string(),
             "cache_hours" => self.cache_hours.to_string(),
             "rngit_identity" => self.rngit_identity.to_string(),
             "rngit_timeout_secs" => self.rngit_timeout_secs.to_string(),
@@ -1907,8 +1927,8 @@ impl Settings {
                 self.node_announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?;
             }
             "node_name" => {
-                if optional(value).is_some_and(|n| n.len() > nomad_core::MAX_ANNOUNCE_NAME_BYTES) {
-                    return Err(fail(format!("at most {} bytes", nomad_core::MAX_ANNOUNCE_NAME_BYTES)));
+                if optional(value).is_some_and(|n| n.len() > crate::nomad::paths::MAX_NAME_BYTES) {
+                    return Err(fail(format!("at most {} bytes", crate::nomad::paths::MAX_NAME_BYTES)));
                 }
                 self.node_name = optional(value);
             }
@@ -1936,6 +1956,7 @@ impl Settings {
                 self.rrc_messages_kept = n;
             }
             "message_storage_mb" => self.message_storage_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
+            "downloads_quota_mb" => self.downloads_quota_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
             "cache_hours" => self.cache_hours = number(value, MAX_HOURS).map_err(fail)?,
             "rngit_identity" => self.rngit_identity = toggle(value).map_err(fail)?,
             "rngit_timeout_secs" => {
@@ -2028,6 +2049,14 @@ pub fn load_identity(path: &Path) -> Result<Identity> {
         return Identity::from_file(path).map_err(|e| anyhow::anyhow!("loading identity {}: {e}", path.display()));
     }
     let identity = Identity::new();
+    // Made private first, so the key is never readable by others, even for a moment.
+    #[cfg(unix)]
+    {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let _ = options.open(path);
+    }
     identity.to_file(path).map_err(|e| anyhow::anyhow!("saving identity {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
@@ -2037,9 +2066,16 @@ pub fn load_identity(path: &Path) -> Result<Identity> {
     Ok(identity)
 }
 
+/// Where `path` is written before it takes the place of the old file:
+/// beside it, with a dot in front, so a node serving the folder never lists it.
+pub fn temp_beside(path: &Path) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{name}.tmp"))
+}
+
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("tmp");
+    let tmp = temp_beside(path);
     let mut file = fs::File::create(&tmp)?;
     file.write_all(bytes)?;
     // On the disk before it takes the old one's place: otherwise a power
@@ -2071,7 +2107,7 @@ pub fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
 /// moment it's created (on Unix).
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("tmp");
+    let tmp = temp_beside(path);
     let _ = fs::remove_file(&tmp);
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -2088,6 +2124,24 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn what_rettui_keeps_is_private_to_its_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rettui-test-private-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let paths = Paths::new(Some(dir.clone())).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        load_identity(&paths.identity).unwrap();
+        assert_eq!(mode(&paths.identity), 0o600);
+        crate::store::Store::default().save(&paths.store).unwrap();
+        assert_eq!(mode(&paths.store), 0o600);
+        Settings::default().save(&paths.settings).unwrap();
+        assert_eq!(mode(&paths.settings), 0o600);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn every_setting_is_in_one_group() {

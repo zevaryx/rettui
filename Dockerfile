@@ -10,7 +10,7 @@
 
 FROM rust:1-slim-bookworm AS build
 WORKDIR /src
-# The Reticulum, LXMF and NomadNet libraries are git submodules in deps/;
+# The Reticulum and LXMF libraries are git submodules in deps/;
 # Codec2 is vendored in vendor/.
 COPY Cargo.toml Cargo.lock ./
 COPY deps ./deps
@@ -33,6 +33,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 # setpriv (util-linux, already in the image) drops to PUID/PGID at start.
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY LICENSE /usr/share/doc/rettui/LICENSE
 
 # Everything rettui keeps (identity, settings, messages, Reticulum config)
 # lives in /data; HOME points there too so nothing is written elsewhere.

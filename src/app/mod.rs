@@ -270,6 +270,8 @@ pub enum PromptKind {
     Track(String),
     /// Install the newer release found, in this one's place.
     ConfirmInstallUpdate,
+    /// Open a file that came from someone with the program the system uses for it.
+    ConfirmOpenFile(PathBuf),
     /// Stop sharing a location live with someone (by address).
     ConfirmStopLive(String),
     /// Delete what's known of where someone (by address) has been.
@@ -727,6 +729,9 @@ pub struct App {
     pub announced: bool,
     /// What interface discovery does was said, since Reticulum started.
     discovery_noted: bool,
+    /// Interfaces in rettui's Reticulum config that are off only because
+    /// they have no `enabled` line, as found when Reticulum started.
+    pub interfaces_off: Vec<String>,
     /// Hubs to reconnect once Reticulum is back after a restart (and the
     /// one hosted here, once it's back too).
     pub(crate) rejoin_hubs: Vec<Hash>,
@@ -785,7 +790,7 @@ impl App {
         }
         // The node uses this client's identity, so its address is known now.
         let node_hash =
-            rns_identity::destination::Destination::hash_from_name_and_identity(nomad_core::NOMAD_NODE_ASPECT, Some(&identity_hash));
+            rns_identity::destination::Destination::hash_from_name_and_identity(crate::nomad::paths::NODE_ASPECT, Some(&identity_hash));
         let mut node = node::Node::new(node_hash, settings.node_enabled);
         node.served = node_stats::Served::load(&paths.node_stats);
         let pn_hash =
@@ -912,6 +917,7 @@ impl App {
             identity_pending: None,
             announced: false,
             discovery_noted: true,
+            interfaces_off: Vec::new(),
             rejoin_hubs: Vec::new(),
             notifications: Vec::new(),
             reads: Vec::new(),
@@ -1175,6 +1181,7 @@ impl App {
                 self.log(format!("Reticulum ready; LXMF address {}", hex::encode(lxmf_hash)));
                 // Said once its interfaces are known (see note_discovery).
                 self.discovery_noted = false;
+                self.interfaces_off.clear();
                 // A new network actor knows no contacts yet.
                 self.update_policy(true);
                 if self.settings.auto_propagation_node {
@@ -1474,6 +1481,11 @@ impl App {
                 }
             }
             PromptKind::Hub(prompt) => self.hub_prompt(prompt, &text),
+            PromptKind::ConfirmOpenFile(path) => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    self.open_file(&path);
+                }
+            }
             PromptKind::ConfirmInstallUpdate => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
                     match self.install_update() {

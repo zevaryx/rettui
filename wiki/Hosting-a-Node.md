@@ -5,7 +5,7 @@ node (git repositories, read over Reticulum), with another of its own.
 
 ## NomadNet node
 
-rettui hosts a NomadNet node using rsNomad's node. Pages are Micron
+rettui hosts a NomadNet node itself. Pages are Micron
 files in `node/pages/` (and downloads in `node/files/`) in the data directory,
 or the folder set in `node_dir`.
 
@@ -87,7 +87,11 @@ or the folder set in `node_dir`.
   one on it lets no one see it (you still can, in the Browser). The node
   reads the list for each visit, so a change applies at once, and the list
   goes along when what it's for is renamed, moved or deleted. A list that's
-  itself a program (executable) is left as it is: change it on the host.
+  itself a program (executable) is left as it is: change it on the host. A
+  list that isn't a file at all (a folder, a pipe) lets no one in. Copies an
+  editor leaves beside a file are never served, as they have no list of their
+  own: names ending in `~`, `.bak`, `.orig`, `.old`, `.tmp`, `.swp`, `.save`
+  or `.rej`, names wrapped in `#`, and any name with `.allowed` in it.
 - **Statistics:** the Node tab says how many pages, files and pictures the
   node has served, how many requests it had (and how many were for
   something not there), when the last one came, and since when it has
@@ -193,7 +197,7 @@ peer protocol).
 - **Passing messages on (peering):** yours peers with other propagation
   nodes too, as `lxmd` does, so a message sent through it reaches its
   recipient whichever node they collect from. With *Auto-peer*
-  (`pn_autopeer`, on) it peers with each propagation node it hears
+  (`pn_autopeer`, off until you turn it on) it peers with each propagation node it hears
   announcing within *Auto-peer depth* (`pn_autopeer_depth`, 4 hops), up to
   *Most peers* (`pn_max_peers`, 20). One that moves further away, or stops
   being a propagation node, is no longer peered with, and one asking for
@@ -234,9 +238,13 @@ and the other RRC clients can join it as they join rrcd.
 - **You on it:** the hub is added to your hubs in Channels once it's up, and
   rettui joins it straight away (a client can't find a path to a destination
   it hosts, so yours connects with the hub's key). Stopping the hub leaves it.
-- **Who makes rooms:** as on most hubs, anyone may make a room by joining one
-  that isn't there, and is its founder (an operator of it). With "Anyone makes
-  rooms" off, only you can: others join the rooms there are.
+- **Who makes rooms:** only you, to start with: others join the rooms there
+  are. With "Anyone makes rooms" (`hub_open_rooms`) on, as on most hubs, anyone
+  may make a room by joining one that isn't there, and is its founder (an
+  operator of it). A hub set up before this kept its setting.
+- **Closed rooms and bans:** someone who isn't in a room that is invite-only, has a key or is private can't post to it, list who's in it or read its topic, and only people in a room (or its operators) set its topic. A ban takes the person out on every connection they have.
+- **Nicks and idle links:** a nick is cleaned of control and invisible characters, and one someone else has (any case), or "hub", isn't given: the person is told, and keeps the one they had. Someone can only leave rooms they're in. Links are pinged every 60 seconds and closed if they don't answer within 30 more (`ping_interval_s` and `ping_timeout_s` in the hub's `config.yaml`; a value of 0 means these defaults).
+- **A damaged rooms file:** if a crash leaves `rooms.yaml` cut off, it is put aside as `rooms.yaml.damaged` and `rooms.yaml.bak` (the rooms as they were when the hub last started) is used.
 - **The Hub tab:** who's connected (their nick, identity, rooms and when they
   came), the rooms (registered or not, modes, topic, who's in them, their
   operators) and the bans, of the whole hub and of each room. Pick someone
@@ -397,3 +405,7 @@ changing who may do what, and forks, mirrors and sync.
 
 `rngit serve DIR [RULES]` of the `rngit` command serves a folder the same way
 without rettui.
+
+## Blocked contacts
+
+Someone you've blocked (in Contacts) is turned away by everything you host: your node doesn't answer them, your hub closes their connection, your propagation node refuses their requests, and your git host refuses them. They can only be told apart once they identify themselves to the service, so a visitor who doesn't is treated as anyone. The git host reads the block list when it starts: switch it off and on to apply a change, and it knows only people rettui has heard announce.

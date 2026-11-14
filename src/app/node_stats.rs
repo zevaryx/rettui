@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use nomad_core::NomadServeStats;
+use crate::nomad::host::Stats as NomadServeStats;
 use serde::{Deserialize, Serialize};
 
 use super::{App, now};

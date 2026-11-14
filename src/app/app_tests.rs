@@ -116,6 +116,18 @@ fn picked_messages_retries_paper_and_location_requests() {
     tui.app.settings.answer_commands = "contacts".into();
     assert!(ask(&mut tui, 53).contains("Answered with this station's location"));
     assert!(ask(&mut tui, 54).contains("less than a minute ago"));
+    // The same from a sender whose signature couldn't be checked: shown, not acted on.
+    let mut message = crate::lxmf::InboundMessage {
+        id: Some([60; 32]),
+        source: [0xab; 16],
+        timestamp: 1_800_000_200.0,
+        verified: false,
+        ..Default::default()
+    };
+    message.extras.commands = vec![Command::TelemetryRequest];
+    tui.app.on_message(message);
+    let notes = tui.app.store.conversations[BOB].messages.last().unwrap().notes.join(" ");
+    assert!(notes.contains("Not acted on") && !notes.contains("Answered"), "{notes}");
 }
 
 #[test]

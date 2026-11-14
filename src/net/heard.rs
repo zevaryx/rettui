@@ -51,7 +51,7 @@ impl Kind {
 /// The kinds rettui can name, by the full name they announce under.
 const KNOWN: &[(&str, Kind)] = &[
     (crate::lxmf::LXMF_ASPECT, Kind::Lxmf),
-    (nomad_core::NOMAD_NODE_ASPECT, Kind::Nomad),
+    (crate::nomad::paths::NODE_ASPECT, Kind::Nomad),
     (crate::lxmf::PROPAGATION_ASPECT, Kind::Propagation),
     (crate::rrc::DEFAULT_ASPECT, Kind::Rrc),
     ("lxst.telephony", Kind::Phone),
@@ -86,7 +86,7 @@ pub fn heard(hash: Hash, name_hash_heard: [u8; 10], app_data: Option<&[u8]>, hop
     let (aspect, kind) = known.map_or((None, Kind::Other), |(name, kind)| (Some(*name), *kind));
     let name = app_data.and_then(|data| match kind {
         Kind::Lxmf => super::lxmf_display_name(data),
-        Kind::Nomad => crate::names::clean(&nomad_core::clamp_node_name(&String::from_utf8_lossy(data))),
+        Kind::Nomad => crate::names::clean(&crate::nomad::paths::clamp_name(&String::from_utf8_lossy(data))),
         Kind::Propagation => lxmf_core::handlers::parse_pn_announce_data(data)
             .and_then(|pn| pn.metadata.get(&lxmf_core::constants::PN_META_NAME).cloned())
             .and_then(|name| crate::names::clean(&String::from_utf8_lossy(&name))),

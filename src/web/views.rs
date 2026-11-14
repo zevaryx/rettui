@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
-use crate::app::channels::{Hub, HubStatus, LineKind};
+use crate::app::channels::{ChatLine, Hub, HubStatus, LineKind};
 use crate::app::node::NodeStatus;
 use crate::app::{App, NetState, SyncState, network};
 use crate::config::{Effect, FIELDS, FieldKind, Section, Settings, WebAccess};
@@ -139,6 +139,8 @@ pub fn state(app: &App) -> Value {
         "rns_config": app.settings.rns_config,
         "data_dir": app.paths.store.parent().map(|p| p.display().to_string()),
         "known": app.store.peers.len(),
+        // Off only because they have no `enabled` line.
+        "interfaces_off": app.interfaces_off,
         "interfaces": app.interfaces.iter().map(|i| json!({
             "name": i.name, "online": i.online, "rx": i.rx_bytes, "tx": i.tx_bytes,
             // Its rate, MTU and the rest, as rnstatus shows them.
@@ -746,10 +748,40 @@ fn line_kind(kind: LineKind) -> &'static str {
     }
 }
 
-/// Byte ranges of `text` as UTF-16 offsets (what JavaScript strings index).
-fn utf16_ranges(text: &str, ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    let at = |byte: usize| text.get(..byte).map_or(0, |t| t.encode_utf16().count());
-    ranges.iter().map(|&(start, end)| (at(start), at(end))).collect()
+/// The UTF-16 offsets (what JavaScript strings index) of byte offsets into
+/// `text`, counted in one pass over it: a lookup from each of `bytes` to its
+/// offset (0 for one that isn't on a character boundary of `text`).
+fn utf16_offsets(text: &str, bytes: impl IntoIterator<Item = usize>) -> impl Fn(usize) -> usize {
+    let mut wanted: Vec<usize> = bytes.into_iter().collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    let mut found = Vec::with_capacity(wanted.len());
+    let mut wanted = wanted.into_iter().peekable();
+    let mut units = 0;
+    let boundaries = text.char_indices().map(|(at, c)| (at, c.len_utf16())).chain(std::iter::once((text.len(), 0)));
+    for (at, len) in boundaries {
+        while let Some(byte) = wanted.next_if(|&byte| byte <= at) {
+            if byte == at {
+                found.push((byte, units));
+            }
+        }
+        units += len;
+    }
+    move |byte| found.binary_search_by_key(&byte, |&(b, _)| b).map_or(0, |i| found[i].1)
+}
+
+/// A Micron style in a chat message: its colours as `#rrggbb` and which of
+/// bold, italic and underline it has.
+fn micron_style(style: ratatui::style::Style) -> Value {
+    use crate::nomad::micron::html::css_color;
+    use ratatui::style::Modifier;
+    json!({
+        "fg": style.fg.and_then(css_color),
+        "bg": style.bg.and_then(css_color),
+        "bold": style.add_modifier.contains(Modifier::BOLD),
+        "italic": style.add_modifier.contains(Modifier::ITALIC),
+        "underline": style.add_modifier.contains(Modifier::UNDERLINED),
+    })
 }
 
 /// The newest `last` of `items` (all of them without a limit).
@@ -767,17 +799,29 @@ pub fn room(app: &App, hub: &Hub, room: &str, last: Option<usize>) -> Value {
     let shown: Vec<_> = buffer.iter().filter(|line| line.shown(app.settings.show_joins)).collect();
     let lines: Vec<Value> = newest(&shown, last)
         .iter()
-        .map(|line| {
+        .map(|&line| {
+            // A message written in Micron (NomadNet's `¦` tags): its text
+            // without the tags, and its styles over that text.
+            let micron = line.is_message().then(|| crate::nomad::micron::chat::parse(&line.text)).flatten();
+            let stripped = micron.as_ref().map(|m| ChatLine { text: m.text.clone(), mention_at: Vec::new(), ..line.clone() });
+            let line = stripped.as_ref().unwrap_or(line);
+            let spans = micron.as_ref().map_or(&[][..], |m| m.spans.as_slice());
             let highlights = line.highlights(&own_nick);
             // `@name` mentions of others, drawn in that person's colour.
-            let mentions: Vec<Value> = line
-                .user_mentions(&people, &highlights)
-                .into_iter()
-                .map(|(start, end, id)| {
-                    let (start, end) = utf16_ranges(&line.text, &[(start, end)])[0];
-                    json!([start, end, hex::encode(id)])
-                })
-                .collect();
+            let user_mentions = line.user_mentions(&people, &highlights);
+            // Every range's ends as UTF-16 offsets, counted in one pass.
+            let ends = spans
+                .iter()
+                .map(|&(start, end, _)| (start, end))
+                .chain(highlights.iter().copied())
+                .chain(user_mentions.iter().map(|&(start, end, _)| (start, end)))
+                .flat_map(|(start, end)| [start, end]);
+            let utf16 = utf16_offsets(&line.text, ends);
+            let styles: Vec<Value> =
+                spans.iter().map(|&(start, end, style)| json!([utf16(start), utf16(end), micron_style(style)])).collect();
+            let mentions: Vec<Value> =
+                user_mentions.iter().map(|&(start, end, id)| json!([utf16(start), utf16(end), hex::encode(id)])).collect();
+            let highlights: Vec<(usize, usize)> = highlights.iter().map(|&(start, end)| (utf16(start), utf16(end))).collect();
             json!({
                 "kind": line_kind(line.kind),
                 "src": line.src,
@@ -787,10 +831,13 @@ pub fn room(app: &App, hub: &Hub, room: &str, last: Option<usize>) -> Value {
                 "text": line.text,
                 "ts": line.ts,
                 "mention": line.mention,
-                "highlights": utf16_ranges(&line.text, &highlights),
+                "highlights": highlights,
                 "mentions": mentions,
                 "own": line.own,
                 "pending": line.pending.is_some(),
+                "micron": styles,
+                // Coloured Micron, often art: drawn line for line.
+                "art": micron.as_ref().is_some_and(|m| m.colour),
             })
         })
         .collect();
@@ -1126,7 +1173,7 @@ pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
             "title": s.title(),
             "interface": matches!(s, Section::Interface(_)),
             "type": values.and_then(|v| v.get("type")),
-            "enabled": values.map(|v| v.get("enabled").or_else(|| v.get("interface_enabled")).is_none_or(crate::app::reticulum::rns_truthy)),
+            "enabled": values.map(|v| v.interface_enabled()),
         })
     };
     let options = rns::options(config.as_ref(), &current);
@@ -1159,6 +1206,16 @@ pub fn reticulum(app: &App, section: Option<&str>) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_offsets_as_utf16() {
+        // é is 2 bytes and 1 unit, 🎨 4 bytes and 2 units.
+        let text = "aé🎨b";
+        let utf16 = utf16_offsets(text, [7, 0, 1, 3, 7, 8, 2, 99]);
+        assert_eq!([0, 1, 3, 7, 8].map(&utf16), [0, 1, 2, 4, 5]);
+        // Inside a character, past the end, or not asked for: 0.
+        assert_eq!([2, 99, 5].map(&utf16), [0, 0, 0]);
+    }
 
     #[test]
     fn the_newest_part_of_a_history() {
@@ -1354,6 +1411,45 @@ mod tests {
             app.hub.status = status;
             assert_eq!((node(&app)["status"].as_str(), hub(&app)["status"].as_str()), (Some(said), Some(said)));
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn micron_in_room_lines() {
+        use crate::app::channels::Hub;
+        let (mut app, dir) = app_in("micron-lines", Settings::default(), crate::store::Store::default());
+        app.settings.display_name = "Bin".into();
+        let mut hub = Hub::new([1; 16], "rrc.other".into(), "Hilltop".into());
+        let lines: Vec<ChatLine> = serde_json::from_value(json!([
+            { "kind": "Msg", "src": "cc".repeat(16), "text": "¦B000🆎 ¦F0f0 hi¦f ¦!@Bin¦!", "ts": 1, "mention": true, "mention_at": [[999, 1002]] },
+            { "kind": "Msg", "src": "cc".repeat(16), "text": "¦!bold¦! only", "ts": 2 },
+            { "kind": "Msg", "src": "cc".repeat(16), "text": "plain `F00 code`", "ts": 3 },
+            { "kind": "Notice", "text": "¦F0f0hub", "ts": 4 },
+        ]))
+        .unwrap();
+        hub.buffers.insert("lobby".into(), lines);
+        app.channels.hubs.push(hub);
+        let lobby = room(&app, &app.channels.hubs[0], "lobby", None);
+        let lines = &lobby["lines"];
+        // Without its tags, styled in UTF-16 ranges (🆎 is two), its mention
+        // of us found in the text as shown.
+        assert_eq!(lines[0]["text"], "🆎  hi @Bin");
+        assert_eq!(lines[0]["art"], true);
+        assert_eq!(
+            lines[0]["micron"][0],
+            json!([0, 3, { "fg": null, "bg": "#000000", "bold": false, "italic": false, "underline": false }])
+        );
+        assert_eq!(lines[0]["micron"][1][2]["fg"], "#00ff00");
+        assert_eq!(
+            lines[0]["micron"][3],
+            json!([7, 11, { "fg": null, "bg": "#000000", "bold": true, "italic": false, "underline": false }])
+        );
+        assert_eq!(lines[0]["highlights"], json!([[7, 11]]));
+        // Formatting alone isn't art; text without a `¦` tag, and hub
+        // notices, are as they came.
+        assert_eq!((lines[1]["text"].as_str(), lines[1]["art"].as_bool()), (Some("bold only"), Some(false)));
+        assert_eq!((lines[2]["text"].as_str(), lines[2]["micron"].as_array().map(Vec::len)), (Some("plain `F00 code`"), Some(0)));
+        assert_eq!(lines[3]["text"], "¦F0f0hub");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

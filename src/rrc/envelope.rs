@@ -41,6 +41,16 @@ pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
+/// Whether a CBOR tag is anywhere in `value`.
+fn has_tag(value: &Value) -> bool {
+    match value {
+        Value::Tag(..) => true,
+        Value::Array(items) => items.iter().any(has_tag),
+        Value::Map(entries) => entries.iter().any(|(k, v)| has_tag(k) || has_tag(v)),
+        _ => false,
+    }
+}
+
 pub(super) fn key(k: u64) -> Value {
     Value::Integer(Integer::from(k))
 }
@@ -152,6 +162,32 @@ impl Envelope {
         let mut out = Vec::new();
         ciborium::into_writer(&Value::Map(map), &mut out).expect("writing to a Vec cannot fail");
         out
+    }
+
+    /// [`Envelope::decode`] for a frame that another reader (the hub's
+    /// router) will read too: refused when two readers could see it
+    /// differently. That is a key given twice, a CBOR tag anywhere, a key
+    /// that isn't a small integer, or bytes after the map.
+    pub fn decode_strict(data: &[u8]) -> Result<Self, String> {
+        let mut reader = data;
+        let value: Value = ciborium::from_reader(&mut reader).map_err(|e| format!("bad CBOR: {e}"))?;
+        if !reader.is_empty() {
+            return Err("bytes after the envelope".into());
+        }
+        let Value::Map(map) = &value else {
+            return Err("envelope is not a map".into());
+        };
+        let mut seen = std::collections::HashSet::new();
+        for (k, _) in map {
+            let Some(k) = as_u64(k) else { return Err("a key is not an integer".into()) };
+            if !seen.insert(k) {
+                return Err("a key is given twice".into());
+            }
+        }
+        if has_tag(&value) {
+            return Err("it has a CBOR tag".into());
+        }
+        Self::decode(data)
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, String> {

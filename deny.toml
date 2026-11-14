@@ -123,7 +123,9 @@ allow = [
   'GPL-3.0',
   'GPL-3.0-only',
   'GPL-3.0-or-later',
-  'AGPL-3.0-or-later',
+  # rettui's own license, and rsReticulum's and rsLXMF's (see the clarify
+  # entries below).
+  'LicenseRef-Reticulum',
   'LGPL-2.1-only',
   'bzip2-1.0.6',
   'Unicode-3.0',
@@ -161,6 +163,59 @@ exceptions = [
 # Each entry is a crate relative path, and the (opaque) hash of its contents
 #{ path = "LICENSE", hash = 0xbd0eed23 }
 #]
+
+# The Reticulum License, which has no SPDX identifier: rettui's own, and
+# rsReticulum's and rsLXMF's from 1.4. A changed license file stops
+# matching, and the crate is checked again.
+[[licenses.clarify]]
+crate = "rettui"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "LICENSE", hash = 0x38cfeec5 }]
+
+[[licenses.clarify]]
+crate = "rns-crypto"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "../../LICENSE", hash = 0xf930d1af }]
+
+[[licenses.clarify]]
+crate = "rns-identity"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "../../LICENSE", hash = 0xf930d1af }]
+
+[[licenses.clarify]]
+crate = "rns-interface"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "../../LICENSE", hash = 0xf930d1af }]
+
+[[licenses.clarify]]
+crate = "rns-link"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "../../LICENSE", hash = 0xf930d1af }]
+
+[[licenses.clarify]]
+crate = "rns-protocol"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "../../LICENSE", hash = 0xf930d1af }]
+
+[[licenses.clarify]]
+crate = "rns-runtime"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "../../LICENSE", hash = 0xf930d1af }]
+
+[[licenses.clarify]]
+crate = "rns-transport"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "../../LICENSE", hash = 0xf930d1af }]
+
+[[licenses.clarify]]
+crate = "rns-wire"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "../../LICENSE", hash = 0xf930d1af }]
+
+[[licenses.clarify]]
+crate = "lxmf-core"
+expression = "LicenseRef-Reticulum"
+license-files = [{ path = "../../LICENSE", hash = 0x67442739 }]
 
 [licenses.private]
 # If true, ignores workspace crates that aren't published, or are only

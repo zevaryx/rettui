@@ -283,6 +283,7 @@ impl HostedPn {
     /// identity (its LXMF address is `lxmf_hash`, its ratchets in `ring`).
     /// Messages for this client go to `deliver`; `known` has the keys heard
     /// before (static peers' among them).
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         runtime: &ReticulumHandle,
         identity: &Identity,
@@ -291,6 +292,7 @@ impl HostedPn {
         config: &PnConfig,
         known: &crate::net::Known,
         deliver: mpsc::UnboundedSender<Vec<u8>>,
+        blocked: crate::store::Blocked,
     ) -> Result<Self, String> {
         let hash = Destination::hash_from_name_and_identity(PROPAGATION_ASPECT, Some(&identity.hash));
         let min_stamp = config.stamp_cost.saturating_sub(PROPAGATION_COST_FLEX);
@@ -343,11 +345,14 @@ impl HostedPn {
             .map_err(|e| format!("Could not register the propagation node: {e}"))?;
 
         // `/get`: the messages for whoever identified on the Link.
-        let (get_node, get_ingest) = (node.clone(), ingest.clone());
+        let (get_node, get_ingest, get_blocked) = (node.clone(), ingest.clone(), blocked.clone());
         destination
             .handle
             .register_request_handler(lxmf_core::constants::MESSAGE_GET_PATH, AllowPolicy::AllowAll, Vec::new(), false, move |request| {
                 let Some(remote) = request.remote_identity else { return error_reply(PeerError::NoIdentity) };
+                if get_blocked.has_identity(&remote.hash) {
+                    return error_reply(PeerError::NoAccess);
+                }
                 let client = Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&remote.hash));
                 let action = get_node.lock().unwrap().handle_get_request(&request.data, &client);
                 let (reply, served) = action.into_response_with_served_count();
@@ -358,7 +363,7 @@ impl HostedPn {
             .map_err(|e| format!("Could not start the propagation node: {e}"))?;
         // `/offer`: a peer lists what it has, proving its peering key; a Link
         // that did may send several messages at once.
-        let (offer_node, offer_peers, local_identity) = (node.clone(), peers.clone(), identity.hash);
+        let (offer_node, offer_peers, local_identity, offer_blocked) = (node.clone(), peers.clone(), identity.hash, blocked.clone());
         destination
             .handle
             .register_request_handler(lxmf_core::constants::OFFER_REQUEST_PATH, AllowPolicy::AllowAll, Vec::new(), false, move |request| {
@@ -368,7 +373,7 @@ impl HostedPn {
                     peer_hash,
                     identity_known: remote.is_some(),
                     is_throttled: false,
-                    access_allowed: true,
+                    access_allowed: !remote.is_some_and(|hash| offer_blocked.has_identity(&hash)),
                     local_identity_hash: Some(&local_identity),
                     remote_identity_hash: remote.as_ref(),
                 };
@@ -519,7 +524,8 @@ impl HostedPn {
 
 #[cfg(test)]
 mod tests {
-    use lxmf_core::message_api::{DeliveryMethod, LxMessage, MessageError};
+    use lxmf_core::message_api::{DeliveryMethod, LxMessage, LxMessageDraft, MessageError};
+    use lxmf_core::propagation_send::{AdvertisedNodePolicy, PreparedNode, PropagationEnvelope};
 
     use super::*;
 
@@ -573,15 +579,15 @@ mod tests {
     /// [`transfer`], and what its stamp is worth (at least `cost`; a stamp
     /// of no work is worth whatever its hash happens to be).
     fn stamped(to: Hash, recipient: &Identity, cost: u8) -> (Vec<u8>, u32) {
-        let mut message = LxMessage::new(to, [3; 16], "", "kept for you", DeliveryMethod::Propagated);
-        message.sign(&Identity::new().get_signing_key().unwrap()).unwrap();
-        let (packed, _, value) = message
-            .pack_propagated_encrypted_with_stamp(
-                |plain| recipient.encrypt(plain, None).map_err(|e| MessageError::PackFailed(e.to_string())),
-                cost,
-            )
-            .unwrap();
-        (packed, value)
+        let message = LxMessageDraft::new(to, [3; 16], "", "kept for you", DeliveryMethod::Propagated).unwrap();
+        let message = message.sign(&Identity::new().get_signing_key().unwrap()).unwrap().finalize(None).unwrap();
+        let mut envelope = PropagationEnvelope::new(message, [0; 32], cost, |plain| {
+            recipient.encrypt(plain, None).map_err(|e| MessageError::PackFailed(e.to_string()))
+        })
+        .unwrap();
+        let policy = AdvertisedNodePolicy { stamp_cost: cost, transfer_limit_kb: f64::MAX, recorded_at: 0. };
+        let packed = envelope.pack_for(PreparedNode { node: [9; 16], policy }, 1_800_000_000.).unwrap();
+        (packed, envelope.stamp_value())
     }
 
     #[test]
@@ -607,7 +613,7 @@ mod tests {
         local.submit(&transfer(us, &ours, 13)).unwrap();
         let full = delivered.try_recv().unwrap();
         assert_eq!(&full[..16], &us);
-        assert_eq!(LxMessage::unpack(&full).unwrap().content, "kept for you");
+        assert_eq!(LxMessage::unpack(&full).unwrap().content_text(), "kept for you");
         // Too little work: turned away. (A stamp of no work has enough by
         // chance about one time in a thousand: one that hasn't.) Several at
         // once: only from a peer.

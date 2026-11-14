@@ -105,6 +105,11 @@ struct Block {
     runs: Vec<(String, Look)>,
 }
 
+/// How deep quotes and lists are drawn: deeper ones are drawn at this depth. Every line
+/// of a block carries its bars, so unlimited nesting would cost memory in proportion to
+/// depth times length.
+const MAX_NESTING: usize = 8;
+
 fn parse(text: &str) -> Vec<Block> {
     let mut blocks: Vec<Block> = Vec::new();
     let mut open: Option<Block> = None;
@@ -114,8 +119,8 @@ fn parse(text: &str) -> Vec<Block> {
     let mut marker: Option<String> = None;
     let start = |kind: Kind, quote: usize, lists: &[Option<u64>], marker: &mut Option<String>| Block {
         kind,
-        quote,
-        list: lists.len(),
+        quote: quote.min(MAX_NESTING),
+        list: lists.len().min(MAX_NESTING),
         marker: marker.take(),
         runs: Vec::new(),
     };
@@ -442,9 +447,9 @@ impl ToMicron<'_> {
     /// What a line in the current block starts with: quote bars, and the
     /// list's indent and marker.
     fn lead(&mut self) -> String {
-        let mut lead = "`F888│`f ".repeat(self.quote);
+        let mut lead = "`F888│`f ".repeat(self.quote.min(MAX_NESTING));
         if !self.lists.is_empty() {
-            lead.push_str(&"  ".repeat(self.lists.len() - 1));
+            lead.push_str(&"  ".repeat((self.lists.len() - 1).min(MAX_NESTING)));
             match self.marker.take() {
                 Some(marker) => lead.push_str(&marker),
                 None => lead.push_str("  "),
@@ -619,6 +624,16 @@ pub fn micron(text: &str, level: usize, link: &dyn Fn(&str, &str) -> Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deeply_nested_quotes_cost_no_more_than_shallow_ones() {
+        // A megabyte of nesting used to need gigabytes to draw.
+        let text = format!("{} {}", ">".repeat(20_000), "x".repeat(100_000));
+        let drawn: usize = lines(&text, 80).iter().map(|line| line.width()).sum();
+        assert!(drawn < 10_000_000, "{drawn}");
+        let list = "- ".repeat(5000) + "x";
+        assert!(!lines(&list, 80).is_empty());
+    }
 
     #[test]
     fn formatted_text_is_made_once_until_too_much_is_kept() {
