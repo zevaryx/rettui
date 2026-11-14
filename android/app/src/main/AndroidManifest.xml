@@ -86,6 +86,17 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <!-- A conversation in a bubble (Android 11 and later): the same screen as the app's, in a task of its own. -->
+        <activity
+            android:name=".BubbleActivity"
+            android:exported="false"
+            android:allowEmbedded="true"
+            android:resizeableActivity="true"
+            android:documentLaunchMode="always"
+            android:taskAffinity=""
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|density"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- Opened by plugging in an RNode, too: agreeing lets rettui use it. -->
         <activity
             android:name=".RNodesActivity"

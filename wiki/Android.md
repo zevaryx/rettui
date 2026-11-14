@@ -63,6 +63,14 @@ repository.
   goes. Rooms (channels) and games have notification settings of their own
   too, apart from Messages, so one can be turned off or made quiet without
   the others (Android's settings for rettui, *Notifications*).
+- A challenge to a game has **Accept** and **Decline** in its notification
+  while it waits for an answer, and answers it as the Games tab does.
+- With two or more notifications waiting, Android shows them as one stack
+  ("3 notifications") that opens to each of them.
+- On Android 11 and later, a conversation's notification can float as a
+  **bubble** (the button in the notification, or Android's settings for
+  rettui, *Bubbles*): the conversation opens over other apps, and stays
+  there while you read it.
 - Attaching a file offers the camera beside the files. A photo taken
   goes into the message, and isn't kept in the phone's gallery.
 - With rettui's notifications turned off, the app says so once, with

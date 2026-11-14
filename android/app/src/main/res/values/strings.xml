@@ -114,6 +114,10 @@
     <string name="you">You</string>
     <string name="reply_sent">Reply sent</string>
     <string name="reply_failed">Your reply wasn\'t sent</string>
+    <string name="accept">Accept</string>
+    <string name="decline">Decline</string>
+    <string name="game_failed">Couldn\'t answer the challenge</string>
+    <string name="notifications_waiting">%1$d notifications</string>
     <string name="read_failed">Couldn\'t mark it read</string>
     <string name="nothing_to_do">Nothing to do for this notification</string>
     <string name="share_left_out">Left out (too big, or unreadable): %1$s</string>
