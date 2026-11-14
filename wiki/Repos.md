@@ -80,14 +80,6 @@ shown as tabs across the top (`←` `→` or `Tab` switch between them, and
   its text and comments. A document signed by its author says
   **✓ signed by them**; one whose signature doesn't match its text says
   **✗ signature doesn't check out**.
-- **Reviewing proposals:** a document someone proposed sits in the
-  proposed list until someone who may manage the repository's documents
-  reviews it. Open it and read it with its comments (`c` to ask the author
-  something). `a` (**Accept**) moves it to the active list; `X`
-  (**Decline**) deletes it, after you type `y`. If its signature doesn't
-  prove who wrote it, the document says so, and accepting asks first. The
-  node decides who may review: without permission, it refuses and nothing
-  changes.
 - **Permissions:** the repository's `.allowed` file, if the node lets you
   read it (it needs `adm`).
 
@@ -200,6 +192,17 @@ A refused change says the node doesn't allow you, and changes nothing.
   web UI, the browser picks the files, never files from the computer
   rettui runs on. Files may come to 32 MB in all. `X` on an open release
   deletes it after you type `y`; its tag stays in the repository.
+
+### Reviewing proposals
+
+A document someone proposed sits in the proposed list (`s` in the Work
+pane) until someone who may manage the repository's documents reviews it.
+Open it and read it with its comments (`c` to ask the author something).
+`a` (**Accept** in the web UI) moves it to the active list; `X`
+(**Decline**) deletes it, after you type `y`. If its signature doesn't
+prove who wrote it, the document says so, and accepting asks first. The
+node decides who may review: without permission, it refuses and nothing
+changes.
 
 ## Who you are to a node
 
