@@ -2546,7 +2546,9 @@ fn status_and_reticulum_on_small_and_large_terminals() {
 
     tui.tab(Tab::Reticulum);
     let screen = tui.resize(80, 24);
-    assert!(screen.contains("rns/config") && screen.contains("not created yet"), "{screen}");
+    // The path has the platform's separator (a backslash on Windows).
+    let config = format!("rns{}config", std::path::MAIN_SEPARATOR);
+    assert!(screen.contains(&config) && screen.contains("not created yet"), "{screen}");
     assert!(screen.contains("╰ ? lists the keys ─") && screen.contains("to apply ch…"), "{screen}");
 }
 
