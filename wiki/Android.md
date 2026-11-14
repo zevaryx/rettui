@@ -108,6 +108,11 @@ can then:
   takes effect within 15 seconds.
 - **Wi-Fi multicast only for AutoInterface.** The app asks Wi-Fi to pass
   multicast, which costs power, only while an AutoInterface is on.
+- **AutoInterface needs the other side's firewall open.** The phone finds
+  another rettui or Reticulum on the same Wi-Fi only if that computer's
+  firewall lets in UDP ports 29716 (discovery) and 42671 (data), or the ones
+  set as *Discovery port* and *Data port*. A blocked port shows as nothing
+  coming through the phone's Default Interface in Status.
 - **The page rests in the background.** Out of sight, the web UI fetches
   nothing; it catches up when you open the app again. Notifications come
   from the service meanwhile, which hears only about notifications, not
