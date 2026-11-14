@@ -1264,6 +1264,7 @@ impl App {
             NetEvent::Rncp { to, name, state } => self.on_rncp(to, name, state),
             NetEvent::RncpFetch { to, path, state } => self.on_rncp_fetch(to, path, state),
             NetEvent::Git { id, result } => self.on_git(id, result),
+            NetEvent::GitProgress { id, repo, progress } => self.on_git_progress(id, repo, progress),
             NetEvent::Speed(event) => self.on_speed(event),
             NetEvent::Identified { to, result } => self.on_identified(to, result),
             NetEvent::Probed { to, result } => self.on_probed(to, result),

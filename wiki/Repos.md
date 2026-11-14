@@ -80,6 +80,14 @@ shown as tabs across the top (`←` `→` or `Tab` switch between them, and
   its text and comments. A document signed by its author says
   **✓ signed by them**; one whose signature doesn't match its text says
   **✗ signature doesn't check out**.
+- **Reviewing proposals:** a document someone proposed sits in the
+  proposed list until someone who may manage the repository's documents
+  reviews it. Open it and read it with its comments (`c` to ask the author
+  something). `a` (**Accept**) moves it to the active list; `X`
+  (**Decline**) deletes it, after you type `y`. If its signature doesn't
+  prove who wrote it, the document says so, and accepting asks first. The
+  node decides who may review: without permission, it refuses and nothing
+  changes.
 - **Permissions:** the repository's `.allowed` file, if the node lets you
   read it (it needs `adm`).
 
@@ -110,12 +118,21 @@ deletes its copy too.
   from a node as data and runs no program from it. A node that sends a
   branch or tag with a name git wouldn't allow is refused, and nothing of
   that copy is kept.
-- A copy may come to 256 MB in one go. A bigger repository isn't copied, and
-  says so. A copy may take an hour (or **rngit timeout**, below, if that's
-  longer), so a big repository over a slow link gets there. A copy that
-  fails to be made leaves nothing behind, and one that fails to be updated
-  stays as it was. rettui can't say how far a copy has got, only that it
-  is going.
+- A copy may come to 256 MB. A bigger repository isn't copied, and says so.
+  A copy may take an hour (or **rngit timeout**, below, if that's longer), so
+  a big repository over a slow link gets there.
+- A copy is fetched a step at a time: the branch HEAD is on, then each other
+  branch (several together if there are many), then the tags. While it goes,
+  the Repos tab says which step it is on and how much of it has come
+  (**step 2 of 5, 1.2 of 3.4 MB (35%)**), in the web UI too.
+- **A copy that stops goes on.** If the link drops or the node goes quiet
+  part way, the steps that came are kept, and the message says which step it
+  stopped at. `m` again (**Copy to this computer** again) fetches only what's
+  missing. A step can't be taken in parts: a single branch with a lot of
+  history starts over if the link drops while it comes. A first copy that
+  stopped before anything came leaves nothing behind. An update that fails
+  keeps what came, so the copy may have some branches newer than others
+  until the next one finishes.
 - Two copies of one repository at once aren't made; the second is refused.
 - Names Windows can't have as a folder (`con`, `nul`, a name ending in a
   dot) can't be copied. Two repositories whose names differ only in capitals
@@ -162,6 +179,10 @@ other repository lacks is sent, and a second send of an unchanged copy sends
 nothing. Nothing is changed on the repository the copy is of, and a copy
 can't be sent to its own repository. The copy being updated is not sent at
 the same time. The web UI names the two repositories and no folder.
+
+While it goes, the tab says how much of the branch it is sending has gone.
+If the link drops, the branches already sent stay sent, and sending again
+sends only the rest, as a second send always sends only what's new.
 
 ## Writing
 

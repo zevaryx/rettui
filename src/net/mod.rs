@@ -448,6 +448,12 @@ pub enum NetEvent {
         path: String,
         state: remote::FetchState,
     },
+    /// How far a copy, a send or a download of [`NetEvent::Git`]'s id has got.
+    GitProgress {
+        id: u64,
+        repo: rngit::RepoUrl,
+        progress: git::Progress,
+    },
     /// What an rngit repository answered.
     Git {
         id: u64,

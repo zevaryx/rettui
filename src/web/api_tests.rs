@@ -1632,6 +1632,8 @@ async fn rngit_repositories_over_the_api() {
     assert_eq!(repos["repos"][0]["group"], "public");
     assert_eq!(repos["repos"][0]["node"], NODE);
     assert!(repos["rngit_identity"].is_null());
+    // Nothing is being copied or sent.
+    assert_eq!(web.get("/api/repos/progress").await.json()["transfers"], json!([]));
 
     // A node that can't answer says so; then one that does.
     *web.git_node.lock().unwrap() = Some(std::sync::Arc::default());
