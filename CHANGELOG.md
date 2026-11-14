@@ -34,6 +34,7 @@ Changes since v1.10.0: pages to browse the repositories you host, with their fil
 - **The identity stays off a new Android phone set up from yours:** Android 12 and later copy apps' files to a new phone set up from an old one, even from apps that turn backups off, so the identity went with them, and both phones then answered for the same address. The app now leaves all of its data out of that transfer, and out of cloud backups. The identity moves only when you save it from *Identity and backups*. See [Android](https://github.com/zevaryx/rettui/wiki/Android#identity-and-backups).
 
 ### Docs and development
+- **Android and AutoInterface:** the [Android](https://github.com/zevaryx/rettui/wiki/Android) page no longer says AutoInterface finds no peers. On a phone it binds its ports, joins the Wi-Fi multicast group and finds a desktop on the same network. It was off in the config that was tested, and a desktop firewall that blocks UDP ports 29716 and 42671 keeps peers from hearing each other.
 - **rngit-rs:** `deps/rngit-rs` reads one commit with the files it changed, pages through history, and lists what one visitor may read, for the pages above.
 - **rsNomad:** `deps/rsNomad` is now zevaryx's fork, which adds a script `PATH` and time limit and stops sending executable pages' text when scripts are off.
 
