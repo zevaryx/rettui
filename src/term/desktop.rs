@@ -7,24 +7,37 @@
 //! the connection that showed it (some notification servers send it to
 //! that one only), so rettui shows them on a connection of its own that
 //! also listens. Elsewhere a click isn't reported back.
+//!
+//! What's done with a notification comes back as a [`Response`] (opened,
+//! replied to, marked read, a challenge answered), which the app acts on
+//! with [`crate::app::App::respond`]; one read elsewhere is taken down
+//! with [`Desktop::withdraw`].
 
 use std::path::Path;
 use std::sync::mpsc;
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::app::notify::{Notification, Target};
+use crate::app::notify::{Notification, Response};
+
+/// What the notifications' backend is asked to do.
+pub enum Job {
+    Show(Notification),
+    /// Take down the one with this tag ([`crate::app::notify::Target::tag`]), if it's up.
+    #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+    Withdraw(String),
+}
 
 /// The logo, for notifications that show an icon (written to the cache
 /// folder, since the desktop takes a file).
 const ICON: &[u8] = include_bytes!("../web/assets/brand/icon.png");
 
 pub struct Desktop {
-    queue: Option<UnboundedSender<Notification>>,
+    queue: Option<UnboundedSender<Job>>,
     /// Why showing one failed (once, until one works again).
     failures: mpsc::Receiver<String>,
-    /// What clicked notifications were about.
-    clicks: mpsc::Receiver<Target>,
+    /// What was done with the notifications.
+    responses: mpsc::Receiver<Response>,
 }
 
 impl Desktop {
@@ -34,17 +47,25 @@ impl Desktop {
         if std::fs::read(&icon).map_or(true, |on_disk| on_disk != ICON) {
             let _ = std::fs::create_dir_all(cache).and_then(|()| std::fs::write(&icon, ICON));
         }
-        let (queue, pending) = unbounded_channel::<Notification>();
+        let (queue, pending) = unbounded_channel::<Job>();
         let (failed, failures) = mpsc::channel();
-        let (clicked, clicks) = mpsc::channel();
-        let started = run(pending, icon.to_string_lossy().into_owned(), failed, clicked);
+        let (answered, responses) = mpsc::channel();
+        let started = run(pending, icon.to_string_lossy().into_owned(), failed, answered);
         // Without it there are no notifications (they're a nicety).
-        Self { queue: started.then_some(queue), failures, clicks }
+        Self { queue: started.then_some(queue), failures, responses }
     }
 
     pub fn show(&self, notification: Notification) {
         if let Some(queue) = &self.queue {
-            let _ = queue.send(notification);
+            let _ = queue.send(Job::Show(notification));
+        }
+    }
+
+    /// Take down the notification with this tag ([`Target::tag`]): what it
+    /// was about was read somewhere else.
+    pub fn withdraw(&self, tag: String) {
+        if let Some(queue) = &self.queue {
+            let _ = queue.send(Job::Withdraw(tag));
         }
     }
 
@@ -53,9 +74,10 @@ impl Desktop {
         self.failures.try_recv().ok()
     }
 
-    /// What a notification that was clicked is about, if one was.
-    pub fn clicked(&self) -> Option<Target> {
-        self.clicks.try_recv().ok()
+    /// What was done with a notification (it was opened, replied to…), if
+    /// anything was, since last asked.
+    pub fn response(&self) -> Option<Response> {
+        self.responses.try_recv().ok()
     }
 }
 
@@ -81,21 +103,25 @@ impl Failing {
 }
 
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
-fn run(pending: UnboundedReceiver<Notification>, icon: String, failed: mpsc::Sender<String>, clicked: mpsc::Sender<Target>) -> bool {
+fn run(pending: UnboundedReceiver<Job>, icon: String, failed: mpsc::Sender<String>, clicked: mpsc::Sender<Response>) -> bool {
     tokio::spawn(xdg::run(pending, icon, Failing { failed, failing: false }, clicked));
     true
 }
 
 #[cfg(any(windows, target_os = "macos"))]
-fn run(mut pending: UnboundedReceiver<Notification>, _icon: String, failed: mpsc::Sender<String>, clicked: mpsc::Sender<Target>) -> bool {
+fn run(mut pending: UnboundedReceiver<Job>, _icon: String, failed: mpsc::Sender<String>, clicked: mpsc::Sender<Response>) -> bool {
     let mut failing = Failing { failed, failing: false };
     std::thread::Builder::new()
         .name("rettui-notify".into())
         .spawn(move || {
             #[cfg(target_os = "macos")]
             macos::send_as_terminal();
-            while let Some(notification) = pending.blocking_recv() {
-                failing.report(native::show(&notification, &clicked));
+            while let Some(job) = pending.blocking_recv() {
+                match job {
+                    Job::Show(notification) => failing.report(native::show(&notification, &clicked)),
+                    // Not taken down here (nothing keeps a handle to it).
+                    Job::Withdraw(_) => {}
+                }
             }
         })
         .is_ok()
@@ -104,7 +130,7 @@ fn run(mut pending: UnboundedReceiver<Notification>, _icon: String, failed: mpsc
 /// Android: none from here. The app rettui runs in posts its own, from the
 /// web UI's live events.
 #[cfg(target_os = "android")]
-fn run(_pending: UnboundedReceiver<Notification>, _icon: String, _failed: mpsc::Sender<String>, _clicked: mpsc::Sender<Target>) -> bool {
+fn run(_pending: UnboundedReceiver<Job>, _icon: String, _failed: mpsc::Sender<String>, _clicked: mpsc::Sender<Response>) -> bool {
     false
 }
 
@@ -118,9 +144,9 @@ mod native {
 
     use notify_rust::NotificationResponse;
 
-    use crate::app::notify::{Notification, Target};
+    use crate::app::notify::{Notification, Response};
 
-    pub fn show(notification: &Notification, clicked: &mpsc::Sender<Target>) -> Result<(), String> {
+    pub fn show(notification: &Notification, clicked: &mpsc::Sender<Response>) -> Result<(), String> {
         let handle = notify_rust::Notification::new()
             .appname("rettui")
             .summary(&notification.title)
@@ -135,7 +161,7 @@ mod native {
             let _ = handle.wait_for_response(|response: &NotificationResponse| {
                 if matches!(response, NotificationResponse::Default) {
                     bring_forward();
-                    let _ = clicked.send(target);
+                    let _ = clicked.send(Response::Open(target));
                 }
             });
         });
@@ -171,9 +197,9 @@ mod native {
 mod native {
     use std::sync::mpsc;
 
-    use crate::app::notify::{Notification, Target};
+    use crate::app::notify::{Notification, Response};
 
-    pub fn show(notification: &Notification, _clicked: &mpsc::Sender<Target>) -> Result<(), String> {
+    pub fn show(notification: &Notification, _clicked: &mpsc::Sender<Response>) -> Result<(), String> {
         // Sent as the handle goes (asynchronously).
         notify_rust::Notification::new()
             .appname("rettui")
@@ -225,8 +251,8 @@ mod xdg {
     use tokio::sync::mpsc::UnboundedReceiver;
     use zbus::Variant;
 
-    use super::Failing;
-    use crate::app::notify::{Notification, Target};
+    use super::{Failing, Job};
+    use crate::app::notify::{Notification, Response, Target};
 
     pub const SERVICE: &str = "org.freedesktop.Notifications";
     pub const PATH: &str = "/org/freedesktop/Notifications";
@@ -234,12 +260,22 @@ mod xdg {
     /// The notifications on screen, by id: what each is about.
     type OnScreen = Arc<Mutex<HashMap<u32, Target>>>;
 
-    pub async fn run(mut pending: UnboundedReceiver<Notification>, icon: String, mut failing: Failing, clicked: mpsc::Sender<Target>) {
+    pub async fn run(mut pending: UnboundedReceiver<Job>, icon: String, mut failing: Failing, clicked: mpsc::Sender<Response>) {
         let on_screen = OnScreen::default();
         let mut connection: Option<zbus::Connection> = None;
         // By conversation or room, the one shown: a newer one replaces it.
         let mut shown: HashMap<String, u32> = HashMap::new();
-        while let Some(notification) = pending.recv().await {
+        while let Some(job) = pending.recv().await {
+            let notification = match job {
+                Job::Show(notification) => notification,
+                // Read elsewhere: taken down, if it's still up.
+                Job::Withdraw(tag) => {
+                    if let (Some(bus), Some(id)) = (&connection, shown.remove(&tag)) {
+                        let _ = bus.call_method(Some(SERVICE), PATH, Some(SERVICE), "CloseNotification", &(id,)).await;
+                    }
+                    continue;
+                }
+            };
             // Connected when first needed, and again if the bus went away.
             if connection.is_none() {
                 let connected = match zbus::Connection::session().await {
@@ -310,7 +346,7 @@ mod xdg {
 
     /// Clicks on rettui's notifications, as what they're about; and which
     /// are gone from the screen.
-    async fn clicks(mut signals: zbus::MessageStream, on_screen: OnScreen, clicked: mpsc::Sender<Target>) {
+    async fn clicks(mut signals: zbus::MessageStream, on_screen: OnScreen, clicked: mpsc::Sender<Response>) {
         while let Some(Ok(signal)) = signals.next().await {
             let header = signal.header();
             match header.member().map(|member| member.as_str()) {
@@ -318,7 +354,7 @@ mod xdg {
                     let Ok((id, action)) = signal.body().deserialize::<(u32, String)>() else { continue };
                     let target = on_screen.lock().ok().and_then(|on_screen| on_screen.get(&id).cloned());
                     if let Some(target) = target.filter(|_| action == "default")
-                        && clicked.send(target).is_err()
+                        && clicked.send(Response::Open(target)).is_err()
                     {
                         return;
                     }
@@ -438,11 +474,8 @@ mod platform_tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let note = crate::app::notify::Notification {
-            title: "Alice's \"$(rm -rf /)\"".into(),
-            body: "<b>hi</b> & 'bye'".into(),
-            target: crate::app::notify::Target::Summary,
-        };
+        let note =
+            crate::app::notify::Notification::new("Alice's \"$(rm -rf /)\"", "<b>hi</b> & 'bye'", crate::app::notify::Target::Summary);
         super::wsl::show(fake.to_str().unwrap(), &note).await.unwrap();
         let seen = std::fs::read_to_string(&seen).unwrap();
         let lines: Vec<&str> = seen.lines().collect();
@@ -468,6 +501,7 @@ mod tests {
 
     use super::xdg::{PATH, SERVICE};
     use super::*;
+    use crate::app::notify::Target;
 
     /// A notification service that remembers who showed each.
     struct Service {
@@ -508,13 +542,13 @@ mod tests {
         let wait = |desktop: &Desktop| {
             (0..40).find_map(|_| {
                 std::thread::sleep(Duration::from_millis(50));
-                desktop.clicked()
+                desktop.response()
             })
         };
-        desktop.show(Notification { title: "Alice".into(), body: "Hi <there>".into(), target: about("aa") });
+        desktop.show(Notification::new("Alice", "Hi <there>", about("aa")));
         tokio::time::sleep(Duration::from_millis(300)).await;
         // A newer one about the same conversation replaces it (same id).
-        desktop.show(Notification { title: "Alice".into(), body: "Again".into(), target: about("aa") });
+        desktop.show(Notification::new("Alice", "Again", about("aa")));
         tokio::time::sleep(Duration::from_millis(300)).await;
         let shown_by = senders.lock().unwrap().clone();
         assert_eq!(shown_by.len(), 2);
@@ -522,7 +556,7 @@ mod tests {
         // Clicked, as servers that tell only the one that showed it do.
         let to = shown_by[0].as_str();
         service.emit_signal(Some(to), PATH, SERVICE, "ActionInvoked", &(7u32, "default")).await.unwrap();
-        assert_eq!(tokio::task::spawn_blocking(move || wait(&desktop)).await.unwrap(), Some(about("aa")));
+        assert_eq!(tokio::task::spawn_blocking(move || wait(&desktop)).await.unwrap(), Some(Response::Open(about("aa"))));
         let _ = std::fs::remove_dir_all(&cache);
     }
 }

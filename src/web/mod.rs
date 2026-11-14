@@ -312,16 +312,12 @@ mod notice_tests {
         store.conversations.insert(a.clone(), Conversation { unread: 2, ..Default::default() });
         store.conversations.insert(b.clone(), Conversation { unread: 0, ..Default::default() });
         let app = crate::app::test_app(&dir, Settings::default(), store);
-        let note = |key: &str, body: &str| Notification {
-            title: key[..4].to_string(),
-            body: body.into(),
-            target: Target::Conversation { key: key.to_string() },
-        };
+        let note = |key: &str, body: &str| Notification::new(key[..4].to_string(), body, Target::Conversation { key: key.to_string() });
         let recent = VecDeque::from([
             (10, note(&a, "first")),
             (11, note(&b, "read since")),
             (12, note(&a, "second")),
-            (13, Notification { title: "3 new messages".into(), body: String::new(), target: Target::Summary }),
+            (13, Notification::new("3 new messages", "", Target::Summary)),
         ]);
         let owner = Owner { app, fetches: HashMap::new(), git: HashMap::new(), hosting: HashMap::new(), next_request: 0, recent };
         let bodies = |since| owner.missed(since).into_iter().map(|(id, n)| (id, n.body)).collect::<Vec<_>>();

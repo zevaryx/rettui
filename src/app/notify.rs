@@ -13,6 +13,47 @@ pub struct Notification {
     /// What it's about: opening it goes there, and a newer notification
     /// about the same thing replaces it.
     pub target: Target,
+    /// What can be done from it, besides opening it (see [`App::respond`]).
+    /// Left out of the web UI's events when there's nothing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<NoticeAction>,
+}
+
+impl Notification {
+    /// One with no actions: [`App::push_notification`] adds the ones its
+    /// target has.
+    pub fn new(title: impl Into<String>, body: impl Into<String>, target: Target) -> Self {
+        Self { title: title.into(), body: body.into(), target, actions: Vec::new() }
+    }
+}
+
+/// What a notification offers besides opening it: a reply written in it,
+/// marking it read, or answering a game's challenge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeAction {
+    Reply,
+    MarkRead,
+    Accept,
+    Decline,
+}
+
+/// What was done with a notification, as a desktop reports it (see
+/// [`App::respond`]).
+// Each desktop's backend builds the ones it can get (a click is all some can).
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Response {
+    /// Clicked: show what it's about.
+    Open(Target),
+    /// A reply was written in it.
+    Reply {
+        target: Target,
+        text: String,
+    },
+    MarkRead(Target),
+    Accept(Target),
+    Decline(Target),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -78,7 +119,7 @@ pub fn batch(pending: Vec<Notification>) -> Vec<Notification> {
     if from.len() > shown {
         body.push_str(&format!(" and {} more", from.len() - shown));
     }
-    vec![Notification { title: format!("{count} new messages"), body, target: Target::Summary }]
+    vec![Notification::new(format!("{count} new messages"), body, Target::Summary)]
 }
 
 impl App {
@@ -104,14 +145,90 @@ impl App {
 
     /// Queue a notification, unless it's about what's on screen in a window
     /// that has the focus, or it's quiet hours (see [`App::quiet_for`]).
-    pub(super) fn push_notification(&mut self, on_screen: bool, notification: Notification) {
+    pub(super) fn push_notification(&mut self, on_screen: bool, mut notification: Notification) {
         if self.focused && on_screen {
             return;
         }
         if self.quiet_for(&notification.target, minute_now()) {
             return;
         }
+        notification.actions = self.actions_for(&notification.target);
         self.notifications.push(notification);
+    }
+
+    /// What can be done from a notification about `target`: a conversation
+    /// or a room can be answered and marked read; a challenge can be
+    /// accepted or declined while it waits for an answer.
+    pub fn actions_for(&self, target: &Target) -> Vec<NoticeAction> {
+        match target {
+            Target::Conversation { .. } => vec![NoticeAction::Reply, NoticeAction::MarkRead],
+            Target::Room { hub, .. } => match crate::net::parse_hash(hub).and_then(|hash| self.channels.hub_index(hash)) {
+                Some(_) => vec![NoticeAction::Reply, NoticeAction::MarkRead],
+                None => Vec::new(),
+            },
+            Target::Game { app, session, .. } => match self.games.view(app, session) {
+                Some(game) if game.actions.iter().any(|a| a == "accept") => vec![NoticeAction::Accept, NoticeAction::Decline],
+                _ => Vec::new(),
+            },
+            Target::Summary => Vec::new(),
+        }
+    }
+
+    /// Do what was done with a notification, in the app: the one place
+    /// every desktop's notifications come back to, so they all act alike.
+    /// A reply goes the way set for that conversation (or the room's
+    /// text, in its limit) and marks it read; Accept and Decline answer a
+    /// challenge as the Games tab does. Why it couldn't, if it couldn't.
+    pub fn respond(&mut self, response: Response) -> Result<(), String> {
+        match response {
+            Response::Open(target) => {
+                self.open_notified(target);
+                Ok(())
+            }
+            Response::Reply { target: Target::Conversation { key }, text } => {
+                let text = text.trim().to_string();
+                if text.is_empty() {
+                    return Ok(());
+                }
+                let mode = self.store.contact(&key).delivery.unwrap_or(crate::lxmf::DeliveryMode::Auto);
+                self.send_message(key.clone(), text, Vec::new(), mode, None).map_err(|(error, ..)| error)?;
+                self.mark_conversation_read(&key);
+                Ok(())
+            }
+            Response::Reply { target: Target::Room { hub, room }, text } => {
+                let (index, room) = self.notified_room(&hub, room)?;
+                // Too long for the hub: sent in parts, as the web UI's
+                // "send as several" does.
+                if let Some(parts) = self.channel_submit(index, &room, &text) {
+                    for part in parts {
+                        self.channel_submit(index, &room, &part);
+                    }
+                }
+                self.mark_room_read(index, &room);
+                Ok(())
+            }
+            Response::Reply { .. } => Err("There's nothing to reply to".into()),
+            Response::MarkRead(Target::Conversation { key }) => {
+                self.mark_conversation_read(&key);
+                Ok(())
+            }
+            Response::MarkRead(Target::Room { hub, room }) => {
+                let (index, room) = self.notified_room(&hub, room)?;
+                self.mark_room_read(index, &room);
+                Ok(())
+            }
+            Response::MarkRead(_) => Ok(()),
+            Response::Accept(Target::Game { app, session, .. }) => self.game_action(&app, &session, "accept", None),
+            Response::Decline(Target::Game { app, session, .. }) => self.game_action(&app, &session, "decline", None),
+            Response::Accept(_) | Response::Decline(_) => Err("There's no challenge to answer".into()),
+        }
+    }
+
+    /// The hub's index, and the room, a notification about a room names.
+    fn notified_room(&self, hub: &str, room: String) -> Result<(usize, String), String> {
+        let hash = crate::net::parse_hash(hub).ok_or("There's no such hub")?;
+        let index = self.channels.hub_index(hash).ok_or("There's no such hub")?;
+        Ok((index, room))
     }
 
     /// Whether quiet hours hold back a notification about `target` at
@@ -232,7 +349,7 @@ mod tests {
     }
 
     fn note(title: &str, body: &str, key: &str) -> Notification {
-        Notification { title: title.into(), body: body.into(), target: Target::Conversation { key: key.into() } }
+        Notification::new(title, body, Target::Conversation { key: key.into() })
     }
 
     #[test]

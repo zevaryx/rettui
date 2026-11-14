@@ -246,7 +246,7 @@ impl App {
             && self.game_menu.is_none()
             && self.game_view.as_ref().is_some_and(|s| s.app == game.app && s.session == game.session);
         let target = Target::Game { key: key.to_string(), app: game.app.clone(), session: game.session.clone() };
-        self.push_notification(on_screen, Notification { title: name, body: label, target });
+        self.push_notification(on_screen, Notification::new(name, label, target));
     }
 
     /// How your last move of a game went, if it isn't there yet, and what
@@ -1128,6 +1128,11 @@ mod tests {
         assert!(
             matches!(&notified[..], [n] if n.target == Target::Game { key: hex::encode(AMY), app: "four_in_a_row".into(), session: session.clone() })
         );
+        // A challenge can be accepted or declined from its notification, and
+        // answering it does what the Games tab's buttons do.
+        assert_eq!(notified[0].actions, [crate::app::notify::NoticeAction::Accept, crate::app::notify::NoticeAction::Decline]);
+        let target = notified[0].target.clone();
+        assert!(ben.app.respond(crate::app::notify::Response::Reply { target: target.clone(), text: "hi".into() }).is_err());
         // The same move again, in another message: not kept twice.
         ben.app.on_message(lxmf::InboundMessage { id: Some([0x77; 32]), ..challenge.clone() });
         ben.app.on_message(challenge);
