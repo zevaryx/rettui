@@ -12,7 +12,9 @@ use std::sync::Mutex;
 
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::Foundation::{IPropertyValue, TypedEventHandler};
-use windows::UI::Notifications::{ToastActivatedEventArgs, ToastNotification, ToastNotificationManager};
+use windows::UI::Notifications::{
+    ToastActivatedEventArgs, ToastDismissalReason, ToastDismissedEventArgs, ToastNotification, ToastNotificationManager,
+};
 use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
 use windows::core::{HSTRING, IInspectable, Interface, h};
 
@@ -53,6 +55,9 @@ pub struct Toast {
     pub buttons: Vec<Button>,
 }
 
+/// Most toasts kept at once (see [`LIVE`]).
+const MOST_KEPT: usize = 200;
+
 /// The toasts on screen or in the notification centre, kept so that the
 /// events they report keep coming.
 static LIVE: Mutex<Option<HashMap<String, ToastNotification>>> = Mutex::new(None);
@@ -75,17 +80,28 @@ pub fn show(toast: &Toast, activated: impl Fn(Activation) + Send + Sync + 'stati
             Ok(())
         }))
         .map_err(error)?;
-    // Gone from the screen and the centre: nothing more to report.
+    // Swiped away or closed: nothing more to report. Not when the banner just
+    // times out into the notification centre, where it can still be used.
     let gone = tag.clone();
     notification
-        .Dismissed(&TypedEventHandler::new(move |_, _| {
-            forget(&gone);
+        .Dismissed(&TypedEventHandler::<ToastNotification, ToastDismissedEventArgs>::new(move |_, args| {
+            let timed_out = args.as_ref().and_then(|args| args.Reason().ok()) == Some(ToastDismissalReason::TimedOut);
+            if !timed_out {
+                forget(&gone);
+            }
             Ok(())
         }))
         .map_err(error)?;
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID)).map_err(error)?.Show(&notification).map_err(error)?;
     if let Ok(mut live) = LIVE.lock() {
-        live.get_or_insert_with(HashMap::new).insert(tag, notification);
+        let live = live.get_or_insert_with(HashMap::new);
+        // Those in the centre are kept to answer for; not for ever.
+        if live.len() >= MOST_KEPT
+            && let Some(oldest) = live.keys().next().cloned()
+        {
+            live.remove(&oldest);
+        }
+        live.insert(tag, notification);
     }
     Ok(())
 }
@@ -250,8 +266,9 @@ mod tests {
 
     /// By hand: shows a toast with a reply box and buttons, and says what
     /// comes of it when it's clicked, a reply is written in it, or a button
-    /// is pressed (it waits a minute). `cargo test -- --ignored --nocapture
-    /// click_the_toast`
+    /// is pressed (it waits a minute, or `RETTUI_TOAST_WAIT` seconds: the toast
+    /// stays in the notification centre meanwhile). `cargo test -- --ignored
+    /// --nocapture click_the_toast`
     #[test]
     #[ignore = "waits for someone to click the toast"]
     fn click_the_toast() {
@@ -266,7 +283,8 @@ mod tests {
             let _ = sent.send(activation);
         })
         .unwrap();
-        let done = got.recv_timeout(std::time::Duration::from_secs(60)).expect("nothing was done with the toast in a minute");
+        let wait = std::env::var("RETTUI_TOAST_WAIT").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+        let done = got.recv_timeout(std::time::Duration::from_secs(wait)).expect("nothing was done with the toast in time");
         println!("Activated: {done:?}");
         withdraw("test:by-hand");
     }
