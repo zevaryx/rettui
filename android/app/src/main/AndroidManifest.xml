@@ -110,7 +110,7 @@
         <!-- Photos taken for a message: only the camera given one may write it. -->
         <provider
             android:name=".Photos"
-            android:authorities="org.zevaryx.rettui.photos"
+            android:authorities="${applicationId}.photos"
             android:exported="false"
             android:grantUriPermissions="true" />
 

@@ -18,8 +18,6 @@ import java.io.File
  */
 class Photos : ContentProvider() {
     companion object {
-        private const val AUTHORITY = "org.zevaryx.rettui.photos"
-
         private fun folder(context: Context) = File(context.cacheDir, "photos")
 
         /** A new, empty photo for the camera to fill, and its address; those taken before go. */
@@ -28,7 +26,7 @@ class Photos : ContentProvider() {
             dir.deleteRecursively()
             dir.mkdirs()
             val name = "photo-${System.currentTimeMillis()}.jpg"
-            return File(dir, name) to Uri.parse("content://$AUTHORITY/$name")
+            return File(dir, name) to Uri.parse("content://${context.packageName}.photos/$name")
         }
     }
 
