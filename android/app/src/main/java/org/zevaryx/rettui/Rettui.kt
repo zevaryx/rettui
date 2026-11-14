@@ -115,6 +115,14 @@ object Rettui {
 
     fun showing(context: Context) = File(context.filesDir, "showing").exists()
 
+    /** A conversation is open in its bubble (see BubbleActivity); a file too, for the service. */
+    fun setBubbleShowing(context: Context, showing: Boolean) {
+        val flag = File(context.filesDir, "bubble")
+        if (showing) flag.writeText("") else flag.delete()
+    }
+
+    fun bubbleShowing(context: Context) = File(context.filesDir, "bubble").exists()
+
     /** rettui was stopped with Stop (not by a restore, nor a crash). */
     fun setStoppedByYou(context: Context, stopped: Boolean) {
         val flag = File(context.filesDir, "stopped")

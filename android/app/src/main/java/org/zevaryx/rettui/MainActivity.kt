@@ -50,7 +50,7 @@ import java.net.URL
  * WebView: the same pages a browser shows, with the phone's microphone,
  * location and files where the pages ask for them.
  */
-class MainActivity : Activity() {
+open class MainActivity : Activity() {
     companion object {
         /**
          * Said in the WebView's user agent, so the web UI offers what only
