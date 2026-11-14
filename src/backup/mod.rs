@@ -3,7 +3,8 @@
 //!
 //! A backup is a `.tar.gz` of the data directory's own files: settings,
 //! contacts and conversations (the store, and its archive), the peers
-//! heard, known identities, stamp tickets, RRC chat history, the hosted
+//! heard and their keys (the database, copied whole while rettui runs),
+//! stamp tickets, RRC chat history, the hosted
 //! node's pages (its default folder) and the hosted RRC hub's settings and
 //! rooms; the identity and the hub's, unless left out (the web UI always
 //! leaves them out); and with `files`, attachments received and sent. Caches, logs, the web UI's login and certificates, ratchets and
@@ -31,6 +32,9 @@ const MANIFEST: &str = "rettui-backup.json";
 const KEPT: &[&str] = &[
     "settings.json",
     "store.json.gz",
+    DB,
+    // Where versions before 2.0 kept the peers and keys: restored from their
+    // backups, and moved into the database the next time rettui starts.
     "peers.json.gz",
     "known_identities.json",
     "tickets.json",
@@ -40,6 +44,8 @@ const KEPT: &[&str] = &[
     "node",
     "rrc-hub",
 ];
+/// The peers heard and their keys (see [`crate::db`]).
+const DB: &str = "rettui.db";
 /// The identity: the private key behind your addresses.
 const IDENTITY: &str = "identity";
 /// The hosted RRC hub's identity, behind its address: kept with yours.
@@ -100,7 +106,20 @@ pub fn create(base: &Path, out: impl Write, options: Options) -> Result<usize, S
     let mut count = 0;
     for name in kept(options) {
         let path = base.join(name);
-        if path.is_dir() {
+        if name == DB {
+            // Copied through SQLite, so a backup taken while rettui is
+            // saving to it is whole: the file alone may be mid-write.
+            if path.is_file() {
+                let copy =
+                    std::env::temp_dir().join(format!("rettui-backup-{}-{}.db", std::process::id(), chrono::Utc::now().timestamp_micros()));
+                let added = crate::db::snapshot(&path, &copy)
+                    .map_err(|e| format!("Couldn't copy rettui.db: {e:#}"))
+                    .and_then(|()| tar.append_path_with_name(&copy, format!("{ROOT}/{name}")).map_err(fail));
+                let _ = std::fs::remove_file(&copy);
+                added?;
+                count += 1;
+            }
+        } else if path.is_dir() {
             tar.append_dir_all(format!("{ROOT}/{name}"), &path).map_err(fail)?;
             count += walk_count(&path);
         } else if path.is_file() {
@@ -520,6 +539,25 @@ mod tests {
         assert!(done.contains("no identity"), "{done}");
         assert!(other.join("downloads/abc/photo.jpg").exists() && !other.join("identity").exists());
         assert!(other.join("rrc-hub/config.yaml").exists() && !other.join("rrc-hub-identity").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_database_is_backed_up_whole_while_in_use() {
+        let base = std::env::temp_dir().join(format!("rettui-backup-db-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (from, to) = (base.join("from"), base.join("to"));
+        std::fs::create_dir_all(&from).unwrap();
+        // Open, with a save not yet folded into the file itself.
+        let mut db = crate::db::open(&from.join(DB)).unwrap();
+        let peer = crate::store::Peer { kind: crate::net::PeerKind::Lxmf, name: Some("Amy".into()), hops: 1, last_seen: 5 };
+        crate::db::save_peers(&mut db, &[("aa".repeat(16), peer)], &[]).unwrap();
+        let file = base.join("backup.tar.gz");
+        assert_eq!(create(&from, std::fs::File::create(&file).unwrap(), Options::default()).unwrap(), 1);
+        drop(db);
+        restore(&file, &to, false, None).unwrap();
+        let peers = crate::db::load_peers(&crate::db::open(&to.join(DB)).unwrap()).unwrap();
+        assert_eq!(peers[&"aa".repeat(16)].name.as_deref(), Some("Amy"));
         let _ = std::fs::remove_dir_all(&base);
     }
 

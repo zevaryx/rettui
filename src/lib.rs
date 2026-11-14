@@ -9,6 +9,7 @@ mod backup;
 mod cli;
 mod clock;
 mod config;
+mod db;
 mod emoji;
 mod games;
 mod highlight;
@@ -494,7 +495,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         propagation_node: settings.propagation_node.as_deref().and_then(net::parse_hash),
         auto_propagation: settings.auto_propagation_node,
         sync_interval: (settings.sync_interval_mins > 0).then(|| Duration::from_secs(settings.sync_interval_mins * 60)),
-        known_identities: paths.known_identities.clone(),
+        db: paths.db.clone(),
         host: nomad::host::HostConfig::from_settings(settings, paths),
         propagation: lxmf::pn::PnConfig::from_settings(settings, paths),
         hub,
@@ -527,7 +528,7 @@ fn android_start(settings: &Settings, paths: &Paths) -> Vec<String> {
 /// switching to.
 async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::identity::Identity) -> Result<Option<String>> {
     let identity_hash = identity.hash;
-    let store = Store::load_or_empty(&paths.store);
+    let store = Store::load_with_db(&paths.store, &paths.db);
     store.sync_blocked();
     let (mut net_tx, mut net_rx) = net::spawn(net_options(&settings, &paths, identity.clone(), store.blocked.clone()));
     // ratatui's panic hook gives the terminal back on a panic in any thread, but only the

@@ -542,7 +542,8 @@ pub struct NetOptions {
     /// Pick the propagation node automatically (see [`autopn`]).
     pub auto_propagation: bool,
     pub sync_interval: Option<Duration>,
-    pub known_identities: PathBuf,
+    /// The database the keys heard are kept in (see [`crate::db`]).
+    pub db: PathBuf,
     /// Node to host from the start, if any.
     pub host: Option<HostConfig>,
     /// Propagation node to host from the start, if any.
@@ -683,7 +684,7 @@ async fn run(
     }
 
     let identity = options.identity;
-    let known = KnownIdentities::load(&options.known_identities);
+    let known = KnownIdentities::load(&options.db);
     let policy = lxmf::Policy::load(&options.tickets, options.stamp_cost, options.max_message_bytes);
     let mut display_name = options.display_name;
     let mut propagation_node = options.propagation_node;

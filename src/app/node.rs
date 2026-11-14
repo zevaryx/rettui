@@ -281,7 +281,7 @@ impl App {
                         last_seen: chrono::Utc::now().timestamp(),
                     },
                 );
-                self.peers_dirty = true;
+                self.peer_changed(hex::encode(hash));
                 self.log(format!("Hosting propagation node {}", hex::encode(hash)));
             }
             PnEvent::Stopped => {
@@ -325,7 +325,7 @@ impl App {
                         last_seen: chrono::Utc::now().timestamp(),
                     },
                 );
-                self.peers_dirty = true;
+                self.peer_changed(hex::encode(hash));
                 self.log(format!("Hosting NomadNet node {}", hex::encode(hash)));
             }
             HostEvent::Stopped => {

@@ -574,7 +574,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("could not listen on {address}"))?;
 
     let identity_hash = identity.hash;
-    let store = Store::load_or_empty(&paths.store);
+    let store = Store::load_with_db(&paths.store, &paths.db);
     store.sync_blocked();
     let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone(), store.blocked.clone()));
     let mut app = App::new(settings, paths.clone(), store, net_tx.clone(), None, identity_hash);
@@ -677,6 +677,9 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 // A check for updates, or an install, that finished: Status
                 // shows it.
                 let before = owner.app.updates.shown();
+                // A browser following changes is someone looking; with none
+                // (a phone's screen off, say), peers are saved less often.
+                owner.app.watched = changes.receiver_count() > 0;
                 owner.app.on_tick();
                 if owner.app.updates.shown() != before {
                     notify(&changes, Scope::STATUS);

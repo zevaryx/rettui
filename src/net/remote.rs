@@ -1,7 +1,7 @@
 //! Reaching remote destinations: paths, public keys (live or remembered
 //! from earlier runs) and Link options.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,8 +31,9 @@ pub const PATH_TRIES: u32 = PATH_REQUESTS.len() as u32;
 pub type Progress<'a> = &'a (dyn Fn(String) + Send + Sync);
 
 /// Public keys and announce data heard from LXMF and propagation node
-/// announces, kept across runs so messages can be encrypted, stamped and
-/// verified without first hearing the peer again.
+/// announces, kept across runs (in `rettui.db`, see [`crate::db`]) so
+/// messages can be encrypted, stamped and verified without first hearing
+/// the peer again.
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct KnownEntry {
     key: String,
@@ -47,13 +48,15 @@ const MAX_KNOWN_DATA: usize = 4096;
 
 #[derive(Default)]
 pub struct KnownIdentities {
+    /// The database (see [`crate::db`]).
     path: PathBuf,
     entries: HashMap<String, KnownEntry>,
-    /// Changed since the last save. Saving is batched (see
-    /// [`KnownIdentities::save_in_background`]): rewriting the whole file for
-    /// every announce slowed the network actor to a crawl during bursts, and
-    /// announces were dropped.
-    dirty: bool,
+    /// Destinations kept or forgotten since the last save. Saving is batched
+    /// (see [`KnownIdentities::save_in_background`]) and writes only these
+    /// rows: rewriting everything for every announce slowed the network
+    /// actor to a crawl during bursts, and announces were dropped.
+    changed: HashSet<String>,
+    removed: HashSet<String>,
 }
 
 pub type Known = Arc<std::sync::Mutex<KnownIdentities>>;
@@ -65,31 +68,69 @@ impl std::fmt::Debug for KnownIdentities {
 }
 
 impl KnownIdentities {
+    /// What the database at `path` keeps. One that can't be opened (made by
+    /// a newer rettui, say) gives none, and saving to it fails each time.
     pub fn load(path: &Path) -> Known {
-        let entries = std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
-        Arc::new(std::sync::Mutex::new(Self { path: path.to_path_buf(), entries, dirty: false }))
+        let entries = Self::read(path).unwrap_or_else(|e| {
+            tracing::warn!("could not read the known identities: {e:#}");
+            HashMap::new()
+        });
+        Arc::new(std::sync::Mutex::new(Self { path: path.to_path_buf(), entries, ..Self::default() }))
     }
 
-    /// Write the file if anything changed, off the async threads.
+    fn read(path: &Path) -> anyhow::Result<HashMap<String, KnownEntry>> {
+        let mut conn = crate::db::open(path)?;
+        // The app moves the files of earlier versions in when it starts;
+        // `rettui send` and the like may come first.
+        if let Some(base) = path.parent() {
+            for note in crate::db::migrate_files(&mut conn, base, &HashMap::new()).notes {
+                tracing::info!("{note}");
+            }
+        }
+        let known = crate::db::load_known(&conn)?;
+        Ok(known
+            .into_iter()
+            .map(|(dest, known)| (dest, KnownEntry { key: hex::encode(known.key), app_data: known.app_data.map(hex::encode) }))
+            .collect())
+    }
+
+    /// Save what changed, off the async threads. If that fails it's tried
+    /// again with the next save.
     pub async fn save_in_background(known: &Known) {
-        let snapshot = {
+        let (path, changed, removed) = {
             let mut known = known.lock().unwrap();
-            if !known.dirty {
+            if known.changed.is_empty() && known.removed.is_empty() {
                 return;
             }
-            known.dirty = false;
-            (known.path.clone(), known.entries.clone())
+            let changed: Vec<(String, crate::db::Known)> = std::mem::take(&mut known.changed)
+                .into_iter()
+                .filter_map(|dest| {
+                    let entry = known.entries.get(&dest)?;
+                    let key = hex::decode(&entry.key).ok()?;
+                    Some((dest, crate::db::Known { key, app_data: entry.app_data.as_deref().and_then(|d| hex::decode(d).ok()) }))
+                })
+                .collect();
+            let removed: Vec<String> = std::mem::take(&mut known.removed).into_iter().collect();
+            (known.path.clone(), changed, removed)
         };
-        let (path, entries) = snapshot;
-        let saved = tokio::task::spawn_blocking(move || {
-            let text = serde_json::to_string(&entries)?;
-            crate::config::write_private(&path, text.as_bytes())
-        })
-        .await;
-        match saved {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!("could not save known identities: {e}"),
-            Err(e) => tracing::warn!("could not save known identities: {e}"),
+        let rows = (changed.clone(), removed.clone());
+        let saved = tokio::task::spawn_blocking(move || crate::db::save_known(&mut crate::db::open(&path)?, &rows.0, &rows.1)).await;
+        let failed = match saved {
+            Ok(Ok(())) => return,
+            Ok(Err(e)) => format!("{e:#}"),
+            Err(e) => e.to_string(),
+        };
+        tracing::warn!("could not save known identities: {failed}");
+        let mut known = known.lock().unwrap();
+        for (dest, _) in changed {
+            if !known.removed.contains(&dest) {
+                known.changed.insert(dest);
+            }
+        }
+        for dest in removed {
+            if !known.changed.contains(&dest) {
+                known.removed.insert(dest);
+            }
         }
     }
 
@@ -127,13 +168,19 @@ impl KnownIdentities {
             return;
         }
         *slot = KnownEntry { key, app_data };
-        self.dirty = true;
+        let dest = hex::encode(destination);
+        self.removed.remove(&dest);
+        self.changed.insert(dest);
     }
 
     /// Forget what was kept for `destinations`.
     pub(crate) fn forget(&mut self, destinations: &[Hash]) {
         for destination in destinations {
-            self.dirty |= self.entries.remove(&hex::encode(destination)).is_some();
+            let dest = hex::encode(destination);
+            if self.entries.remove(&dest).is_some() {
+                self.changed.remove(&dest);
+                self.removed.insert(dest);
+            }
         }
     }
 
@@ -524,15 +571,47 @@ mod tests {
         assert_eq!(Signal::of(None, Some(-3.0), None).unwrap().label(), "SNR -3.0 dB");
     }
 
+    /// Something is waiting to be saved.
+    fn dirty(known: &KnownIdentities) -> bool {
+        !known.changed.is_empty() || !known.removed.is_empty()
+    }
+
+    fn saved(known: &mut KnownIdentities) {
+        known.changed.clear();
+        known.removed.clear();
+    }
+
     #[test]
     fn forgets_only_what_it_kept() {
         let mut known = KnownIdentities::default();
         known.remember([1; 16], &[2; 64], None);
-        known.dirty = false;
+        saved(&mut known);
         known.forget(&[[9; 16]]);
-        assert!(!known.dirty, "nothing kept for it");
+        assert!(!dirty(&known), "nothing kept for it");
         known.forget(&[[1; 16], [9; 16]]);
-        assert!(known.dirty && known.entries.is_empty());
+        assert!(known.removed.contains(&hex::encode([1u8; 16])) && known.entries.is_empty());
+    }
+
+    #[test]
+    fn only_what_changed_is_saved_and_read_back() {
+        let dir = std::env::temp_dir().join(format!("rettui-known-db-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = crate::db::path(&dir);
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let known = KnownIdentities::load(&path);
+        known.lock().unwrap().remember([1; 16], &[2; 64], Some(b"Amy"));
+        known.lock().unwrap().remember([3; 16], &[4; 64], None);
+        runtime.block_on(KnownIdentities::save_in_background(&known));
+        assert!(!dirty(&known.lock().unwrap()));
+        known.lock().unwrap().forget(&[[3; 16]]);
+        runtime.block_on(KnownIdentities::save_in_background(&known));
+        let again = KnownIdentities::load(&path);
+        let again = again.lock().unwrap();
+        assert_eq!(again.app_data_of([1; 16]), Some(b"Amy".to_vec()));
+        assert!(again.public_key_of([3; 16]).is_none(), "forgotten");
+        drop(again);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -540,18 +619,18 @@ mod tests {
         let mut known = KnownIdentities::default();
         let (dest, key, other_key) = ([1u8; 16], [2u8; 64], [3u8; 64]);
         known.remember(dest, &key, Some(b"named"));
-        assert!(known.dirty);
-        known.dirty = false;
+        assert!(dirty(&known));
+        saved(&mut known);
         // The same announce again changes nothing.
         known.remember(dest, &key, Some(b"named"));
-        assert!(!known.dirty);
+        assert!(!dirty(&known));
         // A nameless announce (an automatic path response) keeps the data.
         known.remember(dest, &key, None);
-        assert!(!known.dirty);
+        assert!(!dirty(&known));
         assert_eq!(known.entries[&hex::encode(dest)].app_data, Some(hex::encode(b"named")));
         // New data replaces it; a different key starts over.
         known.remember(dest, &key, Some(b"renamed"));
-        assert!(known.dirty);
+        assert!(dirty(&known));
         assert_eq!(known.entries[&hex::encode(dest)].app_data, Some(hex::encode(b"renamed")));
         known.remember(dest, &other_key, None);
         assert_eq!(known.entries[&hex::encode(dest)].app_data, None);
@@ -559,8 +638,7 @@ mod tests {
 
     #[test]
     fn what_is_kept_of_announces_has_a_limit() {
-        let known = KnownIdentities::load(&std::env::temp_dir().join(format!("rettui-known-limit-{}", std::process::id())));
-        let mut known = known.lock().unwrap();
+        let mut known = KnownIdentities::default();
         known.remember([1; 16], &[7; 64], Some(&vec![0; MAX_KNOWN_DATA + 1]));
         assert!(known.public_key_of([1; 16]).is_some());
         assert!(known.app_data_of([1; 16]).is_none(), "announce data over the limit isn't kept");

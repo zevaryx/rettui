@@ -393,7 +393,8 @@ pub struct Paths {
     pub store: PathBuf,
     pub log: PathBuf,
     pub downloads: PathBuf,
-    pub known_identities: PathBuf,
+    /// Peers heard and the keys they announced (see [`crate::db`]).
+    pub db: PathBuf,
     /// Stamp tickets given to contacts and received from them.
     pub tickets: PathBuf,
     /// Ratchet keys for the LXMF address (see [`crate::lxmf::ratchets`]).
@@ -466,7 +467,7 @@ impl Paths {
             store: base.join("store.json.gz"),
             log: root.join("rettui.log"),
             downloads: base.join("downloads"),
-            known_identities: base.join("known_identities.json"),
+            db: crate::db::path(&base),
             tickets: base.join("tickets.json"),
             ratchets: base.join("ratchets"),
             cache: root.join("cache"),

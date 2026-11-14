@@ -63,7 +63,7 @@ pub mod trails;
 mod updates;
 pub mod whois;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -114,8 +114,11 @@ const LOG_LINES: usize = 500;
 
 /// What a message being cancelled says, until its send ends.
 pub(crate) const CANCELLING: &str = "cancelling";
-/// How often peers are saved when all that changed is when they were heard.
-const PEERS_SEEN_EVERY: Duration = Duration::from_secs(5 * 60);
+/// How often the peers heard are saved (only those that changed), and how
+/// often when no one is looking (see [`App::watched`]): a busy network
+/// announces several a second, and each save wakes a phone's storage.
+const PEERS_SAVE_EVERY: Duration = Duration::from_secs(60);
+const PEERS_SAVE_UNWATCHED: Duration = Duration::from_secs(5 * 60);
 /// How often peers not heard from in a while are forgotten.
 const PRUNE_PEERS_EVERY: Duration = Duration::from_secs(6 * 3600);
 
@@ -542,12 +545,17 @@ pub struct App {
     pub paths: Paths,
     pub store: Store,
     pub(crate) store_dirty: bool,
-    /// The peers heard changed (they're saved apart from the store).
-    pub(crate) peers_dirty: bool,
-    /// Only when peers were last heard changed: saved every
-    /// [`PEERS_SEEN_EVERY`], as a busy network announces several a second.
-    peers_seen_dirty: bool,
+    /// Peers heard or changed, and forgotten, since they were last saved
+    /// (to the database, apart from the store; see [`App::save_peers`]).
+    pub(crate) peers_changed: HashSet<String>,
+    peers_removed: HashSet<String>,
     peers_saved: Instant,
+    /// Someone is looking: the terminal UI, or a browser on the web UI.
+    /// Without, the peers are saved less often.
+    pub watched: bool,
+    /// What the database has to say (see [`Store::db_notice`]), shown on
+    /// Status in both UIs.
+    pub db_notice: Option<String>,
     /// When peers not heard from in a while were last forgotten.
     peers_pruned: Instant,
     net: UnboundedSender<NetCommand>,
@@ -814,9 +822,11 @@ impl App {
             settings_section: crate::config::Section::Profile,
             paths,
             store_dirty: store.rewrite_store,
-            peers_dirty: store.rewrite_peers,
-            peers_seen_dirty: false,
+            peers_changed: HashSet::new(),
+            peers_removed: HashSet::new(),
             peers_saved: Instant::now(),
+            watched: true,
+            db_notice: store.db_notice.clone(),
             // The first prune a minute after starting.
             peers_pruned: Instant::now().checked_sub(PRUNE_PEERS_EVERY - Duration::from_secs(60)).unwrap_or_else(Instant::now),
             store,
@@ -937,7 +947,7 @@ impl App {
             game_filter: games::GameFilter::All,
             game_menu: None,
         };
-        for note in std::mem::take(&mut app.store.migration_notes).into_iter().chain(game_problems) {
+        for note in std::mem::take(&mut app.store.migration_notes).into_iter().chain(game_problems).chain(app.db_notice.clone()) {
             app.log(note);
         }
         // Stores of earlier versions (or a lower "Messages kept") may hold
@@ -989,16 +999,7 @@ impl App {
             }
             self.games_dirty = false;
         }
-        // Peers first: a store of an earlier version still holds them until
-        // it's written again.
-        if self.peers_dirty || (self.peers_seen_dirty && self.peers_saved.elapsed() >= PEERS_SEEN_EVERY) {
-            self.peers_seen_dirty = false;
-            self.peers_saved = Instant::now();
-            let peers = self.store.peers.clone();
-            let path = crate::store::peers_path(&self.paths.store);
-            self.saver.write(path, "peers", move || crate::store::encode_peers(&peers));
-            self.peers_dirty = false;
-        }
+        self.save_peers(false);
         if self.store_dirty {
             // Only messages change the store's size: archive what's over
             // the limit first (it's queued before the store, so a message
@@ -1013,6 +1014,40 @@ impl App {
         }
     }
 
+    /// A peer was heard, changed or added: saved with the next save of them.
+    pub(crate) fn peer_changed(&mut self, key: String) {
+        self.peers_removed.remove(&key);
+        self.peers_changed.insert(key);
+    }
+
+    /// Save the peers that changed since the last time, once it's been
+    /// [`PEERS_SAVE_EVERY`] (or `now`). Only their rows are written, in the
+    /// background. Not when the database couldn't be opened: one made by a
+    /// newer rettui is left as it is.
+    fn save_peers(&mut self, now: bool) {
+        if self.peers_changed.is_empty() && self.peers_removed.is_empty() {
+            return;
+        }
+        let every = if self.watched { PEERS_SAVE_EVERY } else { PEERS_SAVE_UNWATCHED };
+        if !now && self.peers_saved.elapsed() < every {
+            return;
+        }
+        self.peers_saved = Instant::now();
+        let changed: Vec<(String, crate::store::Peer)> = std::mem::take(&mut self.peers_changed)
+            .into_iter()
+            .filter_map(|key| Some((key.clone(), self.store.peers.get(&key)?.clone())))
+            .collect();
+        let removed: Vec<String> = std::mem::take(&mut self.peers_removed).into_iter().collect();
+        if self.store.db_refused {
+            return;
+        }
+        let db = self.paths.db.clone();
+        self.saver.run("save the peers", move || {
+            crate::db::save_peers(&mut crate::db::open(&db)?, &changed, &removed)?;
+            Ok(Vec::new())
+        });
+    }
+
     /// Forget peers not heard from in a while (see [`Store::prune_peers`]),
     /// and the keys kept for them.
     fn prune_peers(&mut self) {
@@ -1022,14 +1057,17 @@ impl App {
         if gone.is_empty() {
             return;
         }
-        self.peers_dirty = true;
+        for key in &gone {
+            self.peers_changed.remove(key);
+            self.peers_removed.insert(key.clone());
+        }
         self.log(format!("Forgot {} peer(s) not heard from in {} days", gone.len(), crate::store::PEER_DAYS));
         self.send(NetCommand::ForgetKnown(gone.iter().filter_map(|key| crate::net::parse_hash(key)).collect()));
     }
 
     /// Save what changed and wait until everything is written, before exiting.
     pub fn finish_saves(&mut self) {
-        self.peers_dirty |= self.peers_seen_dirty;
+        self.save_peers(true);
         self.save_if_dirty();
         self.saver.finish();
     }
@@ -1215,21 +1253,14 @@ impl App {
                 if kind == PeerKind::Lxmf {
                     self.resend_on_announce(&key);
                 }
-                let peer = self.store.peers.entry(key).or_insert(Peer { kind, name: None, hops, last_seen: 0 });
-                // New, or more changed than when it was heard: saved with the
-                // next save (within 10 s).
-                let changed = peer.last_seen == 0 || peer.kind != kind || peer.hops != hops || (name.is_some() && peer.name != name);
+                let peer = self.store.peers.entry(key.clone()).or_insert(Peer { kind, name: None, hops, last_seen: 0 });
                 peer.kind = kind;
                 peer.hops = hops;
                 peer.last_seen = now() as i64;
                 if name.is_some() {
                     peer.name = name;
                 }
-                if changed {
-                    self.peers_dirty = true;
-                } else {
-                    self.peers_seen_dirty = true;
-                }
+                self.peer_changed(key);
             }
             NetEvent::Heard(heard) => {
                 self.heard_git_node(&heard);

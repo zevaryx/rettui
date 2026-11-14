@@ -80,9 +80,15 @@ macOS and Windows:
   call `sync_all` and then `config::replace`, which retries the rename on
   Windows (virus scanners and the indexer hold new files open briefly).
   Don't use a bare `fs::rename` to replace a saved file.
-- Changes to saved data must stay readable both ways. Add new fields with
+- Changes to saved files must stay readable both ways. Add new fields with
   `#[serde(default)]`, skipped when empty, so older versions still read the
   files. Never rename or remove a field that is already saved.
+- The peers and keys heard live in `rettui.db` (`src/db.rs`), which is
+  versioned instead: change its layout by adding a step to `UPGRADES` and
+  raising `VERSION`, never by editing a step already released. A database
+  newer than the build is never opened. Older versions can't read a newer
+  layout, so a change to it is one-way: it needs a major version and a line
+  on the Status tab saying so.
 - Per-identity data lives in `Paths::base`. Shared data (log, web login and
   certificates, caches, Reticulum config history) lives in `Paths::root`.
 

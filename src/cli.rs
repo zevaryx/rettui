@@ -27,7 +27,7 @@ fn options(settings: &Settings, paths: &Paths, identity: Identity, announce: boo
         propagation_node: node,
         auto_propagation: false,
         sync_interval: None,
-        known_identities: paths.known_identities.clone(),
+        db: paths.db.clone(),
         host: None,
         propagation: None,
         hub: None,
@@ -288,7 +288,7 @@ pub async fn path_table(settings: &Settings) -> Result<()> {
 /// kind of, which are sent a probe packet they must prove.
 pub async fn probe(settings: &Settings, paths: &Paths, address: &str, name: Option<&str>) -> Result<()> {
     let to = parse_destination(address)?;
-    let known = net::KnownIdentities::load(&paths.known_identities);
+    let known = net::KnownIdentities::load(&paths.db);
     let runtime = net::start_runtime(settings.rns_config.as_deref()).await.map_err(anyhow::Error::msg)?;
     say_if_asking(&runtime, to).await;
     let result = net::probe(&runtime, &known, to, name, &|text| eprintln!("{text}…")).await;
