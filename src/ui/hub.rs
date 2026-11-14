@@ -107,7 +107,8 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let width = label.width() as u16;
         tabs.push((Rect::new(x, tabs_row.y, width, 1), pane));
         x += width + 1;
-        let style = if pane == app.hub.pane { Style::default().fg(Color::Black).bg(accent()).bold() } else { Style::default().fg(dim()) };
+        let style =
+            if pane == app.hub.pane { Style::default().fg(super::on_accent()).bg(accent()).bold() } else { Style::default().fg(dim()) };
         spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
     }

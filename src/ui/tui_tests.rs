@@ -2490,3 +2490,32 @@ fn micron_art_in_a_room_keeps_its_shape() {
     assert!(buffer[(at, bold as u16)].modifier.contains(Modifier::BOLD));
     assert!(!rows[bold].contains('\u{a6}') && !rows[bold + 1].contains("<carol>") && rows[bold + 1].contains("like any"), "{screen}");
 }
+
+/// Every tab reads in each theme: nothing pale on a light terminal's
+/// background, and only the 16 colours every terminal has in the basic one.
+#[test]
+fn every_tab_in_the_light_and_basic_themes() {
+    use ratatui::style::Color;
+    let pale = |colour: Color| match colour {
+        Color::Yellow | Color::LightYellow | Color::LightGreen | Color::LightCyan | Color::Gray | Color::White => true,
+        Color::Rgb(r, g, b) => (299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000 > 110,
+        _ => false,
+    };
+    for theme in ["light", "basic"] {
+        let mut tui = Tui::with(&format!("theme-{theme}"), |s| s.tui_theme = theme.into());
+        with_bob(&mut tui);
+        with_hilltop(&mut tui);
+        for tab in Tab::ALL {
+            tui.settle().tab(tab);
+            for cell in &tui.buffer().content {
+                let block = cell.symbol().chars().next().is_some_and(|c| ('\u{2580}'..='\u{259f}').contains(&c));
+                if theme == "basic" {
+                    let full = |c: Color| matches!(c, Color::Rgb(..) | Color::Indexed(_));
+                    assert!(!full(cell.fg) && !full(cell.bg), "{tab:?} in basic: {cell:?}");
+                } else if cell.bg == Color::Reset && !block {
+                    assert!(!pale(cell.fg), "{tab:?} in light: {cell:?}");
+                }
+            }
+        }
+    }
+}

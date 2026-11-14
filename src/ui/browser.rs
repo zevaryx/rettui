@@ -102,7 +102,8 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
                 break;
             }
             app.regions.page_tabs.push((Rect::new(x, address.y, width, 1), i));
-            let style = if i == app.browser.current { Style::default().fg(Color::Black).bg(accent()) } else { Style::default().fg(dim()) };
+            let style =
+                if i == app.browser.current { Style::default().fg(super::on_accent()).bg(accent()) } else { Style::default().fg(dim()) };
             spans.push(Span::styled(label, style));
             x += width;
             if room(x) >= 2 {
@@ -127,9 +128,9 @@ pub(super) fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.browser.tab.source.is_some() {
         // A button in the title bar; `u` does the same.
         let (label, style) = if view_source {
-            (" ◂ back to page ", Style::default().fg(Color::Black).bg(accent()))
+            (" ◂ back to page ", Style::default().fg(super::on_accent()).bg(accent()))
         } else {
-            (" </> view source ", Style::default().fg(Color::White).bg(dim()))
+            (" </> view source ", super::keycap_style())
         };
         let width = label.width() as u16;
         // Right-aligned titles end just inside the top-right corner.
@@ -226,7 +227,7 @@ fn draw_find(frame: &mut Frame, app: &App, area: Rect) {
     };
     let bar = Rect { y: area.bottom() - 1, height: 1, ..area };
     let line = Line::from(vec![
-        Span::styled(" Find: ", Style::default().fg(Color::Black).bg(accent()).add_modifier(Modifier::BOLD)),
+        Span::styled(" Find: ", Style::default().fg(super::on_accent()).bg(accent()).add_modifier(Modifier::BOLD)),
         Span::raw(format!(" {query}")),
         Span::styled(count, Style::default().fg(dim())),
         Span::styled("   ↑↓ Enter: next · Esc: done", Style::default().fg(dim())),
@@ -369,7 +370,7 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         tabs.push((Rect::new(x, tabs_row.y, width, 1), pane));
         x += width + 1;
         let style =
-            if pane == app.browser.pane { Style::default().fg(Color::Black).bg(accent()).bold() } else { Style::default().fg(dim()) };
+            if pane == app.browser.pane { Style::default().fg(super::on_accent()).bg(accent()).bold() } else { Style::default().fg(dim()) };
         spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
     }

@@ -130,7 +130,7 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         tabs.push((Rect::new(x, tabs_row.y, width, 1), section));
         x += width + 1;
         let style = if section == app.settings_section {
-            Style::default().fg(Color::Black).bg(accent()).bold()
+            Style::default().fg(super::on_accent()).bg(accent()).bold()
         } else {
             Style::default().fg(dim())
         };
