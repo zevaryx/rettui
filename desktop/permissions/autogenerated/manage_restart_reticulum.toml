@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-manage-restart-reticulum"
+description = "Enables the manage_restart_reticulum command without any pre-configured scope."
+commands.allow = ["manage_restart_reticulum"]
+
+[[permission]]
+identifier = "deny-manage-restart-reticulum"
+description = "Denies the manage_restart_reticulum command without any pre-configured scope."
+commands.deny = ["manage_restart_reticulum"]

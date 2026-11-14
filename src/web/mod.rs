@@ -18,6 +18,7 @@
 
 #[cfg(test)]
 mod api_tests;
+pub mod desktop;
 pub mod mbtiles;
 mod push;
 mod routes;
@@ -614,6 +615,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         https: served.is_some(),
         ca: served.as_ref().and_then(|s| s.ca.clone()),
     };
+    desktop::register(&state.jobs);
     let router = routes::router(state);
     let server = match &served {
         Some(served) => {
@@ -887,6 +889,11 @@ pub(crate) mod testing {
                 ca: None,
             };
             TestWeb { router: routes::router(state.clone()), dir, sent, pages, git_node, state }
+        }
+
+        /// Where jobs for the owner go, for what only the desktop app does.
+        pub(super) fn jobs(&self) -> mpsc::UnboundedSender<Job> {
+            self.state.jobs.clone()
         }
 
         /// Run something on the app, as a job (and wait for it).

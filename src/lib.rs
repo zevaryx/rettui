@@ -35,6 +35,9 @@ mod ui;
 mod update;
 mod web;
 
+/// What only the desktop app's own window may do (see its docs).
+pub use web::desktop as manage;
+
 use std::path::PathBuf;
 use std::time::Duration;
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-manage-keep-identity"
+description = "Enables the manage_keep_identity command without any pre-configured scope."
+commands.allow = ["manage_keep_identity"]
+
+[[permission]]
+identifier = "deny-manage-keep-identity"
+description = "Denies the manage_keep_identity command without any pre-configured scope."
+commands.deny = ["manage_keep_identity"]

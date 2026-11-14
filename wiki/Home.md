@@ -49,6 +49,7 @@ it can edit your Reticulum configuration. It is built on:
 - [Web UI](Web-UI): logging in, phones, slow links, the JSON API
 - [Docker](Docker): running the web UI in a container
 - [Android](Android): the Android app's test builds
+- [Desktop App](Desktop-App): rettui in a window of its own, with identities, backups and pipe interfaces
 
 **What it does**
 

@@ -65,17 +65,32 @@ impl App {
     /// attachments, sealed with `passphrase` if there is one; the log says
     /// when it's done.
     pub fn back_up_all(&mut self, to: PathBuf, passphrase: Option<Zeroizing<String>>) -> Result<(), String> {
+        self.back_up_all_then(to, passphrase, None)
+    }
+
+    /// As [`Self::back_up_all`]; `done`, if given, hears how many files it
+    /// holds once it's written (the desktop app's backup screen waits).
+    pub fn back_up_all_then(
+        &mut self,
+        to: PathBuf,
+        passphrase: Option<Zeroizing<String>>,
+        done: Option<tokio::sync::oneshot::Sender<Result<usize, String>>>,
+    ) -> Result<(), String> {
         if to.exists() {
             return Err(format!("{} exists already: pick another name", to.display()));
         }
         self.save_if_dirty();
         let base = self.paths.base.clone();
+        let sealed = passphrase.is_some();
         self.saver.run("back up", move || {
             // Stretching the passphrase takes a moment: here, not on screen.
-            let key = passphrase.map(|p| BackupKey::from_passphrase(&p)).transpose().map_err(anyhow::Error::msg)?;
-            let count =
-                backup::write_file(&base, &to, Options { identity: true, files: false }, key.as_ref()).map_err(anyhow::Error::msg)?;
-            Ok(vec![if key.is_some() {
+            let key = passphrase.map(|p| BackupKey::from_passphrase(&p)).transpose();
+            let made = key.and_then(|key| backup::write_file(&base, &to, Options { identity: true, files: false }, key.as_ref()));
+            if let Some(done) = done {
+                let _ = done.send(made.clone());
+            }
+            let count = made.map_err(anyhow::Error::msg)?;
+            Ok(vec![if sealed {
                 format!("Backed up {count} files to {}, sealed with your passphrase: it can't be restored without it", to.display())
             } else {
                 format!(

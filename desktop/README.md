@@ -1,4 +1,4 @@
-# rettui desktop (prototype)
+# rettui desktop
 
 The web UI in a window of its own, without a browser. It runs rettui in
 this process, as the Android app does: the web UI listens on 127.0.0.1 (on
@@ -20,6 +20,24 @@ minimized. On Linux the tray needs libayatana-appindicator (the
 Flatpak carries its own); without it the window closes and minimizes as
 usual.
 
+## Identities, backups and pipe interfaces
+
+The web UI leaves these out on purpose: anyone with its login link controls
+it, so it may not copy, import or delete identity keys, make backups that
+hold the identity, or set up programs for Reticulum to run. The desktop app
+has them in a window of its own, opened from **Identities, backups and
+pipes…** in the tray menu (the **rettui** menu on a Mac, Cmd+Shift+M), the
+launcher's action of that name, or by starting `rettui-desktop --manage`.
+
+What keeps the rule's intent: nothing is added to the web UI or its HTTP
+API. The window is a page bundled in the app (`ui/`), and its commands
+(`src/manage.rs`) have permissions that only that window's capability
+(`capabilities/manage.json`) grants; the web UI's page is a remote origin
+with permission only for notifications. Each command also checks that it's
+asked from that window. They reach rettui through `rettui::manage`, which
+works only inside this app. Anything that runs a program (a pipe
+interface's command) asks first, and a new one starts turned off.
+
 It's a separate package so that `rettui` itself never links the system
 webview: `cargo build` at the top builds rettui alone.
 
@@ -40,7 +58,14 @@ Installers (`.deb`, AppImage, `.dmg`, NSIS `.exe`) come from the Tauri CLI:
     cargo install tauri-cli --version '^2'
     cd desktop && cargo tauri build
 
+## Signing
+
+The Desktop workflow signs the Windows and macOS builds when the
+repository has the certificates as secrets, and builds them unsigned when
+it doesn't. An unsigned build runs, but Windows SmartScreen and macOS
+Gatekeeper warn about it. See [Development](../wiki/Development.md).
+
 ## Not done yet
 
-- Identity, backup and pipe interface screens, which the web UI leaves out.
-- Code signing: the builds are unsigned for now.
+- Restoring a backup from the window (use `rettui restore`, with rettui
+  stopped).
