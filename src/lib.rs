@@ -31,6 +31,8 @@ mod reticulum;
 mod rrc;
 mod store;
 mod term;
+#[cfg(windows)]
+pub mod toast;
 mod ui;
 mod update;
 mod web;

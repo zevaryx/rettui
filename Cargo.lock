@@ -6438,6 +6438,7 @@ dependencies = [
  "unicode-width",
  "ureq",
  "webpki-roots 0.26.11",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
  "x25519-dalek",
  "zbus 6.0.0",

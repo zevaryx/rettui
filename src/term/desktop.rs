@@ -119,8 +119,7 @@ fn run(mut pending: UnboundedReceiver<Job>, _icon: String, failed: mpsc::Sender<
             while let Some(job) = pending.blocking_recv() {
                 match job {
                     Job::Show(notification) => failing.report(native::show(&notification, &clicked)),
-                    // Not taken down here (nothing keeps a handle to it).
-                    Job::Withdraw(_) => {}
+                    Job::Withdraw(tag) => native::withdraw(&tag),
                 }
             }
         })
@@ -134,38 +133,51 @@ fn run(_pending: UnboundedReceiver<Job>, _icon: String, _failed: mpsc::Sender<St
     false
 }
 
-/// Windows: toasts, as Windows PowerShell's (a program that isn't
-/// installed can't have its own), with the instant-message sound. Clicking
-/// one while rettui runs opens what it's about, and brings the console
-/// window forward where Windows lets it.
+/// Windows: toasts (see [`crate::toast`]), as Windows PowerShell's (a
+/// program that isn't installed can't have its own), with the
+/// instant-message sound. What's done with one while rettui runs comes back
+/// as a [`Response`]: a click opens what it's about, and brings the console
+/// window forward where Windows lets it; a reply written in it, Mark read,
+/// Accept and Decline are done as the app does them.
 #[cfg(windows)]
 mod native {
     use std::sync::mpsc;
 
-    use notify_rust::NotificationResponse;
+    use crate::app::notify::{NoticeAction, Notification, Response};
+    use crate::toast::{Activation, Button, Toast};
 
-    use crate::app::notify::{Notification, Response};
-
-    pub fn show(notification: &Notification, clicked: &mpsc::Sender<Response>) -> Result<(), String> {
-        let handle = notify_rust::Notification::new()
-            .appname("rettui")
-            .summary(&notification.title)
-            .body(&notification.body)
-            .sound_name("IM")
-            .show()
-            .map_err(|e| e.to_string())?;
-        // Until it's clicked or gone (dismissed, or timed out into the
-        // notification centre).
-        let (clicked, target) = (clicked.clone(), notification.target.clone());
-        let _ = std::thread::Builder::new().name("rettui-notify-click".into()).spawn(move || {
-            let _ = handle.wait_for_response(|response: &NotificationResponse| {
-                if matches!(response, NotificationResponse::Default) {
+    pub fn show(notification: &Notification, answered: &mpsc::Sender<Response>) -> Result<(), String> {
+        let buttons = notification
+            .actions
+            .iter()
+            .map(|action| match action {
+                NoticeAction::Reply => Button::Reply,
+                NoticeAction::MarkRead => Button::MarkRead,
+                NoticeAction::Accept => Button::Accept,
+                NoticeAction::Decline => Button::Decline,
+            })
+            .collect();
+        let toast = Toast { title: notification.title.clone(), body: notification.body.clone(), tag: notification.target.tag(), buttons };
+        let (answered, target) = (answered.clone(), notification.target.clone());
+        crate::toast::show(&toast, move |activation| {
+            let target = target.clone();
+            let response = match activation {
+                Activation::Open => {
                     bring_forward();
-                    let _ = clicked.send(Response::Open(target));
+                    Response::Open(target)
                 }
-            });
-        });
-        Ok(())
+                Activation::Reply(text) => Response::Reply { target, text },
+                Activation::MarkRead => Response::MarkRead(target),
+                Activation::Accept => Response::Accept(target),
+                Activation::Decline => Response::Decline(target),
+            };
+            let _ = answered.send(response);
+        })
+    }
+
+    /// Read elsewhere: taken down.
+    pub fn withdraw(tag: &str) {
+        crate::toast::withdraw(tag);
     }
 
     /// The console window rettui runs in, restored and in front (Windows
@@ -198,6 +210,9 @@ mod native {
     use std::sync::mpsc;
 
     use crate::app::notify::{Notification, Response};
+
+    /// Not taken down: nothing keeps a handle to it.
+    pub fn withdraw(_tag: &str) {}
 
     pub fn show(notification: &Notification, _clicked: &mpsc::Sender<Response>) -> Result<(), String> {
         // Sent as the handle goes (asynchronously).
