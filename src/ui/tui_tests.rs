@@ -2643,3 +2643,23 @@ fn messages_in_a_row_and_chat_times() {
     let screen = tui.resize(80, 24);
     assert!(!screen.contains("08:00:00"), "no seconds when narrow:\n{screen}");
 }
+
+/// Every list marks its selected row the same way, with a bar at its left,
+/// and unread counts are drawn alike.
+#[test]
+fn selected_rows_and_badges_look_alike_everywhere() {
+    let mut tui = Tui::new("marks");
+    with_bob(&mut tui);
+    assert!(tui.draw().contains("Bob  2  "), "{}", tui.draw());
+    let bar = |tui: &mut Tui| {
+        let screen = tui.draw();
+        // Past the sidebar's own bar.
+        screen.lines().filter(|row| row.chars().skip(23).any(|c| c == '▌')).count()
+    };
+    tui.tab(Tab::Status);
+    assert_eq!(bar(&mut tui), 1, "{}", tui.draw());
+    tui.tab(Tab::Reticulum);
+    assert!(bar(&mut tui) >= 1, "{}", tui.draw());
+    with_hilltop(&mut tui);
+    assert_eq!(bar(&mut tui), 1, "{}", tui.draw());
+}

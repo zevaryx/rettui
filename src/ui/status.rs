@@ -167,6 +167,7 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).bold());
     frame.render_stateful_widget(list, list_area, &mut app.settings_list);
+    super::mark_selected(frame, list_area, &app.settings_list, 1);
     let help = app.settings_list.selected().and_then(|i| fields.get(i)).map_or("", |f| f.help);
     // Two rows, so most help is seen whole on an 80-column terminal.
     let help = Paragraph::new(Span::styled(help, Style::default().fg(dim()).italic())).wrap(Wrap { trim: true });

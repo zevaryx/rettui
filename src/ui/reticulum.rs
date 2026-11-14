@@ -137,6 +137,7 @@ fn draw_sections(frame: &mut Frame, app: &mut App, area: Rect) {
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_widget(list_block, area);
     frame.render_stateful_widget(list, app.regions.rns_sections, &mut app.rns.section_list);
+    super::mark_selected(frame, app.regions.rns_sections, &app.rns.section_list, 1);
 }
 
 fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -206,6 +207,7 @@ fn draw_options(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, list_area, &mut app.rns.option_list);
+    super::mark_selected(frame, list_area, &app.rns.option_list, 1);
 
     let help = app.rns.selected_option().map_or_else(Vec::new, |o| {
         vec![Line::from(vec![
@@ -238,6 +240,7 @@ fn draw_picker(frame: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = picker.choices.iter().map(|(_, label)| ListItem::new(format!(" {label}"))).collect();
     let list = List::new(items).block(picker_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, rect, &mut picker.list);
+    super::mark_selected(frame, app.regions.rns_picker, &picker.list, 1);
 }
 
 /// Earlier versions (`H`): the list, newest first, and how the selected
@@ -265,6 +268,7 @@ fn draw_history(frame: &mut Frame, app: &mut App, area: Rect) {
     // Two lines a version: clicks find theirs by halving.
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()));
     frame.render_stateful_widget(list, inner, &mut view.list);
+    super::mark_selected(frame, inner, &view.list, 2);
 
     let title = if view.against_current { "What putting it back would change" } else { "What it changed" };
     let other = if view.against_current { "the version before" } else { "the file now" };

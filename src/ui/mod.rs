@@ -216,6 +216,22 @@ fn clear_popup(frame: &mut Frame, rect: ratatui::layout::Rect) {
     frame.render_widget(ratatui::widgets::Clear, around);
 }
 
+/// The selected row of a list marked with a bar in its first column, as
+/// the Messages and Network lists mark theirs, where that column is blank
+/// (most rows start with a space), so it shows without colours too.
+/// `rows` is how many rows each item takes.
+fn mark_selected(frame: &mut Frame, area: ratatui::layout::Rect, state: &ratatui::widgets::ListState, rows: u16) {
+    let Some(row) = state.selected().and_then(|s| s.checked_sub(state.offset())) else { return };
+    let Some(dy) = u16::try_from(row).ok().and_then(|r| r.checked_mul(rows)).filter(|dy| *dy < area.height) else { return };
+    if area.width == 0 {
+        return;
+    }
+    let cell = &mut frame.buffer_mut()[(area.x, area.y + dy)];
+    if cell.symbol() == " " {
+        cell.set_symbol("▌").set_fg(accent());
+    }
+}
+
 /// A pane with nothing in it yet: a box saying what goes there and how to
 /// put something in it.
 fn empty_pane(frame: &mut Frame, area: ratatui::layout::Rect, hint: &str) {

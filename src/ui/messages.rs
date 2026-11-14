@@ -119,9 +119,11 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             .map(|key| {
                 let conversation = &app.store.conversations[key];
                 let mut spans = vec![Span::raw(format!("{gap}{}", app.store.display_name(key)))];
+                // Badges as the sidebar and Channels draw them: padded.
                 if conversation.unread > 0 {
+                    spans.push(Span::raw(" "));
                     spans.push(Span::styled(
-                        format!(" {}", conversation.unread),
+                        format!(" {} ", conversation.unread),
                         Style::default().fg(Color::Black).bg(Color::Yellow).bold(),
                     ));
                 }
@@ -135,7 +137,8 @@ pub(super) fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(Span::styled(" pinned", Style::default().fg(accent())));
                 }
                 if app.is_request(key) {
-                    spans.push(Span::styled(" request", Style::default().fg(Color::Black).bg(Color::Yellow)));
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(" request ", Style::default().fg(Color::Black).bg(Color::Yellow)));
                 } else if !app.is_known(key) {
                     spans.push(Span::styled(" ?", Style::default().fg(Color::Yellow)));
                 }
