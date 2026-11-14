@@ -3632,6 +3632,44 @@ function emojiButton(input) {
 // A click puts one in at the input's caret and closes it (Shift keeps it
 // open). Arrows and Enter work from the search, Esc closes. Given
 // `onPick` (a reaction), it hands the emoji to that instead, by `button`.
+// On a touch screen a message has no buttons under it: a tap reacts and
+// holding it opens a menu with the rest, Reply among them (see messageMenu). The pointer
+// moving more than a few px is a scroll, and a tap on a link, a picture or
+// a button does what that does.
+const touchScreen = window.matchMedia('(pointer: coarse)');
+let hinted = false;
+
+const HOLD_MS = 450;
+function messageGestures(node, { tap, hold }) {
+  let down = null;
+  let timer = 0;
+  const cancel = () => {
+    clearTimeout(timer);
+    down = null;
+  };
+  node.addEventListener('pointerdown', (e) => {
+    if (e.button > 0 || e.target.closest('a, button, audio, video, img, input, textarea, select')) return;
+    down = { x: e.clientX, y: e.clientY, held: false };
+    timer = setTimeout(() => {
+      if (!down) return;
+      down.held = true;
+      navigator.vibrate?.(12);
+      hold();
+    }, HOLD_MS);
+  });
+  node.addEventListener('pointermove', (e) => {
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 10) cancel();
+  });
+  node.addEventListener('pointerup', () => {
+    const was = down;
+    cancel();
+    if (was && !was.held) tap();
+  });
+  node.addEventListener('pointercancel', cancel);
+  // The phone's own menu for a long press would come up over ours.
+  node.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
 const emojiPicker = {
   node: null,
 
@@ -4485,7 +4523,7 @@ app.views.messages = {
     const actions = !archived;
     const reactButton = actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '🙂 React', title: 'React to this message' }) : null;
     reactButton?.addEventListener('click', () => emojiPicker.toggle(reactButton, reactButton, (e) => this.react(conversation.key, m.id, e)));
-    return el('div', { class: 'message ' + (m.incoming ? 'in' : 'out') + (archived ? ' archived' : '') + (m.joined ? ' joined' : ''), dataset: { id: m.id } },
+    const node = el('div', { class: 'message ' + (m.incoming ? 'in' : 'out') + (archived ? ' archived' : '') + (m.joined ? ' joined' : ''), dataset: { id: m.id } },
       el('div', { class: 'meta' },
         el('span', { class: 'author ' + (m.incoming ? 'in' : 'out'), text: author }),
         el('span', { class: 'dim time', text: '  ' + timeLabel(m.timestamp) }),
@@ -4529,6 +4567,26 @@ app.views.messages = {
           el('span', { class: 'dim', text: ` ${humanBytes(a.size)}` }));
       }),
       this.reactions(m, conversation));
+    if (actions && touchScreen.matches) {
+      messageGestures(node, {
+        tap: () => m.can_reply && emojiPicker.toggle(node, node, (e) => this.react(conversation.key, m.id, e)),
+        hold: () => this.messageMenu(m, conversation, node, true),
+      });
+      this.hintMessageGestures();
+    }
+    return node;
+  },
+
+  // Once, on a touch screen: the buttons under a message are gone, so say
+  // what to do instead.
+  hintMessageGestures() {
+    if (hinted) return;
+    hinted = true;
+    try {
+      if (localStorage.getItem('rettui.hint.messages')) return;
+      localStorage.setItem('rettui.hint.messages', '1');
+    } catch { /* no storage: the hint comes every start */ }
+    toast('Tap a message to react, hold it for more');
   },
 
   // A message's reactions: each emoji, with who reacted (a failed one of
@@ -4579,8 +4637,18 @@ app.views.messages = {
   },
 
   // What else can be done with a message.
-  messageMenu(m, conversation, anchor) {
-    const items = [{ text: 'Copy text', action: () => copy(m.content || this.opening(m), 'the message') }];
+  messageMenu(m, conversation, anchor, full = false) {
+    const items = [];
+    // On a touch screen these have no buttons under the message.
+    if (full && m.can_reply) {
+      const author = m.incoming ? conversation.name : 'You';
+      items.push({ text: 'Reply', action: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) });
+      items.push({ text: 'React…', action: () => emojiPicker.toggle(anchor, anchor, (e) => this.react(conversation.key, m.id, e)) });
+    }
+    if (full && !m.incoming && m.state.kind === 'sending' && this.paperWaiting?.id !== m.id) {
+      items.push({ text: 'Cancel sending', action: () => this.cancelSend(conversation.key, m.id) });
+    }
+    items.push({ text: 'Copy text', action: () => copy(m.content || this.opening(m), 'the message') });
     if (m.content?.trim() || m.attachments.length) items.push({ text: 'Forward…', action: () => this.forwardDialog(conversation.key, m) });
     if (['failed', 'cancelled'].includes(m.state.kind)) items.push({ text: 'Send again', action: () => this.retry(conversation.key, m.id) });
     items.push({ text: m.attachments.length ? 'Delete (and its files)' : 'Delete', danger: true, action: async () => {
