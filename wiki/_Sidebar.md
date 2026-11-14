@@ -7,6 +7,7 @@
 - [Web UI](Web-UI)
 - [Docker](Docker)
 - [Android](Android)
+- [Desktop App](Desktop-App)
 
 **What it does**
 - [Messaging](Messaging)

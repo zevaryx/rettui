@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-manage-back-up"
+description = "Enables the manage_back_up command without any pre-configured scope."
+commands.allow = ["manage_back_up"]
+
+[[permission]]
+identifier = "deny-manage-back-up"
+description = "Denies the manage_back_up command without any pre-configured scope."
+commands.deny = ["manage_back_up"]

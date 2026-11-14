@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-manage-set-pipe"
+description = "Enables the manage_set_pipe command without any pre-configured scope."
+commands.allow = ["manage_set_pipe"]
+
+[[permission]]
+identifier = "deny-manage-set-pipe"
+description = "Denies the manage_set_pipe command without any pre-configured scope."
+commands.deny = ["manage_set_pipe"]

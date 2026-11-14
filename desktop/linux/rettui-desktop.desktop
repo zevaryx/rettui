@@ -8,3 +8,8 @@ Icon=rettui-desktop
 Terminal=false
 Categories=Network;Chat;InstantMessaging;
 StartupWMClass=rettui-desktop
+Actions=manage;
+
+[Desktop Action manage]
+Name=Identities, backups and pipes
+Exec=rettui-desktop --manage

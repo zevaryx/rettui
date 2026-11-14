@@ -6451,6 +6451,7 @@ version = "1.11.0"
 dependencies = [
  "directories",
  "rettui",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-manage-pipes"
+description = "Enables the manage_pipes command without any pre-configured scope."
+commands.allow = ["manage_pipes"]
+
+[[permission]]
+identifier = "deny-manage-pipes"
+description = "Denies the manage_pipes command without any pre-configured scope."
+commands.deny = ["manage_pipes"]

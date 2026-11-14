@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-manage-defaults"
+description = "Enables the manage_defaults command without any pre-configured scope."
+commands.allow = ["manage_defaults"]
+
+[[permission]]
+identifier = "deny-manage-defaults"
+description = "Denies the manage_defaults command without any pre-configured scope."
+commands.deny = ["manage_defaults"]
