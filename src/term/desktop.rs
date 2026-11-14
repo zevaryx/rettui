@@ -252,7 +252,7 @@ mod xdg {
     use zbus::Variant;
 
     use super::{Failing, Job};
-    use crate::app::notify::{Notification, Response, Target};
+    use crate::app::notify::{NoticeAction, Notification, Response, Target};
 
     pub const SERVICE: &str = "org.freedesktop.Notifications";
     pub const PATH: &str = "/org/freedesktop/Notifications";
@@ -260,9 +260,27 @@ mod xdg {
     /// The notifications on screen, by id: what each is about.
     type OnScreen = Arc<Mutex<HashMap<u32, Target>>>;
 
+    /// What the notification server can do.
+    #[derive(Clone, Copy, Default)]
+    pub struct Server {
+        actions: bool,
+        inline_reply: bool,
+    }
+
+    /// Asked of the server once connected: buttons, and a reply field in
+    /// the notification (KDE Plasma's).
+    async fn capabilities(bus: &zbus::Connection) -> Server {
+        let caps: Vec<String> = match bus.call_method(Some(SERVICE), PATH, Some(SERVICE), "GetCapabilities", &()).await {
+            Ok(reply) => reply.body().deserialize().unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        Server { actions: caps.iter().any(|c| c == "actions"), inline_reply: caps.iter().any(|c| c == "inline-reply") }
+    }
+
     pub async fn run(mut pending: UnboundedReceiver<Job>, icon: String, mut failing: Failing, clicked: mpsc::Sender<Response>) {
         let on_screen = OnScreen::default();
         let mut connection: Option<zbus::Connection> = None;
+        let mut server = Server::default();
         // By conversation or room, the one shown: a newer one replaces it.
         let mut shown: HashMap<String, u32> = HashMap::new();
         while let Some(job) = pending.recv().await {
@@ -287,7 +305,10 @@ mod xdg {
                     Err(e) => Err(e.to_string()),
                 };
                 match connected {
-                    Ok(bus) => connection = Some(bus),
+                    Ok(bus) => {
+                        server = capabilities(&bus).await;
+                        connection = Some(bus);
+                    }
                     // No desktop bus under WSL: Windows shows it.
                     Err(_) if super::wsl::detected() => {
                         failing.report(super::wsl::show("powershell.exe", &notification).await);
@@ -301,7 +322,7 @@ mod xdg {
             }
             let Some(bus) = &connection else { continue };
             let tag = notification.target.tag();
-            match show(bus, &notification, &icon, shown.get(&tag).copied()).await {
+            match show(bus, server, &notification, &icon, shown.get(&tag).copied()).await {
                 Ok(id) => {
                     shown.insert(tag, id);
                     if let Ok(mut on_screen) = on_screen.lock() {
@@ -318,12 +339,19 @@ mod xdg {
     }
 
     /// Show one (in place of `replaces`, if that's still up): its id.
-    pub async fn show(bus: &zbus::Connection, notification: &Notification, icon: &str, replaces: Option<u32>) -> Result<u32, String> {
+    pub async fn show(
+        bus: &zbus::Connection,
+        server: Server,
+        notification: &Notification,
+        icon: &str,
+        replaces: Option<u32>,
+    ) -> Result<u32, String> {
         // Bodies may be marked up: text stays text.
         let body = notification.body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
-        // "default" is the action of clicking the notification itself.
-        let actions = vec!["default", "Open"];
-        let hints: HashMap<&str, Variant> = HashMap::new();
+        let actions = action_list(server, notification);
+        let mut hints: HashMap<&str, Variant> = HashMap::new();
+        hints.insert("category", Variant::from("im.received"));
+        hints.insert("x-kde-reply-placeholder-text", Variant::from("Reply…"));
         let reply = bus
             .call_method(
                 Some(SERVICE),
@@ -335,6 +363,26 @@ mod xdg {
             .await
             .map_err(|e| e.to_string())?;
         reply.body().deserialize::<u32>().map_err(|e| e.to_string())
+    }
+
+    /// The buttons it gets, as (key, label) flattened: what the server can
+    /// show. "default" is the click on the notification itself. Without a
+    /// reply field in it, Reply opens the chat to write one.
+    fn action_list(server: Server, notification: &Notification) -> Vec<&'static str> {
+        let mut actions = vec!["default", "Open"];
+        if !server.actions {
+            return actions;
+        }
+        for action in &notification.actions {
+            match action {
+                NoticeAction::Reply if server.inline_reply => actions.extend(["inline-reply", "Reply"]),
+                NoticeAction::Reply => actions.extend(["reply", "Reply"]),
+                NoticeAction::MarkRead => actions.extend(["read", "Mark read"]),
+                NoticeAction::Accept => actions.extend(["accept", "Accept"]),
+                NoticeAction::Decline => actions.extend(["decline", "Decline"]),
+            }
+        }
+        actions
     }
 
     /// The notification service's signals, on this connection.
@@ -353,8 +401,24 @@ mod xdg {
                 Some("ActionInvoked") => {
                     let Ok((id, action)) = signal.body().deserialize::<(u32, String)>() else { continue };
                     let target = on_screen.lock().ok().and_then(|on_screen| on_screen.get(&id).cloned());
-                    if let Some(target) = target.filter(|_| action == "default")
-                        && clicked.send(Response::Open(target)).is_err()
+                    let response = target.and_then(|target| match action.as_str() {
+                        "default" | "reply" => Some(Response::Open(target)),
+                        "read" => Some(Response::MarkRead(target)),
+                        "accept" => Some(Response::Accept(target)),
+                        "decline" => Some(Response::Decline(target)),
+                        _ => None,
+                    });
+                    if let Some(response) = response
+                        && clicked.send(response).is_err()
+                    {
+                        return;
+                    }
+                }
+                Some("NotificationReplied") => {
+                    let Ok((id, text)) = signal.body().deserialize::<(u32, String)>() else { continue };
+                    let target = on_screen.lock().ok().and_then(|on_screen| on_screen.get(&id).cloned());
+                    if let Some(target) = target.filter(|_| !text.trim().is_empty())
+                        && clicked.send(Response::Reply { target, text }).is_err()
                     {
                         return;
                     }
