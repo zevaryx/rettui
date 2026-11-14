@@ -3,7 +3,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use rngit::client::WorkScope;
@@ -746,7 +746,7 @@ pub fn keys(app: &App) -> Keys {
 }
 
 fn keycap(key: &str) -> Span<'static> {
-    Span::styled(key.to_string(), Style::default().fg(Color::Black).bg(dim()))
+    Span::styled(key.to_string(), super::keycap_style())
 }
 
 /// One hint's width: the key, a space, what it does, and two spaces.

@@ -174,7 +174,7 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
 
     // The two buttons share a line.
     let button = |label: &str, row: GuideRow| {
-        let style = if Some(row) == selected { picked_style() } else { Style::default().fg(Color::Black).bg(dim()) };
+        let style = if Some(row) == selected { picked_style() } else { super::keycap_style() };
         Span::styled(format!(" {label} "), style)
     };
     let (apply, later) = (" Apply ", " Not now ");

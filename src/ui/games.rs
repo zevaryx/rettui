@@ -66,8 +66,11 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let width = (label.width() as u16).min(inner.right().saturating_sub(x));
         app.regions.games_filters.push((Rect { x, y: inner.y, width, height: 1 }, filter));
         x += width;
-        let style =
-            if filter == app.game_filter { Style::default().fg(Color::Black).bg(accent()).bold() } else { Style::default().fg(dim()) };
+        let style = if filter == app.game_filter {
+            Style::default().fg(super::on_accent()).bg(accent()).bold()
+        } else {
+            Style::default().fg(dim())
+        };
         filters.push(Span::styled(label, style));
     }
     frame.render_widget(Paragraph::new(Line::from(filters)), Rect { height: 1, ..inner });
