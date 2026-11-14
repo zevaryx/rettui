@@ -25,7 +25,7 @@ host. rettui works with each of them, as they differ (see
   web UI) closes a conversation. Whispers saved in rooms by older versions
   are moved to their conversations.
 - **Commands:** the same set as NomadNet: `/join <room> [key]`, `/part`,
-  `/me`, `/nick` (per hub, defaulting to your display name), `/who` (or
+  `/me`, `/nick` (per hub, defaulting to your display name, cut to the hub's limit if it's longer; the default name is 17 characters), `/who` (or
   `/names`), `/list`, `/topic`, `/ping`, `/clear`, `/connect`,
   `/disconnect`, and hub moderation commands such as `/mode`, `/kick` and
   `/op`. `/msg <nick> [text]` (also `/w`) whispers on hubs that support it

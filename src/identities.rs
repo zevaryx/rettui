@@ -78,7 +78,13 @@ pub fn list(root: &Path) -> Vec<Profile> {
 fn profile(id: String, dir: PathBuf, active: &Path) -> Option<Profile> {
     let identity = Identity::from_file(&dir.join("identity")).ok()?;
     let lxmf = crate::app::identity::lxmf_address(&identity);
-    let name = Settings::load(&dir.join("settings.json")).map(|s| s.display_name).unwrap_or_default();
+    // One not used since names were made from addresses still says "rettui user".
+    let name = Settings::load(&dir.join("settings.json"))
+        .map(|mut s| {
+            s.name_by_address(&lxmf);
+            s.display_name
+        })
+        .unwrap_or_default();
     Some(Profile { link: crate::lxmf::identity_link(lxmf, &identity.get_public_key()), active: dir == active, id, dir, name, lxmf })
 }
 
