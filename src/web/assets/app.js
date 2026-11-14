@@ -1578,6 +1578,7 @@ const notifications = {
   async close(tag) {
     this.open.get(tag)?.close();
     this.open.delete(tag);
+    DESKTOP_APP?.invoke('notify_close', { tag }).catch(() => {});
     const registration = await navigator.serviceWorker?.getRegistration?.();
     for (const shown of (await registration?.getNotifications({ tag })) || []) shown.close();
   },
@@ -1614,6 +1615,10 @@ const notifications = {
     if (this.push === 'on' && document.visibilityState !== 'visible') return;
     if (DESKTOP_APP) {
       try {
+        // The app's own notifications, with buttons where the system has
+        // them; without those, the plugin's plain one.
+        const actions = await desktopActions(target);
+        if (await DESKTOP_APP.invoke('notify_show', { request: { title, body, tag, target, actions } })) return;
         return await DESKTOP_APP.invoke('plugin:notification|notify', { options: { title, body, extra: { target } } });
       } catch (e) {
         console.warn('Could not show a notification:', e);
@@ -1712,6 +1717,50 @@ function bellButton(level, title, onclick) {
   return el('button', { class: 'bell' + (level === 'off' ? ' off' : ''), title: said, 'aria-label': said, onclick },
     el('span', { text: level === 'off' ? '🔕' : '🔔' }), level === 'all' ? el('span', { class: 'bell-label', text: ' All' }) : null);
 }
+
+// The buttons a desktop notification about `target` has: Reply and Mark
+// read on a conversation or room, Accept and Decline on a challenge that
+// waits for an answer (as the Android app's do).
+async function desktopActions(target) {
+  if (target?.kind === 'conversation' || target?.kind === 'room') return ['reply', 'read'];
+  if (target?.kind === 'game') {
+    try {
+      const game = await api.get(`/games/${encodeURIComponent(target.app)}/${encodeURIComponent(target.session)}`);
+      if (game.status === 'pending' && (game.actions || []).includes('accept')) return ['accept', 'decline'];
+    } catch {}
+  }
+  return [];
+}
+
+// What was done with a notification the desktop app showed (it calls this):
+// clicked, replied to, marked read, a challenge answered. The API does it as
+// the page's own buttons do.
+window.rettuiNotified = async ({ action, target, text }) => {
+  try {
+    if (action === 'open') return openTarget(target);
+    const key = encodeURIComponent(target.key || '');
+    const hub = encodeURIComponent(target.hub || '');
+    if (target.kind === 'game') {
+      await api.post(`/games/${encodeURIComponent(target.app)}/${encodeURIComponent(target.session)}`, { command: action });
+      return;
+    }
+    if (action === 'reply') {
+      if (target.kind === 'conversation') {
+        const info = await api.get(`/conversations/${key}`);
+        const mode = ['auto', 'direct', 'propagated'].includes(info?.contact?.delivery) ? info.contact.delivery : 'auto';
+        await api.post(`/conversations/${key}/send`, { content: text, mode });
+      } else {
+        await api.post(`/channels/${hub}/send`, { room: target.room, text });
+      }
+    }
+    // Replying reads it too.
+    if (target.kind === 'conversation') await api.post(`/conversations/${key}/read`, {});
+    else await api.post(`/channels/${hub}/read`, { room: target.room });
+    if (action === 'reply') toast('Reply sent');
+  } catch (e) {
+    toast(`Couldn't do that from the notification: ${e.message}`, true);
+  }
+};
 
 // Go to what a notification is about.
 function openTarget(target) {

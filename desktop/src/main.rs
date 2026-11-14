@@ -14,6 +14,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod manage;
+mod notify;
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -91,6 +92,7 @@ fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
                 let handle = handle.clone();
                 app.notification().on_action(move |_| show(&handle))?;
             }
+            app.manage(notify::start(&handle));
             app.manage(manage::Downloads(downloads.clone()));
             app.manage(manage::Runner { data_dir, token_path, port, server: started });
             add_tray(app);
@@ -126,6 +128,8 @@ fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            notify::notify_show,
+            notify::notify_close,
             manage::manage_defaults,
             manage::manage_identities,
             manage::manage_keep_identity,
@@ -344,7 +348,7 @@ fn add_tray(app: &App) {
 }
 
 /// Brings the window back: from the tray, the taskbar or behind others.
-fn show(app: &AppHandle) {
+pub(crate) fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
