@@ -11,7 +11,9 @@ host. rettui works with each of them, as they differ (see
   tells the hub who you are.
 - **Views:** the hub view shows its status, limits, MOTD, and public rooms,
   which you can click to join. Rooms show the topic, members (on wide
-  screens), `/me` actions and notices, with times to the second. Your own
+  screens; in the web UI, **Members** shows or hides them at any width, and
+  it's remembered), `/me` actions and notices, with times to the second (in
+  a narrow web UI chat, to the minute). Your own
   messages show `…` until the hub echoes them back. Only the hub's own
   notices are shown as the hub's (`-hub-`) and set the topic or the room
   list; another user's notice to a room shows as said by them.

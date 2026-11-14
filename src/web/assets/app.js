@@ -21,8 +21,37 @@ function el(tag, attrs = {}, ...children) {
     if (child === null || child === undefined || child === false) continue;
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
+  // A field named only by its tooltip is named by it for screen readers too.
+  if (['select', 'input', 'textarea'].includes(tag) && attrs.title && !attrs['aria-label']) node.setAttribute('aria-label', attrs.title);
+  if (attrs.onclick && PRESSABLE.test(attrs.class || '') && !['button', 'a', 'input', 'select', 'textarea', 'label'].includes(tag)) pressable(node);
   return node;
 }
+
+// A list's rows redrawn, with the keyboard's focus kept on the row it was
+// on (by its place in the list).
+function refill(list, ...nodes) {
+  const at = [...list.querySelectorAll('[data-press]')].indexOf(document.activeElement);
+  list.replaceChildren(...nodes);
+  if (at >= 0) list.querySelectorAll('[data-press]')[at]?.focus({ preventScroll: true });
+}
+
+// Rows of a list, sections in the sidebar and names to click: reached with
+// Tab and pressed with Enter or Space, as buttons are.
+const PRESSABLE = /(^|\s)(list-item|tab|clickable|game-row)(\s|$)/;
+function pressable(node) {
+  if (!node.hasAttribute('tabindex')) node.tabIndex = 0;
+  node.dataset.press = '';
+  // A row with buttons of its own isn't one itself (a button can't hold buttons).
+  if (!node.hasAttribute('role') && !node.querySelector('button, a, input, select, textarea')) node.setAttribute('role', 'button');
+  if (/(^|\s)(selected|active)(\s|$)/.test(node.className)) node.setAttribute('aria-current', 'true');
+}
+document.addEventListener('keydown', (e) => {
+  const target = e.target;
+  if ((e.key !== 'Enter' && e.key !== ' ') || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (!(target instanceof HTMLElement) || !target.hasAttribute('data-press')) return;
+  e.preventDefault();
+  target.click();
+});
 
 const $ = (selector, root = document) => root.querySelector(selector);
 
@@ -258,6 +287,20 @@ function clockDay(date, withYear = false) {
   }
 }
 
+// A day and time, as the Clock and Dates settings have them: Nov 14 07:37
+// (the year too, for another year's).
+function dateTime(unixSeconds) {
+  const date = new Date(unixSeconds * 1000);
+  return clockDay(date, date.getFullYear() !== new Date().getFullYear()) + ' ' + clockTime(date);
+}
+
+// A folder's path, which a narrow column breaks after a slash rather than
+// in the middle of a name.
+function pathText(path, className = 'mono dim') {
+  const parts = String(path || '').split(/(?<=[/\\])/);
+  return el('span', { class: className, title: path }, parts.flatMap((part, i) => (i ? [el('wbr'), part] : [part])));
+}
+
 function timeLabel(unixSeconds) {
   const date = new Date(unixSeconds * 1000);
   const now = new Date();
@@ -323,7 +366,8 @@ function humanBytes(bytes) {
     value /= 1000;
     unit += 1;
   }
-  return unit === 0 ? `${bytes} B` : `${value.toFixed(1)} ${units[unit]}`;
+  // A no-break space: a number never ends a line without its unit.
+  return unit === 0 ? `${bytes}\u00a0B` : `${value.toFixed(1)}\u00a0${units[unit]}`;
 }
 
 // Put new server-rendered HTML into `container`, replacing only the lines
@@ -627,7 +671,7 @@ function readFile(file) {
 
 const NICK_COLORS = ['#f14c4c', '#23d18b', '#f5f543', '#6cb6ff', '#d670d6', '#29b8db', '#ffa55a', '#b48eff', '#7fdbca', '#ff8fb3'];
 // The same, darker, to read on the light theme.
-const NICK_COLORS_LIGHT = ['#c42b2b', '#17784a', '#8a6400', '#1a5fb4', '#9a2f99', '#12698e', '#b8520a', '#6a3fd0', '#1c7d6e', '#c2306a'];
+const NICK_COLORS_LIGHT = ['#c42b2b', '#146c42', '#7a5800', '#1a5fb4', '#9a2f99', '#12698e', '#b8520a', '#6a3fd0', '#1c7d6e', '#c2306a'];
 
 function nickColor(src) {
   const seed = src ? parseInt(src.slice(0, 2), 16) || 0 : 0;
@@ -635,17 +679,20 @@ function nickColor(src) {
   return colors[seed % colors.length];
 }
 
-// The web UI's colours, chosen in each browser: dark (rettui's own), light,
-// or as the device is set (and following it when it changes).
+// The web UI's colours, chosen in each browser: as the device is set (the
+// first time, and following it when it changes), dark (rettui's own) or
+// light.
 const theme = {
   query: window.matchMedia('(prefers-color-scheme: light)'),
   chosen() {
-    try { return localStorage.getItem('rettui.theme') || 'dark'; } catch { return 'dark'; }
+    try { return localStorage.getItem('rettui.theme') || 'auto'; } catch { return 'auto'; }
   },
   apply() {
     const chosen = this.chosen();
     const light = chosen === 'light' || (chosen === 'auto' && this.query.matches);
     document.documentElement.dataset.theme = light ? 'light' : 'dark';
+    // The phone's status bar and the installed app's title bar, in the same colours.
+    document.querySelector('meta[name=theme-color]')?.setAttribute('content', light ? '#f3f3f6' : '#16161e');
   },
   set(chosen) {
     try { localStorage.setItem('rettui.theme', chosen); } catch { /* this page only */ }
@@ -830,7 +877,7 @@ function resizableSide(id, view) {
   };
   const handle = el('div', {
     class: 'resizer', role: 'separator', tabindex: '0', 'aria-orientation': 'vertical', 'aria-label': 'Resize the list',
-    'aria-valuemin': String(SIDE_MIN), title: 'Drag to resize the list; a double click puts it back  ( < > = )',
+    'aria-valuemin': String(SIDE_MIN), 'aria-valuenow': String(paneWidths[id] || SIDE_MIN), title: 'Drag to resize the list; a double click puts it back  ( < > = )',
     ondblclick: () => set(null),
     onkeydown: (e) => {
       const now = side.getBoundingClientRect().width;
@@ -1002,6 +1049,18 @@ function moreButton() {
   } });
 }
 
+// Tools, on a larger screen: a header's less used buttons (button.tool) in
+// a menu under it, so its search and main buttons keep their room. A phone
+// has them behind ⋯ with the rest.
+function toolsButton() {
+  return el('button', { class: 'phone-hidden tools-button', text: 'Tools ▾', title: 'More tools', 'aria-haspopup': 'menu', onclick: (e) => {
+    e.stopPropagation();
+    const anchor = e.currentTarget;
+    const buttons = [...anchor.closest('header, .toolbar').querySelectorAll('button.tool')];
+    openSheet('', buttons.map((button) => ({ text: button.textContent, disabled: button.disabled, action: () => button.click() })), anchor);
+  } });
+}
+
 // A menu of `items` ({ text, danger, disabled, checked, action }): a sheet
 // from the bottom on a phone, else under `anchor` (the button that opened
 // it).
@@ -1034,15 +1093,19 @@ function openSheet(title, items, anchor = null) {
       closeSheet();
     }
   };
-  sheet = { node, closer };
+  sheet = { node, closer, anchor };
   setTimeout(() => {
     document.addEventListener('click', closer, true);
     document.addEventListener('keydown', closer);
   });
+  // Opened from the keyboard: on its first choice, ready for Tab and Enter.
+  if (anchor && anchor === document.activeElement && anchor.matches(':focus-visible')) node.querySelector('.menu-item:not(:disabled)')?.focus();
 }
 
 function closeSheet() {
   if (!sheet) return;
+  // The focus back on what opened it, if it was in the menu.
+  if (sheet.node.contains(document.activeElement) && sheet.anchor?.isConnected) sheet.anchor.focus({ preventScroll: true });
   sheet.node.remove();
   document.removeEventListener('click', sheet.closer, true);
   document.removeEventListener('keydown', sheet.closer);
@@ -1948,8 +2011,9 @@ function browse(url) {
 // finds them (the same rules: keep the two alike): NomadNet pages and files
 // (<node>:/page/…, also after nomadnetwork://), LXMF addresses (lxmf@,
 // lxmf://, lxma:// with a key), RRC hubs (rrc://hub/room, rrc@hub) and
-// rngit repositories (rns://node/group/repo). A bare hash isn't linked;
-// punctuation after a link isn't part of it.
+// rngit repositories (rns://node/group/repo), and web pages (https:// and
+// http://, with a host). A bare hash isn't linked; punctuation after a link
+// isn't part of it.
 // [start, end, url] for each, in order.
 const LINK_HASH = /[0-9a-fA-F]{32}(?![0-9A-Za-z])/y;
 const LINK_TRAILING = /[.,;:!?)\]}>'"*_`]+$/;
@@ -1966,6 +2030,14 @@ function findLinks(text) {
     return min + text.slice(min, end).replace(LINK_TRAILING, '').length;
   };
   const linkAt = (at) => {
+    // A web page: opened by the browser, in a tab of its own.
+    for (const prefix of ['https://', 'http://']) {
+      if (!has(at, prefix)) continue;
+      const stop = runEnd(at + prefix.length, at + prefix.length);
+      const url = text.slice(at, stop);
+      const host = text.slice(at + prefix.length, stop).split(/[/?#]/)[0].split('@').pop();
+      return host && webUrl(url) ? [stop, url] : null;
+    }
     for (const prefix of ['rrc://', 'rrc@']) {
       if (!has(at, prefix)) continue;
       const end = hashEnd(at + prefix.length);
@@ -2021,6 +2093,12 @@ function findLinks(text) {
 // Open a link written in chat: a page or file in the Browser, an address's
 // conversation, a hub in Channels (asking first for one not added yet).
 function openLink(url) {
+  if (webUrl(url)) {
+    const link = linkNode('', url);
+    document.body.append(link);
+    link.click();
+    return void link.remove();
+  }
   url = url.replace(/^[a-z]+(?=:\/\/|@)/i, (scheme) => scheme.toLowerCase());
   if (url.startsWith('lxma://') || url.startsWith('lxmf@') || url.startsWith('lxmf://')) return openConversation(url);
   if (url.startsWith('rrc://') || url.startsWith('rrc@')) return openHubLink(url);
@@ -2051,8 +2129,26 @@ function microned(text, from, to, micron) {
   return out;
 }
 
+// An http(s) address that parses as one, or null.
+function webUrl(text) {
+  try {
+    const url = new URL(text);
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 // A link to `url` showing `content` (text, or a list of nodes and text).
 function linkNode(content, url) {
+  // A web page in a tab of its own, telling it nothing of where it came
+  // from. The Android and desktop apps hand it to the system's browser
+  // when it's followed in their own window.
+  if (webUrl(url)) {
+    const app = IN_ANDROID_APP || window.RETTUI_DESKTOP;
+    return el('a', { class: 'chat-link', href: webUrl(url), target: app ? '_self' : '_blank', rel: 'noopener noreferrer nofollow', title: url,
+      onclick: (e) => e.stopPropagation() }, content);
+  }
   return el('a', { class: 'chat-link', href: '#', title: url, onclick: (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -2420,9 +2516,14 @@ async function mapDialog({ at = null, name = '', key = null, interfaceId = null 
 // A dialog over the page: closed by its buttons, Escape or a click beside
 // it. Its close function (which `onclose` hears about).
 function dialog(title, body, { className = '', onclose } = {}) {
-  // Escape closes the one on top only (a question over another dialog).
+  // What had the focus, to have it again when the dialog closes.
+  const opener = document.activeElement;
+  // Escape closes the one on top only (a question over another dialog), and
+  // Tab goes round its own buttons and fields, not the page under it.
   const onKey = (e) => {
-    if (e.key !== 'Escape' || e.defaultPrevented || [...document.querySelectorAll('.overlay')].at(-1) !== overlay) return;
+    if (e.defaultPrevented || [...document.querySelectorAll('.overlay')].at(-1) !== overlay) return;
+    if (e.key === 'Tab') return keepFocus(e, box);
+    if (e.key !== 'Escape') return;
     e.preventDefault();
     close();
   };
@@ -2430,16 +2531,38 @@ function dialog(title, body, { className = '', onclose } = {}) {
     overlay.remove();
     document.removeEventListener('keydown', onKey);
     onclose?.();
+    if (opener?.isConnected && !document.querySelector('.overlay')) opener.focus?.({ preventScroll: true });
   };
-  const overlay = el('div', { class: 'overlay', onclick: (e) => e.target === overlay && close() },
-    el('div', { class: 'dialog ' + className, role: 'dialog', 'aria-label': title },
-      el('header', {}, el('span', { class: 'title grow', text: title }),
-        el('button', { class: 'close', text: '×', title: 'Close', onclick: () => close() })),
-      body(close)));
+  const box = el('div', { class: 'dialog ' + className, role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabindex: '-1' },
+    el('header', {}, el('h2', { class: 'title grow', text: title }),
+      el('button', { class: 'close', text: '×', title: 'Close', 'aria-label': 'Close', onclick: () => close() })),
+    body(close));
+  const overlay = el('div', { class: 'overlay', onclick: (e) => e.target === overlay && close() }, box);
   document.addEventListener('keydown', onKey);
   overlay.close = close;
   document.body.append(overlay);
+  // Into the dialog, unless it put the focus on a field or button of its own.
+  requestAnimationFrame(() => {
+    if (overlay.isConnected && !box.contains(document.activeElement)) box.focus({ preventScroll: true });
+  });
   return close;
+}
+
+// Tab and Shift+Tab kept within `box`: from its last field to its first,
+// and back.
+function keepFocus(e, box) {
+  const focusable = [...box.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter((node) => !node.disabled && node.getClientRects().length);
+  if (!focusable.length) return;
+  const [first, last] = [focusable[0], focusable.at(-1)];
+  const inside = box.contains(document.activeElement) && document.activeElement !== box;
+  if (e.shiftKey && (!inside || document.activeElement === first)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (!inside || document.activeElement === last)) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 
 // Questions in dialogs of the page's own, not the browser's confirm() and
@@ -2584,7 +2707,7 @@ function shareText(text) {
   text = String(text ?? '').slice(0, 50_000).trim();
   if (!text) return;
   const [link] = findLinks(text);
-  if (link && link[0] === 0 && link[1] === text.length) return openLink(link[2]);
+  if (link && link[0] === 0 && link[1] === text.length && !webUrl(link[2])) return openLink(link[2]);
   shareDialog(text, link?.[2], []);
 }
 
@@ -2711,7 +2834,7 @@ function gameBoard(app, session, onForget) {
       // How your last move went, and what came with theirs.
       ...(game.notes || []).map((text) => el('div', { class: 'game-note warn', text })),
       el('div', { class: 'game-actions' }, actions),
-      ...(game.rules ? [el('div', { class: 'game-rules' }, el('h4', { text: 'How to play' }), el('p', { text: game.rules }))] : []));
+      ...(game.rules ? [el('div', { class: 'game-rules' }, el('h3', { text: 'How to play' }), el('p', { text: game.rules }))] : []));
   };
   const note = (game) => {
     const b = game.board;
@@ -3098,8 +3221,8 @@ function gameBoard(app, session, onForget) {
       });
     }));
     return el('div', { class: 'board battleship' },
-      el('div', {}, el('h4', { class: 'theirs', text: 'Their waters' }), grid(b.theirs, false)),
-      el('div', {}, el('h4', { class: 'mine', text: 'Your fleet' }), grid(b.mine, true)));
+      el('div', {}, el('h3', { class: 'theirs', text: 'Their waters' }), grid(b.theirs, false)),
+      el('div', {}, el('h3', { class: 'mine', text: 'Your fleet' }), grid(b.mine, true)));
   };
   // Rock Paper Scissors: the score, your three throws, and the rounds so far.
   const rpsBoard = (b, playing) => {
@@ -3934,7 +4057,7 @@ app.views.messages = {
     this.search = el('input', {
       type: 'search',
       class: 'pane-search',
-      placeholder: 'Search messages  ( / )',
+      placeholder: 'Search messages', 'aria-label': 'Search messages', title: 'Search messages  ( / )', 'aria-keyshortcuts': '/',
       value: this.query,
       oninput: () => {
         this.query = this.search.value;
@@ -4022,7 +4145,7 @@ app.views.messages = {
     root.append(
       el('section', { class: 'panel side' },
         // On a phone the top bar names the section already.
-        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Conversations' }),
+        el('header', {}, el('h2', { class: 'title grow phone-hidden', text: 'Conversations' }),
           el('button', { class: 'more', text: 'Read paper', title: 'Read in a paper message (an lxm:// link or its QR code)', onclick: () => readPaper() }),
           el('button', { class: 'phone-hidden', text: '+ New', onclick: () => this.newConversation() }),
           el('button', { class: 'more', text: '🗺', 'data-label': '🗺 Map of shared locations', title: 'Map of the locations shared with you ( M )', onclick: () => mapDialog({ key: this.selected }) }),
@@ -4152,7 +4275,7 @@ app.views.messages = {
     const requestsMark = el('div', { class: 'list-heading', text: `Message requests (${requests})`,
       title: 'From people who aren\'t contacts: no notifications until you trust them, leave them as they are, or reply' });
     if (this.query.trim()) this.runSearch();
-    else if (changed(this, 'list:' + this.selected, conversations)) this.list.replaceChildren(...(conversations.length ? conversations.flatMap((c, i) => [c.request && !conversations[i - 1]?.request ? requestsMark : null, el('div', {
+    else if (changed(this, 'list:' + this.selected, conversations)) refill(this.list, ...(conversations.length ? conversations.flatMap((c, i) => [c.request && !conversations[i - 1]?.request ? requestsMark : null, el('div', {
       class: 'list-item' + (c.key === this.selected ? ' selected' : ''),
       dataset: { key: c.key },
       // Start loading as the button goes down; the click shows it.
@@ -4171,7 +4294,7 @@ app.views.messages = {
       [el('div', { class: 'empty', text: `No conversations yet. Press ${phone.matches ? 'the + button' : '+ New'}, or message a peer from the Network tab.` })]));
     this.compose.classList.toggle('hidden', !this.selected);
     if (!this.selected) {
-      this.header.replaceChildren(el('span', { class: 'title', text: 'Messages' }));
+      this.header.replaceChildren(el('h2', { class: 'title', text: 'Messages' }));
       this.history.replaceChildren();
       return;
     }
@@ -4244,7 +4367,7 @@ app.views.messages = {
     else {
       (this.snapshots ||= {}).conversation = null;
       this.lastKey = null;
-      this.header.replaceChildren(el('span', { class: 'title', text: this.names?.get(key) || key }),
+      this.header.replaceChildren(el('h2', { class: 'title', text: this.names?.get(key) || key }),
         el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px', text: key }));
       this.history.replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
     }
@@ -4278,7 +4401,7 @@ app.views.messages = {
     if (!changed(this, 'conversation', { key, conversation, all: this.showAll === key, archive: this.archive?.key === key && this.archive.messages.length })) return;
     this.header.replaceChildren(...[
       avatar(conversation.icon, conversation.name, key),
-      el('span', { class: 'title', text: conversation.name }),
+      el('h2', { class: 'title', text: conversation.name }),
       el('span', { class: 'dim mono grow', style: 'font-weight:400;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: key }),
       el('button', { class: 'more pin-button' + (conversation.pinned ? ' on' : ''), text: '📌',
         'data-label': conversation.pinned ? '📌 Unpin' : '📌 Pin to the top',
@@ -4583,15 +4706,17 @@ app.views.messages = {
         el('span', { class: 'dim time', text: '  ' + timeLabel(m.timestamp) }),
         state,
         m.signal ? el('span', { class: 'dim', text: `  📶 ${m.signal.short}`, title: `How it was heard: ${m.signal.label}` }) : null,
-        actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
-          onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null,
-        reactButton,
+        // Shown on hover, over the message's corner (see .msg-actions).
+        el('span', { class: 'msg-actions' },
+          actions && m.can_reply ? el('button', { class: 'inline reply-button', text: '↩ Reply', title: 'Reply to this message',
+            onclick: () => this.setReply({ id: m.id, author, text: this.opening(m) }, true) }) : null,
+          reactButton,
+          actions ? el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) }) : null),
         actions && ['failed', 'cancelled'].includes(m.state.kind) ? el('button', { class: 'inline', text: '↻ Retry', title: 'Send it again',
           onclick: () => this.retry(conversation.key, m.id) }) : null,
         actions && !m.incoming && m.state.kind === 'sending' && this.paperWaiting?.id !== m.id
           ? el('button', { class: 'inline', text: '■ Cancel', title: 'Stop sending it (one already on its way in a single packet can\'t be called back)',
-            onclick: () => this.cancelSend(conversation.key, m.id) }) : null,
-        actions ? el('button', { class: 'inline reply-button', text: '⋯', title: 'More', onclick: (e) => this.messageMenu(m, conversation, e.currentTarget) }) : null),
+            onclick: () => this.cancelSend(conversation.key, m.id) }) : null),
       m.reply ? this.quote(m.reply, conversation) : null,
       m.comment_on ? this.quote(m.comment_on, conversation, '💬 Comment on ') : null,
       m.continues ? this.quote(m.continues, conversation, '… Carrying on from ') : null,
@@ -4965,7 +5090,7 @@ app.views.games = {
     this.setFilter(this.filter, false);
     root.append(
       el('section', { class: 'panel side' },
-        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Games' }),
+        el('header', {}, el('h2', { class: 'title grow phone-hidden', text: 'Games' }),
           el('button', { class: 'phone-hidden', text: '+ New game', title: 'Challenge someone  ( n )', onclick: () => newGameDialog() }),
           this.filters),
         this.list),
@@ -4989,7 +5114,7 @@ app.views.games = {
     const same = (g) => this.selected && g.app === this.selected.app && g.session === this.selected.session;
     if (!games.some(same)) this.selected = games[0] ? { app: games[0].app, session: games[0].session } : null;
     if (changed(this, 'list', [games, this.selected])) {
-      this.list.replaceChildren(...(games.length ? games.map((g) => el('div', {
+      refill(this.list, ...(games.length ? games.map((g) => el('div', {
         class: 'list-item' + (same(g) ? ' selected' : ''),
         dataset: { game: `${g.app}/${g.session}` },
         onclick: () => {
@@ -5009,7 +5134,7 @@ app.views.games = {
     const game = games.find(same);
     if (!game) {
       this.board = null;
-      this.header.replaceChildren(el('span', { class: 'title grow', text: 'Games' }));
+      this.header.replaceChildren(el('h2', { class: 'title grow', text: 'Games' }));
       this.body.replaceChildren(el('p', { class: 'dim empty', text: 'Pick a game, or start one.' }));
       return;
     }
@@ -5019,7 +5144,7 @@ app.views.games = {
       this.board = { key, ...board };
       this.header.replaceChildren(
         avatar(game.icon, game.peer_name, game.peer),
-        el('span', { class: 'title grow', text: `${game.name} with ${game.peer_name}` }),
+        el('h2', { class: 'title grow', text: `${game.name} with ${game.peer_name}` }),
         el('button', { text: 'Conversation', title: 'Your conversation with them', onclick: () => openConversation(game.peer) }));
       this.body.replaceChildren(board.node);
     }
@@ -5098,7 +5223,7 @@ app.views.channels = {
     this.search = el('input', {
       type: 'search',
       class: 'pane-search',
-      placeholder: 'Search channels  ( / )',
+      placeholder: 'Search channels', 'aria-label': 'Search channels', title: 'Search channels  ( / )', 'aria-keyshortcuts': '/',
       value: this.query || '',
       oninput: () => {
         this.query = this.search.value;
@@ -5116,13 +5241,28 @@ app.views.channels = {
     });
     root.append(
       el('section', { class: 'panel side' },
-        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Channels' }),
+        el('header', {}, el('h2', { class: 'title grow phone-hidden', text: 'Channels' }),
           el('button', { class: 'phone-hidden', text: '+ Add hub', onclick: () => this.addHub() }), this.search),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.body, this.inputBar),
       this.membersPanel,
       fab('Add a hub', () => this.addHub()));
+    try { root.dataset.members = localStorage.getItem('rettui.members') || ''; } catch { /* as the window has room */ }
     this.lastView = null;
+  },
+
+  // The room's members beside the chat: shown when the window has room for
+  // both, unless hidden with the Members button (or shown by it, in a
+  // narrow window), as this browser last had it.
+  membersShown() {
+    return !!this.membersPanel.isConnected && getComputedStyle(this.membersPanel).display !== 'none';
+  },
+
+  toggleMembers() {
+    const shown = this.membersShown() ? 'hidden' : 'shown';
+    this.root.dataset.members = shown;
+    try { localStorage.setItem('rettui.members', shown); } catch { /* this page only */ }
+    this.fitSide?.();
   },
 
   async addHub() {
@@ -5183,11 +5323,11 @@ app.views.channels = {
     }
     if (this.query?.trim()) this.runSearch();
     else if (changed(this, 'list', { hubs, selected: this.selected })) {
-      this.list.replaceChildren(...(items.length ? items : [el('div', { class: 'empty', text: 'No hubs yet. Add one by address or rrc:// link; NomadNet pages can also link to hubs.' })]));
+      refill(this.list, ...(items.length ? items : [el('div', { class: 'empty', text: 'No hubs yet. Add one by address or rrc:// link; NomadNet pages can also link to hubs.' })]));
     }
 
     if (!this.selected) {
-      this.header.replaceChildren(el('span', { class: 'title', text: 'Channels' }));
+      this.header.replaceChildren(el('h2', { class: 'title', text: 'Channels' }));
       this.body.replaceChildren();
       this.inputBar.classList.add('hidden');
       this.membersPanel.classList.add('hidden');
@@ -5284,7 +5424,7 @@ app.views.channels = {
       this.lastView = null;
       const hub = this.hubs?.find((h) => h.hash === hash);
       const whisper = hub?.whispers.find((w) => w.key === room);
-      this.header.replaceChildren(el('span', { class: 'title grow', text: whisper ? '@ ' + whisper.name : room ? '#' + room : hub?.name || '' }));
+      this.header.replaceChildren(el('h2', { class: 'title grow', text: whisper ? '@ ' + whisper.name : room ? '#' + room : hub?.name || '' }));
       this.membersPanel.classList.add('hidden');
       this.body.replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
     }
@@ -5359,7 +5499,7 @@ app.views.channels = {
     if (whisper) {
       this.membersPanel.classList.add('hidden');
       this.header.replaceChildren(
-        el('span', { class: 'title grow' }, el('span', { class: 'whisper-icon', text: '@ ' }), whisper.name,
+        el('h2', { class: 'title grow' }, el('span', { class: 'whisper-icon', text: '@ ' }), whisper.name,
           el('span', { class: 'dim', style: 'font-weight:400', text: ' · whisper' + (view.whisper ? '' : ' (this hub doesn\'t pass whispers)') })),
         el('button', { text: 'Actions', onclick: (e) => this.userMenu(e, whisper.src) }),
         bellButton(view.notify_level === 'off' ? 'off' : 'on', `Notifications from ${whisper.name}`, (e) => this.notifyMenu(e, hub, room, view)),
@@ -5372,11 +5512,17 @@ app.views.channels = {
     } else if (room) {
       const entry = hub.rooms.find((r) => r.name === room);
       this.header.replaceChildren(
-        el('span', { class: 'title grow' }, '#' + room, view.topic ? el('span', { class: 'dim', style: 'font-weight:400', text: ' — ' + view.topic }) : null),
+        el('h2', { class: 'title grow' }, '#' + room, view.topic ? el('span', { class: 'dim', style: 'font-weight:400', text: ' — ' + view.topic }) : null),
         view.joined
           ? el('button', { class: 'more', text: 'Leave', onclick: () => this.hubAction(hash, 'leave', { room }) })
           : el('button', { text: 'Join', onclick: () => this.hubAction(hash, 'join', { room }) }),
-        el('button', { class: 'phone-only', text: `Members ${view.members.length}`, onclick: () => setPane(this, 'members') }),
+        el('button', { class: 'members-button', text: `Members ${view.members.length}`, title: 'Who is in the room: show or hide the list',
+          'aria-pressed': phone.matches ? null : String(this.membersShown()),
+          onclick: (e) => {
+            if (phone.matches) return setPane(this, 'members');
+            this.toggleMembers();
+            e.currentTarget.setAttribute('aria-pressed', String(this.membersShown()));
+          } }),
         bellButton(view.notify_level, `Notifications in #${room}`, (e) => this.notifyMenu(e, hub, room, view)),
         // A setting ("Show joins and leaves"), here where it matters; on a
         // phone, behind ⋯.
@@ -5406,7 +5552,7 @@ app.views.channels = {
       this.membersPanel.classList.add('hidden');
       const busy = hub.status.kind === 'connected' || hub.status.kind === 'connecting';
       this.header.replaceChildren(
-        el('span', { class: 'title grow', text: hub.name }),
+        el('h2', { class: 'title grow', text: hub.name }),
         el('button', { text: busy ? 'Disconnect' : 'Connect', onclick: () => this.hubAction(hash, 'connect') }),
         bellButton(hub.notify, `Notifications from ${hub.name}`, (e) => this.notifyMenu(e, hub, '', view)),
         el('button', { class: 'more', text: 'Copy link', onclick: () => copy(hub.link, 'link') }),
@@ -5490,9 +5636,10 @@ app.views.channels = {
       const today = date.toDateString() === new Date().toDateString();
       const full = this.view?.chat_dates === false || today ? clockTime(date, true)
         : clockDay(date, date.getFullYear() !== new Date().getFullYear()) + ' ' + clockTime(date, true);
-      // A phone has no room for a column of dates: the time, and the rest
-      // when held on.
-      const time = phone.matches ? clockTime(date) : full;
+      // A narrow chat (a phone, or a small window) has no room for a column
+      // of seconds and dates: the minute, and the rest when held on (see
+      // .t-short in style.css).
+      const time = [el('span', { class: 't-full', text: full }), el('span', { class: 't-short', text: clockTime(date) })];
       // Other people's names open the user menu.
       const user = !line.own && line.src && this.view?.users[line.src] && ['msg', 'action', 'private'].includes(line.kind);
       // In a whisper conversation, whispers read like ordinary chat.
@@ -5513,7 +5660,7 @@ app.views.channels = {
       }
       // Coloured Micron, often art, keeps its lines: not wrapped.
       return el('div', { class: 'chat-line ' + kind + (line.art ? ' art' : ''), dataset: { ts: line.ts } },
-        el('span', { class: 'time', text: time, title: full }),
+        el('span', { class: 'time', title: full }, time),
         el('span', { class: 'body' }, prefix,
           el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [], line.mentions || [], line.micron || [])),
           line.pending ? el('span', { class: 'pending', text: ' …' }) : null));
@@ -5824,7 +5971,7 @@ app.views.network = {
     this.search = el('input', {
       type: 'search',
       class: 'grow',
-      placeholder: 'Find by name or address  ( / )',
+      placeholder: 'Find by name or address', 'aria-label': 'Find by name or address', title: 'Find by name or address  ( / )', 'aria-keyshortcuts': '/',
       value: this.query,
       oninput: () => {
         this.query = this.search.value;
@@ -5842,13 +5989,13 @@ app.views.network = {
         }
       },
     });
-    const filter = this.filterSelect = el('select', { onchange: (e) => {
+    const filter = this.filterSelect = el('select', { title: 'Which kind', onchange: (e) => {
       this.filter = e.target.value;
       this.limit = 200;
       this.update();
     } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes'], ['blocked', 'Blocked']]
       .map(([value, text]) => el('option', { value, text, selected: value === this.filter })));
-    this.heardSelect = el('select', { onchange: (e) => {
+    this.heardSelect = el('select', { title: 'Which kind', onchange: (e) => {
       this.heardKind = e.target.value;
       this.update();
     } }, [['all', 'All'], ['lxmf', 'LXMF peers'], ['nomad', 'NomadNet nodes'], ['propagation', 'Propagation nodes'], ['other', 'Everything else']]
@@ -5866,21 +6013,21 @@ app.views.network = {
       this.limit = 200;
       this.update();
     } });
-    this.title = el('span', { class: 'title grow' });
-    this.table = el('div', { class: 'scroll' });
+    this.title = el('h2', { class: 'title grow' });
+    this.table = el('div', { class: 'scroll net-scroll' });
     root.append(el('div', { class: 'column grow' },
       el('section', { class: 'panel' }, el('header', { class: 'network-tools' }, this.search, filter, this.heardSelect, sort, this.viaSelect, this.modeButton,
-        el('button', { class: 'more', text: 'Tables', title: 'Reticulum\'s path table and announce rates  ( t )', 'data-label': 'Path table and announce rates', onclick: () => tablesDialog() }),
+        el('button', { class: 'more tool', text: 'Tables', title: 'Reticulum\'s path table and announce rates  ( t )', 'data-label': 'Path table and announce rates', onclick: () => tablesDialog() }),
         el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
-        el('button', { class: 'more', text: 'Interfaces found', title: 'Entry points and radios others make known, by interface discovery or in their telemetry  ( e )', onclick: () => foundDialog() }),
-        el('button', { class: 'more', text: 'Speed test', title: 'Measure how fast data goes between you and someone else, with rettui or NomadNet  ( v )', onclick: () => speedDialog() }),
-        el('button', { class: 'more', text: 'Identities…', title: 'Your addresses, and whose an address is  ( I )', onclick: () => identityDialog(this.selected) }),
-        el('button', { class: 'more', text: 'Send a file…', title: 'Send a file to someone running rncp -l  ( F )', onclick: () => rncpDialog(this.selected) }),
-        el('button', { class: 'more', text: 'Find a path…', title: 'Find the path to any address', onclick: async () => {
+        el('button', { class: 'more tool', text: 'Interfaces found', title: 'Entry points and radios others make known, by interface discovery or in their telemetry  ( e )', onclick: () => foundDialog() }),
+        el('button', { class: 'more tool', text: 'Speed test', title: 'Measure how fast data goes between you and someone else, with rettui or NomadNet  ( v )', onclick: () => speedDialog() }),
+        el('button', { class: 'more tool', text: 'Identities…', title: 'Your addresses, and whose an address is  ( I )', onclick: () => identityDialog(this.selected) }),
+        el('button', { class: 'more tool', text: 'Send a file…', title: 'Send a file to someone running rncp -l  ( F )', onclick: () => rncpDialog(this.selected) }),
+        el('button', { class: 'more tool', text: 'Find a path…', title: 'Find the path to any address', onclick: async () => {
           const address = await askText('Find a path', { label: 'To the address', value: this.selected || '', ok: 'Find', mono: true });
           if (address) pathDialog(address.replace(/^<|>$/g, ''));
-        } }), moreButton())),
+        } }), toolsButton(), moreButton())),
       el('section', { class: 'panel grow' }, el('header', {}, this.title), this.table)));
     this.showMode();
   },
@@ -5952,7 +6099,7 @@ app.views.network = {
     // The newest rows only; more on request.
     const more = total - rows.length;
     this.table.replaceChildren(el('table', { class: 'net-table' },
-      el('thead', {}, el('tr', {}, ['', 'Name', 'Address', 'Hops', 'Heard', 'Via', ''].map((h) => el('th', { text: h })))),
+      el('thead', {}, el('tr', {}, ['Kind', 'Name', 'Address', 'Hops', 'Heard', 'Via', 'Actions'].map((h) => el('th', {}, h === 'Kind' || h === 'Actions' ? el('span', { class: 'sr-only', text: h }) : h)))),
       el('tbody', {}, rows.map((p) => el('tr', {
         class: p.hash === this.selected ? 'selected' : '',
         onclick: (e) => {
@@ -5962,15 +6109,15 @@ app.views.network = {
         },
         ondblclick: () => this.open(p),
       },
-      el('td', {}, el('span', { class: 'tag ' + p.kind, text: tag[p.kind] })),
-      el('td', { class: 'name' }, p.name ? highlighted(p.name, terms) : el('span', { class: 'dim', text: '(unnamed)' }),
+      el('td', { class: 'c-tag' }, el('span', { class: 'tag ' + p.kind, text: tag[p.kind] })),
+      el('td', { class: 'name c-name' }, p.name ? highlighted(p.name, terms) : el('span', { class: 'dim', text: '(unnamed)' }),
         p.hash === outbound ? el('span', { class: 'star', text: '  ★ outbound' }) : null,
         p.blocked ? el('span', { class: 'blocked-mark', text: '  ⛔ blocked' }) : null),
-      el('td', { class: 'mono dim' }, highlighted(p.hash, terms)),
-      el('td', { class: 'dim', text: p.last_seen ? `${p.hops} hop${p.hops === 1 ? '' : 's'}` : '' }),
-      el('td', { class: 'dim', text: p.last_seen ? ago(p.last_seen) + ' ago' : 'not heard' }),
-      el('td', { class: 'dim', text: p.via || '' }),
-      el('td', {}, el('div', { class: 'actions' },
+      el('td', { class: 'mono dim c-addr' }, highlighted(p.hash, terms)),
+      el('td', { class: 'dim c-hops', text: p.last_seen ? `${p.hops} hop${p.hops === 1 ? '' : 's'}` : '' }),
+      el('td', { class: 'dim c-heard', text: p.last_seen ? ago(p.last_seen) + ' ago' : 'not heard' }),
+      el('td', { class: 'dim c-via', text: p.via || '' }),
+      el('td', { class: 'c-actions' }, el('div', { class: 'actions' },
         p.kind === 'lxmf' && !p.blocked ? el('button', { text: 'Message', onclick: () => this.open(p) }) : null,
         p.kind === 'lxmf' ? el('button', { class: p.blocked ? '' : 'danger', text: p.blocked ? 'Unblock' : 'Block', onclick: async (e) => {
           e.stopPropagation();
@@ -6046,7 +6193,7 @@ app.views.network = {
     if (!this.heardBody) {
       this.heardBody = el('tbody');
       this.table.replaceChildren(el('table', { class: 'net-table heard-table' },
-        el('thead', {}, el('tr', {}, ['Heard', '', 'Name', 'Address', 'Hops', 'Via', ''].map((h) => el('th', { text: h })))), this.heardBody));
+        el('thead', {}, el('tr', {}, ['Heard', 'Kind', 'Name', 'Address', 'Hops', 'Via', 'Actions'].map((h) => el('th', {}, h === 'Kind' || h === 'Actions' ? el('span', { class: 'sr-only', text: h }) : h)))), this.heardBody));
       this.table.pinned = true;
       fresh = this.heard;
     }
@@ -6069,14 +6216,14 @@ app.views.network = {
       },
       ondblclick: () => opens && this.open(a),
     },
-    el('td', { class: 'dim', text: clockTime(new Date(a.at * 1000), true) }),
-    el('td', {}, el('span', { class: 'tag ' + a.kind, text: a.tag, title: a.aspect || 'A kind rettui doesn\'t know' })),
-    el('td', { class: 'name' }, a.name ? highlighted(a.name, terms) : el('span', { class: 'dim', text: '(unnamed)' }),
+    el('td', { class: 'dim c-heard', text: clockTime(new Date(a.at * 1000), true) }),
+    el('td', { class: 'c-tag' }, el('span', { class: 'tag ' + a.kind, text: a.tag, title: a.aspect || 'A kind rettui doesn\'t know' })),
+    el('td', { class: 'name c-name' }, a.name ? highlighted(a.name, terms) : el('span', { class: 'dim', text: '(unnamed)' }),
       a.software ? el('span', { class: 'dim', text: ` · ${a.software}`, title: 'What runs this propagation node' }) : null),
-    el('td', { class: 'mono dim' }, highlighted(a.hash, terms)),
-    el('td', { class: 'dim', text: `${a.hops} hop${a.hops === 1 ? '' : 's'}` }),
-    el('td', { class: 'dim', text: a.via || '' }),
-    el('td', {}, el('div', { class: 'actions' },
+    el('td', { class: 'mono dim c-addr' }, highlighted(a.hash, terms)),
+    el('td', { class: 'dim c-hops', text: `${a.hops} hop${a.hops === 1 ? '' : 's'}` }),
+    el('td', { class: 'dim c-via', text: a.via || '' }),
+    el('td', { class: 'c-actions' }, el('div', { class: 'actions' },
       opens ? el('button', { text: opens, onclick: () => this.open(a) }) : null,
       el('button', { text: 'Path', title: 'Find the path to it, or forget it', onclick: (e) => {
         e.stopPropagation();
@@ -6136,13 +6283,13 @@ app.views.browser = {
   mount(root) {
     this.tab = {};
     this.tabs = [this.tab];
-    this.tabStrip = el('div', { class: 'page-tabs hidden', role: 'tablist' });
+    this.tabStrip = el('div', { class: 'page-tabs hidden' });
     this.paneList = el('div', { class: 'scroll' });
     this.paneTabs = el('div', { class: 'subtabs' });
     this.search = el('input', {
       type: 'search',
       class: 'pane-search',
-      placeholder: 'Find by name or address  ( / )',
+      placeholder: 'Find by name or address', 'aria-label': 'Find by name or address', title: 'Find by name or address  ( / )', 'aria-keyshortcuts': '/',
       value: this.query,
       oninput: () => {
         this.query = this.search.value;
@@ -6164,7 +6311,7 @@ app.views.browser = {
     });
     this.address = el('input', {
       type: 'text',
-      placeholder: 'NomadNet address (hash:/page/index.mu)',
+      placeholder: 'Address: hash:/page/index.mu', title: 'A NomadNet address, such as hash:/page/index.mu  ( g )',
       onkeydown: (e) => {
         if (e.key === 'Enter') this.go(this.address.value);
       },
@@ -6179,11 +6326,11 @@ app.views.browser = {
         this.renderPage();
       } }),
       find: el('button', { text: 'Find', title: 'Find in the page (f)', onclick: () => this.openFind() }),
-      repos: el('button', { text: 'Keep repos', title: 'Keep every repository this page links to, in the Repos section',
+      repos: el('button', { class: 'tool', text: 'Keep repos', title: 'Keep every repository this page links to, in the Repos section',
         onclick: () => this.page && app.views.repos.keepLinked(this.page.source) }),
       newTab: el('button', { text: '+', 'data-label': 'New tab', 'aria-label': 'New tab', title: 'A new tab (T); Ctrl+click or middle-click a link opens it in one',
         onclick: () => this.newTab() }),
-      clear: el('button', { text: 'Clear cache', onclick: async () => {
+      clear: el('button', { class: 'tool', text: 'Clear cache', onclick: async () => {
         const result = await attempt(() => api.post('/cache/clear'));
         if (result) toast(`Cleared ${result.removed} cached page(s) and image(s)`);
       } }),
@@ -6208,7 +6355,7 @@ app.views.browser = {
       el('button', { text: '↓', title: 'Next (Enter)', onclick: () => this.find(1) }),
       el('button', { text: '×', title: 'Done (Esc)', onclick: () => this.closeFind() }));
     const tools = el('span', { class: 'more-tools' }, this.buttons.reload, this.buttons.save, this.buttons.identify, this.buttons.source, this.buttons.find, this.buttons.repos,
-      this.buttons.newTab, this.buttons.clear);
+      this.buttons.newTab, this.buttons.clear, toolsButton());
     root.append(
       el('section', { class: 'panel side' }, el('header', {}, this.paneTabs,
         el('button', { class: 'phone-only', text: 'Address…', onclick: () => {
@@ -6221,7 +6368,7 @@ app.views.browser = {
           // On a phone the page's buttons wait behind ⋯.
           el('button', { class: 'phone-only', text: '⋯', title: 'More', 'aria-label': 'More actions', onclick: (e) => {
             e.stopPropagation();
-            openSheet(this.page?.title || this.page?.url || 'Page', [...tools.children].filter((b) => !b.disabled)
+            openSheet(this.page?.title || this.page?.url || 'Page', [...tools.children].filter((b) => !b.disabled && !b.classList.contains('tools-button'))
               .map((b) => ({ text: b.dataset.label || b.textContent, action: () => b.click() })));
           } })),
         this.status, this.findBar, this.content));
@@ -6712,19 +6859,21 @@ app.views.browser = {
     const many = this.tabs.length > 1 || newTabs();
     this.tabStrip.classList.toggle('hidden', !many);
     if (!many) return this.tabStrip.replaceChildren();
-    this.tabStrip.replaceChildren(...this.tabs.map((tab) => {
+    // The tabs (each its name, to pick it, and ×), then + for a new one.
+    this.tabStrip.replaceChildren(el('div', { class: 'page-tab-list', role: 'group', 'aria-label': 'Open pages' }, this.tabs.map((tab) => {
       const shown = tab === this.tab;
       const page = shown ? this.page : tab.page;
       const loading = shown ? this.loading : tab.loading;
       const name = page ? pageName(page) : loading ? 'Loading…' : 'New tab';
-      return el('div', { class: 'page-tab' + (shown ? ' active' : ''), role: 'tab', 'aria-selected': String(shown), title: page?.url || '',
+      return el('div', { class: 'page-tab' + (shown ? ' active' : ''), title: page?.url || '',
         onclick: () => this.showTab(tab), onauxclick: (e) => e.button === 1 && this.closeTab(tab) },
-      el('span', { class: 'page-tab-name', text: (loading ? '⟳ ' : '') + name }),
+      el('span', { class: 'page-tab-name', role: 'button', tabindex: '0', 'aria-current': shown ? 'page' : null, text: (loading ? '⟳ ' : '') + name,
+        onkeydown: (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), this.showTab(tab)) }),
       el('button', { class: 'page-tab-close', text: '×', title: 'Close tab (W)', 'aria-label': `Close ${name}`, onclick: (e) => {
         e.stopPropagation();
         this.closeTab(tab);
       } }));
-    }), el('button', { class: 'page-tab-new', text: '+', title: 'New tab (T)', 'aria-label': 'New tab', onclick: () => this.newTab() }));
+    })), el('button', { class: 'page-tab-new', text: '+', title: 'New tab (T)', 'aria-label': 'New tab', onclick: () => this.newTab() }));
   },
 
   // Links carry their target in data-url and the fields they submit in
@@ -6996,7 +7145,7 @@ app.views.node = {
     this.card = el('div', { class: 'hub-info node-card' });
     this.hostButton = el('button', { onclick: () => this.toggleHosting() });
     this.list = el('div', { class: 'scroll' });
-    this.title = el('span', { class: 'title grow' });
+    this.title = el('h2', { class: 'title grow' });
     this.buttons = el('div', { class: 'row' });
     this.banner = el('div', { class: 'banner hidden' });
     this.text = el('textarea', {
@@ -7054,10 +7203,10 @@ app.views.node = {
     applyWrap(this.text);
     root.append(
       el('div', { class: 'column side' },
-        el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Hosting' })), this.card,
+        el('section', { class: 'panel' }, el('header', {}, el('h2', { class: 'title grow', text: 'Hosting' })), this.card,
           el('div', { class: 'row card-actions' }, this.hostButton,
             el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/node/announce'), 'Announcing the node') }))),
-        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Pages and files' }),
+        el('section', { class: 'panel grow' }, el('header', {}, el('h2', { class: 'title grow', text: 'Pages and files' }),
           el('button', { text: '+ New', title: 'A new page, or a file uploaded', onclick: () => this.create() })), this.list)),
       el('section', { class: 'panel grow pane-main' },
         el('header', {}, this.title, this.buttons),
@@ -7151,14 +7300,14 @@ app.views.node = {
       label('Name'), el('span', { text: node.name }),
       label('Served'), el('span', { text: node.served.label }),
       label('Requests'), el('span', { text: [String(node.served.requests), node.served.not_found ? `${node.served.not_found} not found` : null,
-        node.served.last ? `last ${new Date(node.served.last * 1000).toLocaleString()}` : null,
+        node.served.last ? `last ${dateTime(node.served.last)}` : null,
         node.stats?.visitors ? `${node.stats.visitors} identified ${node.stats.visitors === 1 ? 'visitor' : 'visitors'} since start` : null].filter(Boolean).join(' · ') }),
-      label('Since'), el('span', { class: 'row' }, el('span', { class: 'dim', text: new Date(node.served.since * 1000).toLocaleString() }),
+      label('Since'), el('span', { class: 'row' }, el('span', { class: 'dim', text: dateTime(node.served.since) }),
         el('button', { text: 'Reset', title: 'Count what the node serves again from now', onclick: async () => {
           if (!await ask('Reset the node\'s statistics?\nThe counts start again from now.', { title: 'Reset statistics', yes: 'Reset', danger: true })) return;
           if (await attempt(() => api.post('/node/stats/reset'), 'The node\'s statistics were reset')) this.update();
         } })),
-      label('Folder'), el('span', { class: 'mono dim', text: node.dir }));
+      label('Folder'), pathText(node.dir));
     if (node.list_error) {
       this.list.replaceChildren(el('div', { class: 'empty state-bad', text: node.list_error }));
       return;
@@ -7244,7 +7393,7 @@ app.views.node = {
     rows.push(folderRow('files', '', 0));
     if (node.files.length) tree('files', node.files, '', 1);
     else rows.push(el('div', { class: 'empty', text: 'No files to download yet: + New uploads them, as does Upload in a page\'s formatting bar.' }));
-    this.list.replaceChildren(...rows);
+    refill(this.list, ...rows);
   },
 
   // Where pages find something: a page, a picture, a file to download.
@@ -7514,8 +7663,10 @@ app.views.node = {
     this.text.readOnly = !!open?.executable;
     this.banner.classList.toggle('hidden', !open?.executable);
     this.banner.textContent = 'This page is a script. Scripts can only be changed on the host, not from the web UI.';
-    this.split.className = 'editor-split view-' + this.view;
+    // Nothing open: the hint alone, not an empty editor beside an empty preview.
+    this.split.className = 'editor-split view-' + this.view + (open ? '' : ' nothing-open');
     this.ribbon.classList.toggle('hidden', !open || !!open.executable || this.view === 'preview');
+    this.viewButtons.classList.toggle('hidden', !open);
     this.viewButtons.replaceChildren(...PAGE_VIEWS.map(([view, label]) => el('button', {
       text: label, class: view === this.view ? 'active' : '', onclick: () => this.setView(view),
     })));
@@ -7593,10 +7744,10 @@ app.views.status = {
     this.revertButton = el('button', { text: 'Revert', disabled: true, onclick: () => this.loadSettings(true) });
     this.settingsFooter = el('div', { class: 'settings-footer dim' });
     this.interfaces = el('div', { class: 'scroll' });
-    this.log = el('div', { class: 'scroll log' });
+    this.log = el('div', { class: 'scroll log', tabindex: '0', 'aria-label': 'Log' });
     root.append(
       el('div', { class: 'column grow' },
-        el('section', { class: 'panel', style: 'max-height:55%' }, el('header', {}, el('span', { class: 'title grow', text: 'Identity' }),
+        el('section', { class: 'panel', style: 'max-height:55%' }, el('header', {}, el('h2', { class: 'title grow', text: 'Identity' }),
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
           this.syncButton = el('button', { text: 'Sync now', onclick: () => (app.status?.sync.state === 'running'
             ? attempt(() => api.post('/sync/cancel'), 'Stopping the sync')
@@ -7604,7 +7755,7 @@ app.views.status = {
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
           el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }),
           el('button', { class: 'more danger', text: 'Stop rettui', title: 'Save everything and close rettui', onclick: () => stopRettui() }), moreButton()), this.info),
-        el('section', { class: 'panel grow settings-panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Settings' }),
+        el('section', { class: 'panel grow settings-panel' }, el('header', {}, el('h2', { class: 'title grow', text: 'Settings' }),
           this.revertButton, this.saveButton), this.sectionTabs, el('div', { class: 'scroll' }, this.form, this.settingsFooter))),
       el('div', { class: 'column', style: 'width:42%' },
         el('section', { class: 'panel', style: 'max-height:40%' }, el('header', { text: 'Interfaces' }), this.interfaces),
@@ -7881,7 +8032,7 @@ app.views.status = {
       label('Known'), el('span', { text: `${s.known} destinations` }),
       label('Notifications'), notifications.describe(),
       label('Theme'), el('select', { title: 'This browser\'s colours', onchange: (e) => theme.set(e.target.value) },
-        [['dark', 'Dark'], ['light', 'Light'], ['auto', 'As the device is set']]
+        [['auto', 'As the device is set'], ['dark', 'Dark'], ['light', 'Light']]
           .map(([value, text]) => el('option', { value, text, selected: value === theme.chosen() }))),
       // A link shared too widely, or a lost phone: everyone else out.
       label('Browsers'), el('div', { class: 'row' },
@@ -7962,7 +8113,7 @@ app.views.hub = {
     this.card = el('div', { class: 'hub-info hosted-hub' });
     this.hostButton = el('button', { onclick: () => this.toggle() });
     this.announceButton = el('button', { text: 'Announce', title: 'Announce the hub now (it does every so often by itself)', onclick: () => this.act('announce') });
-    this.replies = el('div', { class: 'scroll hub-replies', dataset: { stick: 'bottom' } });
+    this.replies = el('div', { class: 'scroll hub-replies', tabindex: '0', 'aria-label': 'What the hub said', dataset: { stick: 'bottom' } });
     this.command = el('input', {
       type: 'text', class: 'grow mono', placeholder: '/stats, /kline list, /who lobby…', spellcheck: false,
       onkeydown: (e) => {
@@ -7977,10 +8128,10 @@ app.views.hub = {
     }, 300));
     root.append(
       el('div', { class: 'column side' },
-        el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Hosting' })), this.card,
+        el('section', { class: 'panel' }, el('header', {}, el('h2', { class: 'title grow', text: 'Hosting' })), this.card,
           el('div', { class: 'row card-actions' }, this.hostButton, this.announceButton,
             el('button', { class: 'phone-only', text: 'People and rooms', onclick: () => setPane(this, 'detail') }))),
-        el('section', { class: 'panel grow' }, el('header', {}, el('span', { class: 'title grow', text: 'Console' })),
+        el('section', { class: 'panel grow' }, el('header', {}, el('h2', { class: 'title grow', text: 'Console' })),
           this.replies,
           el('div', { class: 'row hub-command' }, this.command, el('button', { text: 'Run', onclick: () => this.run() })))),
       el('section', { class: 'panel grow pane-main' },
@@ -8015,9 +8166,9 @@ app.views.hub = {
       label('People'), el('span', { text: people }),
       label('Rooms'), el('span', { text: `${hub.rooms.length} (${hub.rooms.filter((r) => r.registered).length} registered)` }),
       label('Messages'), el('span', { text: `${hub.stats.messages} · ${hub.stats.joins} joins` }),
-      label('Traffic'), el('span', { text: `↓ ${humanBytes(hub.stats.bytes_in)} · ↑ ${humanBytes(hub.stats.bytes_out)}` }),
+      label('Traffic'), el('span', { text: `↓\u00a0${humanBytes(hub.stats.bytes_in)} · ↑\u00a0${humanBytes(hub.stats.bytes_out)}` }),
       label('Rooms by'), el('span', { text: hub.open_rooms ? 'anyone (joining one makes it)' : 'you only' }),
-      label('Folder'), el('span', { class: 'mono dim', text: hub.dir }));
+      label('Folder'), pathText(hub.dir));
     // What the hub said: new replies are said too.
     if (this.replied !== null && hub.replied > this.replied && hub.replies.length) {
       const newest = hub.replies[hub.replies.length - 1];
@@ -8122,7 +8273,7 @@ app.views.hub = {
   pageHead(back, title, ...buttons) {
     return el('div', { class: 'hub-page-head' },
       el('button', { text: '← ' + back, onclick: () => this.show(this.showing) }),
-      el('span', { class: 'title grow', text: title }), ...buttons);
+      el('h2', { class: 'title grow', text: title }), ...buttons);
   },
 
   // A setting: its name, what changes it, and what it does.
@@ -8405,7 +8556,7 @@ app.views.repos = {
     this.body = el('div', { class: 'scroll repo-body' });
     root.append(
       el('section', { class: 'panel side' },
-        el('header', {}, el('span', { class: 'title grow phone-hidden', text: 'Repos' }),
+        el('header', {}, el('h2', { class: 'title grow phone-hidden', text: 'Repos' }),
           el('button', { class: 'phone-hidden', text: '+ Add', title: 'Add a repository by its rns:// URL  ( n )', onclick: () => this.add() })),
         this.list),
       el('section', { class: 'panel grow pane-main' }, this.header, this.body),
@@ -8449,7 +8600,7 @@ app.views.repos = {
         }
       }
       if (items.length === 1) items.push(el('div', { class: 'empty', text: 'No repositories yet. Add one by its rns:// URL; a link to one in a message or page opens it. rngit nodes show here when they announce.' }));
-      this.list.replaceChildren(...items);
+      refill(this.list, ...items);
     }
     this.render();
   },
@@ -8677,7 +8828,7 @@ app.views.repos = {
     const running = hosted?.state === 'running';
     this.header.replaceChildren(
       el('button', { class: 'phone-only', text: '‹', title: 'Back to the list', onclick: () => setPane(this, 'list') }),
-      el('span', { class: 'title', text: 'Hosted here' }),
+      el('h2', { class: 'title', text: 'Hosted here' }),
       running && hosted.url ? el('span', { class: 'mono dim phone-hidden', text: hosted.url }) : null,
       el('span', { class: 'grow' }),
       running ? el('button', { text: 'Mirror', title: 'Mirror a repository from rns:// or https://', onclick: () => this.follow('mirror') }) : null,
@@ -8721,7 +8872,7 @@ app.views.repos = {
     if (this.hosting) return this.renderHosted();
     const repo = this.url && repoUrl(this.url);
     if (!repo) {
-      this.header.replaceChildren(el('span', { class: 'title', text: 'Repository' }));
+      this.header.replaceChildren(el('h2', { class: 'title', text: 'Repository' }));
       this.body.replaceChildren(el('div', { class: 'empty', text: 'Pick a repository, or add one by its URL. A node doesn\'t list its repositories: you need the URL, from its owner or its NomadNet page.' }));
       return;
     }
@@ -8738,7 +8889,7 @@ app.views.repos = {
     })));
     this.header.replaceChildren(
       el('button', { class: 'phone-only', text: '‹', title: 'Back to the list', onclick: () => setPane(this, 'list') }),
-      el('span', { class: 'title', text: `${repo.group}/${repo.repo}`, title: this.url }),
+      el('h2', { class: 'title', text: `${repo.group}/${repo.repo}`, title: this.url }),
       this.tabs, el('span', { class: 'grow' }),
       el('button', { text: 'Copy URL', onclick: () => copy(this.url, 'the repository\'s URL') }),
       el('button', { text: '↻', title: 'Ask the node again', onclick: () => this.reload() }));
@@ -9103,7 +9254,7 @@ app.views.reticulum = {
     this.sections = el('div', { class: 'scroll' });
     this.fileCard = el('div', { class: 'rns-file' });
     this.addForm = el('div', { class: 'rns-add hidden' });
-    this.title = el('span', { class: 'title grow' });
+    this.title = el('h2', { class: 'title grow' });
     this.buttons = el('div', { class: 'row' });
     this.form = el('div', { class: 'settings' });
     this.formScroll = el('div', { class: 'scroll' }, this.form);
@@ -9126,10 +9277,10 @@ app.views.reticulum = {
     applyWrap(this.text);
     root.append(
       el('div', { class: 'column side' },
-        el('section', { class: 'panel' }, el('header', {}, el('span', { class: 'title grow', text: 'Config file' }),
+        el('section', { class: 'panel' }, el('header', {}, el('h2', { class: 'title grow', text: 'Config file' }),
           el('button', { text: 'Restart', title: 'Restart Reticulum, to apply saved changes now', onclick: () => restartReticulum() })), this.fileCard),
         el('section', { class: 'panel grow' },
-          el('header', {}, el('span', { class: 'title grow', text: 'Sections' }),
+          el('header', {}, el('h2', { class: 'title grow', text: 'Sections' }),
             IN_ANDROID_APP ? androidRNodesButton() : null,
             el('button', { text: '+ Interface', onclick: () => this.showAdd() })),
           this.addForm, this.sections)),

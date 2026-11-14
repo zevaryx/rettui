@@ -13,6 +13,21 @@ pub fn normalize_nick(nick: &str, max_bytes: usize) -> Option<String> {
     (!nick.is_empty() && nick.len() <= max_bytes && !nick.contains(['\n', '\r', '\0'])).then(|| nick.to_string())
 }
 
+/// A display name as a nick: cut to the hub's limit (at a character, not
+/// in the middle of one) rather than left out, so a long name still gives
+/// one. `None` only when nothing is left.
+pub fn nick_from_name(name: &str, max_bytes: usize) -> Option<String> {
+    let name = name.lines().next().unwrap_or_default().trim();
+    let mut end = 0;
+    for (at, c) in name.char_indices() {
+        if at + c.len_utf8() > max_bytes {
+            break;
+        }
+        end = at + c.len_utf8();
+    }
+    normalize_nick(&name[..end], max_bytes)
+}
+
 fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
@@ -189,6 +204,17 @@ pub fn parse_link(link: &str) -> Option<(crate::net::Hash, String, Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_display_name_is_cut_to_a_nick() {
+        assert_eq!(nick_from_name("Zeva", 32).as_deref(), Some("Zeva"));
+        assert_eq!(nick_from_name("Bartholomew Longname-Station (portable)", 32).as_deref(), Some("Bartholomew Longname-Station (po"));
+        // Not in the middle of a character, nor ending in a space.
+        assert_eq!(nick_from_name("Ünïcødé", 4).as_deref(), Some("Ün"));
+        assert_eq!(nick_from_name("ab cd", 3).as_deref(), Some("ab"));
+        assert_eq!(nick_from_name("first\nsecond", 32).as_deref(), Some("first"));
+        assert_eq!(nick_from_name("   ", 32), None);
+    }
 
     #[test]
     fn mentions_and_splitting() {

@@ -2,7 +2,8 @@
 //! pages and files (`<node>:/page/index.mu`, also after `nomadnetwork://`),
 //! LXMF addresses (`lxmf@<address>`, `lxmf://<address>`, and `lxma://`
 //! links with a public key), RRC hubs (`rrc://<hub>/room`, `rrc@<hub>`)
-//! and rngit repositories (`rns://<node>/<group>/<repo>`).
+//! rngit repositories (`rns://<node>/<group>/<repo>`) and web pages
+//! (`https://…`, `http://…`).
 //!
 //! A bare hash isn't linked: it could be any destination. What a link ends
 //! with is trimmed of the punctuation a sentence puts after it. The web UI
@@ -19,6 +20,8 @@ pub enum LinkKind {
     Rrc,
     /// An rngit repository, in the Repos tab.
     Git,
+    /// A web page, in the computer's browser.
+    Web,
 }
 
 /// A link found in some text.
@@ -81,6 +84,16 @@ fn run_end(text: &str, at: usize, min: usize) -> usize {
 
 fn link_at(text: &str, at: usize) -> Option<Found> {
     let found = |end: usize, kind: LinkKind, url: &str| Some(Found { start: at, end, kind, url: url.to_string() });
+    // A web page, with a host.
+    for prefix in ["https://", "http://"] {
+        if has_prefix(text, at, prefix) {
+            let host = at + prefix.len();
+            let end = run_end(text, host, host);
+            let authority = text[host..end].split(['/', '?', '#']).next().unwrap_or_default();
+            let has_host = authority.rsplit('@').next().is_some_and(|h| !h.is_empty());
+            return if has_host { found(end, LinkKind::Web, &text[at..end]) } else { None };
+        }
+    }
     // RRC: a hub, maybe its aspect, maybe a room.
     for prefix in ["rrc://", "rrc@"] {
         if has_prefix(text, at, prefix) {
@@ -158,6 +171,11 @@ mod tests {
                 (LinkKind::Git, format!("rns://{NODE}/public/demo.git")),
             ]
         );
+        // Web pages, without the punctuation after them.
+        assert_eq!(
+            urls("Docs at https://reticulum.network/manual/ and (http://example.com:8080/a?b=1#c)."),
+            [(LinkKind::Web, "https://reticulum.network/manual/".into()), (LinkKind::Web, "http://example.com:8080/a?b=1#c".into())]
+        );
         // Where each is, as written (with nomadnetwork://).
         let second = &find(&text)[1];
         assert_eq!(&text[second.start..second.end], format!("nomadnetwork://{NODE}:/file/manual.pdf"));
@@ -183,6 +201,10 @@ mod tests {
             format!("rns://{NODE}/onlygroup"),
             format!("rns://{NODE}/a/b/c"),
             format!("rns://{NODE}/../demo"),
+            "https://".to_string(),
+            "http:///path".to_string(),
+            "https://me@/x".to_string(),
+            "xhttps://example.com".to_string(),
         ] {
             assert!(find(&text).is_empty(), "{text}");
         }

@@ -22,4 +22,7 @@ pub use hub::{
     Limits, ResourceAnnouncement, Welcome, WhoEntry, hello_body, parse_resource_envelope, parse_room_info, parse_room_list,
     parse_room_list_more, parse_topic, parse_user_list, parse_welcome, parse_who,
 };
-pub use text::{complete_names, mention_prefix, mention_ranges, normalize_nick, normalize_room, parse_link, split_message, user_mentions};
+pub use text::{
+    complete_names, mention_prefix, mention_ranges, nick_from_name, normalize_nick, normalize_room, parse_link, split_message,
+    user_mentions,
+};
