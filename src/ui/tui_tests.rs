@@ -44,7 +44,14 @@ impl Tui {
     pub fn draw(&mut self) -> String {
         self.terminal.draw(|frame| super::draw(frame, &mut self.app)).unwrap();
         let buffer = self.terminal.backend().buffer();
-        (0..HEIGHT).map(|y| (0..WIDTH).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+        let area = buffer.area;
+        (0..area.height).map(|y| (0..area.width).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
+    }
+
+    /// The terminal made `width` by `height`, and the screen drawn.
+    pub fn resize(&mut self, width: u16, height: u16) -> String {
+        self.terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        self.draw()
     }
 
     /// The screen's cells as last drawn, for their colours and styles.
@@ -2518,4 +2525,50 @@ fn every_tab_in_the_light_and_basic_themes() {
             }
         }
     }
+}
+
+/// The Status and Reticulum tabs at 80×24 and at 200×50: help seen whole,
+/// the config file's path kept, and a tall terminal's rows going to the
+/// interfaces and the log rather than to empty settings.
+#[test]
+fn status_and_reticulum_on_small_and_large_terminals() {
+    let mut tui = Tui::new("sizes-status");
+    tui.tab(Tab::Status);
+    let screen = tui.resize(80, 24);
+    assert!(screen.contains("Name sent in your LXMF announces (and your RRC nick") && screen.contains(" its own)"), "{screen}");
+    let screen = tui.resize(200, 50);
+    let rows: Vec<&str> = screen.lines().collect();
+    let log = rows.iter().position(|r| r.contains("╭ Log")).unwrap();
+    assert!(rows.len() - log > 15, "the log is {} rows:\n{screen}", rows.len() - log);
+    // The settings box is as tall as its group, not the largest group.
+    let settings = rows.iter().position(|r| r.contains("╭ Settings")).unwrap();
+    assert!(log - settings <= tui.app.section_fields().len() + 5, "{screen}");
+
+    tui.tab(Tab::Reticulum);
+    let screen = tui.resize(80, 24);
+    assert!(screen.contains("rns/config") && screen.contains("not created yet"), "{screen}");
+    assert!(screen.contains("╰ ? lists the keys ─") && screen.contains("to apply ch…"), "{screen}");
+}
+
+/// Panes with nothing in them yet say what goes there, and a value too long
+/// for its box is cut with an ellipsis, at 80×24.
+#[test]
+fn empty_panes_and_cut_values_at_80_columns() {
+    let mut tui = Tui::new("empty-panes");
+    let screen = tui.resize(80, 24);
+    assert!(screen.contains("Your messages show here") && !screen.contains("╭  ─"), "{screen}");
+    with_bob(&mut tui);
+    assert!(tui.draw().contains("Pick a conversation"));
+    tui.tab(Tab::Games);
+    assert!(tui.draw().contains("A game's board shows here"));
+    tui.tab(Tab::Browser);
+    let screen = tui.draw();
+    assert!(screen.contains("No page open") && screen.contains("g or click: enter an address"), "{screen}");
+    tui.tab(Tab::Hub);
+    assert!(tui.draw().contains("Pick someone above"));
+    // The node's folder is a long temporary path: cut, and saying so.
+    tui.tab(Tab::Node);
+    let screen = tui.draw();
+    let folder = screen.lines().find(|l| l.contains("Folder")).unwrap();
+    assert!(folder.contains("…│"), "{screen}");
 }

@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim, human_bytes, selected_bg, wrap};
@@ -117,7 +117,7 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = settings_block.inner(area);
     frame.render_widget(settings_block, area);
     let [tabs_row, list_area, help_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(2)]).areas(inner);
     // The groups: their names, or shorter ones when those don't fit.
     let full: usize = Section::ALL.iter().map(|s| s.title().width() + 3).sum();
     let short = full > tabs_row.width as usize;
@@ -168,30 +168,31 @@ fn draw_settings(frame: &mut Frame, app: &mut App, area: Rect) {
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).bold());
     frame.render_stateful_widget(list, list_area, &mut app.settings_list);
     let help = app.settings_list.selected().and_then(|i| fields.get(i)).map_or("", |f| f.help);
-    frame.render_widget(Paragraph::new(Span::styled(format!(" {help}"), Style::default().fg(dim()).italic())), help_area);
+    // Two rows, so most help is seen whole on an 80-column terminal.
+    let help = Paragraph::new(Span::styled(help, Style::default().fg(dim()).italic())).wrap(Wrap { trim: true });
+    frame.render_widget(help, Rect { x: help_area.x + 1, width: help_area.width.saturating_sub(1), ..help_area });
 }
 
 pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.identities_view.is_some() {
         return draw_identities(frame, app, area);
     }
-    // The largest group, its tabs, its help and the box.
-    let settings_height = Section::ALL.iter().map(|s| s.fields().count()).max().unwrap_or(0) as u16 + 4;
+    // The shown group, its tabs, its two rows of help and the box.
+    let settings_height = app.section_fields().len() as u16 + 5;
     let steps = app.first_steps();
-    // The settings list scrolls, so it may give way on short terminals.
-    let [info, settings, rest] = Layout::vertical([
-        Constraint::Length(
-            12 + u16::from(!steps.is_empty())
-                + u16::from(app.update_available().is_some())
-                + u16::from(app.hub.status != NodeStatus::Off)
-                + u16::from(app.git_host.status != NodeStatus::Off)
-                + u16::from(app.rncp_in.status != crate::app::rncp_in::Listening::Off)
-                + u16::from(app.node.status == NodeStatus::Running),
-        ),
-        Constraint::Max(settings_height),
-        Constraint::Min(5),
-    ])
-    .areas(area);
+    let info_height = 12
+        + u16::from(!steps.is_empty())
+        + u16::from(app.update_available().is_some())
+        + u16::from(app.hub.status != NodeStatus::Off)
+        + u16::from(app.git_host.status != NodeStatus::Off)
+        + u16::from(app.rncp_in.status != crate::app::rncp_in::Listening::Off)
+        + u16::from(app.node.status == NodeStatus::Running);
+    // The settings list scrolls, so it gives way on short terminals, keeping
+    // five rows for the interfaces and the log; those get every row the
+    // shown group doesn't need, as they're what keeps changing.
+    let settings_height = settings_height.min(area.height.saturating_sub(info_height + 5));
+    let [info, settings, rest] =
+        Layout::vertical([Constraint::Length(info_height), Constraint::Length(settings_height), Constraint::Fill(1)]).areas(area);
     draw_settings(frame, app, settings);
     let [ifaces, log] = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(rest);
 

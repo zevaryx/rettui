@@ -61,6 +61,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![label("Traffic"), Span::raw(format!("↓ {} · ↑ {}", human_bytes(stats.bytes_in), human_bytes(stats.bytes_out)))]),
         Line::from(vec![label("Folder"), Span::styled(app.paths.rrc_hub.display().to_string(), Style::default().fg(dim()))]),
     ];
+    let lines = super::fit_lines(lines, area.width.saturating_sub(2) as usize);
     frame.render_widget(Paragraph::new(lines).block(block("Hosting", false)), area);
 }
 
@@ -270,6 +271,17 @@ fn draw_details(frame: &mut Frame, app: &App, area: Rect) {
             ),
             None => ("Ban".into(), Vec::new()),
         },
+    };
+    // Nothing picked: what would show here, and where it comes from.
+    let lines = if lines.is_empty() {
+        let hint = match hub.pane {
+            HubPane::People => "Pick someone above to see who they are and what they're in. People show there once they connect.",
+            HubPane::Rooms => "Pick a room above to see its topic, modes and who's in it.",
+            HubPane::Bans => "Pick a ban above to see who it's for, and to lift it.",
+        };
+        vec![Line::styled(hint, Style::default().fg(dim()))]
+    } else {
+        lines
     };
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block(&title, false)), area);
 }
