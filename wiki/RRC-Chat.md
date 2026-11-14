@@ -59,10 +59,11 @@ host. rettui works with each of them, as they differ (see
   joins and leaves" under Status), and hiding them loses nothing: they come
   back when turned on again. The [Android app](Android) starts with them
   hidden.
-- **Times and dates:** each line shows the date it was said with its time
-  (as the *Dates* and *Clock* settings write them; the year too, for
-  another year's). `D` (TUI), or "Dates on chat lines" under Status, shows
-  the time alone instead.
+- **Times and dates:** each line shows the time it was said, and a line
+  from an earlier day its date too (as the *Dates* and *Clock* settings
+  write them; the year too, for another year's). `D` (TUI), or "Dates on
+  chat lines" under Status, shows the time alone instead. In a narrow
+  terminal the seconds are left out.
 - **How much is kept:** the newest 500 messages of each room and whisper
   conversation, also across restarts: "Chat messages kept" (Status ›
   Messages, `rrc_messages_kept`, 50 to 100000) says how many, and when it

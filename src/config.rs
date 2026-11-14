@@ -1413,7 +1413,7 @@ pub const FIELDS: &[Field] = &[
     Field {
         key: "chat_dates",
         label: "Dates on chat lines",
-        help: "Show the date with the time of each line in RRC rooms and whispers (as the Dates setting writes it), not only the time. D toggles it in the terminal UI's Channels tab",
+        help: "Show the date with the time of lines from earlier days in RRC rooms and whispers (as the Dates setting writes it), not only the time. D toggles it in the terminal UI's Channels tab",
         kind: FieldKind::Toggle,
         effect: Effect::Now,
     },

@@ -2594,3 +2594,52 @@ fn popups_on_a_small_terminal() {
     let screen = tui.resize(50, 16);
     assert!(screen.contains("… more in a bigger terminal"), "{screen}");
 }
+
+/// Messages in a row from the same side share a heading; a chat line from
+/// today shows its time alone, and a narrow room leaves out the seconds.
+#[test]
+fn messages_in_a_row_and_chat_times() {
+    use crate::store::{Conversation, Message, MessageState};
+    let mut tui = Tui::new("grouped");
+    let at = crate::app::now() - 600.0;
+    let received = MessageState::Received { verified: true };
+    let message = |id: &str, content: &str, at: f64| Message {
+        id: id.repeat(64),
+        incoming: true,
+        content: content.into(),
+        timestamp: at,
+        state: received.clone(),
+        ..Message::default()
+    };
+    let messages = vec![message("a", "first", at), message("b", "second", at + 30.0), message("c", "much later", at + 400.0)];
+    tui.app.store.conversations.insert(BOB.into(), Conversation { messages, ..Conversation::default() });
+    tui.app.store.contacts.entry(BOB.into()).or_default().alias = Some("Bob".into());
+    tui.app.open_newest_conversation();
+    let screen = tui.draw();
+    let rows: Vec<&str> = screen.lines().collect();
+    let first = rows.iter().position(|r| r.contains("first")).unwrap();
+    assert!(rows[first + 1].contains("second"), "{screen}");
+    assert_eq!(screen.matches("│ Bob  ").count(), 2, "{screen}");
+    // A click on the second (which has no heading) picks it.
+    let x = rows[first + 1].find("second").unwrap();
+    let x = rows[first + 1][..x].chars().count() as u16;
+    tui.click(x, (first + 1) as u16);
+    assert_eq!(tui.app.picked_message().map(|(i, _)| i), Some(1));
+
+    tui.settle();
+    let mut tui = Tui::new("chat-times");
+    with_hilltop(&mut tui);
+    let hub = &mut tui.app.channels.hubs[0];
+    let now = (crate::app::now() * 1000.0) as u64;
+    let today: Vec<crate::app::channels::ChatLine> = serde_json::from_value(
+        serde_json::json!([{ "kind": "Msg", "nick": "carol", "src": hex::encode(CAROL), "text": "today's", "ts": now }]),
+    )
+    .unwrap();
+    hub.buffers.get_mut("lobby").unwrap().extend(today);
+    let screen = tui.draw();
+    let row = screen.lines().find(|r| r.contains("today's")).unwrap();
+    assert!(!row.contains(&crate::clock::day(&chrono::Local::now())), "today's line has no date:\n{screen}");
+    assert!(screen.contains("2027"), "an earlier day's line keeps its date:\n{screen}");
+    let screen = tui.resize(80, 24);
+    assert!(!screen.contains("08:00:00"), "no seconds when narrow:\n{screen}");
+}

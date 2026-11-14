@@ -15,6 +15,10 @@ MeshChat, NomadNet and other LXMF clients).
   In the web UI, drafts also outlive reloading the page (which phones do to
   pages left in the background) and restarting rettui: their text, and
   what they reply to, are kept in that browser. Files attached aren't.
+- **Messages in a row:** in the TUI, messages from the same side sent
+  within five minutes of each other show under one heading, without a gap,
+  as chat apps do. Each starts a new heading again when its state, its
+  signal or a reply sets it apart.
 - **Message states:** your messages show *sending…*, ✓ (delivered), *✓ via
   propagation node*, *cancelled*, or *failed* with the reason. While one is
   being sent, *sending…* says how it's going: finding a path, working out
