@@ -497,6 +497,10 @@ header .avatar.icon { font-size: 17px; }
 .board.ttt { display: grid; grid-template-columns: repeat(3, 72px); grid-template-rows: repeat(3, 72px); gap: 4px; }
 .board.ttt .cell { font-size: 34px; font-weight: 700; border-radius: 6px; }
 .board.ttt .cell:not(:disabled):hover { border-color: var(--accent); }
+/* On a phone the board fills the width, rather than staying at 72px a cell. */
+@media (max-width: 480px) {
+  .board.ttt { grid-template-columns: repeat(3, min(96px, calc((100vw - 64px) / 3))); grid-template-rows: repeat(3, min(96px, calc((100vw - 64px) / 3))); }
+}
 .board.four { display: flex; gap: 2px; padding: 6px; border-radius: 8px; background: var(--raised); }
 .board.four .column { display: flex; flex-direction: column; gap: 4px; padding: 3px; background: none; border: 1px solid transparent; border-radius: 6px; }
 .board.four.playing .column:hover { border-color: var(--accent); }
@@ -545,9 +549,12 @@ header .avatar.icon { font-size: 17px; }
 .board.reversi .point.last { background: #4f8a4a; }
 .board.reversi .point.open::after { content: ''; width: 20%; height: 20%; border-radius: 50%; background: #fff6; }
 .board.reversi .point.open:hover { background: #3b7f48; }
-.board.dots { --gap: min(9vw, 44px); display: grid; grid-template-columns: repeat(5, 10px var(--gap)) 10px; grid-template-rows: repeat(5, 10px var(--gap)) 10px; padding: 6px; }
+.board.dots { --gap: clamp(20px, calc((100vw - 110px) / 5), 44px); display: grid; grid-template-columns: repeat(5, 10px var(--gap)) 10px; grid-template-rows: repeat(5, 10px var(--gap)) 10px; padding: 6px; }
 .board.dots .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text); }
-.board.dots .line { border: 0; border-radius: 3px; background: transparent; margin: 2px; }
+.board.dots .line { border: 0; border-radius: 3px; background: transparent; margin: 2px; position: relative; }
+/* The line is thin: its touch area reaches past it, to the dots' gap on either side. */
+.board.dots .line.across::after { content: ''; position: absolute; inset: -9px 0; }
+.board.dots .line.down::after { content: ''; position: absolute; inset: 0 -9px; }
 .board.dots .line.across { margin: 2px 1px; }
 .board.dots .line.down { margin: 1px 2px; }
 .board.dots.playing .line:not(.drawn):hover { background: var(--dim); }
@@ -562,7 +569,7 @@ header .avatar.icon { font-size: 17px; }
 .board.go .point:not(:disabled):hover, .board.pente .point:not(:disabled):hover { background-color: #e6c587; }
 .board.go .point.last .stone, .board.pente .point.last .stone { outline: 2px solid var(--accent); outline-offset: 1px; }
 .board.ultimate { display: grid; grid-template-columns: repeat(3, auto); gap: 6px; padding: 6px; border-radius: 8px; background: var(--raised); }
-.board.ultimate .small { --cell: min(3.6vw, 30px); display: grid; grid-template-columns: repeat(3, var(--cell)); grid-template-rows: repeat(3, var(--cell)); gap: 1px; padding: 2px; border: 2px solid var(--border); border-radius: 6px; }
+.board.ultimate .small { --cell: clamp(14px, calc((100vw - 90px) / 9), 30px); display: grid; grid-template-columns: repeat(3, var(--cell)); grid-template-rows: repeat(3, var(--cell)); gap: 1px; padding: 2px; border: 2px solid var(--border); border-radius: 6px; }
 .board.ultimate .small.won { background: color-mix(in srgb, currentColor 18%, transparent); }
 .board.ultimate .small.won.mine { border-color: var(--accent); }
 .board.ultimate .small.won.theirs { border-color: var(--yellow); }
@@ -571,8 +578,8 @@ header .avatar.icon { font-size: 17px; }
 .board.ultimate .cell.open { box-shadow: inset 0 0 0 2px var(--accent); }
 .board.ultimate .cell.open:hover { background: var(--raised); }
 .board.ultimate .cell.last { outline: 2px solid var(--text); outline-offset: 1px; }
-.board.squares { --sq: min(9vw, 44px); display: grid; grid-template-columns: repeat(var(--n), var(--sq)); grid-template-rows: repeat(var(--n), var(--sq)); border: 1px solid var(--border); }
-.board.squares.amazons { --sq: min(8.4vw, 40px); }
+.board.squares { --sq: min(calc((100vw - 34px) / var(--n)), 44px); display: grid; grid-template-columns: repeat(var(--n), var(--sq)); grid-template-rows: repeat(var(--n), var(--sq)); border: 1px solid var(--border); }
+.board.squares.amazons { --sq: min(calc((100vw - 34px) / var(--n)), 40px); }
 .board.squares .square { border: 0; display: flex; align-items: center; justify-content: center; font-size: calc(var(--sq) * 0.7); line-height: 1; }
 .board.squares .square.light { background: #b58863; }
 .board.squares .square.dark { background: #7a553a; }
@@ -1399,3 +1406,23 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 .repo-comment textarea { width: 100%; box-sizing: border-box; }
 .ask-dialog.wide { width: min(640px, 100%); }
 .ask-dialog.wide textarea { width: 100%; box-sizing: border-box; }
+
+/* A phone: an identity's label, address and Copy don't fit on one line, so the
+   label gets its own and the address wraps; touch targets are at least 40px. */
+@media (max-width: 480px) {
+  .identity-rows .row { flex-wrap: wrap; }
+  .identity-rows .row .dim { flex: 1 0 100%; }
+  .identity-rows .row .mono { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+  /* Three filters side by side, each wide enough for its labels. */
+  .network-tools select { flex: 1 1 calc(33% - 8px); min-width: 96px; }
+  /* A first step's button under its text, not in the middle of the sentence. */
+  .first-steps button { display: block; margin: 6px 0 2px 1.4em; }
+}
+@media (pointer: coarse) {
+  .dialog > header .close { min-width: 40px; min-height: 40px; }
+  .more-button { min-width: 40px; }
+  .page-tab-close { min-width: 32px; min-height: 36px; }
+  .page-tab-new { min-width: 36px; min-height: 36px; }
+  /* Reply, React and … under each message were 20px tall. */
+  .reply-button { min-height: 30px; padding-left: 10px; padding-right: 10px; }
+}
