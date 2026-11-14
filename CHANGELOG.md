@@ -2,7 +2,7 @@
 
 What changed in each release of rettui. Releases before v1.6.0 are described on the [releases page](https://github.com/zevaryx/rettui/releases).
 
-## v1.11.0
+## v2.0.0
 
 Changes since v1.10.0: pages to browse the repositories you host, with their files' syntax coloured, backups sealed with a passphrase (with a tool that opens them without rettui), files received with rncp and got from an rncp listener, interfaces others make known (found by interface discovery or sent in Sideband's telemetry) listed, mapped and added, asking where someone is from the map, a running sync stopped, page scripts that find Python and can run longer, identified visitors counted, Python in the Docker image, a desktop app that keeps running in the tray and has identities, backups, restoring a backup and pipe interfaces in a window of its own, colours and art written in Micron in RRC rooms, an Android app that follows the web UI's theme (on its own screens too, which are tidier and have a back arrow), stacks messages in its notifications, takes photos for messages, says when notifications are off, keeps the identity off new phones set up from it and makes backups on a schedule, a tidier terminal UI (light and basic themes that read, popups and text that fit small terminals, messages in a row grouped), a web UI that fits in-between widths and works from the keyboard, links to web pages in messages and rooms, rsReticulum and rsLXMF 1.4, a NomadNet node of rettui's own in place of rsNomad, default names made from each node's address so they do not clash, and rettui under the Reticulum License.
 
