@@ -50,6 +50,8 @@ jobs:
     uses: ./.github/workflows/desktop.yml
     with:
       version: ${{ github.ref_name }}
+    # The signing certificates, if there are any (none: unsigned).
+    secrets: inherit
 
   # The Android app (arm64-v8a: almost every phone), signed with the
   # ANDROID_KEYSTORE secret's key, as the test builds are.
