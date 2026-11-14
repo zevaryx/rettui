@@ -48,6 +48,9 @@ pub struct Settings {
     /// Megabytes the store and the archive may use together; the oldest
     /// archived months are deleted to stay within it. 0 is no limit.
     pub message_storage_mb: u64,
+    /// Megabytes the received files folder may use; a file that would take it
+    /// over is not saved (the message is kept). 0 is no limit.
+    pub downloads_quota_mb: u64,
     /// How long NomadNet pages and images stay cached (pages can ask for
     /// less with `#!c=`).
     pub cache_hours: u64,
@@ -72,6 +75,12 @@ pub struct Settings {
     pub node_dir: Option<String>,
     /// Run executable pages as scripts (NomadNet dynamic pages).
     pub node_executable_pages: bool,
+    /// The `PATH` page scripts run with: none is `/usr/bin:/bin`, `host`
+    /// is rettui's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_script_path: Option<String>,
+    /// Seconds a page script may run before it is stopped.
+    pub node_script_timeout_secs: u64,
     /// Wrap long lines in the text editors instead of scrolling sideways.
     pub wrap_lines: bool,
     /// Show people joining and leaving RRC rooms in the chat.
@@ -79,6 +88,11 @@ pub struct Settings {
     /// In the Android app: keep the phone's processor awake while rettui
     /// runs (a wake lock; see `RettuiService`).
     pub keep_awake: bool,
+    /// In the desktop app: closing the window leaves rettui running, with
+    /// an icon in the system tray to open it again or quit.
+    pub keep_running: bool,
+    /// In the desktop app: minimizing the window puts it in the system tray.
+    pub minimize_to_tray: bool,
     /// The date with each chat line's time (RRC rooms).
     pub chat_dates: bool,
     /// Messages each RRC room and whisper conversation keeps.
@@ -231,6 +245,20 @@ pub struct Settings {
     /// Have a sync of a fork or mirror drop the branches and tags its source
     /// dropped; off by default, as in stock rngit.
     pub git_host_prune: bool,
+    /// Serve NomadNet pages to browse the hosted repositories (as stock
+    /// rngit's `serve_nomadnet`), showing each visitor what they may clone.
+    pub git_host_pages: bool,
+    /// Listen for files sent with `rncp` (to this identity's rncp address),
+    /// from the identities in `rncp_allowed` only.
+    pub rncp_listen: bool,
+    /// Identities that may send files: identity hashes (32 hex characters),
+    /// separated by commas or spaces. Nobody else is let in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rncp_allowed: Option<String>,
+    /// Where received files are saved; `received/` in the data directory
+    /// when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rncp_dir: Option<String>,
     /// Host an RRC hub (rsRRCD's, in `rrc-hub/`).
     pub hub_enabled: bool,
     /// Name the hub announces and welcomes people with; the display name
@@ -264,6 +292,7 @@ impl Default for Settings {
             auto_propagation_node: false,
             messages_kept: 1000,
             message_storage_mb: 0,
+            downloads_quota_mb: 2000,
             cache_hours: 24,
             rngit_identity: false,
             rngit_timeout_secs: 120,
@@ -273,9 +302,13 @@ impl Default for Settings {
             node_announce_interval_mins: 360,
             node_dir: None,
             node_executable_pages: false,
+            node_script_path: None,
+            node_script_timeout_secs: 10,
             // A phone's screen is small: only what people say, there.
             show_joins: !cfg!(target_os = "android"),
             keep_awake: false,
+            keep_running: true,
+            minimize_to_tray: false,
             chat_dates: true,
             rrc_messages_kept: 500,
             wrap_lines: false,
@@ -322,7 +355,8 @@ impl Default for Settings {
             pn_stamp_cost: u64::from(lxmf_core::constants::PROPAGATION_COST),
             pn_storage_mb: 500,
             pn_transfer_kb: lxmf_core::constants::PROPAGATION_LIMIT as u64,
-            pn_autopeer: lxmf_core::constants::AUTOPEER,
+            // Off until you choose it: a node that peers by itself takes on other nodes' load and storage.
+            pn_autopeer: false,
             pn_autopeer_depth: lxmf_core::constants::AUTOPEER_MAXDEPTH as u64,
             pn_max_peers: lxmf_core::constants::MAX_PEERS as u64,
             pn_static_peers: None,
@@ -333,11 +367,15 @@ impl Default for Settings {
             git_host_push_mb: 256,
             git_host_repo_mb: 1024,
             git_host_prune: false,
+            git_host_pages: true,
+            rncp_listen: false,
+            rncp_allowed: None,
+            rncp_dir: None,
             hub_enabled: false,
             hub_name: None,
             hub_greeting: None,
             hub_announce_interval_mins: 360,
-            hub_open_rooms: true,
+            hub_open_rooms: false,
         }
     }
 }
@@ -401,6 +439,8 @@ pub struct Paths {
     pub node_stats: PathBuf,
     /// Copies of rngit repositories (the Repos tab), by node, group and name.
     pub repos: PathBuf,
+    /// Files received with rncp, when no folder is set.
+    pub rncp_received: PathBuf,
 }
 
 impl Paths {
@@ -412,6 +452,12 @@ impl Paths {
             }
         };
         fs::create_dir_all(&base).with_context(|| format!("creating {}", base.display()))?;
+        // Messages, contacts and keys live here: other users on the machine have no business in it.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&base, fs::Permissions::from_mode(0o700));
+        }
         let root = base;
         let base = crate::identities::active_dir(&root);
         Ok(Self {
@@ -444,6 +490,7 @@ impl Paths {
             interface_profiles: root.join("interface-profiles.json"),
             node_stats: base.join("node-stats.json"),
             repos: base.join("repos"),
+            rncp_received: base.join("received"),
             root,
             base,
         })
@@ -454,6 +501,12 @@ impl Settings {
     /// The propagation nodes always peered with ([`Settings::pn_static_peers`]).
     pub fn static_peers(&self) -> Vec<crate::net::Hash> {
         let text = self.pn_static_peers.as_deref().unwrap_or_default();
+        text.split(|c: char| c == ',' || c.is_whitespace()).filter_map(crate::net::parse_hash).collect()
+    }
+
+    /// The identities that may send files with rncp ([`Settings::rncp_allowed`]).
+    pub fn rncp_allowed_list(&self) -> Vec<crate::net::Hash> {
+        let text = self.rncp_allowed.as_deref().unwrap_or_default();
         text.split(|c: char| c == ',' || c.is_whitespace()).filter_map(crate::net::parse_hash).collect()
     }
 
@@ -525,7 +578,7 @@ impl Settings {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        write_atomic(path, serde_json::to_string_pretty(self)?.as_bytes())
+        write_private(path, serde_json::to_string_pretty(self)?.as_bytes())
     }
 }
 
@@ -578,14 +631,13 @@ impl Field {
             // commands Reticulum runs; the recorder is a command run;
             // another node folder could hold
             // executable pages, or share files that aren't meant to be.
-            "rns_config" | "node_dir" | "nomad_files_dir" | "map_tiles_file" | "voice_recorder" | "print_command" => {
-                WebAccess::TerminalOnly
-            }
+            "rns_config" | "node_dir" | "nomad_files_dir" | "map_tiles_file" | "voice_recorder" | "print_command" | "node_script_path"
+            | "rncp_allowed" | "rncp_dir" => WebAccess::TerminalOnly,
             // Which identity's keys are read, and signed with.
             "rngit_identity" => WebAccess::TerminalOnly,
             // Which folder is served.
             "git_host_dir" => WebAccess::TerminalOnly,
-            "node_executable_pages" => WebAccess::TurnOffOnly,
+            "node_executable_pages" | "rncp_listen" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }
     }
@@ -697,6 +749,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "print_command",
             "messages_kept",
             "message_storage_mb",
+            "downloads_quota_mb",
             "rrc_messages_kept",
         ],
     ),
@@ -725,6 +778,8 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "node_announce_interval_mins",
             "node_dir",
             "node_executable_pages",
+            "node_script_path",
+            "node_script_timeout_secs",
             "pn_enabled",
             "pn_name",
             "pn_stamp_cost",
@@ -745,12 +800,28 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "git_host_push_mb",
             "git_host_repo_mb",
             "git_host_prune",
+            "git_host_pages",
+            "rncp_listen",
+            "rncp_allowed",
+            "rncp_dir",
             "hub_open_rooms",
         ],
     ),
     (Section::Display, &["tui_theme", "clock", "date_style", "wrap_lines", "show_joins", "chat_dates"]),
     (Section::Notifications, &["notify_messages", "notify_rrc", "quiet_hours", "quiet_hours_trusted"]),
-    (Section::System, &["log_level", "update_check", "update_prereleases", "discovered_entry_points", "keep_awake", "rns_config"]),
+    (
+        Section::System,
+        &[
+            "log_level",
+            "update_check",
+            "update_prereleases",
+            "discovered_entry_points",
+            "keep_awake",
+            "keep_running",
+            "minimize_to_tray",
+            "rns_config",
+        ],
+    ),
 ];
 
 impl Field {
@@ -1011,6 +1082,13 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "downloads_quota_mb",
+        label: "Received files limit (MB)",
+        help: "Most disk the files and pictures that come with messages may use together. One that would take it over isn't saved (the message is kept, and says so). 0 is no limit",
+        kind: FieldKind::Number,
+        effect: Effect::Now,
+    },
+    Field {
         key: "home",
         label: "Home page",
         help: "NomadNet page opened by the browser's home key, e.g. <hash>:/page/index.mu",
@@ -1085,6 +1163,20 @@ pub const FIELDS: &[Field] = &[
         label: "Run page scripts",
         help: "Run executable pages as programs (NomadNet dynamic pages); only with scripts you trust",
         kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "node_script_path",
+        label: "Script PATH",
+        help: "Where page scripts find programs, such as python3 for #!/usr/bin/env python3: folders joined with colons, or host for rettui's own PATH; empty uses /usr/bin:/bin. Terminal only",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "node_script_timeout_secs",
+        label: "Script time limit (s)",
+        help: "Seconds a page script may run before it is stopped (1 to 120). A running script holds up the node's other requests",
+        kind: FieldKind::Number,
         effect: Effect::Now,
     },
     Field {
@@ -1235,6 +1327,34 @@ pub const FIELDS: &[Field] = &[
         effect: Effect::Now,
     },
     Field {
+        key: "git_host_pages",
+        label: "rngit pages",
+        help: "Serve NomadNet pages to browse the hosted repositories: their files with syntax colouring, READMEs, history and branches. Each visitor sees only what they may clone",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "rncp_listen",
+        label: "Receive files with rncp",
+        help: "Take files sent to your rncp address (see the Network tab) from the identities allowed below, and save them in the folder below; off, nothing is taken. Turned on in the terminal only",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "rncp_allowed",
+        label: "Who may send files",
+        help: "Identity hashes (32 hex characters, as rncp -a takes) that may send files, separated by commas; nobody else is let in. Terminal only",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "rncp_dir",
+        label: "Received files folder",
+        help: "Where files sent with rncp are saved; empty uses received/ in the data directory. Terminal only",
+        kind: FieldKind::Optional,
+        effect: Effect::Now,
+    },
+    Field {
         key: "tui_theme",
         label: "Terminal colours",
         help: "The terminal UI's colours: dark (for a dark terminal), light (for a light one), or basic (16 colours, for terminals without full colour). The web UI picks its own, in its Status page",
@@ -1273,6 +1393,20 @@ pub const FIELDS: &[Field] = &[
         key: "keep_awake",
         label: "Keep the phone awake",
         help: "In the Android app: keep the phone's processor awake while rettui runs, so its timers (announcing, syncing, keeping links up) run on time with the screen off. Messages arrive without it; it uses more battery",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "keep_running",
+        label: "Keep running when closed",
+        help: "In the desktop app: closing its window leaves rettui running in the background, so messages keep arriving and notifications keep coming. Its icon in the system tray (the menu bar on a Mac) opens it again or quits. Off, closing the window stops rettui",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "minimize_to_tray",
+        label: "Minimize to tray",
+        help: "In the desktop app: minimizing its window hides it to the system tray (the menu bar on a Mac) instead of the taskbar or dock; its icon there opens it again",
         kind: FieldKind::Toggle,
         effect: Effect::Now,
     },
@@ -1456,6 +1590,7 @@ impl Settings {
             "messages_kept" => self.messages_kept.to_string(),
             "rrc_messages_kept" => self.rrc_messages_kept.to_string(),
             "message_storage_mb" => self.message_storage_mb.to_string(),
+            "downloads_quota_mb" => self.downloads_quota_mb.to_string(),
             "cache_hours" => self.cache_hours.to_string(),
             "rngit_identity" => self.rngit_identity.to_string(),
             "rngit_timeout_secs" => self.rngit_timeout_secs.to_string(),
@@ -1466,9 +1601,13 @@ impl Settings {
             "node_announce_interval_mins" => self.node_announce_interval_mins.to_string(),
             "node_dir" => self.node_dir.clone().unwrap_or_default(),
             "node_executable_pages" => self.node_executable_pages.to_string(),
+            "node_script_path" => self.node_script_path.clone().unwrap_or_default(),
+            "node_script_timeout_secs" => self.node_script_timeout_secs.to_string(),
             "wrap_lines" => self.wrap_lines.to_string(),
             "show_joins" => self.show_joins.to_string(),
             "keep_awake" => self.keep_awake.to_string(),
+            "keep_running" => self.keep_running.to_string(),
+            "minimize_to_tray" => self.minimize_to_tray.to_string(),
             "chat_dates" => self.chat_dates.to_string(),
             "notify_messages" => self.notify_messages.to_string(),
             "notify_rrc" => self.notify_rrc.to_string(),
@@ -1515,9 +1654,13 @@ impl Settings {
             "git_host_name" => self.git_host_name.clone().unwrap_or_default(),
             "git_host_dir" => self.git_host_dir.clone().unwrap_or_default(),
             "git_host_access" => self.git_host_access.clone().unwrap_or_default(),
+            "rncp_listen" => self.rncp_listen.to_string(),
+            "rncp_allowed" => self.rncp_allowed.clone().unwrap_or_default(),
+            "rncp_dir" => self.rncp_dir.clone().unwrap_or_default(),
             "git_host_push_mb" => self.git_host_push_mb.to_string(),
             "git_host_repo_mb" => self.git_host_repo_mb.to_string(),
             "git_host_prune" => self.git_host_prune.to_string(),
+            "git_host_pages" => self.git_host_pages.to_string(),
             "hub_enabled" => self.hub_enabled.to_string(),
             "hub_name" => self.hub_name.clone().unwrap_or_default(),
             "hub_greeting" => self.hub_greeting.clone().unwrap_or_default(),
@@ -1563,9 +1706,19 @@ impl Settings {
             "auto_propagation_node" => self.auto_propagation_node = toggle(value).map_err(fail)?,
             "node_enabled" => self.node_enabled = toggle(value).map_err(fail)?,
             "node_executable_pages" => self.node_executable_pages = toggle(value).map_err(fail)?,
+            "node_script_path" => {
+                // Folders to look in; nothing here is run by the setting itself.
+                if optional(value).is_some_and(|p| p.len() > 4096 || p.contains(['\n', '\0'])) {
+                    return Err(fail("a list of folders joined with colons, or host".into()));
+                }
+                self.node_script_path = optional(value);
+            }
+            "node_script_timeout_secs" => self.node_script_timeout_secs = between(value, (1, 120)).map_err(fail)?,
             "wrap_lines" => self.wrap_lines = toggle(value).map_err(fail)?,
             "show_joins" => self.show_joins = toggle(value).map_err(fail)?,
             "keep_awake" => self.keep_awake = toggle(value).map_err(fail)?,
+            "keep_running" => self.keep_running = toggle(value).map_err(fail)?,
+            "minimize_to_tray" => self.minimize_to_tray = toggle(value).map_err(fail)?,
             "browser_new_tabs" => self.browser_new_tabs = toggle(value).map_err(fail)?,
             "chat_dates" => self.chat_dates = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
@@ -1642,6 +1795,33 @@ impl Settings {
             "pn_enabled" => self.pn_enabled = toggle(value).map_err(fail)?,
             "git_host_enabled" => self.git_host_enabled = toggle(value).map_err(fail)?,
             "git_host_prune" => self.git_host_prune = toggle(value).map_err(fail)?,
+            "git_host_pages" => self.git_host_pages = toggle(value).map_err(fail)?,
+            "rncp_listen" => self.rncp_listen = toggle(value).map_err(fail)?,
+            "rncp_allowed" => {
+                self.rncp_allowed = match optional(value) {
+                    None => None,
+                    Some(text) => {
+                        let mut who = Vec::new();
+                        for hash in text.split(|c: char| c == ',' || c.is_whitespace()).filter(|a| !a.is_empty()) {
+                            let hash = crate::net::parse_hash(hash)
+                                .ok_or_else(|| fail(format!("{hash} isn't an identity hash (32 hex characters)")))?;
+                            if !who.contains(&hex::encode(hash)) {
+                                who.push(hex::encode(hash));
+                            }
+                        }
+                        (!who.is_empty()).then(|| who.join(", "))
+                    }
+                };
+            }
+            "rncp_dir" => {
+                // Made when the first file arrives, so it only needs a parent.
+                if let Some(text) = optional(value)
+                    && !expand_home(&text).parent().is_some_and(Path::is_dir)
+                {
+                    return Err(fail(format!("no such parent directory for {text}")));
+                }
+                self.rncp_dir = optional(value);
+            }
             "git_host_name" => {
                 if optional(value).is_some_and(|n| n.chars().count() > MAX_DISPLAY_NAME) {
                     return Err(fail(format!("at most {MAX_DISPLAY_NAME} characters")));
@@ -1747,8 +1927,8 @@ impl Settings {
                 self.node_announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?;
             }
             "node_name" => {
-                if optional(value).is_some_and(|n| n.len() > nomad_core::MAX_ANNOUNCE_NAME_BYTES) {
-                    return Err(fail(format!("at most {} bytes", nomad_core::MAX_ANNOUNCE_NAME_BYTES)));
+                if optional(value).is_some_and(|n| n.len() > crate::nomad::paths::MAX_NAME_BYTES) {
+                    return Err(fail(format!("at most {} bytes", crate::nomad::paths::MAX_NAME_BYTES)));
                 }
                 self.node_name = optional(value);
             }
@@ -1776,6 +1956,7 @@ impl Settings {
                 self.rrc_messages_kept = n;
             }
             "message_storage_mb" => self.message_storage_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
+            "downloads_quota_mb" => self.downloads_quota_mb = number(value, MAX_STORAGE_MB).map_err(fail)?,
             "cache_hours" => self.cache_hours = number(value, MAX_HOURS).map_err(fail)?,
             "rngit_identity" => self.rngit_identity = toggle(value).map_err(fail)?,
             "rngit_timeout_secs" => {
@@ -1868,6 +2049,14 @@ pub fn load_identity(path: &Path) -> Result<Identity> {
         return Identity::from_file(path).map_err(|e| anyhow::anyhow!("loading identity {}: {e}", path.display()));
     }
     let identity = Identity::new();
+    // Made private first, so the key is never readable by others, even for a moment.
+    #[cfg(unix)]
+    {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let _ = options.open(path);
+    }
     identity.to_file(path).map_err(|e| anyhow::anyhow!("saving identity {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
@@ -1877,9 +2066,16 @@ pub fn load_identity(path: &Path) -> Result<Identity> {
     Ok(identity)
 }
 
+/// Where `path` is written before it takes the place of the old file:
+/// beside it, with a dot in front, so a node serving the folder never lists it.
+pub fn temp_beside(path: &Path) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{name}.tmp"))
+}
+
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("tmp");
+    let tmp = temp_beside(path);
     let mut file = fs::File::create(&tmp)?;
     file.write_all(bytes)?;
     // On the disk before it takes the old one's place: otherwise a power
@@ -1911,7 +2107,7 @@ pub fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
 /// moment it's created (on Unix).
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("tmp");
+    let tmp = temp_beside(path);
     let _ = fs::remove_file(&tmp);
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -1928,6 +2124,24 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn what_rettui_keeps_is_private_to_its_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rettui-test-private-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let paths = Paths::new(Some(dir.clone())).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        load_identity(&paths.identity).unwrap();
+        assert_eq!(mode(&paths.identity), 0o600);
+        crate::store::Store::default().save(&paths.store).unwrap();
+        assert_eq!(mode(&paths.store), 0o600);
+        Settings::default().save(&paths.settings).unwrap();
+        assert_eq!(mode(&paths.settings), 0o600);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn every_setting_is_in_one_group() {

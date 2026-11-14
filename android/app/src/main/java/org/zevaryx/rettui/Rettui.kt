@@ -55,10 +55,47 @@ object Rettui {
             val code = Native.run(args(context, *args), output.path)
             Said(code == 0, output.readText().trim())
         } catch (e: Throwable) {
-            Said(false, "Couldn't run rettui: $e")
+            Said(false, context.getString(R.string.command_failed, e.toString()))
         } finally {
             output.delete()
         }
+    }
+
+    /** The variable rettui takes a backup's passphrase from (it has no terminal here to ask). */
+    private const val PASSPHRASE = "RETTUI_BACKUP_PASSPHRASE"
+
+    /**
+     * Run one of rettui's commands with `passphrase` as a backup's (if there
+     * is one), set only while it runs: the process's environment, one
+     * command at a time.
+     */
+    @Synchronized
+    fun withPassphrase(context: Context, passphrase: String?, vararg args: String): Said {
+        if (passphrase.isNullOrEmpty()) {
+            Os.unsetenv(PASSPHRASE)
+            return command(context, *args)
+        }
+        return try {
+            Os.setenv(PASSPHRASE, passphrase, true)
+            command(context, *args)
+        } finally {
+            Os.unsetenv(PASSPHRASE)
+        }
+    }
+
+    /** The start of a backup sealed with a passphrase. */
+    private val SEALED = "rettui sealed backup1\n".toByteArray()
+
+    /** Whether `input` (a file, from its start) is a backup sealed with a passphrase. */
+    fun sealed(input: java.io.InputStream): Boolean {
+        val start = ByteArray(SEALED.size)
+        var got = 0
+        while (got < start.size) {
+            val n = input.read(start, got, start.size - got)
+            if (n < 0) return false
+            got += n
+        }
+        return start.contentEquals(SEALED)
     }
 
     /** Whether rettui's process is there (starting, running or stopping). */
@@ -91,7 +128,7 @@ object Rettui {
      * web UI itself does. What it answered, or why it couldn't.
      */
     fun api(context: Context, path: String, body: JSONObject? = null): Said = try {
-        val token = RettuiService.token(context) ?: error("rettui isn't running")
+        val token = RettuiService.token(context) ?: error(context.getString(R.string.not_running))
         val connection = URL("http://127.0.0.1:${port(context)}/api/$path").openConnection() as HttpURLConnection
         connection.setRequestProperty("Authorization", "Bearer $token")
         connection.connectTimeout = 3000

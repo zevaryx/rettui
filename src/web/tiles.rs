@@ -146,6 +146,62 @@ fn prune(dir: &Path, limit: u64) {
     }
 }
 
+/// Whether `ip` is on the public internet: not this computer, a local network,
+/// a link-local, shared or multicast address.
+fn is_public(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || (a == 100 && (64..128).contains(&b))
+                || a == 0)
+        }
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => is_public(IpAddr::V4(v4)),
+            None => {
+                let first = v6.segments()[0];
+                !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80)
+            }
+        },
+    }
+}
+
+/// Whether the web UI may set `template` as the tile source: an `https://`
+/// address whose host is on the public internet. The web login can't have
+/// rettui ask this computer or its network for things; a source on a local
+/// network is set in the terminal UI. The host is looked up now, so every
+/// address it has is checked.
+pub async fn public_source(template: &str) -> Result<(), String> {
+    let refuse = || {
+        "From the web UI, map tiles must come from an https:// address on the public internet: a source on a local network is set in the terminal UI".to_string()
+    };
+    let rest = template.strip_prefix("https://").ok_or_else(refuse)?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return Err(refuse());
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.ends_with(']') || host.starts_with('[') => {
+            (host.trim_matches(['[', ']']), port.parse::<u16>().map_err(|_| refuse())?)
+        }
+        _ => (authority.trim_matches(['[', ']']), 443),
+    };
+    if host.is_empty() || host.eq_ignore_ascii_case("localhost") {
+        return Err(refuse());
+    }
+    let found: Vec<_> = tokio::net::lookup_host((host, port)).await.map_err(|e| format!("Couldn't look up {host}: {e}"))?.collect();
+    if found.is_empty() || !found.iter().all(|addr| is_public(addr.ip())) {
+        return Err(refuse());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +253,28 @@ mod tests {
         assert!(!kept_path(&dir, template, 5, 0, 0).exists() && !kept_path(&dir, template, 5, 1, 0).exists());
         assert!(kept_path(&dir, template, 5, 2, 0).exists() && path.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn the_web_may_only_use_tiles_from_the_public_internet() {
+        for template in [
+            "http://1.2.3.4/{z}/{x}/{y}.png",
+            "https://127.0.0.1/{z}/{x}/{y}.png",
+            "https://localhost/{z}/{x}/{y}.png",
+            "https://10.0.0.5:8443/{z}/{x}/{y}.png",
+            "https://192.168.1.2/{z}/{x}/{y}.png",
+            "https://169.254.169.254/latest/{z}/{x}/{y}",
+            "https://100.64.0.1/{z}/{x}/{y}",
+            "https://[::1]/{z}/{x}/{y}",
+            "https://[fd00::1]:444/{z}/{x}/{y}",
+            "https://[::ffff:127.0.0.1]/{z}/{x}/{y}",
+            "https://user@8.8.8.8/{z}/{x}/{y}",
+            "https:///{z}/{x}/{y}",
+            "https://8.8.8.8:notaport/{z}/{x}/{y}",
+        ] {
+            assert!(public_source(template).await.is_err(), "{template}");
+        }
+        assert!(public_source("https://8.8.8.8/{z}/{x}/{y}.png").await.is_ok());
+        assert!(public_source("https://[2606:4700:4700::1111]:8443/{z}/{x}/{y}.png?key=1").await.is_ok());
     }
 }

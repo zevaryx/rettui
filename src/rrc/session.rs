@@ -190,6 +190,7 @@ async fn session(
     let _ = handle.send_packet(hello(&own, nick.as_deref())).await;
     let mut hello_attempts = 1;
     let mut welcomed = false;
+    let mut hub_identity: Vec<u8> = Vec::new();
     let mut hello_timer = tokio::time::interval(HELLO_INTERVAL);
     hello_timer.tick().await;
 
@@ -248,6 +249,7 @@ async fn session(
                         }
                         t::WELCOME => {
                             welcomed = true;
+                            hub_identity = env.src.clone();
                             emit(RrcEvent::Welcome {
                                 welcome: rrc::parse_welcome(env.body.as_ref()),
                                 hub_identity: env.src,
@@ -291,6 +293,12 @@ async fn session(
                     && rns_crypto::sha::full_hash(&data).as_slice() != sha.as_slice()
                 {
                     tracing::warn!("hub resource failed its SHA-256 check");
+                    continue;
+                }
+                // The hub relays what a room's member sends as a Resource too, under the member's
+                // identity: only the hub's own text is the hub speaking.
+                if announcement.as_ref().is_some_and(|a| a.src != hub_identity) {
+                    tracing::debug!("not showing a resource sent by a member as the hub's notice");
                     continue;
                 }
                 let (kind, room) = announcement

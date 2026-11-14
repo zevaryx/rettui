@@ -25,6 +25,23 @@ fn from_bob(n: u8, content: &str) -> InboundMessage {
 }
 
 #[tokio::test]
+async fn requests_that_change_things_must_come_from_the_page_itself() {
+    let web = TestWeb::start("origin");
+    let post = |headers: &'static [(&'static str, &'static str)]| web.send_with(Method::POST, "/api/cache/clear", None, false, headers);
+    // A page on another port of the same host: same site, so the cookie goes, but not the same origin.
+    assert_eq!(post(&[("origin", "http://127.0.0.1:9999"), ("host", "127.0.0.1:8740")]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(post(&[("sec-fetch-site", "same-site")]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(post(&[("sec-fetch-site", "cross-site")]).await.status, StatusCode::FORBIDDEN);
+    // Its own page, a browser that says so, or a script that sends neither.
+    assert_eq!(post(&[("origin", "http://127.0.0.1:8740"), ("host", "127.0.0.1:8740")]).await.status, StatusCode::OK);
+    assert_eq!(post(&[("sec-fetch-site", "same-origin")]).await.status, StatusCode::OK);
+    assert_eq!(post(&[]).await.status, StatusCode::OK);
+    // Reading is not refused.
+    let read = web.send_with(Method::GET, "/api/state", None, false, &[("origin", "http://elsewhere.example")]).await;
+    assert_eq!(read.status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn logging_in_and_the_files_every_page_needs() {
     let web = TestWeb::start("login");
     // The link logs in: a cookie, and on to the page.
@@ -99,6 +116,17 @@ async fn state_settings_and_the_little_things() {
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
     assert_eq!(web.get("/api/state").await.json()["display_name"], "Amy");
 
+    // A map tile source on this computer's own network isn't set from the web;
+    // the one already set is sent back unchanged without trouble.
+    for source in ["http://example.org/{z}/{x}/{y}.png", "https://127.0.0.1:8080/{z}/{x}/{y}.png", "https://192.168.1.9/{z}/{x}/{y}.png"] {
+        let refused = web.post("/api/settings", json!({ "values": { "map_tiles": source } })).await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{source}");
+    }
+    let current = web.get("/api/settings").await.json();
+    assert!(current.to_string().contains("map_tiles"));
+    let same = web.post("/api/settings", json!({ "values": { "map_tiles": crate::config::OSM_TILES } })).await;
+    assert_eq!(same.status, StatusCode::OK, "{}", same.text());
+
     // Icons, emoji picked lately, a QR code.
     let icons = web.get("/api/icons?q=radio").await.json();
     assert!(icons.as_array().unwrap().iter().any(|i| i["name"].as_str().unwrap().contains("radio")));
@@ -151,6 +179,37 @@ async fn state_settings_and_the_little_things() {
     assert!(subscribed.status == StatusCode::OK || subscribed.status == StatusCode::BAD_REQUEST, "{}", subscribed.text());
     assert_eq!(web.post("/api/push/showing", json!({ "endpoint": endpoint, "showing": true })).await.status, StatusCode::OK);
     assert_eq!(web.post("/api/push/unsubscribe", json!({ "endpoint": endpoint })).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn an_interface_that_doesnt_say_enabled_is_listed_as_off() {
+    let web = TestWeb::start("rns-unsaid");
+    web.with(|app| {
+        let path = app.rns_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text = "[reticulum]\n  share_instance = No\n\n[interfaces]\n  [[Quiet]]\n    type = AutoInterface\n  [[Loud]]\n    type = AutoInterface\n    interface_enabled = Yes\n";
+        std::fs::write(path, text).unwrap();
+        app.rns_reload();
+    })
+    .await;
+    let rns = web.get("/api/reticulum?section=interface:Quiet").await.json();
+    let on = |name: &str| rns["sections"].as_array().unwrap().iter().find(|s| s["title"] == name).unwrap()["enabled"].clone();
+    assert_eq!((on("Quiet"), on("Loud")), (json!(false), json!(true)), "{rns}");
+    // Its Enabled option is off until set, and the config's warnings say why.
+    let enabled = rns["options"].as_array().unwrap().iter().find(|o| o["key"] == "enabled").unwrap();
+    assert_eq!((&enabled["value"], &enabled["default"]), (&json!(null), &json!("No")), "{rns}");
+    assert!(rns["warnings"].to_string().contains("Quiet: off"), "{rns}");
+
+    // Once Reticulum has started without it, Status lists it as off.
+    assert_eq!(web.get("/api/state").await.json()["interfaces_off"], json!([]));
+    web.with(|app| {
+        let known = crate::net::remote::KnownIdentities::none();
+        app.on_net(crate::net::NetEvent::Started { lxmf_hash: [9; 16], public_key: [1; 64], known });
+        let loud = crate::net::InterfaceInfo { name: "Loud".into(), online: true, ..Default::default() };
+        app.on_net(crate::net::NetEvent::Interfaces(vec![loud]));
+    })
+    .await;
+    assert_eq!(web.get("/api/state").await.json()["interfaces_off"], json!(["Quiet"]));
 }
 
 #[tokio::test]
@@ -865,6 +924,24 @@ async fn paper_backups_tiles_and_signing_out() {
     assert_eq!(backup.status, StatusCode::OK, "{}", backup.text());
     assert_eq!(backup.headers[header::CONTENT_TYPE], "application/gzip");
     assert!(backup.body.starts_with(&[0x1f, 0x8b]));
+    // Sealed with a passphrase: made, then fetched (twice, as the Android
+    // app's WebView does) by its id, and restored only with it.
+    let made = web.post("/api/backup", json!({ "passphrase": "rosebud" })).await;
+    assert_eq!(made.status, StatusCode::OK, "{}", made.text());
+    let id = made.json()["id"].as_str().unwrap().to_string();
+    let sealed = web.get(&format!("/api/backup/{id}")).await;
+    assert_eq!(sealed.status, StatusCode::OK, "{}", sealed.text());
+    assert!(sealed.body.starts_with(crate::backup::sealed::MAGIC));
+    assert_eq!(web.get(&format!("/api/backup/{id}")).await.body, sealed.body);
+    let file = web.dir.join("sealed.tar.gz");
+    std::fs::write(&file, &sealed.body).unwrap();
+    assert!(crate::backup::restore(&file, &web.dir.join("restored"), false, Some("rosebud")).is_ok());
+    // None typed: a plain one. Another id, or none like one, isn't there.
+    let plain = web.post("/api/backup", json!({ "passphrase": "" })).await;
+    let id = plain.json()["id"].as_str().unwrap().to_string();
+    assert!(web.get(&format!("/api/backup/{id}")).await.body.starts_with(&[0x1f, 0x8b]));
+    assert_eq!(web.get(&format!("/api/backup/{}", "0".repeat(32))).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(web.get("/api/backup/..%2Fsettings.json").await.status, StatusCode::BAD_REQUEST);
 
     // Map tiles: none set and no offline map here.
     assert_eq!(web.get("/api/map/tiles/1/0/0").await.status, StatusCode::NOT_FOUND);
@@ -1372,6 +1449,8 @@ async fn send_progress_and_cancelling_a_send() {
     })
     .await;
     assert_eq!(web.get("/api/state").await.json()["sync"]["progress"], "1 of 2 downloaded");
+    assert_eq!(web.post("/api/sync/cancel", json!({})).await.status, StatusCode::OK);
+    assert!(web.sent().iter().any(|c| matches!(c, NetCommand::CancelSync)));
 }
 
 #[tokio::test]
@@ -1421,9 +1500,11 @@ async fn the_nodes_statistics_and_resetting_them() {
     web.with(|app| {
         app.node.served.pages = 5;
         app.node.served.requests = 6;
+        app.node.stats = Some(crate::nomad::host::Stats { request_count: 6, visitors: 3, ..Default::default() });
     })
     .await;
     let node = web.get("/api/node").await.json();
+    assert_eq!(node["stats"]["visitors"], 3, "{node}");
     assert_eq!((node["served"]["pages"].as_u64(), node["served"]["label"].as_str()), (Some(5), Some("5 pages · 0 files")), "{node}");
     assert_eq!(web.post("/api/node/stats/reset", json!({})).await.status, StatusCode::OK);
     let node = web.get("/api/node").await.json();
@@ -1500,7 +1581,14 @@ async fn an_rngit_nodes_pages_and_repositories_linked_from_a_page() {
     let web = TestWeb::start("repos-pages");
     let (git, pages) = ([7u8; 16], [9u8; 16]);
     web.with_owner(move |o| {
-        o.apply(NetEvent::Heard(Heard { hash: git, kind: Kind::Git, aspect: Some(GIT_ASPECT), name: Some("Moon Forge".into()), hops: 1 }));
+        o.apply(NetEvent::Heard(Heard {
+            hash: git,
+            kind: Kind::Git,
+            aspect: Some(GIT_ASPECT),
+            name: Some("Moon Forge".into()),
+            hops: 1,
+            software: None,
+        }));
         o.app.store.peers.insert(
             hex::encode(pages),
             crate::store::Peer { kind: PeerKind::Nomad, name: Some("Moon Forge pages".into()), hops: 2, last_seen: 1 },
@@ -1544,6 +1632,8 @@ async fn rngit_repositories_over_the_api() {
     assert_eq!(repos["repos"][0]["group"], "public");
     assert_eq!(repos["repos"][0]["node"], NODE);
     assert!(repos["rngit_identity"].is_null());
+    // Nothing is being copied or sent.
+    assert_eq!(web.get("/api/repos/progress").await.json()["transfers"], json!([]));
 
     // A node that can't answer says so; then one that does.
     *web.git_node.lock().unwrap() = Some(std::sync::Arc::default());
@@ -1764,6 +1854,32 @@ async fn the_copy_of_a_repository_is_read_in_the_web_ui_without_the_node() {
 }
 
 #[tokio::test]
+async fn the_owner_browses_the_pages_of_what_is_hosted_here() {
+    use crate::config::Settings;
+    use crate::net::githost::GitHostEvent;
+    let web =
+        TestWeb::start_with("hosted-pages", Settings { git_host_enabled: true, ..Settings::default() }, crate::store::Store::default());
+    let root = web.with(|app| app.paths.git_host.clone()).await;
+    let node = rngit::server::Node::new(root);
+    node.make_repository("public", "demo.git", None).unwrap();
+    node.set_rules("public", None, "r:all").unwrap();
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: Some([8; 16]) }))).await;
+    let repos = web.get("/api/repos").await.json();
+    assert_eq!(repos["hosted"]["pages"], "08".repeat(16));
+    // Its own node in the list of nodes knows where its pages are.
+    let pages = format!("{}:/page/repo.mu", "08".repeat(16));
+    let page = web.post("/api/page", json!({ "url": pages, "fields": { "var_g": "public", "var_r": "demo" } })).await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.text());
+    assert!(page.text().contains("Nothing has been pushed here yet"), "{}", page.text());
+    let index = web.get(&format!("/api/page?url={}", "08".repeat(16))).await;
+    assert!(index.text().contains("demo") && index.text().contains("Repositories"), "{}", index.text());
+    // Stopped, the address is just another node's.
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Stopped))).await;
+    assert!(web.get("/api/repos").await.json()["hosted"]["pages"].is_null());
+    assert!(!web.with(|app| app.is_own_node([8; 16])).await);
+}
+
+#[tokio::test]
 async fn the_owner_mirrors_and_manages_the_repositories_hosted_here() {
     use crate::config::Settings;
     use crate::net::githost::{GitHostEvent, owner_tests};
@@ -1776,7 +1892,7 @@ async fn the_owner_mirrors_and_manages_the_repositories_hosted_here() {
     assert!(early.error().contains("Host rngit repositories first"));
 
     owner_tests::source(&web.dir, "public", "demo");
-    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16] }))).await;
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: None }))).await;
     let hosted = web.get("/api/repos").await.json()["hosted"].clone();
     assert_eq!((hosted["state"].as_str(), hosted["repos"].as_array().map(Vec::len)), (Some("running"), Some(0)));
 
@@ -1823,7 +1939,7 @@ async fn the_owner_says_who_may_use_what_is_hosted_here() {
     let web =
         TestWeb::start_with("hosted-access", Settings { git_host_enabled: true, ..Settings::default() }, crate::store::Store::default());
     owner_tests::source(&web.dir, "public", "demo");
-    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16] }))).await;
+    web.with(|app| app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: None }))).await;
     web.post("/api/hosted/new", json!({ "name": "team/empty" })).await;
     // Nobody may clone it yet: the list says so.
     assert_eq!(web.get("/api/repos").await.json()["hosted"]["repos"][0]["open"], false);
@@ -1877,4 +1993,127 @@ async fn the_owner_says_who_may_use_what_is_hosted_here() {
         assert_eq!(web.post("/api/hosted/access", body.clone()).await.status, StatusCode::BAD_REQUEST, "{body}");
     }
     assert_eq!(web.get("/api/hosted/access?name=team/gone").await.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn files_received_with_rncp_are_listed() {
+    use crate::app::rncp_in::{Listening, Received};
+    let web = TestWeb::start("rncp-received");
+    assert_eq!(web.get("/api/state").await.json()["rncp_in"]["state"], "off");
+    web.with(|app| {
+        app.rncp_in.status = Listening::On([0x5a; 16]);
+        app.rncp_in.refused = 1;
+        app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![] });
+        app.rncp_in.received.push(Received {
+            name: "notes.txt".into(),
+            bytes: 24,
+            path: "x/notes.txt".into(),
+            from: Some("ab".repeat(16)),
+            at: 5.0,
+        });
+    })
+    .await;
+    let state = web.get("/api/state").await.json();
+    assert_eq!(state["rncp_in"]["address"], "5a".repeat(16));
+    assert_eq!(
+        (state["rncp_in"]["received"].as_u64(), state["rncp_in"]["refused"].as_u64(), state["rncp_in"]["nobody"].as_bool()),
+        (Some(1), Some(1), Some(true))
+    );
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["received"][0]["name"].as_str(), listed["received"][0]["bytes"].as_u64()),
+        (Some("notes.txt"), Some(24)),
+        "{listed}"
+    );
+    // The web login can't turn it on, or say who may send.
+    let refused = web.post("/api/settings", json!({ "values": { "rncp_listen": "true" } })).await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn files_are_fetched_from_an_rncp_listener() {
+    use crate::net::remote::FetchState;
+    let web = TestWeb::start("rncp-fetch");
+    let to = "ab".repeat(16);
+    let bad = web.post("/api/rncp/fetch", json!({ "to": "nope", "path": "x" })).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let ok = web.post("/api/rncp/fetch", json!({ "to": to, "path": "maps/hill.txt" })).await;
+    assert_eq!(ok.status, StatusCode::OK);
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["fetches"][0]["state"].as_str(), listed["fetches"][0]["path"].as_str()),
+        (Some("fetching"), Some("maps/hill.txt")),
+        "{listed}"
+    );
+    let hash = crate::net::parse_hash(&to).unwrap();
+    web.with(move |app| {
+        app.on_net(crate::net::NetEvent::RncpFetch {
+            to: hash,
+            path: "maps/hill.txt".into(),
+            state: FetchState::Fetched { name: "hill.txt".into(), saved: "x/hill.txt".into(), bytes: 3, secs: 0.1 },
+        })
+    })
+    .await;
+    let listed = web.get("/api/rncp").await.json();
+    assert_eq!(
+        (listed["fetches"][0]["state"].as_str(), listed["fetches"][0]["saved"].as_str()),
+        (Some("fetched"), Some("x/hill.txt")),
+        "{listed}"
+    );
+}
+
+#[tokio::test]
+async fn interfaces_found_listed_mapped_and_added_over_the_api() {
+    use crate::lxmf::fields::Telemetry;
+    use crate::net::found::FoundInterface;
+    let web = TestWeb::start("found");
+    let hill = FoundInterface {
+        name: "Hill".into(),
+        kind: "BackboneInterface".into(),
+        transport: true,
+        transport_id: Some("ab".repeat(16)),
+        reachable_on: Some("hill.example.net".into()),
+        port: Some(4242),
+        latitude: Some(51.5),
+        longitude: Some(-0.1),
+        last_heard: Some(1),
+        heard_count: Some(1),
+        ..FoundInterface::default()
+    };
+    let radio = FoundInterface {
+        name: "Radio".into(),
+        kind: "RNodeInterface".into(),
+        frequency: Some(868_100_000),
+        bandwidth: Some(125_000),
+        spreading_factor: Some(8),
+        coding_rate: Some(5),
+        ..FoundInterface::default()
+    };
+    web.with_owner(move |o| o.apply(NetEvent::Discovered(vec![hill]))).await;
+    // Bob sends his radio in his telemetry.
+    let telemetry = Telemetry {
+        interfaces: vec![radio],
+        sensors: vec![crate::lxmf::sensors::Reading { sensor: "Interfaces".into(), value: "Radio".into() }],
+        ..Telemetry::default()
+    };
+    let message = InboundMessage { extras: Extras { telemetry: Some(telemetry), ..Extras::default() }, ..from_bob(1, "") };
+    web.with(move |app| app.on_message(message)).await;
+    let found = web.get("/api/found").await.json();
+    let rows = found["interfaces"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{found}");
+    assert_eq!((rows[0]["name"].as_str(), rows[0]["source"].as_str()), (Some("Hill"), Some("interface discovery")));
+    assert_eq!(rows[1]["from"].as_str(), Some(BOB));
+    assert!(rows[0]["add"].is_null() && rows[0]["located"] == true && rows[1]["located"] == false);
+    // On the map: the one that says where it is.
+    let map = web.get("/api/locations").await.json();
+    let mapped = map["interfaces"].as_array().unwrap();
+    assert_eq!((mapped.len(), mapped[0]["name"].as_str()), (1, Some("Hill")), "{map}");
+    // Added to the Reticulum config, and an unknown one refused.
+    let id = rows[0]["id"].as_str().unwrap().to_string();
+    let added = web.post(&format!("/api/found/{id}/add"), json!({})).await;
+    assert_eq!(added.status, StatusCode::OK);
+    assert!(added.json()["done"].as_str().unwrap().contains("Hill"));
+    let text = web.with(|app| std::fs::read_to_string(app.rns_path()).unwrap()).await;
+    assert!(text.contains("target_host = hill.example.net"), "{text}");
+    assert_eq!(web.post("/api/found/nope/add", json!({})).await.status, StatusCode::BAD_REQUEST);
 }

@@ -1,0 +1,27 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "manage",
+  "description": "What the management window (identities, backups and pipe interfaces) may ask of the app. It is the app's own page, never the web UI's: that page is a remote origin with no permission for these.",
+  "windows": [
+    "manage"
+  ],
+  "local": true,
+  "permissions": [
+    "allow-manage-defaults",
+    "allow-manage-identities",
+    "allow-manage-keep-identity",
+    "allow-manage-export-identity",
+    "allow-manage-switch-identity",
+    "allow-manage-rename-identity",
+    "allow-manage-delete-identity",
+    "allow-manage-back-up",
+    "allow-manage-passphrase-weakness",
+    "allow-manage-restore-check",
+    "allow-manage-restore",
+    "allow-manage-pipes",
+    "allow-manage-add-pipe",
+    "allow-manage-set-pipe",
+    "allow-manage-remove-pipe",
+    "allow-manage-restart-reticulum"
+  ]
+}

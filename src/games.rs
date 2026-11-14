@@ -726,7 +726,10 @@ impl Games {
         let (app_version, session, command) = (text("a"), text("s"), text("c"));
         let app = lrgp::envelope::parse_app_version(&app_version).map(|(app, _)| app.to_string()).unwrap_or(app_version);
         let game = GameRef { app: app.clone(), session: session.clone(), command: command.clone(), envelope: None };
-        match self.router.dispatch_incoming(&envelope, sender, me) {
+        // A move the game engine can't take must cost that message, not the app.
+        let dispatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.router.dispatch_incoming(&envelope, sender, me)));
+        let Ok(dispatched) = dispatched else { return Received::Rejected("the game engine failed on it".into()) };
+        match dispatched {
             Ok(IncomingDispatch::Replay) => Received::Replay,
             Ok(IncomingDispatch::RemoteError(e)) => {
                 Received::TheirError { game, text: format!("{} says that wasn't right: {} ({})", game_name(&app), e.message, e.code) }

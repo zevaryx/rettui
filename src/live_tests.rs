@@ -71,8 +71,9 @@ impl Peer {
         settings(&mut chosen);
         chosen.save(&paths.settings).unwrap();
         let identity = crate::config::load_identity(&paths.identity).unwrap();
-        let (net, events) = net::spawn(crate::net_options(&chosen, &paths, identity.clone()));
-        let mut app = App::new(chosen, paths, Store::default(), net, None, identity.hash);
+        let store = Store::default();
+        let (net, events) = net::spawn(crate::net_options(&chosen, &paths, identity.clone(), store.blocked.clone()));
+        let mut app = App::new(chosen, paths, store, net, None, identity.hash);
         app.updates.fetch = |_| Err("no update checks in tests".into());
         Peer { app, events, dir, identity }
     }
@@ -241,6 +242,8 @@ async fn amys_node_propagation_node_and_hub() {
     let (mut amy, mut ben) = pair("hosting", |s| {
         s.node_enabled = true;
         s.node_name = Some("Amy's node".into());
+        s.node_executable_pages = true;
+        s.node_script_timeout_secs = 1;
         s.pn_enabled = true;
         s.hub_enabled = true;
         s.hub_name = Some("Amy's hub".into());
@@ -264,6 +267,29 @@ async fn amys_node_propagation_node_and_hub() {
     // A page that isn't there.
     ben.app.navigate(crate::app::resolve_url(&format!("{node}:/page/nope.mu"), None).unwrap());
     until(&mut amy, &mut ben, "Ben told the page isn't there", |_, b| b.app.browser.tab.loading.is_none()).await;
+    // A page put in Amy's folder from outside rettui is found a moment later.
+    std::fs::write(amy.app.paths.node.join("pages").join("copied.mu"), "Copied in by hand").unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    ben.app.navigate(crate::app::resolve_url(&format!("{node}:/page/copied.mu"), None).unwrap());
+    until(&mut amy, &mut ben, "Ben loading the copied page", |_, b| {
+        b.app.browser.tab.loading.is_none() && b.app.browser.tab.source.as_deref().is_some_and(|s| s.contains("Copied in by hand"))
+    })
+    .await;
+    // A script that runs past its time limit gets a page saying so, rather
+    // than leaving Ben waiting.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let slow = amy.app.paths.node.join("pages").join("slow.mu");
+        std::fs::write(&slow, "#!/bin/sh\nsleep 5\n").unwrap();
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        ben.app.navigate(crate::app::resolve_url(&format!("{node}:/page/slow.mu"), None).unwrap());
+        until(&mut amy, &mut ben, "Ben told the script failed", |_, b| {
+            b.app.browser.tab.loading.is_none() && b.app.browser.tab.source.as_deref().is_some_and(|s| s.contains("Page failed"))
+        })
+        .await;
+    }
 
     // Amy blocks Ben (his identity known, so in Reticulum too), then lets
     // him back.
@@ -398,6 +424,21 @@ async fn amys_repositories_read_by_ben() {
     until(&mut amy, &mut ben, "Ben refused", |_, b| matches!(b.app.repos.open.as_ref().unwrap().refs, crate::app::repos::Load::Failed(_)))
         .await;
     assert!(amy.app.git_host.requests >= 2 && amy.app.git_host.refused >= 1, "{} {}", amy.app.git_host.requests, amy.app.git_host.refused);
+
+    // Ben browses the node's pages, which show him only what he may read.
+    let pages = hex::encode(amy.app.git_host.pages.expect("its pages"));
+    until(&mut amy, &mut ben, "Ben hearing its pages", |_, b| b.app.store.peers.contains_key(&pages)).await;
+    let index = crate::app::resolve_url(&format!("{pages}:/page/index.mu"), None).unwrap();
+    ben.app.navigate(index.clone());
+    until(&mut amy, &mut ben, "Ben loading its pages", |_, b| b.app.browser.tab.loading.is_none() && b.app.browser.tab.source.is_some())
+        .await;
+    let shown = ben.app.browser.tab.source.clone().unwrap();
+    assert!(shown.contains(">Repositories") && shown.contains("open") && !shown.contains("closed"), "{shown}");
+    // Amy sees her own, made here: a client can't open a link to itself.
+    amy.app.navigate(index);
+    until(&mut amy, &mut ben, "Amy loading her pages", |a, _| a.app.browser.tab.loading.is_none() && a.app.browser.tab.source.is_some())
+        .await;
+    assert_eq!(amy.app.browser.tab.source.as_deref(), Some(shown.as_str()));
     let _ = std::fs::remove_dir_all(&repos);
 }
 
@@ -641,7 +682,9 @@ async fn while_running<T>(amy: &mut Peer, work: impl std::future::Future<Output 
 async fn the_command_line_against_a_running_rettui() {
     use crate::app::node::NodeStatus;
     let port = free_port();
-    let server = format!("  [[Server]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n{TAKE_ALL}");
+    let server = format!(
+        "  [[Server]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n{TAKE_ALL}"
+    );
     let mut amy = Peer::start("cli-amy", &server, |s| {
         s.node_enabled = true;
         s.node_name = Some("Amy's node".into());
@@ -667,7 +710,7 @@ async fn the_command_line_against_a_running_rettui() {
         rns.join("config"),
         format!(
             "[reticulum]\n  share_instance = No\n\n[interfaces]\n  [[To Amy]]\n    type = TCPClientInterface\n    \
-             target_host = 127.0.0.1\n    target_port = {port}\n{TAKE_ALL}"
+             enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n{TAKE_ALL}"
         ),
     )
     .unwrap();
@@ -734,12 +777,60 @@ async fn the_command_line_against_a_running_rettui() {
 
     // `rettui backup` and `rettui restore`.
     let backup = dir.join("backup.tar.gz");
-    crate::cli::backup(&paths, Some(backup.clone()), crate::backup::Options { identity: true, files: false }).unwrap();
+    crate::cli::backup(&paths, Some(backup.clone()), crate::backup::Options { identity: true, files: false }, crate::cli::Seal::None)
+        .unwrap();
     assert!(backup.is_file());
     let empty = Paths::new(Some(dir.join("empty"))).unwrap();
-    assert!(crate::cli::backup(&empty, Some(dir.join("none.tar.gz")), crate::backup::Options { identity: false, files: false }).is_err());
+    assert!(
+        crate::cli::backup(
+            &empty,
+            Some(dir.join("none.tar.gz")),
+            crate::backup::Options { identity: false, files: false },
+            crate::cli::Seal::None
+        )
+        .is_err()
+    );
     crate::cli::restore(&empty, &backup, false).unwrap();
     assert!(empty.settings.is_file());
+    // Sealed to a backup key (`rettui backup --key`): restored with its
+    // passphrase; with no terminal here, without one it says what it needs.
+    let key = crate::backup::sealed::quick_key("rosebud").encode();
+    let sealed = dir.join("sealed.tar.gz");
+    crate::cli::backup(&paths, Some(sealed.clone()), crate::backup::Options { identity: true, files: false }, crate::cli::Seal::Key(key))
+        .unwrap();
+    assert!(crate::backup::is_sealed(&sealed));
+    let other = Paths::new(Some(dir.join("other"))).unwrap();
+    // (In a terminal, it would ask.)
+    let asks = std::io::IsTerminal::is_terminal(&std::io::stdin()) || std::env::var("RETTUI_BACKUP_PASSPHRASE").is_ok();
+    if !asks {
+        assert!(crate::cli::restore(&other, &sealed, false).unwrap_err().to_string().contains("sealed with a passphrase"));
+    }
+    // `rettui unseal`: only a sealed backup, never over a file, and its
+    // passphrase asked for (or said to be needed).
+    assert!(crate::cli::unseal(&backup, Some(&dir.join("x.tar.gz")), None).unwrap_err().to_string().contains("plain backup already"));
+    assert!(crate::cli::unseal(&sealed, Some(&backup), None).unwrap_err().to_string().contains("exists already"));
+    assert!(crate::cli::unseal(&sealed, None, None).is_err());
+    if !asks {
+        assert!(crate::cli::unseal(&sealed, None, Some(&dir.join("id"))).unwrap_err().to_string().contains("sealed with a passphrase"));
+    }
+    assert!(crate::backup::restore(&sealed, &other.base, false, Some("rosebud")).is_ok());
+    assert!(
+        crate::cli::backup(
+            &paths,
+            Some(dir.join("bad.tar.gz")),
+            crate::backup::Options::default(),
+            crate::cli::Seal::Key("nonsense".into())
+        )
+        .is_err()
+    );
+    // Asked for with no terminal and none set: not made, rather than made unsealed.
+    if !asks {
+        assert!(
+            crate::cli::backup(&paths, Some(dir.join("asked.tar.gz")), crate::backup::Options::default(), crate::cli::Seal::Passphrase)
+                .is_err()
+        );
+        assert!(!dir.join("asked.tar.gz").exists());
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1090,9 +1181,9 @@ async fn the_network_actor_command_by_command() {
     // Interface discovery on, with an entry point to bring back (one that
     // isn't there) and one that can't be.
     let interfaces = format!(
-        "  [[Server]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n\
-         \n  [[Entry]]\n    type = TCPClientInterface\n    bootstrap_only = Yes\n    target_host = 127.0.0.1\n    target_port = 1\n    networkname = net\n    passphrase = pass\n\
-         \n  [[Odd]]\n    type = UDPInterface\n    bootstrap_only = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {}\n    forward_ip = 127.0.0.1\n    forward_port = {}\n",
+        "  [[Server]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n\
+         \n  [[Entry]]\n    type = TCPClientInterface\n    enabled = Yes\n    bootstrap_only = Yes\n    target_host = 127.0.0.1\n    target_port = 1\n    networkname = net\n    passphrase = pass\n\
+         \n  [[Odd]]\n    type = UDPInterface\n    enabled = Yes\n    bootstrap_only = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {}\n    forward_ip = 127.0.0.1\n    forward_port = {}\n",
         free_port(),
         free_port()
     );
@@ -1211,9 +1302,21 @@ async fn a_file_sent_to_an_rncp_listener() {
     )
     .unwrap();
     let runtime = net::start_runtime(Some(&rns.display().to_string())).await.unwrap();
+    // The open one also hands out the files in its shared folder (rncp -F -j).
+    let shared = dir.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("map.txt"), "The hill is north of the lake").unwrap();
     let listen = |allowed: Vec<[u8; 16]>| {
         let identity = Identity::new();
-        let config = RncpListenerConfig { identity: identity.clone(), save_dir: saved.clone(), allowed, ..RncpListenerConfig::default() };
+        let fetch = !allowed.is_empty();
+        let config = RncpListenerConfig {
+            identity: identity.clone(),
+            save_dir: saved.clone(),
+            allowed,
+            allow_fetch: fetch,
+            fetch_jail: fetch.then(|| shared.clone()),
+            ..RncpListenerConfig::default()
+        };
         let (events, _) = tokio::sync::mpsc::channel(64);
         let transport_tx = runtime.transport_tx.clone();
         async move { (spawn_rncp_listener(transport_tx, config, events).await.unwrap(), identity) }
@@ -1259,6 +1362,25 @@ async fn a_file_sent_to_an_rncp_listener() {
     assert!(!saved.join("secret.txt").exists());
     assert!(amy.app.log.iter().any(|l| l.contains("Sent notes.txt (24 B)")), "{:?}", amy.app.log);
 
+    // And Amy gets a file from the one that hands them out; the other doesn't.
+    amy.app.rncp_fetch(&to, "map.txt").unwrap();
+    amy.app.rncp_fetch(&refused, "map.txt").unwrap();
+    until_one(&mut amy, "both fetches finishing", |a| {
+        a.app.rncp_fetches.iter().all(|f| !matches!(f.state, net::remote::FetchState::Fetching(_)))
+    })
+    .await;
+    assert!(
+        matches!(&amy.app.rncp_fetches[0].state, net::remote::FetchState::Fetched { bytes: 29, .. }),
+        "{:?}",
+        amy.app.rncp_fetches[0].state
+    );
+    assert_eq!(std::fs::read_to_string(amy.app.paths.rncp_received.join("map.txt")).unwrap(), "The hill is north of the lake");
+    assert!(
+        matches!(&amy.app.rncp_fetches[1].state, net::remote::FetchState::Failed(e) if e.contains("-F")),
+        "{:?}",
+        amy.app.rncp_fetches[1].state
+    );
+
     announcing.abort();
     open.shutdown().await;
     closed.shutdown().await;
@@ -1292,4 +1414,85 @@ async fn a_speed_test_between_two_rettuis() {
     // Closed, it stops listening.
     ben.app.speed.open = false;
     until(&mut amy, &mut ben, "Ben no longer listening", |_, b| b.app.speed.listening.is_none()).await;
+}
+
+/// A speed test with a real NomadNet, by hand: start NomadNet with a
+/// `TCPServerInterface` on `NOMADNET_PORT`, its speed test screen open (its
+/// address in the file `NOMADNET_SPEED_FILE`), then run this with
+/// `cargo test --locked -- --ignored speed_test_with_nomadnet`. It writes
+/// its own speed test address to `RETTUI_SPEED_FILE` for NomadNet's screen,
+/// waits for `RETTUI_SPEED_READY_FILE` to exist, and sends a test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a NomadNet running by hand"]
+async fn speed_test_with_nomadnet() {
+    let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+    let port = var("NOMADNET_PORT");
+    let client = format!(
+        "  [[To NomadNet]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {port}\n{TAKE_ALL}"
+    );
+    let mut me = Peer::start("nomadnet-speed", &client, |_| {});
+    let started = Instant::now();
+    while me.app.lxmf_hash.is_none() {
+        me.pump();
+        assert!(started.elapsed() < PATIENCE, "rettui didn't start");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let theirs = std::fs::read_to_string(var("NOMADNET_SPEED_FILE")).unwrap();
+    let theirs = theirs.trim().to_string();
+    std::fs::write(var("RETTUI_SPEED_FILE"), hex::encode(me.app.speed_address())).unwrap();
+    while !std::path::Path::new(&var("RETTUI_SPEED_READY_FILE")).exists() {
+        me.pump();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    me.app.speed_set_peer(&theirs).unwrap();
+    me.app.speed_set_size(1).unwrap();
+    me.app.speed_send().unwrap();
+    let started = Instant::now();
+    while me.app.speed.sending.is_some() || me.app.speed.lines.is_empty() {
+        me.pump();
+        assert!(started.elapsed() < Duration::from_secs(120), "no result: {:?}", me.app.speed.lines);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    println!("RESULT {:?}", me.app.speed.lines);
+    assert!(me.app.speed.lines.iter().any(|l| l.starts_with("Upload")), "{:?}", me.app.speed.lines);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn files_received_with_rncp_from_who_is_allowed() {
+    let (mut amy, mut ben) = pair("rncp-in", |_| {}).await;
+    let saved = amy.dir.join("received-files");
+    let saved_text = saved.display().to_string();
+    // Amy listens, for nobody yet.
+    amy.app.update_settings(&[("rncp_listen", "true"), ("rncp_dir", &saved_text)]).unwrap();
+    let mine = crate::net::remote::destinations_of(amy.identity.hash)
+        .into_iter()
+        .find(|(kind, _)| *kind == "rncp listener")
+        .map(|(_, hash)| hash)
+        .unwrap();
+    until(&mut amy, &mut ben, "Amy listening", |a, _| a.app.rncp_in.status == crate::app::rncp_in::Listening::On(mine)).await;
+
+    // Ben isn't on the list: refused, and nothing is saved.
+    ben.app.rncp_send(&hex::encode(mine), "notes.txt", b"Meet at the hill at noon".to_vec()).unwrap();
+    until(&mut amy, &mut ben, "Ben's first send ending", |a, b| {
+        b.app.rncp.iter().all(|s| !matches!(s.state, net::RncpState::Sending(_))) && a.app.rncp_in.refused > 0
+    })
+    .await;
+    assert!(matches!(&ben.app.rncp[0].state, net::RncpState::Failed(_)), "{:?}", ben.app.rncp[0].state);
+    assert!(!saved.join("notes.txt").exists());
+
+    // Allowed, he can send, and it says who from.
+    amy.app.update_settings(&[("rncp_allowed", &hex::encode(ben.identity.hash))]).unwrap();
+    until(&mut amy, &mut ben, "Amy listening again", |a, _| a.app.rncp_in.status == crate::app::rncp_in::Listening::On(mine)).await;
+    ben.app.rncp_send(&hex::encode(mine), "notes.txt", b"Meet at the hill at noon".to_vec()).unwrap();
+    until(&mut amy, &mut ben, "the file arriving", |a, _| !a.app.rncp_in.received.is_empty()).await;
+    let got = &amy.app.rncp_in.received[0];
+    assert_eq!((got.name.as_str(), got.bytes, got.from.as_deref()), ("notes.txt", 24, Some(hex::encode(ben.identity.hash).as_str())));
+    assert_eq!(std::fs::read_to_string(saved.join("notes.txt")).unwrap(), "Meet at the hill at noon");
+
+    // A second file of the same name doesn't write over the first.
+    until(&mut amy, &mut ben, "Ben's send ending", |_, b| b.app.rncp.iter().all(|s| !matches!(s.state, net::RncpState::Sending(_)))).await;
+    ben.app.rncp_send(&hex::encode(mine), "notes.txt", b"Changed my mind".to_vec()).unwrap();
+    until(&mut amy, &mut ben, "the second file arriving", |a, _| a.app.rncp_in.received.len() == 2).await;
+    assert_eq!(std::fs::read_to_string(saved.join("notes.txt")).unwrap(), "Meet at the hill at noon");
+    assert_eq!(std::fs::read_to_string(&amy.app.rncp_in.received[1].path).unwrap(), "Changed my mind");
 }

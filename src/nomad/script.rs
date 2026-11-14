@@ -1,27 +1,56 @@
 //! Running a hosted node's script pages for its owner, the way visitors get
 //! them.
 //!
-//! rsNomad runs a visitor's script page itself (when "Run page scripts" is
-//! on), but a client can't reach the node it hosts over Reticulum, so the
-//! Browser runs the owner's own script pages here. It copies how rsNomad runs
-//! them, so what the owner sees is what visitors get: no shell, nothing on
-//! standard input, a cleared environment with only `PATH` (`/usr/bin:/bin`),
-//! `link_id`, `remote_identity` and the request's `field_*` and `var_*`
-//! values, as NomadNet passes them, and 10 seconds to finish. When visitors
+//! The node runs a visitor's script page (when "Run page scripts" is on),
+//! but a client can't reach the node it hosts over Reticulum, so the
+//! Browser runs the owner's own script pages too. Both run them the same
+//! way here, so what the owner sees is what visitors get: no shell, nothing on
+//! standard input, a cleared environment with only `PATH` (`/usr/bin:/bin`
+//! unless "Script PATH" says otherwise), `link_id`, `remote_identity` and the
+//! request's `field_*` and `var_*` values, as NomadNet passes them, and 10
+//! seconds to finish (or "Script time limit"). When visitors
 //! would get nothing, the page says why, with what the script wrote to its
 //! error output, which visitors never see.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
 use std::time::Duration;
 
-/// How long a script may run (rsNomad's limit for visitors).
-#[cfg(unix)]
+use crate::config::Settings;
+
+/// How long a script may run by default.
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Where scripts find programs (rsNomad's, for visitors).
+/// Where scripts find programs by default.
 pub const PATH: &str = "/usr/bin:/bin";
+
+/// What `node_script_path` is set to for rettui's own `PATH`.
+pub const HOST_PATH: &str = "host";
+
+/// Where scripts find programs and how long they may run: the same for
+/// visitors (set on the node) and for the owner's own view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Limits {
+    pub path: String,
+    pub timeout: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self { path: PATH.into(), timeout: TIMEOUT }
+    }
+}
+
+impl Limits {
+    pub fn from_settings(settings: &Settings) -> Self {
+        let path = match settings.node_script_path.as_deref() {
+            None => PATH.into(),
+            Some(HOST_PATH) => std::env::var("PATH").ok().filter(|p| !p.is_empty()).unwrap_or_else(|| PATH.into()),
+            Some(path) => path.into(),
+        };
+        Self { path, timeout: Duration::from_secs(settings.node_script_timeout_secs.max(1)) }
+    }
+}
 
 /// The most of a script's error output that is kept: its end.
 #[cfg(unix)]
@@ -39,18 +68,30 @@ pub struct Run {
     pub failure: Option<String>,
 }
 
-/// Run a script page with a request's values, as rsNomad would for a
-/// visitor. `remote_identity` is the identity hash of a visitor who
-/// identified.
+/// Run a script page with a request's values, as the node does for a
+/// visitor on a Link of its own. `remote_identity` is the identity hash of
+/// a visitor who identified.
+pub fn run(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeMap<String, String>, max_stdout: usize, limits: &Limits) -> Run {
+    run_on(rand::random(), script, remote_identity, fields, max_stdout, limits)
+}
+
+/// [`run`], for a request that came over the Link `link_id`.
 #[cfg(unix)]
-pub fn run(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeMap<String, String>, max_stdout: usize) -> Run {
+pub fn run_on(
+    link_id: [u8; 16],
+    script: &Path,
+    remote_identity: Option<[u8; 16]>,
+    fields: &BTreeMap<String, String>,
+    max_stdout: usize,
+    limits: &Limits,
+) -> Run {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::Instant;
 
     let mut command = Command::new(script);
-    command.env_clear().env("PATH", PATH).env("link_id", hex::encode(rand::random::<[u8; 16]>()));
+    command.env_clear().env("PATH", &limits.path).env("link_id", hex::encode(link_id));
     if let Some(hash) = remote_identity {
         command.env("remote_identity", hex::encode(hash));
     }
@@ -94,8 +135,8 @@ pub fn run(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeMap<S
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() >= TIMEOUT => {
-                failure = Some(format!("it ran for longer than {} seconds and was stopped", TIMEOUT.as_secs()));
+            Ok(None) if start.elapsed() >= limits.timeout => {
+                failure = Some(format!("it ran for longer than {} seconds and was stopped", limits.timeout.as_secs()));
                 break;
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
@@ -123,27 +164,34 @@ pub fn run(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeMap<S
     Run { stdout, stderr, failure }
 }
 
-/// Scripts don't run on this system: rsNomad runs them only on Unix.
+/// Scripts don't run on this system: only on Unix.
 #[cfg(not(unix))]
-pub fn run(_script: &Path, _remote_identity: Option<[u8; 16]>, _fields: &BTreeMap<String, String>, _max_stdout: usize) -> Run {
+pub fn run_on(
+    _link_id: [u8; 16],
+    _script: &Path,
+    _remote_identity: Option<[u8; 16]>,
+    _fields: &BTreeMap<String, String>,
+    _max_stdout: usize,
+    _limits: &Limits,
+) -> Run {
     Run { failure: Some("scripts only run on Linux, macOS and other Unix systems".into()), ..Run::default() }
 }
 
 /// The page the owner sees for a script page: what it printed, or, when
 /// visitors would get nothing, why.
-pub fn preview(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeMap<String, String>) -> Vec<u8> {
-    let run = run(script, remote_identity, fields, nomad_core::DEFAULT_MAX_PAGE_BYTES);
+pub fn preview(script: &Path, remote_identity: Option<[u8; 16]>, fields: &BTreeMap<String, String>, limits: &Limits) -> Vec<u8> {
+    let run = run(script, remote_identity, fields, crate::nomad::store::MAX_PAGE_BYTES, limits);
     if run.failure.is_none() && !run.stdout.is_empty() {
         return run.stdout;
     }
-    explain(script, &run).into_bytes()
+    explain(script, &run, &limits.path).into_bytes()
 }
 
-fn explain(script: &Path, run: &Run) -> String {
+fn explain(script: &Path, run: &Run, scripts_path: &str) -> String {
     let why = run.failure.as_deref().unwrap_or("it printed nothing");
-    let mut page = format!("#!c=0\n>Script page\n\nVisitors get nothing from this page: {}.\n", nomad_core::sanitize_micron_text(why));
-    if let Some(hint) = interpreter_hint(script, std::env::var_os("PATH").as_deref()) {
-        page.push_str(&format!("\n{}\n", nomad_core::sanitize_micron_text(&hint)));
+    let mut page = format!("#!c=0\n>Script page\n\nVisitors get nothing from this page: {}.\n", crate::nomad::paths::clean_text(why));
+    if let Some(hint) = interpreter_hint(script, scripts_path, std::env::var_os("PATH").as_deref()) {
+        page.push_str(&format!("\n{}\n", crate::nomad::paths::clean_text(&hint)));
     }
     let stderr = String::from_utf8_lossy(&run.stderr);
     if !stderr.trim().is_empty() {
@@ -155,9 +203,10 @@ fn explain(script: &Path, run: &Run) -> String {
 }
 
 /// A fix for a first line naming a program that scripts can't find, as
-/// `#!/usr/bin/env python3` does when Python isn't in `/usr/bin` or `/bin`.
+/// `#!/usr/bin/env python3` does when Python isn't in `scripts_path`
+/// (`/usr/bin:/bin` unless set).
 /// `host_path` is this computer's own `PATH`, to say where the program is.
-pub fn interpreter_hint(script: &Path, host_path: Option<&std::ffi::OsStr>) -> Option<String> {
+pub fn interpreter_hint(script: &Path, scripts_path: &str, host_path: Option<&std::ffi::OsStr>) -> Option<String> {
     let mut first = [0u8; 256];
     let n = std::fs::File::open(script).and_then(|mut f| std::io::Read::read(&mut f, &mut first)).ok()?;
     let line = String::from_utf8_lossy(&first[..n]);
@@ -166,19 +215,19 @@ pub fn interpreter_hint(script: &Path, host_path: Option<&std::ffi::OsStr>) -> O
     let program = words.next()?;
     if Path::new(program).file_name().is_some_and(|name| name == "env") {
         let name = words.find(|w| !w.starts_with('-'))?;
-        if std::env::split_paths(PATH).any(|dir| dir.join(name).is_file()) {
+        if std::env::split_paths(scripts_path).any(|dir| dir.join(name).is_file()) {
             return None;
         }
         let found: Option<PathBuf> =
             host_path.and_then(|p| std::env::split_paths(p).map(|dir| dir.join(name)).find(|candidate| candidate.is_file()));
         return Some(match found {
             Some(at) => format!(
-                "Scripts look for programs only in {PATH}, and {name} isn't there. It's at {}: start the page with #!{} instead.",
+                "Scripts look for programs only in {scripts_path}, and {name} isn't there. It's at {}: start the page with #!{} instead.",
                 at.display(),
                 at.display()
             ),
             None => format!(
-                "Scripts look for programs only in {PATH}, and {name} isn't there. Install it, or name it in full on the first line."
+                "Scripts look for programs only in {scripts_path}, and {name} isn't there. Install it, or name it in full on the first line."
             ),
         });
     }
@@ -215,7 +264,7 @@ mod tests {
         );
         let fields: BTreeMap<String, String> =
             [("field_name", "Zeva"), ("var_x", "1"), ("other", "no")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        let out = run(&page, Some([0xab; 16]), &fields, 1024);
+        let out = run(&page, Some([0xab; 16]), &fields, 1024, &Limits::default());
         assert_eq!(out.failure, None);
         let text = String::from_utf8(out.stdout).unwrap();
         assert!(text.starts_with(&format!("Zeva|1||{}|{PATH}|\n", "ab".repeat(16))), "{text}");
@@ -223,19 +272,40 @@ mod tests {
     }
 
     #[test]
+    fn the_settings_choose_where_scripts_look_and_how_long_they_run() {
+        let mut settings = Settings::default();
+        assert_eq!(Limits::from_settings(&settings), Limits::default());
+        settings.node_script_path = Some("/opt/py/bin:/usr/bin".into());
+        settings.node_script_timeout_secs = 45;
+        let limits = Limits::from_settings(&settings);
+        assert_eq!((limits.path.as_str(), limits.timeout), ("/opt/py/bin:/usr/bin", Duration::from_secs(45)));
+        // "host" is rettui's own PATH.
+        settings.node_script_path = Some(HOST_PATH.into());
+        assert_eq!(Limits::from_settings(&settings).path, std::env::var("PATH").unwrap());
+        // And a script gets exactly what was chosen.
+        let dir = temp_dir("path");
+        let page = script(&dir, "path.mu", "#!/bin/sh\nprintf '%s' \"$PATH\"\n");
+        let chosen = Limits { path: "/usr/bin:/bin:/opt/py/bin".into(), ..Limits::default() };
+        assert_eq!(run(&page, None, &BTreeMap::new(), 1024, &chosen).stdout, b"/usr/bin:/bin:/opt/py/bin");
+        // The fix for a program that isn't found names the path in use.
+        let hint = interpreter_hint(&script(&dir, "py.mu", "#!/usr/bin/env no-such-python\n"), "/opt/py/bin", None).unwrap();
+        assert!(hint.contains("only in /opt/py/bin"), "{hint}");
+    }
+
+    #[test]
     fn what_a_script_prints_is_the_page() {
         let dir = temp_dir("hello");
         let page = script(&dir, "hello.mu", "#!/bin/sh\necho '>Hello'\necho oops >&2\nexit 3\n");
         // Visitors still get what a failing script printed.
-        assert_eq!(preview(&page, None, &BTreeMap::new()), b">Hello\n".to_vec());
-        assert_eq!(run(&page, None, &BTreeMap::new(), 1024).stderr, b"oops\n");
+        assert_eq!(preview(&page, None, &BTreeMap::new(), &Limits::default()), b">Hello\n".to_vec());
+        assert_eq!(run(&page, None, &BTreeMap::new(), 1024, &Limits::default()).stderr, b"oops\n");
     }
 
     #[test]
     fn a_script_that_prints_nothing_says_why_with_its_errors() {
         let dir = temp_dir("broken");
         let page = script(&dir, "broken.mu", "#!/bin/sh\necho 'Traceback: `bad`' >&2\nexit 1\n");
-        let text = String::from_utf8(preview(&page, None, &BTreeMap::new())).unwrap();
+        let text = String::from_utf8(preview(&page, None, &BTreeMap::new(), &Limits::default())).unwrap();
         assert!(text.contains("Visitors get nothing from this page: it printed nothing."), "{text}");
         assert!(text.contains("`=\nTraceback: 'bad'\n`="), "{text}");
     }
@@ -246,9 +316,10 @@ mod tests {
         // The background sleep holds the output open: it must be stopped too.
         let page = script(&dir, "slow.mu", "#!/bin/sh\necho partial\nsleep 60 &\nsleep 60\n");
         let started = std::time::Instant::now();
-        let out = run(&page, None, &BTreeMap::new(), 1024);
-        assert!(started.elapsed() < TIMEOUT + Duration::from_secs(5));
-        assert!(out.failure.as_deref().is_some_and(|f| f.contains("longer than 10 seconds")), "{out:?}");
+        let limits = Limits { timeout: Duration::from_secs(2), ..Limits::default() };
+        let out = run(&page, None, &BTreeMap::new(), 1024, &limits);
+        assert!(started.elapsed() < limits.timeout + Duration::from_secs(5));
+        assert!(out.failure.as_deref().is_some_and(|f| f.contains("longer than 2 seconds")), "{out:?}");
         assert!(out.stdout.is_empty(), "visitors get nothing when a script is stopped");
     }
 
@@ -256,7 +327,7 @@ mod tests {
     fn a_script_that_prints_too_much_gives_visitors_nothing() {
         let dir = temp_dir("big");
         let page = script(&dir, "big.mu", "#!/bin/sh\nhead -c 5000 /dev/zero\n");
-        let out = run(&page, None, &BTreeMap::new(), 2048);
+        let out = run(&page, None, &BTreeMap::new(), 2048, &Limits::default());
         assert_eq!(out.failure.as_deref(), Some("it printed more than 2 KB, the most a page may be"));
         assert!(out.stdout.is_empty());
     }
@@ -265,7 +336,7 @@ mod tests {
     fn a_script_that_cant_start_says_so() {
         let dir = temp_dir("missing");
         let page = script(&dir, "missing.mu", "#!/no/such/python3\nprint('hi')\n");
-        let text = String::from_utf8(preview(&page, None, &BTreeMap::new())).unwrap();
+        let text = String::from_utf8(preview(&page, None, &BTreeMap::new(), &Limits::default())).unwrap();
         assert!(text.contains("it could not be started"), "{text}");
         assert!(text.contains("The first line names /no/such/python3, which isn't on this computer."), "{text}");
     }
@@ -278,14 +349,14 @@ mod tests {
         script(&bin, "rettui-test-python", "#!/bin/sh\n");
         let page = script(&dir, "py.mu", "#!/usr/bin/env -S rettui-test-python -u\nprint('hi')\n");
         let host_path = std::env::join_paths([bin.clone()]).unwrap();
-        let hint = interpreter_hint(&page, Some(&host_path)).unwrap();
+        let hint = interpreter_hint(&page, PATH, Some(&host_path)).unwrap();
         let at = bin.join("rettui-test-python");
         assert!(hint.contains(&format!("It's at {}: start the page with #!{} instead.", at.display(), at.display())), "{hint}");
-        assert!(interpreter_hint(&page, None).unwrap().contains("Install it, or name it in full"));
+        assert!(interpreter_hint(&page, PATH, None).unwrap().contains("Install it, or name it in full"));
         // sh is in /bin (or /usr/bin) everywhere: nothing to fix.
         let fine = script(&dir, "sh.mu", "#!/usr/bin/env sh\necho hi\n");
-        assert_eq!(interpreter_hint(&fine, Some(&host_path)), None);
+        assert_eq!(interpreter_hint(&fine, PATH, Some(&host_path)), None);
         let plain = script(&dir, "plain.mu", "#!/bin/sh\necho hi\n");
-        assert_eq!(interpreter_hint(&plain, None), None);
+        assert_eq!(interpreter_hint(&plain, PATH, None), None);
     }
 }

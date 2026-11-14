@@ -116,6 +116,18 @@ fn picked_messages_retries_paper_and_location_requests() {
     tui.app.settings.answer_commands = "contacts".into();
     assert!(ask(&mut tui, 53).contains("Answered with this station's location"));
     assert!(ask(&mut tui, 54).contains("less than a minute ago"));
+    // The same from a sender whose signature couldn't be checked: shown, not acted on.
+    let mut message = crate::lxmf::InboundMessage {
+        id: Some([60; 32]),
+        source: [0xab; 16],
+        timestamp: 1_800_000_200.0,
+        verified: false,
+        ..Default::default()
+    };
+    message.extras.commands = vec![Command::TelemetryRequest];
+    tui.app.on_message(message);
+    let notes = tui.app.store.conversations[BOB].messages.last().unwrap().notes.join(" ");
+    assert!(notes.contains("Not acted on") && !notes.contains("Answered"), "{notes}");
 }
 
 #[test]
@@ -491,6 +503,20 @@ fn send_progress_cancelling_and_sync_progress() {
     assert!(tui.draw().contains("3 of 10 downloaded"), "{}", tui.draw());
     tui.app.on_net(NetEvent::Synced(Ok(10)));
     assert!(matches!(tui.app.sync, SyncState::Done(..)) && tui.app.sync_progress.is_none());
+
+    // Stopping one: S asks, progress waits, and what came is kept.
+    tui.app.on_net(NetEvent::SyncStarted);
+    tui.app.cancel_sync();
+    tui.app.cancel_sync();
+    assert_eq!(tui.sent().iter().filter(|c| matches!(c, NetCommand::CancelSync)).count(), 1);
+    tui.app.on_net(NetEvent::SyncProgress("4 of 10 downloaded".into()));
+    assert_eq!(tui.app.sync_progress.as_deref(), Some("stopping…"));
+    tui.app.on_net(NetEvent::Synced(Ok(4)));
+    assert!(!tui.app.sync_stopping && matches!(tui.app.sync, SyncState::Done(_, Ok(4))));
+    assert!(tui.app.log.iter().any(|l| l.contains("Sync stopped (4 message(s) downloaded)")));
+    // Nothing running, nothing to stop.
+    tui.app.cancel_sync();
+    assert!(!tui.app.sync_stopping);
 }
 
 #[test]

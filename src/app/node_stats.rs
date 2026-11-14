@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use nomad_core::NomadServeStats;
+use crate::nomad::host::Stats as NomadServeStats;
 use serde::{Deserialize, Serialize};
 
 use super::{App, now};
@@ -109,6 +109,7 @@ mod tests {
             media_hits: media,
             not_found_count: not_found,
             last_request_ms: None,
+            visitors: 0,
         }
     }
 

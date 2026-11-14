@@ -75,6 +75,17 @@ mod tests {
     use std::*;
 
     #[test]
+    fn decoding_450_with_out_of_range_indexes_does_not_panic() {
+        for mode in [crate::Codec2Mode::MODE_450, crate::Codec2Mode::MODE_450PWB] {
+            let mut c2 = crate::Codec2::new(mode);
+            let bytes = (c2.bits_per_frame() + 7) / 8;
+            let mut speech = vec![0; c2.samples_per_frame()];
+            // Every bit set: the 9-bit codebook index is 511, of 500 rows.
+            c2.decode(&mut speech, &vec![0xff; bytes]);
+        }
+    }
+
+    #[test]
     fn encode_test() {
         let mut c2 = crate::Codec2::new(crate::Codec2Mode::MODE_3200);
         //160 samples

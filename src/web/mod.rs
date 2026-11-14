@@ -18,6 +18,7 @@
 
 #[cfg(test)]
 mod api_tests;
+pub mod desktop;
 pub mod mbtiles;
 mod push;
 mod routes;
@@ -130,8 +131,9 @@ impl Owner {
             }
             return;
         }
-        let cacheable =
-            location.fields.is_empty() && !location.path.starts_with(nomad_core::FILE_PREFIX) && !self.app.is_own_node(location.node);
+        let cacheable = location.fields.is_empty()
+            && !location.path.starts_with(crate::nomad::paths::FILE_PREFIX)
+            && !self.app.is_own_node(location.node);
         if cacheable
             && !refresh
             && let Some(cached) = self.app.page_cache().get(location.node, &location.path, identified)
@@ -162,7 +164,13 @@ impl Owner {
                 self.on_net(event);
                 Scope::NONE
             }
+            // Browsers ask for how a copy is going; they aren't told.
+            NetEvent::GitProgress { .. } => {
+                self.on_net(event);
+                Scope::NONE
+            }
             NetEvent::Git { id, result } if self.git.contains_key(&id) => {
+                self.app.git_over(id);
                 let _ = self.git.remove(&id).expect("checked above").send(result);
                 Scope::NONE
             }
@@ -261,7 +269,7 @@ impl Scope {
             // (its starting and stopping touch more).
             NetEvent::Hub(HubEvent::State(_) | HubEvent::Reply { .. }) => Scope::HUB,
             // Only the terminal UI's browser shows it.
-            NetEvent::FetchProgress { .. } => Scope::NONE,
+            NetEvent::FetchProgress { .. } | NetEvent::GitProgress { .. } => Scope::NONE,
             NetEvent::SyncProgress(_) => Scope::STATUS,
             // The announce viewer asks for those after the last it has
             // (they come several a second on a busy network); the Network
@@ -367,7 +375,7 @@ mod scope_tests {
         assert_eq!(Scope::of(&NetEvent::Log("Interface x went offline".into())), Scope::STATUS);
         let announce = NetEvent::Announce { kind: net::PeerKind::Lxmf, hash: [0; 16], name: None, hops: 1 };
         assert_eq!(Scope::of(&announce), Scope::PEERS);
-        let heard = net::heard::Heard { hash: [0; 16], kind: net::heard::Kind::Other, aspect: None, name: None, hops: 1 };
+        let heard = net::heard::Heard { hash: [0; 16], kind: net::heard::Kind::Other, aspect: None, name: None, hops: 1, software: None };
         assert_eq!(Scope::of(&NetEvent::Heard(heard)), Scope::NONE);
         assert_eq!(Scope::of(&NetEvent::Announced), Scope::ALL);
         assert_eq!(Scope::of(&NetEvent::SyncStarted), Scope::ALL);
@@ -434,7 +442,7 @@ impl WebState {
             let _ = tx.send(f(owner));
         });
         self.jobs.send(Job { run, changes }).map_err(|_| "rettui is shutting down".to_string())?;
-        rx.await.map_err(|_| "rettui is shutting down".to_string())
+        rx.await.map_err(|_| "That failed inside rettui (or rettui is shutting down)".to_string())
     }
 
     /// Read app state (browsers are not told to refresh).
@@ -569,7 +577,8 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
 
     let identity_hash = identity.hash;
     let store = Store::load_or_empty(&paths.store);
-    let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone()));
+    store.sync_blocked();
+    let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone(), store.blocked.clone()));
     let mut app = App::new(settings, paths.clone(), store, net_tx.clone(), None, identity_hash);
     // No tab is "on screen" in the web UI: unread counts are cleared by
     // browsers when they show a conversation or room.
@@ -606,6 +615,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         https: served.is_some(),
         ca: served.as_ref().and_then(|s| s.ca.clone()),
     };
+    desktop::register(&state.jobs);
     let router = routes::router(state);
     let server = match &served {
         Some(served) => {
@@ -647,7 +657,10 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     let result = loop {
         tokio::select! {
             Some(job) = jobs.recv() => {
-                (job.run)(&mut owner);
+                // A job that panics fails its own request, not the whole web UI.
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (job.run)(&mut owner))).is_err() {
+                    tracing::error!("a web job panicked; the request failed");
+                }
                 owner.app.tab = Tab::Status;
                 if job.changes {
                     notify(&changes, Scope::ALL);
@@ -713,7 +726,8 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 let _ = pending.reply.send(Err("Reticulum restarted while loading; load the page again".into()));
             }
             net::shutdown(&net_tx, &mut net_rx, net::Stop::Restart).await;
-            (net_tx, net_rx) = net::spawn(crate::net_options(&owner.app.settings, &owner.app.paths, identity.clone()));
+            (net_tx, net_rx) =
+                net::spawn(crate::net_options(&owner.app.settings, &owner.app.paths, identity.clone(), owner.app.store.blocked.clone()));
             owner.app.set_network(net_tx.clone());
             notify(&changes, Scope::ALL);
         }
@@ -830,8 +844,8 @@ pub(crate) mod testing {
                             owner.apply(NetEvent::Fetched { id: *id, result });
                         }
                         // Script pages of its own node run, as in the network task.
-                        if let NetCommand::RunScript { id, script, fields, .. } = &command {
-                            let data = crate::nomad::script::preview(script, None, fields);
+                        if let NetCommand::RunScript { id, script, fields, limits, .. } = &command {
+                            let data = crate::nomad::script::preview(script, None, fields, limits);
                             owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None }) });
                         }
                         if let NetCommand::Git { id, repo, request, .. } = &command
@@ -839,6 +853,17 @@ pub(crate) mod testing {
                         {
                             let result = crate::net::git::tests::answer(&node, repo, request.clone());
                             owner.apply(NetEvent::Git { id: *id, result });
+                        }
+                        // The pages of the rngit node hosted here, as the network task makes them.
+                        if let NetCommand::GitPage { id, path, fields, identify } = &command {
+                            let node = rngit::server::Node::new(owner.app.paths.git_host.clone());
+                            let site = crate::net::gitpages::Site { name: None, address: owner.app.git_host.address.unwrap_or_default() };
+                            let peer = identify.then_some(owner.app.identity_hash);
+                            let data = match crate::net::gitpages::answer(&node, &site, path, fields, peer).0 {
+                                crate::net::gitpages::Reply::Page(page) => page.into_bytes(),
+                                crate::net::gitpages::Reply::File { data, .. } => data,
+                            };
+                            owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None }) });
                         }
                         // The rngit node hosted here, which mirrors from `source/` in the test's folder.
                         if let NetCommand::GitHostAction { id, action } = &command {
@@ -864,6 +889,11 @@ pub(crate) mod testing {
                 ca: None,
             };
             TestWeb { router: routes::router(state.clone()), dir, sent, pages, git_node, state }
+        }
+
+        /// Where jobs for the owner go, for what only the desktop app does.
+        pub(super) fn jobs(&self) -> mpsc::UnboundedSender<Job> {
+            self.state.jobs.clone()
         }
 
         /// Run something on the app, as a job (and wait for it).

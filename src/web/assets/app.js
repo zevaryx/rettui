@@ -63,6 +63,9 @@ async function upload(path, file) {
 // identity and backups, and RNodes over USB and Bluetooth: the page only
 // links to them.
 const IN_ANDROID_APP = /\brettui-android\//.test(navigator.userAgent);
+// In rettui's desktop app (rettui-desktop), whose webview has no web
+// notifications: the app shows them instead, asked through its bridge.
+const DESKTOP_APP = window.__TAURI__?.core;
 const androidBackupsButton = (text) => el('button', { text, title: "The app's own screen: save a copy of the identity, keep another from a file, back up and restore",
   onclick: () => { location.href = 'rettui-app:backups'; } });
 const androidDownloadsButton = () => el('button', { text: '📥 Where files are saved', title: "The app's own screen: Downloads, a folder you pick, or asked each time",
@@ -131,6 +134,27 @@ function toast(text, error = false) {
   $('#toasts').append(node);
   setTimeout(() => node.remove(), error ? 6000 : 3000);
   dismissable(node);
+}
+
+// A notice that says how the copies and sends going have got, every second,
+// until the stop it returns is called.
+function followTransfers() {
+  const node = el('div', { class: 'toast', role: 'status', title: 'Tap to dismiss', text: 'Starting…', style: 'white-space:pre-line' });
+  $('#toasts').append(node);
+  dismissable(node);
+  let alive = true;
+  const poll = async () => {
+    try {
+      const { transfers } = await api.get('/repos/progress');
+      if (alive && transfers.length) node.textContent = transfers.map((t) => `${t.what} ${t.repo}${t.text ? `: ${t.text}` : ''}`).join('\n');
+    } catch { /* the next try */ }
+    if (alive) setTimeout(poll, 1000);
+  };
+  setTimeout(poll, 500);
+  return () => {
+    alive = false;
+    node.remove();
+  };
 }
 
 // A notice goes when tapped, or swiped sideways or up (it follows the
@@ -1454,15 +1478,24 @@ const notifications = {
   // Notifications shown without the service worker, by tag (to close them).
   open: new Map(),
 
-  // 'granted', 'default', 'denied', 'insecure' (plain HTTP from elsewhere)
-  // or 'unsupported'.
+  // 'granted', 'default', 'denied', 'insecure' (plain HTTP from elsewhere),
+  // 'unsupported', or 'app' (the desktop app shows them).
   state() {
+    if (DESKTOP_APP) return 'app';
     if (!window.isSecureContext) return 'insecure';
     if (!('Notification' in window)) return 'unsupported';
     return Notification.permission;
   },
 
   async start() {
+    // A click on one the desktop app showed opens what it's about (the app
+    // brings its window forward).
+    if (DESKTOP_APP) {
+      DESKTOP_APP.addPluginListener('notification', 'actionPerformed', (action) => {
+        const target = action?.notification?.extra?.target;
+        if (target) openTarget(target);
+      }).catch((e) => console.warn('Clicks on notifications won\'t open anything:', e));
+    }
     if (this.state() === 'insecure' || !('serviceWorker' in navigator)) return;
     try {
       this.worker = await navigator.serviceWorker.register('sw.js');
@@ -1482,6 +1515,8 @@ const notifications = {
   // Whether this browser has background notifications, and that rettui has
   // its subscription (made with rettui's current key).
   async checkPush() {
+    // The desktop app runs rettui itself: nothing to push to.
+    if (DESKTOP_APP) return;
     const registration = await navigator.serviceWorker.ready;
     if (!registration.pushManager || this.state() !== 'granted') {
       this.push = registration.pushManager && this.state() !== 'denied' ? 'off' : null;
@@ -1577,6 +1612,13 @@ const notifications = {
     // In the background with Web Push on, the push shows it (a page in the
     // background may be stopped at any moment).
     if (this.push === 'on' && document.visibilityState !== 'visible') return;
+    if (DESKTOP_APP) {
+      try {
+        return await DESKTOP_APP.invoke('plugin:notification|notify', { options: { title, body, extra: { target } } });
+      } catch (e) {
+        console.warn('Could not show a notification:', e);
+      }
+    }
     if (this.state() === 'granted') {
       // A newer one about the same conversation or room replaces it.
       const options = { body, tag, renotify: true, icon: 'brand/icon.png', data: { target } };
@@ -1608,13 +1650,14 @@ const notifications = {
     const state = this.state();
     const text = {
       granted: 'on in this browser',
+      app: 'on: the desktop app shows them',
       default: 'not allowed in this browser yet',
       denied: 'blocked in this browser (allow them in this site\'s settings)',
       insecure: 'not available: browsers only allow them on HTTPS or on this computer (localhost)',
       unsupported: 'not supported by this browser (on an iPhone, add rettui to the Home Screen first)',
     }[state];
     const allowed = el('div', { class: 'row' },
-      el('span', { class: state === 'granted' ? 'state-ok' : 'dim', text }),
+      el('span', { class: state === 'granted' || state === 'app' ? 'state-ok' : 'dim', text }),
       state === 'default' ? el('button', { text: 'Allow', onclick: () => this.allow() }) : null);
     if (!this.push || state === 'denied') return allowed;
     const on = this.push === 'on';
@@ -1935,12 +1978,36 @@ function openLink(url) {
   browse(url);
 }
 
-function linkNode(text, url) {
-  return el('a', { class: 'chat-link', href: '#', text, title: url, onclick: (e) => {
+// The text from `from` to `to`, in the Micron styles (`micron`: sorted
+// ranges with their style) it falls in. Colours are used only as the
+// `#rrggbb` the server sends.
+function microned(text, from, to, micron) {
+  const hex = (c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : null;
+  const out = [];
+  for (const [start, end, style] of micron) {
+    const [s, e] = [Math.max(start, from), Math.min(end, to)];
+    if (s >= e) continue;
+    if (s > from) out.push(text.slice(from, s));
+    const css = [];
+    if (hex(style.fg)) css.push(`color:${hex(style.fg)}`);
+    if (hex(style.bg)) css.push(`background:${hex(style.bg)}`);
+    if (style.bold) css.push('font-weight:700');
+    if (style.italic) css.push('font-style:italic');
+    if (style.underline) css.push('text-decoration:underline');
+    out.push(el('span', { style: css.join(';'), text: text.slice(s, e) }));
+    from = e;
+  }
+  if (from < to) out.push(text.slice(from, to));
+  return out;
+}
+
+// A link to `url` showing `content` (text, or a list of nodes and text).
+function linkNode(content, url) {
+  return el('a', { class: 'chat-link', href: '#', title: url, onclick: (e) => {
     e.preventDefault();
     e.stopPropagation();
     openLink(url);
-  } });
+  } }, content);
 }
 
 // Beside a link to a repository: copy it to this computer, after asking.
@@ -1949,13 +2016,14 @@ function copyLink(url) {
     e.preventDefault();
     e.stopPropagation();
     if (!await ask(`Copy ${url} to this computer?\nYou can read it or clone from it. Nothing on the node changes.`, { title: 'Copy the repository', yes: 'Copy' })) return;
-    toast('Copying…');
+    const stop = followTransfers();
     try {
       const done = await api.post('/repos/mirror', { url });
       toast(done.said || 'Copied');
     } catch (err) {
       toast(`Copying failed: ${err.message}`, true);
     }
+    stop();
   } });
 }
 
@@ -2053,7 +2121,11 @@ function slippyMap(data, places, onPick) {
     el('div', { class: 'map-controls' },
       button('+', 'Closer', () => zoomAt(1)),
       button('−', 'Further', () => zoomAt(-1)),
-      button('⤢', 'All of them', () => fit())),
+      button('⤢', 'All of them', () => fit()),
+      places.some((p) => p.interface) ? button('▲', 'Interfaces others made known: hide or show them', () => {
+        node.classList.toggle('no-interfaces');
+        for (const p of places) if (p.interface) p.row?.toggleAttribute('hidden', node.classList.contains('no-interfaces'));
+      }) : null),
     data.tiles && data.credit?.includes('OpenStreetMap')
       ? el('a', { class: 'map-credit', href: 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener noreferrer', text: data.credit })
       : el('span', { class: 'map-credit', text: data.tiles ? data.credit || '' : 'No map tiles (the Map tiles setting is empty)' }));
@@ -2069,7 +2141,7 @@ function slippyMap(data, places, onPick) {
   }
   for (const p of places) {
     p.circle = el('div', { class: 'map-circle', hidden: true });
-    p.marker = el('button', { type: 'button', class: 'map-marker' + (p.key ? '' : ' station'), title: p.label, onclick: () => onPick(p) },
+    p.marker = el('button', { type: 'button', class: 'map-marker' + (p.interface ? ' interface' : p.key ? '' : ' station'), title: p.about || p.label, onclick: () => onPick(p) },
       p.icon || p.key ? avatar(p.icon, p.name, p.key) : el('span', { class: 'map-pin' }),
       el('span', { class: 'map-label', text: p.name }));
     marks.append(p.circle, p.marker);
@@ -2222,11 +2294,12 @@ function slippyMap(data, places, onPick) {
 // Where everyone was, from the newest location each has shared (and this
 // station, if its Location is set), on a map and in a list. With `at`, a
 // message's location is shown as well (it may not be their newest).
-async function mapDialog({ at = null, name = '', key = null } = {}) {
+async function mapDialog({ at = null, name = '', key = null, interfaceId = null } = {}) {
   const data = await attempt(() => api.get('/locations'));
   if (!data) return;
-  const places = data.places.slice();
-  let focus = key ? places.find((p) => p.key === key) : null;
+  // People's places, then interfaces' (marked apart, and hidden with ▲).
+  const places = data.places.concat(data.interfaces || []);
+  let focus = key ? places.find((p) => p.key === key) : interfaceId ? places.find((p) => p.interface === interfaceId) : null;
   if (at && !(focus && focus.latitude === at.latitude && focus.longitude === at.longitude)) {
     focus = { ...at, name: name ? `${name} (this message)` : 'This message', key: null, at: null, icon: null };
     places.push(focus);
@@ -2247,7 +2320,7 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
   const station = data.here ? data.places[0] : null;
   const close = dialog('Map', (close) => {
     for (const p of places) {
-      const about = [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away, p.via ? `via ${p.via}` : '',
+      const about = p.interface ? [p.about, `from ${p.via}`].join(' · ') : [p.at ? `${ago(p.at)} ago` : p === station ? 'From the Location setting' : '', p.away, p.via ? `via ${p.via}` : '',
         p.trail?.length > 1 ? `trail of ${p.trail.length}` : ''].filter(Boolean).join(' · ');
       const row = el('div', { class: 'list-item', onclick: () => pick(p) },
         p.icon || p.key ? avatar(p.icon, p.name, p.key) : null,
@@ -2255,12 +2328,20 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
           el('div', { class: 'name', text: p.name }),
           el('div', { class: 'sub', text: about || p.label }),
           el('div', { class: 'row map-actions' },
+            p.interface ? el('button', { class: 'inline', text: 'Details', title: 'What\'s known of it, and adding it to Reticulum', onclick: (e) => {
+              e.stopPropagation();
+              foundDialog(p.interface);
+            } }) : null,
             p.key ? el('button', { class: 'inline', text: 'Messages', title: 'Open your conversation', onclick: (e) => {
               e.stopPropagation();
               close();
               app.views.messages.selected = p.key;
               switchTab('messages', { focus: true });
               setPane(app.views.messages, 'detail');
+            } }) : null,
+            p.key ? el('button', { class: 'inline', text: '📍 Ask where', title: 'Ask where they are now, as Sideband does: their answer moves them on the map', onclick: async (e) => {
+              e.stopPropagation();
+              await attempt(() => api.post(`/conversations/${p.key}/command`, { command: 'location' }), `Asked ${p.name} where they are: their answer goes on the map`);
             } }) : null,
             el('a', { href: p.map, target: '_blank', rel: 'noopener noreferrer', text: 'OpenStreetMap ↗', onclick: (e) => e.stopPropagation() }),
             p.key && p.at ? el('button', { class: 'inline danger', text: 'Delete locations', title: 'Take their place and trail off the map (their messages stay)', onclick: async (e) => {
@@ -2271,6 +2352,7 @@ async function mapDialog({ at = null, name = '', key = null } = {}) {
               mapDialog();
             } }) : null)));
       rows.set(p, row);
+      p.row = row;
       list.append(row);
     }
     return [el('div', { class: 'map-body' }, view.node, list)];
@@ -5309,10 +5391,11 @@ app.views.channels = {
         case 'error': prefix = el('span', { class: 'prefix', text: '! ' }); break;
         default: prefix = el('span', { class: 'prefix', text: '— ' });
       }
-      return el('div', { class: 'chat-line ' + kind, dataset: { ts: line.ts } },
+      // Coloured Micron, often art, keeps its lines: not wrapped.
+      return el('div', { class: 'chat-line ' + kind + (line.art ? ' art' : ''), dataset: { ts: line.ts } },
         el('span', { class: 'time', text: time, title: full }),
         el('span', { class: 'body' }, prefix,
-          el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [], line.mentions || [])),
+          el('span', { class: 'text' + (line.pending ? ' pending' : '') }, ...this.marked(line.text, line.highlights || [], line.mentions || [], line.micron || [])),
           line.pending ? el('span', { class: 'pending', text: ' …' }) : null));
     }));
   },
@@ -5411,7 +5494,10 @@ app.views.channels = {
 
   // Text with the mentions of us highlighted, and `@name` mentions of
   // others in their colour (both as UTF-16 ranges from the server).
-  marked(text, highlights, mentions = []) {
+  // The text of a chat line, with mentions of us, `@name` mentions and
+  // links marked, and the rest in its Micron styles (`micron`: ranges and
+  // the colours and text styles the server read from the message).
+  marked(text, highlights, mentions = [], micron = []) {
     const marks = [
       ...highlights.map(([start, end]) => [start, end, { class: 'mention' }]),
       ...mentions.map(([start, end, src]) => [start, end, {
@@ -5424,14 +5510,17 @@ app.views.channels = {
       .map(([start, end, url]) => [start, end, { url }]);
     const ranges = [...marks, ...links].sort((a, b) => a[0] - b[0]);
     const out = [];
+    const plain = (from, to) => out.push(...microned(text, from, to, micron));
     let at = 0;
     for (const [start, end, attrs] of ranges) {
       if (start < at || end <= start) continue;
-      if (start > at) out.push(text.slice(at, start));
-      out.push(attrs.url ? linkNode(text.slice(start, end), attrs.url) : el('span', { ...attrs, text: text.slice(start, end) }));
+      if (start > at) plain(at, start);
+      // Its Micron styles inside, so it keeps the message's colours.
+      const inner = microned(text, start, end, micron);
+      out.push(attrs.url ? linkNode(inner, attrs.url) : el('span', attrs, ...inner));
       at = end;
     }
-    if (at < text.length) out.push(text.slice(at));
+    if (at < text.length) plain(at, text.length);
     return out;
   },
 
@@ -5664,6 +5753,7 @@ app.views.network = {
         el('button', { class: 'more', text: 'Tables', title: 'Reticulum\'s path table and announce rates  ( t )', 'data-label': 'Path table and announce rates', onclick: () => tablesDialog() }),
         el('button', { class: 'more', text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
         el('button', { class: 'more', text: 'Sync', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+        el('button', { class: 'more', text: 'Interfaces found', title: 'Entry points and radios others make known, by interface discovery or in their telemetry  ( e )', onclick: () => foundDialog() }),
         el('button', { class: 'more', text: 'Speed test', title: 'Measure how fast data goes between you and someone else, with rettui or NomadNet  ( v )', onclick: () => speedDialog() }),
         el('button', { class: 'more', text: 'Identities…', title: 'Your addresses, and whose an address is  ( I )', onclick: () => identityDialog(this.selected) }),
         el('button', { class: 'more', text: 'Send a file…', title: 'Send a file to someone running rncp -l  ( F )', onclick: () => rncpDialog(this.selected) }),
@@ -5861,7 +5951,8 @@ app.views.network = {
     },
     el('td', { class: 'dim', text: clockTime(new Date(a.at * 1000), true) }),
     el('td', {}, el('span', { class: 'tag ' + a.kind, text: a.tag, title: a.aspect || 'A kind rettui doesn\'t know' })),
-    el('td', { class: 'name' }, a.name ? highlighted(a.name, terms) : el('span', { class: 'dim', text: '(unnamed)' })),
+    el('td', { class: 'name' }, a.name ? highlighted(a.name, terms) : el('span', { class: 'dim', text: '(unnamed)' }),
+      a.software ? el('span', { class: 'dim', text: ` · ${a.software}`, title: 'What runs this propagation node' }) : null),
     el('td', { class: 'mono dim' }, highlighted(a.hash, terms)),
     el('td', { class: 'dim', text: `${a.hops} hop${a.hops === 1 ? '' : 's'}` }),
     el('td', { class: 'dim', text: a.via || '' }),
@@ -6940,7 +7031,8 @@ app.views.node = {
       label('Name'), el('span', { text: node.name }),
       label('Served'), el('span', { text: node.served.label }),
       label('Requests'), el('span', { text: [String(node.served.requests), node.served.not_found ? `${node.served.not_found} not found` : null,
-        node.served.last ? `last ${new Date(node.served.last * 1000).toLocaleString()}` : null].filter(Boolean).join(' · ') }),
+        node.served.last ? `last ${new Date(node.served.last * 1000).toLocaleString()}` : null,
+        node.stats?.visitors ? `${node.stats.visitors} identified ${node.stats.visitors === 1 ? 'visitor' : 'visitors'} since start` : null].filter(Boolean).join(' · ') }),
       label('Since'), el('span', { class: 'row' }, el('span', { class: 'dim', text: new Date(node.served.since * 1000).toLocaleString() }),
         el('button', { text: 'Reset', title: 'Count what the node serves again from now', onclick: async () => {
           if (!await ask('Reset the node\'s statistics?\nThe counts start again from now.', { title: 'Reset statistics', yes: 'Reset', danger: true })) return;
@@ -7386,7 +7478,9 @@ app.views.status = {
       el('div', { class: 'column grow' },
         el('section', { class: 'panel', style: 'max-height:55%' }, el('header', {}, el('span', { class: 'title grow', text: 'Identity' }),
           el('button', { text: 'Announce', onclick: () => attempt(() => api.post('/announce'), 'Announcing') }),
-          el('button', { text: 'Sync now', onclick: () => attempt(() => api.post('/sync'), 'Syncing with the propagation node') }),
+          this.syncButton = el('button', { text: 'Sync now', onclick: () => (app.status?.sync.state === 'running'
+            ? attempt(() => api.post('/sync/cancel'), 'Stopping the sync')
+            : attempt(() => api.post('/sync'), 'Syncing with the propagation node')) }),
           el('button', { class: 'more', text: 'Getting started', title: 'Connect to others, and where to learn more', onclick: () => gettingStarted() }),
           el('button', { class: 'more', text: 'Restart Reticulum', onclick: () => restartReticulum() }),
           el('button', { class: 'more danger', text: 'Stop rettui', title: 'Save everything and close rettui', onclick: () => stopRettui() }), moreButton()), this.info),
@@ -7575,6 +7669,7 @@ app.views.status = {
       done: `${s.sync.at} · ${s.sync.count} new`,
       failed: `${s.sync.at} · failed: ${s.sync.error}`,
     }[s.sync.state];
+    if (this.syncButton) this.syncButton.textContent = s.sync.state === 'running' ? 'Stop sync' : 'Sync now';
     const h = s.hosting;
     const hosting = h.state === 'running'
       ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: h.hash }),
@@ -7640,6 +7735,11 @@ app.views.status = {
       label('Last sync'), el('span', { text: sync }),
       label('Hosting messages'), hosting,
       ...(s.node_served ? [label('Hosting a node'), el('span', { text: `● ${s.node_served} served (Node)` })] : []),
+      ...(s.rncp_in.state === 'off' ? [] : [label('Receiving files'), s.rncp_in.state === 'running'
+        ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.rncp_in.address }),
+          el('span', { class: 'dim', text: '  ' + [`${s.rncp_in.received} received`, s.rncp_in.nobody ? 'no one may send yet' : null,
+            s.rncp_in.refused ? `${s.rncp_in.refused} refused` : null].filter(Boolean).join(' · ') }))
+        : el('span', { text: s.rncp_in.state === 'starting' ? 'starting' : `failed: ${s.rncp_in.error}` })]),
       ...(s.git_host.state === 'off' ? [] : [label('Hosting rngit'), s.git_host.state === 'running'
         ? el('span', {}, el('span', { class: 'mono', style: 'color:var(--accent)', text: s.git_host.url }),
           el('span', { class: 'dim', text: `  ${s.git_host.summary}` }))
@@ -7652,7 +7752,7 @@ app.views.status = {
       label('Data'), el('span', { class: 'mono', text: s.data_dir || '' }),
       label('Backup'), el('div', {},
         el('button', { text: 'Download a backup', title: 'Settings, contacts and messages, in one file to restore with rettui restore',
-          onclick: () => el('a', { href: 'api/backup', download: '' }).click() }),
+          onclick: () => backupDialog() }),
         IN_ANDROID_APP ? androidBackupsButton('🔑 Identity and backups') : null,
         IN_ANDROID_APP ? androidDownloadsButton() : null,
         el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text: IN_ANDROID_APP
@@ -7686,11 +7786,15 @@ app.views.status = {
     const noInterfaces = s.net.state !== 'online' ? 'Reticulum is starting…'
       : s.external_shared_instance ? 'None here: the program running the shared instance (such as rnsd) has them.'
         : 'None: add one in the Reticulum section to reach other peers.';
-    this.interfaces.replaceChildren(...(s.interfaces.length ? s.interfaces.map((i) => el('div', { class: 'iface' },
+    // Off for want of an enabled line: older versions started these.
+    const off = (s.interfaces_off || []).map((name) => el('div', { class: 'iface' },
+      el('span', { class: 'state-warn', text: '○ ' }), name,
+      el('span', { class: 'dim', text: '  off: no enabled line. Add enabled = Yes in the Reticulum section' })));
+    this.interfaces.replaceChildren(...(s.interfaces.length || off.length ? s.interfaces.map((i) => el('div', { class: 'iface' },
       el('span', { class: i.online ? 'online' : 'offline', text: i.online ? '● ' : '○ ' }), i.name,
       el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` }),
       i.details?.length ? el('div', { class: 'iface-details dim', text: i.details.join(' · ') }) : null,
-      trafficGraph(i.history)))
+      trafficGraph(i.history))).concat(off)
       : [el('div', { class: 'empty', text: noInterfaces })]));
     // Fetched for Status only, and drawn again only when it changed.
     const log = s.log && JSON.stringify([s.log.length, s.log.at(-1), s.log[0]]);
@@ -8437,6 +8541,17 @@ app.views.repos = {
     }, { className: 'access-dialog' });
   },
 
+  // The pages of the node hosted here, in the Browser: a repository's
+  // (`group/name`), or the list of them all.
+  hostedPages(name) {
+    const pages = this.state?.hosted?.pages;
+    if (!pages) return;
+    if (!name) return browse(`${pages}:/page/index.mu`);
+    const [g, r] = name.split('/');
+    switchTab('browser');
+    app.views.browser.go(`${pages}:/page/repo.mu`, { fields: { var_g: g, var_r: r } });
+  },
+
   renderHosted() {
     const hosted = this.state?.hosted;
     const running = hosted?.state === 'running';
@@ -8448,6 +8563,7 @@ app.views.repos = {
       running ? el('button', { text: 'Mirror', title: 'Mirror a repository from rns:// or https://', onclick: () => this.follow('mirror') }) : null,
       running ? el('button', { text: 'Fork', title: 'Fork a repository from rns:// or https://', onclick: () => this.follow('fork') }) : null,
       running ? el('button', { text: 'New', title: 'Make an empty repository to push to', onclick: () => this.newHosted() }) : null,
+      running && hosted.pages ? el('button', { text: 'Pages', title: 'Browse them as visitors do, on the node\'s NomadNet pages', onclick: () => this.hostedPages() }) : null,
       el('button', { text: '↻', title: 'List them again', onclick: () => this.update() }));
     const note = (text) => el('div', { class: 'empty', text });
     if (!running) {
@@ -8472,6 +8588,7 @@ app.views.repos = {
         el('span', { class: 'row actions' },
         f ? el('button', { text: 'Sync', title: 'Fetch from its source again', onclick: () => this.host('sync', { name: repo.name }, `Syncing ${repo.name}`) }) : null,
         repo.url ? el('button', { text: 'Copy URL', onclick: () => copy(repo.url, 'the repository\'s URL') }) : null,
+        hosted.pages ? el('button', { text: 'Pages', title: 'Its page, as visitors who may read it see it', onclick: () => this.hostedPages(repo.name) }) : null,
         el('button', { text: 'Who may use it', onclick: () => this.access(repo.name) }),
         el('button', { text: 'Rename', onclick: () => this.renameHosted(repo) }),
         el('button', { class: 'danger', text: 'Delete', onclick: () => this.deleteHosted(repo) }))));
@@ -8550,26 +8667,28 @@ app.views.repos = {
       { text: 'Make it the same (also deletes)', value: 'same' },
     ], { text: 'If a branch there differs from the copy, leave it, overwrite it, or overwrite it and also delete the branches and tags the copy lacks.' });
     if (!how) return;
-    toast('Sending the copy…');
+    const stop = followTransfers();
     try {
       const done = await api.post('/repos/push', { url: from, to, how });
       toast(done.said || 'Sent');
     } catch (e) {
       toast(`Sending failed: ${e.message}`, true);
     }
+    stop();
   },
 
   async mirror() {
     const url = this.url;
     this.copying = url;
     this.render();
-    toast('Copying…');
+    const stop = followTransfers();
     try {
       const done = await api.post('/repos/mirror', { url });
       toast(done.said || 'Copied');
     } catch (e) {
       toast(`Copying failed: ${e.message}`, true);
     }
+    stop();
     this.copying = null;
     await this.update();
   },
@@ -8728,11 +8847,29 @@ app.views.repos = {
       : data.signer.hash === data.author.hash ? el('span', { class: 'state-ok', text: '✓ signed by them' })
         : el('span', { class: 'state-warn', text: `signed by ${whoName(data.signer)}` });
     const done = data.scope === 'completed';
+    const proposed = data.scope === 'proposed';
+    const trusted = data.signer && data.signer.hash === data.author.hash;
     const comment = el('textarea', { rows: 3, placeholder: 'A comment (Markdown)' });
+    // Accepting moves a proposal to the active list; declining deletes it.
+    const review = proposed ? el('div', { class: 'repo-comment' },
+      el('p', { class: trusted ? 'dim' : 'state-warn', text: trusted
+        ? `Proposed by ${whoName(data.author)}. Accept it to make it active, or decline it to delete it.`
+        : `Proposed by ${whoName(data.author)}, but the signature doesn't prove it. Read it with care before accepting.` }),
+      el('div', { class: 'row actions' },
+        el('button', { class: 'primary', text: 'Accept', onclick: async () => {
+          if (!trusted && !await ask(`#${id} isn't signed by its author. Accept it anyway?`, { yes: 'Accept' })) return;
+          this.opened = null;
+          this.write('/repos/doc/state', { id, scope, done: false }, `Accepting #${id}`);
+        } }),
+        el('button', { class: 'danger', text: 'Decline', onclick: async () => {
+          if (!await ask(`Decline #${id} (${data.title})?\nIt is deleted from the node.`, { yes: 'Decline', danger: true })) return;
+          this.opened = null;
+          this.write('/repos/doc/delete', { id, scope }, `Declining #${id}`);
+        } }))) : null;
     return [
       el('div', { class: 'row card-actions' }, back, el('span', { class: 'grow' }),
         el('button', { text: 'Edit…', onclick: () => this.editDoc({ id, scope, title: data.title, text: data.text }) }),
-        el('button', { text: done ? 'Make active' : 'Mark done', onclick: () => this.write('/repos/doc/state', { id, scope, done: !done }, done ? `Making #${id} active` : `Marking #${id} done`) }),
+        proposed ? null : el('button', { text: done ? 'Make active' : 'Mark done', onclick: () => this.write('/repos/doc/state', { id, scope, done: !done }, done ? `Making #${id} active` : `Marking #${id} done`) }),
         el('button', { class: 'danger', text: 'Delete', onclick: async () => {
           if (!await ask(`Delete #${id} (${data.title}) from the node?`, { yes: 'Delete', danger: true })) return;
           this.opened = null;
@@ -8740,6 +8877,7 @@ app.views.repos = {
         } })),
       el('h3', {}, el('span', { class: 'dim', text: `#${data.id} ` }), data.title),
       el('p', { class: 'dim' }, `${data.scope} · by ${whoName(data.author)}, ${ago(data.edited)} ago · `, signed),
+      review,
       el('div', { class: 'repo-text' }, linked(data.text)),
       data.comments.map((c) => el('div', { class: 'repo-comment' },
         el('div', { class: 'dim', text: `${whoName(c.author)}, ${ago(c.created)} ago` }), el('div', { class: 'repo-text' }, linked(c.text)))),
@@ -9318,6 +9456,64 @@ async function identityDialog(address) {
 
 // A file sent to an rncp listener, as `rncp FILE ADDRESS` does, and how
 // the ones sent lately went.
+// Why a passphrase is easy to guess (short, or a PIN), as rettui says it.
+function passphraseWeakness(passphrase) {
+  const length = [...passphrase].length;
+  if (!length) return '';
+  if (length < 20 && /^[0-9]+$/.test(passphrase)) {
+    return 'A PIN of digits alone is easy to guess: anyone with the backup can try every one, as fast as their computer goes, with nothing to stop them. A few words are much safer.';
+  }
+  if (length < 12) {
+    return 'That passphrase is short: anyone with the backup can try passphrases as fast as their computer goes, with nothing to stop them. A few words (12 characters or more) are much safer.';
+  }
+  return '';
+}
+
+// Download a backup, sealed with a passphrase if one is typed: then
+// rettui restore asks for it, and it can't be restored without it.
+function backupDialog() {
+  dialog('Download a backup', (close) => {
+    const first = el('input', { type: 'password', autocomplete: 'new-password', placeholder: 'none' });
+    const again = el('input', { type: 'password', autocomplete: 'new-password' });
+    const error = el('div', { class: 'status error', role: 'alert' });
+    // Easy to guess: said, as rettui says it (backup::sealed::weakness), and theirs to use anyway.
+    const weak = el('div', { class: 'status', style: 'color:var(--yellow)' });
+    first.addEventListener('input', () => { weak.textContent = passphraseWeakness(first.value); });
+    const go = el('button', { class: 'primary', text: 'Download' });
+    const download = async () => {
+      error.textContent = '';
+      if (!first.value) {
+        close();
+        return el('a', { href: 'api/backup', download: '' }).click();
+      }
+      if (first.value !== again.value) return void (error.textContent = 'The passphrases differ.');
+      go.disabled = true;
+      go.textContent = 'Sealing…';
+      try {
+        // Sent in the request's body, never in an address.
+        const made = await api.post('/backup', { passphrase: first.value });
+        close();
+        el('a', { href: `api/backup/${made.id}`, download: '' }).click();
+      } catch (e) {
+        error.textContent = e.message;
+        go.disabled = false;
+        go.textContent = 'Download';
+      }
+    };
+    go.onclick = download;
+    for (const input of [first, again]) input.addEventListener('keydown', (e) => e.key === 'Enter' && download());
+    setTimeout(() => first.focus());
+    return [
+      el('p', { class: 'dim', text: 'Settings, contacts and messages, without your identity. A passphrase seals it: it can\'t be restored without it (rettui restore asks for it), so don\'t lose it. Leave it empty for none.' }),
+      el('label', { class: 'field' }, el('span', { text: 'Passphrase' }), first),
+      weak,
+      el('label', { class: 'field' }, el('span', { text: 'Again' }), again),
+      error,
+      el('div', { class: 'row actions' }, el('span', { class: 'grow' }), go),
+    ];
+  });
+}
+
 async function rncpDialog(address) {
   const sends = await attempt(() => api.get('/rncp'));
   if (!sends) return;
@@ -9334,7 +9530,7 @@ async function rncpDialog(address) {
     const timer = setInterval(async () => {
       if (!document.body.contains(list)) return clearInterval(timer);
       const now = await api.get('/rncp').catch(() => null);
-      if (now) show(now.sends);
+      if (now) { show(now.sends); showGot(now.received); showGets(now.fetches); }
     }, 1000);
     const send = async () => {
       const picked = file.files[0];
@@ -9342,13 +9538,37 @@ async function rncpDialog(address) {
       const q = `?to=${encodeURIComponent(to.value.trim())}&name=${encodeURIComponent(picked.name)}`;
       if (await attempt(() => upload('/rncp/send' + q, picked), `Sending ${picked.name}`)) file.value = '';
     };
+    const got = el('div', { class: 'rncp-sends' });
+    const showGot = (files) => got.replaceChildren(...(files.length ? [el('h4', { text: 'Received' })] : []),
+      ...files.slice().reverse().map((f) => el('div', { class: 'row' },
+        el('span', { class: 'grow', text: `${f.name} (${humanBytes(f.bytes)}) from ${f.from_name || 'someone'}` }),
+        el('span', { class: 'dim mono', text: f.path }))));
+    showGot(sends.received);
+    // And asking a listener for one of its files.
+    const wanted = el('input', { type: 'text', class: 'mono', placeholder: 'its path on that computer', spellcheck: false });
+    const gets = el('div', { class: 'rncp-sends' });
+    const showGets = (fetches) => gets.replaceChildren(...fetches.slice().reverse().map((f) => el('div', { class: 'row' },
+      el('span', { class: 'grow', text: `${f.path} from ${f.from_name}` }),
+      el('span', { class: f.state === 'failed' ? 'state-bad' : f.state === 'fetched' ? 'online' : 'dim',
+        text: f.state === 'fetching' ? `${Math.round(f.progress * 100)}%` : f.state === 'fetched' ? f.saved : f.error }))));
+    showGets(sends.fetches);
+    const get = async () => {
+      if (!wanted.value.trim()) return toast('Type the path of the file to get');
+      if (await attempt(() => api.post('/rncp/fetch', { to: to.value.trim(), path: wanted.value.trim() }), 'Asking for it')) wanted.value = '';
+    };
     return [
       el('p', { class: 'dim', text: `Someone running rncp -l gets it in their folder. Their listener must allow your identity, ${sends.identity} (rncp -a), or let anyone send (rncp -l -n). Up to ${humanBytes(sends.max)}.` }),
       el('label', { class: 'field' }, el('span', { text: 'To' }), to),
       el('label', { class: 'field' }, el('span', { text: 'File' }), file),
       list,
+      el('h4', { text: 'Get a file' }),
+      el('p', { class: 'dim', text: `From a listener run with rncp -l -F that allows your identity. The file is saved on the computer rettui runs on, with the ones received.` }),
+      el('label', { class: 'field' }, el('span', { text: 'Path' }), wanted),
+      gets,
+      got,
       el('div', { class: 'row actions' }, el('span', { class: 'grow' }),
-        el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } }), el('button', { class: 'primary', text: 'Send', onclick: send })),
+        el('button', { text: 'Close', onclick: () => { clearInterval(timer); close(); } }), el('button', { text: 'Get', onclick: get }),
+        el('button', { class: 'primary', text: 'Send', onclick: send })),
     ];
   });
 }
@@ -9388,6 +9608,48 @@ function tablesDialog() {
     timer = setTimeout(show, data.read ? 5000 : 1000);
   };
   dialog('Reticulum\'s tables', () => el('div', { class: 'tables' }, tabs, search, summary, list), { className: 'tables-dialog', onclose: () => clearTimeout(timer) });
+  show();
+}
+
+// Interfaces others make known, as Sideband 2.x lists them: the entry
+// points and radios interface discovery finds, and those contacts send in
+// their telemetry. Each can be added to the Reticulum config (an RNode
+// added off, as its port is set by hand), and shown on the map.
+function foundDialog(focus = null) {
+  let timer = null;
+  let picked = focus;
+  const list = el('div', { class: 'scroll tables-list' });
+  const detail = el('div', { class: 'found-detail' });
+  const summary = el('div', { class: 'dim' });
+  const show = async () => {
+    clearTimeout(timer);
+    const data = await api.get('/found').catch((e) => ({ error: e.message, interfaces: [] }));
+    if (!list.isConnected) return;
+    const rows = data.interfaces;
+    summary.textContent = data.error || `${rows.length} found`;
+    if (!rows.some((r) => r.id === picked)) picked = rows[0]?.id ?? null;
+    list.replaceChildren(...(rows.length ? rows.map((r) => el('button', {
+      class: 'list-item' + (r.id === picked ? ' selected' : '') + (r.stale ? ' dim' : ''), onclick: () => { picked = r.id; show(); },
+    }, el('span', { class: 'main' },
+      el('div', { class: 'name' }, r.connected ? el('span', { class: 'online', text: '● ' }) : null, r.name),
+      el('div', { class: 'sub', text: `${r.summary} · ${r.source}` })))) : [el('div', { class: 'empty',
+      text: 'None yet. Interface discovery (Discover interfaces, in the Reticulum settings) lists the entry points and radios others announce, and Sideband 2.x sends its own in telemetry. They show here as they\'re heard.' })]));
+    const r = rows.find((row) => row.id === picked);
+    detail.replaceChildren(...(r ? [
+      el('div', { class: 'name', text: `${r.name} · from ${r.source}${r.connected ? ' · connected' : ''}` }),
+      el('dl', {}, ...r.details.flatMap(([label, value]) => [el('dt', { text: label }), el('dd', { text: value })])),
+      el('div', { class: 'row actions' },
+        el('button', { class: 'primary', text: 'Add to Reticulum', disabled: !!r.add, title: r.add || 'Add it to the Reticulum config, as a TCP client for an entry point (it connects when Reticulum restarts)', onclick: async () => {
+          if (!await ask(`Add ${r.name} to the Reticulum config?\n${r.kind === 'RNode' ? 'It\'s added off: set its port and TX power in the Reticulum settings, then turn it on.' : 'It connects when Reticulum restarts.'}`, { title: 'Add interface', yes: 'Add' })) return;
+          const result = await attempt(() => api.post(`/found/${r.id}/add`));
+          if (result) toast(result.done);
+        } }),
+        r.located ? el('button', { text: 'On the map', onclick: () => mapDialog({ interfaceId: r.id }) }) : null,
+        r.reach ? el('button', { text: 'Copy', title: 'Copy where to reach it', onclick: () => copy(r.reach, 'where to reach it') }) : null),
+      r.add ? el('p', { class: 'dim', text: r.add }) : null].filter(Boolean) : []));
+    timer = setTimeout(show, 10000);
+  };
+  dialog('Interfaces found', () => el('div', { class: 'tables found' }, summary, list, detail), { className: 'tables-dialog', onclose: () => clearTimeout(timer) });
   show();
 }
 
@@ -9570,6 +9832,8 @@ document.addEventListener('keydown', (e) => {
     app.views.network.toggleMode();
   } else if (e.key === 't' && app.tab === 'network') {
     tablesDialog();
+  } else if (e.key === 'e' && app.tab === 'network') {
+    foundDialog();
   } else if (e.key === 'v' && app.tab === 'network') {
     speedDialog();
   } else if (e.key === 'I' && app.tab === 'network') {

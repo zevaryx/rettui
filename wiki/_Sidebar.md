@@ -7,6 +7,7 @@
 - [Web UI](Web-UI)
 - [Docker](Docker)
 - [Android](Android)
+- [Desktop App](Desktop-App)
 
 **What it does**
 - [Messaging](Messaging)
@@ -22,6 +23,7 @@
 **Settings and data**
 - [Settings and Reticulum Config](Settings-and-Reticulum-Config)
 - [Data and Storage](Data-and-Storage)
+- [Sealed Backups](Sealed-Backups)
 
 **More**
 - [Glossary](Glossary)

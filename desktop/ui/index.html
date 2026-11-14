@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rettui: identities, backups and pipes</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Identities, backups and pipes</h1>
+  <p class="lead">What the web UI leaves out, because anyone with its login link controls it. This window is only on this computer.</p>
+  <nav role="tablist">
+    <button role="tab" data-tab="identities" aria-selected="true">Identities</button>
+    <button role="tab" data-tab="backup" aria-selected="false">Backup</button>
+    <button role="tab" data-tab="pipes" aria-selected="false">Pipe interfaces</button>
+  </nav>
+</header>
+<p id="notice" role="status" hidden></p>
+
+<main>
+<section id="identities">
+  <p class="help">Each identity has its own address, name, conversations and contacts. Its key is the file that makes it you: anyone who has a copy can pose as you, so keep copies private.</p>
+  <ul id="identity-list" class="cards"></ul>
+  <h2>Keep another identity</h2>
+  <form id="keep">
+    <label>Name it announces <input name="name" required maxlength="100" autocomplete="off"></label>
+    <label>From a file <span class="hint">(optional: an identity from Sideband, NomadNet, MeshChat or another rettui; leave empty for a new one)</span>
+      <input name="from" autocomplete="off" placeholder="/path/to/identity"></label>
+    <button type="submit">Keep identity</button>
+  </form>
+  <h2>Copy the identity in use</h2>
+  <form id="export">
+    <label>Save to <input name="to" required autocomplete="off"></label>
+    <button type="submit">Save a copy</button>
+  </form>
+</section>
+
+<section id="backup" hidden>
+  <p class="help">Settings, contacts, messages and your identity in one file, to restore on another computer or after a reinstall (below, or <code>rettui restore</code>). Attachments are left out. Seal it with a passphrase so the file can be kept anywhere; without one, it holds your key in the clear.</p>
+  <form id="backup-form">
+    <label>Save to <input name="to" required autocomplete="off"></label>
+    <label>Passphrase <span class="hint">(optional)</span> <input name="passphrase" type="password" autocomplete="new-password"></label>
+    <label>Again <input name="again" type="password" autocomplete="new-password"></label>
+    <p id="weak" class="warn" hidden></p>
+    <button type="submit">Back up</button>
+  </form>
+  <h2>Restore a backup</h2>
+  <p class="help">Puts the backup's settings, contacts, messages and identity in place of the ones of the identity in use. What's there now is moved aside, into a <code>before-restore</code> folder in the data folder, not deleted. rettui stops while it's restored and starts again, and the main window reloads.</p>
+  <form id="restore-form">
+    <label>Backup file <input name="file" required autocomplete="off" placeholder="/path/to/rettui-backup.tar.gz"></label>
+    <label id="restore-passphrase" hidden>Its passphrase <input name="passphrase" type="password" autocomplete="off"></label>
+    <button type="submit">Restore…</button>
+  </form>
+</section>
+
+<section id="pipes" hidden>
+  <p class="help">A pipe interface runs a program and talks to it over its input and output, to reach Reticulum through a radio or a script. <strong>It runs with your account's rights</strong>, so only add commands you trust. New ones start turned off.</p>
+  <ul id="pipe-list" class="cards"></ul>
+  <h2>Add a pipe interface</h2>
+  <form id="add-pipe">
+    <label>Name <input name="name" required maxlength="100" autocomplete="off"></label>
+    <label>Command <input name="command" required autocomplete="off" placeholder="/usr/local/bin/my-modem --port /dev/ttyUSB0"></label>
+    <button type="submit">Add</button>
+  </form>
+  <p id="restart-row" hidden>Changes apply when Reticulum starts again. <button id="restart" type="button">Restart Reticulum</button></p>
+</section>
+</main>
+
+<dialog id="confirm">
+  <form method="dialog">
+    <p id="confirm-text"></p>
+    <menu><button value="cancel">Cancel</button><button value="ok" id="confirm-ok" class="danger">OK</button></menu>
+  </form>
+</dialog>
+<script src="manage.js"></script>
+</body>
+</html>

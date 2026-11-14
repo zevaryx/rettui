@@ -51,7 +51,7 @@ impl Kind {
 /// The kinds rettui can name, by the full name they announce under.
 const KNOWN: &[(&str, Kind)] = &[
     (crate::lxmf::LXMF_ASPECT, Kind::Lxmf),
-    (nomad_core::NOMAD_NODE_ASPECT, Kind::Nomad),
+    (crate::nomad::paths::NODE_ASPECT, Kind::Nomad),
     (crate::lxmf::PROPAGATION_ASPECT, Kind::Propagation),
     (crate::rrc::DEFAULT_ASPECT, Kind::Rrc),
     ("lxst.telephony", Kind::Phone),
@@ -67,6 +67,9 @@ pub struct Heard {
     pub aspect: Option<&'static str>,
     pub name: Option<String>,
     pub hops: u8,
+    /// For a propagation node, what runs it, as LXMF 1.2 announces it
+    /// ("lxmd 1.2.1", "rettui 1.2.0").
+    pub software: Option<String>,
 }
 
 /// Reticulum's name hash: the first 10 bytes of the full name's SHA-256.
@@ -83,14 +86,35 @@ pub fn heard(hash: Hash, name_hash_heard: [u8; 10], app_data: Option<&[u8]>, hop
     let (aspect, kind) = known.map_or((None, Kind::Other), |(name, kind)| (Some(*name), *kind));
     let name = app_data.and_then(|data| match kind {
         Kind::Lxmf => super::lxmf_display_name(data),
-        Kind::Nomad => crate::names::clean(&nomad_core::clamp_node_name(&String::from_utf8_lossy(data))),
+        Kind::Nomad => crate::names::clean(&crate::nomad::paths::clamp_name(&String::from_utf8_lossy(data))),
         Kind::Propagation => lxmf_core::handlers::parse_pn_announce_data(data)
             .and_then(|pn| pn.metadata.get(&lxmf_core::constants::PN_META_NAME).cloned())
             .and_then(|name| crate::names::clean(&String::from_utf8_lossy(&name))),
         Kind::Rrc => hub_name(data).or_else(|| any_name(data)),
         Kind::Phone | Kind::Git | Kind::Other => any_name(data),
     });
-    Heard { hash, kind, aspect, name, hops }
+    let software = app_data
+        .filter(|_| kind == Kind::Propagation)
+        .and_then(lxmf_core::handlers::parse_pn_announce_data)
+        .and_then(|pn| pn_software(&pn.metadata));
+    Heard { hash, kind, aspect, name, hops, software }
+}
+
+/// What runs a propagation node, from its announce's metadata: the
+/// implementation's name and version, as Sideband shows them ("Running
+/// lxmd 1.2.1"). Either alone, if that's all it says.
+pub fn pn_software(metadata: &std::collections::HashMap<u8, Vec<u8>>) -> Option<String> {
+    const IMPL_NAME: u8 = 0xFE;
+    let text = |key: u8| {
+        let value = metadata.get(&key)?;
+        let text: String = String::from_utf8_lossy(value).chars().filter(|c| !c.is_control()).take(32).collect();
+        let text = text.trim().to_string();
+        (!text.is_empty()).then_some(text)
+    };
+    match (text(IMPL_NAME), text(lxmf_core::constants::PN_META_VERSION)) {
+        (Some(name), Some(version)) => Some(format!("{name} {version}")),
+        (one, other) => one.or(other),
+    }
 }
 
 /// An RRC hub's name, as rrcd, rsRRCD, the Go hub and rettui announce it:
@@ -133,6 +157,29 @@ fn any_name(data: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_runs_a_propagation_node_is_read_from_its_announce() {
+        use lxmf_core::handlers::{PropagationNodeAnnounceData, get_propagation_node_app_data};
+        let mut data = PropagationNodeAnnounceData::new(true, 256, 10_240, 16, 3, 18);
+        data.metadata.insert(lxmf_core::constants::PN_META_NAME, b"Hill".to_vec());
+        let bare = get_propagation_node_app_data(&data);
+        // lxmd packs its name and version as text, not bytes.
+        let mut value = rmpv::decode::read_value(&mut &bare[..]).unwrap();
+        if let rmpv::Value::Array(parts) = &mut value
+            && let Some(rmpv::Value::Map(meta)) = parts.get_mut(6)
+        {
+            meta.push((rmpv::Value::from(0xFE), rmpv::Value::from("lxmd")));
+            meta.push((rmpv::Value::from(lxmf_core::constants::PN_META_VERSION), rmpv::Value::from("1.2.1")));
+        }
+        let mut lxmd = Vec::new();
+        rmpv::encode::write_value(&mut lxmd, &value).unwrap();
+        let node = heard([4; 16], name_hash(crate::lxmf::PROPAGATION_ASPECT), Some(&lxmd), 1);
+        assert_eq!((node.name.as_deref(), node.software.as_deref()), (Some("Hill"), Some("lxmd 1.2.1")));
+        // One that doesn't say, and one that isn't a propagation node.
+        assert_eq!(heard([4; 16], name_hash(crate::lxmf::PROPAGATION_ASPECT), Some(&bare), 1).software, None);
+        assert_eq!(heard([1; 16], name_hash("lxmf.delivery"), Some(&lxmd), 1).software, None);
+    }
 
     #[test]
     fn known_kinds_are_named_and_others_said_as_they_are() {

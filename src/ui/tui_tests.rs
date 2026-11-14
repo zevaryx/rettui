@@ -47,6 +47,11 @@ impl Tui {
         (0..HEIGHT).map(|y| (0..WIDTH).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect()
     }
 
+    /// The screen's cells as last drawn, for their colours and styles.
+    pub fn buffer(&self) -> &ratatui::buffer::Buffer {
+        self.terminal.backend().buffer()
+    }
+
     /// A key, then the screen drawn.
     pub fn key(&mut self, code: KeyCode) -> &mut Self {
         self.app.on_key(KeyEvent::from(code));
@@ -276,6 +281,7 @@ fn reticulums_path_and_announce_rate_tables() {
         aspect: None,
         name: Some("Hilltop relay".into()),
         hops: 1,
+        software: None,
     };
     tui.app.announce_log.push(heard, now);
     let paths = vec![
@@ -322,6 +328,37 @@ fn reticulums_path_and_announce_rate_tables() {
     // Back to the list.
     tui.key(KeyCode::Char('t'));
     assert!(!tui.app.tables.open && tui.draw().contains("Heard announces"));
+}
+
+/// The config, written as someone might by hand, and read in.
+fn with_rns_config(app: &mut crate::app::App, text: &str) {
+    let path = app.rns_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+    app.rns_reload();
+}
+
+#[test]
+fn an_interface_that_doesnt_say_enabled_is_off() {
+    let mut tui = Tui::new("rns-unsaid");
+    with_rns_config(&mut tui.app, "[reticulum]\n  share_instance = No\n\n[interfaces]\n  [[Quiet]]\n    type = AutoInterface\n");
+    tui.tab(Tab::Reticulum);
+    while tui.app.rns.section() != Some(&crate::reticulum::Section::Interface("Quiet".into())) {
+        tui.key(KeyCode::Down);
+    }
+    // Shown as off, as Reticulum takes it, and the option reads no.
+    let drawn = tui.draw();
+    assert!(drawn.contains("○ Quiet") && !drawn.contains("● Quiet"), "{drawn}");
+    assert!(tui.app.rns.check.warnings.iter().any(|w| w.contains("Quiet: off")), "{:?}", tui.app.rns.check.warnings);
+    // Space turns it on, rather than writing that it's off.
+    tui.key(KeyCode::Char(' '));
+    let config = std::fs::read_to_string(tui.app.rns_path()).unwrap();
+    assert!(crate::reticulum::interface_on(&crate::reticulum::doc::Doc::new(&config), "Quiet"), "{config}");
+    assert!(tui.draw().contains("● Quiet"));
+    // And off again.
+    tui.key(KeyCode::Char(' '));
+    let config = std::fs::read_to_string(tui.app.rns_path()).unwrap();
+    assert!(!crate::reticulum::interface_on(&crate::reticulum::doc::Doc::new(&config), "Quiet"), "{config}");
 }
 
 #[test]
@@ -586,7 +623,7 @@ fn browsing_this_clients_own_node() {
 
 /// A script page of this client's own node runs as it would for a visitor
 /// (with what a form sends), when scripts are on; when they're off, a note
-/// says visitors get its text.
+/// says visitors are told it isn't there.
 #[cfg(unix)]
 #[test]
 fn browsing_this_clients_own_script_pages() {
@@ -613,10 +650,10 @@ fn browsing_this_clients_own_script_pages() {
     tui.key(KeyCode::Enter);
     let mut ran = None;
     while let Ok(command) = tui.net.try_recv() {
-        if let NetCommand::RunScript { id, script, fields, identify } = command {
+        if let NetCommand::RunScript { id, script, fields, identify, limits } = command {
             assert_eq!(fields.get("field_name").map(String::as_str), Some("Bob"));
             assert!(!identify);
-            ran = Some((id, crate::nomad::script::preview(&script, None, &fields)));
+            ran = Some((id, crate::nomad::script::preview(&script, None, &fields, &limits)));
         }
     }
     let (id, data) = ran.expect("the script was asked to run");
@@ -893,6 +930,12 @@ fn messages_at_the_keyboard_and_with_the_mouse() {
     ] {
         tui.key(code);
     }
+    // `o` asks before opening what Bob sent; no leaves it shut.
+    assert!(matches!(tui.app.prompt.as_ref().map(|p| &p.kind), Some(crate::app::PromptKind::ConfirmOpenFile(_))));
+    tui.key(KeyCode::Esc);
+    assert!(tui.app.prompt.is_none());
+    tui.ask(crate::app::PromptKind::ConfirmOpenFile(std::path::PathBuf::from("note.txt")), "y");
+    assert!(tui.app.prompt.is_none());
 
     // Writing: an emoji picked, a shortcode, a reply chosen, sent (as
     // messages to Bob go: automatically, after cycling through the modes).
@@ -1032,6 +1075,29 @@ fn messages_at_the_keyboard_and_with_the_mouse() {
 }
 
 #[test]
+fn a_backup_sealed_with_a_passphrase_typed_unseen() {
+    let mut tui = Tui::new("sealed-backup");
+    std::fs::write(&tui.app.paths.identity, [7u8; 64]).unwrap();
+    tui.tab(Tab::Status);
+    let backup = tui.dir.join("sealed.tar.gz");
+    // Where: in place of the name it suggests.
+    tui.key(KeyCode::Char('B'));
+    tui.app.prompt.as_mut().unwrap().input = crate::term::input::TextInput::with_text(&backup.display().to_string());
+    tui.key(KeyCode::Enter);
+    assert!(tui.app.prompt.as_ref().unwrap().title.contains("passphrase"));
+    // Typed, it shows as dots.
+    tui.keys("hunter 2");
+    let screen = tui.draw();
+    assert!(screen.contains("••••••••") && !screen.contains("hunter 2"), "{screen}");
+    tui.key(KeyCode::Enter).answer("hunter 2");
+    tui.app.saver.finish();
+    assert!(crate::backup::is_sealed(&backup));
+    let restored = tui.dir.join("restored");
+    assert!(crate::backup::restore(&backup, &restored, false, Some("hunter 2")).is_ok());
+    assert!(restored.join("identity").exists());
+}
+
+#[test]
 fn the_network_and_status_tabs() {
     use crate::net::{NetEvent, PeerKind};
     let mut tui = Tui::new("network");
@@ -1100,7 +1166,8 @@ fn the_network_and_status_tabs() {
     }
     tui.settle();
     let backup = tui.dir.join("backup.tar.gz").display().to_string();
-    tui.key(KeyCode::Char('B')).answer(&backup);
+    // No passphrase: Enter.
+    tui.key(KeyCode::Char('B')).answer(&backup).answer("");
     let identity = tui.dir.join("identity-copy").display().to_string();
     tui.key(KeyCode::Char('b')).answer(&identity);
     tui.key(KeyCode::Char('i')).answer("/no/such/identity");
@@ -1694,7 +1761,14 @@ fn network_peers_of_each_kind_and_the_announce_viewer() {
         tui.app.on_net(NetEvent::Announce { kind, hash: [n; 16], name: Some(name.into()), hops: 1 });
     }
     for (n, kind) in [(1u8, Kind::Lxmf), (2, Kind::Nomad), (3, Kind::Propagation), (4, Kind::Rrc), (5, Kind::Phone), (6, Kind::Other)] {
-        tui.app.on_net(NetEvent::Heard(Heard { hash: [n; 16], kind, aspect: None, name: Some(format!("heard {n}")), hops: 2 }));
+        tui.app.on_net(NetEvent::Heard(Heard {
+            hash: [n; 16],
+            kind,
+            aspect: None,
+            name: Some(format!("heard {n}")),
+            hops: 2,
+            software: None,
+        }));
     }
     tui.tab(Tab::Network);
     // Each peer: opened, and the keys for its kind.
@@ -1766,7 +1840,7 @@ fn network_peers_of_each_kind_and_the_announce_viewer() {
     tui.key(KeyCode::Char('g'));
     for n in 0..(crate::app::announces::KEPT + 5) {
         let hash = [(n % 250) as u8, (n / 250) as u8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9];
-        tui.app.on_net(NetEvent::Heard(Heard { hash, kind: Kind::Other, aspect: None, name: None, hops: 1 }));
+        tui.app.on_net(NetEvent::Heard(Heard { hash, kind: Kind::Other, aspect: None, name: None, hops: 1, software: None }));
     }
     tui.draw();
 }
@@ -2018,13 +2092,14 @@ fn who_may_see_a_page_on_the_node() {
 #[test]
 fn the_node_counts_what_it_serves_across_restarts_until_reset() {
     use crate::net::{HostEvent, NetEvent};
-    let stats = |requests, pages, files, media| nomad_core::NomadServeStats {
+    let stats = |requests, pages, files, media| crate::nomad::host::Stats {
         request_count: requests,
         page_hits: pages,
         file_hits: files,
         media_hits: media,
         not_found_count: requests - pages - files - media,
         last_request_ms: None,
+        visitors: 0,
     };
     let mut tui = Tui::new("node-stats");
     tui.tab(Tab::Node);
@@ -2037,6 +2112,12 @@ fn the_node_counts_what_it_serves_across_restarts_until_reset() {
     tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(7, 3, 1, 2))));
     let screen = tui.draw();
     assert!(screen.contains("3 pages · 1 file · 2 pic") && screen.contains("7 · 1 not found"), "{screen}");
+    assert!(!screen.contains("identified"), "nobody has identified yet");
+    // Visitors who identified are counted by the running node.
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(crate::nomad::host::Stats { visitors: 2, ..stats(7, 3, 1, 2) })));
+    let shown = tui.draw();
+    assert!(shown.contains("2 identified since"), "{shown}");
+    tui.app.on_net(NetEvent::Host(HostEvent::Stats(stats(7, 3, 1, 2))));
     tui.tab(Tab::Status);
     assert!(tui.draw().contains("3 pages · 1 file · 2 pictures served"));
 
@@ -2095,6 +2176,40 @@ fn sending_a_file_to_an_rncp_listener() {
     say(&mut tui, crate::net::RncpState::Failed("the listener closed the link".into()));
     assert!(tui.said().contains("Could not send notes.txt"), "{}", tui.said());
     assert_eq!(tui.app.rncp.len(), 2);
+}
+
+#[test]
+fn getting_a_file_from_an_rncp_listener() {
+    use crate::net::remote::FetchState;
+    let mut tui = Tui::new("rncp-get");
+    tui.tab(Tab::Network);
+    let to = "ab".repeat(16);
+    tui.key(KeyCode::Char('O'));
+    let mine = hex::encode(tui.app.identity_hash);
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.contains(&mine) && p.title.contains("-F")));
+    tui.answer("nope");
+    assert!(tui.said().contains("32 hex"), "{}", tui.said());
+    tui.key(KeyCode::Char('O')).answer(&to);
+    assert!(tui.app.prompt.as_ref().is_some_and(|p| p.title.contains("Get which file")));
+    tui.answer("/srv/maps/hill.txt");
+    let sent = tui.sent();
+    assert!(
+        sent.iter()
+            .any(|c| matches!(c, NetCommand::RncpFetch { path, dir, .. } if path == "/srv/maps/hill.txt" && dir.ends_with("received"))),
+        "{sent:?}"
+    );
+    // Asking twice for the same one is turned down while it's on its way.
+    assert!(tui.app.rncp_fetch(&to, "/srv/maps/hill.txt").unwrap_err().contains("already"));
+    let hash = crate::net::parse_hash(&to).unwrap();
+    let say = |tui: &mut Tui, state| tui.app.on_net(crate::net::NetEvent::RncpFetch { to: hash, path: "/srv/maps/hill.txt".into(), state });
+    say(&mut tui, FetchState::Fetching(0.5));
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("50%")));
+    say(&mut tui, FetchState::Fetched { name: "hill.txt".into(), saved: "x/hill.txt".into(), bytes: 12, secs: 1.5 });
+    assert!(tui.app.log.iter().any(|l| l.contains("Got hill.txt (12 B)")));
+    tui.key(KeyCode::Char('O')).answer(&to).answer("/srv/maps/hill.txt");
+    say(&mut tui, FetchState::Failed("not allowed".into()));
+    assert!(tui.said().contains("Could not get"), "{}", tui.said());
+    assert_eq!(tui.app.rncp_fetches.len(), 2);
 }
 
 #[test]
@@ -2181,4 +2296,197 @@ fn a_speed_test_at_the_keyboard() {
     tui.key(KeyCode::Esc);
     assert!(!tui.app.speed.open);
     assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::SpeedListen(None))));
+}
+
+#[test]
+fn receiving_files_with_rncp_shows_in_status() {
+    use crate::app::rncp_in::{Listening, Received};
+    let mut tui = Tui::new("rncp-status");
+    tui.tab(Tab::Status);
+    assert!(!tui.draw().contains("Receiving files"), "off, nothing to say");
+    tui.app.rncp_in.status = Listening::On([0x5a; 16]);
+    tui.app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![] });
+    let screen = tui.draw();
+    assert!(screen.contains("Receiving files") && screen.contains(&"5a".repeat(16)) && screen.contains("no one may send yet"), "{screen}");
+    tui.app.rncp_in.config = Some(crate::net::rncplisten::RncpListenConfig { dir: "x".into(), allowed: vec![[1; 16]] });
+    tui.app.rncp_in.refused = 2;
+    tui.app.rncp_in.received.push(Received { name: "a".into(), bytes: 1, path: "x/a".into(), from: None, at: 0.0 });
+    let screen = tui.draw();
+    assert!(screen.contains("1 received") && screen.contains("2 refused") && !screen.contains("no one may send"), "{screen}");
+    tui.app.rncp_in.status = Listening::Failed("no transport".into());
+    assert!(tui.draw().contains("no transport"));
+}
+
+#[test]
+fn interfaces_found_listed_added_and_mapped_at_the_keyboard() {
+    use crate::net::found::FoundInterface;
+    let mut tui = Tui::new("found");
+    tui.tab(Tab::Network);
+    tui.key(KeyCode::Char('e'));
+    assert!(tui.app.found_view.open && tui.draw().contains("None yet"));
+    let hill = FoundInterface {
+        name: "Hill".into(),
+        kind: "BackboneInterface".into(),
+        transport: true,
+        transport_id: Some("ab".repeat(16)),
+        reachable_on: Some("hill.example.net".into()),
+        port: Some(4242),
+        latitude: Some(51.5),
+        longitude: Some(-0.1),
+        last_heard: Some(1),
+        heard_count: Some(2),
+        status: Some("available".into()),
+        ..FoundInterface::default()
+    };
+    let radio = FoundInterface {
+        name: "Radio".into(),
+        kind: "RNodeInterface".into(),
+        frequency: Some(868_100_000),
+        bandwidth: Some(125_000),
+        spreading_factor: Some(8),
+        coding_rate: Some(5),
+        ..FoundInterface::default()
+    };
+    tui.app.on_net(crate::net::NetEvent::Discovered(vec![hill, radio]));
+    let screen = tui.draw();
+    assert!(screen.contains("Backbone · hill.example.net:4242") && screen.contains("RNode · 868.1 MHz"), "{screen}");
+    assert!(screen.contains("Reachable on") && screen.contains("Heard"), "{screen}");
+    // The radio is added off, for its port to be set.
+    tui.key(KeyCode::Down).key(KeyCode::Enter);
+    assert!(
+        tui.app.notice.as_ref().is_some_and(|n| n.text.contains("Added Radio") && n.text.contains("off")),
+        "{:?}",
+        tui.app.notice.as_ref().map(|n| n.text.clone())
+    );
+    let text = std::fs::read_to_string(tui.app.rns_path()).unwrap();
+    assert!(text.contains("[[Radio]]") && text.contains("frequency = 868100000") && text.contains("enabled = No"), "{text}");
+    // The entry point copied, then shown on the map.
+    tui.key(KeyCode::Up).key(KeyCode::Char('y'));
+    assert_eq!(tui.app.clipboard.last.as_deref(), Some("hill.example.net:4242"));
+    tui.key(KeyCode::Char('m'));
+    assert!(!tui.app.found_view.open && tui.app.tab == Tab::Messages && tui.app.map.is_some());
+    let screen = tui.draw();
+    assert!(screen.contains("▲ Hill") && screen.contains("Backbone · hill"), "{screen}");
+    // Enter on it goes back to it in the list.
+    tui.key(KeyCode::Enter);
+    assert!(tui.app.found_view.open && tui.app.tab == Tab::Network && tui.app.map.is_none());
+    tui.key(KeyCode::Esc);
+    assert!(!tui.app.found_view.open);
+    // Left off the map, nothing's left to show, so it closes.
+    tui.tab(Tab::Messages);
+    tui.key(KeyCode::Char('M'));
+    assert!(tui.app.map.is_some());
+    tui.key(KeyCode::Char('i'));
+    assert!(tui.app.map.is_none());
+}
+
+#[test]
+fn ask_where_someone_is_from_the_map_and_see_what_runs_a_propagation_node() {
+    use crate::lxmf::fields::{Command, Telemetry};
+    use crate::lxmf::{Extras, InboundMessage};
+    let mut tui = Tui::new("map-ask");
+    let key = "ab".repeat(16);
+    let telemetry = Telemetry { location: Some(crate::lxmf::Location::at(51.5, -0.1)), ..Telemetry::default() };
+    let message = InboundMessage {
+        source: [0xab; 16],
+        timestamp: crate::app::now() - 60.0,
+        extras: Extras { telemetry: Some(telemetry), ..Extras::default() },
+        ..InboundMessage::default()
+    };
+    tui.app.on_net(crate::net::NetEvent::Message(Box::new(message)));
+    tui.tab(Tab::Messages);
+    tui.key(KeyCode::Char('M'));
+    assert!(tui.app.map.is_some() && tui.draw().contains("w ask where"));
+    tui.key(KeyCode::Char('w'));
+    let asked = tui.sent();
+    assert!(
+        asked.iter().any(|c| matches!(c, NetCommand::SendMessage { message, .. } if message.commands == [Command::TelemetryRequest] && hex::encode(message.to) == key)),
+        "{asked:?}"
+    );
+    assert!(tui.app.notice.as_ref().is_some_and(|n| n.text.contains("where they are")));
+    // The announce viewer says what runs a propagation node.
+    tui.key(KeyCode::Esc);
+    tui.tab(Tab::Network);
+    let node = crate::net::heard::Heard {
+        hash: [5; 16],
+        kind: crate::net::heard::Kind::Propagation,
+        aspect: None,
+        name: Some("Hill node".into()),
+        hops: 1,
+        software: Some("lxmd 1.2.1".into()),
+    };
+    tui.app.announce_log.push(node, crate::app::now());
+    tui.key(KeyCode::Char('a'));
+    let shown = tui.draw();
+    assert!(shown.contains("Hill node") && shown.contains("lxmd 1.2.1"), "{shown}");
+}
+
+/// Art sent to a room as Micron in NomadNet's `¦` form, a message a line, as
+/// an art bot sends it: drawn in its colours, a row a message, every space
+/// kept, lined up under the sender's name. Messages without a `¦` tag, and
+/// formatting without colour, wrap as before.
+#[test]
+fn micron_art_in_a_room_keeps_its_shape() {
+    use crate::app::channels::ChatLine;
+    use ratatui::style::{Color, Modifier};
+    let mut tui = Tui::new("micron-art");
+    with_hilltop(&mut tui);
+    let carol = hex::encode(CAROL);
+    let said = |text: &str| -> ChatLine {
+        serde_json::from_value(
+            serde_json::json!({ "kind": "Msg", "src": carol, "nick": "carol", "text": text, "ts": 1_800_000_000_000u64 }),
+        )
+        .unwrap()
+    };
+    let art: Vec<&str> = include_str!("testdata/micron-art.txt").lines().collect();
+    let mut lines: Vec<ChatLine> = art.iter().map(|l| said(l)).collect();
+    lines.push(said("plain words with `F00 backticks` and a ¦ bar, long enough that the chat view has to wrap them onto a second row"));
+    lines.push(said("¦!bold¦! words but no colour wrap like any other message, so this one is made long enough to need a second row"));
+    tui.app.channels.hubs[0].buffers.insert("lobby".into(), lines);
+    let screen = tui.draw();
+    let rows: Vec<&str> = screen.lines().collect();
+    let said_at: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.contains("<carol> ")).map(|(y, _)| y).collect();
+    assert_eq!(said_at.len(), art.len() + 2, "{screen}");
+    // A row each, one under the other: none wrapped.
+    assert!(said_at.windows(2).take(art.len()).all(|w| w[1] == w[0] + 1), "{screen}");
+    let history = tui.app.regions.channel_history;
+    let buffer = tui.buffer();
+    // The column a row's message starts in, after the sender's name.
+    let body = |y: usize| (rows[y][..rows[y].find("<carol> ").unwrap()].chars().count() + "<carol> ".len()) as u16;
+    for (line, &y) in art.iter().zip(&said_at) {
+        let row = rows[y];
+        let body = body(y);
+        let micron = crate::nomad::micron::chat::parse(line).unwrap();
+        // Its text from the same column, every space kept, up to the view's
+        // edge; never a tag.
+        let shown: String = (body..history.right()).map(|x| buffer[(x, y as u16)].symbol()).collect();
+        let text: String = micron.text.chars().take(shown.chars().count()).collect();
+        assert_eq!(shown.trim_end(), text.trim_end(), "row {y}");
+        assert!(!row.contains('\u{a6}'), "{row}");
+    }
+    // Colours as sent: `¦Bf00¦Faf0▄¦B0f9▀ `.
+    let (x, y) = (body(said_at[0]), said_at[0] as u16);
+    assert_eq!((buffer[(x, y)].symbol(), buffer[(x, y)].fg, buffer[(x, y)].bg), ("▄", Color::Rgb(0xaa, 0xff, 0), Color::Rgb(0xff, 0, 0)));
+    assert_eq!((buffer[(x + 1, y)].symbol(), buffer[(x + 1, y)].bg), ("▀", Color::Rgb(0, 0xff, 0x99)));
+    assert_eq!((buffer[(x + 2, y)].symbol(), buffer[(x + 2, y)].bg), (" ", Color::Rgb(0, 0xff, 0x99)));
+    // The banner below it, in the same column, each letter of "RRC" in its
+    // own colour on black.
+    let banner = said_at[art.len() - 2];
+    assert_eq!(body(banner), x);
+    assert!(rows[banner].contains("| RRC art over Reticulum"), "{screen}");
+    for (i, (letter, fg)) in
+        [("R", Color::Rgb(0xff, 0xff, 0)), ("R", Color::Rgb(0, 0xff, 0)), ("C", Color::Rgb(0xff, 0, 0xff))].into_iter().enumerate()
+    {
+        let cell = &buffer[(x + 3 + i as u16, banner as u16)];
+        assert_eq!((cell.symbol(), cell.fg, cell.bg), (letter, fg, Color::Rgb(0, 0, 0)));
+    }
+    // Plain text: backticks and a lone bar shown as written, and wrapped.
+    let plain = said_at[art.len()];
+    assert!(rows[plain].contains("with `F00"), "{screen}");
+    assert!(!rows[plain + 1].contains("<carol>") && rows[plain + 1].contains("backticks` and a \u{a6} bar"), "{screen}");
+    // Bold without colour: bold, and wrapped like the plain message.
+    let bold = said_at[art.len() + 1];
+    let at = rows[bold][..rows[bold].find("bold").unwrap()].chars().count() as u16;
+    assert!(buffer[(at, bold as u16)].modifier.contains(Modifier::BOLD));
+    assert!(!rows[bold].contains('\u{a6}') && !rows[bold + 1].contains("<carol>") && rows[bold + 1].contains("like any"), "{screen}");
 }

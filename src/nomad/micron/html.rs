@@ -7,6 +7,8 @@
 
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::source::{Token, tokenize, visible};
 use super::{FieldKind, Interactive, MLine, MSpan, Page, Table};
@@ -31,6 +33,45 @@ pub fn escape(text: &str) -> String {
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#39;"),
             c => out.push(visible(c)),
+        }
+    }
+    out
+}
+
+/// Whether the web UI's own font draws `c`, rather than a fallback font.
+fn in_font(c: char) -> bool {
+    let c = c as u32;
+    // Nerd Font's icons, in the private use areas, are its third file.
+    if (0xE000..=0xF8FF).contains(&c) || c >= 0xF0000 {
+        return true;
+    }
+    super::font_chars::RANGES
+        .binary_search_by(|&(first, last)| {
+            if last < c {
+                std::cmp::Ordering::Less
+            } else if first > c {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
+/// A page's text, escaped, with each character the web UI's font doesn't
+/// draw (emoji, CJK, some symbols) in a box as many columns wide as the
+/// terminal UI gives it. A fallback font's characters aren't a column
+/// wide, so without it a line holding one is longer or shorter than the
+/// lines around it, and boxes and bands drawn with text come out ragged.
+fn text_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for cluster in text.graphemes(true) {
+        let width = cluster.width();
+        let drawn = cluster.chars().all(|c| in_font(c) || c.width() == Some(0));
+        if width == 0 || (width == 1 && drawn) {
+            out.push_str(&escape(cluster));
+        } else {
+            out.push_str(&format!("<span class=\"m-w{}\">{}</span>", width.min(2), escape(cluster)));
         }
     }
     out
@@ -70,7 +111,7 @@ fn indexed(n: u8) -> (u8, u8, u8) {
     }
 }
 
-fn css_color(color: Color) -> Option<String> {
+pub(crate) fn css_color(color: Color) -> Option<String> {
     let (r, g, b) = match color {
         Color::Reset => return None,
         Color::Rgb(r, g, b) => (r, g, b),
@@ -256,13 +297,13 @@ impl Page {
                     "<a class=\"m-link\" data-url=\"{}\" data-fields=\"{}\" style=\"{style}\">{}</a>",
                     escape(&link(url)),
                     escape(&fields.join("|")),
-                    escape(&span.text),
+                    text_html(&span.text),
                 )),
                 Some(Interactive::Field(f)) => out.push_str(&self.field_html(*f, &style)),
                 Some(Interactive::Fold(f)) if span.text.is_empty() => {
                     out.push_str(&format!("<span class=\"m-fold-mark\">{} </span>", escape(self.fold_mark(self.folds[*f].open))));
                 }
-                _ => out.push_str(&format!("<span style=\"{style}\">{}</span>", escape(&span.text))),
+                _ => out.push_str(&format!("<span style=\"{style}\">{}</span>", text_html(&span.text))),
             }
         }
         out
@@ -398,6 +439,23 @@ mod tests {
         assert!(!html.contains('\u{1b}'));
         assert!(html.contains("a\u{241b}[31mb"));
         assert!(html.contains("<span class=\"t-tag\">`!</span>"));
+    }
+
+    #[test]
+    fn characters_the_font_lacks_take_their_columns() {
+        let html = parse("◈ 🐍 Zeva's ━ é e\u{301} ❤\u{fe0f} 全").to_html(|url| url.to_string(), |_| None);
+        // Emoji and CJK take two columns, a symbol from a fallback font one,
+        // as in the terminal UI.
+        assert!(html.contains("<span class=\"m-w2\">🐍</span>"));
+        assert!(html.contains("<span class=\"m-w2\">❤\u{fe0f}</span>"));
+        assert!(html.contains("<span class=\"m-w2\">全</span>"));
+        assert!(html.contains("<span class=\"m-w1\">◈</span>"));
+        // What the font draws stays as it is, accents too.
+        assert!(html.contains("Zeva&#39;s ━ é e\u{301} "));
+        // Links' text too, and never their targets.
+        let html = parse("`[🐍 home`:/page/🐍.mu]").to_html(|url| url.to_string(), |_| None);
+        assert!(html.contains("data-url=\":/page/🐍.mu\""));
+        assert!(html.contains("><span class=\"m-w2\">🐍</span> home</a>"));
     }
 
     #[test]

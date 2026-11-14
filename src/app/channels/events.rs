@@ -12,6 +12,7 @@
 //! - every hub but the one sending it as a Resource splits a long greeting
 //!   over several notices.
 
+use crate::store::Trust;
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
@@ -118,6 +119,12 @@ impl App {
                 self.record(index, "", ChatLine::new(LineKind::System, text));
             }
         }
+    }
+
+    /// Whether the identity `src` (an RRC sender) is someone blocked: the block list is of
+    /// LXMF addresses, which come from identities.
+    fn identity_is_blocked(&self, src: &[u8]) -> bool {
+        super::users::lxmf_address(src).is_some_and(|address| self.store.contact(&hex::encode(address)).trust == Trust::Blocked)
     }
 
     fn on_envelope(&mut self, index: usize, env: Envelope) {
@@ -227,6 +234,10 @@ impl App {
             }
             t::MSG | t::ACTION => {
                 let is_own = env.src == own;
+                // Someone blocked is blocked in rooms and whispers too: nothing of theirs is shown.
+                if !is_own && self.identity_is_blocked(&env.src) {
+                    return;
+                }
                 let key = room.clone().unwrap_or_default();
                 let id = hex::encode(&env.id);
                 let hub = self.hub_mut(index);
@@ -683,6 +694,18 @@ mod tests {
         hubs.deliver(env);
         assert!(hubs.hub().members["lobby"].contains(dan.as_slice()));
         assert_eq!(hubs.hub().name_of(&dan), "dan");
+    }
+
+    #[test]
+    fn someone_blocked_is_not_shown_in_a_room() {
+        let mut hubs = Hubs::connected("blocked");
+        hubs.join("lobby", &[AMY, BOB]);
+        hubs.said("lobby", AMY, "amy", "hello");
+        let address = hex::encode(super::super::users::lxmf_address(&AMY).unwrap());
+        hubs.app.store.update_contact(&address, |c| c.trust = Trust::Blocked);
+        hubs.said("lobby", AMY, "amy", "still here");
+        hubs.said("lobby", BOB, "bob", "hi all");
+        assert_eq!(hubs.lines("lobby"), ["You joined #lobby", "hello", "hi all"]);
     }
 
     #[test]

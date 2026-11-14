@@ -28,16 +28,18 @@ unpacked="$(find "$work" -mindepth 1 -maxdepth 1 -type d | head -n1)"
 root="$work/root"
 install -Dm755 "$unpacked/rettui" "$root/usr/bin/rettui"
 install -Dm644 "$unpacked/README.md" "$root/usr/share/doc/rettui/README.md"
-cat > "$root/usr/share/doc/rettui/copyright" <<COPYRIGHT
+{
+  cat <<COPYRIGHT
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: rettui
 Source: https://github.com/zevaryx/rettui
 
 Files: *
-License: AGPL-3.0-or-later
- On Debian systems, the GNU Affero General Public License version 3 is
- at https://www.gnu.org/licenses/agpl-3.0.txt.
+License: Reticulum
 COPYRIGHT
+  # The license's text, indented as the format asks (a blank line as " .").
+  sed -e 's/^$/./' -e 's/^/ /' "$unpacked/LICENSE"
+} > "$root/usr/share/doc/rettui/copyright"
 mkdir -p "$root/DEBIAN"
 cat > "$root/DEBIAN/control" <<CONTROL
 Package: rettui

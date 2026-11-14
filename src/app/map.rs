@@ -20,6 +20,10 @@ pub struct Placed {
     /// The collector that passed it on, by name, if it didn't come from
     /// them.
     pub via: Option<String>,
+    /// For an interface someone made known, rather than a person: its id
+    /// (see [`crate::net::found`]), and what it is ("TCP · host:port").
+    pub interface: Option<String>,
+    pub about: Option<String>,
 }
 
 /// The map over the Messages tab: the place picked, and how far in it's
@@ -32,6 +36,8 @@ pub struct MapView {
     /// How many degrees of latitude all of them took, as last drawn (where
     /// zooming in starts).
     pub fitted: f64,
+    /// Interfaces others made known left off (`i`).
+    pub hide_interfaces: bool,
 }
 
 /// The most and least of the world in view, in degrees of latitude.
@@ -96,6 +102,8 @@ impl App {
                     location: newest.location?,
                     at: Some(newest.timestamp),
                     via: None,
+                    interface: None,
+                    about: None,
                 })
             })
             .collect();
@@ -118,29 +126,69 @@ impl App {
                     location: relayed.location,
                     at: Some(relayed.at),
                     via: Some(self.store.display_name(&relayed.via)),
+                    interface: None,
+                    about: None,
                 }),
             }
         }
         placed.sort_by(|a, b| b.at.unwrap_or(0.0).total_cmp(&a.at.unwrap_or(0.0)).then_with(|| a.name.cmp(&b.name)));
         if let Some(location) = self.settings.own_location() {
-            placed.insert(0, Placed { key: None, name: "This station".into(), location, at: None, via: None });
+            placed
+                .insert(0, Placed { key: None, name: "This station".into(), location, at: None, via: None, interface: None, about: None });
         }
         placed
     }
 
+    /// Interfaces others made known that say where they are, as places:
+    /// the newest heard first.
+    pub fn interface_places(&self) -> Vec<Placed> {
+        self.found_interfaces()
+            .into_iter()
+            .filter_map(|found| {
+                let location = found.interface.location()?;
+                let at = found.at.or(found.interface.last_heard.map(|t| t as f64));
+                Some(Placed {
+                    key: None,
+                    name: found.interface.name.clone(),
+                    location,
+                    at,
+                    via: Some(found.source()),
+                    interface: Some(found.interface.id()),
+                    about: Some(found.interface.summary()),
+                })
+            })
+            .take(crate::net::found::MOST_SENT * 4)
+            .collect()
+    }
+
+    /// What the map shows: everyone's place, then interfaces' (unless
+    /// they're left off).
+    pub fn map_places(&self) -> Vec<Placed> {
+        let mut places = self.locations();
+        if !self.map.as_ref().is_some_and(|m| m.hide_interfaces) {
+            places.extend(self.interface_places());
+        }
+        places
+    }
+
     /// Open the map, on the open conversation's place if they've shared one.
     pub(super) fn open_map(&mut self) {
-        let places = self.locations();
+        let open = self.active_conversation.clone();
+        self.open_map_at(|p| p.key.is_some() && p.key == open);
+    }
+
+    /// Open the map on the first place `pick` takes (or the first of all).
+    pub(super) fn open_map_at(&mut self, pick: impl Fn(&Placed) -> bool) {
+        let places = self.map_places();
         if places.is_empty() {
             return self.confirm("No one has shared a location yet (L shares one)");
         }
-        let open = self.active_conversation.as_deref();
-        let selected = places.iter().position(|p| p.key.as_deref().is_some_and(|k| Some(k) == open)).unwrap_or(0);
-        self.map = Some(MapView { selected, span: None, fitted: WIDEST });
+        let selected = places.iter().position(pick).unwrap_or(0);
+        self.map = Some(MapView { selected, span: None, fitted: WIDEST, hide_interfaces: false });
     }
 
     pub(super) fn map_key(&mut self, key: KeyEvent) {
-        let places = self.locations();
+        let places = self.map_places();
         let Some(map) = self.map.as_mut() else { return };
         let Some(last) = places.len().checked_sub(1) else {
             self.map = None;
@@ -157,6 +205,14 @@ impl App {
             // Out until all of them are in view again.
             KeyCode::Char('-') => map.span = map.span.map(|s| s * 2.0).filter(|s| *s < map.fitted.min(WIDEST)),
             KeyCode::Char('0') | KeyCode::Char('a') => map.span = None,
+            KeyCode::Char('i') => {
+                map.hide_interfaces = !map.hide_interfaces;
+                map.selected = 0;
+                map.span = None;
+                if self.map_places().is_empty() {
+                    self.map = None;
+                }
+            }
             KeyCode::Char('o') => {
                 let url = places[map.selected].location.map_url();
                 self.open_url(&url);
@@ -165,6 +221,15 @@ impl App {
                 if let Some(key) = places[map.selected].key.clone() {
                     self.map = None;
                     self.open_conversation(key);
+                } else if let Some(id) = places[map.selected].interface.clone() {
+                    // An interface: shown in the list of those found.
+                    self.map = None;
+                    self.show_found(&id);
+                }
+            }
+            KeyCode::Char('w') => {
+                if let Some(key) = places[map.selected].key.clone() {
+                    self.ask_location(&key);
                 }
             }
             KeyCode::Char('x') => {
@@ -247,7 +312,7 @@ mod tests {
     use crate::store::{Conversation, Message, MessageState, Store};
 
     fn place(lat: f64, lon: f64) -> Placed {
-        Placed { key: None, name: String::new(), location: Location::at(lat, lon), at: None, via: None }
+        Placed { key: None, name: String::new(), location: Location::at(lat, lon), at: None, via: None, interface: None, about: None }
     }
 
     #[test]
@@ -262,7 +327,7 @@ mod tests {
         let ground = (east - west) * 50.0f64.to_radians().cos() / (north - south);
         assert!((ground - 2.0).abs() < 0.1, "{ground}");
         // Zoomed in, around the one picked.
-        let view = MapView { selected: 1, span: Some(0.01), fitted: 5.0 };
+        let view = MapView { selected: 1, span: Some(0.01), fitted: 5.0, hide_interfaces: false };
         let (lons, lats) = bounds(&places, &view, 80, 20);
         assert!(((lats[0] + lats[1]) / 2.0 - 48.85).abs() < 1e-9 && ((lons[0] + lons[1]) / 2.0 - 2.35).abs() < 1e-9);
         assert!((lats[1] - lats[0] - 0.01).abs() < 1e-9);

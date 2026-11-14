@@ -102,7 +102,7 @@ fn draw_sections(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|section| match section {
             Section::Interface(name) => {
                 let values = config.as_ref().and_then(|c| c.subsection("interfaces", name));
-                let enabled = values.and_then(|v| v.get("enabled").or_else(|| v.get("interface_enabled"))).is_none_or(rns_truthy);
+                let enabled = values.is_some_and(|v| v.interface_enabled());
                 let kind = values.and_then(|v| v.get("type")).unwrap_or("?").trim_end_matches("Interface").to_string();
                 let (dot, color) = if enabled { ("●", Color::Green) } else { ("○", dim()) };
                 ListItem::new(Line::from(vec![

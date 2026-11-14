@@ -31,6 +31,8 @@ pub struct GitHost {
     pub status: NodeStatus,
     /// The address in clone URLs, once it has an identity (after it first starts).
     pub address: Option<[u8; 16]>,
+    /// Where its pages are, while it serves them.
+    pub pages: Option<[u8; 16]>,
     /// What the network actor was last asked to run.
     config: Option<GitHostConfig>,
     /// Requests answered since it started, and how many were refused.
@@ -103,6 +105,7 @@ impl GitHost {
         Self {
             status: if config.is_some() { NodeStatus::Starting } else { NodeStatus::Off },
             address: githost::address(&paths.git_host_identity),
+            pages: None,
             config,
             requests: 0,
             refused: 0,
@@ -195,6 +198,35 @@ impl App {
         self.git_host.hosted.ready()?.get(self.repos.hosted.selected().unwrap_or(0))
     }
 
+    /// Open the pages of the node hosted here in the Browser: one
+    /// repository's (`group`, `name.git`), or the list of them all.
+    pub fn browse_hosted(&mut self, repo: Option<(&str, &str)>) -> Result<(), String> {
+        let pages = self.git_host.pages.ok_or("Its pages are off: turn on \"rngit pages\" in Settings › Hosting")?;
+        let (path, fields) = match repo {
+            Some((group, name)) => {
+                let name = name.strip_suffix(".git").unwrap_or(name);
+                let fields = [("var_g".to_string(), group.to_string()), ("var_r".to_string(), name.to_string())].into();
+                (crate::net::gitpages::REPO, fields)
+            }
+            None => (crate::net::gitpages::INDEX, Default::default()),
+        };
+        self.navigate(crate::app::browser::Location { node: pages, path: path.into(), fields });
+        Ok(())
+    }
+
+    /// A page of the node hosted here, which this client can't open a link
+    /// to: it is made in the network task, as a visitor gets it, and comes
+    /// back as `Fetched` with this `id`. `None` once asked.
+    pub fn own_git_page(
+        &mut self,
+        id: u64,
+        location: &crate::app::browser::Location,
+        identify: bool,
+    ) -> Option<Result<crate::nomad::FetchedContent, String>> {
+        let command = NetCommand::GitPage { id, path: location.path.clone(), fields: location.fields.clone(), identify };
+        self.net.send(command).is_err().then(|| Err("The network task isn't running, so the page can't be made".to_string()))
+    }
+
     /// Where to clone a hosted repository from.
     pub fn hosted_url(&self, hosted: &Hosted) -> Option<String> {
         Some(format!("{}/{}/{}", self.git_host.url()?, hosted.group, hosted.name.strip_suffix(".git").unwrap_or(&hosted.name)))
@@ -223,6 +255,12 @@ impl App {
             KeyCode::PageDown => return self.move_hosted(10),
             KeyCode::PageUp => return self.move_hosted(-10),
             KeyCode::Char('R') => return self.list_hosted(),
+            KeyCode::Char('b') => {
+                if let Err(e) = self.browse_hosted(picked.as_ref().map(|(group, name, _)| (group.as_str(), name.as_str()))) {
+                    self.warn(e);
+                }
+                return;
+            }
             _ => {}
         }
         let result = match (code, picked) {
@@ -333,14 +371,19 @@ impl App {
 
     pub(super) fn on_git_host(&mut self, event: GitHostEvent) {
         match event {
-            GitHostEvent::Started { hash } => {
+            GitHostEvent::Started { hash, pages } => {
                 self.git_host.status = NodeStatus::Running;
                 self.git_host.address = Some(hash);
+                self.git_host.pages = pages;
                 self.log(format!("Hosting rngit repositories at rns://{}", hex::encode(hash)));
+                if let Some(pages) = pages {
+                    self.log(format!("Their pages are at {}:/page/index.mu", hex::encode(pages)));
+                }
                 self.list_hosted();
             }
             GitHostEvent::Stopped => {
                 self.git_host.status = NodeStatus::Off;
+                self.git_host.pages = None;
                 self.git_host.hosted = Load::Idle;
                 self.log("Stopped hosting rngit repositories");
             }
@@ -362,6 +405,7 @@ impl App {
             }
             GitHostEvent::Failed(e) => {
                 self.log(format!("rngit node: {e}"));
+                self.git_host.pages = None;
                 self.git_host.status = NodeStatus::Failed(e);
             }
             // The last of a node that has since stopped: not counted.
@@ -409,7 +453,7 @@ mod tests {
             Ok(NetCommand::GitHost(Some(config))) => assert_eq!(config.access, "r:all"),
             other => panic!("{other:?}"),
         }
-        app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16] }));
+        app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: None }));
         assert_eq!(app.git_host.status, NodeStatus::Running);
         assert_eq!(app.git_host.url().unwrap(), format!("rns://{}", "07".repeat(16)));
         // Once running, what it hosts is listed.
@@ -424,7 +468,7 @@ mod tests {
     fn requests_are_counted_and_the_newest_kept() {
         let (mut app, _commands, dir) = app("git-host-served");
         app.update_settings(&[("git_host_enabled", "true")]).unwrap();
-        app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16] }));
+        app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: None }));
         for n in 0..60u8 {
             let status = if n % 10 == 0 { 3 } else { 0 };
             app.on_net(NetEvent::GitHost(GitHostEvent::Served { path: "/git/fetch\u{1b}[31m".into(), peer: Some([n; 16]), status }));
@@ -440,6 +484,7 @@ mod tests {
     use crate::net::githost::{HostAction, owner_tests};
     use crate::ui::tui_tests::Tui;
     use crossterm::event::KeyCode;
+    use rngit::server::Node;
 
     /// Do what the app asked of the node, as the network task does, until
     /// nothing more is asked (a change lists them again).
@@ -467,7 +512,7 @@ mod tests {
     fn hosting(name: &str) -> (Tui, std::path::PathBuf) {
         let mut tui = Tui::with(name, |s| s.git_host_enabled = true);
         let source = owner_tests::source(&tui.dir, "public", "demo");
-        tui.app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16] }));
+        tui.app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: None }));
         assert_eq!(run_all(&mut tui, &source), [HostAction::List]);
         tui.tab(crate::app::Tab::Repos);
         (tui, source)
@@ -573,6 +618,48 @@ mod tests {
         assert!(tui.said().contains("URL"), "{}", tui.said());
         tui.key(KeyCode::Char('H'));
         assert_eq!(tui.app.repos.focus, crate::app::repos::ReposFocus::List);
+    }
+
+    #[test]
+    fn the_owner_browses_the_pages_of_what_is_hosted() {
+        let mut tui = Tui::with("git-host-pages", |s| s.git_host_enabled = true);
+        let node = Node::new(tui.app.paths.git_host.clone());
+        node.make_repository("public", "demo.git", None).unwrap();
+        node.set_rules("public", None, "r:all").unwrap();
+        tui.app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: Some([8; 16]) }));
+        let source = tui.dir.clone();
+        run_all(&mut tui, &source);
+        assert!(tui.said().contains(&format!("Their pages are at {}:/page/index.mu", "08".repeat(16))), "{}", tui.said());
+        assert!(tui.app.is_own_node([8; 16]));
+        // The Repos tab's own node opens its pages without asking where they are.
+        assert_eq!(tui.app.page_node_for([7; 16]), Some([8; 16]));
+        tui.tab(crate::app::Tab::Repos);
+        assert!(tui.key(KeyCode::Char('H')).draw().contains("b shows its pages"));
+        tui.key(KeyCode::Char('b'));
+        assert_eq!(tui.app.tab, crate::app::Tab::Browser);
+        // Made in the network task as a visitor gets it, never fetched over a link to itself.
+        let sent = tui.sent();
+        assert!(!sent.iter().any(|c| matches!(c, NetCommand::Fetch { .. })), "{sent:?}");
+        let Some(NetCommand::GitPage { id, path, fields, .. }) = sent.into_iter().find(|c| matches!(c, NetCommand::GitPage { .. })) else {
+            panic!("no page asked for");
+        };
+        assert_eq!((path.as_str(), fields.get("var_r").map(String::as_str)), ("/page/repo.mu", Some("demo")));
+        let site = crate::net::gitpages::Site { name: None, address: [7; 16] };
+        let crate::net::gitpages::Reply::Page(page) = crate::net::gitpages::answer(&node, &site, &path, &fields, None).0 else {
+            panic!("a file");
+        };
+        let content = crate::nomad::FetchedContent { data: page.into_bytes(), metadata: None };
+        tui.app.on_net(NetEvent::Fetched { id, result: Ok(content) });
+        assert!(tui.draw().contains("Nothing has been pushed here yet"), "{}", tui.draw());
+        // With its pages off, `b` says how to turn them on.
+        tui.app.on_net(NetEvent::GitHost(GitHostEvent::Stopped));
+        assert!(!tui.app.is_own_node([8; 16]));
+        tui.app.on_net(NetEvent::GitHost(GitHostEvent::Started { hash: [7; 16], pages: None }));
+        run_all(&mut tui, &source);
+        tui.tab(crate::app::Tab::Repos);
+        assert_eq!(tui.app.repos.focus, crate::app::repos::ReposFocus::Hosted);
+        tui.key(KeyCode::Char('b'));
+        assert!(tui.said().contains("Its pages are off"), "{}", tui.said());
     }
 
     #[test]

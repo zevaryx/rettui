@@ -66,6 +66,31 @@ fn hosting_hub(app: &App) -> Option<Vec<Span<'static>>> {
     })
 }
 
+/// Receiving files sent with rncp, while that's on.
+fn receiving_files(app: &App) -> Option<Vec<Span<'static>>> {
+    use crate::app::rncp_in::Listening;
+    let rncp = &app.rncp_in;
+    Some(match &rncp.status {
+        Listening::Off => return None,
+        Listening::Starting => vec![Span::styled("◌ starting", Style::default().fg(Color::Yellow))],
+        Listening::Failed(e) => vec![Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red))],
+        Listening::On(hash) => {
+            let mut spans =
+                vec![Span::styled("● ", Style::default().fg(Color::Green)), Span::styled(hex::encode(hash), Style::default().fg(accent()))];
+            let allowed = rncp.config.as_ref().map_or(0, |c| c.allowed.len());
+            let mut parts = vec![format!("{} received", rncp.received.len())];
+            if allowed == 0 {
+                parts.push("no one may send yet".into());
+            }
+            if rncp.refused > 0 {
+                parts.push(format!("{} refused", rncp.refused));
+            }
+            spans.push(Span::raw(format!("  {}", parts.join(" · "))));
+            spans
+        }
+    })
+}
+
 /// The rngit repositories hosted here, while that's on.
 fn hosting_git(app: &App) -> Option<Vec<Span<'static>>> {
     let git = &app.git_host;
@@ -160,6 +185,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
                 + u16::from(app.update_available().is_some())
                 + u16::from(app.hub.status != NodeStatus::Off)
                 + u16::from(app.git_host.status != NodeStatus::Off)
+                + u16::from(app.rncp_in.status != crate::app::rncp_in::Listening::Off)
                 + u16::from(app.node.status == NodeStatus::Running),
         ),
         Constraint::Max(settings_height),
@@ -215,6 +241,9 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.node.status == NodeStatus::Running {
         let text = format!("{} served (Node tab)", app.node.served.label());
         lines.insert(7, Line::from(vec![label("Hosting a node"), Span::styled("● ", Style::default().fg(Color::Green)), Span::raw(text)]));
+    }
+    if let Some(spans) = receiving_files(app) {
+        lines.insert(7, Line::from([vec![label("Receiving files")], spans].concat()));
     }
     if let Some(spans) = hosting_git(app) {
         lines.insert(7, Line::from([vec![label("Hosting rngit")], spans].concat()));
@@ -278,7 +307,21 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
             lines
         })
         .collect();
-    let iface_lines = if iface_lines.is_empty() {
+    // Off for want of an `enabled` line: older versions started these.
+    let off_lines: Vec<Line> = app
+        .interfaces_off
+        .iter()
+        .map(|name| {
+            Line::from(vec![
+                Span::styled("○ ", Style::default().fg(Color::Yellow)),
+                Span::raw(name.clone()),
+                Span::styled("  off: no enabled line. Add enabled = Yes in the Reticulum tab", Style::default().fg(dim())),
+            ])
+        })
+        .collect();
+    let iface_lines = if !off_lines.is_empty() {
+        iface_lines.into_iter().chain(off_lines).collect()
+    } else if iface_lines.is_empty() {
         let none = match app.net_state {
             NetState::Online if app.uses_external_shared_instance() => {
                 "None here: the program running the shared instance (such as rnsd) has them."
@@ -525,6 +568,50 @@ mod tests {
         assert!(graph.contains("▁▄█▁  0 B/s  ↑ "), "{graph}");
         // A quiet interface has none.
         assert_eq!(shown.lines().filter(|line| line.contains(" B/s  ↑ ")).count(), 1, "{shown}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn interfaces_with_no_enabled_line_are_said_to_be_off() {
+        let dir = std::env::temp_dir().join(format!("rettui-interfaces-off-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rns_dir = dir.join("rns");
+        std::fs::create_dir_all(&rns_dir).unwrap();
+        let write = |text: &str| std::fs::write(rns_dir.join("config"), text).unwrap();
+        // A config from an older version, which started Quiet as it is.
+        write("[interfaces]\n  [[Quiet]]\n    type = AutoInterface\n  [[Loud]]\n    type = AutoInterface\n    enabled = Yes\n");
+        let settings = Settings { rns_config: Some(rns_dir.display().to_string()), ..Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, Store::default());
+        app.tab = crate::app::Tab::Status;
+        let start = |app: &mut App, interfaces: &[&str]| {
+            app.on_net(NetEvent::Started { lxmf_hash: [5; 16], public_key: [1; 64], known: crate::net::remote::KnownIdentities::none() });
+            let running =
+                interfaces.iter().map(|name| crate::net::InterfaceInfo { name: name.to_string(), online: true, ..Default::default() });
+            app.on_net(NetEvent::Interfaces(running.collect()));
+        };
+        start(&mut app, &["Loud"]);
+        let notice = app.notice.as_ref().map(|n| n.text.clone()).unwrap_or_default();
+        assert!(notice.starts_with("Interface Quiet is off: it has no enabled line. Add enabled = Yes"), "{notice}");
+        assert_eq!(app.interfaces_off, ["Quiet"]);
+        let shown = screen(&mut app);
+        assert!(shown.contains("○ Quiet  off: no enabled line") && shown.contains("● Loud"), "{shown}");
+
+        // None of them says: nothing runs, and that's still said.
+        write("[interfaces]\n  [[Quiet]]\n    type = AutoInterface\n  [[Hill]]\n    type = AutoInterface\n");
+        start(&mut app, &[]);
+        let notice = app.notice.as_ref().map(|n| n.text.clone()).unwrap_or_default();
+        assert!(notice.starts_with("2 interfaces are off: they have no enabled line (Quiet, Hill)"), "{notice}");
+        let shown = screen(&mut app);
+        assert!(shown.contains("○ Hill  off: no enabled line") && !shown.contains("None: add one"), "{shown}");
+
+        // Another program's shared instance has its own config; and once
+        // they all say, nothing is said.
+        start(&mut app, &["Shared Instance[default]"]);
+        assert!(app.interfaces_off.is_empty());
+        write("[interfaces]\n  [[Quiet]]\n    type = AutoInterface\n    enabled = No\n");
+        app.notice = None;
+        start(&mut app, &[]);
+        assert!(app.interfaces_off.is_empty() && app.notice.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

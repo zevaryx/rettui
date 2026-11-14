@@ -87,6 +87,33 @@ impl HubHostConfig {
     }
 }
 
+/// rsRRCD writes its rooms file in place, so a crash can leave it cut off and
+/// the hub unable to start. The rooms last read cleanly are kept beside it
+/// (`rooms.yaml.bak`); a file that won't read is put aside
+/// (`rooms.yaml.damaged`) and that copy used instead.
+fn load_router(dir: &Path, config: HubConfig, hub: Hash) -> Result<Router, String> {
+    let rooms = dir.join(ROOMS_FILE);
+    let backup = dir.join(format!("{ROOMS_FILE}.bak"));
+    match Router::load(config.clone(), hub) {
+        Ok(router) => {
+            if rooms.is_file() {
+                let _ = std::fs::copy(&rooms, &backup);
+            }
+            Ok(router)
+        }
+        Err(e) if rooms.is_file() => {
+            let damaged = dir.join(format!("{ROOMS_FILE}.damaged"));
+            std::fs::rename(&rooms, &damaged).map_err(|_| format!("{e:#}"))?;
+            if backup.is_file() {
+                let _ = std::fs::copy(&backup, &rooms);
+            }
+            Router::load(config, hub)
+                .map_err(|again| format!("{again:#} (the rooms file was damaged: {e:#}; it is kept as {})", damaged.display()))
+        }
+        Err(e) => Err(format!("{e:#}")),
+    }
+}
+
 /// The hub's identity, made the first time.
 pub fn identity(path: &Path) -> Result<Identity, String> {
     if path.exists() {
@@ -151,6 +178,13 @@ fn write_config(config: &HubHostConfig, hub: Hash) -> Result<HubConfig, String> 
     };
     section.insert("identity_path".into(), identity.into());
     section.insert("room_registry_path".into(), ROOMS_FILE.into());
+    // Links that go quiet are closed: left at 0 (rsRRCD's default), idle
+    // connections would hold the hub's links forever.
+    for (key, default) in [("ping_interval_s", 60.0), ("ping_timeout_s", 30.0)] {
+        if section.get(key).and_then(serde_json::Value::as_f64).is_none_or(|seconds| seconds <= 0.0) {
+            section.insert(key.into(), default.into());
+        }
+    }
     section.insert("announce_period_s".into(), config.announce_interval.map_or(0.0, |d| d.as_secs_f64()).into());
     // Operators: kept as written, with the hub (the console) and you. Those
     // rettui added before and that aren't either any more (an identity you
@@ -300,12 +334,17 @@ pub struct HostedHub {
 impl HostedHub {
     /// Start the hub on the running Reticulum instance; it reports on
     /// `events` (as [`NetEvent::Hub`]) until it stops.
-    pub async fn start(runtime: &ReticulumHandle, config: &HubHostConfig, events: mpsc::UnboundedSender<NetEvent>) -> Result<Self, String> {
+    pub async fn start(
+        runtime: &ReticulumHandle,
+        config: &HubHostConfig,
+        events: mpsc::UnboundedSender<NetEvent>,
+        blocked: crate::store::Blocked,
+    ) -> Result<Self, String> {
         let prepare = config.clone();
         let (identity, router) = tokio::task::spawn_blocking(move || -> Result<(Identity, Router), String> {
             let identity = identity(&prepare.identity)?;
             let hub_config = write_config(&prepare, identity.hash)?;
-            let router = Router::load(hub_config, identity.hash).map_err(|e| format!("{e:#}"))?;
+            let router = load_router(&prepare.dir, hub_config, identity.hash)?;
             Ok((identity, router))
         })
         .await
@@ -328,10 +367,20 @@ impl HostedHub {
             .map_err(|e| format!("Could not register the hub: {e}"))?;
         let (actions_tx, actions) = mpsc::unbounded_channel();
         let (stop, stopped) = oneshot::channel();
+        let failures = events.clone();
         let mut core = Core::new(router, identity.hash, config.clone(), events);
+        core.blocked = blocked;
         core.open_console();
         let hub = Hub { handle: destination.handle.clone(), core };
-        let task = tokio::spawn(hub.run(destination, actions, stopped));
+        // If the hub's task panics, say so: otherwise the panel keeps showing it running.
+        let task = tokio::spawn(async move {
+            if let Err(e) = tokio::spawn(hub.run(destination, actions, stopped)).await
+                && e.is_panic()
+            {
+                let _ = failures
+                    .send(NetEvent::Hub(HubEvent::Failed("The hub stopped after an error. Turn it off and on to start it again.".into())));
+            }
+        });
         Ok(Self { hash, public_key, actions: actions_tx, stop: Some(stop), task: Some(task) })
     }
 
@@ -367,6 +416,8 @@ struct Core {
     connected: HashMap<[u8; 16], i64>,
     /// The snapshot last sent.
     shown: Option<HubSnapshot>,
+    /// Who you've blocked: turned away.
+    blocked: crate::store::Blocked,
 }
 
 fn unix_now() -> f64 {
@@ -423,14 +474,15 @@ impl Hub {
                     self.core.router.established(link);
                 }
                 Some((link, peer)) = events.links_identified.recv() => {
-                    let actions = self.core.router.identified(link, peer);
+                    let actions = if self.core.blocked.has_identity(&peer) {
+                        vec![Action::Close(link)]
+                    } else {
+                        self.core.router.identified(link, peer)
+                    };
                     self.apply(actions).await;
                 }
                 Some((data, link)) = events.link_packets.recv() => {
-                    let actions = match self.core.screen(link, &data) {
-                        Some(refusal) => refusal,
-                        None => self.core.router.packet(link, &data),
-                    };
+                    let actions = self.core.forward(link, &data);
                     self.apply(actions).await;
                 }
                 Some(done) = events.resource_completions.recv() => {
@@ -560,7 +612,7 @@ impl Hub {
 
 impl Core {
     fn new(router: Router, identity: Hash, config: HubHostConfig, events: mpsc::UnboundedSender<NetEvent>) -> Self {
-        Self { router, identity, config, events, connected: HashMap::new(), shown: None }
+        Self { router, identity, config, events, connected: HashMap::new(), shown: None, blocked: crate::store::Blocked::default() }
     }
 
     fn emit(&self, event: HubEvent) {
@@ -575,6 +627,52 @@ impl Core {
         let _ = self.router.packet(CONSOLE, &hello.encode());
     }
 
+    /// A frame from `link`: screened, its nick cleaned, then given to
+    /// rsRRCD; and whoever is banned from a room taken out of it.
+    fn forward(&mut self, link: [u8; 16], data: &[u8]) -> Vec<Action> {
+        let mut actions = match self.screen(link, data) {
+            Some(refusal) => refusal,
+            None => {
+                let (data, refused) = self.with_clean_nick(link, data);
+                let mut actions = Vec::new();
+                if let Some(nick) = refused {
+                    let note = Envelope::new(t::NOTICE, &self.identity)
+                        .text(&format!("The nick {nick} isn't available: it's in use or not allowed"));
+                    actions.push(Action::Send(link, note.encode()));
+                }
+                actions.extend(self.router.packet(link, &data));
+                actions
+            }
+        };
+        actions.extend(self.evict_banned());
+        actions
+    }
+
+    /// The frame with its nick cleaned (as announced names are: no control,
+    /// invisible or look-alike characters), and none if someone else has it
+    /// already or it is the hub's; the nick not taken, if one wasn't.
+    fn with_clean_nick(&self, link: [u8; 16], data: &[u8]) -> (Vec<u8>, Option<String>) {
+        let Ok(mut env) = Envelope::decode_strict(data) else { return (data.to_vec(), None) };
+        let Some(nick) = env.nick.clone() else { return (data.to_vec(), None) };
+        let cleaned = crate::names::clean(&nick);
+        let taken = |wanted: &str| {
+            wanted.eq_ignore_ascii_case("hub")
+                || self
+                    .router
+                    .state
+                    .sessions
+                    .iter()
+                    .any(|(other, session)| *other != link && session.nick.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(wanted)))
+        };
+        let usable = cleaned.filter(|n| !taken(n));
+        if usable.as_deref() == Some(nick.as_str()) {
+            return (data.to_vec(), None);
+        }
+        let refused = usable.is_none().then(|| nick.chars().filter(|c| !c.is_control()).take(32).collect());
+        env.nick = usable;
+        (env.encode(), refused)
+    }
+
     /// What rsRRCD isn't given, answered here instead:
     /// - a JOIN that would make a room, when only the operator may;
     /// - commands rsRRCD can't take (it panics, and a panic anywhere tears
@@ -582,10 +680,15 @@ impl Core {
     ///   for a room there isn't, and those naming someone nobody here
     ///   matches (see [`Core::unmatched`]).
     fn screen(&mut self, link: [u8; 16], data: &[u8]) -> Option<Vec<Action>> {
-        let env = Envelope::decode(data).ok()?;
+        // A frame the router might read differently from this screen is
+        // refused, not passed on unscreened.
+        let Ok(env) = Envelope::decode_strict(data) else { return Some(Vec::new()) };
         let state = &self.router.state;
         let session = state.sessions.get(&link)?;
         let peer = session.peer?;
+        if self.blocked.has_identity(&peer) {
+            return Some(vec![Action::Close(link)]);
+        }
         let no_such_room = |room: &str, text: &str| {
             let error = Envelope::new(t::ERROR, &self.identity).room(room).text(text);
             Some(vec![Action::Send(link, error.encode())])
@@ -598,9 +701,20 @@ impl Core {
                 }
                 no_such_room(&room, "no such room (only the hub's host makes rooms here)")
             }
-            // Commands, once it has said hello (before, rsRRCD takes
-            // anything for one).
-            t::MSG | t::NOTICE if session.welcomed => {
+            // Leaving a room it isn't in: rsRRCD would tell the room it left.
+            t::PART => {
+                let room = state.normalize_room(env.room.as_deref()?, &self.router.config).ok()?;
+                if session.rooms.contains(&room) { None } else { Some(Vec::new()) }
+            }
+            // What someone outside a room may do in it, and commands, once
+            // it has said hello (before, rsRRCD takes anything for one).
+            t::MSG | t::NOTICE | t::ACTION if session.welcomed => {
+                if let Some(refusal) = self.outsider(link, peer, &env) {
+                    return Some(refusal);
+                }
+                if env.t == t::ACTION {
+                    return None;
+                }
                 let text = env.body_text()?.trim();
                 if !text.starts_with('/') {
                     return None;
@@ -612,6 +726,69 @@ impl Core {
             }
             _ => None,
         }
+    }
+
+    /// What rsRRCD lets through that a room's rules say it shouldn't: someone
+    /// not in an invite-only, keyed or private room posting to it, reading who
+    /// is in it or its topic, or someone banned from a room (or not in it)
+    /// setting its topic. `None`: nothing against it.
+    fn outsider(&self, link: [u8; 16], peer: Hash, env: &Envelope) -> Option<Vec<Action>> {
+        if peer == self.config.operator {
+            return None;
+        }
+        let state = &self.router.state;
+        let text = env.body_text().unwrap_or_default().trim();
+        let parts: Vec<&str> = text.split_whitespace().collect();
+        let command = parts.first().filter(|_| text.starts_with('/')).map(|c| c.to_ascii_lowercase());
+        // The room the frame is about, and whether it changes the topic.
+        let (named, sets_topic) = match command.as_deref() {
+            Some("/topic") => (parts.get(1).copied()?, parts.len() > 2),
+            Some("/who" | "/names") => (parts.get(1).copied().or(env.room.as_deref())?, false),
+            Some(_) => return None,
+            None => (env.room.as_deref()?, false),
+        };
+        let room_name = state.normalize_room(named, &self.router.config).ok()?;
+        let room = state.rooms.get(&room_name)?;
+        let member = state.sessions.get(&link)?.rooms.contains(&room_name);
+        let closed = room.invite_only || room.private || room.key.is_some();
+        let why = if room.banned.contains(&peer) && command.is_some() {
+            "banned from room"
+        } else if sets_topic && !member && !room.is_operator(&peer) {
+            "not authorized: join the room first"
+        } else if !member && closed && !room.is_operator(&peer) {
+            "not in this room"
+        } else {
+            return None;
+        };
+        let error = Envelope::new(t::ERROR, &self.identity).room(&room_name).text(why);
+        Some(vec![Action::Send(link, error.encode())])
+    }
+
+    /// Takes anyone banned from a room out of it. rsRRCD removes only the
+    /// newest link of an identity, so one connected twice would go on
+    /// reading it.
+    fn evict_banned(&mut self) -> Vec<Action> {
+        let state = &self.router.state;
+        let mut gone = Vec::new();
+        for (name, room) in &state.rooms {
+            for link in &room.members {
+                if state.sessions.get(link).and_then(|s| s.peer).is_some_and(|peer| room.banned.contains(&peer)) {
+                    gone.push((*link, name.clone()));
+                }
+            }
+        }
+        let mut actions = Vec::new();
+        for (link, name) in gone {
+            if let Some(room) = self.router.state.rooms.get_mut(&name) {
+                room.members.remove(&link);
+            }
+            if let Some(session) = self.router.state.sessions.get_mut(&link) {
+                session.rooms.remove(&name);
+            }
+            let error = Envelope::new(t::ERROR, &self.identity).room(&name).text(&format!("banned from {name}"));
+            actions.push(Action::Send(link, error.encode()));
+        }
+        actions
     }
 
     /// rsRRCD's commands naming someone (`/kick`, `/op`, `/deop`, `/voice`,
@@ -1100,17 +1277,13 @@ mod tests {
         core.connected.insert([link; 16], 1_800_000_000);
         let _ = core.router.identified([link; 16], who);
         let hello = Envelope::new(t::HELLO, &who).body(crate::rrc::hello_body()).nick(Some(nick));
-        let _ = core.router.packet([link; 16], &hello.encode());
+        let _ = core.forward([link; 16], &hello.encode());
     }
 
     /// What `who` (on Link `link`) sends, passing the screen first, as the
     /// hub does.
     fn send(core: &mut Core, link: u8, env: Envelope) -> Vec<Action> {
-        let data = env.encode();
-        match core.screen([link; 16], &data) {
-            Some(refused) => refused,
-            None => core.router.packet([link; 16], &data),
-        }
+        core.forward([link; 16], &env.encode())
     }
 
     fn join(core: &mut Core, link: u8, who: Hash, room: &str) -> Vec<Action> {
@@ -1385,6 +1558,174 @@ mod tests {
         join(&mut core, 2, YOU, "lobby");
         join(&mut core, 1, AMY, "lobby");
         assert_eq!(core.router.state.rooms["lobby"].members.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A frame whose body the screen and the router could read differently
+    /// (a key twice, a tag): a MSG from `AMY` in "lobby" with `body` bytes.
+    fn raw_message(body_pairs: &[u8], pairs: u8) -> Vec<u8> {
+        let mut frame = vec![0xa0 + pairs, 0x00, 0x01, 0x01, 0x14, 0x02, 0x48, 1, 2, 3, 4, 5, 6, 7, 8, 0x03, 0x00, 0x04, 0x50];
+        frame.extend_from_slice(&AMY);
+        frame.extend_from_slice(&[0x05, 0x65]);
+        frame.extend_from_slice(b"lobby");
+        frame.extend_from_slice(body_pairs);
+        frame
+    }
+
+    #[test]
+    fn someone_blocked_is_turned_away() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-blocked-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        connect(&mut core, 2, BOB, "bob");
+        let mut blocked = std::collections::HashSet::new();
+        blocked.insert(rns_identity::destination::Destination::hash_from_name_and_identity(crate::lxmf::LXMF_ASPECT, Some(&BOB)));
+        core.blocked.replace(blocked);
+        let from_bob = Envelope::new(t::JOIN, &BOB).room("lobby").encode();
+        assert!(
+            core.screen([2; 16], &from_bob).is_some_and(|actions| matches!(actions.as_slice(), [Action::Close(link)] if *link == [2; 16]))
+        );
+        let from_amy = Envelope::new(t::JOIN, &AMY).room("lobby").encode();
+        assert!(core.screen([1; 16], &from_amy).is_none(), "everyone else goes on as before");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nicks_are_cleaned_and_not_shared_and_only_members_part() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-nicks-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        connect(&mut core, 2, BOB, "amy");
+        let nick = |core: &Core, link: u8| core.router.state.sessions[&[link; 16]].nick.clone();
+        assert_eq!(nick(&core, 1).as_deref(), Some("amy"));
+        assert_eq!(nick(&core, 2), None, "someone else's nick isn't taken");
+        // The same nick in other letters, the hub's, and one with hidden characters.
+        for wanted in ["AMY", "Hub"] {
+            let out = send(&mut core, 2, Envelope::new(t::PING, &BOB).nick(Some(wanted)));
+            assert!(
+                sent(&out).iter().any(|(link, kind, _, text)| *link == 2
+                    && *kind == t::NOTICE
+                    && text.as_deref().is_some_and(|t| t.contains("isn't available"))),
+                "{wanted}: {:?}",
+                sent(&out)
+            );
+            assert_eq!(nick(&core, 2), None, "{wanted}");
+        }
+        // Leaving a room it isn't in tells no one.
+        let _ = join(&mut core, 1, AMY, "lobby");
+        let out = send(&mut core, 2, Envelope::new(t::PART, &BOB).room("lobby"));
+        assert!(sent(&out).is_empty(), "{:?}", sent(&out));
+        let _ = join(&mut core, 2, BOB, "lobby");
+        let _ = send(&mut core, 2, Envelope::new(t::MSG, &BOB).room("lobby").text("hi").nick(Some("b\u{202e}o\u{0}b")));
+        assert_eq!(nick(&core, 2).as_deref(), Some("bob"), "hidden characters are taken out");
+        let out = send(&mut core, 2, Envelope::new(t::PART, &BOB).room("lobby"));
+        assert!(sent(&out).iter().any(|(link, kind, ..)| *link == 1 && *kind == t::PARTED), "members still part");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn idle_links_are_pinged_by_default_and_a_damaged_rooms_file_is_put_aside() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-ping-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = config(&dir, true);
+        let hub_config = write_config(&config, HUB).unwrap();
+        assert_eq!((hub_config.ping_interval_s, hub_config.ping_timeout_s), (60.0, 30.0));
+        // A chosen interval stays.
+        let hub_dir = dir.join("rrc-hub");
+        let path = hub_dir.join(rsrrcd::CONFIG_FILE_NAME);
+        let text = std::fs::read_to_string(&path).unwrap().replace("ping_interval_s: 60.0", "ping_interval_s: 300.0");
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(write_config(&config, HUB).unwrap().ping_interval_s, 300.0);
+
+        // Rooms read cleanly are kept; a file cut off is put aside for them.
+        std::fs::write(hub_dir.join(ROOMS_FILE), "rooms: {}\n").unwrap();
+        assert!(load_router(&hub_dir, write_config(&config, HUB).unwrap(), HUB).is_ok());
+        assert!(hub_dir.join(format!("{ROOMS_FILE}.bak")).is_file());
+        std::fs::write(hub_dir.join(ROOMS_FILE), "rooms: {lobby: [").unwrap();
+        let loaded = load_router(&hub_dir, write_config(&config, HUB).unwrap(), HUB);
+        assert!(loaded.is_ok(), "{:?}", loaded.err());
+        assert!(hub_dir.join(format!("{ROOMS_FILE}.damaged")).is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn say(core: &mut Core, link: u8, who: Hash, room: &str, text: &str) -> Vec<Action> {
+        send(core, link, Envelope::new(t::MSG, &who).room(room).text(text))
+    }
+
+    #[test]
+    fn outsiders_stay_out_of_closed_rooms_and_the_banned_out_of_every_link() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-outsiders-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        connect(&mut core, 2, BOB, "bob");
+        let _ = join(&mut core, 1, AMY, "lobby");
+
+        // An open room: an outsider posts, as before.
+        let open = say(&mut core, 2, BOB, "lobby", "hello");
+        assert!(sent(&open).iter().any(|(link, kind, ..)| *link == 1 && *kind == t::MSG), "{:?}", sent(&open));
+
+        // Invite-only: he can't post, read who is in it, or set its topic.
+        let _ = say(&mut core, 1, AMY, "lobby", "/mode lobby +i");
+        for text in ["hello", "/who lobby", "/topic lobby mine", "/topic lobby"] {
+            let out = sent(&say(&mut core, 2, BOB, "lobby", text));
+            assert!(out.iter().all(|(link, kind, ..)| *link == 2 && *kind == t::ERROR) && !out.is_empty(), "{text}: {out:?}");
+        }
+        assert!(sent(&say(&mut core, 1, AMY, "lobby", "hello")).iter().any(|(_, kind, ..)| *kind == t::MSG), "members still post");
+        assert!(core.router.state.rooms["lobby"].topic.is_none());
+
+        // Open again: he can read, but only members set the topic.
+        let _ = say(&mut core, 1, AMY, "lobby", "/mode lobby -i");
+        let out = sent(&say(&mut core, 2, BOB, "lobby", "/topic lobby mine"));
+        assert!(out.iter().all(|(link, kind, ..)| *link == 2 && *kind == t::ERROR) && !out.is_empty(), "{out:?}");
+        assert!(core.router.state.rooms["lobby"].topic.is_none());
+
+        // Connected twice, a ban takes him out of the room on both links.
+        connect(&mut core, 3, BOB, "bob");
+        let _ = join(&mut core, 2, BOB, "lobby");
+        let _ = join(&mut core, 3, BOB, "lobby");
+        let ban = format!("/ban lobby add {}", hex::encode(BOB));
+        let mut out = say(&mut core, 1, AMY, "lobby", &ban);
+        out.extend(core.evict_banned());
+        let out = sent(&out);
+        for link in [2, 3] {
+            assert!(
+                out.iter().any(|(to, kind, _, text)| *to == link && *kind == t::ERROR && text.as_deref() == Some("banned from lobby")),
+                "{link}: {out:?}"
+            );
+        }
+        let members = &core.router.state.rooms["lobby"].members;
+        assert!(!members.contains(&[2; 16]) && !members.contains(&[3; 16]) && members.contains(&[1; 16]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn frames_the_router_could_read_differently_are_refused() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-ambiguous-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, false);
+        connect(&mut core, 1, AMY, "amy");
+        let ban = b"\x6d/ban zzz list";
+        // The body given twice: "hello", then a command.
+        let mut twice = vec![0x06, 0x65];
+        twice.extend_from_slice(b"hello");
+        twice.push(0x06);
+        twice.extend_from_slice(ban);
+        // The body under a CBOR tag.
+        let mut tagged = vec![0x06, 0xc1];
+        tagged.extend_from_slice(ban);
+        // The same frames, with one body, are fine: the refusals are for what they do.
+        let mut once = vec![0x06, 0x65];
+        once.extend_from_slice(b"hello");
+        assert!(Envelope::decode_strict(&raw_message(&once, 7)).is_ok());
+        for (frame, why) in [(raw_message(&twice, 8), "twice"), (raw_message(&tagged, 7), "tagged")] {
+            assert!(Envelope::decode_strict(&frame).is_err(), "{why}");
+            assert!(core.screen([1; 16], &frame).is_some_and(|actions| actions.is_empty()), "{why}");
+        }
+        // Bytes after the map are refused too, and a plain frame still passes.
+        let plain = Envelope::new(t::MSG, &AMY).room("lobby").text("hi").encode();
+        assert!(core.screen([1; 16], &plain).is_none());
+        let mut trailing = plain.clone();
+        trailing.push(0);
+        assert!(core.screen([1; 16], &trailing).is_some_and(|actions| actions.is_empty()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

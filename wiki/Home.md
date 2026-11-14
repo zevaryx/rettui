@@ -5,7 +5,6 @@ it can edit your Reticulum configuration. It is built on:
 
 - [rsReticulum](https://github.com/ratspeak/rsReticulum): the Reticulum protocol
 - [rsLXMF](https://github.com/ratspeak/rsLXMF): LXMF messages
-- [rsNomad](https://github.com/Colorado-Mesh/rsNomad): NomadNet requests and hosting
 - [ratatui](https://github.com/ratatui/ratatui): the terminal UI
 
 > [!WARNING]
@@ -50,6 +49,7 @@ it can edit your Reticulum configuration. It is built on:
 - [Web UI](Web-UI): logging in, phones, slow links, the JSON API
 - [Docker](Docker): running the web UI in a container
 - [Android](Android): the Android app's test builds
+- [Desktop App](Desktop-App): rettui in a window of its own, with identities, backups and pipe interfaces
 
 **What it does**
 

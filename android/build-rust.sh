@@ -15,8 +15,11 @@ ndk_version="$(sed -n 's/.*ndkVersion = "\(.*\)".*/\1/p' "$here/app/build.gradle
 ndk="${ANDROID_NDK_HOME:-${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}/ndk/$ndk_version}"
 case "$(uname -s)" in
   Darwin) host=darwin-x86_64 ;;
+  MINGW*|MSYS*|CYGWIN*) host=windows-x86_64; exe=.exe; cmd=.cmd ;;
   *) host=linux-x86_64 ;;
 esac
+exe="${exe:-}"
+cmd="${cmd:-}"
 bin="$ndk/toolchains/llvm/prebuilt/$host/bin"
 [ -d "$bin" ] || { echo "No Android NDK at $ndk (set ANDROID_NDK_HOME)" >&2; exit 1; }
 
@@ -28,19 +31,19 @@ for abi in "$@"; do
     *) echo "Unknown ABI $abi (arm64-v8a or x86_64)" >&2; exit 1 ;;
   esac
   env_target="$(echo "$target" | tr 'a-z-' 'A-Z_')"
-  export "CARGO_TARGET_${env_target}_LINKER=$bin/$target$api-clang"
-  export "CC_${target//-/_}=$bin/$target$api-clang"
-  export "AR_${target//-/_}=$bin/llvm-ar"
+  export "CARGO_TARGET_${env_target}_LINKER=$bin/$target$api-clang$cmd"
+  export "CC_${target//-/_}=$bin/$target$api-clang$cmd"
+  export "AR_${target//-/_}=$bin/llvm-ar$exe"
   cargo rustc --locked --release --lib --crate-type cdylib --target "$target" --manifest-path "$here/../Cargo.toml"
   mkdir -p "$here/app/src/main/jniLibs/$abi"
-  "$bin/llvm-strip" -o "$here/app/src/main/jniLibs/$abi/librettui.so" "$here/../target/$target/release/librettui.so"
+  "$bin/llvm-strip$exe" -o "$here/app/src/main/jniLibs/$abi/librettui.so" "$here/../target/$target/release/librettui.so"
   echo "Built $here/app/src/main/jniLibs/$abi/librettui.so"
 done
 
 # btleplug (Bluetooth RNodes) calls Java classes of its own, which the app
 # carries: taken from the btleplug crate Cargo.lock has, so the two match.
 btleplug="$(cargo metadata --locked --format-version 1 --manifest-path "$here/../Cargo.toml" --filter-platform aarch64-linux-android |
-  python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "btleplug"))')"
+  "$(command -v python3 || command -v python)" -c'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "btleplug"))')"
 rm -rf "$here/btleplug/java"
 cp -R "$(dirname "$btleplug")/src/droidplug/java/src/main/java" "$here/btleplug/java"
 cp "$(dirname "$btleplug")/LICENSE.md" "$here/btleplug/java/LICENSE.md"

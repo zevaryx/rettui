@@ -9,7 +9,7 @@ site_description = "A Reticulum client for the terminal and the browser: LXMF me
 site_url = "https://zevaryx.github.io/rettui/"
 repo_url = "https://github.com/zevaryx/rettui"
 repo_name = "zevaryx/rettui"
-copyright = "rettui is licensed under the AGPL-3.0-or-later"
+copyright = "rettui is licensed under the Reticulum License"
 docs_dir = "pages"
 site_dir = "site"
 # The navigation, from wiki/_Sidebar.md (written by docs/build.py).

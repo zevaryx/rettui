@@ -3,15 +3,10 @@ package org.zevaryx.rettui
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
-import android.widget.Button
 import android.widget.CheckBox
-import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 
 /**
@@ -41,60 +36,35 @@ class DownloadsActivity : Activity() {
     private lateinit var where: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        applyPageTheme()
         super.onCreate(savedInstanceState)
-        title = getString(R.string.downloads)
-        val column = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 48, 48, 48)
-        }
-        column.addView(TextView(this).apply {
-            text = getString(R.string.downloads)
-            textSize = 24f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-        })
-        column.addView(TextView(this).apply {
-            text = getString(R.string.downloads_note)
-            textSize = 14f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, 16, 0, 16)
-        })
-        column.addView(CheckBox(this).apply {
+        val page = Page(this, getString(R.string.downloads))
+        val card = page.section()
+        card.note(getString(R.string.downloads_note))
+        card.addView(CheckBox(this).apply {
             text = getString(R.string.downloads_ask)
-            setTextColor(Color.WHITE)
+            tinted()
             isChecked = asks(this@DownloadsActivity)
             setOnCheckedChangeListener { _, checked ->
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(ASK, checked).apply()
             }
         })
-        where = TextView(this).apply {
-            textSize = 14f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, 24, 0, 8)
+        val folder = page.section()
+        where = folder.value()
+        folder.primary(getString(R.string.downloads_choose)) {
+            startActivityForResult(
+                Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+                ),
+                PICK_FOLDER,
+            )
         }
-        column.addView(where)
-        column.addView(Button(this).apply {
-            text = getString(R.string.downloads_choose)
-            isAllCaps = false
-            setOnClickListener {
-                startActivityForResult(
-                    Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
-                    ),
-                    PICK_FOLDER,
-                )
-            }
-        })
-        column.addView(Button(this).apply {
-            text = getString(R.string.downloads_default)
-            isAllCaps = false
-            setOnClickListener {
-                folder(this@DownloadsActivity)?.let { runCatching { contentResolver.releasePersistableUriPermission(it, Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(FOLDER).apply()
-                show()
-            }
-        })
-        showClearOfBars(ScrollView(this).apply { addView(column) })
+        folder.secondary(getString(R.string.downloads_default)) {
+            // Kept if scheduled backups go there too.
+            folder(this@DownloadsActivity)?.takeIf { it != ScheduledBackups.folder(this@DownloadsActivity) }?.let { runCatching { contentResolver.releasePersistableUriPermission(it, Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(FOLDER).apply()
+            show()
+        }
         show()
     }
 

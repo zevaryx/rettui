@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark on every phone, as the web UI starts: the screen shown while
+         rettui starts (and Android 12's splash behind the icon) is its
+         background rather than a white flash, and dialogs, buttons and
+         ticks read on the app's own dark screens. -->
+    <style name="Theme.Rettui" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:colorBackground">@color/background</item>
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+
+    <!-- The same on the web UI's light theme, for the app's own screens
+         when the page is light. -->
+    <style name="Theme.Rettui.Light" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/background_light</item>
+        <item name="android:colorBackground">@color/background_light</item>
+        <item name="android:statusBarColor">@color/background_light</item>
+        <item name="android:navigationBarColor">@color/background_light</item>
+        <item name="android:colorAccent">@color/accent_light</item>
+    </style>
+
+    <!-- Dialogs: rounded, on the web UI's panel colour, with plain
+         (not capitalised) buttons in its accent. -->
+    <style name="Dialog" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/dialog_background</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:textColorPrimary">#dcdce4</item>
+        <item name="android:textColorSecondary">#9a9aae</item>
+        <item name="android:textColorHint">#9a9aae</item>
+        <item name="android:buttonBarButtonStyle">@style/DialogButton</item>
+        <item name="android:textAppearanceMedium">@style/DialogText</item>
+    </style>
+    <style name="Dialog.Light" parent="android:Theme.Material.Light.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/dialog_background_light</item>
+        <item name="android:colorAccent">@color/accent_light</item>
+        <item name="android:textColorPrimary">#1b1b24</item>
+        <item name="android:textColorSecondary">#5d5d6e</item>
+        <item name="android:textColorHint">#5d5d6e</item>
+        <item name="android:buttonBarButtonStyle">@style/DialogButton.Light</item>
+        <item name="android:textAppearanceMedium">@style/DialogText.Light</item>
+    </style>
+    <style name="DialogButton" parent="android:Widget.Material.Button.Borderless.Colored">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">@color/accent</item>
+    </style>
+    <style name="DialogButton.Light">
+        <item name="android:textColor">@color/accent_light</item>
+    </style>
+    <style name="DialogText" parent="android:TextAppearance.Material.Medium">
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">#dcdce4</item>
+    </style>
+    <style name="DialogText.Light">
+        <item name="android:textColor">#1b1b24</item>
+    </style>
+</resources>

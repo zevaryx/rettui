@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-manage-export-identity"
+description = "Enables the manage_export_identity command without any pre-configured scope."
+commands.allow = ["manage_export_identity"]
+
+[[permission]]
+identifier = "deny-manage-export-identity"
+description = "Denies the manage_export_identity command without any pre-configured scope."
+commands.deny = ["manage_export_identity"]

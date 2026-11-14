@@ -1,0 +1,29 @@
+[package]
+name = "rettui-desktop"
+version = "1.11.0"
+edition = "2024"
+description = "rettui's web UI in a window of its own"
+license-file = "../LICENSE"
+publish = false
+
+[[bin]]
+name = "rettui-desktop"
+path = "src/main.rs"
+
+[dependencies]
+# rettui itself, run in this process: the same web UI the browser shows.
+rettui = { path = ".." }
+# The tray icon keeps it reachable while it runs in the background.
+tauri = { version = "2.12", features = ["tray-icon"] }
+# Links that aren't rettui's open in the system's browser.
+tauri-plugin-opener = "2.7"
+# One copy at a time: a second start brings the first one's window up, as
+# two on one data directory would fight over it.
+tauri-plugin-single-instance = "2.5"
+directories = "6"
+serde_json = "1"
+# Notifications as the system shows them (the webview has no web ones).
+tauri-plugin-notification = "2.8"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }

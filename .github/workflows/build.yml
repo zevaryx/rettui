@@ -78,7 +78,7 @@ jobs:
           VERSION="${VERSION//\//-}"
           name="rettui-$VERSION-$TARGET"
           mkdir -p "dist/$name"
-          cp README.md "dist/$name/"
+          cp README.md LICENSE "dist/$name/"
           cd dist
           if [[ "$TARGET" == *windows* ]]; then
             cp "../target/$TARGET/release/rettui.exe" "$name/"

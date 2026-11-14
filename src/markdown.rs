@@ -105,6 +105,11 @@ struct Block {
     runs: Vec<(String, Look)>,
 }
 
+/// How deep quotes and lists are drawn: deeper ones are drawn at this depth. Every line
+/// of a block carries its bars, so unlimited nesting would cost memory in proportion to
+/// depth times length.
+const MAX_NESTING: usize = 8;
+
 fn parse(text: &str) -> Vec<Block> {
     let mut blocks: Vec<Block> = Vec::new();
     let mut open: Option<Block> = None;
@@ -114,8 +119,8 @@ fn parse(text: &str) -> Vec<Block> {
     let mut marker: Option<String> = None;
     let start = |kind: Kind, quote: usize, lists: &[Option<u64>], marker: &mut Option<String>| Block {
         kind,
-        quote,
-        list: lists.len(),
+        quote: quote.min(MAX_NESTING),
+        list: lists.len().min(MAX_NESTING),
         marker: marker.take(),
         runs: Vec::new(),
     };
@@ -376,9 +381,259 @@ pub fn html(text: &str) -> String {
     out
 }
 
+/// The file name a code block's fence language would have, for
+/// [`crate::highlight::language`]: `rust` is `x.rs`.
+fn fence_file(info: &str) -> String {
+    let name = info.split([' ', ',', '{']).next().unwrap_or_default().to_ascii_lowercase();
+    let ext = match name.as_str() {
+        "rust" => "rs",
+        "python" | "python3" => "py",
+        "javascript" | "node" => "js",
+        "typescript" => "ts",
+        "shell" | "bash" | "sh" | "zsh" | "console" | "shell-session" => "sh",
+        "c++" => "cpp",
+        "csharp" | "c#" => "cs",
+        "kotlin" => "kt",
+        "yaml" => "yml",
+        "markdown" => "md",
+        "micron" => "mu",
+        "make" | "makefile" => "mk",
+        "docker" => "dockerfile",
+        other => other,
+    };
+    format!("x.{ext}")
+}
+
+/// Markdown made into Micron, a block at a time.
+struct ToMicron<'a> {
+    out: String,
+    /// Headings start at this many `>`.
+    level: usize,
+    link: &'a dyn Fn(&str, &str) -> Option<String>,
+    quote: usize,
+    lists: Vec<Option<u64>>,
+    /// The marker the next line starts with (a list item's first line).
+    marker: Option<String>,
+    at_start: bool,
+    /// A code block's fence language and text, while in one.
+    code: Option<(String, String)>,
+    /// A link's or image's address and the text it has so far.
+    links: Vec<(String, String)>,
+    in_item: bool,
+}
+
+impl ToMicron<'_> {
+    /// Start a block: a blank line after the one before, but not between a
+    /// tight list's items.
+    fn block(&mut self) {
+        if !self.out.is_empty() && !self.out.ends_with("\n\n") {
+            if !self.out.ends_with('\n') {
+                self.out.push('\n');
+            }
+            if !self.in_item {
+                self.out.push('\n');
+            }
+        }
+        self.at_start = true;
+    }
+
+    fn end_line(&mut self) {
+        if !self.at_start {
+            self.out.push('\n');
+        }
+        self.at_start = true;
+    }
+
+    /// What a line in the current block starts with: quote bars, and the
+    /// list's indent and marker.
+    fn lead(&mut self) -> String {
+        let mut lead = "`F888│`f ".repeat(self.quote.min(MAX_NESTING));
+        if !self.lists.is_empty() {
+            lead.push_str(&"  ".repeat((self.lists.len() - 1).min(MAX_NESTING)));
+            match self.marker.take() {
+                Some(marker) => lead.push_str(&marker),
+                None => lead.push_str("  "),
+            }
+        }
+        lead
+    }
+
+    /// Markup (already Micron) at the current place.
+    fn markup(&mut self, markup: &str) {
+        // A link's text is kept to label it with, without its formatting.
+        if !self.links.is_empty() {
+            return;
+        }
+        if self.at_start {
+            let lead = self.lead();
+            self.out.push_str(&lead);
+            self.at_start = false;
+        }
+        self.out.push_str(markup);
+    }
+
+    fn text(&mut self, text: &str) {
+        if let Some((_, said)) = self.links.last_mut() {
+            said.push_str(text);
+            return;
+        }
+        if self.at_start {
+            let lead = self.lead();
+            let escaped = if lead.is_empty() { crate::nomad::micron::write::line(text) } else { crate::nomad::micron::write::escape(text) };
+            self.out.push_str(&lead);
+            self.out.push_str(&escaped);
+            self.at_start = false;
+        } else {
+            self.out.push_str(&crate::nomad::micron::write::escape(text));
+        }
+    }
+
+    fn end_code(&mut self) {
+        let Some((info, text)) = self.code.take() else { return };
+        let lang = crate::highlight::language(&fence_file(&info), "");
+        let text = text.strip_suffix('\n').unwrap_or(&text);
+        for line in crate::nomad::micron::write::code(lang, text) {
+            let lead = self.lead();
+            // Two spaces in, so nothing in it can mean something at the start of a line.
+            self.out.push_str(&format!("{lead}  {line}\n"));
+        }
+        self.at_start = true;
+    }
+}
+
+/// Markdown `text` as Micron, for the README and Markdown files of a
+/// repository hosted here. Headings start at `level` `>`s; code blocks are
+/// coloured by the language their fence names; raw HTML is left out; and
+/// `link(text, address)` makes a link (Micron), or `None` shows its text
+/// with the address after it.
+pub fn micron(text: &str, level: usize, link: &dyn Fn(&str, &str) -> Option<String>) -> String {
+    let mut m = ToMicron {
+        out: String::new(),
+        level: level.max(1),
+        link,
+        quote: 0,
+        lists: Vec::new(),
+        marker: None,
+        at_start: true,
+        code: None,
+        links: Vec::new(),
+        in_item: false,
+    };
+    for event in Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH) {
+        if let Some((_, code)) = &mut m.code {
+            match event {
+                Event::Text(text) => code.push_str(&text),
+                Event::End(TagEnd::CodeBlock) => m.end_code(),
+                _ => {}
+            }
+            continue;
+        }
+        match event {
+            Event::Start(tag) => match tag {
+                Tag::Paragraph => m.block(),
+                Tag::Heading { level, .. } => {
+                    m.block();
+                    let depth = (m.level + level as usize - 1).min(3);
+                    m.out.push_str(&">".repeat(depth));
+                    m.at_start = false;
+                }
+                Tag::BlockQuote(_) => {
+                    m.block();
+                    m.quote += 1;
+                }
+                Tag::CodeBlock(kind) => {
+                    m.block();
+                    let info = match kind {
+                        CodeBlockKind::Fenced(info) => info.to_string(),
+                        CodeBlockKind::Indented => String::new(),
+                    };
+                    m.code = Some((info, String::new()));
+                }
+                Tag::List(first) => {
+                    if m.lists.is_empty() {
+                        m.block();
+                    } else {
+                        m.end_line();
+                    }
+                    m.lists.push(first);
+                }
+                Tag::Item => {
+                    m.end_line();
+                    m.in_item = true;
+                    m.marker = Some(match m.lists.last_mut() {
+                        Some(Some(n)) => {
+                            *n += 1;
+                            format!("{}. ", *n - 1)
+                        }
+                        _ => "• ".to_string(),
+                    });
+                }
+                Tag::Emphasis => m.markup("`*"),
+                Tag::Strong => m.markup("`!"),
+                Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
+                    m.links.push((dest_url.to_string(), String::new()));
+                }
+                _ => {}
+            },
+            Event::End(tag) => match tag {
+                TagEnd::Paragraph | TagEnd::Heading(_) => m.end_line(),
+                TagEnd::BlockQuote(_) => {
+                    m.end_line();
+                    m.quote = m.quote.saturating_sub(1);
+                }
+                TagEnd::List(_) => {
+                    m.end_line();
+                    m.lists.pop();
+                    m.in_item = !m.lists.is_empty();
+                }
+                TagEnd::Item => m.end_line(),
+                TagEnd::Emphasis => m.markup("`*"),
+                TagEnd::Strong => m.markup("`!"),
+                TagEnd::Link | TagEnd::Image => {
+                    let Some((url, said)) = m.links.pop() else { continue };
+                    let said = if said.trim().is_empty() { url.clone() } else { said };
+                    match (m.link)(&said, &url) {
+                        Some(made) => m.markup(&made),
+                        None if said.trim() == url => m.text(&said),
+                        None => m.text(&format!("{said} ({url})")),
+                    }
+                }
+                _ => {}
+            },
+            Event::Text(text) => m.text(&text),
+            Event::Code(text) => {
+                if m.links.is_empty() {
+                    m.markup(&format!("`Fdd6{}`f", crate::nomad::micron::write::escape(&text)));
+                } else {
+                    m.text(&text);
+                }
+            }
+            Event::SoftBreak => m.text(" "),
+            Event::HardBreak => m.end_line(),
+            Event::Rule => {
+                m.block();
+                m.out.push_str("-\n");
+            }
+            _ => {}
+        }
+    }
+    m.end_code();
+    m.out.trim_end().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deeply_nested_quotes_cost_no_more_than_shallow_ones() {
+        // A megabyte of nesting used to need gigabytes to draw.
+        let text = format!("{} {}", ">".repeat(20_000), "x".repeat(100_000));
+        let drawn: usize = lines(&text, 80).iter().map(|line| line.width()).sum();
+        assert!(drawn < 10_000_000, "{drawn}");
+        let list = "- ".repeat(5000) + "x";
+        assert!(!lines(&list, 80).is_empty());
+    }
 
     #[test]
     fn formatted_text_is_made_once_until_too_much_is_kept() {
@@ -400,6 +655,28 @@ mod tests {
         get(TextFormat::Micron, &"x".repeat(KEPT_BYTES), 80);
         get(TextFormat::Micron, "hello", 80);
         assert_eq!(made.get(), 5);
+    }
+
+    #[test]
+    fn markdown_as_micron() {
+        let text = "# Title\n\nSome **bold**, *it*, ``co`de`` and [a link](docs/x.md) or [web](https://e.org).\n\n## Use\n\n- one\n- two\n  1. nested\n\n> quoted\n\n```rust\nfn main() {}\n# not a heading\n```\n\n---\n\n#hash and <b>raw</b>\n\n- dash";
+        let link = |said: &str, url: &str| (!url.contains("://")).then(|| format!("`[{said}`:/page/blob.mu`path={url}]"));
+        let made = micron(text, 2, &link);
+        let lines: Vec<&str> = made.lines().collect();
+        assert_eq!(lines[0], ">>Title");
+        assert!(lines[2].contains("`!bold`!") && lines[2].contains("`*it`*") && lines[2].contains("`Fdd6co\\`de`f"), "{}", lines[2]);
+        assert!(lines[2].contains("`[a link`:/page/blob.mu`path=docs/x.md]") && lines[2].contains("web (https://e.org)"), "{}", lines[2]);
+        assert_eq!(lines[4], ">>>Use");
+        assert_eq!(&lines[6..9], ["• one", "• two", "  1. nested"]);
+        assert_eq!(lines[10], "`F888│`f quoted");
+        assert!(lines[12].starts_with("  `Fc8ffn`f") && lines[13].starts_with("  "), "{made}");
+        assert!(made.contains("\n-\n"));
+        // What would mean something at the start of a line is escaped; raw HTML is left out.
+        assert!(made.contains("\n\\#hash and raw\n"), "{made}");
+        assert!(made.ends_with("• dash"));
+        // Micron reads it back to the same words.
+        let page = crate::nomad::micron::parse(&made);
+        assert!(page.items.len() == 1, "one link");
     }
 
     fn shown(text: &str, width: usize) -> Vec<String> {

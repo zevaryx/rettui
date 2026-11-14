@@ -93,9 +93,10 @@ macOS and Windows:
   for each submodule's current remote before touching it. Commit a change
   in the fork, then move the submodule pointer in rettui. Leave every
   other submodule as it is, and work around its limits in rettui itself.
-- `deps/rsReticulum` is pinned on purpose. Never change it or move its
-  submodule pointer, even though it's a fork, unless the open PRs that it
-  is forked from are merged into upstream.
+- `deps/rsReticulum` is pinned on purpose, to the fork's `rettui-1.4`
+  branch: rsReticulum 1.4.0 with rettui's patches. Never change it or move
+  its submodule pointer, even though it's a fork, unless asked to, or the
+  open PRs that it is forked from are merged into upstream.
 - Never open a pull request against an upstream project for a change made
   in a fork.
 - `vendor/codec2` is a vendored copy of the codec2 crate, with 700C, 450 and

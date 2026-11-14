@@ -410,7 +410,7 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
                     let name = peer.name.clone().unwrap_or_else(|| format!("<{}>", &hash[..12]));
                     let mut spans = vec![Span::styled(marker, Style::default().fg(accent()))];
                     spans.extend(row(&name, hash));
-                    if saved_urls.contains(format!("{hash}:{}", nomad_core::DEFAULT_INDEX_ROUTE).as_str()) {
+                    if saved_urls.contains(format!("{hash}:{}", crate::nomad::paths::INDEX_PATH).as_str()) {
                         spans.push(Span::styled(" ★", Style::default().fg(Color::Yellow)));
                     }
                     spans.push(Span::styled(format!("  {}", ago(peer.last_seen)), Style::default().fg(dim())));

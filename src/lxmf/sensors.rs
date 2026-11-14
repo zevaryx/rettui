@@ -39,6 +39,9 @@ const FUEL: u64 = 0x17;
 const LXMF_PROPAGATION: u64 = 0x18;
 const RNS_TRANSPORT: u64 = 0x19;
 const CONNECTION_MAP: u64 = 0x1A;
+/// Interfaces the sender makes known (Sideband 2.x), read in
+/// [`crate::net::found`].
+pub const INTERFACES: u64 = 0x1B;
 const CUSTOM: u64 = 0xFF;
 
 /// Most readings kept from one message (the rest are left out).
@@ -285,6 +288,13 @@ pub fn read(sensors: &[(Value, Value)]) -> Vec<Reading> {
             RNS_TRANSPORT => add("Reticulum transport", Some("statistics (shown in Sideband)".into())),
             LXMF_PROPAGATION => add("Propagation node", Some("statistics (shown in Sideband)".into())),
             CONNECTION_MAP => add("Connection map", Some("(shown in Sideband)".into())),
+            INTERFACES => {
+                let found = crate::net::found::FoundInterface::from_sensor(value);
+                let shown: Vec<String> = found.iter().take(4).map(|f| format!("{} ({})", f.name, f.summary())).collect();
+                let more = found.len().saturating_sub(shown.len());
+                let more = if more > 0 { format!(", and {more} more") } else { String::new() };
+                add("Interfaces", (!found.is_empty()).then(|| format!("{}{more}", shown.join(", "))));
+            }
             // The time and the location, and sensors not known.
             _ => {}
         }

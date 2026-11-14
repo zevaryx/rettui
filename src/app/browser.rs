@@ -47,6 +47,12 @@ pub struct Pending {
     pub status: Option<String>,
 }
 
+/// The most images, and the most partials, one page loads, and the least
+/// seconds between a partial's reloads: a page can ask for any number.
+const MAX_PAGE_IMAGES: usize = 24;
+const MAX_PARTIALS: usize = 16;
+const MIN_PARTIAL_REFRESH: u64 = 5;
+
 /// The most Browser tabs open at once: each keeps its page and images.
 pub const MAX_TABS: usize = 12;
 
@@ -188,8 +194,8 @@ impl App {
         };
         let location = &pending.location;
         match result {
-            Ok(content) if location.path.starts_with(nomad_core::FILE_PREFIX) => {
-                let name = nomad_core::reply_file_name(content.metadata.as_deref())
+            Ok(content) if location.path.starts_with(crate::nomad::paths::FILE_PREFIX) => {
+                let name = crate::nomad::request::reply_file_name(content.metadata.as_deref())
                     .or_else(|| location.path.rsplit('/').next().map(str::to_string))
                     .unwrap_or_else(|| "download".to_string());
                 let folder =
@@ -243,11 +249,11 @@ impl App {
         self.browser.tab.selection = None;
         self.browser.tab.scroll = 0;
         self.browser.tab.error = None;
-        for url in image_urls {
+        for url in image_urls.into_iter().take(MAX_PAGE_IMAGES) {
             self.request_image(url, pending.refresh);
         }
         self.browser.tab.partial_requests.clear();
-        let count = self.browser.tab.page.as_ref().map_or(0, |p| p.partials.len());
+        let count = self.browser.tab.page.as_ref().map_or(0, |p| p.partials.len()).min(MAX_PARTIALS);
         self.browser.tab.partials = vec![PartialState::default(); count];
         for index in 0..count {
             self.request_partial(index);
@@ -259,6 +265,9 @@ impl App {
     fn request_partial(&mut self, index: usize) {
         let (Some(page), Some(current)) = (&self.browser.tab.page, &self.browser.tab.location) else { return };
         let Some(partial) = page.partials.get(index) else { return };
+        if index >= self.browser.tab.partials.len() {
+            return;
+        }
         let Some(mut location) = self.resolve(&partial.url) else {
             let why = format!("`Ff66This part of the page has an address rettui can't read: {}`f", partial.url.replace('`', "'"));
             self.browser.tab.partials[index].content = Some(why);
@@ -299,7 +308,8 @@ impl App {
         let new_images: Vec<String> = page.image_urls().into_iter().filter(|u| !known.contains(u)).collect();
         self.browser.tab.selected = self.browser.tab.selected.filter(|&s| s < page.items.len()).or((!page.items.is_empty()).then_some(0));
         self.browser.tab.page = Some(page);
-        for url in new_images {
+        let room = MAX_PAGE_IMAGES.saturating_sub(self.browser.tab.images.len() + self.browser.tab.media_requests.len());
+        for url in new_images.into_iter().take(room) {
             self.request_image(url, false);
         }
     }
@@ -317,7 +327,10 @@ impl App {
             .zip(&self.browser.tab.partials)
             .enumerate()
             .filter(|(_, (partial, state))| {
-                !state.loading && partial.refresh.is_some_and(|every| state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every))
+                !state.loading
+                    && partial
+                        .refresh
+                        .is_some_and(|every| state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every.max(MIN_PARTIAL_REFRESH)))
             })
             .map(|(index, _)| index)
             .collect();
@@ -602,7 +615,7 @@ impl App {
         self.browser.focus = BrowserFocus::Page;
         // Pages from this client's own node skip the cache, so edits show.
         let cacheable =
-            location.fields.is_empty() && !location.path.starts_with(nomad_core::FILE_PREFIX) && !self.is_own_node(location.node);
+            location.fields.is_empty() && !location.path.starts_with(crate::nomad::paths::FILE_PREFIX) && !self.is_own_node(location.node);
         let id = self.request_id();
         let pending = Pending { id, location, started: Instant::now(), record_history, identified, refresh, status: None };
         if cacheable
@@ -646,10 +659,10 @@ impl App {
     /// A name for a saved page: the node's name, plus the page path.
     pub fn bookmark_name(&self, location: &Location) -> String {
         let node = self.store.display_name(&hex::encode(location.node));
-        if location.path == nomad_core::DEFAULT_INDEX_ROUTE {
+        if location.path == crate::nomad::paths::INDEX_PATH {
             node
         } else {
-            format!("{node} · {}", location.path.trim_start_matches(nomad_core::PAGE_PREFIX))
+            format!("{node} · {}", location.path.trim_start_matches(crate::nomad::paths::PAGE_PREFIX))
         }
     }
 
@@ -1189,7 +1202,7 @@ pub fn resolve_url(url: &str, current: Option<Hash>) -> Option<Location> {
         None if url.starts_with('/') => (current?, url.to_string()),
         None => (parse_hash(url)?, String::new()),
     };
-    let path = if path.is_empty() || path == "/" { nomad_core::DEFAULT_INDEX_ROUTE.to_string() } else { path };
+    let path = if path.is_empty() || path == "/" { crate::nomad::paths::INDEX_PATH.to_string() } else { path };
     Some(Location { node, path, fields: BTreeMap::new() })
 }
 

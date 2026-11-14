@@ -38,6 +38,10 @@ android {
 
     buildTypes {
         debug {
+            // Installs beside the release app, so a test build never
+            // replaces it (or its identity).
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
             signingConfigs.findByName("shared")?.let { signingConfig = it }
         }
         // Releases: not debuggable (adb can't read the app's files, the

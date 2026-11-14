@@ -215,7 +215,7 @@ impl App {
                 None => {}
             },
             // As in the Network list.
-            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F' | 'I')) => self.address_action(c, selected.map(|(key, _)| key)),
+            KeyCode::Char(c @ ('y' | 'P' | 'T' | 'D' | 'F' | 'O' | 'I')) => self.address_action(c, selected.map(|(key, _)| key)),
             KeyCode::Char('/') => self.net_search.typing = true,
             KeyCode::Esc => self.clear_network_search(),
             KeyCode::Char('i') => self.cycle_net_via(),
@@ -249,7 +249,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn heard(byte: u8, kind: Kind, name: &str) -> Heard {
-        Heard { hash: [byte; 16], kind, aspect: None, name: Some(name.into()), hops: byte % 4 }
+        Heard { hash: [byte; 16], kind, aspect: None, name: Some(name.into()), hops: byte % 4, software: None }
     }
 
     fn screen(app: &mut App) -> String {

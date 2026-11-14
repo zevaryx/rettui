@@ -11,6 +11,7 @@ mod clock;
 mod config;
 mod emoji;
 mod games;
+mod highlight;
 mod https;
 mod icons;
 mod identities;
@@ -33,6 +34,9 @@ mod term;
 mod ui;
 mod update;
 mod web;
+
+/// What only the desktop app's own window may do (see its docs).
+pub use web::desktop as manage;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -189,12 +193,43 @@ enum Command {
         /// new addresses).
         #[arg(long)]
         without_identity: bool,
+        /// Seal it with a passphrase, asked for here (or taken from
+        /// RETTUI_BACKUP_PASSPHRASE): it can't be restored without it. In a
+        /// terminal, rettui asks for one anyway (Enter for none).
+        #[arg(long, conflicts_with_all = ["key", "no_passphrase"])]
+        passphrase: bool,
+        /// Seal it to a backup key (from `rettui backup-key`), for backups
+        /// made without anyone there to type the passphrase.
+        #[arg(long, value_name = "KEY", conflicts_with = "no_passphrase")]
+        key: Option<String>,
+        /// Don't ask for a passphrase: the backup isn't sealed.
+        #[arg(long)]
+        no_passphrase: bool,
     },
+    /// Open a backup sealed with a passphrase without restoring it (and
+    /// without rettui running): the plain backup to OUT, or only the
+    /// identity in it, for Sideband, NomadNet or another rettui. It asks for
+    /// the passphrase (or takes RETTUI_BACKUP_PASSPHRASE).
+    Unseal {
+        /// The sealed backup.
+        file: PathBuf,
+        /// Where to write the plain backup (a .tar.gz).
+        #[arg(required_unless_present = "identity", conflicts_with = "identity")]
+        out: Option<PathBuf>,
+        /// Write only the identity in it, to this file.
+        #[arg(long, value_name = "FILE")]
+        identity: Option<PathBuf>,
+    },
+    /// Turn a passphrase into a backup key, to seal backups with
+    /// (`rettui backup --key`) without the passphrase at hand. Restoring one
+    /// still takes the passphrase.
+    BackupKey,
     /// Restore a backup into the data directory, with rettui stopped.
     ///
     /// A data directory that has an identity or messages already is left
     /// alone, unless --force: then what the backup replaces is moved aside
-    /// first, into a before-restore-<time> folder.
+    /// first, into a before-restore-<time> folder. A sealed backup asks for
+    /// its passphrase (or takes it from RETTUI_BACKUP_PASSPHRASE).
     Restore {
         file: PathBuf,
         /// Restore over what's there (moved aside first).
@@ -258,6 +293,45 @@ pub fn request_stop() {
     STOP.notify_one();
 }
 
+/// The desktop app's tray settings as they stand (see [`keep_running`] and
+/// [`minimize_to_tray`]), changed while it runs.
+static KEEP_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static MINIMIZE_TO_TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_tray(settings: &Settings) {
+    KEEP_RUNNING.store(settings.keep_running, std::sync::atomic::Ordering::Relaxed);
+    MINIMIZE_TO_TRAY.store(settings.minimize_to_tray, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the desktop app keeps running when its window is closed (the
+/// Keep running when closed setting).
+pub fn keep_running() -> bool {
+    KEEP_RUNNING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether the desktop app hides its window to the tray when it's
+/// minimized (the Minimize to tray setting).
+pub fn minimize_to_tray() -> bool {
+    MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// This build's version, for the desktop app's `--version`.
+pub const VERSION: &str = update::VERSION;
+
+/// Say that rettui runs inside the desktop app, before [`run_with`]:
+/// installing an update then replaces it with the release's
+/// `rettui-desktop`, not `rettui`.
+pub fn desktop_app() {
+    update::install::DESKTOP_APP.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Where the web UI keeps its login secret, for a program that runs it
+/// in-process and opens it itself (the desktop app, as the Android app
+/// reads its own): `data_dir` as `--data-dir` would be given.
+pub fn web_token_path(data_dir: Option<PathBuf>) -> Result<PathBuf> {
+    Ok(Paths::new(data_dir)?.web_token)
+}
+
 pub(crate) async fn stop_requested() {
     STOP.notified().await;
 }
@@ -272,10 +346,18 @@ async fn run(cli: Cli) -> Result<()> {
     let paths = Paths::new(cli.data_dir.clone())?;
     // Before anything is loaded (and, in a new data directory, made).
     match &cli.command {
-        Some(Command::Backup { file, with_files, without_identity }) => {
+        Some(Command::Backup { file, with_files, without_identity, passphrase, key, no_passphrase }) => {
             let options = backup::Options { identity: !without_identity, files: *with_files };
-            return cli::backup(&paths, file.clone(), options);
+            let seal = match (key, passphrase, no_passphrase) {
+                (Some(key), ..) => cli::Seal::Key(key.clone()),
+                (None, true, _) => cli::Seal::Passphrase,
+                (None, false, true) => cli::Seal::None,
+                (None, false, false) => cli::Seal::Ask,
+            };
+            return cli::backup(&paths, file.clone(), options, seal);
         }
+        Some(Command::BackupKey) => return cli::backup_key(),
+        Some(Command::Unseal { file, out, identity }) => return cli::unseal(file, out.as_deref(), identity.as_deref()),
         Some(Command::Restore { file, force }) => return cli::restore(&paths, file, *force),
         Some(Command::Identity { action: IdentityAction::Export { file } }) => return cli::export_identity(&paths, file),
         Some(Command::Identity { action: IdentityAction::Import { file, name } }) => return cli::import_identity(&paths, file, name),
@@ -283,11 +365,11 @@ async fn run(cli: Cli) -> Result<()> {
     }
     let settings = load_settings(&paths, cli.rns_config.clone())?;
 
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&paths.log)
-        .with_context(|| format!("opening {}", paths.log.display()))?;
+    let mut log_options = std::fs::OpenOptions::new();
+    log_options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut log_options, 0o600);
+    let log_file = log_options.open(&paths.log).with_context(|| format!("opening {}", paths.log.display()))?;
     // Everything goes to the log file, at the level set (changed while
     // running); interface trouble also goes to the log on screen.
     let (filter, reload) = tracing_subscriber::reload::Layer::new(logging::starting_filter(&settings.log_level));
@@ -310,9 +392,11 @@ async fn run(cli: Cli) -> Result<()> {
             _ => cli.https.then_some(web::tls::Https::Own),
         };
         let (mut settings, mut paths, mut identity) = (settings, paths, identity);
+        set_tray(&settings);
         // Switching identity starts the web UI over as the other one.
         while web::run(settings, paths, identity, &address, https.clone()).await?.is_some() {
             (settings, paths, identity) = switched(&cli.data_dir, cli.rns_config.clone())?;
+            set_tray(&settings);
         }
         return Ok(());
     }
@@ -341,7 +425,9 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         Some(Command::Update { yes }) => cli::update(&settings, yes).await,
-        Some(Command::Backup { .. } | Command::Restore { .. } | Command::Identity { .. }) => unreachable!("handled before loading"),
+        Some(Command::Backup { .. } | Command::BackupKey | Command::Unseal { .. } | Command::Restore { .. } | Command::Identity { .. }) => {
+            unreachable!("handled before loading")
+        }
         None => {
             let (mut settings, mut paths, mut identity) = (settings, paths, identity);
             // Switching identity starts over as the other one.
@@ -381,10 +467,11 @@ fn switched(data_dir: &Option<PathBuf>, rns_config: Option<String>) -> Result<(S
 }
 
 /// Network options for an interactive session (the TUI or the web UI).
-fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::identity::Identity) -> net::NetOptions {
+fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::identity::Identity, blocked: store::Blocked) -> net::NetOptions {
     let hub = rrc::host::HubHostConfig::from_settings(settings, paths, identity.hash);
     let git_host = net::githost::GitHostConfig::from_settings(settings, paths);
     net::NetOptions {
+        blocked,
         rns_config: settings.rns_config.clone(),
         identity,
         display_name: settings.display_name.clone(),
@@ -398,6 +485,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         propagation: lxmf::pn::PnConfig::from_settings(settings, paths),
         hub,
         git_host,
+        rncp_listen: net::rncplisten::RncpListenConfig::from_settings(settings, paths),
         stamp_cost: lxmf::policy::stamp_cost(settings.stamp_cost),
         max_message_bytes: settings.max_message_kb * 1000,
         tickets: paths.tickets.clone(),
@@ -426,8 +514,15 @@ fn android_start(settings: &Settings, paths: &Paths) -> Vec<String> {
 async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::identity::Identity) -> Result<Option<String>> {
     let identity_hash = identity.hash;
     let store = Store::load_or_empty(&paths.store);
-    let (mut net_tx, mut net_rx) = net::spawn(net_options(&settings, &paths, identity.clone()));
+    store.sync_blocked();
+    let (mut net_tx, mut net_rx) = net::spawn(net_options(&settings, &paths, identity.clone(), store.blocked.clone()));
+    // ratatui's panic hook gives the terminal back on a panic in any thread, but only the
+    // UI thread's panic ends the UI: a worker's must not wreck the screen.
+    let default_hook: std::sync::Arc<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync> = std::sync::Arc::from(std::panic::take_hook());
+    let kept = default_hook.clone();
+    std::panic::set_hook(Box::new(move |info| kept(info)));
     let mut terminal = ratatui::init();
+    let ratatui_hook = std::panic::take_hook();
     // Probe for Kitty graphics while in raw mode, before EventStream starts
     // reading stdin (it would swallow the terminal's replies).
     let graphics = term::images::Graphics::detect();
@@ -437,11 +532,15 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     // Focus reports (where the terminal sends them) tell notifications
     // whether the user is looking.
     execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste, EnableFocusChange)?;
-    // ratatui's panic hook restores the terminal; also release the mouse.
-    let hook = std::panic::take_hook();
+    let ui_thread = std::thread::current().id();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
-        hook(info);
+        if std::thread::current().id() == ui_thread {
+            let _ = execute!(std::io::stdout(), DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
+            ratatui_hook(info);
+        } else {
+            // On the screen it would only be garbage; the log has it.
+            tracing::error!("a thread panicked: {info}");
+        }
     }));
     let desktop = term::desktop::Desktop::start(&app.paths.cache);
     let mut events = EventStream::new();
@@ -512,7 +611,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
             // Show "restarting" while the old stack stops.
             let _ = terminal.draw(|frame| ui::draw(frame, &mut app));
             net::shutdown(&net_tx, &mut net_rx, net::Stop::Restart).await;
-            (net_tx, net_rx) = net::spawn(net_options(&app.settings, &app.paths, identity.clone()));
+            (net_tx, net_rx) = net::spawn(net_options(&app.settings, &app.paths, identity.clone(), app.store.blocked.clone()));
             app.set_network(net_tx.clone());
         }
     };
@@ -528,6 +627,13 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_desktop_app_finds_the_login_secret_in_the_data_folder() {
+        let dir = std::env::temp_dir().join(format!("rettui-token-path-{}", std::process::id()));
+        assert_eq!(super::web_token_path(Some(dir.clone())).unwrap(), dir.join("web_token"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_web_ui_stops_when_asked_from_within() {
         let dir = std::env::temp_dir().join(format!("rettui-run-with-{}", std::process::id()));

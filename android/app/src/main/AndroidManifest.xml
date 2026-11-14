@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Scheduled backups carry on after the phone restarts. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Asked once: to be left out of battery optimisation. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Asked for only when the web UI records voice or shares a location. -->
@@ -26,14 +28,23 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
+    <!-- Whether there's a camera app to offer when attaching a file. -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
+
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction"
+        android:enableOnBackInvokedCallback="true"
         android:extractNativeLibs="true"
         android:networkSecurityConfig="@xml/network_security"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:theme="@style/Theme.Rettui">
 
         <activity
             android:name=".MainActivity"
@@ -77,8 +88,7 @@
             android:name=".RNodesActivity"
             android:exported="true"
             android:label="@string/rnodes"
-            android:launchMode="singleTop"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
@@ -90,14 +100,24 @@
         <activity
             android:name=".BackupsActivity"
             android:exported="false"
-            android:label="@string/backups"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+            android:label="@string/backups" />
 
         <activity
             android:name=".DownloadsActivity"
             android:exported="false"
-            android:label="@string/downloads"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+            android:label="@string/downloads" />
+
+        <!-- Photos taken for a message: only the camera given one may write it. -->
+        <provider
+            android:name=".Photos"
+            android:authorities="${applicationId}.photos"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <service
+            android:name=".ScheduledBackups"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <receiver
             android:name=".NotificationActions"

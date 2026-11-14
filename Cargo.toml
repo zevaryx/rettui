@@ -1,14 +1,21 @@
 [package]
 name = "rettui"
-version = "1.10.0"
+version = "1.11.0"
 edition = "2024"
 description = "Terminal Reticulum client: LXMF messaging and NomadNet browsing"
-# rsReticulum, rsLXMF and rsNomad are AGPL-3.0-or-later.
-license = "AGPL-3.0-or-later"
+# The Reticulum License, as rsReticulum and rsLXMF are.
+license-file = "LICENSE"
+
+# The desktop app (desktop/) is its own package, so rettui itself never
+# links the system webview (GTK and WebKitGTK on Linux): plain `cargo build`
+# here builds rettui alone.
+[workspace]
+members = ["desktop"]
+exclude = ["deps", "vendor"]
 
 [dependencies]
-# Reticulum / LXMF / NomadNet, vendored as git submodules under deps/
-# (the libraries expect rsReticulum as a sibling of rsLXMF and rsNomad).
+# Reticulum and LXMF, vendored as git submodules under deps/ (rsLXMF
+# expects rsReticulum as its sibling).
 rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime", features = ["serial", "rnode-tcp"] }
 rns-identity = { path = "deps/rsReticulum/crates/rns-identity" }
 rns-crypto = { path = "deps/rsReticulum/crates/rns-crypto" }
@@ -17,7 +24,6 @@ rns-transport = { path = "deps/rsReticulum/crates/rns-transport" }
 # A packet's hash, to ask how it was heard.
 rns-wire = { path = "deps/rsReticulum/crates/rns-wire" }
 lxmf-core = { path = "deps/rsLXMF/crates/lxmf-core" }
-nomad-core = { path = "deps/rsNomad/crates/nomad-core" }
 # Hosting an RRC hub: rsRRCD's hub logic (it expects rsReticulum and rsRRC
 # as its siblings), and the YAML its configuration file is written in.
 rsrrcd = { path = "deps/rsRRCD", default-features = false }
@@ -40,8 +46,8 @@ unicode-segmentation = "1"
 unicode-normalization = "0.1"
 # Emoji names, groups and shortcodes, for the emoji pickers.
 emojis = "0.9"
-# Same decoders nomad-core already builds (NomadNet serves WebP media).
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+# Pictures in pages and messages, and a hosted node's pictures made into WebP.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "webp"] }
 rmpv = "1"
 # Terminal graphics (Kitty) with capability detection.
 ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
@@ -93,11 +99,15 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 codec2 = { path = "vendor/codec2" }
 # Offline map tiles from an MBTiles file (SQLite), for the web UI's map;
 # SQLite built in, so nothing needs installing.
-rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.42", default-features = false, features = ["bundled"] }
 # Unpacking a release to update to (see src/update/install.rs): .tar.gz
 # for Linux and macOS, .zip for Windows.
 tar = { version = "0.4", default-features = false }
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+argon2 = "0.5"
+rpassword = "7"
+zeroize = "1"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 
 [target.'cfg(unix)'.dependencies]
 # Bounded terminal capability probe (poll/read on stdin).
@@ -183,6 +193,15 @@ opt-level = 3
 [profile.dev.package.cbc]
 opt-level = 3
 [profile.dev.package.hkdf]
+opt-level = 3
+# Sealed backups: stretching a passphrase takes seconds unoptimised.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.dev.package.aes-gcm]
+opt-level = 3
+[profile.dev.package.ghash]
 opt-level = 3
 [profile.dev.package.rns-crypto]
 opt-level = 3

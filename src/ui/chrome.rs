@@ -190,15 +190,15 @@ pub(super) fn draw_prompt(frame: &mut Frame, app: &App) {
             .border_style(Style::default().fg(accent()))
     };
     let inner = prompt_block.inner(rect);
-    let cursor = prompt.input.cursor_column();
+    // A passphrase shows as a dot a character.
+    let secret = prompt.kind.is_secret();
+    let shown = if secret { "•".repeat(prompt.input.text().chars().count()) } else { prompt.input.text().to_string() };
+    let cursor = if secret { prompt.input.before_cursor().chars().count() } else { prompt.input.cursor_column() };
     let offset = cursor.saturating_sub(inner.width.saturating_sub(1) as usize);
     frame.render_widget(prompt_block, rect);
     let asked = question.len() as u16;
     frame.render_widget(Paragraph::new(question.join("\n")).style(Style::default().fg(super::accent())), Rect { height: asked, ..inner });
     let typed = Rect { y: inner.y + asked, height: 1, ..inner };
-    frame.render_widget(
-        Paragraph::new(prompt.input.text()).scroll((0, offset as u16)).style(Style::default().add_modifier(Modifier::BOLD)),
-        typed,
-    );
+    frame.render_widget(Paragraph::new(shown).scroll((0, offset as u16)).style(Style::default().add_modifier(Modifier::BOLD)), typed);
     frame.set_cursor_position(Position::new(inner.x + (cursor - offset) as u16, typed.y));
 }

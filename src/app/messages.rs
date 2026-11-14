@@ -9,7 +9,7 @@ use ratatui::layout::Position;
 
 use super::files::{path_from_input, unique_path};
 use super::notify::{self, Notification, Target};
-use super::{App, HistoryHit, MessageAction, PaperView, PromptKind, Tab, now};
+use super::{App, HistoryHit, MessageAction, PaperView, PromptKind, SyncState, Tab, now};
 use crate::lxmf::{self, DeliveryMode};
 use crate::markdown::TextFormat;
 use crate::net::{NetCommand, parse_hash};
@@ -87,11 +87,15 @@ impl App {
             }
         }
         let extras = &message.extras;
-        if let Some(appearance) = &extras.appearance {
+        // Without their key to check the signature, the sender is only who the message says:
+        // it may speak in their conversation, but not answer for, move or change them.
+        let acts = paper || message.verified;
+        if let Some(appearance) = extras.appearance.as_ref().filter(|_| acts) {
             self.keep_appearance(&key, appearance, message.timestamp);
         }
         let location = extras.telemetry.as_ref().and_then(|t| t.location);
         let sensors = extras.telemetry.as_ref().map(|t| t.sensors.clone()).unwrap_or_default();
+        let interfaces = extras.telemetry.as_ref().map(|t| t.interfaces.clone()).unwrap_or_default();
         // Nothing to show but what the fields say. A reaction's text may be
         // its emoji again, for clients without reactions (Mesh-Client sends
         // it so): that's the reaction, not a message as well.
@@ -106,7 +110,17 @@ impl App {
         let mut notes = extras.notes(bare);
         // Sideband's commands: answered if set to, and said so either way.
         let answers: Vec<String> = extras.commands.iter().filter_map(|c| c.answer(message.signal.as_ref())).collect();
-        if !answers.is_empty() && !paper {
+        let wants_action = !answers.is_empty()
+            || !extras.stream.is_empty()
+            || extras.appearance.is_some()
+            || extras
+                .commands
+                .iter()
+                .any(|c| matches!(c, lxmf::fields::Command::CollectorRequest(_) | lxmf::fields::Command::TelemetryRequest));
+        if wants_action && !acts {
+            notes.push("Not acted on: the sender isn't verified yet".into());
+        }
+        if !answers.is_empty() && acts && !paper {
             notes.push(match self.answer_commands(&key, answers) {
                 Ok(()) => "Answered automatically (Answer commands)".into(),
                 Err(why) => why,
@@ -119,19 +133,19 @@ impl App {
             _ => None,
         });
         let serving = self.settings.collector_serve != "off";
-        if let (Some(since), true, false) = (collector_request, serving, paper) {
+        if let (Some(since), true, true, false) = (collector_request, serving, acts, paper) {
             notes.push(match self.answer_collector_request(&key, since) {
                 Ok(note) => format!("Answered: {note}"),
                 Err(why) => why,
             });
-        } else if (collector_request.is_some() || extras.commands.contains(&lxmf::fields::Command::TelemetryRequest)) && !paper {
+        } else if (collector_request.is_some() || extras.commands.contains(&lxmf::fields::Command::TelemetryRequest)) && acts && !paper {
             notes.push(match self.answer_location_request(&key) {
                 Ok(()) => "Answered with this station's location (Location requests)".into(),
                 Err(why) => why,
             });
         }
         // Others' locations, passed on by a collector.
-        if !extras.stream.is_empty() && !paper {
+        if !extras.stream.is_empty() && acts && !paper {
             notes.push(self.take_stream(&key, &extras.stream));
         }
         // Their icon alone isn't a message either (it's kept, above).
@@ -175,7 +189,14 @@ impl App {
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 self.log(format!("Could not create {}: {e}", dir.display()));
             }
+            let quota = self.settings.downloads_quota_mb.saturating_mul(1_000_000);
+            let mut used = if quota > 0 { super::files::folder_size(&self.paths.downloads) } else { 0 };
             for (name, data, image, voice) in files {
+                if quota > 0 && used.saturating_add(data.len() as u64) > quota {
+                    self.warn(format!("Not saved: {name} would take the received files folder over its {} MB limit", quota / 1_000_000));
+                    continue;
+                }
+                used = used.saturating_add(data.len() as u64);
                 let path = unique_path(&dir, &name);
                 match std::fs::write(&path, data) {
                     Ok(()) => attachments.push(StoredAttachment { name, path, size: data.len() as u64, image, voice }),
@@ -197,6 +218,7 @@ impl App {
             continues: extras.continues.map(hex::encode),
             location,
             sensors,
+            interfaces,
             notes,
             format: extras.format.filter(|_| !message.content.trim().is_empty()),
             signal: message.signal,
@@ -371,6 +393,16 @@ impl App {
         self.send_progress.insert(number, super::CANCELLING.into());
         self.send(NetCommand::CancelSend(number));
         Ok(())
+    }
+
+    /// Stop the sync that's running: it ends after the download it's on,
+    /// and keeps what has come.
+    pub fn cancel_sync(&mut self) {
+        if matches!(self.sync, SyncState::Running(_)) && !self.sync_stopping {
+            self.sync_stopping = true;
+            self.sync_progress = Some("stopping…".into());
+            self.send(NetCommand::CancelSync);
+        }
     }
 
     /// How sending a message (by id) is going, while it's being sent.
@@ -1294,7 +1326,7 @@ impl App {
         };
         if let Some(attachment) = message.attachments.first() {
             let path = attachment.path.clone();
-            self.open_file(&path);
+            self.ask_open_file(&path);
         } else if let Some(location) = message.location {
             self.open_url(&location.map_url());
         } else {
@@ -1554,7 +1586,7 @@ impl App {
             .and_then(|c| c.messages.iter().rev().find_map(|m| m.attachments.last()))
             .map(|a| a.path.clone());
         match latest {
-            Some(path) => self.open_file(&path),
+            Some(path) => self.ask_open_file(&path),
             None => self.warn("No attachments in this conversation"),
         }
     }
@@ -1662,7 +1694,7 @@ impl App {
             let row = (at.y - self.regions.history.y) as usize;
             let button = self.regions.history_buttons.iter().find(|(rect, _)| rect.contains(at)).map(|(_, hit)| hit.clone());
             match button.or_else(|| self.regions.history_rows.get(row).cloned().flatten()) {
-                Some(HistoryHit::File(path)) => self.open_file(&path),
+                Some(HistoryHit::File(path)) => self.ask_open_file(&path),
                 Some(HistoryHit::Pick(index)) => self.pick_index(index),
                 Some(HistoryHit::Original(index)) => self.scroll_to = Some(index),
                 Some(HistoryHit::Link(url)) => self.open_url(&url),
@@ -2381,6 +2413,35 @@ mod tests {
         app.update_settings(&[("resend_on_announce", "false")]).unwrap();
         announce(&mut app);
         assert!(matches!(state(&mut app, text), MessageState::Failed(_)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_past_the_received_files_limit_are_not_saved() {
+        use crate::lxmf::Attachment;
+        let dir = temp_dir("quota");
+        let mut app = app(&dir, store_of(Vec::new()), 20, 0);
+        app.update_settings(&[("downloads_quota_mb", "1")]).unwrap();
+        let mut first = from_them(1, "one", crate::lxmf::Extras::default());
+        first.attachments = vec![Attachment { name: "a.bin".into(), data: vec![0; 700_000], image: false }];
+        first.timestamp = 1_900_000_000.0;
+        app.on_message(first);
+        let mut second = from_them(2, "two", crate::lxmf::Extras::default());
+        second.attachments = vec![Attachment { name: "b.bin".into(), data: vec![0; 700_000], image: false }];
+        second.timestamp = 1_900_000_001.0;
+        app.on_message(second);
+        let messages = &app.store.conversations[&key()].messages;
+        assert_eq!(messages.len(), 2, "the message itself is kept");
+        assert_eq!(messages[0].attachments.len(), 1);
+        assert!(messages[1].attachments.is_empty());
+        assert!(super::super::files::folder_size(&app.paths.downloads) <= 1_000_000);
+        // No limit: saved.
+        app.update_settings(&[("downloads_quota_mb", "0")]).unwrap();
+        let mut third = from_them(3, "three", crate::lxmf::Extras::default());
+        third.attachments = vec![Attachment { name: "c.bin".into(), data: vec![0; 700_000], image: false }];
+        third.timestamp = 1_900_000_002.0;
+        app.on_message(third);
+        assert_eq!(app.store.conversations[&key()].messages[2].attachments.len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

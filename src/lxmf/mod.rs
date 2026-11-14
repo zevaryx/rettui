@@ -297,7 +297,7 @@ mod tests {
     use rns_runtime::prelude::*;
 
     use super::inbound::attachments_of;
-    use super::send::build_message;
+    use super::send::{build_message, finish};
     use super::*;
 
     #[tokio::test]
@@ -311,7 +311,7 @@ mod tests {
         let identity = Identity::new();
         let outgoing = Outgoing::text([1; 16], "hi".into(), vec![img, doc], DeliveryMode::Direct, 1_800_000_000.0);
         let message = build_message(&identity, [2; 16], &outgoing, None).await.unwrap();
-        let unpacked = LxMessage::unpack(&message.pack().unwrap()).unwrap();
+        let unpacked = LxMessage::unpack(finish(message).unwrap().wire_bytes()).unwrap();
         let attachments = attachments_of(&unpacked);
         std::fs::remove_dir_all(&dir).unwrap();
 
@@ -320,7 +320,7 @@ mod tests {
         assert_eq!(attachments[0].name, "image.png");
         assert_eq!(attachments[1].name, "notes.txt");
         assert_eq!(attachments[1].data, b"hello");
-        assert_eq!(unpacked.content, "hi");
+        assert_eq!(unpacked.content_text(), "hi");
     }
 
     #[test]
@@ -366,7 +366,7 @@ mod tests {
         let identity = Identity::new();
         let reply = Reply { to: [7; 32], quote: Some("Lunch tomorrow?".into()) };
         let message = build_message(&identity, [2; 16], &outgoing(Some(reply.clone())), None).await.unwrap();
-        let packed = message.pack().unwrap();
+        let packed = finish(message).unwrap().pack().unwrap();
         assert_eq!(super::inbound::reply_of(&LxMessage::unpack(&packed).unwrap()), Some(reply));
         // Field 0x30 as msgpack bytes (bin 8, 32 long), as Columba and
         // MeshChatX send it.
@@ -375,7 +375,7 @@ mod tests {
         assert!(packed.windows(on_wire.len()).any(|w| w == on_wire));
         // Not a reply: no fields.
         let plain = build_message(&identity, [2; 16], &outgoing(None), None).await.unwrap();
-        assert_eq!(super::inbound::reply_of(&LxMessage::unpack(&plain.pack().unwrap()).unwrap()), None);
+        assert_eq!(super::inbound::reply_of(&LxMessage::unpack(finish(plain).unwrap().wire_bytes()).unwrap()), None);
     }
 
     #[tokio::test]
@@ -385,15 +385,17 @@ mod tests {
         let identity = Identity::new();
         let first = build_message(&identity, [2; 16], &outgoing(None), None).await.unwrap();
         let second = build_message(&identity, [2; 16], &outgoing(None), Some(&[0x91, 0xc0])).await.unwrap();
-        assert!(first.hash.is_some());
-        assert_eq!(first.hash, second.hash);
+        assert_eq!(first.message_id(), second.message_id());
     }
 
     #[test]
     fn older_columba_replies_are_read_too() {
-        let mut message = LxMessage::new([1; 16], [2; 16], "", "ok", lxmf_core::message_api::DeliveryMethod::Direct);
+        let mut message =
+            lxmf_core::message_api::LxMessageDraft::new([1; 16], [2; 16], "", "ok", lxmf_core::message_api::DeliveryMethod::Direct)
+                .unwrap();
         let extensions = Value::Map(vec![(Value::from("reply_to"), Value::from(hex::encode([9u8; 32])))]);
         message.set_msgpack_field(0x10, encode(&extensions)).unwrap();
+        let message = message.sign(&Identity::new().get_signing_key().unwrap()).unwrap().finalize(None).unwrap();
         assert_eq!(super::inbound::reply_of(&message), Some(Reply { to: [9; 32], quote: None }));
     }
 

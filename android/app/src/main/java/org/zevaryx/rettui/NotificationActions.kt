@@ -81,7 +81,7 @@ class NotificationActions : BroadcastReceiver() {
                 }
                 Rettui.api(context, "channels/$hub/read", JSONObject().put("room", room))
             }
-            else -> Rettui.Said(false, "Nothing to do for this notification")
+            else -> Rettui.Said(false, context.getString(R.string.nothing_to_do))
         }
     }
 }

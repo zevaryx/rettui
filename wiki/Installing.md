@@ -45,15 +45,14 @@ git clone --recursive <this repo>   # or: git submodule update --init
 cargo build --release
 ```
 
-The three libraries are git submodules under `deps/`. Each one expects the others
+The libraries are git submodules under `deps/`. Each one expects the others
 to be checked out next to it (for example `../rsReticulum`). They are pinned to
 revisions that build together:
 
 | Submodule | Revision | Why |
 | --- | --- | --- |
-| rsReticulum | `6fb0dee` | The [1.3.0 release](https://github.com/ratspeak/rsReticulum/releases/tag/v1.3.0) with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in: `RequestOutcome::ReplyFile`, file metadata and the requester's identity, which node hosting needs. It's the `rettui` branch of [zevaryx/rsReticulum](https://github.com/zevaryx/rsReticulum/tree/rettui) until that pull request is merged upstream. |
-| rsLXMF | `4a0abec` | `main` (it needs rsReticulum 1.3) |
-| rsNomad | `05ad8ec` | `main` (its tests pass against rsReticulum 1.3 too) |
+| rsReticulum | `44693b9` | The [1.4.0 release](https://github.com/ratspeak/rsReticulum/releases/tag/v1.4.0) with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in: `RequestOutcome::ReplyFile`, file metadata and the requester's identity, which node hosting needs. It's the `rettui-1.4` branch of [zevaryx/rsReticulum](https://github.com/zevaryx/rsReticulum/tree/rettui-1.4) until that pull request is merged upstream. |
+| rsLXMF | `00f439d` | The 1.4.0 release (it needs rsReticulum 1.4) |
 
 Once ratspeak/rsReticulum#26 is merged, point `deps/rsReticulum` back at
 ratspeak/rsReticulum in `.gitmodules` and pin its `main`.

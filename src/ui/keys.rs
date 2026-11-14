@@ -6,6 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
+use rngit::client::WorkScope;
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim};
@@ -31,7 +32,7 @@ const EVERYWHERE: KeyList = &[
     ("< >", "list width"),
     ("=", "list width back"),
     ("A", "announce"),
-    ("S", "sync"),
+    ("S", "sync (stop one)"),
     ("^L", "redraw"),
     ("q", "quit"),
     ("?", "keys"),
@@ -79,6 +80,7 @@ fn repos_keys(app: &App) -> Keys {
                 ("Enter", "who may use it"),
                 ("g", "who may use its group"),
                 ("y", "copy URL"),
+                ("b", "its pages"),
                 ("R", "reload"),
                 ("Esc", "list"),
                 ("↑↓", "select"),
@@ -91,6 +93,10 @@ fn repos_keys(app: &App) -> Keys {
         (_, Some(Detail::Browse(_)), _) => mode(
             "Repos: copy",
             &[("Enter", "open"), ("L", "log"), ("Esc", "back"), ("PgUp/PgDn", "scroll"), ("y", "copy URL"), ("↑↓", "select")],
+        ),
+        (_, Some(Detail::Doc { scope: WorkScope::Proposed, .. }), _) => mode(
+            "Repos: proposal",
+            &[("a", "accept"), ("X", "decline"), ("c", "comment"), ("e", "edit"), ("Esc", "back"), ("r", "reload"), ("↑↓", "scroll")],
         ),
         (_, Some(Detail::Doc { .. }), _) => mode(
             "Repos: document",
@@ -215,6 +221,8 @@ pub fn keys(app: &App) -> Keys {
                 ("Enter", "open"),
                 ("+/-", "zoom"),
                 ("0", "all"),
+                ("w", "ask where"),
+                ("i", "interfaces"),
                 ("o", "OpenStreetMap"),
                 ("x", "delete locations"),
                 ("Esc", "close"),
@@ -347,6 +355,10 @@ pub fn keys(app: &App) -> Keys {
         Tab::Network if app.whois.open => {
             typing("Identities", &[("↑↓", "select"), ("y", "copy"), ("e", "look up another"), ("Esc", "close")])
         }
+        Tab::Network if app.found_view.open => mode(
+            "Interfaces found",
+            &[("Enter", "add to Reticulum"), ("m", "on the map"), ("y", "copy"), ("↑↓", "select"), ("Esc", "close")],
+        ),
         Tab::Network if app.speed.open => {
             typing("Speed test", &[("Enter", "send"), ("←→", "size"), ("e", "their address"), ("y", "copy yours"), ("Esc", "close")])
         }
@@ -363,6 +375,7 @@ pub fn keys(app: &App) -> Keys {
                 ("y", "copy"),
                 ("D", "forget path"),
                 ("t", "back"),
+                ("O", "get file"),
                 ("↑↓", "select"),
             ],
         ),
@@ -381,6 +394,7 @@ pub fn keys(app: &App) -> Keys {
                 ("y", "copy"),
                 ("i", "interface"),
                 ("Esc", "back"),
+                ("O", "get file"),
                 ("↑↓", "select"),
             ],
         ),
@@ -401,6 +415,7 @@ pub fn keys(app: &App) -> Keys {
                 ("s", "sort"),
                 ("i", "interface"),
                 ("D", "forget path"),
+                ("O", "get file"),
                 ("↑↓", "select"),
             ],
         ),
@@ -422,7 +437,9 @@ pub fn keys(app: &App) -> Keys {
                 ("a", "announces"),
                 ("t", "tables"),
                 ("v", "speed test"),
+                ("e", "interfaces found"),
                 ("D", "forget path"),
+                ("O", "get file"),
                 ("↑↓", "select"),
             ],
         ),

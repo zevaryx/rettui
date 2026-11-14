@@ -415,6 +415,8 @@ header .avatar.icon { font-size: 17px; }
 .map-marker > .avatar, .map-pin { position: absolute; left: -12px; top: -12px; width: 24px; height: 24px; box-shadow: 0 0 0 2px var(--panel); }
 .map-pin { border-radius: 50%; background: var(--magenta); }
 .map-marker.station .map-pin { background: var(--yellow); border-radius: 4px; transform: rotate(45deg) scale(.8); }
+.map-marker.interface .map-pin { background: var(--accent); clip-path: polygon(50% 0, 100% 100%, 0 100%); border-radius: 0; box-shadow: none; transform: scale(.75); }
+.map.no-interfaces .map-marker.interface { display: none; }
 .map-label { position: absolute; left: 16px; top: -10px; white-space: nowrap; padding: 1px 6px; border-radius: 4px; background: var(--panel); color: var(--text); font-size: 12px; border: 1px solid var(--border); }
 .map-marker.picked { z-index: 1; }
 .map-marker.picked .map-label { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
@@ -662,6 +664,12 @@ header .avatar.icon { font-size: 17px; }
 .chat-line.system .body { color: var(--dim); }
 .chat-line .pending { color: var(--dim); }
 .chat-line .mention { background: var(--yellow-bg); color: #111; }
+/* Coloured Micron, often art: every space kept, no wrapping, cut off at the
+   edge, in the monospace font (phones use the sans one for chat). */
+/* Rows that touch, so half-block art (▀ ▄ on background colours) shows no
+   gaps between lines. */
+.chat-line.art { white-space: pre; overflow-wrap: normal; overflow: hidden; line-height: 1; padding: 0; }
+.chat-line.art .text { font-family: var(--mono); }
 .hub-info { display: grid; grid-template-columns: 90px 1fr; gap: 2px 12px; padding: 12px; }
 .hub-info .label { color: var(--dim); }
 /* The Hub section's console: what the hub said, and a command to run. */
@@ -813,6 +821,11 @@ mark { background: var(--yellow-bg); color: #111; border-radius: 2px; }
 .page { padding: 10px 14px; }
 .micron { font-family: var(--mono); font-size: 13.5px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 100%; }
 .m-line { min-height: 1.4em; }
+/* A character from a fallback font, kept to the columns the terminal UI
+   gives it (see micron/html.rs), so the line keeps its width. */
+.m-w1, .m-w2 { display: inline-block; text-align: center; white-space: nowrap; line-height: 1; }
+.m-w1 { width: 1ch; }
+.m-w2 { width: 2ch; }
 .m-link { cursor: pointer; }
 .m-fold-head { cursor: pointer; }
 .m-fold-head:hover { filter: brightness(1.15); }
@@ -1310,6 +1323,11 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 .dialog.tables-dialog { width: min(760px, 100%); }
 .tables { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .tables-list { max-height: 60vh; }
+.found .tables-list { max-height: 34vh; }
+.found .list-item { width: 100%; text-align: left; }
+.found-detail dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 6px 0; }
+.found-detail dt { color: var(--dim); }
+.found-detail dd { margin: 0; overflow-wrap: anywhere; }
 /* A phone on its side: little height, plenty of width. The sections go in
    a rail down the left rather than a bar at the bottom, and the bars and
    headers are shorter, so most of the screen is the list or the page. */

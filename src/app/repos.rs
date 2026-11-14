@@ -189,20 +189,33 @@ pub struct Repos {
     /// The repository picked of those hosted here.
     pub hosted: ListState,
     asked: HashMap<u64, Asked>,
+    /// How far each copy, send or download that's going has got, by request.
+    progress: HashMap<u64, (RepoUrl, crate::net::git::Progress)>,
 }
 
 impl Repos {
     /// Changes being made, and what each is.
     pub fn writing(&self) -> Vec<String> {
         self.asked
-            .values()
-            .filter_map(|a| match a {
-                Asked::Write(_, what) => Some(what.clone()),
-                Asked::Mirror(repo) => Some(format!("Copying {}/{}", repo.group, repo.repo)),
-                Asked::Push(repo) => Some(format!("Sending to {}/{}", repo.group, repo.repo)),
-                _ => None,
+            .iter()
+            .filter_map(|(id, a)| {
+                let how = self.progress.get(id).map(|(_, p)| p.text()).filter(|t| !t.is_empty());
+                let with = |said: String| Some(how.map_or(said.clone(), |how| format!("{said}: {how}")));
+                match a {
+                    Asked::Write(_, what) => Some(what.clone()),
+                    Asked::Mirror(repo) => with(format!("Copying {}/{}", repo.group, repo.repo)),
+                    Asked::Push(repo) => with(format!("Sending to {}/{}", repo.group, repo.repo)),
+                    _ => None,
+                }
             })
             .collect()
+    }
+
+    /// Copies, sends and downloads going, by repository: what they are and how far they've got.
+    pub fn transfers(&self) -> Vec<(RepoUrl, crate::net::git::Progress)> {
+        let mut all: Vec<_> = self.progress.iter().map(|(id, (repo, p))| (*id, repo.clone(), p.clone())).collect();
+        all.sort_by_key(|(id, ..)| *id);
+        all.into_iter().map(|(_, repo, p)| (repo, p)).collect()
     }
 
     /// A release file being downloaded.
@@ -439,6 +452,8 @@ pub enum RepoPrompt {
         scope: WorkScope,
         title: String,
     },
+    /// Accept a proposal whose signature isn't its author's.
+    ConfirmAcceptDoc(u64),
     ConfirmDeleteDoc {
         id: u64,
         scope: WorkScope,
@@ -785,7 +800,17 @@ impl App {
         Ok(sent)
     }
 
+    pub(super) fn on_git_progress(&mut self, id: u64, repo: RepoUrl, progress: crate::net::git::Progress) {
+        self.repos.progress.insert(id, (repo, progress));
+    }
+
+    /// A request is over: what it said of how it went is dropped.
+    pub fn git_over(&mut self, id: u64) {
+        self.repos.progress.remove(&id);
+    }
+
     pub(super) fn on_git(&mut self, id: u64, result: Result<GitReply, String>) {
+        self.git_over(id);
         if let Ok(GitReply::Mirrored(copy)) = &result {
             self.record_mirror(copy);
         }
@@ -1019,6 +1044,10 @@ impl App {
 
     /// The node with an rngit node's pages, if one is kept and still known.
     pub fn page_node_for(&self, git: Hash) -> Option<Hash> {
+        // The node hosted here knows where its own are.
+        if Some(git) == self.git_host.address && self.git_host.pages.is_some() {
+            return self.git_host.pages;
+        }
         let kept = self.store.git_pages.get(&hex::encode(git))?;
         net::parse_hash(kept)
     }
@@ -1205,12 +1234,30 @@ impl App {
                         self.open_prompt(PromptKind::Repo(RepoPrompt::EditTitle { id, scope }), &format!("Title of #{id}"), &title);
                         Ok(())
                     }
+                    // Review a proposal: accept it into the active list.
+                    KeyCode::Char('a') if scope == WorkScope::Proposed => {
+                        let trusted = load.ready().is_some_and(|d| d.signer.as_deref() == Some(d.author.as_str()));
+                        if trusted {
+                            let sent = self.finish_doc(id, false);
+                            self.close_detail();
+                            sent.map(drop)
+                        } else {
+                            let title = format!("#{id} isn't signed by its author. Accept it anyway? Type y");
+                            self.open_prompt(PromptKind::Repo(RepoPrompt::ConfirmAcceptDoc(id)), &title, "");
+                            Ok(())
+                        }
+                    }
+                    KeyCode::Char('x') if scope == WorkScope::Proposed => Ok(()),
                     KeyCode::Char('x') => match scope {
                         WorkScope::Completed => self.finish_doc(id, false).map(drop),
                         _ => self.finish_doc(id, true).map(drop),
                     },
                     KeyCode::Char('X') => {
-                        let title = format!("Delete #{id} from the node? Type y");
+                        let title = if scope == WorkScope::Proposed {
+                            format!("Decline #{id}? It is deleted from the node. Type y")
+                        } else {
+                            format!("Delete #{id} from the node? Type y")
+                        };
                         self.open_prompt(PromptKind::Repo(RepoPrompt::ConfirmDeleteDoc { id, scope }), &title, "");
                         Ok(())
                     }
@@ -1304,6 +1351,10 @@ impl App {
                 Err(e) => Err(e),
             },
             RepoPrompt::EditText { id, scope, title } => self.edit_doc(id, scope, &title, text).map(drop),
+            RepoPrompt::ConfirmAcceptDoc(id) if yes => {
+                self.close_detail();
+                self.finish_doc(id, false).map(drop)
+            }
             RepoPrompt::ConfirmDeleteDoc { id, scope } if yes => {
                 if let Some(open) = &mut self.repos.open {
                     open.detail = None;
@@ -1528,6 +1579,74 @@ mod tests {
     }
 
     #[test]
+    fn a_proposal_is_accepted_or_declined() {
+        let author = Identity::new();
+        let node = Arc::new(demo_node(&author));
+        let mut tui = Tui::new("repos-review");
+        tui.app.open_repo(&format!("rns://{NODE}/public/demo")).unwrap();
+        answer_all(&mut tui, &node);
+        let writes = |tui: &mut Tui| -> Vec<GitRequest> {
+            answer_all(tui, &node)
+                .into_iter()
+                .filter(|r| matches!(r, GitRequest::WorkActivate(_) | GitRequest::WorkDelete { .. } | GitRequest::WorkComplete(_)))
+                .collect()
+        };
+
+        // The proposed list, and a proposal opened: the screen says how to review it.
+        tui.key(KeyCode::Right).key(KeyCode::Right).key(KeyCode::Char('s')).key(KeyCode::Enter);
+        answer_all(&mut tui, &node);
+        let screen = tui.draw();
+        assert!(screen.contains("To review: a accepts"), "{screen}");
+        // Done doesn't apply to a proposal.
+        tui.key(KeyCode::Char('x'));
+        assert!(writes(&mut tui).is_empty());
+
+        // Signed by its author: accepting goes straight away.
+        tui.key(KeyCode::Char('a'));
+        assert_eq!(writes(&mut tui), [GitRequest::WorkActivate(3)]);
+
+        // Not signed by its author: it says so, and accepting asks first.
+        tui.key(KeyCode::Enter);
+        answer_all(&mut tui, &node);
+        if let Some(Detail::Doc { load: Load::Ready(doc), .. }) = tui.app.repos.open.as_mut().and_then(|o| o.detail.as_mut()) {
+            doc.signer = None;
+        }
+        assert!(tui.draw().contains("signature doesn't prove"));
+        tui.key(KeyCode::Char('a')).answer("n");
+        assert!(writes(&mut tui).is_empty());
+        tui.key(KeyCode::Char('a')).answer("y");
+        assert_eq!(writes(&mut tui), [GitRequest::WorkActivate(3)]);
+
+        // Declined: deleted from the node, from the proposed list.
+        tui.key(KeyCode::Enter);
+        answer_all(&mut tui, &node);
+        tui.key(KeyCode::Char('X')).answer("y");
+        assert_eq!(writes(&mut tui), [GitRequest::WorkDelete { id: 3, scope: WorkScope::Proposed }]);
+    }
+
+    #[test]
+    fn a_copy_says_how_far_it_has_got() {
+        let mut tui = Tui::new("repos-progress");
+        tui.app.open_repo(&format!("rns://{NODE}/public/demo")).unwrap();
+        tui.sent();
+        tui.app.mirror_repo().unwrap();
+        let Some(NetCommand::Git { id, repo, .. }) =
+            tui.sent().into_iter().find(|c| matches!(c, NetCommand::Git { request: GitRequest::Mirror { .. }, .. }))
+        else {
+            panic!("no copy asked")
+        };
+        let progress =
+            crate::net::git::Progress { label: "Copying", step: Some((2, 4)), bytes: 1024 * 1024, total: 4 * 1024 * 1024, upload: false };
+        tui.app.on_net(NetEvent::GitProgress { id, repo: repo.clone(), progress });
+        let screen = tui.draw();
+        assert!(screen.contains("step 2 of 4") && screen.contains("(25%)"), "{screen}");
+        assert_eq!(tui.app.repos.transfers().len(), 1);
+        // Done: it's forgotten.
+        tui.app.on_net(NetEvent::Git { id, result: Err("the link dropped".into()) });
+        assert!(tui.app.repos.transfers().is_empty());
+    }
+
+    #[test]
     fn writing_documents_and_releases() {
         let author = Identity::new();
         let node = Arc::new(demo_node(&author));
@@ -1609,7 +1728,7 @@ mod tests {
         tui.tab(Tab::Repos);
         // An rngit node heard: listed. Enter opens it in the Browser; n adds a repository on it.
         let hash = [7; 16];
-        let heard = Heard { hash, kind: Kind::Git, aspect: Some(crate::net::git::GIT_ASPECT), name: None, hops: 2 };
+        let heard = Heard { hash, kind: Kind::Git, aspect: Some(crate::net::git::GIT_ASPECT), name: None, hops: 2, software: None };
         tui.app.on_net(NetEvent::Heard(heard));
         assert!(tui.draw().contains("node 07070707"));
         // With no other node to guess, the prompt starts empty; empty tries the node itself.
@@ -1664,8 +1783,14 @@ mod tests {
         let mut tui = Tui::with("repos-pages", |_| {});
         tui.tab(Tab::Repos);
         let (git, pages, other) = ([7; 16], [9; 16], [8; 16]);
-        let heard =
-            Heard { hash: git, kind: Kind::Git, aspect: Some(crate::net::git::GIT_ASPECT), name: Some("Moon Forge".into()), hops: 2 };
+        let heard = Heard {
+            hash: git,
+            kind: Kind::Git,
+            aspect: Some(crate::net::git::GIT_ASPECT),
+            name: Some("Moon Forge".into()),
+            hops: 2,
+            software: None,
+        };
         tui.app.on_net(NetEvent::Heard(heard));
         let nomad = |name: &str, hops| Peer { kind: PeerKind::Nomad, name: Some(name.into()), hops, last_seen: 1 };
         tui.app.store.peers.insert(hex::encode(pages), nomad("moon forge pages", 3));

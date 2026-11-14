@@ -9,8 +9,8 @@
 //! linked to download), and anything can be moved between the folders of
 //! its root (`pages/` or `files/`): links to it in the pages follow.
 
+use crate::nomad::host::Stats as NomadServeStats;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use nomad_core::NomadServeStats;
 use ratatui::layout::Position;
 use ratatui::widgets::ListState;
 
@@ -472,7 +472,7 @@ impl App {
             }
             Root::Files => {
                 let to = to.trim().trim_matches('/').to_string();
-                nomad_core::validate_content_relative_path(&to).map_err(|e| format!("Not a name for the node: {e}"))?;
+                crate::nomad::paths::check_name(&to).map_err(|e| format!("Not a name for the node: {e}"))?;
                 to
             }
         };
@@ -942,10 +942,10 @@ impl App {
         }
     }
 
-    /// Whether a location is on this client's own node (never cached, so
-    /// edits show at once).
+    /// Whether a location is on this client's own node, or the pages of the
+    /// rngit node hosted here (never cached, so edits show at once).
     pub fn is_own_node(&self, node: Hash) -> bool {
-        node == self.node.hash
+        node == self.node.hash || Some(node) == self.git_host.pages
     }
 
     /// A path on this client's own node, read from the node folder: a client
@@ -959,6 +959,9 @@ impl App {
         location: &Location,
         identify: bool,
     ) -> Option<Result<crate::nomad::FetchedContent, String>> {
+        if Some(location.node) == self.git_host.pages {
+            return self.own_git_page(id, location, identify);
+        }
         let store = match self.node_store() {
             Ok(store) => store,
             Err(e) => return Some(Err(e)),
@@ -966,7 +969,13 @@ impl App {
         if self.settings.node_executable_pages
             && let Some(script) = store.script(&location.path)
         {
-            let command = NetCommand::RunScript { id, script, fields: location.fields.clone(), identify };
+            let command = NetCommand::RunScript {
+                id,
+                script,
+                fields: location.fields.clone(),
+                identify,
+                limits: crate::nomad::script::Limits::from_settings(&self.settings),
+            };
             return self.net.send(command).is_err().then(|| Err("The network task isn't running, so the script can't run".to_string()));
         }
         Some(store.serve(&location.path).map(|data| crate::nomad::FetchedContent { data, metadata: None }))

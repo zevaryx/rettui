@@ -248,8 +248,10 @@ fn get(port: u16, path: &str, token: &str) -> (String, String) {
 #[test]
 fn the_web_ui_from_start_to_stop() {
     let rns_port = free_port();
-    let dir =
-        folder("web", &format!("  [[Here]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {rns_port}\n"));
+    let dir = folder(
+        "web",
+        &format!("  [[Here]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {rns_port}\n"),
+    );
     let port = free_port();
     let web = Web::start(&dir, &["--web", &format!("127.0.0.1:{port}")]);
     let token = std::fs::read_to_string(dir.join("data/web_token")).unwrap().trim().to_string();
@@ -440,11 +442,15 @@ fn wait_json(port: u16, path: &str, token: &str, what: &str, ready: impl Fn(&ser
 #[test]
 fn propagation_nodes_pass_messages_on_to_their_peers() {
     let rns_port = free_port();
-    let server = format!("  [[Here]]\n    type = TCPServerInterface\n    listen_ip = 127.0.0.1\n    listen_port = {rns_port}\n");
-    let client = format!("  [[There]]\n    type = TCPClientInterface\n    target_host = 127.0.0.1\n    target_port = {rns_port}\n");
+    let server =
+        format!("  [[Here]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {rns_port}\n");
+    let client = format!(
+        "  [[There]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {rns_port}\n"
+    );
     let (a, b) = (folder("peer-a", &server), folder("peer-b", &client));
     for (dir, name) in [(&a, "Alice"), (&b, "Bob")] {
-        let settings = serde_json::json!({ "update_check": false, "welcomed": true, "display_name": name, "pn_enabled": true });
+        let settings =
+            serde_json::json!({ "update_check": false, "welcomed": true, "display_name": name, "pn_enabled": true, "pn_autopeer": true });
         std::fs::write(dir.join("data/settings.json"), settings.to_string()).unwrap();
     }
     let address = |dir: &Path| String::from_utf8_lossy(&run(dir, &["address"]).stdout).trim().to_string();

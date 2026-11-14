@@ -119,8 +119,10 @@ rettui path <address> [-d]   # find the path to any destination (-d: forget it)
 rettui path -t               # list every path known
 rettui probe <address> [--name NAME]  # time an answer, as rnprobe does
 rettui update [--yes]  # check for a newer release, and install it (see Installing)
-rettui backup [FILE] [--with-files] [--without-identity]  # everything to one file (see Data and Storage)
-rettui restore FILE [--force]  # restore one, with rettui stopped
+rettui backup [FILE] [--with-files] [--without-identity] [--passphrase | --key KEY | --no-passphrase]  # everything to one file, sealed if you like (see Data and Storage)
+rettui backup-key            # turn a passphrase into a key that seals backups without it
+rettui unseal FILE [OUT] [--identity ID]  # open a sealed backup without restoring it (see Sealed Backups)
+rettui restore FILE [--force]  # restore one, with rettui stopped (a sealed one asks its passphrase)
 rettui identity export FILE  # save a copy of the identity in use (never over another file)
 rettui identity import FILE --name NAME  # keep another identity from a file, to switch to
 rettui address [--link]      # print your LXMF address (--link: as an lxma:// link with your key)

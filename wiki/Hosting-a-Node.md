@@ -5,7 +5,7 @@ node (git repositories, read over Reticulum), with another of its own.
 
 ## NomadNet node
 
-rettui hosts a NomadNet node using rsNomad's node. Pages are Micron
+rettui hosts a NomadNet node itself. Pages are Micron
 files in `node/pages/` (and downloads in `node/files/`) in the data directory,
 or the folder set in `node_dir`.
 
@@ -33,7 +33,8 @@ or the folder set in `node_dir`.
   preview alone (`Ctrl-P` / `p`, or the buttons in the web UI). Saving writes
   the file, and visitors get the new version straight away. New, renamed and
   deleted pages are picked up without a restart. You can also edit the files
-  with any editor.
+  with any editor, or copy pages into the folder: rettui looks for new ones
+  every minute.
 - **Formatting ribbon:** above the page editor, in both UIs, buttons put
   Micron markup around the selection, on the selected lines, or at the
   cursor: bold, italic, underline and normal (removes formatting), text and
@@ -86,13 +87,20 @@ or the folder set in `node_dir`.
   one on it lets no one see it (you still can, in the Browser). The node
   reads the list for each visit, so a change applies at once, and the list
   goes along when what it's for is renamed, moved or deleted. A list that's
-  itself a program (executable) is left as it is: change it on the host.
+  itself a program (executable) is left as it is: change it on the host. A
+  list that isn't a file at all (a folder, a pipe) lets no one in. Copies an
+  editor leaves beside a file are never served, as they have no list of their
+  own: names ending in `~`, `.bak`, `.orig`, `.old`, `.tmp`, `.swp`, `.save`
+  or `.rej`, names wrapped in `#`, and any name with `.allowed` in it.
 - **Statistics:** the Node tab says how many pages, files and pictures the
   node has served, how many requests it had (and how many were for
   something not there), when the last one came, and since when it has
   counted, as NomadNet does. The counts are kept across restarts until you
   reset them, with `R` in the TUI or **Reset** in the web UI. While the node
-  runs, Status shows them too.
+  runs, Status shows them too. It also says (a Visitors line) how many
+  different visitors who identified themselves have come since the node
+  started (a visitor who doesn't identify can't be told apart, and this
+  number starts again with the node).
 - **Selecting text in the editors:** Shift with the arrows, Home/End or
   PgUp/PgDn, `Ctrl-A` for everything, or drag with the mouse. Typing, pasting
   or deleting replaces the selection.
@@ -102,7 +110,8 @@ or the folder set in `node_dir`.
   from the cache), and runs your script pages itself (see below).
 - **Scripts:** executable pages run as programs for visitors only when "Run
   page scripts" is on. The web UI can't change, rename or create scripts,
-  turn "Run page scripts" on or move the node folder, so the web login can't
+  turn "Run page scripts" on, change *Script PATH* or move the node folder,
+  so the web login can't
   be used to run programs on the host. The TUI can do all of these.
 
 ### Script pages
@@ -112,18 +121,28 @@ NomadNet: any file with its execute bit set (`chmod +x page.mu`), usually
 starting with a line such as `#!/usr/bin/env python3`. Each visitor who
 opens it runs it, and gets what it prints. Scripts run only on Linux, macOS
 and other Unix systems, and only while "Run page scripts" is on: while it's
-off, visitors get the script's own text, so keep secrets out of it.
+off, a script is never sent, and a visitor who asks for one gets the same
+"not found" page as for a page that isn't there.
 
 - **What a script gets:** no shell and nothing to read on its input. Its
   environment holds only, as NomadNet gives it, `link_id` (the visitor's
   link), `remote_identity` (the identity hash of a visitor who identified),
   each `field_…` a form sent and each `var_…` a link sent, and `PATH`, which
-  is just `/usr/bin:/bin`. So `#!/usr/bin/env python3` finds Python only if
-  it's in `/usr/bin` or `/bin`. Where it isn't (Homebrew, `/usr/local`, pyenv
-  or a virtual environment), start the page with Python's full path instead,
-  such as `#!/opt/homebrew/bin/python3`.
-- **Limits:** a script has 10 seconds to finish and may print up to 512 KB.
-  Past either, the visitor gets nothing. What it writes to its error output
+  is `/usr/bin:/bin` unless *Script PATH* (Settings, Hosting; terminal only)
+  says otherwise: a list of folders joined with colons, or `host` for the
+  `PATH` rettui itself was started with, as NomadNet does. So
+  `#!/usr/bin/env python3` finds Python if it's in a folder on that path.
+  Where it isn't (Homebrew, `/usr/local`, pyenv or a virtual environment),
+  put its folder in *Script PATH*, or start the page with Python's full path,
+  such as `#!/opt/homebrew/bin/python3` or `#!/srv/node/venv/bin/python`.
+  Use full paths: a script runs in the folder rettui was started in, not its
+  page's folder, so `#!../venv/bin/python` or a relative *Script PATH* folder
+  doesn't find it.
+- **Limits:** a script has 10 seconds to finish (*Script time limit*, up to
+  120) and may print up to 512 KB. Past either, or if it can't be run, the
+  visitor gets a "Page failed" page saying it couldn't be made. A
+  running script holds up the node's other requests until it ends, so a long
+  limit makes everyone wait. What it writes to its error output
   never reaches visitors; a script that fails but printed something still
   sends that.
 - **Trying one:** open it on your own node in the Browser (`b` in the Node
@@ -133,8 +152,9 @@ off, visitors get the script's own text, so keep secrets out of it.
   line naming a program that scripts can't find, says where that program is
   on your computer. In the web UI, this runs scripts already on the node, as
   any visitor could; the web UI still can't write them or turn them on.
-- **Docker:** rettui's image has no Python. A script in it needs a program
-  that's there (`/bin/sh`), or an image built on rettui's with Python added.
+- **Docker:** rettui's image has Python 3 (`/usr/bin/python3`), so
+  `#!/usr/bin/env python3` works there. For any other program, build an image
+  on rettui's with it added.
 
 ## Propagation node
 
@@ -177,7 +197,7 @@ peer protocol).
 - **Passing messages on (peering):** yours peers with other propagation
   nodes too, as `lxmd` does, so a message sent through it reaches its
   recipient whichever node they collect from. With *Auto-peer*
-  (`pn_autopeer`, on) it peers with each propagation node it hears
+  (`pn_autopeer`, off until you turn it on) it peers with each propagation node it hears
   announcing within *Auto-peer depth* (`pn_autopeer_depth`, 4 hops), up to
   *Most peers* (`pn_max_peers`, 20). One that moves further away, or stops
   being a propagation node, is no longer peered with, and one asking for
@@ -218,9 +238,13 @@ and the other RRC clients can join it as they join rrcd.
 - **You on it:** the hub is added to your hubs in Channels once it's up, and
   rettui joins it straight away (a client can't find a path to a destination
   it hosts, so yours connects with the hub's key). Stopping the hub leaves it.
-- **Who makes rooms:** as on most hubs, anyone may make a room by joining one
-  that isn't there, and is its founder (an operator of it). With "Anyone makes
-  rooms" off, only you can: others join the rooms there are.
+- **Who makes rooms:** only you, to start with: others join the rooms there
+  are. With "Anyone makes rooms" (`hub_open_rooms`) on, as on most hubs, anyone
+  may make a room by joining one that isn't there, and is its founder (an
+  operator of it). A hub set up before this kept its setting.
+- **Closed rooms and bans:** someone who isn't in a room that is invite-only, has a key or is private can't post to it, list who's in it or read its topic, and only people in a room (or its operators) set its topic. A ban takes the person out on every connection they have.
+- **Nicks and idle links:** a nick is cleaned of control and invisible characters, and one someone else has (any case), or "hub", isn't given: the person is told, and keeps the one they had. Someone can only leave rooms they're in. Links are pinged every 60 seconds and closed if they don't answer within 30 more (`ping_interval_s` and `ping_timeout_s` in the hub's `config.yaml`; a value of 0 means these defaults).
+- **A damaged rooms file:** if a crash leaves `rooms.yaml` cut off, it is put aside as `rooms.yaml.damaged` and `rooms.yaml.bak` (the rooms as they were when the hub last started) is used.
 - **The Hub tab:** who's connected (their nick, identity, rooms and when they
   came), the rooms (registered or not, modes, topic, who's in them, their
   operators) and the bans, of the whole hub and of each room. Pick someone
@@ -350,11 +374,38 @@ changing who may do what, and forks, mirrors and sync.
   node reads for each request, so it applies at once; comments in it are
   dropped. A mirror or fork you make has no `.allowed` of its own, so until you
   tick something, the group's rules and *rngit access* decide who reads it.
+- **Its pages:** as stock rngit does with `serve_nomadnet`, the node also
+  serves NomadNet pages to browse what it hosts, at a NomadNet address of the
+  same identity, announced with the node's name. They list its groups and
+  repositories (with each one's description, from its `description` file),
+  and for each repository its clone command, its files, its README (Markdown
+  formatted, with links to other files in it made into page links), each file
+  with its lines numbered and its syntax coloured, its history 50 commits a page,
+  each commit with the files it changed, and its branches and tags. A file is
+  shown 1,000 lines a page; one over 8 MB can only be downloaded, and one over
+  1 MB is shown without colour. Markdown and Micron files are shown formatted,
+  with a link to their source. Every visitor sees only the repositories they may
+  read, as for a clone, and anyone who doesn't identify sees what
+  `d7db22f63b453c23bb0688dde565b7c1` may. The pages use stock rngit's paths and
+  page variables (`/page/repo.mu` with `g` and `r`, `/page/blob.mu` with `ref`
+  and `path`...), so links made for one work on the other. `b` in the list of
+  what's hosted (**Pages** in the web UI) opens them in the Browser: a
+  repository's, or with nothing picked the list of them all. You see them as a
+  visitor would, made here, since a client can't open a link to itself.
+  *rngit pages* (`git_host_pages`, on) in Settings › Hosting turns them off.
+  Colouring knows Rust, Python, C and C++, Go, JavaScript and TypeScript, Java,
+  Kotlin, C#, Swift, Zig, shell, Lua, Ruby, SQL, TOML, INI, YAML, JSON, HTML,
+  XML, CSS, Makefiles, Dockerfiles, diffs, Markdown and Micron, by a file's
+  name, or for a script by its `#!` line.
 - **Security:** the web UI can switch it on and off, name it, make, mirror,
-  fork, sync, rename and delete repositories, and say who may use them, but
-  can't pick the folder. Nothing in a repository is run: hooks are never
+  fork, sync, rename and delete repositories, say who may use them and turn its
+  pages on or off, but can't pick the folder. Nothing in a repository is run: hooks are never
   called. Names that aren't plain folder names (`..`, a leading dot, a path)
   are refused.
 
 `rngit serve DIR [RULES]` of the `rngit` command serves a folder the same way
 without rettui.
+
+## Blocked contacts
+
+Someone you've blocked (in Contacts) is turned away by everything you host: your node doesn't answer them, your hub closes their connection, your propagation node refuses their requests, and your git host refuses them. They can only be told apart once they identify themselves to the service, so a visitor who doesn't is treated as anyone. The git host reads the block list when it starts: switch it off and on to apply a change, and it knows only people rettui has heard announce.
