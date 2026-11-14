@@ -1409,10 +1409,12 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 
 /* A phone: an identity's label, address and Copy don't fit on one line, so the
    label gets its own and the address wraps; touch targets are at least 40px. */
-@media (max-width: 480px) {
+@media (max-width: 480px), (max-height: 500px) {
   .identity-rows .row { flex-wrap: wrap; }
   .identity-rows .row .dim { flex: 1 0 100%; }
   .identity-rows .row .mono { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+}
+@media (max-width: 480px) {
   /* Three filters side by side, each wide enough for its labels. */
   .network-tools select { flex: 1 1 calc(33% - 8px); min-width: 96px; }
   /* A first step's button under its text, not in the middle of the sentence. */
@@ -1423,6 +1425,14 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
   .more-button { min-width: 40px; }
   .page-tab-close { min-width: 32px; min-height: 36px; }
   .page-tab-new { min-width: 36px; min-height: 36px; }
-  /* Reply, React and … under each message were 20px tall. */
-  .reply-button { min-height: 30px; padding-left: 10px; padding-right: 10px; }
+  /* A message has no Reply, React and … buttons on a touch screen: a tap reacts,
+     and holding it opens a menu (see messageGestures). Its text isn't selected by the hold. */
+  .message .meta .reply-button { display: none; }
+  .message { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+}
+/* A phone turned sideways with its keyboard up has almost no height left (under
+   100px): the side bar's icons would pile on each other, and the title bars would push a
+   conversation's text box off the screen. They go until the keyboard does. */
+@media (pointer: coarse) and (max-height: 260px) {
+  #bottombar, #appbar, .pane-main > header, .compose .reply-bar { display: none; }
 }
