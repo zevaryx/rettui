@@ -223,7 +223,31 @@ pub fn is_sealed(path: &Path) -> bool {
 const MAX_RESTORE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_RESTORE_ENTRIES: usize = 200_000;
 
-pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str>) -> Result<String, String> {
+/// A backup that opened and is one, before anything is restored.
+struct Inspected<'a> {
+    archive: &'a Path,
+    opener: Option<sealed::Opener>,
+    manifest: Manifest,
+    /// What it would put in the data directory, by first name.
+    names: Vec<String>,
+    files: usize,
+}
+
+impl Inspected<'_> {
+    fn open(&self) -> Result<tar::Archive<flate2::read::GzDecoder<Box<dyn Read>>>, String> {
+        let file = std::fs::File::open(self.archive).map_err(|e| format!("Couldn't open {}: {e}", self.archive.display()))?;
+        let input = std::io::BufReader::new(file);
+        let input: Box<dyn Read> = match &self.opener {
+            Some(opener) => Box::new(opener.open(input).map_err(|e| format!("Couldn't open {}: {e}", self.archive.display()))?),
+            None => Box::new(input),
+        };
+        Ok(tar::Archive::new(flate2::read::GzDecoder::new(input)))
+    }
+}
+
+/// Open the backup `archive` (with `passphrase` if it's sealed) and check
+/// that it is a rettui backup, changing nothing.
+fn inspect<'a>(archive: &'a Path, passphrase: Option<&str>) -> Result<Inspected<'a>, String> {
     let file = || std::fs::File::open(archive).map_err(|e| format!("Couldn't open {}: {e}", archive.display()));
     // Sealed: the passphrase is checked once (it's slow), then each reading
     // opens it again.
@@ -236,21 +260,20 @@ pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str
     } else {
         None
     };
-    let open = || -> Result<tar::Archive<flate2::read::GzDecoder<Box<dyn Read>>>, String> {
-        let input = std::io::BufReader::new(file()?);
-        let input: Box<dyn Read> = match &opener {
-            Some(opener) => Box::new(opener.open(input).map_err(|e| format!("Couldn't open {}: {e}", archive.display()))?),
-            None => Box::new(input),
-        };
-        Ok(tar::Archive::new(flate2::read::GzDecoder::new(input)))
+    let mut found = Inspected {
+        archive,
+        opener,
+        manifest: Manifest { version: String::new(), created: 0, identity: false, files: false },
+        names: Vec::new(),
+        files: 0,
     };
     let bad = |e: &dyn std::fmt::Display| format!("{} isn't a rettui backup: {e}", archive.display());
     // First, that it's one: its manifest, and nothing outside what a
     // backup keeps.
     let mut manifest: Option<Manifest> = None;
-    let mut names: Vec<String> = Vec::new();
     let (mut bytes, mut entries) = (0u64, 0usize);
-    for entry in open()?.entries().map_err(|e| bad(&e))? {
+    let mut archive_entries = found.open()?;
+    for entry in archive_entries.entries().map_err(|e| bad(&e))? {
         let mut entry = entry.map_err(|e| bad(&e))?;
         let path = entry.path().map_err(|e| bad(&e))?.into_owned();
         let Some(rel) = destination(&path) else {
@@ -268,13 +291,42 @@ pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str
             let mut text = String::new();
             entry.read_to_string(&mut text).map_err(|e| bad(&e))?;
             manifest = Some(serde_json::from_str(&text).map_err(|e| bad(&e))?);
-        } else if let Some(first) = rel.components().next().and_then(|c| c.as_os_str().to_str())
-            && !names.iter().any(|n| n == first)
-        {
-            names.push(first.to_string());
+        } else {
+            if entry.header().entry_type().is_file() {
+                found.files += 1;
+            }
+            if let Some(first) = rel.components().next().and_then(|c| c.as_os_str().to_str())
+                && !found.names.iter().any(|n| n == first)
+            {
+                found.names.push(first.to_string());
+            }
         }
     }
-    let manifest = manifest.ok_or_else(|| bad(&"it has no rettui-backup.json"))?;
+    drop(archive_entries);
+    found.manifest = manifest.ok_or_else(|| bad(&"it has no rettui-backup.json"))?;
+    Ok(found)
+}
+
+/// What a backup holds, checked without restoring it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Contents {
+    pub version: String,
+    pub identity: bool,
+    pub files: usize,
+}
+
+/// Open the backup `archive`, with `passphrase` if it's sealed, and say what
+/// it holds. Nothing is changed.
+pub fn check(archive: &Path, passphrase: Option<&str>) -> Result<Contents, String> {
+    let found = inspect(archive, passphrase)?;
+    Ok(Contents { version: found.manifest.version, identity: found.manifest.identity, files: found.files })
+}
+
+pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str>) -> Result<String, String> {
+    let bad = |e: &dyn std::fmt::Display| format!("{} isn't a rettui backup: {e}", archive.display());
+    let Inspected { opener, manifest, names, .. } = inspect(archive, passphrase)?;
+    let found = Inspected { archive, opener, manifest, names, files: 0 };
+    let (manifest, names) = (&found.manifest, &found.names);
     // What's here already.
     std::fs::create_dir_all(base).map_err(|e| format!("Couldn't make {}: {e}", base.display()))?;
     let set_up = base.join(IDENTITY).exists() || base.join("store.json.gz").exists();
@@ -296,7 +348,7 @@ pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str
     }
     // Then everything in it.
     let mut count = 0;
-    for entry in open()?.entries().map_err(|e| bad(&e))? {
+    for entry in found.open()?.entries().map_err(|e| bad(&e))? {
         let mut entry = entry.map_err(|e| bad(&e))?;
         let path = entry.path().map_err(|e| bad(&e))?.into_owned();
         let Some(rel) = destination(&path) else { continue };
@@ -385,6 +437,29 @@ mod tests {
         write_file(&from, &plain, Options::default(), None).unwrap();
         assert!(!is_sealed(&plain));
         assert!(restore(&plain, &base.join("again"), false, Some("unused")).is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_backup_is_looked_into_without_changing_anything() {
+        let base = std::env::temp_dir().join(format!("rettui-backup-check-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let from = base.join("from");
+        data(&from);
+        let plain = base.join("plain.tar.gz");
+        write_file(&from, &plain, Options { identity: true, files: false }, None).unwrap();
+        let held = check(&plain, None).unwrap();
+        assert_eq!((held.identity, held.files), (true, 6));
+        let sealed = base.join("sealed.tar.gz");
+        write_file(&from, &sealed, Options::default(), Some(&sealed::quick_key("pw"))).unwrap();
+        assert!(check(&sealed, None).unwrap_err().contains("sealed with a passphrase"));
+        assert!(check(&sealed, Some("no")).unwrap_err().contains("that isn't its passphrase"));
+        assert!(!check(&sealed, Some("pw")).unwrap().identity);
+        // Not a backup at all.
+        let other = base.join("other");
+        std::fs::write(&other, "text").unwrap();
+        assert!(check(&other, None).unwrap_err().contains("isn't a rettui backup"));
+        assert!(check(&base.join("missing"), None).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-manage-remove-pipe"
+description = "Enables the manage_remove_pipe command without any pre-configured scope."
+commands.allow = ["manage_remove_pipe"]
+
+[[permission]]
+identifier = "deny-manage-remove-pipe"
+description = "Denies the manage_remove_pipe command without any pre-configured scope."
+commands.deny = ["manage_remove_pipe"]

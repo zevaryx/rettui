@@ -1,5 +1,6 @@
 //! rettui's desktop app: the web UI in a window of its own, without a
-//! browser. A prototype.
+//! browser, and a window of its own for what the web UI leaves out
+//! (identity keys, backups with the identity, pipe interfaces).
 //!
 //! It works as the Android app does: rettui runs in this process (its web
 //! UI on 127.0.0.1, on a port kept between runs so the page keeps what it
@@ -11,6 +12,8 @@
 //! first.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod manage;
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -36,19 +39,26 @@ fn main() {
         println!("rettui-desktop {}", rettui::VERSION);
         return;
     }
-    // `--data-dir` as rettui takes it, for a second identity's folder.
+    // `--data-dir` as rettui takes it, for a second identity's folder; and
+    // `--manage`, to open the management window (the launcher's action, for
+    // where there's no tray icon to open it from).
     let mut args = std::env::args().skip(1);
-    let data_dir = match (args.next().as_deref(), args.next()) {
-        (Some("--data-dir"), Some(dir)) => Some(PathBuf::from(dir)),
-        _ => flatpak_data_dir(),
-    };
-    if let Err(e) = run(data_dir) {
+    let (mut data_dir, mut manage) = (None, false);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--data-dir" => data_dir = args.next().map(PathBuf::from),
+            "--manage" => manage = true,
+            _ => {}
+        }
+    }
+    let data_dir = data_dir.or_else(flatpak_data_dir);
+    if let Err(e) = run(data_dir, manage) {
         eprintln!("rettui: {e}");
         std::process::exit(1);
     }
 }
 
-fn run(data_dir: Option<PathBuf>) -> Result<(), String> {
+fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
     let token_path = rettui::web_token_path(data_dir.clone()).map_err(|e| e.to_string())?;
     let folder = token_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let downloads = directories::UserDirs::new().and_then(|d| d.download_dir().map(Path::to_path_buf)).unwrap_or(folder.clone());
@@ -60,7 +70,11 @@ fn run(data_dir: Option<PathBuf>) -> Result<(), String> {
     let started = server.clone();
 
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show(app)))
+        .plugin(tauri_plugin_single_instance::init(
+            |app, args, _cwd| {
+                if args.iter().any(|a| a == "--manage") { manage::open(app) } else { show(app) }
+            },
+        ))
         .plugin(tauri_plugin_opener::init())
         // Notifications, which the webview doesn't show: the page sends
         // them here (capabilities/web-ui.json allows it that and nothing
@@ -77,7 +91,10 @@ fn run(data_dir: Option<PathBuf>) -> Result<(), String> {
                 let handle = handle.clone();
                 app.notification().on_action(move |_| show(&handle))?;
             }
+            app.manage(manage::Downloads(downloads.clone()));
+            app.manage(manage::Runner { data_dir, token_path, port, server: started });
             add_tray(app);
+            add_menu(app)?;
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(home))
                 .title("rettui")
                 .inner_size(1200.0, 800.0)
@@ -103,8 +120,29 @@ fn run(data_dir: Option<PathBuf>) -> Result<(), String> {
                     _ => true,
                 })
                 .build()?;
+            if manage {
+                manage::open(app.handle());
+            }
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            manage::manage_defaults,
+            manage::manage_identities,
+            manage::manage_keep_identity,
+            manage::manage_export_identity,
+            manage::manage_switch_identity,
+            manage::manage_rename_identity,
+            manage::manage_delete_identity,
+            manage::manage_back_up,
+            manage::manage_passphrase_weakness,
+            manage::manage_restore_check,
+            manage::manage_restore,
+            manage::manage_pipes,
+            manage::manage_add_pipe,
+            manage::manage_set_pipe,
+            manage::manage_remove_pipe,
+            manage::manage_restart_reticulum,
+        ])
         .on_window_event(|window, event| match event {
             // Closing leaves rettui running, the window hidden until the
             // tray icon brings it back.
@@ -157,7 +195,10 @@ fn start(app: &AppHandle, data_dir: Option<&Path>, token_path: &Path, port: u16,
     let handle = app.clone();
     let thread = thread::spawn(move || {
         let result = rettui::run_with(command).map_err(|e| format!("{e:#}"));
-        handle.exit(0);
+        // Stopped on purpose, to be started again (a restore): the app stays.
+        if !RESTARTING.load(Ordering::SeqCst) {
+            handle.exit(0);
+        }
         result
     });
     // Wait for the web UI, or for rettui to stop without it (a broken
@@ -186,6 +227,41 @@ fn start(app: &AppHandle, data_dir: Option<&Path>, token_path: &Path, port: u16,
     Url::parse(&format!("http://127.0.0.1:{port}/?token={}", token.trim())).map_err(|e| e.to_string())
 }
 
+/// Set while rettui is stopped to be started again, so its stopping doesn't
+/// close the app.
+static RESTARTING: AtomicBool = AtomicBool::new(false);
+
+/// Restores the backup `file` (already looked into): stops rettui, which
+/// saves everything first, restores it with what was there moved aside, and
+/// starts rettui again, then has the main window load it. The files are
+/// restored whether or not rettui stopped cleanly, and rettui is started
+/// again whether or not the restore worked, so a failed restore leaves
+/// the app running as it was.
+fn restore_and_restart(app: &AppHandle, file: &str, passphrase: Option<String>) -> Result<String, String> {
+    let runner = app.state::<manage::Runner>();
+    RESTARTING.store(true, Ordering::SeqCst);
+    let stopped = stop(&runner.server);
+    let restored = match stopped {
+        Ok(()) => tauri::async_runtime::block_on(rettui::manage::restore_files(runner.data_dir.clone(), file, passphrase)),
+        Err(e) => Err(format!("rettui didn't stop cleanly, so nothing was restored: {e}")),
+    };
+    let started = start(app, runner.data_dir.as_deref(), &runner.token_path, runner.port, &runner.server);
+    RESTARTING.store(false, Ordering::SeqCst);
+    let home = match started {
+        Ok(home) => home,
+        Err(e) => {
+            return Err(format!(
+                "{}rettui couldn't start again: {e}. Quit the app and open it again.",
+                restored.map(|d| format!("{d}. ")).unwrap_or_default()
+            ));
+        }
+    };
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.navigate(home);
+    }
+    restored
+}
+
 /// Stops rettui, if it started, and waits: it saves everything first.
 fn stop(server: &Mutex<Option<Server>>) -> Result<(), String> {
     let Some(thread) = server.lock().unwrap_or_else(|e| e.into_inner()).take() else {
@@ -193,6 +269,29 @@ fn stop(server: &Mutex<Option<Server>>) -> Result<(), String> {
     };
     rettui::request_stop();
     thread.join().map_err(|_| "rettui stopped unexpectedly".to_string())?
+}
+
+/// The menu entry that opens the management window.
+const MANAGE: &str = "Identities, backups and pipes…";
+
+/// On a Mac, the usual menu bar with the management window added to it (the
+/// other systems have the tray icon and the launcher's action). Without the
+/// usual menu a Mac's text fields lose copy and paste.
+fn add_menu(app: &App) -> tauri::Result<()> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+    let menu = Menu::default(app.handle())?;
+    let item = MenuItem::with_id(app, "manage", MANAGE, true, Some("CmdOrCtrl+Shift+M"))?;
+    let submenu = tauri::menu::Submenu::with_items(app, "rettui", true, &[&item])?;
+    menu.append(&submenu)?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() == "manage" {
+            manage::open(app);
+        }
+    });
+    Ok(())
 }
 
 /// Whether the tray icon is up. Without one a hidden window couldn't be
@@ -205,14 +304,16 @@ static TRAY: AtomicBool = AtomicBool::new(false);
 fn add_tray(app: &App) {
     let build = || -> tauri::Result<()> {
         let open = MenuItem::with_id(app, "open", "Open rettui", true, None::<&str>)?;
+        let manage = MenuItem::with_id(app, "manage", MANAGE, true, None::<&str>)?;
         let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-        let menu = Menu::with_items(app, &[&open, &quit])?;
+        let menu = Menu::with_items(app, &[&open, &manage, &quit])?;
         let mut tray = TrayIconBuilder::with_id("main")
             .tooltip("rettui")
             .menu(&menu)
             .show_menu_on_left_click(false)
             .on_menu_event(|app, event| match event.id.as_ref() {
                 "open" => show(app),
+                "manage" => manage::open(app),
                 "quit" => app.exit(0),
                 _ => {}
             })

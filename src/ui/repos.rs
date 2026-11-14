@@ -238,7 +238,7 @@ fn draw_repo(frame: &mut Frame, app: &mut App, area: Rect) {
     let repo_block = block(&title, app.repos.focus == ReposFocus::Repo);
     let inner = repo_block.inner(area);
     frame.render_widget(repo_block, area);
-    let [about, tabs_row, _, body] =
+    let [about, tabs_row, going, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)]).areas(inner);
 
     // The URL, HEAD, and what's being changed.
@@ -246,13 +246,13 @@ fn draw_repo(frame: &mut Frame, app: &mut App, area: Rect) {
     if let Some(head) = open.refs.ready().and_then(|r| r.head.as_deref()) {
         spans.push(Span::raw(format!("  HEAD {}", head.trim_start_matches("refs/heads/"))));
     }
-    for what in app.repos.writing() {
-        spans.push(Span::styled(format!("  ◌ {what}…"), Style::default().fg(Color::Yellow)));
-    }
-    if app.repos.downloading() {
-        spans.push(Span::styled("  ◌ downloading…", Style::default().fg(Color::Yellow)));
-    }
     frame.render_widget(Paragraph::new(Line::from(spans)), about);
+    // What's going on, on the row under the panes: a copy's progress is long.
+    let mut doing: Vec<String> = app.repos.writing().into_iter().map(|what| format!("◌ {what}…")).collect();
+    if app.repos.downloading() {
+        doing.push("◌ downloading…".to_string());
+    }
+    frame.render_widget(Paragraph::new(Line::styled(doing.join("   "), Style::default().fg(Color::Yellow))), going);
 
     // The panes, with how many each has.
     let counts = [
@@ -282,7 +282,7 @@ fn draw_repo(frame: &mut Frame, app: &mut App, area: Rect) {
 
     match &open.detail {
         Some(Detail::Release { tag, load }) => draw_release(frame, app, tag, load, body),
-        Some(Detail::Doc { load, .. }) => draw_doc(frame, app, load, body),
+        Some(Detail::Doc { load, scope, .. }) => draw_doc(frame, app, *scope, load, body),
         Some(Detail::Browse(browse)) => draw_browse(frame, app, browse, body),
         None => match app.repos.pane {
             RepoPane::Branches => draw_refs(frame, app, &open, body),
@@ -583,7 +583,7 @@ fn draw_browse(frame: &mut Frame, app: &mut App, browse: &Browse, area: Rect) {
     }
 }
 
-fn draw_doc(frame: &mut Frame, app: &mut App, load: &Load<crate::net::git::Doc>, area: Rect) {
+fn draw_doc(frame: &mut Frame, app: &mut App, scope: WorkScope, load: &Load<crate::net::git::Doc>, area: Rect) {
     if not_ready(frame, load, area) {
         return;
     }
@@ -603,6 +603,15 @@ fn draw_doc(frame: &mut Frame, app: &mut App, load: &Load<crate::net::git::Doc>,
         Span::styled(format!("by {author}, {} ago", super::ago(doc.edited as i64)), Style::default().fg(dim())),
         signed,
     ]));
+    if scope == WorkScope::Proposed {
+        let trusted = doc.signer.as_deref() == Some(doc.author.as_str());
+        let (text, color) = if trusted {
+            ("To review: a accepts it into the active list, X declines it (deletes it).", accent())
+        } else {
+            ("To review: its signature doesn't prove who wrote it. a accepts it anyway (asks first), X declines it.", Color::Yellow)
+        };
+        lines.push(Line::styled(text, Style::default().fg(color)));
+    }
     lines.push(Line::default());
     lines.extend(doc.text.lines().map(|l| Line::raw(l.to_string())));
     for comment in &doc.comments {

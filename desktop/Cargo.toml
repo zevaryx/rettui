@@ -21,6 +21,7 @@ tauri-plugin-opener = "2.7"
 # two on one data directory would fight over it.
 tauri-plugin-single-instance = "2.5"
 directories = "6"
+serde_json = "1"
 # Notifications as the system shows them (the webview has no web ones).
 tauri-plugin-notification = "2.8"
 

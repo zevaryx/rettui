@@ -215,7 +215,7 @@ a backup with it, without the passphrase, so a script (or the Android app's
 scheduled backups) can make sealed backups knowing only the key, which
 can't open them. Restoring one still takes the passphrase.
 
-To restore, stop rettui, then `rettui restore FILE` (with `--data-dir DIR`
+To restore, stop rettui, then `rettui restore FILE` (the [desktop app](Desktop-App#identities-backups-and-pipes) restores from its window, and stops and starts rettui itself) (with `--data-dir DIR`
 for another data directory). A sealed backup asks for its passphrase (or
 takes `RETTUI_BACKUP_PASSPHRASE`). Into a data directory that's empty, or new,
 it just unpacks. One that has an identity or messages already is left

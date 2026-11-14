@@ -6,6 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
+use rngit::client::WorkScope;
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, block, dim};
@@ -92,6 +93,10 @@ fn repos_keys(app: &App) -> Keys {
         (_, Some(Detail::Browse(_)), _) => mode(
             "Repos: copy",
             &[("Enter", "open"), ("L", "log"), ("Esc", "back"), ("PgUp/PgDn", "scroll"), ("y", "copy URL"), ("↑↓", "select")],
+        ),
+        (_, Some(Detail::Doc { scope: WorkScope::Proposed, .. }), _) => mode(
+            "Repos: proposal",
+            &[("a", "accept"), ("X", "decline"), ("c", "comment"), ("e", "edit"), ("Esc", "back"), ("r", "reload"), ("↑↓", "scroll")],
         ),
         (_, Some(Detail::Doc { .. }), _) => mode(
             "Repos: document",

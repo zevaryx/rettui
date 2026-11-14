@@ -175,6 +175,7 @@ pub fn router(state: WebState) -> Router {
         .route("/repos/remove", post(remove_repo))
         .route("/repos/page", post(repos_on_page))
         .route("/repos/pages", post(set_repo_pages))
+        .route("/repos/progress", get(repo_progress))
         .route("/repos/mirror", post(repo_mirror))
         .route("/repos/mirror/delete", post(repo_delete_mirror))
         .route("/repos/push", post(repo_push))
@@ -2749,6 +2750,21 @@ async fn repo_mirror(State(state): State<WebState>, axum::Json(body): axum::Json
         Ok(Err(e)) => Err(ApiError(StatusCode::BAD_GATEWAY, e)),
         Err(_) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, "The copy stopped unexpectedly".into())),
     }
+}
+
+/// How far the copies and sends that are going have got.
+async fn repo_progress(State(state): State<WebState>) -> ApiResult {
+    let transfers = state
+        .read(|o| {
+            o.app
+                .repos
+                .transfers()
+                .into_iter()
+                .map(|(repo, p)| json!({ "repo": format!("{}/{}", repo.group, repo.repo), "what": p.label, "text": p.text() }))
+                .collect::<Vec<_>>()
+        })
+        .await?;
+    Ok(axum::Json(json!({ "transfers": transfers })))
 }
 
 #[derive(Deserialize)]

@@ -136,6 +136,27 @@ function toast(text, error = false) {
   dismissable(node);
 }
 
+// A notice that says how the copies and sends going have got, every second,
+// until the stop it returns is called.
+function followTransfers() {
+  const node = el('div', { class: 'toast', role: 'status', title: 'Tap to dismiss', text: 'Starting…', style: 'white-space:pre-line' });
+  $('#toasts').append(node);
+  dismissable(node);
+  let alive = true;
+  const poll = async () => {
+    try {
+      const { transfers } = await api.get('/repos/progress');
+      if (alive && transfers.length) node.textContent = transfers.map((t) => `${t.what} ${t.repo}${t.text ? `: ${t.text}` : ''}`).join('\n');
+    } catch { /* the next try */ }
+    if (alive) setTimeout(poll, 1000);
+  };
+  setTimeout(poll, 500);
+  return () => {
+    alive = false;
+    node.remove();
+  };
+}
+
 // A notice goes when tapped, or swiped sideways or up (it follows the
 // finger, and springs back from a short swipe).
 function dismissable(node) {
@@ -1995,13 +2016,14 @@ function copyLink(url) {
     e.preventDefault();
     e.stopPropagation();
     if (!await ask(`Copy ${url} to this computer?\nYou can read it or clone from it. Nothing on the node changes.`, { title: 'Copy the repository', yes: 'Copy' })) return;
-    toast('Copying…');
+    const stop = followTransfers();
     try {
       const done = await api.post('/repos/mirror', { url });
       toast(done.said || 'Copied');
     } catch (err) {
       toast(`Copying failed: ${err.message}`, true);
     }
+    stop();
   } });
 }
 
@@ -8645,26 +8667,28 @@ app.views.repos = {
       { text: 'Make it the same (also deletes)', value: 'same' },
     ], { text: 'If a branch there differs from the copy, leave it, overwrite it, or overwrite it and also delete the branches and tags the copy lacks.' });
     if (!how) return;
-    toast('Sending the copy…');
+    const stop = followTransfers();
     try {
       const done = await api.post('/repos/push', { url: from, to, how });
       toast(done.said || 'Sent');
     } catch (e) {
       toast(`Sending failed: ${e.message}`, true);
     }
+    stop();
   },
 
   async mirror() {
     const url = this.url;
     this.copying = url;
     this.render();
-    toast('Copying…');
+    const stop = followTransfers();
     try {
       const done = await api.post('/repos/mirror', { url });
       toast(done.said || 'Copied');
     } catch (e) {
       toast(`Copying failed: ${e.message}`, true);
     }
+    stop();
     this.copying = null;
     await this.update();
   },
@@ -8823,11 +8847,29 @@ app.views.repos = {
       : data.signer.hash === data.author.hash ? el('span', { class: 'state-ok', text: '✓ signed by them' })
         : el('span', { class: 'state-warn', text: `signed by ${whoName(data.signer)}` });
     const done = data.scope === 'completed';
+    const proposed = data.scope === 'proposed';
+    const trusted = data.signer && data.signer.hash === data.author.hash;
     const comment = el('textarea', { rows: 3, placeholder: 'A comment (Markdown)' });
+    // Accepting moves a proposal to the active list; declining deletes it.
+    const review = proposed ? el('div', { class: 'repo-comment' },
+      el('p', { class: trusted ? 'dim' : 'state-warn', text: trusted
+        ? `Proposed by ${whoName(data.author)}. Accept it to make it active, or decline it to delete it.`
+        : `Proposed by ${whoName(data.author)}, but the signature doesn't prove it. Read it with care before accepting.` }),
+      el('div', { class: 'row actions' },
+        el('button', { class: 'primary', text: 'Accept', onclick: async () => {
+          if (!trusted && !await ask(`#${id} isn't signed by its author. Accept it anyway?`, { yes: 'Accept' })) return;
+          this.opened = null;
+          this.write('/repos/doc/state', { id, scope, done: false }, `Accepting #${id}`);
+        } }),
+        el('button', { class: 'danger', text: 'Decline', onclick: async () => {
+          if (!await ask(`Decline #${id} (${data.title})?\nIt is deleted from the node.`, { yes: 'Decline', danger: true })) return;
+          this.opened = null;
+          this.write('/repos/doc/delete', { id, scope }, `Declining #${id}`);
+        } }))) : null;
     return [
       el('div', { class: 'row card-actions' }, back, el('span', { class: 'grow' }),
         el('button', { text: 'Edit…', onclick: () => this.editDoc({ id, scope, title: data.title, text: data.text }) }),
-        el('button', { text: done ? 'Make active' : 'Mark done', onclick: () => this.write('/repos/doc/state', { id, scope, done: !done }, done ? `Making #${id} active` : `Marking #${id} done`) }),
+        proposed ? null : el('button', { text: done ? 'Make active' : 'Mark done', onclick: () => this.write('/repos/doc/state', { id, scope, done: !done }, done ? `Making #${id} active` : `Marking #${id} done`) }),
         el('button', { class: 'danger', text: 'Delete', onclick: async () => {
           if (!await ask(`Delete #${id} (${data.title}) from the node?`, { yes: 'Delete', danger: true })) return;
           this.opened = null;
@@ -8835,6 +8877,7 @@ app.views.repos = {
         } })),
       el('h3', {}, el('span', { class: 'dim', text: `#${data.id} ` }), data.title),
       el('p', { class: 'dim' }, `${data.scope} · by ${whoName(data.author)}, ${ago(data.edited)} ago · `, signed),
+      review,
       el('div', { class: 'repo-text' }, linked(data.text)),
       data.comments.map((c) => el('div', { class: 'repo-comment' },
         el('div', { class: 'dim', text: `${whoName(c.author)}, ${ago(c.created)} ago` }), el('div', { class: 'repo-text' }, linked(c.text)))),

@@ -190,6 +190,102 @@ pub enum GitReply {
     Pushed(Pushed),
 }
 
+/// How far a copy, a send or a download has got.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Progress {
+    /// What is going on: "Copying", "Sending" or "Downloading".
+    pub label: &'static str,
+    /// The step it is on, and how many there are, when it works in steps
+    /// (a copy fetches its branches one at a time).
+    pub step: Option<(usize, usize)>,
+    /// Bytes of the transfer in hand that have come (or gone), and how many it has.
+    pub bytes: u64,
+    pub total: u64,
+    /// The bytes are going out, not coming in.
+    pub upload: bool,
+}
+
+impl Progress {
+    /// Said in a line: "branch 2 of 5, 1.2 of 3.4 MB (35%)".
+    pub fn text(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some((done, total)) = self.step {
+            parts.push(format!("step {done} of {total}"));
+        }
+        if let Some(percent) = (self.bytes.min(self.total) * 100).checked_div(self.total) {
+            parts.push(format!("{} of {} ({percent}%)", size_text(self.bytes), size_text(self.total)));
+        } else if self.step.is_none() {
+            parts.push("waiting for the node".to_string());
+        }
+        parts.join(", ")
+    }
+}
+
+/// A size in bytes, short.
+fn size_text(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} B"),
+        1024..1_048_576 => format!("{:.0} KB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+    }
+}
+
+/// Fewest time between two progress reports of a transfer (its first and last go at once).
+const PROGRESS_EVERY: Duration = Duration::from_millis(300);
+
+/// Says how a request is going, as [`NetEvent::GitProgress`]. Cheap to clone.
+#[derive(Clone, Default)]
+pub struct Reporter(Option<Arc<Reporting>>);
+
+struct Reporting {
+    id: u64,
+    repo: RepoUrl,
+    ev: mpsc::UnboundedSender<NetEvent>,
+    state: StdMutex<(Progress, Option<Instant>)>,
+}
+
+impl Reporter {
+    pub fn new(id: u64, repo: RepoUrl, label: &'static str, ev: mpsc::UnboundedSender<NetEvent>) -> Self {
+        let progress = Progress { label, ..Progress::default() };
+        Reporter(Some(Arc::new(Reporting { id, repo, ev, state: StdMutex::new((progress, None)) })))
+    }
+
+    fn update(&self, change: impl FnOnce(&mut Progress), force: bool) {
+        let Some(inner) = &self.0 else { return };
+        let Ok(mut state) = inner.state.lock() else { return };
+        change(&mut state.0);
+        if force || state.1.is_none_or(|at| at.elapsed() >= PROGRESS_EVERY) {
+            state.1 = Some(Instant::now());
+            let progress = state.0.clone();
+            let _ = inner.ev.send(NetEvent::GitProgress { id: inner.id, repo: inner.repo.clone(), progress });
+        }
+    }
+
+    /// Now on step `done` of `total`; the transfer's bytes start again.
+    pub fn step(&self, done: usize, total: usize) {
+        self.update(
+            |p| {
+                p.step = Some((done, total));
+                p.bytes = 0;
+                p.total = 0;
+            },
+            true,
+        );
+    }
+
+    /// `bytes` of `total` have come (`upload`: gone).
+    pub fn bytes(&self, bytes: u64, total: u64, upload: bool) {
+        self.update(
+            |p| {
+                p.bytes = bytes;
+                p.total = total;
+                p.upload = upload;
+            },
+            bytes >= total,
+        );
+    }
+}
+
 /// Text from a node, safe to draw: no control characters but line breaks
 /// and tabs, and at most `max` characters.
 pub fn clean_text(text: &str, max: usize) -> String {
@@ -208,7 +304,19 @@ pub fn describe(error: rngit::Error) -> String {
 }
 
 /// Run one request with `client`, signing with `signer` where it writes.
+#[cfg(test)]
 pub async fn run<T: Transport>(client: &Client<T>, repo: &RepoUrl, signer: &dyn Signer, request: GitRequest) -> Result<GitReply, String> {
+    run_with(client, repo, signer, request, &Reporter::default()).await
+}
+
+/// [`run`], saying how it is going to `report`.
+pub async fn run_with<T: Transport>(
+    client: &Client<T>,
+    repo: &RepoUrl,
+    signer: &dyn Signer,
+    request: GitRequest,
+    report: &Reporter,
+) -> Result<GitReply, String> {
     let reply = match request {
         GitRequest::Refs => GitReply::Refs(client.list(repo, false).await.map_err(describe)?),
         GitRequest::Perms => GitReply::Perms(clean_text(&client.repo_perms(repo).await.map_err(describe)?, MAX_TEXT)),
@@ -252,7 +360,7 @@ pub async fn run<T: Transport>(client: &Client<T>, repo: &RepoUrl, signer: &dyn 
             client.delete_release(repo, &tag).await.map_err(describe)?;
             GitReply::Done(format!("Deleted the release {tag}"))
         }
-        GitRequest::Mirror { dir } => GitReply::Mirrored(mirror(client, repo, &dir).await?),
+        GitRequest::Mirror { dir } => GitReply::Mirrored(mirror(client, repo, &dir, report).await?),
         GitRequest::PushCopy { dir, force, prune } => GitReply::Pushed(push_copy(client, repo, &dir, force, prune).await?),
     };
     Ok(reply)
@@ -313,21 +421,58 @@ pub fn dir_size(dir: &Path) -> u64 {
     bytes
 }
 
-/// Make `dir` a copy of `repo`, as `rngit`'s mirror does. A copy that fails
-/// to be made leaves nothing behind; one that fails to be updated stays as
-/// it was.
-async fn mirror<T: Transport>(client: &Client<T>, repo: &RepoUrl, dir: &Path) -> Result<Mirrored, String> {
+/// Marks a copy that was begun and not finished: its branches fetched so
+/// far are kept, and the next copy goes on from them.
+const PARTIAL: &str = "rettui-partial";
+/// Most steps a copy is made in: its branches are fetched one at a time
+/// (the more there are, the more go together), then its tags.
+const MAX_STEPS: usize = 16;
+
+/// What a copy fetches in each step: the branch `HEAD` is on first, then
+/// the other branches, then the tags together. A step that has come is
+/// kept if a later one fails, so a link that drops costs only the step it
+/// dropped in.
+fn steps(remote: &RemoteRefs) -> Vec<Vec<rngit::Want>> {
+    let wants = |prefix: &str| -> Vec<rngit::Want> {
+        remote
+            .refs
+            .iter()
+            .filter(|(_, name)| name.starts_with(prefix))
+            .map(|(sha, name)| rngit::Want { sha: *sha, name: name.clone() })
+            .collect()
+    };
+    let mut branches = wants("refs/heads/");
+    branches.sort_by_key(|w| Some(&w.name) != remote.head.as_ref());
+    let per_step = branches.len().div_ceil(MAX_STEPS - 1).max(1);
+    let mut steps: Vec<Vec<_>> = branches.chunks(per_step).map(<[_]>::to_vec).collect();
+    let tags = wants("refs/tags/");
+    if !tags.is_empty() {
+        steps.push(tags);
+    }
+    steps
+}
+
+/// Make `dir` a copy of `repo`, as `rngit`'s mirror does, a step at a time
+/// (see [`steps`]). A first copy that fails before anything came leaves
+/// nothing behind; one that fails part way is kept and marked, and the
+/// next goes on from it. An update that fails keeps what came.
+async fn mirror<T: Transport>(client: &Client<T>, repo: &RepoUrl, dir: &Path, report: &Reporter) -> Result<Mirrored, String> {
     let _held = Copying::take(dir)?;
-    let first = !dir.exists();
-    let (remote, removed) = match client.mirror_into(repo, dir).await {
+    let marker = dir.join(PARTIAL);
+    let resumed = marker.is_file();
+    let first = !dir.exists() || resumed;
+    let mut kept = resumed;
+    let result = mirror_steps(client, repo, dir, report, first, &mut kept).await;
+    let (remote, removed) = match result {
         Ok(done) => done,
         Err(e) => {
-            if first {
+            if first && !kept {
                 let _ = std::fs::remove_dir_all(dir);
             }
-            return Err(describe(e));
+            return Err(e);
         }
     };
+    let _ = std::fs::remove_file(&marker);
     let count = |prefix: &str| remote.refs.iter().filter(|(_, name)| name.starts_with(prefix)).count();
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     Ok(Mirrored {
@@ -340,6 +485,47 @@ async fn mirror<T: Transport>(client: &Client<T>, repo: &RepoUrl, dir: &Path) ->
         first,
         at,
     })
+}
+
+/// The steps of [`mirror`], then the whole of it once more: what is in
+/// `dir` by then is not asked for again, so that only sets what is left
+/// (HEAD, and the branches and tags the node no longer has to go).
+/// `kept` is set once something has come that stays.
+async fn mirror_steps<T: Transport>(
+    client: &Client<T>,
+    repo: &RepoUrl,
+    dir: &Path,
+    report: &Reporter,
+    first: bool,
+    kept: &mut bool,
+) -> Result<(RemoteRefs, usize), String> {
+    let remote = client.list(repo, false).await.map_err(describe)?;
+    let steps = steps(&remote);
+    let total = steps.len() + 1;
+    for (n, wants) in steps.iter().enumerate() {
+        report.step(n + 1, total);
+        let came = client.fetch_into(repo, wants, dir).await;
+        if let Err(e) = came {
+            let said = describe(e);
+            return Err(if n > 0 || *kept {
+                format!("{said} (stopped at step {} of {total}; what came is kept, and copying again goes on from it)", n + 1)
+            } else {
+                said
+            });
+        }
+        if first {
+            // Marked as soon as something is there to go on from.
+            if !*kept {
+                crate::config::write_atomic(&dir.join(PARTIAL), b"").map_err(|e| format!("Could not write in {}: {e}", dir.display()))?;
+            }
+            *kept = true;
+        }
+        if dir_size(dir) > MAX_MIRROR as u64 {
+            return Err(format!("It is bigger than the {} MB a copy may be", MAX_MIRROR / (1024 * 1024)));
+        }
+    }
+    report.step(total, total);
+    client.mirror_into(repo, dir).await.map_err(describe)
 }
 
 /// Send the copy in `dir` to `repo`. The copy is held while it goes, so it
@@ -436,11 +622,27 @@ pub struct LinkTransport {
     destination: Hash,
     timeout: Mutex<Duration>,
     link: Mutex<Option<LinkSession>>,
+    /// Told how each transfer on the link goes.
+    reporter: Arc<StdMutex<Reporter>>,
 }
 
 impl LinkTransport {
     fn new(runtime: ReticulumHandle, identity: Identity, destination: Hash) -> Self {
-        LinkTransport { runtime, identity, destination, timeout: Mutex::new(DEFAULT_TIMEOUT), link: Mutex::new(None) }
+        LinkTransport {
+            runtime,
+            identity,
+            destination,
+            timeout: Mutex::new(DEFAULT_TIMEOUT),
+            link: Mutex::new(None),
+            reporter: Arc::default(),
+        }
+    }
+
+    /// Say where the next transfers are told how they go.
+    fn report_to(&self, reporter: Reporter) {
+        if let Ok(mut held) = self.reporter.lock() {
+            *held = reporter;
+        }
     }
 
     async fn close(&self) {
@@ -466,7 +668,22 @@ impl Transport for LinkTransport {
             if link.is_none() {
                 let options = remote::link_options("rngit", true);
                 let session = remote::connect(&self.runtime, self.destination, self.identity.clone(), options, &|_| {}).await;
-                *link = Some(session.map_err(|e| rngit::Error::Transport(format!("Couldn't reach the node: {e}")))?);
+                let mut session = session.map_err(|e| rngit::Error::Transport(format!("Couldn't reach the node: {e}")))?;
+                // The link's events say how far a transfer has got; they are
+                // read for as long as the link lasts.
+                let (_, quiet) = mpsc::channel(1);
+                let mut events = std::mem::replace(&mut session.events, quiet);
+                let reporter = self.reporter.clone();
+                tokio::spawn(async move {
+                    while let Some(event) = events.recv().await {
+                        if let LinkSessionEvent::ResourceProgress { direction, transferred, total, .. } = event {
+                            let upload = direction == rns_runtime::link_session::LinkSessionResourceDirection::Outbound;
+                            let report = reporter.lock().map(|r| r.clone()).unwrap_or_default();
+                            report.bytes(transferred as u64, total as u64, upload);
+                        }
+                    }
+                });
+                *link = Some(session);
             }
             let session = link.as_ref().ok_or_else(|| rngit::Error::Transport("no link".into()))?;
             match session.handle.request(path, &data, Some(timeout)).await {
@@ -545,7 +762,17 @@ pub fn spawn(
             let identity = identity_for(&own, identity_file.as_ref())?;
             let client = clients.get(&runtime, &identity, repo.destination).await;
             *client.transport().timeout.lock().await = timeout;
-            run(&client, &repo, &IdentitySigner(&identity), request).await
+            let label = match &request {
+                GitRequest::Mirror { .. } => "Copying",
+                GitRequest::PushCopy { .. } => "Sending",
+                GitRequest::Artifact { .. } => "Downloading",
+                _ => "",
+            };
+            let report = if label.is_empty() { Reporter::default() } else { Reporter::new(id, repo.clone(), label, ev.clone()) };
+            client.transport().report_to(report.clone());
+            let result = run_with(&client, &repo, &IdentitySigner(&identity), request, &report).await;
+            client.transport().report_to(Reporter::default());
+            result
         });
         let _ = ev.send(NetEvent::Git { id, result });
     });
@@ -950,6 +1177,107 @@ pub(crate) mod tests {
         assert!(answer(&refused, &repo(), GitRequest::Mirror { dir: dir.clone() }).is_err());
         assert_eq!((refs_of(&dir), dir.exists()), (before, true));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A node whose fetches stop working after `allowed` of them.
+    struct Flaky {
+        node: Arc<Canned>,
+        allowed: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Transport for Flaky {
+        async fn request(&self, path: &str, data: Vec<u8>) -> Result<Response, rngit::Error> {
+            if path == "/git/fetch" {
+                let left = self.allowed.load(std::sync::atomic::Ordering::SeqCst);
+                if left == 0 {
+                    return Err(rngit::Error::Transport("the link dropped".into()));
+                }
+                self.allowed.store(left - 1, std::sync::atomic::Ordering::SeqCst);
+            }
+            self.node.request(path, data).await
+        }
+    }
+
+    fn flaky_mirror(source: &Source, dir: &Path, allowed: usize, report: &Reporter) -> Result<Mirrored, String> {
+        let client = Client::new(Flaky { node: Arc::new(source.node()), allowed: allowed.into() });
+        let identity = Identity::new();
+        let request = GitRequest::Mirror { dir: dir.to_path_buf() };
+        match block_on(run_with(&client, &repo(), &IdentitySigner(&identity), request, report))? {
+            GitReply::Mirrored(copy) => Ok(copy),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_copy_that_drops_part_way_goes_on_from_what_came() {
+        let root = scratch("resume");
+        let source = Source::new(&root.join("source"));
+        source.git(&["tag", "v1"]);
+        source.git(&["checkout", "-q", "-b", "topic"]);
+        source.commit("topic");
+        source.git(&["checkout", "-q", "main"]);
+        let dir = root.join("repos").join("node").join("public").join("demo.git");
+
+        // Steps: main, topic, the tags. The link goes after the first.
+        let err = flaky_mirror(&source, &dir, 1, &Reporter::default()).unwrap_err();
+        assert!(err.contains("the link dropped") && err.contains("step 2 of 4") && err.contains("goes on from it"), "{err}");
+        assert!(dir.join(PARTIAL).is_file());
+        // (The canned node sends every ref in each bundle, so more than main may be there.)
+        assert!(refs_of(&dir).contains(&"refs/heads/main".to_string()));
+
+        // Copying again fetches what's missing, and ends with a whole copy.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let report = Reporter::new(7, repo(), "Copying", tx);
+        let done = flaky_mirror(&source, &dir, 10, &report).unwrap();
+        assert!(done.first && (done.branches, done.tags) == (2, 1));
+        assert!(!dir.join(PARTIAL).exists());
+        let mut refs = refs_of(&dir);
+        refs.sort();
+        assert_eq!(refs, ["refs/heads/main", "refs/heads/topic", "refs/tags/v1"]);
+        let mut said = Vec::new();
+        while let Ok(NetEvent::GitProgress { id, progress, .. }) = rx.try_recv() {
+            assert_eq!(id, 7);
+            said.push(progress.step);
+        }
+        assert_eq!(said.first(), Some(&Some((1, 4))));
+        assert_eq!(said.last(), Some(&Some((4, 4))));
+
+        // Nothing came before the link went: nothing is left behind.
+        let other = root.join("repos").join("node").join("public").join("other.git");
+        assert!(flaky_mirror(&source, &other, 0, &Reporter::default()).is_err());
+        assert!(!other.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn progress_is_said_in_a_line() {
+        let mut p = Progress { label: "Copying", ..Progress::default() };
+        assert_eq!(p.text(), "waiting for the node");
+        p.step = Some((2, 5));
+        assert_eq!(p.text(), "step 2 of 5");
+        p.bytes = 512 * 1024;
+        p.total = 2 * 1024 * 1024;
+        assert_eq!(p.text(), "step 2 of 5, 512 KB of 2.0 MB (25%)");
+        p.bytes = 900;
+        p.total = 900;
+        assert_eq!(p.text(), "step 2 of 5, 900 B of 900 B (100%)");
+    }
+
+    #[test]
+    fn progress_reports_come_at_a_steady_pace() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let report = Reporter::new(1, repo(), "Sending", tx);
+        for n in 0..50 {
+            report.bytes(n, 100, true);
+        }
+        report.bytes(100, 100, true);
+        let mut got = Vec::new();
+        while let Ok(NetEvent::GitProgress { progress, .. }) = rx.try_recv() {
+            got.push(progress);
+        }
+        // The first, and the last that finishes: the ones between are held back.
+        assert_eq!(got.len(), 2);
+        assert!(got[0].upload && got[1].bytes == 100);
     }
 
     /// A node that has no such repository until it is made.

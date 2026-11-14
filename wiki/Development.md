@@ -53,6 +53,24 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
     system's webview (WebKitGTK on Linux, WebView2 on Windows, WKWebView
     on macOS). It's a package of its own so that `rettui` never links
     them: `cargo build` at the top builds rettui alone.
+  - **Signing is optional.** With none of the secrets below set (the
+    default, and for forks and pull requests) the installers are built
+    unsigned and everything else works. Set them under the repository's
+    *Settings > Secrets and variables > Actions* to sign:
+    - macOS: `APPLE_CERTIFICATE` (a Developer ID Application `.p12`,
+      base64), `APPLE_CERTIFICATE_PASSWORD` and `APPLE_SIGNING_IDENTITY`
+      (for example `Developer ID Application: Name (TEAMID)`); to notarize
+      too, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and
+      `APPLE_TEAM_ID`.
+    - Windows: `WINDOWS_CERTIFICATE` (a code signing `.pfx`, base64) and
+      `WINDOWS_CERTIFICATE_PASSWORD`.
+  - Its identity, backup and pipe interface screens are a window of their
+    own, a page bundled in the app (`desktop/ui/`), not part of the web UI.
+    Their commands (`desktop/src/manage.rs`) are given only to that window
+    (`desktop/capabilities/manage.json`), and call `rettui::manage`
+    (`src/web/desktop.rs`), which works only in the desktop app. Don't add
+    them to the web UI's routes. A new command needs a permission in
+    `desktop/build.rs` and the capability.
   - Closing its window leaves rettui running, with a tray icon to open
     it again or quit (*Keep running when closed*, on; *Minimize to tray*,
     off). On Linux the tray needs libayatana-appindicator, which the
