@@ -498,6 +498,8 @@ fn shutdown_signal() -> impl std::future::Future<Output = ()> {
 
 /// Ctrl-C or SIGTERM: listened for from now (not from when it's first
 /// awaited), so a stop right after starting is still a clean one.
+// Not an `async fn`: on Unix the signals are registered when it's called.
+#[cfg_attr(not(unix), allow(clippy::manual_async_fn))]
 fn os_signal() -> impl std::future::Future<Output = ()> {
     #[cfg(unix)]
     {

@@ -113,12 +113,16 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 # Bounded terminal capability probe (poll/read on stdin).
 libc = "0.2"
 
-[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
-# Desktop notifications on Windows and macOS (on Linux and the BSDs rettui
-# speaks D-Bus itself, below): without its D-Bus side, which these don't use.
+[target.'cfg(target_os = "macos")'.dependencies]
+# Desktop notifications on macOS (on Linux and the BSDs rettui speaks D-Bus
+# itself, below, and on Windows it makes its own toasts): without its D-Bus
+# side, which this doesn't use.
 notify-rust = { version = "4.18.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
+# Toasts with a reply box and buttons (see src/toast.rs): Windows' own
+# notifications, as the desktop app's already use (the version they use).
+windows = { version = "0.62", default-features = false, features = ["Data_Xml_Dom", "Foundation", "Foundation_Collections", "UI_Notifications", "Win32_System_WinRT"] }
 # Bringing the console window forward when a notification is clicked (the
 # version the rest already uses).
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
