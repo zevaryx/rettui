@@ -114,15 +114,29 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   contacts and messages to one file, without your identity. Type a
   passphrase to seal it (or leave it empty): it can't be restored without
   it. See [Backups](Data-and-Storage#backups).
-- **Theme:** dark (rettui's own), light, or as the device is set (and
-  following it when it changes): *Theme* in the Status page. Each browser
-  keeps its own. Times and dates follow the *Clock* and *Dates* settings.
+- **Theme:** as the device is set (at first, and following it when it
+  changes), dark (rettui's own) or light: *Theme* in the Status page. Each
+  browser keeps its own. Times and dates follow the *Clock* and *Dates*
+  settings.
 - **Resizing the lists:** drag the edge of a section's list (a line shows
   where, when pointed at) to make it wider or narrower, or press `<` and
   `>`; `=`, or a double click on the edge, puts it back. With the edge
   focused (Tab), the arrow keys move it. Each section keeps its own width,
   in this browser, and the pane beside it always keeps room (500px). Not on
   a phone, which shows one pane at a time.
+- **Narrower windows:** in a window too narrow for the Network table (its
+  pane under about 1080px), each row becomes a card, with its name and
+  address on top and its buttons beside or under them. Network's less used
+  tools (Tables, Interfaces found, Speed test, Identities…, Send a file…,
+  Find a path…) and the Browser's Keep repos and Clear cache are in a
+  **Tools ▾** menu. A message's Reply, React and ⋯ show when the pointer is
+  over it (or it has the keyboard's focus), over the end of its heading.
+- **Keyboard and screen readers:** Tab goes through the sections, a list's
+  rows and the buttons, and `Enter` or `Space` opens the row or section
+  that has the focus. A dialog keeps Tab inside it, and gives the focus back
+  to what opened it when it closes; a menu opened from the keyboard starts
+  on its first item. Each section's title is a heading, and the boxes and
+  buttons that show only a symbol have names a screen reader says.
 - **Keys:** `?` lists them all. `1`–`9` and `0` switch sections, `<`/`>` resize the
   section's list, `/` searches the
   Network list (in Messages, [the messages](Messaging#searching); in

@@ -570,7 +570,8 @@ impl App {
 
     /// A link written in a message (see [`crate::links`]): a page or file
     /// opens in the Browser, an address its conversation, a hub in
-    /// Channels (asking first, for a hub not added yet).
+    /// Channels (asking first, for a hub not added yet), and a web page in
+    /// the computer's browser.
     pub fn open_address(&mut self, url: &str) {
         let url = url.trim();
         // Schemes in any case, as they're found.
@@ -579,6 +580,9 @@ impl App {
             Some(i) => format!("{}{}", url[..i].to_ascii_lowercase(), &url[i..]),
             None => url.to_string(),
         };
+        if url.starts_with("https://") || url.starts_with("http://") {
+            return self.open_url(&url);
+        }
         if url.starts_with("rrc://") || url.starts_with("rrc@") {
             return self.open_rrc_link(&url);
         }
@@ -1709,6 +1713,7 @@ mod tests {
             ("lxma://nonsense", ""),
             ("not anything", "Cannot open"),
             ("rrc://0101010101010101010101010101010101", ""),
+            ("HTTPS://example.com/", "Opened https://example.com/ in your browser"),
         ] {
             app.open_address(address);
             if !said.is_empty() {

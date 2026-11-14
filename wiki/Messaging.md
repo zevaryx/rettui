@@ -170,8 +170,8 @@ it's with, when, and the part that matched.
 
 ## Links in messages
 
-NomadNet pages and files, LXMF addresses and RRC hubs written in a message
-are links, in both UIs and in RRC rooms too:
+NomadNet pages and files, LXMF addresses, RRC hubs and web pages written in
+a message are links, in both UIs and in RRC rooms too:
 
 - **Pages and files:** `<node>:/page/index.mu` or `<node>:/file/name`
   (also after `nomadnetwork://`) open in the Browser.
@@ -182,6 +182,10 @@ are links, in both UIs and in RRC rooms too:
 - **Hubs:** `rrc://<hub>`, `rrc://<hub>/room` or `rrc@<hub>` open the hub
   in Channels (and join the room); a hub you haven't added asks first, as
   connecting tells it who you are.
+- **Web pages:** `https://…` and `http://…` open in your browser: from the
+  terminal UI, the computer's default browser; from the web UI, a new tab
+  that isn't told where the link came from (the Android and desktop apps
+  hand it to the system's browser).
 
 A bare hash isn't a link (it could be any destination), and punctuation
 after a link (a full stop, a closing bracket) isn't part of it.
