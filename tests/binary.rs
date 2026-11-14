@@ -2,10 +2,17 @@
 //! arguments, the commands that need no network, and the web UI from start
 //! to a clean stop.
 
+// What only the tests that run the web UI (and stop it with SIGTERM, so on
+// Unix) use is Unix's too.
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+#[cfg(unix)]
+use std::process::{Child, Stdio};
+use std::process::{Command, Output};
+#[cfg(unix)]
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 /// A fresh folder for one test, with a Reticulum config that has no
@@ -42,6 +49,7 @@ fn said(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned() + &String::from_utf8_lossy(&output.stderr)
 }
 
+#[cfg(unix)]
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
@@ -133,6 +141,7 @@ fn a_message_on_paper() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
 /// A running `rettui --web`, stopped (as `docker stop` and systemd do) when
 /// dropped.
 struct Web {
@@ -140,6 +149,7 @@ struct Web {
     said: Arc<Mutex<Vec<String>>>,
 }
 
+#[cfg(unix)]
 impl Web {
     /// Started, once it says where it is.
     fn start(dir: &Path, args: &[&str]) -> Self {
@@ -185,6 +195,7 @@ impl Web {
     }
 }
 
+#[cfg(unix)]
 impl Drop for Web {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -219,6 +230,7 @@ fn get_tls(port: u16, ca: &Path) -> (String, String) {
     (head.lines().next().unwrap_or_default().to_string(), body.to_string())
 }
 
+#[cfg(unix)]
 /// A plain HTTP POST of `{}` (with the token), its status line.
 fn post(port: u16, path: &str, token: &str) -> String {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -233,6 +245,7 @@ fn post(port: u16, path: &str, token: &str) -> String {
     raw.lines().next().unwrap_or_default().to_string()
 }
 
+#[cfg(unix)]
 /// A plain HTTP GET (with the token), its status line and body.
 fn get(port: u16, path: &str, token: &str) -> (String, String) {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -404,6 +417,7 @@ fn the_terminal_ui_starts_and_quits() {
 }
 
 /// A POST of `body` (JSON, with the token), its status line and body.
+#[cfg(unix)]
 fn post_json(port: u16, path: &str, token: &str, body: &serde_json::Value) -> (String, String) {
     let body = body.to_string();
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -421,6 +435,7 @@ fn post_json(port: u16, path: &str, token: &str, body: &serde_json::Value) -> (S
 }
 
 /// What `get` finds at `path`, as JSON, once `ready` says it's there.
+#[cfg(unix)]
 fn wait_json(port: u16, path: &str, token: &str, what: &str, ready: impl Fn(&serde_json::Value) -> bool) -> serde_json::Value {
     let started = Instant::now();
     loop {
