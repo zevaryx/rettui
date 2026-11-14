@@ -8,4 +8,7 @@
     <!-- rettui's cyan, the prompt's: notifications, buttons and
          ticks are tinted with it. -->
     <color name="accent">#4FD6E0</color>
+    <!-- The same on the web UI's light theme. -->
+    <color name="background_light">#F3F3F6</color>
+    <color name="accent_light">#00727C</color>
 </resources>

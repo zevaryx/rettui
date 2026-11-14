@@ -22,9 +22,10 @@ fun Context.dp(value: Int): Int = (value * resources.displayMetrics.density).rou
  * so it looks the same, and pads `root` itself (on top of its own padding).
  */
 fun Activity.showClearOfBars(root: View) {
-    root.setBackgroundColor(BACKGROUND)
+    val palette = palette()
+    root.setBackgroundColor(palette.background)
     setContentView(root)
-    colorBars(BACKGROUND, light = false)
+    colorBars(palette.background, palette.light)
     if (Build.VERSION.SDK_INT < 30) return
     window.setDecorFitsSystemWindows(false)
     val own = intArrayOf(root.paddingLeft, root.paddingTop, root.paddingRight, root.paddingBottom)

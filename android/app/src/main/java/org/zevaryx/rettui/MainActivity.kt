@@ -93,12 +93,15 @@ class MainActivity : Activity() {
         waiting = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            addView(ProgressBar(context).apply { isIndeterminate = true })
+            addView(ProgressBar(context).apply {
+                isIndeterminate = true
+                indeterminateTintList = android.content.res.ColorStateList.valueOf(palette().accent)
+            })
             addView(TextView(context).apply {
                 text = getString(R.string.starting)
                 gravity = Gravity.CENTER
-                textSize = 18f
-                setTextColor(Color.LTGRAY)
+                textSize = 16f
+                setTextColor(palette().dim)
                 setPadding(0, dp(16), 0, 0)
             })
         }
@@ -245,7 +248,7 @@ class MainActivity : Activity() {
         }
         if (prefs.getBoolean("asked_notifications", false) || asking?.isShowing == true) return
         prefs.edit().putBoolean("asked_notifications", true).apply()
-        asking = AlertDialog.Builder(this)
+        asking = dialog()
             .setTitle(R.string.notifications_off)
             .setMessage(R.string.notifications_off_note)
             .setPositiveButton(R.string.notifications_turn_on) { _, _ ->
@@ -269,7 +272,7 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences("app", MODE_PRIVATE)
         if (getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName) || prefs.getBoolean("asked_battery", false)) return false
         prefs.edit().putBoolean("asked_battery", true).apply()
-        asking = AlertDialog.Builder(this)
+        asking = dialog()
             .setTitle(R.string.battery)
             .setMessage(R.string.battery_note)
             .setPositiveButton(R.string.battery_allow) { _, _ ->
@@ -319,42 +322,46 @@ class MainActivity : Activity() {
     private fun stopped() {
         val byYou = Rettui.stoppedByYou(this)
         val log = if (byYou) "" else RettuiService.logFile(this).takeIf { it.isFile }?.readText()?.takeLast(20_000) ?: ""
-        showClearOfBars(LinearLayout(this).apply {
+        val palette = palette()
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(16), dp(12), dp(12))
-            addView(TextView(context).apply {
-                text = getString(if (byYou) R.string.stopped_by_you else R.string.stopped)
-                textSize = 18f
-                setTextColor(Color.WHITE)
-            })
-            addView(Button(context).apply {
-                text = getString(if (byYou) R.string.start else R.string.restart)
-                setOnClickListener {
-                    // Start over, without what the app was first opened for.
-                    intent = Intent(this@MainActivity, MainActivity::class.java)
-                    recreate()
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+        }
+        content.addView(TextView(this).apply {
+            text = getString(if (byYou) R.string.stopped_by_you else R.string.stopped)
+            textSize = 20f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(palette.text)
+            setPadding(0, dp(8), 0, dp(8))
+        })
+        content.primary(getString(if (byYou) R.string.start else R.string.restart)) {
+            // Start over, without what the app was first opened for.
+            intent = Intent(this@MainActivity, MainActivity::class.java)
+            recreate()
+        }
+        // A backup can be restored, or the identity saved, even with
+        // rettui failing to start.
+        content.secondary(getString(R.string.backups)) { startActivity(Intent(this@MainActivity, BackupsActivity::class.java)) }
+        content.secondary(getString(R.string.close_app)) { finishAndRemoveTask() }
+        if (log.isNotEmpty()) {
+            val card = ScrollView(this).apply {
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(palette.panel)
+                    setStroke(dp(1), palette.border)
+                    cornerRadius = dp(12).toFloat()
                 }
-            })
-            addView(Button(context).apply {
-                text = getString(R.string.close_app)
-                setOnClickListener { finishAndRemoveTask() }
-            })
-            // A backup can be restored, or the identity saved, even with
-            // rettui failing to start.
-            addView(Button(context).apply {
-                text = getString(R.string.backups)
-                setOnClickListener { startActivity(Intent(this@MainActivity, BackupsActivity::class.java)) }
-            })
-            addView(ScrollView(context).apply {
+                setPadding(dp(12), dp(12), dp(12), dp(12))
                 addView(TextView(context).apply {
                     text = log
                     typeface = android.graphics.Typeface.MONOSPACE
                     textSize = 11f
-                    setTextColor(Color.LTGRAY)
+                    setTextColor(palette.dim)
                     setTextIsSelectable(true)
                 })
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        })
+            }
+            content.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(16) })
+        }
+        showClearOfBars(content)
     }
 
     /** The web UI's screen, with a new WebView if its last one went (see onRenderProcessGone). */

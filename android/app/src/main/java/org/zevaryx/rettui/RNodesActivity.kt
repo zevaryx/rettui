@@ -15,8 +15,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.graphics.Color
-import android.graphics.Typeface
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -25,11 +23,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
 import android.text.InputType
-import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
 import org.json.JSONObject
 import java.util.UUID
 
@@ -68,6 +63,7 @@ class RNodesActivity : Activity() {
 
     private val main = Handler(Looper.getMainLooper())
     private lateinit var usb: UsbManager
+    private lateinit var page: Page
     private lateinit var list: LinearLayout
     private var asked: UsbDevice? = null
     private val heard = linkedMapOf<String, Heard>()
@@ -100,15 +96,11 @@ class RNodesActivity : Activity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        applyPageTheme()
         super.onCreate(savedInstanceState)
         usb = getSystemService(UsbManager::class.java)
-        list = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-        }
-        showClearOfBars(ScrollView(this).apply {
-            addView(list)
-        })
+        page = Page(this, getString(R.string.rnodes))
+        list = page.content
         // The answer comes from this app's own pending intent; nothing else
         // may send it. (Before Android 13 the flag is ignored.)
         registerReceiver(permission, IntentFilter(ACTION_PERMISSION), RECEIVER_NOT_EXPORTED)
@@ -131,52 +123,25 @@ class RNodesActivity : Activity() {
 
     private fun show() {
         list.removeAllViews()
-        list.addView(TextView(this).apply {
-            text = getString(R.string.rnodes)
-            textSize = 24f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-        })
-        heading(getString(R.string.usb))
-        note(getString(R.string.usb_note))
+        val over = page.section(getString(R.string.usb))
+        over.note(getString(R.string.usb_note))
         val devices = usb.deviceList.values.sortedBy { it.deviceName }
-        if (devices.isEmpty()) note(getString(R.string.usb_none))
+        if (devices.isEmpty()) over.value(getString(R.string.usb_none))
         for (device in devices) {
             val chip = CHIPS[device.vendorId] ?: "USB device"
             val named = listOfNotNull(device.manufacturerName, device.productName).joinToString(" ").ifBlank { chip }
-            button(getString(R.string.usb_device, named, chip, "%04x:%04x".format(device.vendorId, device.productId), device.deviceName)) {
+            over.secondary(getString(R.string.usb_device, named, chip, "%04x:%04x".format(device.vendorId, device.productId), device.deviceName)) {
                 chooseUsb(device)
             }
         }
 
-        heading(getString(R.string.bluetooth))
-        note(getString(R.string.bluetooth_note))
-        button(getString(if (scanning) R.string.bluetooth_scanning else R.string.bluetooth_find)) { if (!scanning) findBluetooth() }
+        val ble = page.section(getString(R.string.bluetooth))
+        ble.note(getString(R.string.bluetooth_note))
+        ble.primary(getString(if (scanning) R.string.bluetooth_scanning else R.string.bluetooth_find)) { if (!scanning) findBluetooth() }
         for (one in heard.values) {
-            button(getString(R.string.bluetooth_device, one.name ?: getString(R.string.bluetooth_unnamed), one.address)) { addBluetooth(one) }
+            ble.secondary(getString(R.string.bluetooth_device, one.name ?: getString(R.string.bluetooth_unnamed), one.address)) { addBluetooth(one) }
         }
     }
-
-    private fun heading(text: String) = list.addView(TextView(this).apply {
-        this.text = text
-        textSize = 20f
-        setTypeface(typeface, Typeface.BOLD)
-        setTextColor(Color.WHITE)
-        setPadding(0, dp(12), 0, dp(4))
-    })
-
-    private fun note(text: String) = list.addView(TextView(this).apply {
-        this.text = text
-        textSize = 14f
-        setTextColor(Color.LTGRAY)
-        setPadding(0, 0, 0, dp(4))
-    })
-
-    private fun button(text: String, run: () -> Unit) = list.addView(Button(this).apply {
-        this.text = text
-        isAllCaps = false
-        setOnClickListener { run() }
-    })
 
     // ---- USB ------------------------------------------------------------------
 
@@ -254,7 +219,7 @@ class RNodesActivity : Activity() {
             setText(suggested)
             inputType = InputType.TYPE_CLASS_TEXT
         }
-        AlertDialog.Builder(this)
+        dialog()
             .setTitle(R.string.rnode_add)
             .setMessage(R.string.rnode_add_note)
             .setView(input)
@@ -279,6 +244,6 @@ class RNodesActivity : Activity() {
     }
 
     private fun say(text: String) {
-        AlertDialog.Builder(this).setMessage(text).setPositiveButton(android.R.string.ok, null).show()
+        dialog().setMessage(text).setPositiveButton(android.R.string.ok, null).show()
     }
 }

@@ -4,19 +4,16 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
-import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.view.View
-import android.widget.ScrollView
 import android.widget.TextView
 import java.io.File
 import org.json.JSONObject
@@ -51,47 +48,20 @@ class BackupsActivity : Activity() {
     private var backupPassphrase = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        applyPageTheme()
         super.onCreate(savedInstanceState)
-        title = getString(R.string.backups)
-        val column = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-        }
-        fun heading(text: String) = column.addView(TextView(this).apply {
-            this.text = text
-            textSize = 20f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            setPadding(0, dp(12), 0, dp(4))
-        })
-        fun note(text: String) = column.addView(TextView(this).apply {
-            this.text = text
-            textSize = 14f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, 0, 0, dp(4))
-        })
-        fun action(text: String, run: () -> Unit) = column.addView(Button(this).apply {
-            this.text = text
-            isAllCaps = false
-            setOnClickListener { run() }
-        })
+        val page = Page(this, getString(R.string.backups))
 
-        column.addView(TextView(this).apply {
-            text = getString(R.string.backups)
-            textSize = 24f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-        })
-        heading(getString(R.string.identity))
-        note(getString(R.string.identity_note))
-        action(getString(R.string.identity_save)) {
+        val identity = page.section(getString(R.string.identity))
+        identity.note(getString(R.string.identity_note))
+        identity.primary(getString(R.string.identity_save)) {
             save(SAVE_IDENTITY, "application/octet-stream", "rettui-identity")
         }
-        action(getString(R.string.identity_bring)) { open(OPEN_IDENTITY) }
+        identity.secondary(getString(R.string.identity_bring)) { open(OPEN_IDENTITY) }
 
-        heading(getString(R.string.backup))
-        note(getString(R.string.backup_note))
-        action(getString(R.string.backup_save)) {
+        val backup = page.section(getString(R.string.backup))
+        backup.note(getString(R.string.backup_note))
+        backup.primary(getString(R.string.backup_save)) {
             // A passphrase first (or none), then where.
             askPassphrase(R.string.backup_passphrase, getString(R.string.backup_passphrase_note), twice = true) { passphrase ->
                 backupPassphrase = passphrase
@@ -99,17 +69,12 @@ class BackupsActivity : Activity() {
                 save(SAVE_BACKUP, "application/gzip", "rettui-backup-$day.tar.gz")
             }
         }
-        action(getString(R.string.backup_restore)) { open(OPEN_BACKUP) }
+        backup.secondary(getString(R.string.backup_restore)) { open(OPEN_BACKUP) }
 
-        heading(getString(R.string.schedule))
-        note(getString(R.string.schedule_note, ScheduledBackups.KEPT))
-        scheduleFolder = TextView(this).apply {
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            setPadding(0, dp(4), 0, dp(4))
-        }
-        column.addView(scheduleFolder)
-        action(getString(R.string.downloads_choose)) {
+        val schedule = page.section(getString(R.string.schedule))
+        schedule.note(getString(R.string.schedule_note, ScheduledBackups.KEPT))
+        scheduleFolder = schedule.value()
+        schedule.secondary(getString(R.string.downloads_choose)) {
             startActivityForResult(
                 Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
@@ -119,12 +84,14 @@ class BackupsActivity : Activity() {
         }
         val every = listOf(0 to R.string.schedule_off, 1 to R.string.schedule_daily, 7 to R.string.schedule_weekly)
         val buttons = mutableMapOf<Int, RadioButton>()
-        column.addView(RadioGroup(this).apply {
+        schedule.addView(RadioGroup(this).apply {
+            setPadding(0, dp(8), 0, 0)
             for ((days, label) in every) {
                 addView(RadioButton(context).apply {
                     id = View.generateViewId()
                     text = getString(label)
-                    setTextColor(Color.WHITE)
+                    tinted()
+                    minHeight = dp(48)
                     isChecked = ScheduledBackups.every(context) == days
                     buttons[days] = this
                     setOnClickListener {
@@ -143,27 +110,13 @@ class BackupsActivity : Activity() {
                 })
             }
         })
-        scheduleSealed = TextView(this).apply {
-            textSize = 14f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, dp(4), 0, dp(4))
-        }
-        column.addView(scheduleSealed)
-        action(getString(R.string.schedule_change_passphrase)) { askSchedulePassphrase(then = { showSchedule() }, cancelled = {}) }
-        scheduleLast = TextView(this).apply {
-            textSize = 14f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, dp(4), 0, dp(4))
-        }
-        column.addView(scheduleLast)
-        action(getString(R.string.schedule_now)) {
+        scheduleSealed = schedule.note("")
+        schedule.secondary(getString(R.string.schedule_change_passphrase)) { askSchedulePassphrase(then = { showSchedule() }, cancelled = {}) }
+        scheduleLast = schedule.note("")
+        schedule.primary(getString(R.string.schedule_now)) {
             if (ScheduledBackups.decided(this)) makeOneNow() else askSchedulePassphrase(then = { makeOneNow() }, cancelled = {})
         }
         showSchedule()
-
-        showClearOfBars(ScrollView(this).apply {
-            addView(column)
-        })
     }
 
     private fun makeOneNow() = work {
@@ -203,7 +156,7 @@ class BackupsActivity : Activity() {
         val again = field(R.string.passphrase_again)
         // A new one easy to guess: said, as rettui says it, and theirs to use anyway.
         val weak = TextView(this).apply {
-            setTextColor(Color.rgb(0xf2, 0xd4, 0x5c))
+            setTextColor(Color.rgb(if (palette().light) 0x8a else 0xf2, if (palette().light) 0x5a else 0xd4, if (palette().light) 0x00 else 0x5c))
             setPadding(0, dp(4), 0, dp(4))
             visibility = View.GONE
         }
@@ -231,7 +184,7 @@ class BackupsActivity : Activity() {
                 addView(again)
             }
         }
-        val dialog = AlertDialog.Builder(this)
+        val dialog = dialog()
             .setTitle(title)
             .setView(layout)
             .setPositiveButton(android.R.string.ok, null)
@@ -282,6 +235,9 @@ class BackupsActivity : Activity() {
             last.second == null -> getString(R.string.schedule_last_ok, DateFormat.getDateTimeInstance().format(Date(last.first)))
             else -> getString(R.string.schedule_last_failed, DateFormat.getDateTimeInstance().format(Date(last.first)), last.second)
         }
+        // Nothing to say: no gap either.
+        scheduleSealed.visibility = if (scheduleSealed.text.isEmpty()) View.GONE else View.VISIBLE
+        scheduleLast.visibility = if (scheduleLast.text.isEmpty()) View.GONE else View.VISIBLE
     }
 
     private fun save(request: Int, type: String, name: String) {
@@ -311,7 +267,7 @@ class BackupsActivity : Activity() {
                 work { saveThrough(uri) { file -> Rettui.withPassphrase(this, passphrase, "backup", file.path, sealing) } }
             }
             OPEN_IDENTITY -> askName { name -> work { openThrough(uri) { file -> Rettui.command(this, "identity", "import", file.path, "--name", name) } } }
-            OPEN_BACKUP -> AlertDialog.Builder(this)
+            OPEN_BACKUP -> dialog()
                 .setTitle(R.string.backup_restore)
                 .setMessage(R.string.restore_confirm)
                 .setPositiveButton(R.string.restore) { _, _ -> restoreChosen(uri) }
@@ -396,7 +352,7 @@ class BackupsActivity : Activity() {
             hint = getString(R.string.identity_name_hint)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
         }
-        AlertDialog.Builder(this)
+        dialog()
             .setTitle(R.string.identity_name)
             .setView(input)
             .setPositiveButton(R.string.keep) { _, _ -> then(input.text.toString()) }
@@ -406,13 +362,13 @@ class BackupsActivity : Activity() {
 
     /** Run `job` away from the screen, then say what came of it. */
     private fun work(job: () -> Rettui.Said) {
-        busy = AlertDialog.Builder(this).setMessage(R.string.working).setCancelable(false).show()
+        busy = dialog().setMessage(R.string.working).setCancelable(false).show()
         Thread {
             val said = job()
             main.post {
                 busy?.dismiss()
                 busy = null
-                AlertDialog.Builder(this)
+                dialog()
                     .setTitle(if (said.ok) R.string.done else R.string.failed)
                     .setMessage(said.text.removePrefix("Error: ").ifEmpty { getString(if (said.ok) R.string.done else R.string.failed) })
                     .setPositiveButton(android.R.string.ok, null)
