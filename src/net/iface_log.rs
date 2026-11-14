@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{self, Write as _};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::UnboundedSender;
@@ -25,8 +25,17 @@ const REPEAT_WINDOW: Duration = Duration::from_secs(300);
 /// not trouble.
 const ROUTINE: &[&str] = &["transport channel closed"];
 
-static STATE: Mutex<State> = Mutex::new(State { sink: None, names: None, recent: None });
+/// What the layer works from: one for the program (see [`global`]), and
+/// one of its own for each test, so tests running side by side don't change
+/// each other's.
+type Shared = Arc<Mutex<State>>;
 
+fn global() -> &'static Shared {
+    static GLOBAL: OnceLock<Shared> = OnceLock::new();
+    GLOBAL.get_or_init(Shared::default)
+}
+
+#[derive(Default)]
 struct State {
     /// The running network actor's events, which the app logs.
     sink: Option<UnboundedSender<NetEvent>>,
@@ -40,7 +49,7 @@ struct State {
 /// replaces it). A restart starts afresh: trouble that's still there is
 /// logged again, rather than looking fixed.
 pub fn attach(sink: UnboundedSender<NetEvent>) {
-    if let Ok(mut state) = STATE.lock() {
+    if let Ok(mut state) = global().lock() {
         state.sink = Some(sink);
         state.recent = None;
     }
@@ -48,14 +57,18 @@ pub fn attach(sink: UnboundedSender<NetEvent>) {
 
 /// The interfaces running now, by id.
 pub fn set_names(names: impl IntoIterator<Item = (u64, String)>) {
-    if let Ok(mut state) = STATE.lock() {
+    if let Ok(mut state) = global().lock() {
         state.names = Some(names.into_iter().collect());
     }
 }
 
 /// The layer to add to the `tracing` subscriber.
 pub fn layer<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>>() -> impl Layer<S> {
-    InterfaceLog.with_filter(Trouble)
+    layer_for(global().clone())
+}
+
+fn layer_for<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>>(state: Shared) -> impl Layer<S> {
+    InterfaceLog { state }.with_filter(Trouble)
 }
 
 /// Warnings and errors from the Reticulum libraries.
@@ -71,7 +84,9 @@ impl<S> Filter<S> for Trouble {
     }
 }
 
-struct InterfaceLog;
+struct InterfaceLog {
+    state: Shared,
+}
 
 impl<S: Subscriber> Layer<S> for InterfaceLog {
     fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
@@ -86,7 +101,7 @@ impl<S: Subscriber> Layer<S> for InterfaceLog {
         if !about_interfaces || ROUTINE.contains(&fields.message.as_str()) {
             return;
         }
-        let Ok(mut state) = STATE.lock() else { return };
+        let Ok(mut state) = self.state.lock() else { return };
         let Some(sink) = state.sink.clone() else { return };
         let who = fields.interface.clone().or_else(|| {
             let id = fields.id?;
@@ -246,9 +261,19 @@ mod tests {
     #[test]
     fn interface_trouble_reaches_the_log_once_in_a_while() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        attach(tx);
-        set_names([(7, "TCPInterface[Testnet]".to_string())]);
-        let subscriber = tracing_subscriber::registry().with(layer());
+        // Its own state, not the program's: other tests start network actors,
+        // which attach to that one as this runs.
+        let state: Shared = Arc::new(Mutex::new(State {
+            sink: Some(tx),
+            names: Some(HashMap::from([(7, "TCPInterface[Testnet]".to_string())])),
+            recent: None,
+        }));
+        let subscriber = tracing_subscriber::registry().with(layer_for(state));
+        // Another network actor attaching meanwhile (as tests side by side do)
+        // takes none of this one's.
+        let (elsewhere, mut elsewhere_rx) = mpsc::unbounded_channel();
+        attach(elsewhere);
+        set_names([(7, "Elsewhere".to_string())]);
         tracing::subscriber::with_default(subscriber, || {
             let e = "Connection refused (os error 111)";
             tracing::warn!(target: "rns_interface::tcp", name = "Testnet", error = %e, "TCP connect failed");
@@ -267,6 +292,7 @@ mod tests {
             _ => None,
         })
         .collect();
+        assert!(elsewhere_rx.try_recv().is_err());
         assert_eq!(
             lines,
             [
