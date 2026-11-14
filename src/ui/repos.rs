@@ -105,6 +105,7 @@ fn draw_hosted(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, body, &mut app.repos.hosted);
+    super::mark_selected(frame, body, &app.repos.hosted, 1);
 }
 
 /// Who may use a hosted repository or group: a row for each person, a column
@@ -223,6 +224,7 @@ fn draw_side(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, inner, &mut app.repos.side);
+    super::mark_selected(frame, inner, &app.repos.side, 1);
 }
 
 fn draw_repo(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -315,6 +317,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, items: Vec<ListItem>, empty: &str
     }
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, area, &mut app.repos.items);
+    super::mark_selected(frame, area, &app.repos.items, 1);
 }
 
 /// What the copy on this computer is, above the branches and tags.

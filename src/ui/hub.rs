@@ -194,6 +194,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let list = List::new(items).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     let state = app.hub.list();
     frame.render_stateful_widget(list, list_area, state);
+    super::mark_selected(frame, list_area, state, 1);
 }
 
 /// What's known of the one picked, and what can be done with it.

@@ -290,6 +290,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
         app.channels.list.select(selected);
         let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).bold());
         frame.render_stateful_widget(list, list_area, &mut app.channels.list);
+        super::mark_selected(frame, app.regions.channel_list, &app.channels.list, 1);
     }
 
     let [history_area, input_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);

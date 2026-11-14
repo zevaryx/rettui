@@ -451,6 +451,7 @@ fn draw_browser_pane(frame: &mut Frame, app: &mut App, area: Rect) {
         state.select(Some(0));
     }
     frame.render_stateful_widget(list, list_area, state);
+    super::mark_selected(frame, list_area, state, 1);
 }
 
 /// The pane's search line: what's typed after a `/`, or how to start one.

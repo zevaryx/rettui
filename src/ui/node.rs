@@ -66,6 +66,7 @@ fn draw_allowed(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.node_allowed = list_block.inner(rect);
     let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, rect, &mut view.list);
+    super::mark_selected(frame, app.regions.node_allowed, &view.list, 1);
 }
 
 /// Different visitors who identified, since the node started: only the
@@ -166,6 +167,7 @@ fn draw_pages(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let list = List::new(items).block(list_block).highlight_style(Style::default().bg(selected_bg()).add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, area, &mut app.node.list);
+    super::mark_selected(frame, app.regions.node_pages, &app.node.list, 1);
 }
 
 fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
