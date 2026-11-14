@@ -28,8 +28,17 @@ backups and pipes…** in the tray menu, the **rettui** menu on a Mac
   as you.
 - **Backup:** settings, contacts, messages and your identity in one file,
   sealed with a passphrase if you give one (see
-  [Sealed Backups](Sealed-Backups)). Restore it with `rettui restore`, with
-  rettui stopped.
+  [Sealed Backups](Sealed-Backups)). **Restore a backup** puts one in
+  place of the data of the identity in use: type the file's path, and a
+  sealed backup asks for its passphrase. It looks into the backup first, so
+  a wrong passphrase or a file that isn't a backup changes nothing, then
+  asks before going on, since a restore replaces your settings, contacts,
+  messages and identity. What was there is moved aside into a
+  `before-restore-<time>` folder in the data folder, not deleted. rettui
+  stops while it restores (so anything being sent or received at that
+  moment is lost) and starts again, and the main window reloads. If the
+  restore fails, rettui starts again as it was. `rettui restore`, with
+  rettui stopped, does the same without the window.
 - **Pipe interfaces:** add, change, turn on or off and remove the pipe
   interfaces in Reticulum's config. Each runs a program with your account's
   rights, so it asks first, and a new one starts off. Changes apply when

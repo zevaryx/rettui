@@ -16,6 +16,8 @@
     "allow-manage-delete-identity",
     "allow-manage-back-up",
     "allow-manage-passphrase-weakness",
+    "allow-manage-restore-check",
+    "allow-manage-restore",
     "allow-manage-pipes",
     "allow-manage-add-pipe",
     "allow-manage-set-pipe",

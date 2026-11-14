@@ -1,6 +1,6 @@
 //! What only the desktop app's own window may do: keep, copy and delete
-//! identity keys, make backups that hold the identity, and set up pipe
-//! interfaces, which run programs. The web UI leaves all of these out,
+//! identity keys, make backups that hold the identity, restore a backup
+//! (which replaces them), and set up pipe interfaces, which run programs. The web UI leaves all of these out,
 //! since anyone with its login link controls it.
 //!
 //! None of this is reachable over HTTP. The desktop app (a separate
@@ -139,6 +139,54 @@ pub async fn back_up(to: &str, passphrase: Option<String>) -> Result<usize, Stri
     let (done, wait) = oneshot::channel();
     run(move |o| o.app.back_up_all_then(to, passphrase, Some(done))).await??;
     wait.await.map_err(|_| "The backup stopped before it was written".to_string())?
+}
+
+/// Look into the backup `file` without restoring it: whether it's sealed
+/// with a passphrase, and, once it opens (a sealed one needs `passphrase`),
+/// what it holds. A sealed backup given no passphrase answers that it needs
+/// one, which isn't a failure.
+pub async fn restore_check(file: &str, passphrase: Option<String>) -> Result<Value, String> {
+    let file = files::path_from_input(&plain("The file", file)?);
+    if file.as_os_str().is_empty() {
+        return Err("Say which backup to restore".into());
+    }
+    if passphrase.as_ref().is_some_and(|p| p.len() > LONGEST) {
+        return Err("The passphrase is too long".into());
+    }
+    let passphrase = passphrase.filter(|p| !p.is_empty()).map(Zeroizing::new);
+    // Opening a sealed backup is slow on purpose.
+    tokio::task::spawn_blocking(move || {
+        let sealed = crate::backup::is_sealed(&file);
+        if sealed && passphrase.is_none() {
+            return Ok(json!({ "sealed": true, "checked": false }));
+        }
+        let held = crate::backup::check(&file, passphrase.as_ref().map(|p| p.as_str()))?;
+        Ok(json!({ "sealed": sealed, "checked": true, "version": held.version, "identity": held.identity, "files": held.files }))
+    })
+    .await
+    .map_err(|_| "Looking into the backup failed".to_string())?
+}
+
+/// Restore the backup `file` into the data directory (`data_dir` as
+/// `--data-dir` is given: the identity in use), moving what's there aside
+/// first. rettui must have been stopped by the caller, which starts it again
+/// afterwards: it writes these files itself, and would save over them.
+pub async fn restore_files(data_dir: Option<std::path::PathBuf>, file: &str, passphrase: Option<String>) -> Result<String, String> {
+    let still_running = JOBS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|jobs| !jobs.is_closed());
+    if still_running {
+        return Err("rettui is still running: it has to stop before a backup is restored".into());
+    }
+    let file = files::path_from_input(&plain("The file", file)?);
+    if passphrase.as_ref().is_some_and(|p| p.len() > LONGEST) {
+        return Err("The passphrase is too long".into());
+    }
+    let passphrase = passphrase.filter(|p| !p.is_empty()).map(Zeroizing::new);
+    tokio::task::spawn_blocking(move || {
+        let paths = crate::config::Paths::new(data_dir).map_err(|e| format!("{e:#}"))?;
+        crate::backup::restore(&file, &paths.base, true, passphrase.as_ref().map(|p| p.as_str()))
+    })
+    .await
+    .map_err(|_| "Restoring the backup failed".to_string())?
 }
 
 /// A name for a backup, with today's date, as the terminal suggests.
@@ -289,6 +337,42 @@ mod tests {
         assert!(crate::backup::is_sealed(&sealed));
         assert!(!backup_name().is_empty());
         assert!(passphrase_weakness("abc").is_some());
+    }
+
+    #[tokio::test]
+    async fn backups_are_looked_into_and_restored_only_when_rettui_is_stopped() {
+        let _one = ONE_AT_A_TIME.lock().await;
+        let web = TestWeb::start("desktop-restore");
+        register_for_test(&web.jobs());
+        let plain = web.dir.join("plain.tar.gz");
+        back_up(&plain.display().to_string(), None).await.unwrap();
+        let sealed = web.dir.join("sealed.tar.gz");
+        let phrase = "a long and unlikely passphrase 41".to_string();
+        back_up(&sealed.display().to_string(), Some(phrase.clone())).await.unwrap();
+        // Looking changes nothing; a sealed one asks for its passphrase.
+        let held = restore_check(&plain.display().to_string(), None).await.unwrap();
+        assert_eq!((held["sealed"].as_bool(), held["checked"].as_bool()), (Some(false), Some(true)));
+        assert!(held["files"].as_u64().unwrap() > 0);
+        let asks = restore_check(&sealed.display().to_string(), None).await.unwrap();
+        assert_eq!((asks["sealed"].as_bool(), asks["checked"].as_bool()), (Some(true), Some(false)));
+        assert!(restore_check(&sealed.display().to_string(), Some("wrong".into())).await.unwrap_err().contains("isn't its passphrase"));
+        let opened = restore_check(&sealed.display().to_string(), Some(phrase.clone())).await.unwrap();
+        assert_eq!(opened["checked"].as_bool(), Some(true));
+        assert!(restore_check("", None).await.is_err());
+        assert!(restore_check(&web.dir.join("missing").display().to_string(), None).await.is_err());
+        // Not while rettui runs: it would save over what was restored.
+        let data = web.dir.join("restored");
+        let refused = restore_files(Some(data.clone()), &plain.display().to_string(), None).await.unwrap_err();
+        assert!(refused.contains("still running"), "{refused}");
+        assert!(!data.exists());
+        // Once it has stopped (its job channel closed), a sealed one restores.
+        let (stopped, gone) = mpsc::unbounded_channel();
+        drop(gone);
+        register_for_test(&stopped);
+        assert!(restore_files(Some(data.clone()), &sealed.display().to_string(), None).await.is_err());
+        let done = restore_files(Some(data.clone()), &sealed.display().to_string(), Some(phrase)).await.unwrap();
+        assert!(done.starts_with("Restored"), "{done}");
+        assert!(data.join("settings.json").exists() || data.join("identity").exists());
     }
 
     #[tokio::test]

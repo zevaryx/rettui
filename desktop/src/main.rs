@@ -92,6 +92,7 @@ fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
                 app.notification().on_action(move |_| show(&handle))?;
             }
             app.manage(manage::Downloads(downloads.clone()));
+            app.manage(manage::Runner { data_dir, token_path, port, server: started });
             add_tray(app);
             add_menu(app)?;
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(home))
@@ -134,6 +135,8 @@ fn run(data_dir: Option<PathBuf>, manage: bool) -> Result<(), String> {
             manage::manage_delete_identity,
             manage::manage_back_up,
             manage::manage_passphrase_weakness,
+            manage::manage_restore_check,
+            manage::manage_restore,
             manage::manage_pipes,
             manage::manage_add_pipe,
             manage::manage_set_pipe,
@@ -192,7 +195,10 @@ fn start(app: &AppHandle, data_dir: Option<&Path>, token_path: &Path, port: u16,
     let handle = app.clone();
     let thread = thread::spawn(move || {
         let result = rettui::run_with(command).map_err(|e| format!("{e:#}"));
-        handle.exit(0);
+        // Stopped on purpose, to be started again (a restore): the app stays.
+        if !RESTARTING.load(Ordering::SeqCst) {
+            handle.exit(0);
+        }
         result
     });
     // Wait for the web UI, or for rettui to stop without it (a broken
@@ -219,6 +225,41 @@ fn start(app: &AppHandle, data_dir: Option<&Path>, token_path: &Path, port: u16,
     }
     let token = std::fs::read_to_string(token_path).map_err(|e| format!("reading {}: {e}", token_path.display()))?;
     Url::parse(&format!("http://127.0.0.1:{port}/?token={}", token.trim())).map_err(|e| e.to_string())
+}
+
+/// Set while rettui is stopped to be started again, so its stopping doesn't
+/// close the app.
+static RESTARTING: AtomicBool = AtomicBool::new(false);
+
+/// Restores the backup `file` (already looked into): stops rettui, which
+/// saves everything first, restores it with what was there moved aside, and
+/// starts rettui again, then has the main window load it. The files are
+/// restored whether or not rettui stopped cleanly, and rettui is started
+/// again whether or not the restore worked, so a failed restore leaves
+/// the app running as it was.
+fn restore_and_restart(app: &AppHandle, file: &str, passphrase: Option<String>) -> Result<String, String> {
+    let runner = app.state::<manage::Runner>();
+    RESTARTING.store(true, Ordering::SeqCst);
+    let stopped = stop(&runner.server);
+    let restored = match stopped {
+        Ok(()) => tauri::async_runtime::block_on(rettui::manage::restore_files(runner.data_dir.clone(), file, passphrase)),
+        Err(e) => Err(format!("rettui didn't stop cleanly, so nothing was restored: {e}")),
+    };
+    let started = start(app, runner.data_dir.as_deref(), &runner.token_path, runner.port, &runner.server);
+    RESTARTING.store(false, Ordering::SeqCst);
+    let home = match started {
+        Ok(home) => home,
+        Err(e) => {
+            return Err(format!(
+                "{}rettui couldn't start again: {e}. Quit the app and open it again.",
+                restored.map(|d| format!("{d}. ")).unwrap_or_default()
+            ));
+        }
+    };
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.navigate(home);
+    }
+    restored
 }
 
 /// Stops rettui, if it started, and waits: it saves everything first.

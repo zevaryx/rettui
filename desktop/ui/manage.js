@@ -153,6 +153,43 @@ $('backup-form').addEventListener('submit', async (e) => {
   }
 });
 
+// ---- Restore ----
+$('restore-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const file = f.file.value;
+  const passphrase = f.passphrase.value || null;
+  const button = f.querySelector('button');
+  button.disabled = true;
+  try {
+    say('Looking into the backup…');
+    let held;
+    try {
+      held = await invoke('manage_restore_check', { file, passphrase });
+    } catch (err) {
+      return fail(err);
+    }
+    // A sealed one asks for its passphrase first.
+    if (!held.checked) {
+      $('restore-passphrase').hidden = false;
+      f.passphrase.focus();
+      return say('This backup is sealed: type its passphrase, then restore again.');
+    }
+    say('');
+    const what = `${held.files} files from a rettui ${held.version} backup${held.identity ? ', with its identity' : ', without an identity: rettui makes a new one, with new addresses'}`;
+    if (!(await confirmed(`Restore ${what}? It replaces the settings, contacts, messages${held.identity ? ' and identity' : ''} of the identity in use. What's there now is moved aside, not deleted. rettui stops for a moment, so anything it's sending or receiving right now is lost, and the main window reloads.`, 'Restore'))) return;
+    say('Restoring: rettui is stopping and will start again…');
+    const done = await act(() => invoke('manage_restore', { file, passphrase }), (text) => `${text}.`);
+    if (done != null) {
+      f.reset();
+      $('restore-passphrase').hidden = true;
+      loadIdentities();
+    }
+  } finally {
+    button.disabled = false;
+  }
+});
+
 // ---- Pipe interfaces ----
 async function loadPipes() {
   let data;

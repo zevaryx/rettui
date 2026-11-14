@@ -37,13 +37,20 @@
 </section>
 
 <section id="backup" hidden>
-  <p class="help">Settings, contacts, messages and your identity in one file, to restore on another computer or after a reinstall with <code>rettui restore</code>. Attachments are left out. Seal it with a passphrase so the file can be kept anywhere; without one, it holds your key in the clear.</p>
+  <p class="help">Settings, contacts, messages and your identity in one file, to restore on another computer or after a reinstall (below, or <code>rettui restore</code>). Attachments are left out. Seal it with a passphrase so the file can be kept anywhere; without one, it holds your key in the clear.</p>
   <form id="backup-form">
     <label>Save to <input name="to" required autocomplete="off"></label>
     <label>Passphrase <span class="hint">(optional)</span> <input name="passphrase" type="password" autocomplete="new-password"></label>
     <label>Again <input name="again" type="password" autocomplete="new-password"></label>
     <p id="weak" class="warn" hidden></p>
     <button type="submit">Back up</button>
+  </form>
+  <h2>Restore a backup</h2>
+  <p class="help">Puts the backup's settings, contacts, messages and identity in place of the ones of the identity in use. What's there now is moved aside, into a <code>before-restore</code> folder in the data folder, not deleted. rettui stops while it's restored and starts again, and the main window reloads.</p>
+  <form id="restore-form">
+    <label>Backup file <input name="file" required autocomplete="off" placeholder="/path/to/rettui-backup.tar.gz"></label>
+    <label id="restore-passphrase" hidden>Its passphrase <input name="passphrase" type="password" autocomplete="off"></label>
+    <button type="submit">Restore…</button>
   </form>
 </section>
 

@@ -1,5 +1,5 @@
 //! The management window's commands: identity keys, backups that hold the
-//! identity, and pipe interfaces (which run programs). The web UI leaves
+//! identity, restoring a backup, and pipe interfaces (which run programs). The web UI leaves
 //! these out on purpose, since anyone with its login link controls it, and
 //! so the web UI's page can't call these either: they have permissions
 //! (build.rs) that only the local `manage` window is granted
@@ -102,6 +102,37 @@ pub async fn manage_back_up(window: WebviewWindow, to: String, passphrase: Optio
 pub async fn manage_passphrase_weakness(window: WebviewWindow, passphrase: String) -> Result<Option<String>, String> {
     allowed(&window)?;
     Ok(rettui::manage::passphrase_weakness(&passphrase))
+}
+
+/// What it takes to stop rettui, restore, and start it again: the
+/// arguments it was started with, and its thread.
+pub struct Runner {
+    pub data_dir: Option<std::path::PathBuf>,
+    pub token_path: std::path::PathBuf,
+    pub port: u16,
+    pub server: std::sync::Arc<std::sync::Mutex<Option<super::Server>>>,
+}
+
+#[tauri::command]
+pub async fn manage_restore_check(window: WebviewWindow, file: String, passphrase: Option<String>) -> Result<Value, String> {
+    allowed(&window)?;
+    rettui::manage::restore_check(&file, passphrase).await
+}
+
+/// Restore a backup: look into it first (so a wrong passphrase or a file
+/// that isn't a backup stops nothing), then stop rettui, restore, and start
+/// rettui again, on the same port and login so the main window reloads into it.
+#[tauri::command]
+pub async fn manage_restore(window: WebviewWindow, file: String, passphrase: Option<String>) -> Result<String, String> {
+    allowed(&window)?;
+    let held = rettui::manage::restore_check(&file, passphrase.clone()).await?;
+    if held["checked"] != true {
+        return Err("This backup is sealed: it needs its passphrase".into());
+    }
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || super::restore_and_restart(&app, &file, passphrase))
+        .await
+        .map_err(|_| "Restoring stopped unexpectedly".to_string())?
 }
 
 #[tauri::command]
