@@ -56,6 +56,13 @@ repository.
   **Mark read** marks it read without opening rettui. A conversation's
   notification shows its last few messages, one under another, until it's
   read or swiped aside.
+- A person's messages are a conversation to Android (11 and later): their
+  picture (the same face as in rettui) is by the messages, and Android
+  lists them with your other conversations, with settings of their own.
+  After a reply, the notification shows what was sent for a moment, then
+  goes. Rooms (channels) and games have notification settings of their own
+  too, apart from Messages, so one can be turned off or made quiet without
+  the others (Android's settings for rettui, *Notifications*).
 - Attaching a file offers the camera beside the files. A photo taken
   goes into the message, and isn't kept in the phone's gallery.
 - With rettui's notifications turned off, the app says so once, with
