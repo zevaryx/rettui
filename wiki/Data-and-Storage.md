@@ -39,21 +39,30 @@ rettui keeps its data in `~/.local/share/rettui/`:
   it can't be read when rettui starts, rettui starts without your messages
   and moves the file aside as `store-unreadable-<time>.json.gz`, rather
   than saving over it, and the log says so.
-- `peers.json.gz`: the LXMF peers, NomadNet nodes and propagation nodes
-  heard. Announces arrive several a second on a busy network, so they are
-  saved apart from the store, which is then only written again when a
-  conversation changes. A new peer, or a changed name, is saved within 10
-  seconds; only hearing one again, every 5 minutes. A peer not heard from in
-  30 days is forgotten (with its key in `known_identities.json`), unless
-  you have a conversation with it, it's a contact, a saved page or hub is
-  on it, or it's your propagation node. Earlier versions kept them in the
-  store; the first launch after upgrading moves them.
+- `rettui.db`: the LXMF peers, NomadNet nodes and propagation nodes heard,
+  and the public keys they announced, so you can reach peers that are
+  offline now. It's an SQLite database (open it with `sqlite3 rettui.db`),
+  with the files `rettui.db-wal` and `rettui.db-shm` beside it while rettui
+  runs. Announces arrive several a second on a busy network, so only what
+  changed is written: the peers once a minute (every 5 minutes when no
+  browser has the web UI open, as on a phone with its screen off), the keys
+  about once a minute, and both when rettui exits. A peer not heard from in
+  30 days is forgotten with its key, unless you have a conversation with
+  it, it's a contact, a saved page or hub is on it, or it's your
+  propagation node.
+
+  Versions before 2.0 kept these in `peers.json.gz` and
+  `known_identities.json`, rewriting them whole every few seconds, which on
+  a phone cost far more battery and storage. The first launch of 2.0 moves
+  them into `rettui.db`, renames them `peers.json.gz.migrated` and
+  `known_identities.json.migrated`, and says so on the Status tab. **Versions
+  before 2.0 can't read `rettui.db`:** if you go back to one, it hears peers
+  and their keys again as they announce. A `rettui.db` made by a newer
+  version of rettui isn't opened at all, so it isn't damaged; the Status tab
+  says so, and peers heard meanwhile aren't kept.
 - `archive/`: older messages (see *Message history* below), one file per
   month, such as `archive/2026-09.jsonl.gz`: one message per line, with the
   conversation it's from. Read it with `zcat archive/*.jsonl.gz | jq`.
-- `known_identities.json`: public keys from LXMF and propagation-node
-  announces, so you can reach peers that are offline now. Saved every 30
-  seconds (when it changed) and when rettui exits.
 - `tickets.json`: [stamp tickets](Messaging#blocking-and-spam) you gave
   trusted contacts and ones they gave you. Only you can read it.
 - `games.json`: your [games](Games) with contacts, as LRGP keeps them (the
@@ -156,8 +165,8 @@ command line, and the [Android app](Android) has a screen of its own for them.
 
 A backup is one `.tar.gz` file holding what's yours to keep:
 `settings.json`, the store (conversations, contacts, saved pages, RRC
-hubs), `peers.json.gz`, the `archive/` of older messages,
-`known_identities.json`, `tickets.json`, your [games](Games) (`games.json`), RRC history (`rrc/`), your node's
+hubs), `rettui.db` (peers and their keys, copied whole even while rettui
+is saving to it), the `archive/` of older messages, `tickets.json`, your [games](Games) (`games.json`), RRC history (`rrc/`), your node's
 pages and files (`node/`), your hub's settings and rooms (`rrc-hub/`) and,
 unless left out, the `identity` (and the hub's, `rrc-hub-identity`). Caches,
 the log, ratchets, copies of repositories (`repos/`), the propagation node's messages and the web UI's login,

@@ -139,6 +139,8 @@ pub fn state(app: &App) -> Value {
         "rns_config": app.settings.rns_config,
         "data_dir": app.paths.store.parent().map(|p| p.display().to_string()),
         "known": app.store.peers.len(),
+        // The database was made, or can't be used (see `Store::db_notice`).
+        "db_notice": app.db_notice.as_ref().map(|text| json!({ "text": text, "refused": app.store.db_refused })),
         // Off only because they have no `enabled` line.
         "interfaces_off": app.interfaces_off,
         "interfaces": app.interfaces.iter().map(|i| json!({

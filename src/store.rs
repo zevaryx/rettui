@@ -5,9 +5,9 @@
 //! upgrading converts the old file (see [`Store::load`]).
 //!
 //! - `store.json.gz`: conversations, saved pages, RRC hubs and the rest.
-//! - `peers.json.gz`: the peers heard. They change with every announce,
-//!   several a second on a busy network, so they have a file of their own:
-//!   saving them doesn't write every conversation again.
+//! - The peers heard are in the database (see [`crate::db`]). They change
+//!   with every announce, several a second on a busy network; versions
+//!   before 2.0 kept them in `peers.json.gz`.
 //! - `archive/<year>-<month>.jsonl.gz`: messages older than the newest ones
 //!   each conversation keeps, by the month they were sent (see
 //!   [`encode_archive`]). Added to, never rewritten; whole months are
@@ -547,8 +547,8 @@ pub struct Store {
     /// Who is blocked, for the services you host (see [`Store::sync_blocked`]).
     #[serde(skip)]
     pub blocked: Blocked,
-    /// Keyed by destination hash (hex). Saved in `peers.json.gz` (see
-    /// [`encode_peers`]); only read here, from stores of earlier versions.
+    /// Keyed by destination hash (hex). Saved in the database (see
+    /// [`crate::db`]); only read here, from stores of earlier versions.
     #[serde(skip_serializing)]
     pub peers: HashMap<String, Peer>,
     /// Keyed by the remote LXMF destination hash (hex).
@@ -593,10 +593,13 @@ pub struct Store {
     /// of their own): write it again without them.
     #[serde(skip)]
     pub rewrite_store: bool,
-    /// The peers couldn't be written to their own file while loading: try
-    /// again with the next save.
+    /// Something to tell whoever is using rettui about the database (see
+    /// [`Store::load_with_db`]): it was made, or it can't be used.
     #[serde(skip)]
-    pub rewrite_peers: bool,
+    pub db_notice: Option<String>,
+    /// The database couldn't be opened: the peers heard aren't saved.
+    #[serde(skip)]
+    pub db_refused: bool,
 }
 
 /// An rngit repository kept in the Repos tab.
@@ -623,6 +626,10 @@ pub struct SavedMirror {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head: Option<String>,
 }
+
+/// What [`Store::db_notice`] says once the files of an earlier version have
+/// moved into the database.
+pub const MOVED_TO_DB: &str = "rettui 2.0 moved the peers and keys it has heard into a database (rettui.db),      which saves only what changes, so it uses far less battery and storage. Versions of rettui before 2.0 can't read it:      if you go back to one, it hears peers and their keys again as they announce.";
 
 /// Days a peer is kept after it was last heard (see [`Store::prune_peers`]).
 pub const PEER_DAYS: i64 = 30;
@@ -679,7 +686,12 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     }
 }
 
-/// `peers.json.gz`'s contents.
+/// The peers in a `peers.json.gz` of an earlier version.
+pub fn read_peers_file(path: &Path) -> Result<HashMap<String, Peer>> {
+    read_json(path)
+}
+
+/// `peers.json.gz`'s contents, as versions before 2.0 kept the peers.
 pub fn encode_peers(peers: &HashMap<String, Peer>) -> Result<Vec<u8>> {
     gzip_json(peers)
 }
@@ -893,8 +905,6 @@ impl Store {
     /// removed. If any step fails, the old file stays and is used.
     pub fn load(path: &Path) -> Result<Self> {
         let legacy = legacy_path(path);
-        // Whether store.json.gz itself still holds the peers.
-        let mut holds_peers = false;
         let mut store = if !path.exists() && legacy.exists() {
             match Self::migrate(&legacy, path) {
                 Ok(store) => store,
@@ -906,17 +916,10 @@ impl Store {
                 }
             }
         } else if path.exists() {
-            let store: Self = read_json(path)?;
-            holds_peers = !store.peers.is_empty();
-            store
+            read_json(path)?
         } else {
             Self::default()
         };
-        store.load_peers(&peers_path(path), holds_peers);
-        // Names heard before they were cleaned (see [`crate::names`]).
-        for peer in store.peers.values_mut() {
-            peer.name = peer.name.take().and_then(|name| crate::names::clean(&name));
-        }
         // Anything still "sending" was interrupted by the last shutdown.
         for conversation in store.conversations.values_mut() {
             conversation.separate_moves();
@@ -952,35 +955,55 @@ impl Store {
         store
     }
 
-    /// The peers, from their own file. A store of an earlier version holds
-    /// them itself: they are written to their file now, before the store is
-    /// written again without them (`holds_peers`), so they are never only
-    /// in memory.
-    fn load_peers(&mut self, path: &Path, holds_peers: bool) {
-        if path.exists() {
-            match read_json(path) {
-                Ok(peers) => {
-                    // Any still in the store are older than the file's.
-                    self.rewrite_store = holds_peers;
-                    self.peers = peers;
+    /// [`Store::load_or_empty`], with the peers from the database at `db`.
+    /// The first time, the files earlier versions kept them in (and the
+    /// peers a store older still held itself) are moved into it, and
+    /// [`Store::db_notice`] says older versions can't read it. A database
+    /// that can't be used (made by a newer rettui) is left alone: the peers
+    /// heard are kept in memory only, and the notice says so.
+    pub fn load_with_db(path: &Path, db: &Path) -> Self {
+        let mut store = Self::load_or_empty(path);
+        // Only a store of an earlier version holds peers itself.
+        let held = std::mem::take(&mut store.peers);
+        match crate::db::open(db) {
+            Ok(mut conn) => {
+                let base = path.parent().unwrap_or(Path::new("."));
+                let migrated = crate::db::migrate_files(&mut conn, base, &held);
+                let held_in = migrated.peers_in && !held.is_empty();
+                store.migration_notes.extend(migrated.notes);
+                if migrated.moved {
+                    store.db_notice = Some(MOVED_TO_DB.into());
                 }
-                Err(e) => {
-                    tracing::warn!("could not read {}: {e:#}", path.display());
-                    self.migration_notes.push(format!("Could not read peers.json.gz ({e:#}); peers are listed again as they announce"));
+                match crate::db::load_peers(&conn) {
+                    Ok(peers) => {
+                        // The store is written again without them once they're in.
+                        store.rewrite_store = held_in;
+                        store.peers = peers;
+                    }
+                    Err(e) => {
+                        store
+                            .migration_notes
+                            .push(format!("Couldn't read the peers from rettui.db ({e:#}); they're listed again as they announce"));
+                        store.peers = held;
+                    }
                 }
             }
-        } else if !self.peers.is_empty() {
-            match encode_peers(&self.peers).and_then(|bytes| write_private(path, &bytes)) {
-                Ok(()) => {
-                    self.rewrite_store = holds_peers;
-                    self.migration_notes.push(format!("Moved {} peers from store.json.gz to peers.json.gz", self.peers.len()));
-                }
-                Err(e) => {
-                    self.rewrite_peers = true;
-                    self.migration_notes.push(format!("Could not write peers.json.gz: {e:#}"));
-                }
+            Err(e) => {
+                tracing::warn!("couldn't open {}: {e:#}", db.display());
+                store.migration_notes.push(format!("Couldn't open rettui.db: {e:#}"));
+                store.db_notice = Some(format!(
+                    "rettui.db, where rettui keeps the peers and keys it has heard, couldn't be opened ({e:#}). \
+                     They're heard again as they announce, but not kept after rettui stops."
+                ));
+                store.db_refused = true;
+                store.peers = held;
             }
         }
+        // Names heard before they were cleaned (see [`crate::names`]).
+        for peer in store.peers.values_mut() {
+            peer.name = peer.name.take().and_then(|name| crate::names::clean(&name));
+        }
+        store
     }
 
     /// The file's contents: compressed JSON (without the peers).
@@ -1035,7 +1058,8 @@ impl Store {
             recent_emoji: self.recent_emoji.clone(),
             migration_notes: Vec::new(),
             rewrite_store: false,
-            rewrite_peers: false,
+            db_notice: None,
+            db_refused: false,
         }
     }
 
@@ -1269,19 +1293,20 @@ mod tests {
         let mut old = sample();
         old.conversations.values_mut().next().unwrap().messages[0].state = MessageState::Sending;
         std::fs::write(&legacy, legacy_json(&old)).unwrap();
-        let store = Store::load(&path).unwrap();
+        let db = crate::db::path(&dir);
+        let store = Store::load_with_db(&path, &db);
         assert!(!legacy.exists(), "the old file is removed after converting");
         assert!(std::fs::read(&path).unwrap().starts_with(&GZIP_MAGIC));
-        assert!(peers_path(&path).exists(), "the peers go to their own file");
-        assert_eq!(store.migration_notes.len(), 1);
-        assert!(store.migration_notes[0].starts_with("Converted store.json"));
-        assert!(!store.rewrite_store && !store.rewrite_peers);
+        assert!(!peers_path(&path).exists(), "the peers went on into the database");
+        assert!(store.migration_notes[0].starts_with("Converted store.json"), "{:?}", store.migration_notes);
+        assert!(store.migration_notes.iter().any(|n| n.starts_with("Moved 1 peer(s) into rettui.db")), "{:?}", store.migration_notes);
+        assert_eq!(store.db_notice.as_deref(), Some(MOVED_TO_DB));
         assert_eq!(store.peers.len(), 1);
         let message = &store.conversations.values().next().unwrap().messages[0];
         assert_eq!(message.state, MessageState::Failed("interrupted".into()));
         // The next launch reads the new files, with no note.
-        let again = Store::load(&path).unwrap();
-        assert!(again.migration_notes.is_empty());
+        let again = Store::load_with_db(&path, &db);
+        assert!(again.migration_notes.is_empty() && again.db_notice.is_none());
         assert_eq!(again.peers.len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1309,7 +1334,7 @@ mod tests {
         peers.get_mut(&"ab".repeat(16)).unwrap().name = Some("Ali\u{202E}ce\u{200B}".into());
         Store::default().save(&path).unwrap();
         write_private(&peers_path(&path), &encode_peers(&peers).unwrap()).unwrap();
-        assert_eq!(Store::load(&path).unwrap().display_name(&"ab".repeat(16)), "Alice");
+        assert_eq!(Store::load_with_db(&path, &crate::db::path(&dir)).display_name(&"ab".repeat(16)), "Alice");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1362,11 +1387,13 @@ mod tests {
         store.save(&path).unwrap();
         assert!(!unzip(&path).contains("Alice"), "the store file leaves the peers out");
         assert!(store.snapshot().peers.is_empty());
-        write_private(&peers_path(&path), &encode_peers(&store.peers).unwrap()).unwrap();
-        let loaded = Store::load(&path).unwrap();
+        let db = crate::db::path(&dir);
+        let peers: Vec<(String, Peer)> = store.peers.clone().into_iter().collect();
+        crate::db::save_peers(&mut crate::db::open(&db).unwrap(), &peers, &[]).unwrap();
+        let loaded = Store::load_with_db(&path, &db);
         assert_eq!(loaded.peers.len(), 1);
         assert_eq!(loaded.display_name(&"ab".repeat(16)), "Alice");
-        assert!(!loaded.rewrite_store && !loaded.rewrite_peers && loaded.migration_notes.is_empty());
+        assert!(!loaded.rewrite_store && loaded.migration_notes.is_empty() && loaded.db_notice.is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1374,23 +1401,31 @@ mod tests {
     fn peers_move_out_of_a_store_from_the_previous_version() {
         let dir = temp_dir("peers-move");
         let path = dir.join("store.json.gz");
+        let db = crate::db::path(&dir);
         write_with_peers(&sample(), &path);
-        let store = Store::load(&path).unwrap();
+        let store = Store::load_with_db(&path, &db);
         assert_eq!(store.peers.len(), 1);
-        assert!(peers_path(&path).exists(), "written while loading, before the store drops them");
         assert!(store.rewrite_store, "the store is written again without them");
-        assert!(store.migration_notes[0].starts_with("Moved 1 peer"), "{:?}", store.migration_notes);
-        // Stopped before the store was written again: the peers' file wins,
-        // and the store is still due to be rewritten.
+        assert!(store.migration_notes.iter().any(|n| n.starts_with("Moved 1 peer(s) into rettui.db")), "{:?}", store.migration_notes);
+        // Stopped before the store was written again: the database keeps
+        // whichever was heard last, and the store is still due a rewrite.
         let mut newer = sample();
-        newer.peers.values_mut().for_each(|p| p.name = Some("Alice B".into()));
-        write_private(&peers_path(&path), &encode_peers(&newer.peers).unwrap()).unwrap();
-        let again = Store::load(&path).unwrap();
+        newer.peers.values_mut().for_each(|p| p.last_seen += 10);
+        let newer: Vec<(String, Peer)> = newer
+            .peers
+            .into_iter()
+            .map(|(k, mut p)| {
+                p.name = Some("Alice B".into());
+                (k, p)
+            })
+            .collect();
+        crate::db::save_peers(&mut crate::db::open(&db).unwrap(), &newer, &[]).unwrap();
+        let again = Store::load_with_db(&path, &db);
         assert_eq!(again.display_name(&"ab".repeat(16)), "Alice B");
-        assert!(again.rewrite_store && again.migration_notes.is_empty());
+        assert!(again.rewrite_store);
         // Once rewritten, nothing is left to do.
         again.save(&path).unwrap();
-        let last = Store::load(&path).unwrap();
+        let last = Store::load_with_db(&path, &db);
         assert!(!last.rewrite_store && last.peers.len() == 1);
         std::fs::remove_dir_all(dir).unwrap();
     }

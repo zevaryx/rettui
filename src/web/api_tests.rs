@@ -96,6 +96,18 @@ async fn logging_in_and_the_files_every_page_needs() {
 }
 
 #[tokio::test]
+async fn the_database_says_older_versions_cant_read_it() {
+    let store = crate::store::Store { db_notice: Some(crate::store::MOVED_TO_DB.into()), ..Default::default() };
+    let web = TestWeb::start_with("db-notice", crate::config::Settings::default(), store);
+    let state = web.get("/api/state?log=1").await.json();
+    assert_eq!(state["db_notice"]["text"], crate::store::MOVED_TO_DB);
+    assert_eq!(state["db_notice"]["refused"], false);
+    assert!(state["log"].to_string().contains("can't read it"), "and in the log");
+    // Nothing to say otherwise.
+    assert!(TestWeb::start("no-db-notice").get("/api/state").await.json()["db_notice"].is_null());
+}
+
+#[tokio::test]
 async fn state_settings_and_the_little_things() {
     let web = TestWeb::start("state");
     let state = web.get("/api/state").await.json();

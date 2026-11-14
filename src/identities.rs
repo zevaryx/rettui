@@ -148,7 +148,11 @@ pub fn add(paths: &Paths, settings: &Settings, name: &str, identity: Option<Iden
         };
         own.save(&dir.join("settings.json")).map_err(|e| e.to_string())?;
         // Others' keys, heard already: so it can write to them at once.
-        let _ = std::fs::copy(&paths.known_identities, dir.join("known_identities.json"));
+        if paths.db.exists()
+            && let Err(e) = crate::db::copy_known(&paths.db, &crate::db::path(&dir))
+        {
+            tracing::warn!("couldn't copy the keys heard to the new identity: {e:#}");
+        }
         Ok::<(), String>(())
     })();
     if let Err(e) = made {
@@ -202,7 +206,9 @@ mod tests {
         let first = crate::config::load_identity(&paths.identity).unwrap();
         let settings = Settings { display_name: "Amy".into(), location: Some("1, 2".into()), node_enabled: true, ..Settings::default() };
         settings.save(&paths.settings).unwrap();
-        std::fs::write(&paths.known_identities, "{}").unwrap();
+        let mut db = crate::db::open(&paths.db).unwrap();
+        crate::db::save_known(&mut db, &[("aa".repeat(16), crate::db::Known { key: vec![1; 64], app_data: None })], &[]).unwrap();
+        drop(db);
         let [one] = list(&root).try_into().unwrap();
         assert_eq!((one.id.as_str(), one.name.as_str(), one.active), ("", "Amy", true));
         assert_eq!(one.lxmf, crate::app::identity::lxmf_address(&first));
@@ -214,7 +220,7 @@ mod tests {
         assert_eq!((work.name.as_str(), work.active, work.id.len()), ("Amy at work", false, 16));
         let theirs = Settings::load(&work.dir.join("settings.json")).unwrap();
         assert_eq!((theirs.location, theirs.node_enabled, theirs.clock), (None, false, settings.clock.clone()));
-        assert!(work.dir.join("known_identities.json").is_file());
+        assert_eq!(crate::db::load_known(&crate::db::open(&crate::db::path(&work.dir)).unwrap()).unwrap().len(), 1, "the keys heard");
         assert_eq!(list(&root).len(), 2);
         // One brought along; not twice, and none nameless.
         let brought = Identity::new();

@@ -184,6 +184,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let info_height = 12
         + u16::from(!steps.is_empty())
         + u16::from(app.update_available().is_some())
+        + u16::from(app.db_notice.is_some())
         + u16::from(app.hub.status != NodeStatus::Off)
         + u16::from(app.git_host.status != NodeStatus::Off)
         + u16::from(app.rncp_in.status != crate::app::rncp_in::Listening::Off)
@@ -240,6 +241,11 @@ pub(super) fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![label("Known"), Span::raw(format!("{} destinations", app.store.peers.len()))]),
     ];
     let mut lines = lines;
+    // The database was made, or can't be used: what that means, in full in the log.
+    if let Some(notice) = &app.db_notice {
+        let color = if app.store.db_refused { Color::LightRed } else { Color::Yellow };
+        lines.push(Line::from(vec![label("Peers and keys"), Span::styled(notice.clone(), Style::default().fg(color))]));
+    }
     if app.node.status == NodeStatus::Running {
         let text = format!("{} served (Node tab)", app.node.served.label());
         lines.insert(7, Line::from(vec![label("Hosting a node"), Span::styled("● ", Style::default().fg(Color::Green)), Span::raw(text)]));
@@ -517,6 +523,20 @@ mod tests {
             key(&mut app, crossterm::event::KeyCode::Down);
         }
         assert_eq!(app.settings_list.selected(), Some(Section::Hosting.fields().count() - 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_database_notice_shows_until_rettui_starts_again() {
+        let dir = std::env::temp_dir().join(format!("rettui-db-notice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store { db_notice: Some(crate::store::MOVED_TO_DB.into()), ..Store::default() };
+        let mut app = crate::app::test_app(&dir, Settings::default(), store);
+        app.tab = crate::app::Tab::Status;
+        let shown = screen(&mut app);
+        let line = shown.lines().find(|l| l.contains("Peers and keys")).expect("a line for it");
+        assert!(line.contains("rettui 2.0 moved the peers"), "{line}");
+        assert!(app.log.iter().any(|l| l.contains("Versions of rettui before 2.0 can't read it")), "in full in the log");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

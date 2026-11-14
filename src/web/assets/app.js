@@ -8030,6 +8030,8 @@ app.views.status = {
           ? 'Download a backup: settings, contacts and messages, without your identity. Identity and backups (the app\'s own screen) saves the identity too, and restores.'
           : 'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' })),
       label('Known'), el('span', { text: `${s.known} destinations` }),
+      // The database was made (older versions can't read it), or can't be used.
+      ...(s.db_notice ? [label('Peers and keys'), el('div', { style: `max-width:40em;color:var(${s.db_notice.refused ? '--red' : '--yellow'})`, text: s.db_notice.text })] : []),
       label('Notifications'), notifications.describe(),
       label('Theme'), el('select', { title: 'This browser\'s colours', onchange: (e) => theme.set(e.target.value) },
         [['auto', 'As the device is set'], ['dark', 'Dark'], ['light', 'Light']]

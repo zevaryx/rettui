@@ -1904,30 +1904,42 @@ mod tests {
         let announce =
             crate::net::NetEvent::Announce { kind: crate::net::PeerKind::Lxmf, hash: [7; 16], name: Some("Bob".into()), hops: 2 };
         app.on_net(announce);
-        assert!(app.peers_dirty && !app.store_dirty);
+        assert!(app.peers_changed.contains(&"07".repeat(16)) && !app.store_dirty);
         let paths = app.paths.clone();
         app.finish_saves();
         assert!(!paths.store.exists(), "no conversation changed");
-        let loaded = Store::load(&paths.store).unwrap();
+        let loaded = Store::load_with_db(&paths.store, &paths.db);
         assert_eq!(loaded.display_name(&"07".repeat(16)), "Bob");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn heard_again_saves_later_and_old_peers_are_forgotten() {
+    fn peers_are_saved_a_minute_at_a_time_and_old_ones_forgotten() {
         let dir = temp_dir("heard-again");
         let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
         let announce = |hash| crate::net::NetEvent::Announce { kind: crate::net::PeerKind::Lxmf, hash, name: Some("Bob".into()), hops: 2 };
+        let saved = |app: &mut App| {
+            app.saver.finish();
+            app.saver = super::super::saver::Saver::new();
+            crate::db::load_peers(&crate::db::open(&app.paths.db).unwrap()).unwrap()
+        };
         app.on_net(announce([7; 16]));
+        // Not within a minute of starting: a busy network announces several a second.
         app.save_if_dirty();
-        // The same again: only when it was heard changed, saved in a while.
-        app.on_net(announce([7; 16]));
-        assert!(!app.peers_dirty && app.peers_seen_dirty);
+        assert!(saved(&mut app).is_empty(), "not yet");
+        app.peers_saved -= super::super::PEERS_SAVE_EVERY;
         app.save_if_dirty();
-        assert!(app.peers_seen_dirty, "not yet");
-        app.peers_saved -= super::super::PEERS_SEEN_EVERY;
+        assert!(app.peers_changed.is_empty());
+        assert_eq!(saved(&mut app)[&"07".repeat(16)].name.as_deref(), Some("Bob"));
+        // With no one looking, every five minutes.
+        app.watched = false;
+        app.on_net(announce([9; 16]));
+        app.peers_saved -= super::super::PEERS_SAVE_EVERY;
         app.save_if_dirty();
-        assert!(!app.peers_seen_dirty);
+        assert!(!app.peers_changed.is_empty(), "not yet");
+        app.peers_saved -= super::super::PEERS_SAVE_UNWATCHED;
+        app.save_if_dirty();
+        assert_eq!(saved(&mut app).len(), 2);
 
         // Not heard from in over a month, nor written to: forgotten, with its key.
         let old = "08".repeat(16);
@@ -1941,6 +1953,8 @@ mod tests {
             std::iter::from_fn(|| net.try_recv().ok()).any(|c| matches!(c, NetCommand::ForgetKnown(ref h) if h == &vec![[8; 16]]));
         assert!(forgotten);
         app.finish_saves();
+        let kept = crate::db::load_peers(&crate::db::open(&app.paths.db).unwrap()).unwrap();
+        assert!(!kept.contains_key(&old) && kept.contains_key(&"07".repeat(16)), "forgotten in the database too");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
