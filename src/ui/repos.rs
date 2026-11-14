@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 use rngit::client::WorkScope;
 use unicode_width::UnicodeWidthStr;
 
@@ -124,7 +124,7 @@ fn draw_hosted_access(frame: &mut Frame, app: &mut App, area: Rect) {
         width,
         height: height.min(area.height),
     };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let hint = " Space tick · a add someone · Enter save · Esc cancel ";
     let title = format!("Who may use {}", access.whose());
     let popup = block(&title, true).title_bottom(Line::styled(hint, Style::default().fg(dim())));

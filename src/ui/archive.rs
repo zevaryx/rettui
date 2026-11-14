@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use super::{accent, block, dim, wrap};
 use crate::app::App;
@@ -64,7 +64,7 @@ pub(super) fn draw_archive(frame: &mut Frame, app: &mut App) {
     let scroll = reader.scroll.min(most);
     let first = most - scroll;
     let shown: Vec<Line> = lines.into_iter().skip(first).take(rows).collect();
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     frame.render_widget(outer, rect);
     frame.render_widget(Paragraph::new(shown), inner);
     app.regions.archive = rect;

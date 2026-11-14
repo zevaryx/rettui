@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use super::{accent, block, dim, selected_bg};
 use crate::app::App;
@@ -21,7 +21,7 @@ pub(super) fn draw_forward(frame: &mut Frame, app: &mut App) {
     let rect = Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height };
     let outer = block("Forward to", true);
     let inner = outer.inner(rect);
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     frame.render_widget(outer, rect);
     app.regions.forward_box = rect;
 

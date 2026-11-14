@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use super::{accent, ago, block, dim, picked_style, wrap};
@@ -76,8 +76,10 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
         line.spans.push(Span::styled(format!(" {} ", icon.icon), colours));
         lines.push(line);
     } else {
-        // No icon of their own: their face (LXMFace's, of their address).
-        for (i, row) in super::face::full(&key).into_iter().enumerate() {
+        // No icon of their own: their face (LXMFace's, of their address),
+        // where the screen has the rows for it.
+        let rows = if area.height >= 28 { super::face::full(&key) } else { Vec::new() };
+        for (i, row) in rows.into_iter().enumerate() {
             let mut line = field(if i == 0 { "Face" } else { "" }, "");
             line.spans.extend(row);
             lines.push(line);
@@ -112,13 +114,20 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
     lines.push(Line::raw(""));
     let actions = app.card_actions(&key);
     let (rows, buttons) = button_rows(&actions, inner_width);
+    // On a short screen the buttons stay whole: what's above them gives way
+    // from the bottom (notes first), keeping the name and address.
+    let room = (area.height.saturating_sub(2) as usize).saturating_sub(rows.len()).max(2);
+    if lines.len() > room {
+        lines.truncate(room - 1);
+        lines.push(Line::styled("…", Style::default().fg(dim())));
+    }
     let first_button_row = lines.len();
     lines.extend(rows);
 
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect =
         Rect { x: area.x + (area.width.saturating_sub(width)) / 2, y: area.y + (area.height.saturating_sub(height)) / 2, width, height };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let card = block("Contact", true).padding(ratatui::widgets::Padding::horizontal(1));
     let inner = card.inner(rect);
     frame.render_widget(Paragraph::new(lines).block(card), rect);

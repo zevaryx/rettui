@@ -7,7 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
 use unicode_width::UnicodeWidthStr;
 
@@ -515,7 +515,7 @@ pub(super) fn draw_paper(frame: &mut Frame, app: &App) {
         width,
         height: height.min(area.height),
     };
-    frame.render_widget(Clear, rect);
+    super::clear_popup(frame, rect);
     let (title, caption) = match view.kind {
         QrKind::Paper => ("Paper message", "Scan it into the recipient's app (Sideband, rettui…)"),
         QrKind::Address => ("Your address", "Scan it in Columba or rettui to add you as a contact"),

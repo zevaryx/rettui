@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use rngit::client::WorkScope;
 use unicode_width::UnicodeWidthStr;
 
@@ -786,8 +786,8 @@ pub(super) fn draw_keys(frame: &mut Frame, app: &App) {
     let column = key_width + 1 + action_width + 3;
     let area = frame.area();
     let inner_room = (area.width as usize).saturating_sub(6);
-    let columns = (inner_room / column).clamp(1, 3);
-    let rows = |list: KeyList| -> Vec<Line<'static>> {
+    let most = (inner_room / column).max(1);
+    let rows = |list: KeyList, columns: usize| -> Vec<Line<'static>> {
         list.chunks(list.len().div_ceil(columns).max(1))
             .fold(Vec::<Vec<Span<'static>>>::new(), |mut lines, chunk| {
                 for (row, (key, action)) in chunk.iter().enumerate() {
@@ -804,20 +804,32 @@ pub(super) fn draw_keys(frame: &mut Frame, app: &App) {
             .map(Line::from)
             .collect()
     };
-    let mut lines = rows(keys.keys);
+    // Three columns at most, unless more are needed to fit the screen's
+    // height (and its width allows them).
+    // The footer's row stays clear.
+    let screen_rows = (area.height as usize).saturating_sub(1);
+    let tall = |columns: usize| rows(keys.keys, columns).len() + rows(everywhere, columns).len() + 4;
+    let columns = (most.min(3)..=most).find(|&c| tall(c) <= screen_rows).unwrap_or(most);
+    let mut lines = rows(keys.keys, columns);
     lines.push(Line::default());
     let heading = if keys.typing { "While typing, too" } else { "In every tab" };
     lines.push(Line::from(Span::styled(heading, Style::default().fg(dim()))));
-    lines.extend(rows(everywhere));
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled("Any key closes this list", Style::default().fg(dim()))));
+    lines.extend(rows(everywhere, columns));
+    // Still too many for the screen: say so, rather than cut them silently.
+    let room = screen_rows.saturating_sub(2);
+    if lines.len() > room {
+        lines.truncate(room.saturating_sub(1));
+        lines.push(Line::from(Span::styled("… more in a bigger terminal", Style::default().fg(dim()))));
+    }
 
     let width = (column * columns + 4).min(area.width as usize) as u16;
-    let height = (lines.len() + 2).min(area.height as usize) as u16;
-    let rect = Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height };
-    frame.render_widget(Clear, rect);
+    let height = (lines.len() + 2).min(screen_rows) as u16;
+    let rect = Rect { x: area.x + (area.width - width) / 2, y: area.y + (screen_rows as u16 - height) / 2, width, height };
+    super::clear_popup(frame, rect);
     let title = format!("Keys · {}", keys.title);
-    frame.render_widget(Paragraph::new(lines).block(block(&title, true).padding(ratatui::widgets::Padding::horizontal(1))), rect);
+    let closes = Line::styled(" Any key closes this list ", Style::default().fg(dim()));
+    let list_block = block(&title, true).title_bottom(closes).padding(ratatui::widgets::Padding::horizontal(1));
+    frame.render_widget(Paragraph::new(lines).block(list_block), rect);
 }
 
 #[cfg(test)]

@@ -2572,3 +2572,25 @@ fn empty_panes_and_cut_values_at_80_columns() {
     let folder = screen.lines().find(|l| l.contains("Folder")).unwrap();
     assert!(folder.contains("…│"), "{screen}");
 }
+
+/// Popups on a small terminal: the contact card keeps its buttons, the
+/// list of keys uses more columns (and says when some don't fit), and
+/// nothing behind a popup shows at its edges.
+#[test]
+fn popups_on_a_small_terminal() {
+    let mut tui = Tui::new("small-popups");
+    with_bob(&mut tui);
+    tui.app.open_newest_conversation();
+    tui.key(KeyCode::Char('c'));
+    let screen = tui.resize(50, 16);
+    assert!(screen.contains("Close (Esc)") && screen.contains("Block (b)") && screen.contains("Address"), "{screen}");
+    tui.settle();
+    tui.key(KeyCode::Char('?'));
+    let screen = tui.resize(80, 24);
+    assert!(screen.contains("Home/End") && screen.contains("Any key closes"), "{screen}");
+    // Nothing of the screen behind shows beside it, but the footer stays.
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[0].trim_end().ends_with('╮') && rows[23].contains("? keys"), "{screen}");
+    let screen = tui.resize(50, 16);
+    assert!(screen.contains("… more in a bigger terminal"), "{screen}");
+}
