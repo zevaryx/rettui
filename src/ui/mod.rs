@@ -301,8 +301,29 @@ pub(crate) fn human_bytes(bytes: u64) -> String {
     if unit == 0 { format!("{bytes} B") } else { format!("{value:.1} {}", UNITS[unit]) }
 }
 
+/// The smallest terminal the tabs are drawn in; below it, the screen asks
+/// for more room instead of drawing a jumble.
+const SMALLEST: (u16, u16) = (40, 10);
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     set_theme(&app.settings.tui_theme);
+    let area = frame.area();
+    if area.width < SMALLEST.0 || area.height < SMALLEST.1 {
+        // Nothing on screen to click.
+        app.regions = Default::default();
+        let text = format!(
+            "Make the terminal bigger: rettui needs {}×{} and this is {}×{}. q quits.",
+            SMALLEST.0, SMALLEST.1, area.width, area.height
+        );
+        let rows = wrap(&text, area.width as usize).len() as u16;
+        let at = ratatui::layout::Rect { y: area.y + area.height.saturating_sub(rows) / 2, height: rows.min(area.height), ..area };
+        let message = ratatui::widgets::Paragraph::new(text)
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(Style::default().fg(accent()));
+        frame.render_widget(message, at);
+        return;
+    }
     let [sidebar, main] =
         Layout::horizontal([Constraint::Length(sidebar_width(frame.area().width)), Constraint::Min(20)]).areas(frame.area());
     let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(main);

@@ -189,6 +189,8 @@ pub fn keys(app: &App) -> Keys {
         Tab::Channels if app.channel_search.is_some() => {
             typing("Search channels", &[("Enter", "open"), ("↑↓", "select"), ("Tab", "here/all"), ("Esc", "close"), ("^V", "paste")])
         }
+        // Nothing to pick yet: only what adds something.
+        Tab::Channels if app.channels.hubs.is_empty() => mode("Channels", &[("n", "add hub")]),
         Tab::Channels => mode(
             "Channels",
             &[
@@ -250,6 +252,7 @@ pub fn keys(app: &App) -> Keys {
                 ("Esc", "back to the list"),
             ],
         ),
+        Tab::Games if app.game_list().is_empty() => mode("Games", &[("n", "new game"), ("f", "filter")]),
         Tab::Games => mode(
             "Games",
             &[
@@ -317,6 +320,7 @@ pub fn keys(app: &App) -> Keys {
                 ("Esc", "done"),
             ],
         ),
+        Tab::Messages if app.conversation_order().is_empty() => mode("Messages", &[("n", "new conversation")]),
         Tab::Messages => mode(
             "Messages",
             &[

@@ -2663,3 +2663,25 @@ fn selected_rows_and_badges_look_alike_everywhere() {
     with_hilltop(&mut tui);
     assert_eq!(bar(&mut tui), 1, "{}", tui.draw());
 }
+
+/// A terminal too small for the tabs asks for more room, and the footer
+/// only offers what can be done while there's nothing to pick.
+#[test]
+fn a_tiny_terminal_and_footers_with_nothing_to_pick() {
+    let mut tui = Tui::new("tiny");
+    let screen = tui.resize(30, 8);
+    assert!(screen.contains("Make the terminal") && screen.contains("30×8"), "{screen}");
+    assert!(tui.app.regions.tabs.is_empty());
+    let screen = tui.resize(80, 24);
+    let footer = screen.lines().last().unwrap();
+    assert!(footer.contains("n new conversation") && !footer.contains("reply"), "{footer}");
+    tui.tab(Tab::Channels);
+    let footer = tui.draw().lines().last().unwrap().to_string();
+    assert!(footer.contains("n add hub") && !footer.contains("connect"), "{footer}");
+    tui.tab(Tab::Games);
+    let footer = tui.draw().lines().last().unwrap().to_string();
+    assert!(footer.contains("n new game") && !footer.contains("play"), "{footer}");
+    with_bob(&mut tui);
+    tui.tab(Tab::Messages);
+    assert!(tui.draw().lines().last().unwrap().contains("r reply"));
+}
