@@ -770,7 +770,7 @@ impl App {
             format!("{name} in #{room}")
         };
         let target = Opens::Room { hub: hex::encode(hub.hash), room: room.to_string() };
-        Some(Notification { title, body: notify::body(&text), target })
+        Some(Notification::new(title, notify::body(&text), target))
     }
 
     /// Room for a reply that names no room: what the user is looking at on

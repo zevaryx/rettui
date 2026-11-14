@@ -1033,7 +1033,7 @@ async fn live_updates_notifications_and_signing_out() {
     assert!(first.contains("event: notify") && first.contains("Are you there?") && first.contains("\"replay\":true"), "{first}");
     let state = web.state();
     let _ = state.changes.send((7, Scope::ALL));
-    let notification = Notification { title: "Bob".into(), body: "Again".into(), target: Target::Conversation { key: BOB.into() } };
+    let notification = Notification::new("Bob", "Again", Target::Conversation { key: BOB.into() });
     // One it already had (by its id), then a new one, then one read.
     let _ = state.notices.send(Notice::Show(1, notification.clone()));
     let _ = state.notices.send(Notice::Show(99, notification));
@@ -1092,11 +1092,11 @@ async fn background_notifications_for_browsers() {
     assert_eq!(web.post("/api/push/subscribe", subscription.clone()).await.status, StatusCode::OK);
     // Showing the web UI: nothing is pushed to it (nor sent anywhere here).
     assert_eq!(web.post("/api/push/showing", json!({ "endpoint": endpoint, "showing": true })).await.status, StatusCode::OK);
-    web.state().push.notify(&crate::app::notify::Notification {
-        title: "Bob".into(),
-        body: "Hi".into(),
-        target: crate::app::notify::Target::Conversation { key: BOB.into() },
-    });
+    web.state().push.notify(&crate::app::notify::Notification::new(
+        "Bob",
+        "Hi",
+        crate::app::notify::Target::Conversation { key: BOB.into() },
+    ));
     assert!(web.state().push.reports().is_empty());
     assert_eq!(web.post("/api/push/showing", json!({ "endpoint": endpoint })).await.status, StatusCode::OK);
     assert_eq!(web.post("/api/push/unsubscribe", json!({ "endpoint": endpoint })).await.status, StatusCode::OK);

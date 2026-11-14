@@ -591,15 +591,19 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
         for notification in app.take_notifications() {
             desktop.show(notification);
         }
-        // Reads close notifications in the web UI's browsers; the desktop
-        // keeps its own.
-        app.take_reads();
+        // Reads close notifications in the web UI's browsers, and on the
+        // desktop.
+        for tag in app.take_reads() {
+            desktop.withdraw(tag);
+        }
         app.open_paper_read();
         if let Some(e) = desktop.failure() {
             app.log(format!("Could not show a desktop notification: {e}"));
         }
-        while let Some(target) = desktop.clicked() {
-            app.open_notified(target);
+        while let Some(response) = desktop.response() {
+            if let Err(e) = app.respond(response) {
+                app.log(format!("A notification's action didn't work: {e}"));
+            }
         }
         if app.should_quit {
             break Ok(None);
