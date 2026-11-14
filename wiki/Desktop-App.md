@@ -28,7 +28,14 @@ room offers:
 A newer notification about the same chat replaces the older one, and one
 goes away when the chat is read here or on another device. Buttons show
 only where the desktop supports them (GNOME, for one, shows only the
-click). Windows and macOS show a plain notification for now.
+click).
+
+On Windows a notification is a toast with a box to write a **Reply** in and
+a **Reply** button, **Mark read**, and **Accept** and **Decline** on a
+challenge, as above. It's shown as Windows PowerShell's (a program that
+isn't installed can't have its own), so Windows PowerShell's notifications
+have to be on, and Do not disturb off, in Windows' settings. The buttons
+work while rettui runs. macOS shows a plain notification for now.
 
 ## Identities, backups and pipes
 

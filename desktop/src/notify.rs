@@ -20,6 +20,8 @@ use tauri::{AppHandle, Manager, State};
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(windows)]
+mod windows;
 
 /// What the user did with a notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,7 +82,9 @@ pub trait Backend: Send + Sync {
 fn backend(sink: Sink) -> Option<Box<dyn Backend>> {
     #[cfg(target_os = "linux")]
     return Some(Box::new(linux::Notifications::start(sink)));
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    return Some(Box::new(windows::Notifications::start(sink)));
+    #[cfg(not(any(target_os = "linux", windows)))]
     None
 }
 

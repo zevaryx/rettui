@@ -21,9 +21,11 @@ both UIs.
     whether the terminal's window comes forward is up to the desktop.
   - **Windows:** opens its conversation or room, and brings the console
     window forward where Windows allows it (Windows Terminal may not pass
-    that on). Notifications show as Windows PowerShell's, since a program
-    that isn't installed can't have its own, with the instant-message
-    sound. If none show, check that Windows PowerShell's notifications are
+    that on). A conversation's or room's toast has a box to write a
+    **Reply** in, and **Mark read**; a game's challenge has **Accept** and
+    **Decline**. A toast goes away when what it's about is read elsewhere.
+    Notifications show as Windows PowerShell's, since a program that isn't
+    installed can't have its own, with the instant-message sound. If none show, check that Windows PowerShell's notifications are
     on (Settings > System > Notifications) and Do not disturb is off.
   - **WSL:** with no Linux notification service, Windows shows them,
     through Windows PowerShell. A click can't come back to rettui there.
