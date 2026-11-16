@@ -19,8 +19,15 @@ static STAMP_CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(
 /// How long to look for an unknown sender's announce to verify a message.
 const SENDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(super) fn attachments_of(message: &LxMessage) -> Vec<Attachment> {
+/// The most files taken from one message. A message may list thousands of
+/// (even empty) files, and each one is a file on disk.
+pub const MAX_ATTACHMENTS: usize = 64;
+
+/// The files a message carries, up to [`MAX_ATTACHMENTS`], and how many more
+/// it listed.
+pub(super) fn attachments_of(message: &LxMessage) -> (Vec<Attachment>, usize) {
     let mut out = Vec::new();
+    let mut dropped = 0;
     if let Ok(Some((format, data))) = message.image_attachment() {
         let ext = if format.is_empty() { "img".to_string() } else { format };
         out.push(Attachment { name: format!("image.{ext}"), data: data.to_vec(), image: true });
@@ -30,6 +37,10 @@ pub(super) fn attachments_of(message: &LxMessage) -> Vec<Attachment> {
     {
         for entry in entries {
             let Value::Array(parts) = entry else { continue };
+            if out.len() >= MAX_ATTACHMENTS {
+                dropped += 1;
+                continue;
+            }
             let (Some(name), Some(data)) = (parts.first().and_then(bytes_of), parts.get(1).and_then(bytes_of)) else {
                 continue;
             };
@@ -37,7 +48,7 @@ pub(super) fn attachments_of(message: &LxMessage) -> Vec<Attachment> {
             out.push(Attachment { image: is_image_name(&name), name, data });
         }
     }
-    out
+    (out, dropped)
 }
 
 /// The most of a received quote kept (some clients send all of the text).
@@ -137,7 +148,7 @@ pub(super) async fn parse_inbound(
     if verified && let Some(policy) = policy {
         policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take_ticket(&message);
     }
-    let attachments = attachments_of(&message);
+    let (attachments, dropped_attachments) = attachments_of(&message);
     let reply = reply_of(&message);
     let mut extras = Extras::of(&message);
     // A Codec2 voice message is decoded to play; it can take a moment.
@@ -152,6 +163,7 @@ pub(super) async fn parse_inbound(
         timestamp: message.timestamp(),
         verified,
         attachments,
+        dropped_attachments,
         paper: false,
         reply,
         extras,

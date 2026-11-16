@@ -192,17 +192,26 @@ impl App {
             let quota = self.settings.downloads_quota_mb.saturating_mul(1_000_000);
             let mut used = if quota > 0 { super::files::folder_size(&self.paths.downloads) } else { 0 };
             for (name, data, image, voice) in files {
-                if quota > 0 && used.saturating_add(data.len() as u64) > quota {
+                // Every file counts for something, even an empty one.
+                let charge = (data.len() as u64).max(super::files::FILE_MIN_CHARGE);
+                if quota > 0 && used.saturating_add(charge) > quota {
                     self.warn(format!("Not saved: {name} would take the received files folder over its {} MB limit", quota / 1_000_000));
                     continue;
                 }
-                used = used.saturating_add(data.len() as u64);
+                used = used.saturating_add(charge);
                 let path = unique_path(&dir, &name);
                 match std::fs::write(&path, data) {
                     Ok(()) => attachments.push(StoredAttachment { name, path, size: data.len() as u64, image, voice }),
                     Err(e) => self.log(format!("Could not save {}: {e}", path.display())),
                 }
             }
+        }
+        if message.dropped_attachments > 0 {
+            self.warn(format!(
+                "Not saved: {} more files than the {} one message may carry",
+                message.dropped_attachments,
+                crate::lxmf::MAX_ATTACHMENTS
+            ));
         }
 
         let stored = Message {
@@ -2495,6 +2504,28 @@ mod tests {
         third.timestamp = 1_900_000_002.0;
         app.on_message(third);
         assert_eq!(app.store.conversations[&key()].messages[2].attachments.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn empty_files_count_against_the_received_files_limit() {
+        use crate::lxmf::Attachment;
+        let dir = temp_dir("quota-empty");
+        let mut app = app(&dir, store_of(Vec::new()), 20, 0);
+        app.update_settings(&[("downloads_quota_mb", "1")]).unwrap();
+        // Messages of empty files, more of them than the limit has room for.
+        let per_message = 50;
+        let wanted = (1_000_000 / super::super::files::FILE_MIN_CHARGE) as usize + 3 * per_message;
+        for n in 0..wanted / per_message + 1 {
+            let mut message = from_them(n as u8 + 1, "empty", crate::lxmf::Extras::default());
+            message.attachments =
+                (0..per_message).map(|i| Attachment { name: format!("e{n}-{i}.bin"), data: Vec::new(), image: false }).collect();
+            message.timestamp = 1_900_000_000.0 + n as f64;
+            app.on_message(message);
+        }
+        let saved: usize = app.store.conversations[&key()].messages.iter().map(|m| m.attachments.len()).sum();
+        assert!(saved > 0 && saved <= 1_000_000 / super::super::files::FILE_MIN_CHARGE as usize, "{saved} empty files saved");
+        assert!(saved < wanted);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
