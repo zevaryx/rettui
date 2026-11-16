@@ -3688,6 +3688,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashlink"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
+dependencies = [
+ "hashbrown 0.17.1",
+]
+
+[[package]]
 name = "heapless"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4601,7 +4610,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "lxmf-core"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -4618,11 +4627,13 @@ dependencies = [
  "rns-protocol",
  "rns-transport",
  "rns-wire",
+ "rusqlite",
  "serde",
  "sha2 0.10.9",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "unicode-general-category",
  "unicode-normalization",
 ]
 
@@ -6542,7 +6553,7 @@ dependencies = [
 
 [[package]]
 name = "rns-crypto"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "aes",
  "cbc",
@@ -6560,7 +6571,7 @@ dependencies = [
 
 [[package]]
 name = "rns-identity"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "hex",
  "libc",
@@ -6580,7 +6591,7 @@ dependencies = [
 
 [[package]]
 name = "rns-interface"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "bluer",
  "btleplug",
@@ -6613,7 +6624,7 @@ dependencies = [
 
 [[package]]
 name = "rns-link"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "hex",
  "libc",
@@ -6630,7 +6641,7 @@ dependencies = [
 
 [[package]]
 name = "rns-protocol"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "bzip2",
  "hex",
@@ -6647,7 +6658,7 @@ dependencies = [
 
 [[package]]
 name = "rns-runtime"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "bytes",
  "hex",
@@ -6666,6 +6677,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "subtle",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -6674,7 +6686,7 @@ dependencies = [
 
 [[package]]
 name = "rns-transport"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "bytes",
  "hex",
@@ -6684,6 +6696,7 @@ dependencies = [
  "rns-crypto",
  "rns-identity",
  "rns-wire",
+ "rusqlite",
  "serde",
  "subtle",
  "thiserror 2.0.21",
@@ -6693,7 +6706,7 @@ dependencies = [
 
 [[package]]
 name = "rns-wire"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "rns-crypto",
  "sha2 0.10.9",
@@ -6730,6 +6743,15 @@ dependencies = [
  "regex",
  "serde_cbor",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "rsqlite-vfs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "353b74f9810d5b085b6c42c9d86a5f0fdb795553235cdd48753b32e3809d18a7"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6772,8 +6794,10 @@ dependencies = [
  "bitflags 2.13.2",
  "fallible-iterator",
  "fallible-streaming-iterator",
+ "hashlink",
  "libsqlite3-sys",
  "smallvec",
+ "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -7549,6 +7573,16 @@ checksum = "7ef958a98b9d5da290cfc78946e9f3e61e1e62a18db0d92cac0b83cc161491a9"
 dependencies = [
  "base64ct",
  "der 0.8.2",
+]
+
+[[package]]
+name = "sqlite-wasm-rs"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6cd504cecbfe7eef649988840f9a6cb768d11085efec138f8e99f160632d867"
+dependencies = [
+ "cc",
+ "rsqlite-vfs",
 ]
 
 [[package]]
@@ -8677,6 +8711,12 @@ name = "unicode-bom"
 version = "2.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7eec5d1121208364f6793f7d2e222bf75a915c19557537745b195b253dd64217"
+
+[[package]]
+name = "unicode-general-category"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2281c8c1d221438e373249e065ca4989c4c36952c211ff21a0ee91c44a3869e7"
 
 [[package]]
 name = "unicode-ident"

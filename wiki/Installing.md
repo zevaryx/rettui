@@ -51,11 +51,10 @@ revisions that build together:
 
 | Submodule | Revision | Why |
 | --- | --- | --- |
-| rsReticulum | `44693b9` | The [1.4.0 release](https://github.com/ratspeak/rsReticulum/releases/tag/v1.4.0) with [ratspeak/rsReticulum#26](https://github.com/ratspeak/rsReticulum/pull/26) merged in: `RequestOutcome::ReplyFile`, file metadata and the requester's identity, which node hosting needs. It's the `rettui-1.4` branch of [zevaryx/rsReticulum](https://github.com/zevaryx/rsReticulum/tree/rettui-1.4) until that pull request is merged upstream. |
-| rsLXMF | `00f439d` | The 1.4.0 release (it needs rsReticulum 1.4) |
+| rsReticulum | `fe7830e` | The [1.5.0 release](https://github.com/ratspeak/rsReticulum/releases/tag/v1.5.0) with two small additions for rettui (a file reply's metadata, and a helper that packs a file name) and SQLite 3.54 (rusqlite 0.42, which fixes RUSTSEC-2026-0459). It's the `rettui-1.5` branch of [zevaryx/rsReticulum](https://github.com/zevaryx/rsReticulum/tree/rettui-1.5). |
+| rsLXMF | `43f85d5` | The 1.5.0 release (it needs rsReticulum 1.5) with rusqlite 0.42 for the same reason: the `rettui-1.5` branch of [zevaryx/rsLXMF](https://github.com/zevaryx/rsLXMF/tree/rettui-1.5) |
 
-Once ratspeak/rsReticulum#26 is merged, point `deps/rsReticulum` back at
-ratspeak/rsReticulum in `.gitmodules` and pin its `main`.
+Once ratspeak's rsReticulum and rsLXMF use rusqlite 0.42, point `deps/rsReticulum` and `deps/rsLXMF` back at ratspeak in `.gitmodules` and pin their `main`.
 
 ## Updating
 
