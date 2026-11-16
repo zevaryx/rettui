@@ -341,10 +341,18 @@ open class MainActivity : Activity() {
         main.postDelayed(watch, 2000)
     }
 
+    /**
+     * `log` without any web login token in it (`token=…` in a link an earlier
+     * version printed): the log is shown as selectable text, which gets
+     * copied into bug reports.
+     */
+    private fun hideTokens(log: String): String =
+        Regex("(token=)[^\\s&\"'<>]+").replace(log) { it.groupValues[1] + "…" }
+
     /** rettui isn't running: stopped with Stop, or it failed (its log shown). */
     private fun stopped() {
         val byYou = Rettui.stoppedByYou(this)
-        val log = if (byYou) "" else RettuiService.logFile(this).takeIf { it.isFile }?.readText()?.takeLast(20_000) ?: ""
+        val log = if (byYou) "" else hideTokens(RettuiService.logFile(this).takeIf { it.isFile }?.readText()?.takeLast(20_000) ?: "")
         val palette = palette()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

@@ -456,7 +456,11 @@ impl WebState {
         *self.token.write().unwrap() = token.clone();
         self.signed_out.send_modify(|n| *n += 1);
         self.push.unsubscribe_all()?;
-        println!("Every other browser was signed out. The new link: {}/?token={token}", self.link_base);
+        if started_by_app() {
+            println!("Every other browser was signed out.");
+        } else {
+            println!("Every other browser was signed out. The new link: {}/?token={token}", self.link_base);
+        }
         Ok(token)
     }
 
@@ -593,6 +597,33 @@ fn reachable_ip(listening: IpAddr) -> Option<IpAddr> {
 /// writes the port it listens on to once it is listening.
 const PORT_FILE_ENV: &str = "RETTUI_PORT_FILE";
 
+/// Whether the Android app started rettui: it logs in with the token file,
+/// and shows what rettui prints as its log, so no login link is printed.
+fn started_by_app() -> bool {
+    std::env::var_os(PORT_FILE_ENV).is_some()
+}
+
+/// The lines printed when the web UI starts, about logging in.
+fn login_notice(scheme: &str, shown: &str, token: &str, by_app: bool) -> String {
+    if by_app {
+        return format!("rettui web UI: {scheme}://{shown}/\n");
+    }
+    format!("rettui web UI: {scheme}://{shown}/?token={token}\nThe link logs this browser in; keep it private. Ctrl-C stops rettui.\n")
+}
+
+#[cfg(test)]
+mod login_notice_tests {
+    use super::*;
+
+    #[test]
+    fn the_app_is_not_given_a_link_with_the_token_to_log() {
+        let link = login_notice("http", "127.0.0.1:8740", testing::TOKEN, false);
+        assert!(link.contains(&format!("?token={}", testing::TOKEN)), "{link}");
+        let log = login_notice("http", "127.0.0.1:8740", testing::TOKEN, true);
+        assert!(log.contains("127.0.0.1:8740") && !log.contains(testing::TOKEN) && !log.contains("token="), "{log}");
+    }
+}
+
 /// Listen on `address`; if its port is taken and `any_port`, on a free one.
 async fn listen(address: SocketAddr, any_port: bool) -> Result<tokio::net::TcpListener> {
     match tokio::net::TcpListener::bind(address).await {
@@ -677,8 +708,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         }
         None => tokio::spawn(async move { axum::serve(listener, router).await }),
     };
-    println!("rettui web UI: {scheme}://{shown}/?token={token}");
-    println!("The link logs this browser in; keep it private. Ctrl-C stops rettui.");
+    print!("{}", login_notice(scheme, &shown, &token, started_by_app()));
     println!("Scripts can send the token in an \"Authorization: Bearer\" header instead.");
     if let Some(served) = &served
         && let Some(fingerprint) = &served.fingerprint
@@ -691,7 +721,9 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         println!("Listening on {address}: anyone with the link can use this client.");
         // For a phone on the same network: the link at this computer's
         // address, and its QR code to scan rather than type the token.
-        if let Some(ip) = reachable_ip(address.ip()) {
+        if !started_by_app()
+            && let Some(ip) = reachable_ip(address.ip())
+        {
             let link = format!("{scheme}://{}/?token={token}", SocketAddr::new(ip, address.port()));
             println!("From another device on this network: {link}");
             crate::cli::print_qr(&link);
