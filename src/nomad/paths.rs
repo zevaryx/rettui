@@ -141,12 +141,19 @@ pub fn file_name(path: &str) -> Result<&str, PathError> {
     name_after(path, FILE_PREFIX)
 }
 
-/// Why a partial at `path` may not be loaded, if it may not. A partial is
-/// fetched with no tap, and a file is held whole in memory (and again as text,
-/// then as HTML, at 6 to 54 times its size), so a partial is never a file:
-/// downloading one is the user's own act.
-pub fn partial_refusal(path: &str) -> Option<&'static str> {
-    path.starts_with(FILE_PREFIX).then_some("This part of the page is a file, so it isn't loaded")
+/// Why a partial at `node`:`path` may not be loaded for a page on
+/// `page_node`, if it may not. A partial is fetched with no tap, so it stays
+/// on its page's node (otherwise a page could make this client send requests,
+/// identified, or run its owner's own scripts, at a node of the page's
+/// choosing), and it is never a file, which is held whole in memory.
+pub fn partial_refusal(page_node: [u8; 16], node: [u8; 16], path: &str) -> Option<&'static str> {
+    if node != page_node {
+        Some("This part of the page is on another node, so it isn't loaded")
+    } else if path.starts_with(FILE_PREFIX) {
+        Some("This part of the page is a file, so it isn't loaded")
+    } else {
+        None
+    }
 }
 
 /// Text to put in a page rettui writes (a name, a path): without control
@@ -206,10 +213,13 @@ mod tests {
     }
 
     #[test]
-    fn partials_are_never_files() {
-        assert_eq!(partial_refusal("/page/p.mu"), None);
-        assert_eq!(partial_refusal("/media/x.webp"), None);
-        assert!(partial_refusal("/file/big.bin").is_some());
+    fn partials_stay_on_their_node_and_are_never_files() {
+        let (page, other) = ([1; 16], [2; 16]);
+        assert_eq!(partial_refusal(page, page, "/page/p.mu"), None);
+        assert_eq!(partial_refusal(page, page, "/media/x.webp"), None);
+        assert!(partial_refusal(page, other, "/page/p.mu").is_some());
+        assert!(partial_refusal(page, page, "/file/big.bin").is_some());
+        assert!(partial_refusal(page, other, "/file/big.bin").is_some());
     }
 
     #[test]

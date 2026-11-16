@@ -754,7 +754,7 @@ async fn browsing_pages_forms_and_files() {
     // A form sent; a partial; a picture.
     let form = web.post("/api/page", json!({ "url": format!("{NODE}:/page/form.mu"), "fields": { "name": "Bob" } })).await;
     assert!(form.json()["html"].as_str().unwrap().contains("Thanks"));
-    let partial = web.post("/api/partial", json!({ "url": format!("{NODE}:/page/form.mu") })).await;
+    let partial = web.post("/api/partial", json!({ "url": format!("{NODE}:/page/form.mu"), "page": url })).await;
     assert!(partial.json()["html"].as_str().unwrap().contains("Thanks"));
     let picture = web.get(&format!("/api/media?url={NODE}:/media/cat.png")).await;
     assert_eq!(picture.status, StatusCode::OK);
@@ -1373,7 +1373,13 @@ async fn the_guide_pages_partials_and_previews() {
     let html = page["html"].as_str().unwrap();
     assert!(html.contains("lxmf@abab") && html.contains("rrc://abab") && html.contains("a%20b.png"), "{html}");
     web.serve("/page/part.mu", "`(img`:/media/a b.png)\npart");
-    let partial = web.post("/api/partial", json!({ "url": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/page/part.mu", "fields": {} })).await.json();
+    let partial = web
+        .post(
+            "/api/partial",
+            json!({ "url": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd:/page/part.mu", "page": format!("{NODE}:/page/links.mu"), "fields": {} }),
+        )
+        .await
+        .json();
     assert!(partial["html"].as_str().unwrap().contains("part"), "{partial}");
     let node = web.with(|app| hex::encode(app.node.hash)).await;
     let preview = web
@@ -1387,21 +1393,34 @@ async fn the_guide_pages_partials_and_previews() {
     assert!(preview.contains("api/node/media?path=own.png") && preview.contains("api/media?url=cdcd"), "{preview}");
 }
 
-/// A partial is never a file: it is fetched with no tap, and a file is held
-/// whole in memory. A download the user asks for still works.
+/// A partial is loaded only from its page's own node, and never a file: it
+/// is fetched with no tap, so anything else is the page's choice, not the
+/// user's.
 #[tokio::test]
-async fn partials_are_never_files() {
-    let web = TestWeb::start("partial-files");
+async fn partials_stay_on_their_node_and_are_never_files() {
+    let web = TestWeb::start("partial-limits");
     web.serve("/page/part.mu", "the part");
     web.serve("/file/big.bin", "file bytes");
+    let page = format!("{NODE}:/page/index.mu");
+    let other = "efefefefefefefefefefefefefefefef";
     let fetches = |web: &TestWeb| web.sent().iter().filter(|c| matches!(c, NetCommand::Fetch { .. })).count();
 
-    let page = web.post("/api/partial", json!({ "url": format!("{NODE}:/page/part.mu") })).await;
-    assert_eq!((page.status, fetches(&web)), (StatusCode::OK, 1), "{}", page.text());
-    let file = web.post("/api/partial", json!({ "url": format!("{NODE}:/file/big.bin") })).await;
-    assert_eq!((file.status, fetches(&web)), (StatusCode::BAD_REQUEST, 0), "{}", file.text());
-    assert!(file.error().contains("a file"), "{}", file.text());
-    let download = web.get(&format!("/api/download?url={NODE}:/file/big.bin")).await;
+    let own = web.post("/api/partial", json!({ "url": format!("{NODE}:/page/part.mu"), "page": page })).await;
+    assert_eq!((own.status, fetches(&web)), (StatusCode::OK, 1), "{}", own.text());
+    // Another node: refused before anything is sent (nothing identified, no request at all).
+    let elsewhere = web.post("/api/partial", json!({ "url": format!("{other}:/page/part.mu"), "page": page })).await;
+    assert_eq!((elsewhere.status, fetches(&web)), (StatusCode::BAD_REQUEST, 0), "{}", elsewhere.text());
+    assert!(elsewhere.error().contains("another node"), "{}", elsewhere.text());
+    // A file, on the page's node or another: refused.
+    for node in [NODE, other] {
+        let file = web.post("/api/partial", json!({ "url": format!("{node}:/file/big.bin"), "page": page })).await;
+        assert_eq!((file.status, fetches(&web)), (StatusCode::BAD_REQUEST, 0), "{}", file.text());
+    }
+    // A request that doesn't say which page it is for isn't answered.
+    let anonymous = web.post("/api/partial", json!({ "url": format!("{NODE}:/page/part.mu") })).await;
+    assert!(anonymous.status.is_client_error() && fetches(&web) == 0);
+    // A download the user asks for is still a file from any node.
+    let download = web.get(&format!("/api/download?url={other}:/file/big.bin")).await;
     assert_eq!(download.body, b"file bytes");
 }
 

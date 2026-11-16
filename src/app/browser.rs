@@ -272,7 +272,7 @@ impl App {
             self.browser.tab.partials[index].content = Some(why);
             return;
         };
-        if let Some(why) = crate::nomad::paths::partial_refusal(&location.path) {
+        if let Some(why) = crate::nomad::paths::partial_refusal(current.node, location.node, &location.path) {
             self.browser.tab.partials[index].content = Some(format!("`Ff66{why}: {}`f", partial.url.replace('`', "'")));
             return;
         }
@@ -1658,22 +1658,25 @@ mod tests {
     }
 
     #[test]
-    fn a_partial_that_is_a_file_is_not_asked_for() {
+    fn partials_stay_on_the_pages_node_and_are_never_files() {
         let dir = std::env::temp_dir().join(format!("rettui-browser-partials-refused-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
-        let node = [0xcd; 16];
+        let (node, other) = ([0xcd; 16], [0xef; 16]);
+        app.set_identify(other, true);
         app.navigate(Location { node, path: "/page/parts.mu".into(), fields: BTreeMap::new() });
         let id = std::iter::from_fn(|| net.try_recv().ok())
             .find_map(|c| if let NetCommand::Fetch { id, .. } = c { Some(id) } else { None })
             .unwrap();
-        app.on_fetched(id, Ok(FetchedContent { data: b"`{:/page/same.mu}\n`{:/file/big.bin}".to_vec(), metadata: None }));
-        // Only the page was asked for; the file says why not.
-        let asked: Vec<String> = std::iter::from_fn(|| net.try_recv().ok())
-            .filter_map(|c| if let NetCommand::Fetch { path, .. } = c { Some(path) } else { None })
+        let source = format!("`{{:/page/same.mu}}\n`{{{}:/page/post.mu}}\n`{{:/file/big.bin}}", hex::encode(other));
+        app.on_fetched(id, Ok(FetchedContent { data: source.into_bytes(), metadata: None }));
+        // Only the one on the page's own node was asked for; the others say why.
+        let asked: Vec<(Hash, String, bool)> = std::iter::from_fn(|| net.try_recv().ok())
+            .filter_map(|c| if let NetCommand::Fetch { node, path, identify, .. } = c { Some((node, path, identify)) } else { None })
             .collect();
-        assert_eq!(asked, ["/page/same.mu"]);
-        assert!(app.browser.tab.partials[1].content.as_deref().unwrap_or_default().contains("a file"));
+        assert_eq!(asked, [(node, "/page/same.mu".to_string(), false)]);
+        let says = |index: usize| app.browser.tab.partials[index].content.clone().unwrap_or_default();
+        assert!(says(1).contains("another node") && says(2).contains("a file"), "{} / {}", says(1), says(2));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -2451,16 +2451,19 @@ async fn node_upload(State(state): State<WebState>, Query(query): Query<UploadQu
 #[derive(Deserialize)]
 struct PartialBody {
     url: String,
+    /// The address of the page the partial is on (see `partial_refusal`).
+    page: String,
     /// The form values and variables it asks for, as a form sends them.
     #[serde(default)]
     fields: BTreeMap<String, String>,
 }
 
 /// A page's partial, loaded on its own (never from the cache): its HTML.
-/// Partials in it aren't loaded. A partial that is a file is refused.
+/// Partials in it aren't loaded. One on another node than its page's, or
+/// that is a file, is refused.
 async fn partial(State(state): State<WebState>, axum::Json(body): axum::Json<PartialBody>) -> ApiResult {
     let mut location = location(&body.url)?;
-    if let Some(why) = crate::nomad::paths::partial_refusal(&location.path) {
+    if let Some(why) = crate::nomad::paths::partial_refusal(self::location(&body.page)?.node, location.node, &location.path) {
         return Err(bad(why));
     }
     location.fields = body.fields;

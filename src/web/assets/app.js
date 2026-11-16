@@ -6688,7 +6688,7 @@ app.views.browser = {
     const fields = this.formFields(node.dataset.fields ? node.dataset.fields.split('|') : []);
     let html;
     try {
-      html = (await api.post('/partial', { url: node.dataset.url, fields })).html;
+      html = (await api.post('/partial', { url: node.dataset.url, page: page.url, fields })).html;
     } catch (e) {
       html = el('span', { class: 'error', text: `Could not load this part of the page: ${e.message}` }).outerHTML;
     }
