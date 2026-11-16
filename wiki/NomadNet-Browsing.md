@@ -45,7 +45,11 @@ network.
     again every so many seconds if it says so, while the page is on screen.
     A link to `p:id` reloads the partials with that `pid=id` among their
     variables. What you typed in the page's fields stays when a partial
-    loads. Partials inside partials aren't loaded.
+    loads. Partials inside partials aren't loaded. A partial loads only from
+    the page's own node, and never a file. The setting **Partials from other
+    nodes** (off by default) lets a page's partials come from other nodes too:
+    they are never identified to you, never come from your own node, and the
+    node asked learns that you opened the page.
   - **Text fields of several rows:** `` `<40x5|notes`> `` (40 wide, 5 rows).
     In the TUI the field is edited on one line, with ↵ for each new line; the
     web UI gives it a text box of that size.

@@ -1424,6 +1424,53 @@ async fn partials_stay_on_their_node_and_are_never_files() {
     assert_eq!(download.body, b"file bytes");
 }
 
+/// With the setting on, a page's partial may come from another node, but it
+/// is never identified for, never a file, and never from the node hosted
+/// here; a partial on the page's own node is identified for as before.
+#[tokio::test]
+async fn partials_from_other_nodes_when_allowed_are_never_identified() {
+    let web = TestWeb::start("partial-elsewhere");
+    web.serve("/page/part.mu", "the part");
+    web.serve("/file/big.bin", "file bytes");
+    let page = format!("{NODE}:/page/index.mu");
+    let other = "efefefefefefefefefefefefefefefef";
+    let own = web.with(|app| hex::encode(app.node.hash)).await;
+    web.with(move |app| {
+        app.set_identify(crate::net::parse_hash(NODE).unwrap(), true);
+        app.set_identify(crate::net::parse_hash(other).unwrap(), true);
+        app.settings.partials_other_nodes = true;
+    })
+    .await;
+    let asked = |web: &TestWeb| -> Vec<(String, bool)> {
+        web.sent()
+            .into_iter()
+            .filter_map(|c| if let NetCommand::Fetch { node, identify, .. } = c { Some((hex::encode(node), identify)) } else { None })
+            .collect()
+    };
+    let post = |url: String| web.post("/api/partial", json!({ "url": url, "page": page }));
+
+    // The page's own node, which the user identifies to: identified, as before.
+    assert_eq!(post(format!("{NODE}:/page/part.mu")).await.status, StatusCode::OK);
+    assert_eq!(asked(&web), [(NODE.to_string(), true)]);
+    // Another node, which the user also identifies to: fetched, not identified.
+    let elsewhere = post(format!("{other}:/page/part.mu")).await;
+    assert_eq!(elsewhere.status, StatusCode::OK, "{}", elsewhere.text());
+    assert_eq!(asked(&web), [(other.to_string(), false)]);
+    // A file, and the node hosted here (its scripts), are still refused, with nothing sent.
+    assert_eq!(post(format!("{other}:/file/big.bin")).await.status, StatusCode::BAD_REQUEST);
+    let mine = post(format!("{own}:/page/act.mu")).await;
+    assert_eq!(mine.status, StatusCode::BAD_REQUEST, "{}", mine.text());
+    assert!(mine.error().contains("own node"), "{}", mine.text());
+    assert!(asked(&web).is_empty());
+    // A page on the node hosted here may still use that node's own partials.
+    let from_mine =
+        web.post("/api/partial", json!({ "url": format!("{own}:/page/part.mu"), "page": format!("{own}:/page/index.mu") })).await;
+    assert!(!from_mine.text().contains("isn't loaded"), "{}", from_mine.text());
+    // Off again: refused, as by default.
+    web.with(|app| app.settings.partials_other_nodes = false).await;
+    assert_eq!(post(format!("{other}:/page/part.mu")).await.status, StatusCode::BAD_REQUEST);
+}
+
 /// A script page of the node hosted here runs for the web UI's Browser as
 /// it would for a visitor, form fields and all.
 #[cfg(unix)]

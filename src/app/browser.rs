@@ -272,16 +272,21 @@ impl App {
             self.browser.tab.partials[index].content = Some(why);
             return;
         };
-        if let Some(why) = crate::nomad::paths::partial_refusal(current.node, location.node, &location.path) {
+        let other_nodes = self.settings.partials_other_nodes;
+        if let Some(why) =
+            crate::nomad::paths::partial_refusal(current.node, location.node, &location.path, other_nodes, self.is_own_node(location.node))
+        {
             self.browser.tab.partials[index].content = Some(format!("`Ff66{why}: {}`f", partial.url.replace('`', "'")));
             return;
         }
         location.fields = page.request_fields(&partial.fields);
-        let page_url = current.url();
+        let (page_url, current_node) = (current.url(), current.node);
         self.browser.tab.partials[index].loading = true;
         let id = self.request_id();
         self.browser.tab.partial_requests.insert(id, (index, page_url));
-        let identify = self.identifies_to(location.node);
+        // Never to a node other than the page's: it was not asked for by a tap.
+        let same_node = location.node == current_node;
+        let identify = same_node && self.identifies_to(location.node);
         if self.is_own_node(location.node) {
             if let Some(result) = self.own_node_content(id, &location, identify) {
                 self.on_fetched(id, result);
@@ -1677,6 +1682,37 @@ mod tests {
         assert_eq!(asked, [(node, "/page/same.mu".to_string(), false)]);
         let says = |index: usize| app.browser.tab.partials[index].content.clone().unwrap_or_default();
         assert!(says(1).contains("another node") && says(2).contains("a file"), "{} / {}", says(1), says(2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn partials_from_other_nodes_when_allowed_are_never_identified() {
+        let dir = std::env::temp_dir().join(format!("rettui-browser-partials-allowed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let (node, other) = ([0xcd; 16], [0xef; 16]);
+        app.set_identify(node, true);
+        app.set_identify(other, true);
+        app.settings.partials_other_nodes = true;
+        app.navigate(Location { node, path: "/page/parts.mu".into(), fields: BTreeMap::new() });
+        let id = std::iter::from_fn(|| net.try_recv().ok())
+            .find_map(|c| if let NetCommand::Fetch { id, .. } = c { Some(id) } else { None })
+            .unwrap();
+        let own = hex::encode(app.node.hash);
+        let source = format!(
+            "`{{:/page/same.mu}}\n`{{{}:/page/post.mu}}\n`{{{own}:/page/act.mu}}\n`{{{}:/file/big.bin}}",
+            hex::encode(other),
+            hex::encode(other)
+        );
+        app.on_fetched(id, Ok(FetchedContent { data: source.into_bytes(), metadata: None }));
+        let asked: Vec<(Hash, String, bool)> = std::iter::from_fn(|| net.try_recv().ok())
+            .filter_map(|c| if let NetCommand::Fetch { node, path, identify, .. } = c { Some((node, path, identify)) } else { None })
+            .filter(|(_, path, _)| path.starts_with("/page/p") || path == "/page/same.mu")
+            .collect();
+        // The page's own node as before (identified); the other node, not identified.
+        assert_eq!(asked, [(node, "/page/same.mu".to_string(), true), (other, "/page/post.mu".to_string(), false)]);
+        let says = |index: usize| app.browser.tab.partials[index].content.clone().unwrap_or_default();
+        assert!(says(2).contains("own node") && says(3).contains("a file"), "{} / {}", says(2), says(3));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
