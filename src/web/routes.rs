@@ -606,9 +606,28 @@ async fn install_update(State(state): State<WebState>) -> ApiResult {
     Ok(axum::Json(json!({ "ok": true, "doing": doing })))
 }
 
+/// Whether a browser says a request is the page being navigated (a link
+/// followed, an address opened) or comes from another site, and not a script
+/// of this page asking. A client that says neither (curl, a script) isn't a
+/// browser page and passes, as in [`same_origin`].
+fn navigating(headers: &axum::http::HeaderMap) -> bool {
+    let text = |name| headers.get(name).and_then(|v| v.to_str().ok());
+    text("sec-fetch-mode") == Some("navigate")
+        || matches!(text("sec-fetch-dest"), Some("document" | "iframe" | "frame" | "embed" | "object"))
+        || text("sec-fetch-site").is_some_and(|site| !matches!(site, "same-origin" | "none"))
+}
+
 /// A backup of settings, contacts and messages, to download: never with
 /// the identity, nor attachments (see [`crate::backup`]).
-async fn download_backup(State(state): State<WebState>) -> Result<Response, ApiError> {
+///
+/// The address is the same on every install, so it is not for a page to be
+/// sent to: a link in a message that opened here would save a backup without
+/// anyone asking. The web UI asks with `POST /api/backup`, which gives the
+/// backup a random name to fetch it by.
+async fn download_backup(State(state): State<WebState>, headers: axum::http::HeaderMap) -> Result<Response, ApiError> {
+    if navigating(&headers) {
+        return Err(ApiError(StatusCode::FORBIDDEN, "a backup is not made by opening an address: use Download a backup".into()));
+    }
     let path = made_backup(&state, None).await?;
     send_backup(path).await
 }

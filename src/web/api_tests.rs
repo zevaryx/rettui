@@ -42,6 +42,36 @@ async fn requests_that_change_things_must_come_from_the_page_itself() {
 }
 
 #[tokio::test]
+async fn a_backup_is_not_made_by_opening_its_address() {
+    let web = TestWeb::start("backup-navigation");
+    let get = |headers: &'static [(&'static str, &'static str)]| web.send_with(Method::GET, "/api/backup", None, false, headers);
+    // A link followed in the page, an address opened, a frame, another site.
+    for headers in [
+        &[("sec-fetch-site", "same-origin"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "document")][..],
+        &[("sec-fetch-mode", "navigate")],
+        &[("sec-fetch-dest", "iframe")],
+        &[("sec-fetch-site", "cross-site"), ("sec-fetch-mode", "cors")],
+    ] {
+        let refused = get(headers).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{headers:?}");
+        assert!(refused.body.is_empty() || !refused.body.starts_with(&[0x1f, 0x8b]));
+    }
+    // The page's own script, or a script outside a browser.
+    assert_eq!(
+        get(&[("sec-fetch-site", "same-origin"), ("sec-fetch-mode", "cors"), ("sec-fetch-dest", "empty")]).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(get(&[]).await.status, StatusCode::OK);
+    // What the page does: asks, then goes to the backup by its random name.
+    let made = web.post("/api/backup", json!({ "passphrase": "" })).await;
+    let id = made.json()["id"].as_str().unwrap().to_string();
+    let link = [("sec-fetch-site", "same-origin"), ("sec-fetch-mode", "navigate")];
+    let fetched = web.send_with(Method::GET, &format!("/api/backup/{id}"), None, false, &link).await;
+    assert_eq!(fetched.status, StatusCode::OK);
+    assert!(fetched.body.starts_with(&[0x1f, 0x8b]));
+}
+
+#[tokio::test]
 async fn logging_in_and_the_files_every_page_needs() {
     let web = TestWeb::start("login");
     // The link logs in: a cookie, and on to the page.

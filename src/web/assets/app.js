@@ -2129,18 +2129,39 @@ function microned(text, from, to, micron) {
   return out;
 }
 
-// An http(s) address that parses as one, or null.
+// An http(s) address that parses as one, or null. Not one to this device's
+// own server (see ownAddress).
 function webUrl(text) {
   try {
     const url = new URL(text);
-    return ['http:', 'https:'].includes(url.protocol) && url.hostname ? url.href : null;
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname && !ownAddress(url.href) ? url.href : null;
   } catch {
     return null;
   }
 }
 
+// Whether an address is on this device's own loopback, on any port: where
+// rettui's own server is. The app follows a link in its own window, logged
+// in, so a link in a message to it could make the app save a backup or a
+// file; such addresses are shown as text. The browser's own reading of the
+// address decides (a number, hex or odd spelling of 127.0.0.1 comes out as it).
+function ownAddress(text) {
+  let host;
+  try {
+    const url = new URL(text);
+    if (!['http:', 'https:'].includes(url.protocol)) return false;
+    host = url.hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return false;
+  }
+  return host === 'localhost' || host.endsWith('.localhost') || /^127(\.\d+){3}$/.test(host) || host === '0.0.0.0'
+    || host === '[::1]' || host === '[::]' || host.startsWith('[::ffff:');
+}
+
 // A link to `url` showing `content` (text, or a list of nodes and text).
 function linkNode(content, url) {
+  // Its own server's address is text, not a link (see ownAddress).
+  if (ownAddress(url)) return el('span', { class: 'chat-link', title: url }, content);
   // A web page in a tab of its own, telling it nothing of where it came
   // from. The Android and desktop apps hand it to the system's browser
   // when it's followed in their own window.
@@ -2209,6 +2230,11 @@ function formattedContent(html) {
     browse(link.dataset.url);
   } });
   node.innerHTML = html;
+  // The server leaves out links to this device's own server, but the
+  // browser has the last word on where an address goes.
+  for (const link of node.querySelectorAll('a[href]')) {
+    if (ownAddress(link.href)) link.replaceWith(el('span', { class: 'md-link', title: link.href }, ...link.childNodes));
+  }
   linkTextIn(node);
   return node;
 }
@@ -9755,15 +9781,13 @@ function backupDialog() {
     const go = el('button', { class: 'primary', text: 'Download' });
     const download = async () => {
       error.textContent = '';
-      if (!first.value) {
-        close();
-        return el('a', { href: 'api/backup', download: '' }).click();
-      }
-      if (first.value !== again.value) return void (error.textContent = 'The passphrases differ.');
+      if (first.value && first.value !== again.value) return void (error.textContent = 'The passphrases differ.');
       go.disabled = true;
-      go.textContent = 'Sealing…';
+      go.textContent = first.value ? 'Sealing…' : 'Preparing…';
       try {
-        // Sent in the request's body, never in an address.
+        // Sent in the request's body, never in an address. Made first even
+        // with none, so that what is downloaded is at a random name: the
+        // plain `api/backup` is not for a page to open.
         const made = await api.post('/backup', { passphrase: first.value });
         close();
         el('a', { href: `api/backup/${made.id}`, download: '' }).click();

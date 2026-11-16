@@ -61,6 +61,23 @@ open class MainActivity : Activity() {
         /** The web UI's links to the app's own screens. */
         private val SCREENS = mapOf("rettui-app:backups" to BackupsActivity::class.java, "rettui-app:rnodes" to RNodesActivity::class.java, "rettui-app:downloads" to DownloadsActivity::class.java)
 
+        /**
+         * The addresses on rettui's own server that its page itself goes to:
+         * the page itself (a reload, or where logging in sends it), and the
+         * downloads its buttons start. Any other address there, followed from
+         * a link in a message, is not opened (see [ownNavigation]): the
+         * WebView is logged in, so what it opens, it can be made to save.
+         */
+        private val OWN_PAGES = listOf(
+            Regex("/"),
+            Regex("/rettui-ca\\.crt"),
+            Regex("/api/download"),
+            Regex("/api/repos/artifact"),
+            Regex("/api/backup/[0-9a-f]{32}"),
+            Regex("/api/conversations/[^/]+/export"),
+            Regex("/api/conversations/[^/]+/attachments/[^/]+/[0-9]+"),
+        )
+
         /** What a notification tapped is about (JSON, as the web UI has it). */
         const val EXTRA_TARGET = "target"
         private const val ASK_START = 1
@@ -423,6 +440,9 @@ open class MainActivity : Activity() {
 
     private fun local(uri: Uri) = uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == Rettui.port(this)
 
+    /** Whether `uri`, on rettui's own server, is a page the app itself goes to (see [OWN_PAGES]). */
+    private fun ownNavigation(uri: Uri) = local(uri) && OWN_PAGES.any { it.matches(uri.path.orEmpty()) }
+
     private fun setUpWebView() {
         // Only a debug build's page can be inspected from a computer (chrome://inspect).
         if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) WebView.setWebContentsDebuggingEnabled(true)
@@ -445,9 +465,12 @@ open class MainActivity : Activity() {
                 return Shared.serve(this@MainActivity, url.path!!) ?: WebResourceResponse("text/plain", null, 404, "Not Found", null, null)
             }
 
-            // Anything not rettui's opens in the phone's browser.
+            // Anything not rettui's opens in the phone's browser. Rettui's own
+            // server is only gone to by its own page: a link to another of its
+            // addresses (from a message, say) goes nowhere. The first load is
+            // not asked about, and a reload is, which is why "/" is allowed.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                if (local(request.url)) return false
+                if (local(request.url)) return request.isForMainFrame && !ownNavigation(request.url)
                 SCREENS[request.url.toString()]?.let {
                     startActivity(Intent(this@MainActivity, it))
                     return true
@@ -563,7 +586,7 @@ open class MainActivity : Activity() {
      */
     private fun download(url: String, disposition: String?, mime: String?) {
         val uri = Uri.parse(url)
-        if (!local(uri)) return
+        if (!ownNavigation(uri)) return
         val name = URLUtil.guessFileName(url, disposition, mime)
         val type = mime ?: "application/octet-stream"
         if (DownloadsActivity.asks(this)) {
