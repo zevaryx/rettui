@@ -133,7 +133,10 @@ impl Peers {
         } else if !data.node_state || !in_range {
             return if peered { self.unpeer(node.hash) } else { Change::Unchanged };
         }
-        let limits = (Some(data.transfer_limit as f64), Some(data.sync_limit as f64));
+        // What it says it takes in one sync is what's read into memory to
+        // send it: no more than this node would take itself.
+        let most = lxmf_core::constants::SYNC_LIMIT as f64;
+        let limits = (Some((data.transfer_limit as f64).min(most)), Some((data.sync_limit as f64).min(most)));
         let costs = (Some(data.stamp_cost), Some(data.stamp_flex), Some(data.peering_cost));
         let metadata = Some(data.metadata.clone());
         let full = self.peers.len() >= self.config.max_peers;
@@ -502,6 +505,17 @@ mod tests {
         assert_eq!(peers.heard(&answer), Change::Unchanged);
         // Not an announce at all.
         assert_eq!(peers.heard(&node(5, 1, vec![1, 2, 3])), Change::Unchanged);
+    }
+
+    #[test]
+    fn a_peer_is_sent_no_more_in_one_sync_than_is_taken_here() {
+        let mut peers = Peers::new(config(), [0; 16], Vec::new());
+        let mut data = PropagationNodeAnnounceData::new(true, u64::MAX / 2, u64::MAX / 2, 16, 3, 18);
+        data.timebase = 1;
+        assert_eq!(peers.heard(&node(1, 1, get_propagation_node_app_data(&data))), Change::Peered);
+        let most = lxmf_core::constants::SYNC_LIMIT as f64;
+        let peer = &peers.peers[&[1; 16]];
+        assert_eq!((peer.propagation_transfer_limit, peer.propagation_sync_limit), (Some(most), Some(most)));
     }
 
     #[test]
