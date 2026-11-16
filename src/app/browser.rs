@@ -272,6 +272,10 @@ impl App {
             self.browser.tab.partials[index].content = Some(why);
             return;
         };
+        if let Some(why) = crate::nomad::paths::partial_refusal(&location.path) {
+            self.browser.tab.partials[index].content = Some(format!("`Ff66{why}: {}`f", partial.url.replace('`', "'")));
+            return;
+        }
         location.fields = page.request_fields(&partial.fields);
         let page_url = current.url();
         self.browser.tab.partials[index].loading = true;
@@ -1650,6 +1654,26 @@ mod tests {
         app.navigate(at("/page/index.mu"));
         app.close_browser_tab();
         assert!(app.browser.tab.location.is_none() && app.browser.tab.loading.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_partial_that_is_a_file_is_not_asked_for() {
+        let dir = std::env::temp_dir().join(format!("rettui-browser-partials-refused-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let node = [0xcd; 16];
+        app.navigate(Location { node, path: "/page/parts.mu".into(), fields: BTreeMap::new() });
+        let id = std::iter::from_fn(|| net.try_recv().ok())
+            .find_map(|c| if let NetCommand::Fetch { id, .. } = c { Some(id) } else { None })
+            .unwrap();
+        app.on_fetched(id, Ok(FetchedContent { data: b"`{:/page/same.mu}\n`{:/file/big.bin}".to_vec(), metadata: None }));
+        // Only the page was asked for; the file says why not.
+        let asked: Vec<String> = std::iter::from_fn(|| net.try_recv().ok())
+            .filter_map(|c| if let NetCommand::Fetch { path, .. } = c { Some(path) } else { None })
+            .collect();
+        assert_eq!(asked, ["/page/same.mu"]);
+        assert!(app.browser.tab.partials[1].content.as_deref().unwrap_or_default().contains("a file"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

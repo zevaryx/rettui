@@ -2457,9 +2457,12 @@ struct PartialBody {
 }
 
 /// A page's partial, loaded on its own (never from the cache): its HTML.
-/// Partials in it aren't loaded.
+/// Partials in it aren't loaded. A partial that is a file is refused.
 async fn partial(State(state): State<WebState>, axum::Json(body): axum::Json<PartialBody>) -> ApiResult {
     let mut location = location(&body.url)?;
+    if let Some(why) = crate::nomad::paths::partial_refusal(&location.path) {
+        return Err(bad(why));
+    }
     location.fields = body.fields;
     let node = location.node;
     let fetched = state.fetch(location, true).await?;
