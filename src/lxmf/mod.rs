@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use rmpv::Value;
 
 pub use fields::{Extras, Location, Reaction};
-pub use inbound::{Heard, spawn_inbound, with_destination};
+pub use inbound::{Heard, MAX_ATTACHMENTS, spawn_inbound, with_destination};
 pub use policy::Policy;
 pub use send::{CANCELLED, Sending, WAITING_FOR_DELIVERY, send};
 pub use sync::Syncer;
@@ -209,6 +209,8 @@ pub struct InboundMessage {
     pub timestamp: f64,
     pub verified: bool,
     pub attachments: Vec<Attachment>,
+    /// Files it listed past the limit on a message's files, not taken.
+    pub dropped_attachments: usize,
     /// Read in from a paper message, not received over the network.
     pub paper: bool,
     /// The message it answers, if it's a reply.
@@ -312,15 +314,39 @@ mod tests {
         let outgoing = Outgoing::text([1; 16], "hi".into(), vec![img, doc], DeliveryMode::Direct, 1_800_000_000.0);
         let message = build_message(&identity, [2; 16], &outgoing, None).await.unwrap();
         let unpacked = LxMessage::unpack(finish(message).unwrap().wire_bytes()).unwrap();
-        let attachments = attachments_of(&unpacked);
+        let (attachments, dropped) = attachments_of(&unpacked);
         std::fs::remove_dir_all(&dir).unwrap();
 
         assert_eq!(attachments.len(), 2);
+        assert_eq!(dropped, 0);
         assert!(attachments[0].image);
         assert_eq!(attachments[0].name, "image.png");
         assert_eq!(attachments[1].name, "notes.txt");
         assert_eq!(attachments[1].data, b"hello");
         assert_eq!(unpacked.content_text(), "hi");
+    }
+
+    #[tokio::test]
+    async fn files_past_the_limit_are_not_taken() {
+        let dir = std::env::temp_dir().join(format!("rettui-test-many-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let files: Vec<_> = (0..inbound::MAX_ATTACHMENTS + 10)
+            .map(|n| {
+                let path = dir.join(format!("f{n}.txt"));
+                std::fs::write(&path, b"").unwrap();
+                path
+            })
+            .collect();
+        let identity = Identity::new();
+        let outgoing = Outgoing::text([1; 16], "hi".into(), files, DeliveryMode::Direct, 1_800_000_000.0);
+        let message = build_message(&identity, [2; 16], &outgoing, None).await.unwrap();
+        let unpacked = LxMessage::unpack(finish(message).unwrap().wire_bytes()).unwrap();
+        let (attachments, dropped) = attachments_of(&unpacked);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(attachments.len(), inbound::MAX_ATTACHMENTS);
+        assert_eq!(dropped, 10);
+        assert_eq!(attachments[0].name, "f0.txt");
     }
 
     #[test]

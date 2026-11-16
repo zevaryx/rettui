@@ -28,15 +28,20 @@ pub(crate) fn safe_file_name(name: &str) -> String {
     if reserved { format!("_{stem}{ext}") } else { format!("{stem}{ext}") }
 }
 
+/// What a file counts for at least, against a limit on a folder's size: a
+/// file takes a block on disk however small it is, and empty files are
+/// otherwise free to make by the thousand.
+pub(crate) const FILE_MIN_CHARGE: u64 = 4096;
+
 /// Bytes the files under `dir` take (folders inside it counted too, to a few
-/// levels).
+/// levels), each counted for at least [`FILE_MIN_CHARGE`].
 pub(crate) fn folder_size(dir: &Path) -> u64 {
     fn walk(dir: &Path, depth: usize) -> u64 {
         let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
         entries
             .flatten()
             .map(|entry| match entry.metadata() {
-                Ok(meta) if meta.is_file() => meta.len(),
+                Ok(meta) if meta.is_file() => meta.len().max(FILE_MIN_CHARGE),
                 Ok(meta) if meta.is_dir() && depth < 4 => walk(&entry.path(), depth + 1),
                 _ => 0,
             })
@@ -57,8 +62,25 @@ pub(crate) fn unique_path(dir: &Path, name: &str) -> PathBuf {
         Some((stem, ext)) => (stem.to_string(), format!(".{ext}")),
         None => (name.clone(), String::new()),
     };
-    (1..).map(|i| dir.join(format!("{stem}-{i}{ext}"))).find(|p| !p.exists()).expect("an unused name exists")
+    // Counting up from 1 each time is quadratic for many files of one name,
+    // so past a few tries the number is random.
+    for i in 1..=SEQUENTIAL_TRIES {
+        let path = dir.join(format!("{stem}-{i}{ext}"));
+        if !path.exists() {
+            return path;
+        }
+    }
+    loop {
+        let path = dir.join(format!("{stem}-{:08x}{ext}", rand::random::<u32>()));
+        if !path.exists() {
+            return path;
+        }
+    }
 }
+
+/// How many numbered names, `name-1` on, [`unique_path`] tries before it
+/// picks a random one.
+const SEQUENTIAL_TRIES: u32 = 8;
 
 /// A path typed, pasted or dropped into a prompt. A terminal given a file
 /// dragged onto it may quote it (`'…'` or `"…"`), escape its spaces and
@@ -214,13 +236,34 @@ mod tests {
     }
 
     #[test]
+    fn many_files_of_one_name_each_get_a_free_path_quickly() {
+        let dir = std::env::temp_dir().join(format!("rettui-unique-many-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let path = unique_path(&dir, "same.txt");
+            assert!(!path.exists() && path.starts_with(&dir));
+            assert!(seen.insert(path.clone()), "{path:?} handed out twice");
+            std::fs::write(&path, b"").unwrap();
+        }
+        // The first few are numbered, as before.
+        assert!(dir.join("same-1.txt").exists() && dir.join("same-8.txt").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_folders_size_counts_what_is_inside_it() {
         let dir = std::env::temp_dir().join(format!("rettui-folder-size-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("a/b")).unwrap();
         std::fs::write(dir.join("x"), [0; 10]).unwrap();
         std::fs::write(dir.join("a/b/y"), [0; 5]).unwrap();
-        assert_eq!(super::folder_size(&dir), 15);
+        // Each file counts for at least a block.
+        assert_eq!(super::folder_size(&dir), 2 * FILE_MIN_CHARGE);
+        std::fs::write(dir.join("big"), vec![0; FILE_MIN_CHARGE as usize + 7]).unwrap();
+        std::fs::write(dir.join("empty"), b"").unwrap();
+        assert_eq!(super::folder_size(&dir), 4 * FILE_MIN_CHARGE + 7);
         assert_eq!(super::folder_size(&dir.join("none")), 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
