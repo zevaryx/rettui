@@ -379,7 +379,7 @@ impl Page {
     fn table(&self, out: &mut Layout, width: usize, table: &Table, selected: Option<usize>) {
         let indent = table.indent.min(width - 1);
         let avail = table.max_width.map_or(width - indent, |w| w.min(width - indent));
-        let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0).max(table.columns.len());
+        let columns = table.column_count();
         if columns == 0 {
             return;
         }
@@ -472,5 +472,8 @@ impl Page {
             }
         }
         out.lines.push(rule("└", "┴", "┘"));
+        if table.cut {
+            out.lines.push(Line::from(vec![Span::raw(" ".repeat(left)), Span::styled("[table cut short]", BORDER)]));
+        }
     }
 }

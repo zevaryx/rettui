@@ -23,6 +23,11 @@ const DIVIDER_CHARS: usize = 1200;
 /// its size as HTML.
 const DIVIDERS_DRAWN: usize = 50;
 
+/// The most HTML one page makes. A page is at most 8 MB of source, so this
+/// leaves room for any real one; it stops what the caps on tables and
+/// dividers don't foresee from filling the browser's and the server's memory.
+pub(super) const MAX_HTML_BYTES: usize = 16 << 20;
+
 pub fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -186,6 +191,10 @@ impl Page {
         let mut folds: Vec<usize> = Vec::new();
         let mut dividers = 0;
         for (index, line) in self.lines.iter().enumerate() {
+            if out.len() >= MAX_HTML_BYTES {
+                out.push_str("<div class=\"m-line\">[page too large to show]</div>");
+                break;
+            }
             if let MLine::Text { section: Some(section), .. } = line {
                 while folds.last().is_some_and(|level| section.level <= *level) {
                     folds.pop();
@@ -313,16 +322,22 @@ impl Page {
         let place = format!("padding-left:{}ch;text-align:{}", table.indent, align_css(table.align));
         let size = table.max_width.map(|w| format!("max-width:{w}ch")).unwrap_or_default();
         let mut out = format!("<div class=\"m-table-wrap\" style=\"{place}\"><table class=\"m-table\" style=\"{size}\">");
-        let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0).max(table.columns.len());
+        let columns = table.column_count();
         for (r, row) in table.rows.iter().enumerate() {
             let cell = if table.header && r == 0 { "th" } else { "td" };
             out.push_str("<tr>");
-            for c in 0..columns {
+            for (c, spans) in row.iter().enumerate() {
                 let align = align_css(table.columns.get(c).copied().unwrap_or(Alignment::Left));
-                let spans = row.get(c).map(Vec::as_slice).unwrap_or_default();
-                out.push_str(&format!("<{cell} style=\"text-align:{align}\">{}</{cell}>", self.spans_html(spans, link)));
+                // A short row's last cell spans the rest, instead of the row
+                // being padded with empty cells (which adds up to columns
+                // times rows for a wide row and many short ones).
+                let span = if c + 1 == row.len() && row.len() < columns { format!(" colspan=\"{}\"", columns - c) } else { String::new() };
+                out.push_str(&format!("<{cell}{span} style=\"text-align:{align}\">{}</{cell}>", self.spans_html(spans, link)));
             }
             out.push_str("</tr>");
+        }
+        if table.cut {
+            out.push_str(&format!("<tr><td class=\"m-table-cut\" colspan=\"{}\">[table cut short]</td></tr>", columns.max(1)));
         }
         out.push_str("</table></div>");
         out
