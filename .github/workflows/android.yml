@@ -8,8 +8,9 @@ name: Android
 #
 # Each build is signed with the key in the ANDROID_KEYSTORE secret (a
 # keystore, base64), if there is one, so a new APK installs over the last;
-# without it, with the runner's own debug key, which changes every run (so
-# uninstall the app before installing another).
+# without it, a test build uses the runner's own debug key, which changes
+# every run (so uninstall the app before installing another), and a release
+# build stops.
 on:
   workflow_dispatch:
     inputs:
@@ -93,7 +94,8 @@ jobs:
             echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/rettui.keystore"
             echo "RETTUI_KEYSTORE=$RUNNER_TEMP/rettui.keystore" >> "$GITHUB_ENV"
           elif [ "$BUILD_TYPE" = release ]; then
-            echo "::warning::No ANDROID_KEYSTORE secret: the release's APK is signed with a key of this run's own, so it won't install over another build"
+            echo "::error::No ANDROID_KEYSTORE secret: a release is never signed with the runner's debug key, so there is nothing to sign it with"
+            exit 1
           fi
 
       # Minutes since late 2023: higher for every build, test or release, so
