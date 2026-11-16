@@ -38,6 +38,8 @@ object Avatars {
 
     private fun fetch(context: Context, address: String): String? = try {
         val token = RettuiService.token(context) ?: error("no token")
+        // Only rettui is given the token.
+        if (!Rettui.genuine(context)) error("not rettui")
         val connection = URL("http://127.0.0.1:${Rettui.port(context)}/face/$address.svg").openConnection() as HttpURLConnection
         connection.setRequestProperty("Authorization", "Bearer $token")
         connection.connectTimeout = 2000

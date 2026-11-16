@@ -345,6 +345,31 @@ mod address_tests {
     }
 }
 
+#[cfg(test)]
+mod listen_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_port_another_program_holds_is_not_taken_from_it() {
+        let holder = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let taken = holder.local_addr().unwrap();
+        // Run on its own, it says so and doesn't listen elsewhere.
+        let error = listen(taken, false).await.unwrap_err();
+        assert!(format!("{error:#}").contains("could not listen"), "{error:#}");
+        // The Android app, which writes the port it got to its port file
+        // (only once it has it), takes another one.
+        let elsewhere = listen(taken, true).await.unwrap().local_addr().unwrap();
+        assert!(elsewhere.ip() == taken.ip() && elsewhere.port() != taken.port() && elsewhere.port() != 0, "{elsewhere}");
+        // A free port is the one asked for; 0 is any, as it is.
+        let free = {
+            let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            probe.local_addr().unwrap()
+        };
+        assert_eq!(listen(free, true).await.unwrap().local_addr().unwrap(), free);
+        assert_ne!(listen("127.0.0.1:0".parse().unwrap(), false).await.unwrap().local_addr().unwrap().port(), 0);
+    }
+}
+
 #[cfg(unix)]
 #[cfg(test)]
 mod signal_tests {
@@ -408,6 +433,9 @@ pub struct WebState {
     paths: std::sync::Arc<Paths>,
     /// How the web UI is reached, for the new link once the token changes.
     link_base: String,
+    /// The port it listens on, which a client names when it asks for proof
+    /// that this is rettui (see [`routes`]' `hello`).
+    port: u16,
     /// Served over HTTPS (`--https`), so the login cookie is `Secure`.
     https: bool,
     /// rettui's own certificate authority (DER), for devices to install.
@@ -561,6 +589,22 @@ fn reachable_ip(listening: IpAddr) -> Option<IpAddr> {
         .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
 }
 
+/// The environment variable the Android app sets to a file, which rettui
+/// writes the port it listens on to once it is listening.
+const PORT_FILE_ENV: &str = "RETTUI_PORT_FILE";
+
+/// Listen on `address`; if its port is taken and `any_port`, on a free one.
+async fn listen(address: SocketAddr, any_port: bool) -> Result<tokio::net::TcpListener> {
+    match tokio::net::TcpListener::bind(address).await {
+        Err(e) if any_port && e.kind() == std::io::ErrorKind::AddrInUse => {
+            Ok(tokio::net::TcpListener::bind(SocketAddr::new(address.ip(), 0))
+                .await
+                .with_context(|| format!("could not listen on {address}"))?)
+        }
+        bound => Ok(bound.with_context(|| format!("could not listen on {address}"))?),
+    }
+}
+
 /// The web UI, until it's stopped; or the name of the identity it's
 /// switching to (it's started again as that one).
 pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: &str, https: Option<tls::Https>) -> Result<Option<String>> {
@@ -571,7 +615,17 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         Some(how) => Some(tls::prepare(how, &paths.web_tls, address.ip()).context("could not set up HTTPS")?),
         None => None,
     };
-    let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("could not listen on {address}"))?;
+    // The Android app asks for the port it had, but another app may be
+    // holding it: then any free one, which it is told of (see below).
+    let port_file = std::env::var_os(PORT_FILE_ENV).map(std::path::PathBuf::from);
+    let listener = listen(address, port_file.is_some()).await?;
+    // The port it has (not the one asked for, which may be 0), and only now,
+    // that is bound, said to the app: a port file written before could be
+    // read while another app held the port.
+    let address = SocketAddr::new(address.ip(), listener.local_addr()?.port());
+    if let Some(file) = &port_file {
+        crate::config::write_atomic(file, address.port().to_string().as_bytes()).context("could not write the port file")?;
+    }
 
     let identity_hash = identity.hash;
     let store = Store::load_with_db(&paths.store, &paths.db);
@@ -610,6 +664,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
         signed_out: tokio::sync::watch::channel(0).0,
         paths: std::sync::Arc::new(paths),
         link_base: format!("{scheme}://{shown}"),
+        port: address.port(),
         https: served.is_some(),
         ca: served.as_ref().and_then(|s| s.ca.clone()),
     };
@@ -886,6 +941,7 @@ pub(crate) mod testing {
                 signed_out: tokio::sync::watch::channel(0).0,
                 paths: Arc::new(paths),
                 link_base: "http://127.0.0.1:8740".into(),
+                port: 8740,
                 https: false,
                 ca: None,
             };
