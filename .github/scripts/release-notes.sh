@@ -4,9 +4,19 @@
 # prerelease (`v1.7.0-rc.1`) takes its own section if there is one, else
 # the release's. No section: an error, so a release isn't made without one.
 #
-#   .github/scripts/release-notes.sh v1.7.0 [CHANGELOG.md]
+# With `--collapse` each `###` subsection (Added, Fixed, ...) is wrapped in a
+# collapsed <details> block, so a long changelog doesn't push the release's
+# assets far down the page. Only the GitHub release uses it; CHANGELOG.md
+# and the pull request description stay as they are.
+#
+#   .github/scripts/release-notes.sh [--collapse] v1.7.0 [CHANGELOG.md]
 set -euo pipefail
-tag="${1:?usage: release-notes.sh <tag> [changelog]}"
+collapse=0
+if [ "${1:-}" = "--collapse" ]; then
+  collapse=1
+  shift
+fi
+tag="${1:?usage: release-notes.sh [--collapse] <tag> [changelog]}"
 changelog="${2:-CHANGELOG.md}"
 
 section() {
@@ -26,5 +36,20 @@ notes="$(printf '%s\n' "$notes" | awk 'NF { last = NR } { line[NR] = $0 } END { 
 if [ -z "$notes" ]; then
   echo "::error::$changelog has no section headed \"## $tag\": add one before tagging" >&2
   exit 1
+fi
+if [ "$collapse" = 1 ]; then
+  # Blank lines inside <details> keep the markdown rendering. A `###` line
+  # inside a code fence is text, not a heading.
+  notes="$(printf '%s\n' "$notes" | awk '
+    /^```/ { fence = !fence }
+    !fence && /^### / {
+      if (open) print "\n</details>\n"
+      print "<details>\n<summary><b>" substr($0, 5) "</b></summary>\n"
+      open = 1
+      next
+    }
+    { print }
+    END { if (open) print "\n</details>" }
+  ')"
 fi
 printf '%s\n' "$notes"

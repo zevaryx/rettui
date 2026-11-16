@@ -124,7 +124,9 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
      desktop app's installers, the APK,
      `SHA256SUMS`, `rettui.rb` and `PKGBUILD`, and the tag's section of
      `CHANGELOG.md` (printed by `.github/scripts/release-notes.sh v1.7.0`)
-     as its notes, with the Docker image's name;
+     as its notes, with each `###` subsection folded away in a
+     `<details>` block (`--collapse`) so the assets are near the top, and
+     the Docker image's name;
   7. for a release, publishes the formula to the Homebrew tap and the
      package to the AUR (see *Homebrew and the AUR* below).
 

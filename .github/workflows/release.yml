@@ -133,7 +133,7 @@ jobs:
           prerelease=()
           if [[ "$TAG" == *-* ]]; then prerelease=(--prerelease); fi
           {
-            .github/scripts/release-notes.sh "$TAG"
+            .github/scripts/release-notes.sh --collapse "$TAG"
             printf '\n**Docker:** `docker pull %s`\n' "$image"
           } > notes.md
           gh release create "$TAG" dist/* \
