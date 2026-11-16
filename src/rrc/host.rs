@@ -44,6 +44,9 @@ const OPERATORS_FILE: &str = "rettui-operators.json";
 const CONSOLE: [u8; 16] = [0xff; 16];
 /// Most Links at once; more are closed as they come.
 const MAX_LINKS: usize = 256;
+/// Most Links one identity may hold (one per device it's used on is usual):
+/// otherwise one visitor could take every one of [`MAX_LINKS`].
+const MAX_LINKS_EACH: usize = 8;
 /// Commands rsRRCD lets only a room's operators run, naming the room first.
 const ROOM_COMMANDS: &[&str] = &["/topic", "/mode", "/op", "/deop", "/voice", "/devoice", "/invite", "/ban", "/unban", "/kick"];
 
@@ -474,11 +477,7 @@ impl Hub {
                     self.core.router.established(link);
                 }
                 Some((link, peer)) = events.links_identified.recv() => {
-                    let actions = if self.core.blocked.has_identity(&peer) {
-                        vec![Action::Close(link)]
-                    } else {
-                        self.core.router.identified(link, peer)
-                    };
+                    let actions = self.core.identified(link, peer);
                     self.apply(actions).await;
                 }
                 Some((data, link)) = events.link_packets.recv() => {
@@ -627,6 +626,20 @@ impl Core {
         let _ = self.router.packet(CONSOLE, &hello.encode());
     }
 
+    /// `link` says who it is: closed if they're blocked, or hold
+    /// [`MAX_LINKS_EACH`] already.
+    fn identified(&mut self, link: [u8; 16], peer: Hash) -> Vec<Action> {
+        if self.blocked.has_identity(&peer) {
+            return vec![Action::Close(link)];
+        }
+        let held = self.router.state.sessions.iter().filter(|(other, session)| **other != link && session.peer == Some(peer)).count();
+        if held >= MAX_LINKS_EACH {
+            tracing::debug!("closed a link from {}: it has {MAX_LINKS_EACH} open already", hex::encode(peer));
+            return vec![Action::Close(link)];
+        }
+        self.router.identified(link, peer)
+    }
+
     /// A frame from `link`: screened, its nick cleaned, then given to
     /// rsRRCD; and whoever is banned from a room taken out of it.
     fn forward(&mut self, link: [u8; 16], data: &[u8]) -> Vec<Action> {
@@ -653,7 +666,14 @@ impl Core {
     /// already or it is the hub's; the nick not taken, if one wasn't.
     fn with_clean_nick(&self, link: [u8; 16], data: &[u8]) -> (Vec<u8>, Option<String>) {
         let Ok(mut env) = Envelope::decode_strict(data) else { return (data.to_vec(), None) };
-        let Some(nick) = env.nick.clone() else { return (data.to_vec(), None) };
+        // A HELLO's nick in the older place, which rsRRCD takes when there's
+        // none above: moved up, to be cleaned and checked the same way.
+        let legacy = if env.t == t::HELLO { take_legacy_nick(&mut env) } else { None };
+        let moved = legacy.is_some();
+        if env.nick.is_none() {
+            env.nick = legacy.flatten();
+        }
+        let Some(nick) = env.nick.clone() else { return (if moved { env.encode() } else { data.to_vec() }, None) };
         let cleaned = crate::names::clean(&nick);
         let taken = |wanted: &str| {
             wanted.eq_ignore_ascii_case("hub")
@@ -666,7 +686,7 @@ impl Core {
         };
         let usable = cleaned.filter(|n| !taken(n));
         if usable.as_deref() == Some(nick.as_str()) {
-            return (data.to_vec(), None);
+            return (if moved { env.encode() } else { data.to_vec() }, None);
         }
         let refused = usable.is_none().then(|| nick.chars().filter(|c| !c.is_control()).take(32).collect());
         env.nick = usable;
@@ -1238,6 +1258,18 @@ fn modes(room: &rsrrcd::Room) -> String {
     if flags.is_empty() { "(none)".into() } else { format!("+{flags}") }
 }
 
+/// Where older clients put a HELLO's nick: in its body.
+const B_HELLO_NICK_LEGACY: u64 = 64;
+
+/// Take the nick out of a HELLO's body: `Some` if the body had one (`None`
+/// in it if it wasn't text).
+fn take_legacy_nick(env: &mut Envelope) -> Option<Option<String>> {
+    let Some(Value::Map(body)) = &mut env.body else { return None };
+    let at = body.iter().position(|(key, _)| super::envelope::as_u64(key) == Some(B_HELLO_NICK_LEGACY))?;
+    let (_, value) = body.remove(at);
+    Some(value.as_text().map(str::to_string))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1620,6 +1652,50 @@ mod tests {
         assert_eq!(nick(&core, 2).as_deref(), Some("bob"), "hidden characters are taken out");
         let out = send(&mut core, 2, Envelope::new(t::PART, &BOB).room("lobby"));
         assert!(sent(&out).iter().any(|(link, kind, ..)| *link == 1 && *kind == t::PARTED), "members still part");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_identity_holds_only_a_few_links() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-links-each-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        let mut closed = 0;
+        for n in 1..=MAX_LINKS_EACH as u8 + 3 {
+            core.router.established([n; 16]);
+            core.connected.insert([n; 16], 1_800_000_000);
+            let actions = core.identified([n; 16], BOB);
+            closed += actions.iter().filter(|a| matches!(a, Action::Close(link) if *link == [n; 16])).count();
+        }
+        assert_eq!(closed, 3);
+        // Someone else still gets in.
+        core.router.established([100; 16]);
+        assert!(!core.identified([100; 16], AMY).iter().any(|a| matches!(a, Action::Close(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_nick_in_the_older_hello_field_is_cleaned_and_checked_too() {
+        use ciborium::value::Integer;
+        let dir = std::env::temp_dir().join(format!("rettui-hub-legacy-nick-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        let nick = |core: &Core, link: u8| core.router.state.sessions[&[link; 16]].nick.clone();
+        let hello = |nick: &str| {
+            let body = Value::Map(vec![(Value::Integer(Integer::from(B_HELLO_NICK_LEGACY)), Value::Text(nick.into()))]);
+            Envelope::new(t::HELLO, &BOB).body(body)
+        };
+        core.router.established([2; 16]);
+        core.connected.insert([2; 16], 1_800_000_000);
+        let _ = core.router.identified([2; 16], BOB);
+        for taken in ["hub", "HUB", "amy", "AMY"] {
+            let out = send(&mut core, 2, hello(taken));
+            assert!(sent(&out).iter().any(|(link, kind, _, text)| *link == 2
+                && *kind == t::NOTICE
+                && text.as_deref().is_some_and(|t| t.contains("isn't available"))));
+            assert_eq!(nick(&core, 2), None, "{taken}");
+        }
+        let _ = send(&mut core, 2, hello("b\u{202e}o\u{1b}b"));
+        assert_eq!(nick(&core, 2).as_deref(), Some("bob"), "hidden and control characters are taken out");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
