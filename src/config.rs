@@ -556,7 +556,7 @@ impl Settings {
         if fs::metadata(path)?.len() > MAX_SETTINGS_BYTES {
             bail!("{} is more than {} MB, which no settings file is", path.display(), MAX_SETTINGS_BYTES / 1_000_000);
         }
-        let text = fs::read_to_string(path)?;
+        let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let value: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         let schedule_set = value.get("announce_schedule").is_some();
         // From before message requests: ignoring unknown senders was a
@@ -588,6 +588,36 @@ impl Settings {
             settings.unknown_senders = "ignore".into();
         }
         Ok(settings)
+    }
+
+    /// [`Settings::load`]; but with `aside` (where nobody can edit the file
+    /// by hand to mend it: the Android app), a file that can't be read as
+    /// settings is moved to `settings-unreadable-<time>.json` and the
+    /// defaults are saved in its place, rather than stopping at every start.
+    /// A note for the user comes with those defaults. Anywhere else, and for
+    /// a file that can't be read at all (not one with bad contents), the
+    /// error is returned as it is.
+    pub fn load_or_aside(path: &Path, aside: bool) -> Result<(Self, Option<String>)> {
+        let error = match Self::load(path) {
+            Ok(settings) => return Ok((settings, None)),
+            Err(e) => e,
+        };
+        let bad_contents = error.chain().any(|e| {
+            e.is::<serde_json::Error>() || e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::InvalidData)
+        }) || fs::metadata(path).is_ok_and(|m| m.len() > MAX_SETTINGS_BYTES);
+        if !aside || !bad_contents {
+            return Err(error);
+        }
+        tracing::warn!("settings.json couldn't be read, starting with the defaults: {error:#}");
+        let kept = path.with_file_name(format!("settings-unreadable-{}.json", chrono::Utc::now().timestamp()));
+        let moved = replace(path, &kept);
+        let defaults = Self::default();
+        defaults.save(path)?;
+        let why = match moved {
+            Ok(()) => format!("The file is kept as {}", kept.display()),
+            Err(e) => format!("It couldn't be moved aside ({e}), and is written over"),
+        };
+        Ok((defaults, Some(format!("Your settings couldn't be read ({error:#}), so rettui started with its default settings. {why}"))))
     }
 
     /// Where this station is, if that's set.
@@ -660,6 +690,19 @@ pub enum WebAccess {
     /// A toggle it may turn off, but not on.
     TurnOffOnly,
     TerminalOnly,
+}
+
+/// What loading the settings at start has to say (see [`Settings::load_or_aside`]).
+static START_NOTES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Say `note` in the log once the app is up (see [`take_start_notes`]).
+pub fn note_at_start(note: String) {
+    START_NOTES.lock().unwrap_or_else(|e| e.into_inner()).push(note);
+}
+
+/// What was said with [`note_at_start`], once.
+pub fn take_start_notes() -> Vec<String> {
+    std::mem::take(&mut *START_NOTES.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// The most `settings.json` may be when read: the settings are a few KB.
@@ -2428,5 +2471,42 @@ mod tests {
         std::fs::write(&path, r#"{"announce_schedule": "random", "announce_interval_mins": 0}"#).unwrap();
         assert_eq!(Settings::load(&path).unwrap().announce_schedule, "random");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unreadable_settings_stop_rettui_except_where_they_cant_be_mended() {
+        let dir = std::env::temp_dir().join(format!("rettui-settings-aside-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        for (name, text) in [("syntax", &b"{not json"[..]), ("type", br#"{"message_storage_mb":"x"}"#), ("text", &[0xff, 0xfe][..])] {
+            fs::write(&path, text).unwrap();
+            // As on a computer: an error that names the file, and the file stays.
+            let error = format!("{:#}", Settings::load_or_aside(&path, false).unwrap_err());
+            assert!(error.contains("settings.json"), "{name}: {error}");
+            assert_eq!(fs::read(&path).unwrap(), text, "{name}");
+            // As in the app: set aside, defaults, and a note saying where.
+            let (settings, note) = Settings::load_or_aside(&path, true).unwrap();
+            let note = note.unwrap();
+            assert!(note.contains("default settings") && note.contains("settings-unreadable-"), "{name}: {note}");
+            assert!(settings.welcomed, "{name}: not a new install");
+            assert!(Settings::load(&path).is_ok(), "{name}: the next start reads");
+            let kept: Vec<_> = fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("settings-unreadable-"))
+                .collect();
+            assert_eq!(fs::read(kept[0].path()).unwrap(), text, "{name}");
+            for e in kept {
+                fs::remove_file(e.path()).unwrap();
+            }
+        }
+        // A good file is read as it is, with nothing said.
+        assert!(Settings::load_or_aside(&path, true).unwrap().1.is_none());
+        // A file that can't be opened at all isn't the contents' fault: left alone.
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(Settings::load_or_aside(&path, true).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 }
