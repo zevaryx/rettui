@@ -522,6 +522,29 @@ pub fn backup_key() -> Result<()> {
     Ok(())
 }
 
+/// Convert the hosted propagation node's message store to the layout
+/// rsLXMF 1.4 reads. The old messages are kept in a quarantine folder, not
+/// served.
+pub fn migrate_propagation(paths: &Paths) -> Result<()> {
+    use lxmf_core::propagation_store_v2::{begin_offline_migration, migrate_store_offline};
+    let dir = &paths.propagation;
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // The guard holds the store's lock, which a running rettui holds too.
+    let guard = begin_offline_migration(dir, true)
+        .map_err(|e| anyhow!("Couldn't take the message store {} (is rettui still running?): {e}", dir.display()))?;
+    let report = migrate_store_offline(&guard).map_err(|e| anyhow!("Couldn't convert the message store {}: {e}", dir.display()))?;
+    println!("The message store is ready at {}.", report.store.display());
+    if report.quarantine.files > 0 {
+        println!(
+            "{} old message files ({} bytes) were kept apart in the quarantine folder beside it, and won't be handed out.",
+            report.quarantine.files, report.quarantine.bytes
+        );
+    }
+    Ok(())
+}
+
 /// Save a copy of the identity in use to `file`.
 pub fn export_identity(paths: &Paths, file: &Path) -> Result<()> {
     let identity = crate::app::identity::copy_identity(&paths.identity, file).map_err(|e| anyhow!(e))?;
@@ -646,6 +669,23 @@ mod tests {
         // Tests don't print to a terminal: nothing, and no failure.
         print_qr("lxma://abc");
         print_qr(&"x".repeat(5000));
+    }
+
+    #[test]
+    fn an_old_message_store_is_converted_and_then_opens() {
+        let dir = std::env::temp_dir().join(format!("rettui-cli-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = Paths::new(Some(dir.clone())).unwrap();
+        std::fs::create_dir_all(&paths.propagation).unwrap();
+        std::fs::write(paths.propagation.join("0123"), b"an old message").unwrap();
+        let open = || lxmf_core::propagation_store_v2::open_store(&paths.propagation);
+        assert!(lxmf_core::propagation_store_v2::is_migration_required(&open().unwrap_err()));
+        migrate_propagation(&paths).unwrap();
+        assert!(open().is_ok());
+        assert!(dir.join("propagation.legacy-quarantine").exists(), "old messages kept");
+        // Again, with nothing left to convert.
+        migrate_propagation(&paths).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

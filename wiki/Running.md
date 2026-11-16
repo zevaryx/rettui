@@ -132,6 +132,7 @@ rettui settings export FILE [--unreadable]  # save a copy of the settings (or th
 rettui settings import FILE [--keep-terminal-settings]  # use the settings in a file, with rettui stopped (refused if it can't be read)
 rettui identity export FILE  # save a copy of the identity in use (never over another file)
 rettui identity import FILE --name NAME  # keep another identity from a file, to switch to
+rettui migrate-propagation   # convert the hosted propagation node's message store after upgrading to 2.0, with rettui stopped (see Hosting a Node)
 rettui address [--link]      # print your LXMF address (--link: as an lxma:// link with your key)
 ```
 

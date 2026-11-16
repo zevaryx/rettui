@@ -269,6 +269,13 @@ enum Command {
         #[command(subcommand)]
         action: SettingsAction,
     },
+    /// Convert the propagation node's message store to the 2.0 layout, with rettui stopped.
+    ///
+    /// Run it once if rettui says it can't open the message store. The
+    /// messages kept before are moved to a `propagation.legacy-quarantine`
+    /// folder beside the store and are not handed out again: nothing can
+    /// show where they came from.
+    MigratePropagation,
     /// Download waiting messages from the propagation node.
     Sync {
         /// Propagation node to use instead of the configured one.
@@ -413,6 +420,7 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Settings { action: SettingsAction::Import { file, keep_terminal_settings } }) => {
             return cli::import_settings(&paths, file, *keep_terminal_settings);
         }
+        Some(Command::MigratePropagation) => return cli::migrate_propagation(&paths),
         Some(Command::Identity { action: IdentityAction::Export { file } }) => return cli::export_identity(&paths, file),
         Some(Command::Identity { action: IdentityAction::Import { file, name } }) => return cli::import_identity(&paths, file, name),
         _ => {}
@@ -485,6 +493,7 @@ async fn run(cli: Cli) -> Result<()> {
             | Command::BackupKey
             | Command::Unseal { .. }
             | Command::Restore { .. }
+            | Command::MigratePropagation
             | Command::Settings { .. }
             | Command::Identity { .. },
         ) => {
