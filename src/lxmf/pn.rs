@@ -106,6 +106,14 @@ struct Counters {
     rejected: AtomicU64,
 }
 
+/// Messages with too small a stamp in one transfer, after which the rest
+/// of it is refused unchecked: checking each costs a workblock (several
+/// milliseconds), an honest peer sends only messages whose stamps pass, and
+/// a transfer may hold tens of thousands.
+const MAX_BAD_STAMPS: usize = 16;
+/// A propagated message's stamp, after the message.
+const STAMP_SIZE: usize = 32;
+
 /// What taking in messages needs, shared by the Link handlers and this
 /// client's own sends to its node.
 struct Ingest {
@@ -139,12 +147,30 @@ impl Ingest {
             self.counters.rejected.fetch_add(messages.len() as u64, Ordering::Relaxed);
             return Err("several messages at once from a client (only peers may)".into());
         }
-        let mut taken = 0;
-        for message in messages {
+        let (mut taken, mut bad) = (0, 0);
+        let total = messages.len();
+        for (index, message) in messages.into_iter().enumerate() {
             let Value::Binary(data) = message else { continue };
+            if bad >= MAX_BAD_STAMPS {
+                let left = (total - index) as u64;
+                self.counters.rejected.fetch_add(left, Ordering::Relaxed);
+                tracing::warn!(
+                    "refused the last {left} messages of a propagation transfer: {MAX_BAD_STAMPS} before them had no valid stamp"
+                );
+                break;
+            }
+            // One held already is a duplicate, fine, and not worth checking
+            // its stamp again (the transient id is the hash of all but the
+            // stamp).
+            if data.len() > STAMP_SIZE && self.node.lock().unwrap().contains(&rns_crypto::sha::full_hash(&data[..data.len() - STAMP_SIZE]))
+            {
+                taken += 1;
+                continue;
+            }
             // The stamp proves the sender's work; without it, it's not taken.
             let Some((transient_id, lxmf_data, value, stamp)) = validate_pn_stamp(&data, self.min_stamp) else {
                 self.counters.rejected.fetch_add(1, Ordering::Relaxed);
+                bad += 1;
                 continue;
             };
             if lxmf_data.len() > 16 && lxmf_data[..16] == self.lxmf_hash {
@@ -654,6 +680,47 @@ mod tests {
         let wrong = transfer(ingest.lxmf_hash, &Identity::new(), 13);
         let _ = ingest.take(&wrong, false);
         assert!(delivered.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_peers_transfer_of_bad_stamps_or_copies_costs_little_work() {
+        let dir = std::env::temp_dir().join(format!("rettui-pn-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (ingest, _delivered, _) = ingest(&dir, 13);
+        let entry = |transfer: Vec<u8>| match rmpv::decode::read_value(&mut transfer.as_slice()) {
+            Ok(Value::Array(parts)) => match &parts[1] {
+                Value::Array(messages) => messages[0].clone(),
+                _ => panic!(),
+            },
+            _ => panic!(),
+        };
+        let several = |entries: Vec<Value>| encode(&Value::Array(vec![Value::F64(1_800_000_000.), Value::Array(entries)]));
+        let bob = Identity::new();
+        let bob_hash = Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&bob.hash));
+        let good = entry(transfer(bob_hash, &bob, 13));
+        let bad = || {
+            let Value::Binary(mut data) = entry(transfer(bob_hash, &bob, 13)) else { panic!() };
+            let at = data.len() - 1;
+            data[at] ^= 0xff;
+            Value::Binary(data)
+        };
+        let bads = |n: usize| (0..n).map(|_| bad()).filter(|b| !matches!(b, Value::Binary(d) if validate_pn_stamp(d, 11).is_some()));
+        // Past MAX_BAD_STAMPS bad stamps, the rest isn't looked at.
+        let mut entries: Vec<Value> = bads(MAX_BAD_STAMPS + 4).take(MAX_BAD_STAMPS).collect();
+        entries.push(good.clone());
+        assert_eq!(ingest.take(&several(entries), true), Ok(0));
+        assert_eq!(ingest.node.lock().unwrap().message_count(), 0);
+        let mut entries: Vec<Value> = bads(MAX_BAD_STAMPS + 4).take(MAX_BAD_STAMPS - 1).collect();
+        entries.push(good.clone());
+        assert_eq!(ingest.take(&several(entries), true), Ok(1));
+        // Copies of one held already are taken without checking their stamps.
+        let once = std::time::Instant::now();
+        assert_eq!(ingest.take(&several(vec![bad()]), true), Ok(0));
+        let one_check = once.elapsed();
+        let copies = std::time::Instant::now();
+        assert_eq!(ingest.take(&several(vec![good; 40]), true), Ok(40));
+        assert!(copies.elapsed() < one_check * 10, "40 copies took {:?}, one check {one_check:?}", copies.elapsed());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
