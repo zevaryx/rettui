@@ -127,6 +127,8 @@ rettui backup [FILE] [--with-files] [--without-identity] [--passphrase | --key K
 rettui backup-key            # turn a passphrase into a key that seals backups without it
 rettui unseal FILE [OUT] [--identity ID]  # open a sealed backup without restoring it (see Sealed Backups)
 rettui restore FILE [--force] [--keep-terminal-settings]  # restore one, with rettui stopped (a sealed one asks its passphrase)
+rettui settings export FILE [--unreadable]  # save a copy of the settings (or the file rettui set aside because it couldn't read it)
+rettui settings import FILE [--keep-terminal-settings]  # use the settings in a file, with rettui stopped (refused if it can't be read)
 rettui identity export FILE  # save a copy of the identity in use (never over another file)
 rettui identity import FILE --name NAME  # keep another identity from a file, to switch to
 rettui address [--link]      # print your LXMF address (--link: as an lxma:// link with your key)

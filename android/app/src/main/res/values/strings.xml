@@ -62,6 +62,16 @@
     <string name="schedule_unsealed">Make scheduled backups without a passphrase?</string>
     <string name="schedule_unsealed_note">Each backup holds your identity, the private key behind your address, and is saved in the folder you chose, where other apps and computers may read it. Without a passphrase, anyone who gets one can pose as you and read what\'s sent to you.</string>
     <string name="schedule_unsealed_save">Use none</string>
+    <string name="settings">Settings</string>
+    <string name="settings_note">Your settings on their own, without messages or the identity. If rettui can\'t read its settings file when it starts, it keeps what it can read, sets the file aside, and says so in the log; save that file here to mend it on a computer, and bring the mended one back.</string>
+    <string name="settings_save">Save a copy of the settings</string>
+    <string name="settings_save_unreadable">Save the settings file rettui couldn\'t read</string>
+    <string name="settings_use">Use settings from a file</string>
+    <string name="settings_use_confirm">rettui stops, uses the settings in the file in place of its own (which are kept in settings-before-import.json in its folder), and starts again. A file that can\'t be read is refused and nothing changes. Settings that decide which programs run aren\'t taken from a file.</string>
+    <string name="settings_use_ok">Use them</string>
+    <string name="settings_save_title">Save the settings to a file?</string>
+    <string name="settings_save_note">The settings can hold a password (an MQTT server\'s) and where you are, and the file goes where other apps and computers can read it. Keep it private.</string>
+    <string name="settings_save_ok">Save</string>
     <string name="restore_passphrase">This backup is sealed</string>
     <string name="restore_passphrase_note">Type the passphrase it was sealed with.</string>
     <string name="schedule_passphrase">A passphrase for scheduled backups?</string>
