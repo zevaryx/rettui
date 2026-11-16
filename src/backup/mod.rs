@@ -241,6 +241,10 @@ pub fn is_sealed(path: &Path) -> bool {
 /// backup from someone else can't fill the disk.
 const MAX_RESTORE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_RESTORE_ENTRIES: usize = 200_000;
+/// The most the manifest may be when read: a real one is about 100 bytes.
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+/// The settings file.
+const SETTINGS: &str = "settings.json";
 
 /// A backup that opened and is one, before anything is restored.
 struct Inspected<'a> {
@@ -308,7 +312,10 @@ fn inspect<'a>(archive: &'a Path, passphrase: Option<&str>) -> Result<Inspected<
         }
         if rel == Path::new(MANIFEST) {
             let mut text = String::new();
-            entry.read_to_string(&mut text).map_err(|e| bad(&e))?;
+            (&mut entry).take(MAX_MANIFEST_BYTES + 1).read_to_string(&mut text).map_err(|e| bad(&e))?;
+            if text.len() as u64 > MAX_MANIFEST_BYTES {
+                return Err(bad(&"its rettui-backup.json is far bigger than one should be"));
+            }
             manifest = Some(serde_json::from_str(&text).map_err(|e| bad(&e))?);
         } else {
             if entry.header().entry_type().is_file() {
@@ -324,6 +331,41 @@ fn inspect<'a>(archive: &'a Path, passphrase: Option<&str>) -> Result<Inspected<
     drop(archive_entries);
     found.manifest = manifest.ok_or_else(|| bad(&"it has no rettui-backup.json"))?;
     Ok(found)
+}
+
+/// The settings file at `path` as JSON, if it is a normal-sized one and reads.
+fn settings_json(path: &Path) -> Option<serde_json::Value> {
+    if std::fs::metadata(path).ok()?.len() > crate::config::MAX_SETTINGS_BYTES {
+        return None;
+    }
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// Check the settings just restored to `path`, which came from outside:
+/// ones rettui can't read are left out (it would stop at every start), and
+/// the ones the web UI may not set, which decide what runs here, are put
+/// back as `current` has them (see [`crate::config::withhold_web_barred`]).
+/// What to tell the user, if anything was changed.
+fn vet_settings(path: &Path, current: Option<&serde_json::Value>) -> Option<String> {
+    if let Err(e) = crate::config::Settings::load(path) {
+        let _ = std::fs::remove_file(path);
+        return Some(format!("its settings.json can't be read ({e:#}), so rettui starts with its default settings"));
+    }
+    let mut value = settings_json(path)?;
+    let withheld = crate::config::withhold_web_barred(&mut value, current);
+    if withheld.is_empty() {
+        return None;
+    }
+    // Written back the way rettui writes it.
+    let written = serde_json::to_vec_pretty(&value).map_err(anyhow::Error::from).and_then(|text| crate::config::write_private(path, &text));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(path);
+        return Some(format!("its settings.json couldn't be checked ({e:#}), so rettui starts with its default settings"));
+    }
+    Some(format!(
+        "not restored, because they decide what runs on this computer and a backup can come from anyone: {}. Set them again in the terminal UI (or in settings.json) if they're yours",
+        withheld.join(", ")
+    ))
 }
 
 /// What a backup holds, checked without restoring it.
@@ -356,6 +398,8 @@ pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str
             base.display()
         ));
     }
+    // The settings being replaced, for what the backup may not change.
+    let current = names.iter().any(|n| n == SETTINGS).then(|| settings_json(&base.join(SETTINGS))).flatten();
     let mut aside = None;
     if !replaced.is_empty() {
         let folder = base.join(format!("before-restore-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
@@ -398,6 +442,12 @@ pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str
         }
     }
     let mut done = format!("Restored {count} files from rettui {}'s backup into {}", manifest.version, base.display());
+    if names.iter().any(|n| n == SETTINGS)
+        && let Some(note) = vet_settings(&base.join(SETTINGS), current.as_ref())
+    {
+        done.push_str("; ");
+        done.push_str(&note);
+    }
     if !manifest.identity {
         done.push_str(" (it has no identity: rettui makes a new one, with new addresses, unless you restore yours)");
     }
@@ -687,6 +737,116 @@ mod tests {
         let error = restore(&build("huge.tar.gz", Some(MAX_RESTORE_BYTES + 1)), &base.join("to2"), false, None).unwrap_err();
         assert!(error.contains("bigger than a backup should be"), "{error}");
         assert!(!base.join("to2").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A backup of `files` (name, content) under the root, with `manifest` first.
+    fn backup_of(path: &Path, manifest: &[u8], files: &[(&str, &[u8])]) {
+        let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(std::fs::File::create(path).unwrap(), flate2::Compression::fast()));
+        let mut header = tar::Header::new_gnu();
+        header.set_size(manifest.len() as u64);
+        header.set_cksum();
+        tar.append_data(&mut header, format!("{ROOT}/{MANIFEST}"), manifest).unwrap();
+        for (name, content) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_cksum();
+            tar.append_data(&mut header, format!("{ROOT}/{name}"), *content).unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap();
+    }
+
+    const MANIFEST_JSON: &[u8] = br#"{"version":"2.0.0","created":0,"identity":false,"files":false}"#;
+
+    #[test]
+    fn a_manifest_of_gigabytes_is_refused_without_reading_it_whole() {
+        let base = std::env::temp_dir().join(format!("rettui-backup-manifest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // Spaces before the JSON: one more than it may be is enough to tell.
+        let mut big = vec![b' '; MAX_MANIFEST_BYTES as usize];
+        big.extend_from_slice(MANIFEST_JSON);
+        let file = base.join("big.tar.gz");
+        backup_of(&file, &big, &[]);
+        let error = restore(&file, &base.join("to"), false, None).unwrap_err();
+        assert!(error.contains("isn't a rettui backup") && error.contains("far bigger"), "{error}");
+        assert!(!base.join("to").exists());
+        let file = base.join("fine.tar.gz");
+        backup_of(&file, MANIFEST_JSON, &[]);
+        assert!(restore(&file, &base.join("to"), false, None).is_ok());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn settings_the_web_ui_may_not_set_are_not_restored_as_written() {
+        let base = std::env::temp_dir().join(format!("rettui-backup-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let evil = serde_json::json!({
+            "display_name": "Zed",
+            "voice_recorder": "sh -c 'id > /tmp/ran'",
+            "print_command": "sh -c 'id > /tmp/ran'",
+            "node_executable_pages": true,
+            "rncp_listen": true,
+            "rncp_allowed": "00".repeat(16),
+            "rncp_dir": "/tmp",
+            "rns_config": "/tmp/rns",
+        });
+        let file = base.join("evil.tar.gz");
+        backup_of(&file, MANIFEST_JSON, &[(SETTINGS, evil.to_string().as_bytes())]);
+        // Onto a new install: they go back to their defaults, and it says so.
+        let to = base.join("to");
+        let done = restore(&file, &to, false, None).unwrap();
+        assert!(done.contains("not restored") && done.contains("decide what runs"), "{done}");
+        let settings = crate::config::Settings::load(&to.join(SETTINGS)).unwrap();
+        assert_eq!(settings.display_name, "Zed", "the rest is restored");
+        assert!(settings.voice_recorder.is_none() && settings.print_command.is_none() && settings.rncp_allowed.is_none());
+        assert!(settings.rncp_dir.is_none() && settings.rns_config.is_none());
+        assert!(!settings.node_executable_pages && !settings.rncp_listen);
+        // Onto a setup that has its own: those are kept.
+        let mine = crate::config::Settings { voice_recorder: Some("arecord".into()), rncp_listen: true, ..Default::default() };
+        std::fs::create_dir_all(&to).unwrap();
+        mine.save(&to.join(SETTINGS)).unwrap();
+        restore(&file, &to, true, None).unwrap();
+        let settings = crate::config::Settings::load(&to.join(SETTINGS)).unwrap();
+        assert_eq!(settings.display_name, "Zed");
+        assert_eq!(settings.voice_recorder.as_deref(), Some("arecord"));
+        assert!(settings.rncp_listen && settings.print_command.is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn ordinary_settings_come_back_untouched() {
+        let base = std::env::temp_dir().join(format!("rettui-backup-settings-kept-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (from, to) = (base.join("from"), base.join("to"));
+        std::fs::create_dir_all(&from).unwrap();
+        let mine = crate::config::Settings { display_name: "Amy".into(), ..Default::default() };
+        mine.save(&from.join(SETTINGS)).unwrap();
+        let file = base.join("backup.tar.gz");
+        create(&from, std::fs::File::create(&file).unwrap(), Options::default()).unwrap();
+        let done = restore(&file, &to, false, None).unwrap();
+        assert!(!done.contains("not restored"), "{done}");
+        assert_eq!(std::fs::read(from.join(SETTINGS)).unwrap(), std::fs::read(to.join(SETTINGS)).unwrap());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn settings_that_cant_be_read_are_left_out_so_rettui_still_starts() {
+        let base = std::env::temp_dir().join(format!("rettui-backup-settings-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        for (name, text) in
+            [("syntax", &b"{not json"[..]), ("type", br#"{"message_storage_mb":"x"}"#), ("huge", &vec![b' '; 2_000_000][..])]
+        {
+            let file = base.join(format!("{name}.tar.gz"));
+            backup_of(&file, MANIFEST_JSON, &[(SETTINGS, text), ("store.json.gz", b"store")]);
+            let to = base.join(name);
+            let done = restore(&file, &to, false, None).unwrap();
+            assert!(done.contains("settings.json can't be read"), "{name}: {done}");
+            assert!(!to.join(SETTINGS).exists(), "{name}");
+            assert!(to.join("store.json.gz").exists(), "{name}: the rest is restored");
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 }
