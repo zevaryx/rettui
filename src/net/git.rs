@@ -675,11 +675,12 @@ impl LinkTransport {
 }
 
 /// A reply, or a file: only a Resource reply carries metadata.
-fn classify(response: LinkSessionResponse) -> Response {
-    match response.metadata {
-        None => Response::Packet(response.data),
-        metadata => Response::File { data: response.data, metadata },
-    }
+async fn classify(response: LinkSessionResponse) -> Result<Response, rngit::Error> {
+    let (data, metadata) = super::response_bytes(response).await.map_err(rngit::Error::Transport)?;
+    Ok(match metadata {
+        None => Response::Packet(data),
+        metadata => Response::File { data, metadata },
+    })
 }
 
 impl Transport for LinkTransport {
@@ -709,7 +710,7 @@ impl Transport for LinkTransport {
             }
             let session = link.as_ref().ok_or_else(|| rngit::Error::Transport("no link".into()))?;
             match session.handle.request(path, &data, Some(timeout)).await {
-                Ok(response) => return Ok(classify(response)),
+                Ok(response) => return classify(response).await,
                 // A link gone quiet is worth one fresh try.
                 Err(LinkSessionError::SessionClosed | LinkSessionError::LinkNotActive) if attempt == 0 => *link = None,
                 Err(e) => return Err(rngit::Error::Transport(e.to_string())),

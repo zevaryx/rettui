@@ -33,7 +33,7 @@ impl StampCheck {
     pub fn passes(&self, message: &LxMessage) -> bool {
         match self {
             StampCheck::Accepted => true,
-            StampCheck::Needs { cost, tokens } => message.validate_stamp_with_tickets(*cost, Some(tokens)),
+            StampCheck::Needs { cost, tokens } => message.validate_stamp_with_tickets(f64::from(*cost), Some(tokens)),
         }
     }
 }
@@ -271,7 +271,7 @@ mod tests {
         // No stamp: dropped; a valid one (cost 4 takes a moment): taken.
         assert!(!policy.stamp_accepted(&received([2; 16], |_| {})));
         let stamped = received([2; 16], |m| {
-            m.stamp_cost = Some(4);
+            m.stamp_cost = Some(4.0);
         });
         assert!(policy.stamp_accepted(&stamped));
         // A contact needs none.

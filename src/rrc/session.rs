@@ -165,13 +165,10 @@ async fn session(
     let connected = match config.key {
         Some(key) => {
             let session = rns_runtime::link_session::LinkSessionConfig {
-                destination_hash: hub,
-                remote_public_key: key,
                 hops: 1,
                 establishment_timeout: LOCAL_LINK_TIMEOUT,
-                client_label: options.client_label,
-                identify: true,
                 track_phy_stats: false,
+                ..rns_runtime::link_session::LinkSessionConfig::identified(hub, key, options.client_label)
             };
             LinkSession::connect(runtime.transport_tx.clone(), identity.clone(), session).await.map_err(|e| e.to_string())
         }

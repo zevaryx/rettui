@@ -23,7 +23,7 @@ use std::time::Duration;
 use super::{Hash, Known, Ping};
 
 /// Most stamp cost asked of each message: more takes a phone minutes.
-pub const MAX_STAMP_COST: u8 = 20;
+pub const MAX_STAMP_COST: f64 = 20.0;
 /// Nodes not heard for this long are left out.
 pub const FRESH: Duration = Duration::from_secs(24 * 3600);
 /// How many of the nearest are probed (besides the one picked before).
@@ -44,14 +44,14 @@ pub fn retry_after(failed: u32) -> Duration {
 }
 
 /// A propagation node that might be picked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Candidate {
     pub hash: Hash,
     pub hops: u8,
     /// When it was last heard (Unix seconds).
     pub heard: i64,
     /// The stamp cost it asks, if its announce was kept.
-    pub stamp_cost: Option<u8>,
+    pub stamp_cost: Option<f64>,
 }
 
 /// How a probe of a candidate went.
@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(retry_after(100), RECHECK);
     }
 
-    fn candidate(n: u8, hops: u8, hours_ago: i64, stamp_cost: Option<u8>) -> Candidate {
+    fn candidate(n: u8, hops: u8, hours_ago: i64, stamp_cost: Option<f64>) -> Candidate {
         Candidate { hash: [n; 16], hops, heard: NOW - hours_ago * 3600, stamp_cost }
     }
 
@@ -160,15 +160,15 @@ mod tests {
     #[test]
     fn the_nearest_usable_nodes_are_probed() {
         let all: HashMap<Hash, Candidate> = [
-            candidate(1, 2, 1, Some(16)),
-            candidate(2, 2, 2, Some(16)),
-            candidate(3, 3, 1, Some(16)),
-            candidate(4, 2, 30, Some(16)), // not heard for a day
-            candidate(5, 1, 1, Some(40)),  // asks too much
-            candidate(6, 1, 1, Some(16)),  // hosted here
-            candidate(7, 5, 1, None),      // its announce wasn't kept: allowed
-            candidate(8, 4, 1, Some(16)),
-            candidate(9, 6, 1, Some(16)), // the one picked before, far away
+            candidate(1, 2, 1, Some(16.0)),
+            candidate(2, 2, 2, Some(16.0)),
+            candidate(3, 3, 1, Some(16.0)),
+            candidate(4, 2, 30, Some(16.0)), // not heard for a day
+            candidate(5, 1, 1, Some(40.0)),  // asks too much
+            candidate(6, 1, 1, Some(16.0)),  // hosted here
+            candidate(7, 5, 1, None),        // its announce wasn't kept: allowed
+            candidate(8, 4, 1, Some(16.0)),
+            candidate(9, 6, 1, Some(16.0)), // the one picked before, far away
         ]
         .into_iter()
         .map(|c| (c.hash, c))

@@ -9,7 +9,7 @@ use lxmf_core::constants::{
 };
 use lxmf_core::handlers::{compression_support_from_app_data, parse_pn_announce_data, stamp_cost_from_app_data};
 use lxmf_core::message_api::{DeliveryMethod, LxMessage, LxMessageDraft, MessageError, SignedLxMessage};
-use lxmf_core::propagation_send::{AdvertisedNodePolicy, PreparedNode, PropagationEnvelope};
+use lxmf_core::propagation_send::{AdvertisedNodePolicy, EncryptionBinding, PreparedNode, PropagationEnvelope};
 use rmpv::Value;
 use rns_runtime::prelude::*;
 use tokio::sync::{mpsc, watch};
@@ -69,8 +69,8 @@ fn compressed_for(app_data: Option<&[u8]>) -> bool {
 pub const MAX_STAMP_COST: u8 = 28;
 
 /// `cost` as announced, if it is one that can be worked out.
-fn workable(cost: u8, whose: &str) -> Result<u8, String> {
-    if cost > MAX_STAMP_COST {
+fn workable(cost: f64, whose: &str) -> Result<f64, String> {
+    if cost > f64::from(MAX_STAMP_COST) {
         return Err(format!("{whose} asks for a stamp cost of {cost}, more than rettui will work out ({MAX_STAMP_COST})"));
     }
     Ok(cost)
@@ -223,7 +223,7 @@ async fn send_direct(
     let compress = compressed_for(recipient.app_data.as_deref());
     let hash = message.message_id();
     // Proof-of-work stamps can take a while at higher costs.
-    if message.stamp_cost().is_some_and(|cost| cost > 0) {
+    if message.stamp_cost().is_some_and(|cost| cost > 0.0) {
         (sending.progress)("working out the stamp".into());
     }
     let packed = sending
@@ -276,14 +276,14 @@ async fn propagate(
             (sending.progress)("finding a path to the propagation node".into());
             sending.unless_cancelled(ensure_path(runtime, node)).await?;
             let node_info = lookup(runtime, known, node).await?;
-            workable(node_info.app_data.as_deref().and_then(parse_pn_announce_data).map_or(0, |d| d.stamp_cost), "The propagation node")?
+            workable(node_info.app_data.as_deref().and_then(parse_pn_announce_data).map_or(0.0, |d| d.stamp_cost), "The propagation node")?
         }
     };
 
     let message = build_message(identity, source, outgoing, recipient.app_data.as_deref()).await?;
     let hash = message.message_id();
     let (recipient_identity, ratchet) = (recipient.identity, recipient.ratchet);
-    if stamp_cost > 0 || message.stamp_cost().is_some_and(|cost| cost > 0) {
+    if stamp_cost > 0.0 || message.stamp_cost().is_some_and(|cost| cost > 0.0) {
         (sending.progress)("working out the stamp".into());
     }
     let packed = sending
@@ -292,7 +292,7 @@ async fn propagate(
                 let message = finish(message)?;
                 // The binding only tells envelopes apart when one is kept to
                 // send again, which rettui doesn't do.
-                let binding = message.message_id();
+                let binding = EncryptionBinding::for_recipient(&recipient_identity.get_public_key(), ratchet.as_ref());
                 let mut envelope = PropagationEnvelope::new(message, binding, stamp_cost, |plaintext| {
                     recipient_identity.encrypt(plaintext, ratchet.as_ref()).map_err(|e| MessageError::PackFailed(e.to_string()))
                 })?;
@@ -378,10 +378,10 @@ async fn wait_for_proof(events: &mut mpsc::Receiver<LinkSessionEvent>, packet_ha
 mod tests {
     #[test]
     fn a_stamp_cost_too_high_to_work_out_is_refused() {
-        assert_eq!(workable(0, "x"), Ok(0));
-        assert_eq!(workable(MAX_STAMP_COST, "x"), Ok(MAX_STAMP_COST));
-        assert!(workable(MAX_STAMP_COST + 1, "The recipient").unwrap_err().contains("more than rettui will work out"));
-        assert!(workable(255, "x").is_err());
+        assert_eq!(workable(0.0, "x"), Ok(0.0));
+        assert_eq!(workable(f64::from(MAX_STAMP_COST), "x"), Ok(f64::from(MAX_STAMP_COST)));
+        assert!(workable(f64::from(MAX_STAMP_COST) + 1.0, "The recipient").unwrap_err().contains("more than rettui will work out"));
+        assert!(workable(255.0, "x").is_err());
     }
 
     use super::*;

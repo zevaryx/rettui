@@ -46,11 +46,12 @@ pub async fn fetch(
     for attempt in 0..2 {
         let handle = node_link(runtime, links, node, identity.as_ref(), progress).await?;
         match handle.request(&request.path, &request.data, Some(request::TIMEOUT)).await {
-            Ok(response) if response.data.len() > MAX_PAGE_BYTES && !path.starts_with(paths::FILE_PREFIX) => {
-                return Err(format!("The node sent {} MB for a page or image, more than rettui takes", response.data.len() / 1_000_000));
-            }
             Ok(response) => {
-                return Ok(FetchedContent { data: response.data, metadata: response.metadata });
+                let (data, metadata) = crate::net::response_bytes(response).await?;
+                if data.len() > MAX_PAGE_BYTES && !path.starts_with(paths::FILE_PREFIX) {
+                    return Err(format!("The node sent {} MB for a page or image, more than rettui takes", data.len() / 1_000_000));
+                }
+                return Ok(FetchedContent { data, metadata });
             }
             Err(e @ (LinkSessionError::LinkNotActive | LinkSessionError::SessionClosed)) if attempt == 0 => {
                 tracing::debug!("NomadNet link to {} went away ({e}); reconnecting", hex::encode(node));

@@ -365,7 +365,7 @@ impl Default for Settings {
             pn_enabled: false,
             pn_name: None,
             // lxmd's defaults.
-            pn_stamp_cost: u64::from(lxmf_core::constants::PROPAGATION_COST),
+            pn_stamp_cost: lxmf_core::constants::PROPAGATION_COST as u64,
             pn_storage_mb: 500,
             pn_transfer_kb: lxmf_core::constants::PROPAGATION_LIMIT as u64,
             // Off until you choose it: a node that peers by itself takes on other nodes' load and storage.
@@ -2146,7 +2146,7 @@ impl Settings {
             }
             "pn_stamp_cost" => {
                 let cost = number(value, MAX_STAMP_COST).map_err(fail)?;
-                let least = u64::from(lxmf_core::constants::PROPAGATION_COST_MIN);
+                let least = lxmf_core::constants::PROPAGATION_COST_MIN as u64;
                 if cost < least {
                     return Err(fail(format!("at least {least} (LXMF's least)")));
                 }

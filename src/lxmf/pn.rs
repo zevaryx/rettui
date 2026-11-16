@@ -44,12 +44,12 @@ use crate::config::{Paths, Settings};
 use crate::net::Hash;
 
 /// How the node runs, from the settings.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PnConfig {
     /// The name it announces.
     pub name: String,
     /// The propagation stamp cost asked of senders.
-    pub stamp_cost: u8,
+    pub stamp_cost: f64,
     /// Most bytes of messages kept.
     pub storage_bytes: u64,
     /// Largest transfer a client may send, in kilobytes.
@@ -67,7 +67,7 @@ impl PnConfig {
     pub fn from_settings(settings: &Settings, paths: &Paths) -> Option<Self> {
         settings.pn_enabled.then(|| Self {
             name: settings.pn_name.clone().unwrap_or_else(|| settings.display_name.clone()),
-            stamp_cost: settings.pn_stamp_cost.clamp(u64::from(PROPAGATION_COST_MIN), 254) as u8,
+            stamp_cost: settings.pn_stamp_cost.clamp(PROPAGATION_COST_MIN as u64, 254) as f64,
             storage_bytes: settings.pn_storage_mb.max(1).saturating_mul(1_000_000),
             transfer_kb: settings.pn_transfer_kb.clamp(1, SYNC_LIMIT as u64),
             dir: paths.propagation.clone(),
@@ -124,7 +124,7 @@ struct Ingest {
     node: Arc<Mutex<PropagationNode>>,
     counters: Counters,
     /// The smallest stamp value taken.
-    min_stamp: u8,
+    min_stamp: f64,
     /// This client's LXMF address and identity: messages for it are
     /// delivered here.
     lxmf_hash: Hash,
@@ -203,7 +203,7 @@ impl Ingest {
                 PropagationAdmission::Reserved(plan) => *plan,
                 // Held already, or being stored from another transfer: a
                 // duplicate is fine.
-                PropagationAdmission::CommittedDuplicate(_) | PropagationAdmission::Pending(_) => {
+                PropagationAdmission::CommittedDuplicate(_) | PropagationAdmission::Pending(_) | PropagationAdmission::AlreadyProcessed => {
                     taken += 1;
                     continue;
                 }
@@ -261,7 +261,7 @@ impl LocalNode {
     }
 
     /// The stamp cost it asks.
-    pub fn stamp_cost(&self) -> u8 {
+    pub fn stamp_cost(&self) -> f64 {
         self.ingest.min_stamp + PROPAGATION_COST_FLEX
     }
 
@@ -321,7 +321,7 @@ fn announce_data(config: &PnConfig) -> Vec<u8> {
 
 /// A peer error code, as `/get` and `/offer` answer it.
 fn error_reply(error: PeerError) -> RequestOutcome {
-    RequestOutcome::Reply(encode(&Value::from(error as u8)))
+    RequestOutcome::ReplyValue(encode(&Value::from(error as u8)))
 }
 
 /// Why an `/offer` isn't given to the node, if it isn't: it is from no one
@@ -330,7 +330,7 @@ fn error_reply(error: PeerError) -> RequestOutcome {
 /// the work `cost` asks over both identities. rsLXMF notes every offer it
 /// reads, for 3 minutes, in a table nothing empties; with only offers that
 /// proved their work given to it, adding an entry costs that work.
-fn offer_refusal(data: &[u8], remote: Option<&Hash>, blocked: bool, local: &Hash, cost: u8) -> Option<PeerError> {
+fn offer_refusal(data: &[u8], remote: Option<&Hash>, blocked: bool, local: &Hash, cost: f64) -> Option<PeerError> {
     let Some(remote) = remote else { return Some(PeerError::NoIdentity) };
     if blocked {
         return Some(PeerError::NoAccess);
@@ -360,7 +360,7 @@ impl HostedPn {
         blocked: crate::store::Blocked,
     ) -> Result<Self, String> {
         let hash = Destination::hash_from_name_and_identity(PROPAGATION_ASPECT, Some(&identity.hash));
-        let min_stamp = config.stamp_cost.saturating_sub(PROPAGATION_COST_FLEX);
+        let min_stamp = (config.stamp_cost - PROPAGATION_COST_FLEX).max(0.0);
         let node_config = PropagationNodeConfig {
             max_storage: usize::try_from(config.storage_bytes).unwrap_or(usize::MAX),
             max_message_age: MESSAGE_EXPIRY,
@@ -431,7 +431,7 @@ impl HostedPn {
                 let action = get_node.lock().unwrap().handle_get_request(&request.data, &client);
                 let (reply, served) = action.into_response_with_served_count();
                 get_ingest.counters.served.fetch_add(served, Ordering::Relaxed);
-                RequestOutcome::Reply(reply)
+                RequestOutcome::ReplyValue(reply)
             })
             .await
             .map_err(|e| format!("Could not start the propagation node: {e}"))?;
@@ -461,7 +461,7 @@ impl HostedPn {
                 if accepted {
                     offer_peers.lock().unwrap().insert(request.link_id);
                 }
-                RequestOutcome::Reply(reply)
+                RequestOutcome::ReplyValue(reply)
             })
             .await
             .map_err(|e| format!("Could not start the propagation node: {e}"))?;
@@ -603,7 +603,7 @@ impl HostedPn {
 #[cfg(test)]
 mod tests {
     use lxmf_core::message_api::{DeliveryMethod, LxMessage, LxMessageDraft, MessageError};
-    use lxmf_core::propagation_send::{AdvertisedNodePolicy, PreparedNode, PropagationEnvelope};
+    use lxmf_core::propagation_send::{AdvertisedNodePolicy, EncryptionBinding, PreparedNode, PropagationEnvelope};
     use lxmf_core::stamper::validate_pn_stamp;
 
     use super::*;
@@ -612,7 +612,7 @@ mod tests {
     fn its_name_goes_out_with_emoji() {
         let config = |name: &str| PnConfig {
             name: name.into(),
-            stamp_cost: 16,
+            stamp_cost: 16.0,
             storage_bytes: 1,
             transfer_kb: 256,
             dir: PathBuf::new(),
@@ -627,7 +627,7 @@ mod tests {
         assert_eq!(name_of(" "), None);
     }
 
-    fn ingest(dir: &std::path::Path, stamp_cost: u8) -> (Ingest, mpsc::UnboundedReceiver<Vec<u8>>, Identity) {
+    fn ingest(dir: &std::path::Path, stamp_cost: f64) -> (Ingest, mpsc::UnboundedReceiver<Vec<u8>>, Identity) {
         let identity = Identity::new();
         let lxmf_hash = Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&identity.hash));
         let config = PropagationNodeConfig {
@@ -651,19 +651,20 @@ mod tests {
 
     /// A message to `to` (encrypted for `recipient`), packed for a
     /// propagation node with a stamp of `cost`, as a client sends it.
-    fn transfer(to: Hash, recipient: &Identity, cost: u8) -> Vec<u8> {
+    fn transfer(to: Hash, recipient: &Identity, cost: f64) -> Vec<u8> {
         stamped(to, recipient, cost).0
     }
 
     /// [`transfer`], and what its stamp is worth (at least `cost`; a stamp
     /// of no work is worth whatever its hash happens to be).
-    fn stamped(to: Hash, recipient: &Identity, cost: u8) -> (Vec<u8>, u32) {
+    fn stamped(to: Hash, recipient: &Identity, cost: f64) -> (Vec<u8>, f64) {
         let message = LxMessageDraft::new(to, [3; 16], "", "kept for you", DeliveryMethod::Propagated).unwrap();
         let message = message.sign(&Identity::new().get_signing_key().unwrap()).unwrap().finalize(None).unwrap();
-        let mut envelope = PropagationEnvelope::new(message, [0; 32], cost, |plain| {
-            recipient.encrypt(plain, None).map_err(|e| MessageError::PackFailed(e.to_string()))
-        })
-        .unwrap();
+        let mut envelope =
+            PropagationEnvelope::new(message, EncryptionBinding::for_recipient(&recipient.get_public_key(), None), cost, |plain| {
+                recipient.encrypt(plain, None).map_err(|e| MessageError::PackFailed(e.to_string()))
+            })
+            .unwrap();
         let policy = AdvertisedNodePolicy { stamp_cost: cost, transfer_limit_kb: f64::MAX, recorded_at: 0. };
         let packed = envelope.pack_for(PreparedNode { node: [9; 16], policy }, 1_800_000_000.).unwrap();
         (packed, envelope.stamp_value())
@@ -673,14 +674,14 @@ mod tests {
     fn messages_are_kept_for_others_and_delivered_here_for_us() {
         let dir = std::env::temp_dir().join(format!("rettui-pn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let (ingest, mut delivered, ours) = ingest(&dir, 13);
+        let (ingest, mut delivered, ours) = ingest(&dir, 13.0);
         let local = LocalNode { hash: [9; 16], ingest: Arc::new(ingest), heard: mpsc::unbounded_channel().0 };
-        assert_eq!(local.stamp_cost(), 13);
+        assert_eq!(local.stamp_cost(), 13.0);
         // For someone else: kept (once, however often it's sent), and listed
         // for them.
         let bob = Identity::new();
         let bob_hash = Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&bob.hash));
-        let for_bob = transfer(bob_hash, &bob, 13);
+        let for_bob = transfer(bob_hash, &bob, 13.0);
         local.submit(&for_bob).unwrap();
         local.submit(&for_bob).unwrap();
         assert_eq!(local.ingest.node.lock().unwrap().message_count(), 1);
@@ -689,20 +690,20 @@ mod tests {
         assert!(matches!(rmpv::decode::read_value(&mut reply.as_slice()), Ok(Value::Array(ids)) if ids.len() == 1));
         // For us: delivered, not kept.
         let us = local.ingest.lxmf_hash;
-        local.submit(&transfer(us, &ours, 13)).unwrap();
+        local.submit(&transfer(us, &ours, 13.0)).unwrap();
         let full = delivered.try_recv().unwrap();
         assert_eq!(&full[..16], &us);
         assert_eq!(LxMessage::unpack(&full).unwrap().content_text(), "kept for you");
         // Too little work: turned away. (A stamp of no work has enough by
         // chance about one time in a thousand: one that hasn't.) Several at
         // once: only from a peer.
-        let min = u32::from(local.ingest.min_stamp);
-        let (short, _) = std::iter::repeat_with(|| stamped(bob_hash, &bob, 0)).find(|(_, value)| *value < min).unwrap();
+        let min = local.ingest.min_stamp;
+        let (short, _) = std::iter::repeat_with(|| stamped(bob_hash, &bob, 0.0)).find(|(_, value)| *value < min).unwrap();
         assert!(local.submit(&short).is_err());
         let stats = &local.ingest.counters;
         assert_eq!((stats.received.load(Ordering::Relaxed), stats.delivered_here.load(Ordering::Relaxed)), (1, 1));
         assert!(stats.rejected.load(Ordering::Relaxed) >= 1);
-        let one = rmpv::decode::read_value(&mut transfer(bob_hash, &bob, 13).as_slice()).unwrap();
+        let one = rmpv::decode::read_value(&mut transfer(bob_hash, &bob, 13.0).as_slice()).unwrap();
         let Value::Array(parts) = one else { panic!() };
         let blob = parts[1].as_array().unwrap()[0].clone();
         let two = encode(&Value::Array(vec![parts[0].clone(), Value::Array(vec![blob.clone(), blob])]));
@@ -714,7 +715,7 @@ mod tests {
     fn what_isnt_a_transfer_and_messages_for_us_that_dont_open() {
         let dir = std::env::temp_dir().join(format!("rettui-pn-odd-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let (ingest, mut delivered, _) = ingest(&dir, 13);
+        let (ingest, mut delivered, _) = ingest(&dir, 13.0);
         // Not msgpack, not a list, a list without messages.
         assert!(ingest.take(&[0xc1], false).is_err());
         assert!(ingest.take(&encode(&Value::from(1)), false).is_err());
@@ -726,11 +727,11 @@ mod tests {
             Value::Array(parts) => parts,
             _ => panic!(),
         };
-        let (first, second) = (parts(transfer(bob_hash, &bob, 13)), parts(transfer(bob_hash, &bob, 13)));
+        let (first, second) = (parts(transfer(bob_hash, &bob, 13.0)), parts(transfer(bob_hash, &bob, 13.0)));
         let both = encode(&Value::Array(vec![first[0].clone(), Value::Array(vec![first[1][0].clone(), second[1][0].clone()])]));
         assert_eq!(ingest.take(&both, true), Ok(2));
         // For us, but encrypted for someone else: not delivered.
-        let wrong = transfer(ingest.lxmf_hash, &Identity::new(), 13);
+        let wrong = transfer(ingest.lxmf_hash, &Identity::new(), 13.0);
         let _ = ingest.take(&wrong, false);
         assert!(delivered.try_recv().is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -739,11 +740,19 @@ mod tests {
     #[test]
     fn an_offer_reaches_the_node_only_with_a_peering_key_that_is_work() {
         use lxmf_core::constants::STAMP_WORKBLOCK_EXPAND_ROUNDS_PEERING;
-        let (local, remote, cost) = ([1; 16], [2; 16], 8);
+        let (local, remote, cost) = ([1; 16], [2; 16], 8.0);
         let mut id = [0u8; 32];
         id[..16].copy_from_slice(&local);
         id[16..].copy_from_slice(&remote);
-        let (key, _) = lxmf_core::stamper::generate_stamp(&id, cost, STAMP_WORKBLOCK_EXPAND_ROUNDS_PEERING).unwrap();
+        let Some((key, _)) = lxmf_core::stamper::generate_stamp(
+            &id,
+            cost,
+            STAMP_WORKBLOCK_EXPAND_ROUNDS_PEERING,
+            &lxmf_core::stamper::StampControl::default(),
+        )
+        .unwrap() else {
+            panic!("no key")
+        };
         let offer = |key: &[u8]| encode(&Value::Array(vec![Value::Binary(key.to_vec()), Value::Array(vec![Value::Binary(vec![7; 32])])]));
         let refusal = |data: &[u8], remote: Option<&Hash>, blocked: bool| offer_refusal(data, remote, blocked, &local, cost);
         // Work over these two identities: through.
@@ -769,7 +778,7 @@ mod tests {
     fn a_peers_transfer_of_bad_stamps_or_copies_costs_little_work() {
         let dir = std::env::temp_dir().join(format!("rettui-pn-bad-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let (ingest, _delivered, _) = ingest(&dir, 13);
+        let (ingest, _delivered, _) = ingest(&dir, 13.0);
         let entry = |transfer: Vec<u8>| match rmpv::decode::read_value(&mut transfer.as_slice()) {
             Ok(Value::Array(parts)) => match &parts[1] {
                 Value::Array(messages) => messages[0].clone(),
@@ -780,14 +789,14 @@ mod tests {
         let several = |entries: Vec<Value>| encode(&Value::Array(vec![Value::F64(1_800_000_000.), Value::Array(entries)]));
         let bob = Identity::new();
         let bob_hash = Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&bob.hash));
-        let good = entry(transfer(bob_hash, &bob, 13));
+        let good = entry(transfer(bob_hash, &bob, 13.0));
         let bad = || {
-            let Value::Binary(mut data) = entry(transfer(bob_hash, &bob, 13)) else { panic!() };
+            let Value::Binary(mut data) = entry(transfer(bob_hash, &bob, 13.0)) else { panic!() };
             let at = data.len() - 1;
             data[at] ^= 0xff;
             Value::Binary(data)
         };
-        let bads = |n: usize| (0..n).map(|_| bad()).filter(|b| !matches!(b, Value::Binary(d) if validate_pn_stamp(d, 11).is_some()));
+        let bads = |n: usize| (0..n).map(|_| bad()).filter(|b| !matches!(b, Value::Binary(d) if validate_pn_stamp(d, 11.0).is_some()));
         // Past MAX_BAD_STAMPS bad stamps, the rest isn't looked at.
         let mut entries: Vec<Value> = bads(MAX_BAD_STAMPS + 4).take(MAX_BAD_STAMPS).collect();
         entries.push(good.clone());

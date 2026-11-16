@@ -266,7 +266,9 @@ impl Manager {
 /// is willing to do it, and the stamp can be re-used for ever.
 pub fn candidates(found: &[DiscoveredInterface]) -> Vec<Candidate> {
     let mut found: Vec<&DiscoveredInterface> = found.iter().filter(|record| record.status != Some(DiscoveryStatus::Stale)).collect();
-    found.sort_by_key(|record| (std::cmp::Reverse(record.status.map_or(0, DiscoveryStatus::code)), record.discovered, record.hops));
+    found.sort_by_key(|record| {
+        (std::cmp::Reverse(record.status.map_or(0, DiscoveryStatus::code)), record.discovered.max(0.0) as u64, record.hops)
+    });
     found
         .into_iter()
         .filter_map(|record| {
@@ -781,10 +783,10 @@ mod tests {
             },
             network_id: [0; 16],
             hops,
-            stamp_value,
+            stamp_value: f64::from(stamp_value),
             stamp: Vec::new(),
-            discovered,
-            last_heard,
+            discovered: discovered as f64,
+            last_heard: last_heard as f64,
             heard_count: 1,
             status: Some(DiscoveryStatus::Available),
         };
@@ -813,10 +815,10 @@ mod tests {
             },
             network_id: [0; 16],
             hops: 1,
-            stamp_value: 0,
+            stamp_value: 0.0,
             stamp: Vec::new(),
-            discovered: 0,
-            last_heard: 0,
+            discovered: 0.0,
+            last_heard: 0.0,
             heard_count: 1,
             status,
         };

@@ -24,6 +24,7 @@ use lxmf_core::constants::{MAX_PEERING_COST, OFFER_REQUEST_PATH, PeerError};
 use lxmf_core::handlers::parse_pn_announce_data;
 use lxmf_core::peer::{LxmPeer, OutboundOfferPolicy, select_sync_peer};
 use lxmf_core::propagation_node::{PropagationNode, read_planned_messages};
+use lxmf_core::stamper::StampControl;
 use lxmf_core::types::PropagationTransientId;
 use rmpv::Value;
 use rns_runtime::prelude::*;
@@ -136,7 +137,7 @@ impl Peers {
         // What it says it takes in one sync is what's read into memory to
         // send it: no more than this node would take itself.
         let most = lxmf_core::constants::SYNC_LIMIT as f64;
-        let limits = (Some((data.transfer_limit as f64).min(most)), Some((data.sync_limit as f64).min(most)));
+        let limits = (Some(data.transfer_limit.as_f64().min(most)), Some(data.sync_limit.as_f64().min(most)));
         let costs = (Some(data.stamp_cost), Some(data.stamp_flex), Some(data.peering_cost));
         let metadata = Some(data.metadata.clone());
         let full = self.peers.len() >= self.config.max_peers;
@@ -183,8 +184,8 @@ impl Peers {
 
     /// The peer to sync with next, if one has messages it hasn't had and
     /// is ready: its costs and identity known, its backoff over.
-    /// `unhandled` counts a peer's messages it hasn't had.
-    pub fn next(&mut self, unhandled: impl Fn(&HashSet<PropagationTransientId>) -> usize) -> Option<Hash> {
+    /// `unhandled` gives the messages a peer hasn't had, from the ones it has.
+    pub fn next(&mut self, unhandled: impl Fn(&HashSet<PropagationTransientId>) -> HashSet<PropagationTransientId>) -> Option<Hash> {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
         let ready: Vec<Hash> = self
             .peers
@@ -194,12 +195,11 @@ impl Peers {
             .collect();
         for hash in &ready {
             if let Some(peer) = self.peers.get_mut(hash) {
-                let count = unhandled(&peer.handled_messages);
-                peer.set_unhandled_count(u32::try_from(count).unwrap_or(u32::MAX));
+                peer.unhandled_messages = unhandled(&peer.handled_messages);
             }
         }
         let candidates: Vec<&LxmPeer> = ready.iter().filter_map(|h| self.peers.get(h)).collect();
-        select_sync_peer(&candidates).map(|i| candidates[i].destination_hash)
+        select_sync_peer(&candidates, now).map(|i| candidates[i].destination_hash)
     }
 }
 
@@ -350,7 +350,7 @@ pub struct PeeringStats {
 
 /// A finished sync: the peer, how it went, and the peering key made for it
 /// with the cost it was made at.
-type SyncDone = (Hash, Result<Synced, Offered>, Option<([u8; 32], u32)>);
+type SyncDone = (Hash, Result<Synced, Offered>, Option<([u8; 32], f64)>);
 
 /// Run peering for the node in `node` until `heard` closes: take
 /// announces, and sync with one peer at a time.
@@ -424,7 +424,7 @@ pub async fn run(
             _ = timer.tick(), if syncing.is_none() => {
                 let next = {
                     let node = node.lock().unwrap();
-                    peers.next(|handled| node.unhandled_message_count(handled))
+                    peers.next(|handled| node.create_offer([0; 16], None).into_iter().filter(|id| !handled.contains(id)).collect())
                 };
                 let Some(hash) = next else { continue };
                 let Some(their_identity) = peers.identity_of(&hash) else { continue };
@@ -442,7 +442,7 @@ pub async fn run(
                         keyed.peering_key
                     } else {
                         let made = tokio::task::spawn_blocking(move || {
-                            keyed.generate_peering_key(&their_identity, &ours);
+                            keyed.generate_peering_key(&their_identity, &ours, &StampControl::default());
                             keyed.peering_key
                         });
                         made.await.ok().flatten()
@@ -467,8 +467,12 @@ mod tests {
     use super::*;
     use lxmf_core::handlers::{PropagationNodeAnnounceData, get_propagation_node_app_data};
 
-    fn announce(serving: bool, peering_cost: u8, timebase: i64) -> Vec<u8> {
-        let mut data = PropagationNodeAnnounceData::new(serving, 256, 10240, 16, 3, peering_cost);
+    fn some(n: u8) -> HashSet<PropagationTransientId> {
+        (0..n).map(|i| [i; 32]).collect()
+    }
+
+    fn announce(serving: bool, peering_cost: f64, timebase: i64) -> Vec<u8> {
+        let mut data = PropagationNodeAnnounceData::new(serving, 256, 10240, 16.0, 3.0, peering_cost);
         data.timebase = timebase;
         get_propagation_node_app_data(&data)
     }
@@ -487,32 +491,32 @@ mod tests {
         // A static peer is there from the start, waiting to be heard.
         assert!(peers.peers[&[9; 16]].is_static && !peers.peers[&[9; 16]].stamp_costs_known());
         // Itself, a node too far, or one not serving: not peered with.
-        assert_eq!(peers.heard(&node(0, 1, announce(true, 18, 1))), Change::Unchanged);
-        assert_eq!(peers.heard(&node(1, 5, announce(true, 18, 1))), Change::Unchanged);
-        assert_eq!(peers.heard(&node(1, 1, announce(false, 18, 1))), Change::Unchanged);
+        assert_eq!(peers.heard(&node(0, 1, announce(true, 18.0, 1))), Change::Unchanged);
+        assert_eq!(peers.heard(&node(1, 5, announce(true, 18.0, 1))), Change::Unchanged);
+        assert_eq!(peers.heard(&node(1, 1, announce(false, 18.0, 1))), Change::Unchanged);
         // Nearby and serving: peered, with what it announces.
-        assert_eq!(peers.heard(&node(1, 2, announce(true, 18, 1))), Change::Peered);
+        assert_eq!(peers.heard(&node(1, 2, announce(true, 18.0, 1))), Change::Peered);
         let peer = &peers.peers[&[1; 16]];
-        assert!(peer.autopeered && peer.stamp_costs_known() && peer.peering_cost == 18);
+        assert!(peer.autopeered && peer.stamp_costs_known() && peer.peering_cost == 18.0);
         assert_eq!(peers.identity_of(&[1; 16]), Some([101; 16]));
         // The same announce again changes nothing; a newer one updates it.
-        assert_eq!(peers.heard(&node(1, 2, announce(true, 18, 1))), Change::Unchanged);
-        assert_eq!(peers.heard(&node(1, 2, announce(true, 20, 2))), Change::Updated);
+        assert_eq!(peers.heard(&node(1, 2, announce(true, 18.0, 1))), Change::Unchanged);
+        assert_eq!(peers.heard(&node(1, 2, announce(true, 20.0, 2))), Change::Updated);
         // Full (the static peer counts): no more.
-        assert_eq!(peers.heard(&node(2, 1, announce(true, 18, 1))), Change::Unchanged);
+        assert_eq!(peers.heard(&node(2, 1, announce(true, 18.0, 1))), Change::Unchanged);
         // Moved away, or stopped serving: no longer peered.
-        assert_eq!(peers.heard(&node(1, 6, announce(true, 18, 3))), Change::Unpeered);
-        assert_eq!(peers.heard(&node(2, 1, announce(true, 18, 1))), Change::Peered);
-        assert_eq!(peers.heard(&node(2, 1, announce(false, 18, 2))), Change::Unpeered);
+        assert_eq!(peers.heard(&node(1, 6, announce(true, 18.0, 3))), Change::Unpeered);
+        assert_eq!(peers.heard(&node(2, 1, announce(true, 18.0, 1))), Change::Peered);
+        assert_eq!(peers.heard(&node(2, 1, announce(false, 18.0, 2))), Change::Unpeered);
         // A peering cost past what's worth working for: not peered.
-        assert_eq!(peers.heard(&node(3, 1, announce(true, MAX_PEERING_COST + 1, 1))), Change::Unchanged);
+        assert_eq!(peers.heard(&node(3, 1, announce(true, MAX_PEERING_COST + 1.0, 1))), Change::Unchanged);
         // A static peer, however far, and by a path's answer too.
-        let mut far = node(9, 30, announce(true, 18, 1));
+        let mut far = node(9, 30, announce(true, 18.0, 1));
         far.path_response = true;
         assert_eq!(peers.heard(&far), Change::Updated);
         assert!(peers.peers[&[9; 16]].stamp_costs_known());
         // Not on a path's answer, for others.
-        let mut answer = node(4, 1, announce(true, 18, 1));
+        let mut answer = node(4, 1, announce(true, 18.0, 1));
         answer.path_response = true;
         assert_eq!(peers.heard(&answer), Change::Unchanged);
         // Not an announce at all.
@@ -522,7 +526,7 @@ mod tests {
     #[test]
     fn a_peer_is_sent_no_more_in_one_sync_than_is_taken_here() {
         let mut peers = Peers::new(config(), [0; 16], Vec::new());
-        let mut data = PropagationNodeAnnounceData::new(true, u64::MAX / 2, u64::MAX / 2, 16, 3, 18);
+        let mut data = PropagationNodeAnnounceData::new(true, u64::MAX / 2, u64::MAX / 2, 16.0, 3.0, 18.0);
         data.timebase = 1;
         assert_eq!(peers.heard(&node(1, 1, get_propagation_node_app_data(&data))), Change::Peered);
         let most = lxmf_core::constants::SYNC_LIMIT as f64;
@@ -534,7 +538,7 @@ mod tests {
     fn a_peer_saved_with_more_than_is_taken_here_is_cut_when_synced() {
         let most = lxmf_core::constants::SYNC_LIMIT as f64;
         let policy_of = |transfer: Option<f64>, sync: Option<f64>| {
-            let mut peer = LxmPeer::from_announce([1; 16], 1.0, transfer, sync, Some(16), Some(3), Some(18));
+            let mut peer = LxmPeer::from_announce([1; 16], 1.0, transfer, sync, Some(16.0), Some(3.0), Some(18.0));
             peer.propagation_sync_limit = sync;
             let mut policy = peer.outbound_offer_policy();
             within_what_is_taken(&mut policy);
@@ -548,13 +552,13 @@ mod tests {
 
     #[test]
     fn auto_peering_off_keeps_static_peers_only() {
-        let saved = vec![LxmPeer::from_announce([1; 16], 1.0, Some(256.0), Some(10240.0), Some(16), Some(3), Some(18))];
+        let saved = vec![LxmPeer::from_announce([1; 16], 1.0, Some(256.0), Some(10240.0), Some(16.0), Some(3.0), Some(18.0))];
         let config = PeeringConfig { autopeer: false, ..config() };
         let mut peers = Peers::new(config, [0; 16], saved);
         assert_eq!(peers.peers.keys().collect::<Vec<_>>(), [&[9; 16]]);
-        assert_eq!(peers.heard(&node(2, 1, announce(true, 18, 1))), Change::Unchanged);
+        assert_eq!(peers.heard(&node(2, 1, announce(true, 18.0, 1))), Change::Unchanged);
         // On, the one saved is kept.
-        let saved = vec![LxmPeer::from_announce([1; 16], 1.0, None, None, Some(16), Some(3), Some(18))];
+        let saved = vec![LxmPeer::from_announce([1; 16], 1.0, None, None, Some(16.0), Some(3.0), Some(18.0))];
         assert!(
             Peers::new(PeeringConfig { static_peers: Vec::new(), ..super::tests::config() }, [0; 16], saved).peers.contains_key(&[1; 16])
         );
@@ -563,21 +567,21 @@ mod tests {
     #[test]
     fn the_next_to_sync_has_messages_it_hasnt_had() {
         let mut peers = Peers::new(PeeringConfig { static_peers: Vec::new(), ..config() }, [0; 16], Vec::new());
-        assert_eq!(peers.next(|_| 3), None);
-        peers.heard(&node(1, 1, announce(true, 18, 1)));
-        assert_eq!(peers.next(|_| 0), None, "nothing to send");
-        assert_eq!(peers.next(|_| 3), Some([1; 16]));
+        assert_eq!(peers.next(|_| some(3)), None);
+        peers.heard(&node(1, 1, announce(true, 18.0, 1)));
+        assert_eq!(peers.next(|_| some(0)), None, "nothing to send");
+        assert_eq!(peers.next(|_| some(3)), Some([1; 16]));
         // Not while its backoff lasts.
         peers.peers.get_mut(&[1; 16]).unwrap().begin_sync();
         peers.peers.get_mut(&[1; 16]).unwrap().state = lxmf_core::constants::PeerState::Idle;
-        assert_eq!(peers.next(|_| 3), None);
+        assert_eq!(peers.next(|_| some(3)), None);
         // Nor without knowing who it is.
-        let mut unknown = node(2, 1, announce(true, 18, 1));
+        let mut unknown = node(2, 1, announce(true, 18.0, 1));
         unknown.identity = None;
         peers.heard(&unknown);
-        assert_eq!(peers.next(|_| 3), None);
+        assert_eq!(peers.next(|_| some(3)), None);
         peers.know([2; 16], [7; 16]);
-        assert_eq!(peers.next(|_| 3), Some([2; 16]));
+        assert_eq!(peers.next(|_| some(3)), Some([2; 16]));
     }
 
     #[test]

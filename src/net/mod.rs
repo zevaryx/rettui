@@ -625,10 +625,16 @@ impl AnnounceSchedule {
 fn app_data(display_name: &str, stamp_cost: Option<u8>) -> Vec<u8> {
     use rmpv::Value;
     let name = crate::names::clean(display_name).map_or(Value::Nil, |name| Value::Binary(name.into_bytes()));
-    let cost = stamp_cost.filter(|cost| (1..255).contains(cost)).map_or(Value::Nil, Value::from);
-    let functions = Value::Array(vec![Value::from(lxmf_core::constants::SF_COMPRESSION)]);
+    // The cost goes out as LXMF 0.9 sends it: whole (rounded up) for older readers, and exact after the functions.
+    let quantized = stamp_cost
+        .map(f64::from)
+        .filter(|cost| *cost > 0.0 && *cost < lxmf_core::stamper::STAMP_COST_CAP)
+        .and_then(|cost| lxmf_core::stamper::quantize_cost(cost).ok());
+    let whole = quantized.filter(|cost| *cost != 0.0).map_or(Value::Nil, |cost| Value::from(cost.ceil() as i64));
+    let exact = quantized.map_or(Value::Nil, Value::F64);
+    let functions = Value::Array(vec![Value::from(lxmf_core::constants::SF_COMPRESSION as u64)]);
     let mut data = Vec::new();
-    rmpv::encode::write_value(&mut data, &Value::Array(vec![name, cost, functions])).expect("writing to memory");
+    rmpv::encode::write_value(&mut data, &Value::Array(vec![name, whole, functions, exact])).expect("writing to memory");
     data
 }
 
@@ -664,12 +670,42 @@ pub fn spawn(options: NetOptions) -> (mpsc::UnboundedSender<NetCommand>, mpsc::U
     (cmd_tx, ev_rx)
 }
 
+/// The most a file response is read back into memory: what a Resource may hold.
+const MAX_FILE_RESPONSE: u64 = 134_217_727;
+
+/// A response's bytes and its file metadata. rsReticulum 1.5 saves a file
+/// response (one with metadata) to a file of its own, which is read back
+/// and removed here, not held for ever.
+pub async fn response_bytes(response: LinkSessionResponse) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+    let LinkSessionResponse { data, metadata, file, .. } = response;
+    let Some(path) = file else { return Ok((data, metadata)) };
+    let read = tokio::task::spawn_blocking(move || {
+        let read = crate::config::read_limited(&path, MAX_FILE_RESPONSE);
+        let _ = std::fs::remove_file(&path);
+        read
+    })
+    .await
+    .map_err(|e| format!("It stopped: {e}"))?;
+    Ok((read.map_err(|e| format!("Could not read the file the node sent: {e}"))?, metadata))
+}
+
 /// Start the runtime without registering any destination, for one-shot CLI use.
 pub async fn start_runtime(rns_config: Option<&str>) -> Result<ReticulumHandle, String> {
     crate::reticulum::seed_default(rns_config);
-    init(rns_config, None, ShutdownSignal::new(), Arc::new(AtomicBool::new(true)))
-        .await
-        .map_err(|e| format!("Reticulum failed to start: {e}"))
+    // One interface that can't start (an RNode that is unplugged, a hub that is
+    // down) doesn't stop the rest, and they start together so a slow one
+    // doesn't hold the others up.
+    let mut options = InitOptions::default();
+    options.keep_starting_after_interface_failure = true;
+    options.start_interfaces_concurrently = true;
+    let handle =
+        rns_runtime::reticulum::init_with_options(rns_config, None, ShutdownSignal::new(), Arc::new(AtomicBool::new(true)), options)
+            .await
+            .map_err(|e| format!("Reticulum failed to start: {e}"))?;
+    for (name, why) in handle.startup_interface_failures() {
+        tracing::warn!("interface {name} did not start: {why}");
+    }
+    Ok(handle)
 }
 
 /// Announces a subscription holds while the actor is busy. Busy networks
@@ -1745,15 +1781,14 @@ mod tests {
     fn our_announce_data_is_python_lxmf_s_with_emoji_kept() {
         // As lxmf-core (and Python LXMF) build it, for a name it keeps whole.
         for cost in [None, Some(8), Some(0), Some(255)] {
-            assert_eq!(app_data("Alex", cost), get_announce_app_data(Some("Alex"), cost), "{cost:?}");
+            assert_eq!(app_data("Alex", cost), get_announce_app_data(Some("Alex"), cost.map(f64::from)), "{cost:?}");
         }
-        // Emoji go out (lxmf-core drops them), and read back as sent.
+        // Emoji go out, and read back as sent.
         let data = app_data("🆎 Alex", Some(8));
         assert_eq!(lxmf_display_name(&data).as_deref(), Some("🆎 Alex"));
-        assert_eq!(lxmf_core::handlers::stamp_cost_from_app_data(&data), Some(8));
+        assert_eq!(lxmf_core::handlers::stamp_cost_from_app_data(&data), Some(8.0));
         let fields = rmpv::decode::read_value(&mut &data[..]).unwrap();
         assert_eq!(fields[0].as_slice(), Some("🆎 Alex".as_bytes()));
-        assert_eq!(lxmf_display_name(&get_announce_app_data(Some("🆎 Alex"), None)).as_deref(), Some("Alex"), "why it's built here");
         // Cleaned as others' names are; nothing left is no name.
         assert_eq!(lxmf_display_name(&app_data("Bob\u{202E}nimda", None)).as_deref(), Some("Bobnimda"));
         assert_eq!(rmpv::decode::read_value(&mut &app_data("\u{200B}", None)[..]).unwrap()[0], rmpv::Value::Nil);
@@ -1777,7 +1812,7 @@ mod tests {
         assert_eq!(lxmf_display_name("Bob\u{202E}nimda".as_bytes()).as_deref(), Some("Bobnimda"));
         assert_eq!(lxmf_display_name(&announced("\u{3164}Eve\u{200B}")).as_deref(), Some("Eve"));
         assert_eq!(lxmf_display_name(&announced("🆎 Alex")).as_deref(), Some("🆎 Alex"));
-        assert_eq!(lxmf_display_name(&get_announce_app_data(Some("Alex"), Some(8))).as_deref(), Some("Alex"));
+        assert_eq!(lxmf_display_name(&get_announce_app_data(Some("Alex"), Some(8.0))).as_deref(), Some("Alex"));
         assert_eq!(lxmf_display_name(b"").as_deref(), None);
         assert_eq!(lxmf_display_name(&[0xff, 0xfe]).as_deref(), None);
     }

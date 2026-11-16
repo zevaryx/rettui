@@ -219,11 +219,10 @@ async fn serve_pages(
                 };
                 activity(&request.path, peer, status);
                 match reply {
-                    super::gitpages::Reply::Page(page) => RequestOutcome::Reply(page.into_bytes()),
+                    super::gitpages::Reply::Page(page) => RequestOutcome::ReplyBytes(page.into_bytes()),
                     super::gitpages::Reply::File { name, data } => RequestOutcome::ReplyFile {
-                        data,
+                        source: Box::new(std::io::Cursor::new(data)),
                         metadata: Some(rns_runtime::link_manager::pack_file_name_metadata(&name)),
-                        auto_compress: true,
                     },
                 }
             })

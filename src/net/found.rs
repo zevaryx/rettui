@@ -161,12 +161,12 @@ impl FoundInterface {
             bandwidth: info.bandwidth,
             spreading_factor: info.spreading_factor,
             coding_rate: info.coding_rate,
-            modulation: tidy_opt(&info.modulation),
+            modulation: info.modulation.as_ref().and_then(|m| tidy(&m.to_string())),
             channel: info.channel,
             hops: Some(record.hops),
-            stamp_value: Some(record.stamp_value),
-            discovered: Some(record.discovered),
-            last_heard: Some(record.last_heard),
+            stamp_value: Some(record.stamp_value.clamp(0.0, 255.0) as u8),
+            discovered: Some(record.discovered.max(0.0) as u64),
+            last_heard: Some(record.last_heard.max(0.0) as u64),
             heard_count: Some(record.heard_count),
             status: record.status.map(|s| {
                 match s {

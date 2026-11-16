@@ -219,7 +219,7 @@ impl Shared {
 
     fn missing(&self, path: &str) -> RequestOutcome {
         self.counts.not_found.fetch_add(1, Ordering::Relaxed);
-        RequestOutcome::Reply(pages::not_found(path).into_bytes())
+        RequestOutcome::ReplyBytes(pages::not_found(path).into_bytes())
     }
 
     /// Whether `who` may have `file`: yes with no `.allowed` list beside
@@ -301,7 +301,7 @@ impl Shared {
             Err(_) => return RequestOutcome::Drop,
         };
         if !self.allowed(&file, who) {
-            return RequestOutcome::Reply(NOT_ALLOWED.as_bytes().to_vec());
+            return RequestOutcome::ReplyBytes(NOT_ALLOWED.as_bytes().to_vec());
         }
         if is_executable(&file) {
             // With scripts off a program's text is never sent: it could hold secrets.
@@ -313,18 +313,18 @@ impl Shared {
             return match run.failure {
                 None => {
                     self.counts.pages.fetch_add(1, Ordering::Relaxed);
-                    RequestOutcome::Reply(run.stdout)
+                    RequestOutcome::ReplyBytes(run.stdout)
                 }
                 Some(why) => {
                     tracing::warn!("script page {path} failed: {why}");
-                    RequestOutcome::Reply(failed(path).into_bytes())
+                    RequestOutcome::ReplyBytes(failed(path).into_bytes())
                 }
             };
         }
         match store::read(&self.pages, name, MAX_PAGE_BYTES) {
             Ok(page) => {
                 self.counts.pages.fetch_add(1, Ordering::Relaxed);
-                RequestOutcome::Reply(page)
+                RequestOutcome::ReplyBytes(page)
             }
             Err(PathError::NotFound) => self.missing(path),
             Err(e) => {
@@ -341,12 +341,12 @@ impl Shared {
             return RequestOutcome::Drop;
         };
         if !self.allowed(&file, who) {
-            return RequestOutcome::Reply(NOT_ALLOWED.as_bytes().to_vec());
+            return RequestOutcome::ReplyBytes(NOT_ALLOWED.as_bytes().to_vec());
         }
         match store::read(&self.files, name, MAX_FILE_BYTES) {
             Ok(data) => {
                 self.counts.files.fetch_add(1, Ordering::Relaxed);
-                RequestOutcome::ReplyFile { data, metadata: Some(pack_file_name_metadata(name)), auto_compress: true }
+                RequestOutcome::ReplyFile { source: Box::new(std::io::Cursor::new(data)), metadata: Some(pack_file_name_metadata(name)) }
             }
             Err(e) => {
                 if matches!(e, PathError::NotFound) {
@@ -395,7 +395,7 @@ impl Shared {
             }
         };
         self.counts.media.fetch_add(1, Ordering::Relaxed);
-        RequestOutcome::ReplyFile { data, metadata: Some(pack_file_name_metadata(&sent_as)), auto_compress: true }
+        RequestOutcome::ReplyFile { source: Box::new(std::io::Cursor::new(data)), metadata: Some(pack_file_name_metadata(&sent_as)) }
     }
 
     /// A picture as WebP, made once and kept for the next visitor.
@@ -497,8 +497,10 @@ pub async fn start(
     let hash = destination.hash;
     destination.set_default_app_data(DefaultAppData::Static(name.as_bytes().to_vec()));
     let serving = shared.clone();
-    manager.set_request_handler_ex(move |link_id, path_hash, data, remote_identity| {
-        let who = remote_identity.map(|identity| identity.hash);
+    // Who a visitor proved to be, by link: the runtime keeps it as the visitor identifies.
+    let identities = manager.link_identities_handle();
+    manager.set_request_handler_ex(move |link_id, path_hash, data| {
+        let who = identities.lock().ok().and_then(|known| known.get(&link_id).copied());
         // A script or a big picture takes a while: let the runtime's other threads carry on meanwhile.
         match tokio::runtime::Handle::try_current() {
             Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
@@ -630,7 +632,7 @@ mod tests {
 
         fn page(&self, path: &str, who: Option<&Identity>) -> String {
             match self.ask(path, b"", who) {
-                RequestOutcome::Reply(page) => String::from_utf8(page).unwrap(),
+                RequestOutcome::ReplyBytes(page) => String::from_utf8(page).unwrap(),
                 other => panic!("{path}: {other:?}"),
             }
         }
@@ -638,7 +640,9 @@ mod tests {
 
     fn file_reply(outcome: RequestOutcome) -> (Vec<u8>, String) {
         match outcome {
-            RequestOutcome::ReplyFile { data, metadata, auto_compress: true } => {
+            RequestOutcome::ReplyFile { mut source, metadata } => {
+                let mut data = Vec::new();
+                std::io::Read::read_to_end(&mut source, &mut data).unwrap();
                 (data, request::reply_file_name(metadata.as_deref()).unwrap())
             }
             other => panic!("{other:?}"),
@@ -685,7 +689,7 @@ mod tests {
         std::fs::remove_file(node.dir.join("pages/blog/one.mu")).unwrap();
         std::fs::remove_file(node.dir.join("files/docs/manual.pdf")).unwrap();
         let hash = |path: &str| rns_crypto::sha::truncated_hash(path.as_bytes());
-        let RequestOutcome::Reply(gone) = node.shared.answer([0; 16], hash("/page/blog/one.mu"), b"", None) else { panic!() };
+        let RequestOutcome::ReplyBytes(gone) = node.shared.answer([0; 16], hash("/page/blog/one.mu"), b"", None) else { panic!() };
         assert!(String::from_utf8(gone).unwrap().contains("The page /page/blog/one.mu is not available"));
         assert!(matches!(node.shared.answer([0; 16], hash("/file/docs/manual.pdf"), b"", None), RequestOutcome::Drop));
         // A visitor who identifies is counted once.
@@ -716,7 +720,7 @@ mod tests {
         // Someone else, or no one in particular: NomadNet's own page, and no picture.
         for who in [Some(&ben), None] {
             assert_eq!(node.page("/page/club.mu", who), NOT_ALLOWED);
-            assert!(matches!(node.ask("/file/minutes.txt", b"", who), RequestOutcome::Reply(page) if page == NOT_ALLOWED.as_bytes()));
+            assert!(matches!(node.ask("/file/minutes.txt", b"", who), RequestOutcome::ReplyBytes(page) if page == NOT_ALLOWED.as_bytes()));
             assert!(matches!(node.ask("/media", &picture, who), RequestOutcome::Drop));
         }
         // An empty list is no one; the list itself is never sent.
@@ -756,7 +760,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .into(),
         );
-        let RequestOutcome::Reply(page) = node.ask("/page/hello.mu", &form, Some(&ann)) else { panic!() };
+        let RequestOutcome::ReplyBytes(page) = node.ask("/page/hello.mu", &form, Some(&ann)) else { panic!() };
         assert_eq!(String::from_utf8(page).unwrap(), format!(">Hello Ann (x) {} {}\n", hex::encode(ann.hash), "cd".repeat(16)));
         // One that fails: a page that says so, not counted as served.
         node.put_program("pages/broken.mu", "#!/bin/nothing-here\n");
@@ -841,7 +845,7 @@ mod tests {
         node.put("pages/index.mu", b">Home\n");
         // Visitors on links of their own, so that only the whole budget is in play.
         for i in 0..MAX_REQUESTS as u8 {
-            assert!(matches!(node.ask_on([i; 16], "/page/index.mu", b"", None), RequestOutcome::Reply(_)));
+            assert!(matches!(node.ask_on([i; 16], "/page/index.mu", b"", None), RequestOutcome::ReplyBytes(_)));
         }
         assert!(matches!(node.ask_on([0xee; 16], "/page/index.mu", b"", None), RequestOutcome::Drop));
         assert_eq!(node.shared.stats().request_count, u64::from(MAX_REQUESTS));
@@ -855,7 +859,7 @@ mod tests {
         let node = node("share", false);
         node.put("pages/index.mu", b">Home\n");
         let answered =
-            |link: [u8; 16], who: Option<&Identity>| matches!(node.ask_on(link, "/page/index.mu", b"", who), RequestOutcome::Reply(_));
+            |link: [u8; 16], who: Option<&Identity>| matches!(node.ask_on(link, "/page/index.mu", b"", who), RequestOutcome::ReplyBytes(_));
         // One link asking for more than its share is answered up to the share only; another link is still answered.
         let flood = (0..MAX_REQUESTS).filter(|_| answered([1; 16], None)).count();
         assert_eq!(flood, MAX_REQUESTS_PER_VISITOR as usize);

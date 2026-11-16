@@ -789,13 +789,14 @@ pub async fn rncp_send(
     ev: tokio::sync::mpsc::UnboundedSender<super::NetEvent>,
 ) {
     let say = |state| super::NetEvent::Rncp { to, name: name.clone(), state };
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<f32>(16);
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<rns_runtime::rncp::RncpProgress>(16);
     let _ = ev.send(say(RncpState::Sending(0.0)));
     // Every 5%, not every part.
     let (events, called) = (ev.clone(), name.clone());
     let watcher = tokio::spawn(async move {
         let mut shown = 0;
-        while let Some(done) = progress_rx.recv().await {
+        while let Some(update) = progress_rx.recv().await {
+            let done = update.progress;
             let step = (done.clamp(0.0, 1.0) * 20.0) as u32;
             if step > shown {
                 shown = step;
@@ -807,17 +808,22 @@ pub async fn rncp_send(
     // runs on a thread of its own, driven by this runtime.
     let (transport_tx, handle, file_name) = (runtime.transport_tx.clone(), tokio::runtime::Handle::current(), name.clone());
     let result = tokio::task::spawn_blocking(move || {
-        handle.block_on(rns_runtime::rncp::rncp_send_file(rns_runtime::rncp::RncpSendRequest {
-            transport_tx,
-            identity,
-            dest_hash: to,
-            file_name: &file_name,
-            data,
-            auto_compress: true,
-            overall_timeout: RNCP_TIMEOUT,
-            path_wait: RNCP_PATH_WAIT,
-            progress_tx: Some(progress_tx),
-        }))
+        handle
+            .block_on(tokio::time::timeout(
+                RNCP_TIMEOUT,
+                rns_runtime::rncp::rncp_send_file(rns_runtime::rncp::RncpSendRequest {
+                    transport_tx,
+                    identity,
+                    dest_hash: to,
+                    file_name: &file_name,
+                    source: Box::new(std::io::Cursor::new(data)),
+                    auto_compress: true,
+                    path_timeout: RNCP_PATH_WAIT,
+                    progress_tx: Some(progress_tx),
+                    shutdown: None,
+                }),
+            ))
+            .unwrap_or(Err(rns_runtime::rncp::RncpError::Timeout("the transfer to finish")))
     })
     .await
     .unwrap_or_else(|e| Err(rns_runtime::rncp::RncpError::Io(e.to_string())));
@@ -850,12 +856,13 @@ pub async fn rncp_fetch(
     ev: tokio::sync::mpsc::UnboundedSender<super::NetEvent>,
 ) {
     let say = |state| super::NetEvent::RncpFetch { to, path: path.clone(), state };
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<f32>(16);
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<rns_runtime::rncp::RncpProgress>(16);
     let _ = ev.send(say(FetchState::Fetching(0.0)));
     let (events, asked) = (ev.clone(), path.clone());
     let watcher = tokio::spawn(async move {
         let mut shown = 0;
-        while let Some(done) = progress_rx.recv().await {
+        while let Some(update) = progress_rx.recv().await {
+            let done = update.progress;
             let step = (done.clamp(0.0, 1.0) * 20.0) as u32;
             if step > shown {
                 shown = step;
@@ -868,17 +875,22 @@ pub async fn rncp_fetch(
         if let Err(e) = std::fs::create_dir_all(&dir) {
             return Err(rns_runtime::rncp::RncpError::Io(format!("could not make {}: {e}", dir.display())));
         }
-        handle.block_on(rns_runtime::rncp::rncp_fetch_file(rns_runtime::rncp::RncpFetchRequest {
-            transport_tx,
-            identity,
-            dest_hash: to,
-            remote_path: &remote_path,
-            save_dir: &dir,
-            overwrite: false,
-            overall_timeout: RNCP_TIMEOUT,
-            path_wait: RNCP_PATH_WAIT,
-            progress_tx: Some(progress_tx),
-        }))
+        handle
+            .block_on(tokio::time::timeout(
+                RNCP_TIMEOUT,
+                rns_runtime::rncp::rncp_fetch_file(rns_runtime::rncp::RncpFetchRequest {
+                    transport_tx,
+                    identity,
+                    dest_hash: to,
+                    remote_path: &remote_path,
+                    save_dir: &dir,
+                    overwrite: false,
+                    path_timeout: RNCP_PATH_WAIT,
+                    progress_tx: Some(progress_tx),
+                    shutdown: None,
+                }),
+            ))
+            .unwrap_or(Err(rns_runtime::rncp::RncpError::Timeout("the transfer to finish")))
     })
     .await
     .unwrap_or_else(|e| Err(rns_runtime::rncp::RncpError::Io(e.to_string())));
@@ -895,6 +907,9 @@ pub async fn rncp_fetch(
                 .into(),
         ),
         // A listener not run with -F, or not allowing us, closes the link.
+        Err(rns_runtime::rncp::RncpError::RequestFailed) => {
+            FetchState::Failed("the listener didn't answer: it must be run with rncp -l -F and allow your identity (rncp -a)".into())
+        }
         Err(rns_runtime::rncp::RncpError::ResourceFailed(e)) if e.contains("link closed") => {
             FetchState::Failed("the listener closed the link: it must be run with rncp -l -F and allow your identity (rncp -a)".into())
         }
