@@ -329,6 +329,7 @@ impl App {
             return;
         }
         let Some(page) = &self.browser.tab.page else { return };
+        let shortest = micron::min_partial_refresh(self.settings.partial_min_refresh_secs);
         let due: Vec<usize> = page
             .partials
             .iter()
@@ -336,9 +337,7 @@ impl App {
             .enumerate()
             .filter(|(_, (partial, state))| {
                 !state.loading
-                    && partial.refresh.is_some_and(|every| {
-                        state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every.max(micron::MIN_PARTIAL_REFRESH))
-                    })
+                    && partial.refresh.is_some_and(|every| state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every.max(shortest)))
             })
             .map(|(index, _)| index)
             .collect();
@@ -1713,6 +1712,38 @@ mod tests {
         assert_eq!(asked, [(node, "/page/same.mu".to_string(), true), (other, "/page/post.mu".to_string(), false)]);
         let says = |index: usize| app.browser.tab.partials[index].content.clone().unwrap_or_default();
         assert!(says(2).contains("own node") && says(3).contains("a file"), "{} / {}", says(2), says(3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn partials_reload_no_sooner_than_the_setting_says() {
+        let dir = std::env::temp_dir().join(format!("rettui-browser-partials-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let fetches = |net: &mut tokio::sync::mpsc::UnboundedReceiver<NetCommand>| -> Vec<(u64, String)> {
+            std::iter::from_fn(|| net.try_recv().ok())
+                .filter_map(|c| if let NetCommand::Fetch { id, path, .. } = c { Some((id, path)) } else { None })
+                .collect()
+        };
+        app.navigate(Location { node: [0xcd; 16], path: "/page/parts.mu".into(), fields: BTreeMap::new() });
+        let (id, _) = fetches(&mut net)[0].clone();
+        // A page asking for a reload every second.
+        app.on_fetched(id, Ok(FetchedContent { data: b"`{:/page/p.mu`1}".to_vec(), metadata: None }));
+        let (part, _) = fetches(&mut net)[0].clone();
+        app.on_fetched(part, Ok(FetchedContent { data: b"part".to_vec(), metadata: None }));
+        app.tab = Tab::Browser;
+        app.browser.tab.partials[0].loaded_at = Some(Instant::now() - std::time::Duration::from_secs(2));
+        // By default it waits 5 seconds; with the setting at 1, the 1 second it asked for.
+        app.refresh_partials();
+        assert!(fetches(&mut net).is_empty());
+        app.settings.partial_min_refresh_secs = 1;
+        app.refresh_partials();
+        assert_eq!(fetches(&mut net).len(), 1);
+        // A setting of 0 in the settings file doesn't go under the floor.
+        app.settings.partial_min_refresh_secs = 0;
+        app.browser.tab.partials[0].loaded_at = Some(Instant::now());
+        app.refresh_partials();
+        assert!(fetches(&mut net).is_empty(), "a reload right after the last one");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

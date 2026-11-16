@@ -98,9 +98,18 @@ pub const MAX_PARTIALS: usize = 16;
 /// The least and the most seconds a partial may ask to wait between its
 /// reloads: a page can write any number, and a very small one is a flood
 /// while a very large one wraps in a browser's timer. A day is as long as any
-/// page needs.
-pub const MIN_PARTIAL_REFRESH: u64 = 5;
+/// page needs. The least is a floor that the setting for the shortest reload
+/// (see [`min_partial_refresh`]) can't go under.
+pub const MIN_PARTIAL_REFRESH: u64 = 1;
 pub const MAX_PARTIAL_REFRESH: u64 = 24 * 60 * 60;
+/// The shortest reload when the setting hasn't been changed.
+pub const DEFAULT_PARTIAL_REFRESH: u64 = 5;
+
+/// The shortest time between a partial's reloads that the setting asks for,
+/// kept between the floor and the ceiling whatever the settings file holds.
+pub fn min_partial_refresh(setting: u64) -> u64 {
+    setting.clamp(MIN_PARTIAL_REFRESH, MAX_PARTIAL_REFRESH)
+}
 
 /// A table: where it sits, how wide it may be, its columns' alignment, and
 /// its rows of cells (the first one a header when a separator follows it).
@@ -1620,6 +1629,10 @@ mod tests {
         assert_eq!(refreshes("0"), Some(None));
         assert_eq!(refreshes("never"), Some(None));
         assert!(MAX_PARTIAL_REFRESH * 1000 < i32::MAX as u64);
+        // The setting for the shortest reload can't go under the floor or over the ceiling.
+        assert_eq!(min_partial_refresh(DEFAULT_PARTIAL_REFRESH), 5);
+        assert_eq!((min_partial_refresh(0), min_partial_refresh(1)), (1, 1));
+        assert_eq!(min_partial_refresh(u64::MAX), MAX_PARTIAL_REFRESH);
     }
 
     #[test]

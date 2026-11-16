@@ -6656,9 +6656,12 @@ app.views.browser = {
   partials: { page: null, html: [], loading: [], timers: [] },
 
   // What a page may ask of its partials, as the server holds them (see
-  // micron `MAX_PARTIALS`): how many, and the seconds between reloads. A
+  // micron `MAX_PARTIALS`): how many, and the seconds between reloads, never
+  // under `floorRefresh` whatever the setting says. The setting for the
+  // shortest reload (`partial_min_refresh` in the status) is used between the
+  // floor and the ceiling; `minRefresh` is what is used until it is known. A
   // timer's delay wraps past 2^31 ms, so a long wait is cut at a day.
-  partialLimits: { count: 16, minRefresh: 5, maxRefresh: 24 * 60 * 60 },
+  partialLimits: { count: 16, floorRefresh: 1, minRefresh: 5, maxRefresh: 24 * 60 * 60 },
 
   // A new page: its partials start afresh.
   resetPartials() {
@@ -6681,8 +6684,9 @@ app.views.browser = {
       else if (!this.partials.loading[i]) this.loadPartial(i);
       const every = Number(node.dataset.refresh);
       if (every > 0 && !this.partials.timers[i]) {
-        const { minRefresh, maxRefresh } = this.partialLimits;
-        const seconds = Math.min(Math.max(every, minRefresh), maxRefresh);
+        const { floorRefresh, minRefresh, maxRefresh } = this.partialLimits;
+        const shortest = Math.min(Math.max(Number(app.status?.partial_min_refresh) || minRefresh, floorRefresh), maxRefresh);
+        const seconds = Math.min(Math.max(every, shortest), maxRefresh);
         this.partials.timers[i] = setInterval(() => showing('browser') && !this.viewSource && this.loadPartial(i), seconds * 1000);
       }
     });
