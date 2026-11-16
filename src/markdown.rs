@@ -316,10 +316,84 @@ pub fn plain(text: &str) -> String {
         .join("\n")
 }
 
-/// Whether a link may be followed from the web UI.
+/// Whether a link may be followed from the web UI: web and mail links, but
+/// not ones to this device's own loopback, where rettui's own server is. The
+/// app follows a link in its own window, logged in, so a stranger's message
+/// could make it fetch a backup or a file.
 fn safe_link(url: &str) -> bool {
     let lower = url.trim().to_ascii_lowercase();
-    ["http://", "https://", "mailto:"].iter().any(|scheme| lower.starts_with(scheme))
+    ["http://", "https://", "mailto:"].iter().any(|scheme| lower.starts_with(scheme)) && !is_loopback(&lower)
+}
+
+/// Whether an `http` or `https` address (lower case) is on this device's own
+/// loopback, however the host is written: `localhost`, an IPv4 address in
+/// 127.0.0.0/8 or `0.0.0.0` (also as one number, in hex or octal, which
+/// browsers read as the same address), or an IPv6 one for the same.
+fn is_loopback(url: &str) -> bool {
+    // Browsers drop tabs and line breaks anywhere in an address.
+    let url: String = url.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
+    let Some(rest) = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")) else { return false };
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    if let Some(v6) = host.strip_prefix('[') {
+        let Ok(address) = v6.split(']').next().unwrap_or_default().parse::<std::net::Ipv6Addr>() else { return false };
+        let of_this_device = |v4: std::net::Ipv4Addr| v4.octets()[0] == 127 || v4.is_unspecified();
+        return address.is_loopback() || address.is_unspecified() || address.to_ipv4_mapped().is_some_and(of_this_device);
+    }
+    let host = host.split(':').next().unwrap_or_default();
+    let host = percent_decoded(host);
+    let host = host.strip_suffix('.').unwrap_or(&host);
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    ipv4_number(host).is_some_and(|address| address >> 24 == 127 || address == 0)
+}
+
+/// `text` with its `%xx` escapes undone (a host may be written with them).
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let escaped = (bytes[at] == b'%').then(|| text.get(at + 1..at + 3)).flatten().and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) => {
+                out.push(byte);
+                at += 3;
+            }
+            None => {
+                out.push(bytes[at]);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// An IPv4 host as browsers read it: one to four numbers (decimal, `0x` hex
+/// or leading-zero octal) with dots between, the last one filling what is
+/// left of the four bytes. `None` if it isn't that.
+fn ipv4_number(host: &str) -> Option<u32> {
+    let number = |part: &str| -> Option<u64> {
+        if let Some(hex) = part.strip_prefix("0x") {
+            return if hex.is_empty() { Some(0) } else { u64::from_str_radix(hex, 16).ok() };
+        }
+        match part.strip_prefix('0') {
+            Some(octal) if !octal.is_empty() => u64::from_str_radix(octal, 8).ok(),
+            _ => part.parse().ok(),
+        }
+    };
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() > 4 {
+        return None;
+    }
+    let numbers = parts.iter().map(|part| number(part)).collect::<Option<Vec<u64>>>()?;
+    let (last, first) = numbers.split_last()?;
+    if first.iter().any(|&n| n > 255) || *last >= 256u64.pow(5 - parts.len() as u32) {
+        return None;
+    }
+    let head = first.iter().enumerate().fold(0u64, |sum, (i, &n)| sum + (n << (8 * (3 - i))));
+    u32::try_from(head + last).ok()
 }
 
 /// Markdown `text` as HTML for the web UI: everything escaped, raw HTML
@@ -728,6 +802,50 @@ mod tests {
         assert!(html.contains("<br>"), "line breaks are kept: {html}");
         assert_eq!(TextFormat::from_renderer(2), Some(TextFormat::Markdown));
         assert_eq!(TextFormat::from_renderer(0), None);
+    }
+
+    #[test]
+    fn links_to_the_apps_own_server_are_not_links() {
+        let own = [
+            "http://127.0.0.1:8740/api/backup",
+            "HTTP://127.0.0.1/api/backup",
+            "http://localhost:41165/api/backup",
+            "http://localhost./api/backup",
+            "http://web.localhost/",
+            "http://[::1]:8740/api/backup",
+            "http://[::ffff:127.0.0.1]/",
+            "http://127.1/",
+            "http://127.255.0.9:1/",
+            "http://2130706433/",
+            "http://0x7f.0.0.1/",
+            "http://0177.0.0.1/",
+            "http://0x7f000001/",
+            "http://0.0.0.0:8740/",
+            "http://%31%32%37.0.0.1/",
+            "http://user@127.0.0.1:8740/",
+            "http://127.0.0.1\\@example.org/",
+            "http://127.\n0.0.1/",
+        ];
+        for url in own {
+            assert!(!safe_link(url), "{url}");
+            // (A backslash is Markdown's own escape, so it can't reach `html` as written.)
+            if !url.contains('\\') && !url.contains('\n') {
+                let html = html(&format!("[x]({url})"));
+                assert!(!html.contains("<a ") && html.contains("md-link"), "{url}: {html}");
+            }
+        }
+        for url in [
+            "https://example.org/a",
+            "http://example.org:8740/",
+            "http://127.0.0.1.example.org/",
+            "http://192.168.1.1/",
+            "http://128.0.0.1/",
+            "http://[2001:db8::1]/",
+            "http://localhost.example.org/",
+            "mailto:a@b.example",
+        ] {
+            assert!(safe_link(url), "{url}");
+        }
     }
 
     #[test]
