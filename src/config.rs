@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rns_identity::identity::Identity;
 use serde::{Deserialize, Serialize};
 
@@ -544,6 +544,10 @@ impl Settings {
             settings.save(path)?;
             return Ok(settings);
         }
+        // A restored backup may hold any file: no real one is near this size.
+        if fs::metadata(path)?.len() > MAX_SETTINGS_BYTES {
+            bail!("{} is more than {} MB, which no settings file is", path.display(), MAX_SETTINGS_BYTES / 1_000_000);
+        }
         let text = fs::read_to_string(path)?;
         let value: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         let schedule_set = value.get("announce_schedule").is_some();
@@ -648,6 +652,40 @@ pub enum WebAccess {
     /// A toggle it may turn off, but not on.
     TurnOffOnly,
     TerminalOnly,
+}
+
+/// The most `settings.json` may be when read: the settings are a few KB.
+pub const MAX_SETTINGS_BYTES: u64 = 1_000_000;
+
+/// In the settings of a backup (`restored`, read from outside), put back
+/// the settings the web UI may not set (see [`WebAccess`]) as they are in
+/// `current`, the settings being replaced, or leave them out (their default)
+/// if there are none. A file someone else made must not decide what runs
+/// here. A toggle that is off is no harm and stays, and so does a value
+/// that is already what `current` has (or the default). The labels of
+/// those changed.
+pub fn withhold_web_barred(restored: &mut serde_json::Value, current: Option<&serde_json::Value>) -> Vec<&'static str> {
+    let Some(object) = restored.as_object_mut() else { return Vec::new() };
+    let defaults = serde_json::to_value(Settings::default()).unwrap_or_default();
+    let mut changed = Vec::new();
+    for field in FIELDS {
+        let Some(value) = object.get(field.key) else { continue };
+        let harmless = match field.web_access() {
+            WebAccess::Change => true,
+            WebAccess::TurnOffOnly => matches!(value, serde_json::Value::Bool(false)),
+            WebAccess::TerminalOnly => false,
+        } || value.is_null();
+        let kept = current.and_then(|c| c.get(field.key)).or_else(|| defaults.get(field.key));
+        if harmless || kept == Some(value) {
+            continue;
+        }
+        match kept {
+            Some(kept) => object.insert(field.key.to_string(), kept.clone()),
+            None => object.remove(field.key),
+        };
+        changed.push(field.label);
+    }
+    changed
 }
 
 impl Field {

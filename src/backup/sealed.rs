@@ -34,10 +34,12 @@ const MEMORY_KIB: u32 = 64 * 1024;
 const PASSES: u32 = 3;
 const LANES: u32 = 1;
 /// The most a backup may ask for (it's read from the file, which anyone
-/// may have made): more would be a way to stop rettui, not a backup.
-const MOST_MEMORY_KIB: u32 = 1024 * 1024;
-const MOST_PASSES: u32 = 16;
-const MOST_LANES: u32 = 16;
+/// may have made): more would be a way to stop rettui, not a backup. Twice
+/// what this version writes, for a later one to raise the cost a little;
+/// the lanes only split the work, and nothing writes more than one.
+const MOST_MEMORY_KIB: u32 = 2 * MEMORY_KIB;
+const MOST_PASSES: u32 = 2 * PASSES;
+const MOST_LANES: u32 = 4;
 const SALT: usize = 16;
 const CHUNK: usize = 64 * 1024;
 const TAG: usize = 16;
@@ -439,6 +441,21 @@ mod tests {
         assert!(Stretch::from_bytes(&stretch).is_err());
         stretch[0..4].copy_from_slice(&64u32.to_le_bytes());
         assert!(Stretch::from_bytes(&stretch).is_ok());
+        // What this version writes is taken, and what a file can ask for to
+        // cost a gigabyte and many seconds isn't.
+        let cost = |memory_kib, passes, lanes| Stretch { memory_kib, passes, lanes, salt: [0; SALT] }.to_bytes();
+        assert!(Stretch::from_bytes(&cost(MEMORY_KIB, PASSES, LANES)).is_ok());
+        assert!(Stretch::from_bytes(&cost(1024 * 1024, 16, 16)).is_err());
+        assert!(Stretch::from_bytes(&cost(1024 * 1024, 1, 1)).is_err());
+        assert!(Stretch::from_bytes(&cost(64, 16, 1)).is_err());
+        assert!(Stretch::from_bytes(&cost(64, 1, 16)).is_err());
+        // Refused before any key is made from the passphrase.
+        let mut file = MAGIC.to_vec();
+        file.extend_from_slice(&cost(1024 * 1024, 16, 16));
+        file.extend_from_slice(&[0; 64]);
+        let started = std::time::Instant::now();
+        assert!(matches!(Opener::new(file.as_slice(), "x"), Err(OpenError::Bad(_))));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

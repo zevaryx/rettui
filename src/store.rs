@@ -19,7 +19,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -673,13 +673,36 @@ fn gzip(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(gzip.finish()?)
 }
 
+/// The most the store, or a month of the archive, may hold once unpacked.
+/// A backup or a file from outside can be a few KB that unpack to many GB,
+/// so reading stops here; the messages of even a very busy install are a
+/// small part of it.
+const MAX_UNPACKED: u64 = 256 * 1024 * 1024;
+
+/// Everything `reader` gives, unless that is more than `limit` bytes.
+fn read_capped(reader: impl Read, limit: u64) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        bail!("it is more than {} MB unpacked, which no rettui file is", limit / 1_000_000);
+    }
+    Ok(bytes)
+}
+
+/// [`read_capped`] as text, at [`MAX_UNPACKED`].
+fn read_capped_text(reader: impl Read) -> Result<String> {
+    Ok(String::from_utf8(read_capped(reader, MAX_UNPACKED)?)?)
+}
+
 /// Read gzip-compressed JSON, or the plain JSON of earlier versions (told
 /// apart by the gzip header).
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    if std::fs::metadata(path)?.len() > MAX_UNPACKED {
+        bail!("{} is more than {} MB, which no rettui file is", path.display(), MAX_UNPACKED / 1_000_000);
+    }
     let bytes = std::fs::read(path)?;
     if bytes.starts_with(&GZIP_MAGIC) {
-        let mut json = Vec::new();
-        GzDecoder::new(bytes.as_slice()).read_to_end(&mut json)?;
+        let json = read_capped(GzDecoder::new(bytes.as_slice()), MAX_UNPACKED)?;
         Ok(serde_json::from_slice(&json)?)
     } else {
         Ok(serde_json::from_slice(&bytes)?)
@@ -724,8 +747,8 @@ pub fn remove_from_archive(dir: &Path, conversation: &str, owned: &[PathBuf]) ->
     };
     let mut removed = 0;
     for path in months {
-        let mut text = String::new();
-        flate2::read::MultiGzDecoder::new(std::fs::File::open(&path)?).read_to_string(&mut text)?;
+        let text = read_capped_text(flate2::read::MultiGzDecoder::new(std::fs::File::open(&path)?))
+            .with_context(|| format!("reading {}", path.display()))?;
         let (mut kept, mut gone) = (Vec::new(), 0);
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
             match serde_json::from_str::<Archived>(line) {
@@ -766,8 +789,8 @@ pub fn read_archive(dir: &Path, conversation: &str) -> Result<Vec<Message>> {
     };
     let mut messages = Vec::new();
     for path in months {
-        let mut text = String::new();
-        flate2::read::MultiGzDecoder::new(std::fs::File::open(&path)?).read_to_string(&mut text)?;
+        let text = read_capped_text(flate2::read::MultiGzDecoder::new(std::fs::File::open(&path)?))
+            .with_context(|| format!("reading {}", path.display()))?;
         // Only lines that name it are read through.
         for line in text.lines().filter(|l| l.contains(conversation)) {
             if let Ok(archived) = serde_json::from_str::<Archived>(line)
@@ -1282,6 +1305,52 @@ mod tests {
         assert_eq!(kept.len(), 1);
         assert_eq!(std::fs::read(&kept[0]).unwrap(), b"{ not json");
         assert!(store.migration_notes[0].ends_with(&format!("The file is kept as {}", kept[0].display())), "{:?}", store.migration_notes);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A gzip file that unpacks to `bytes` of spaces, a few MB on disk.
+    fn spaces_gz(path: &Path, bytes: u64) {
+        let mut gzip = GzEncoder::new(std::fs::File::create(path).unwrap(), Compression::fast());
+        let chunk = vec![b' '; 1 << 20];
+        let mut left = bytes;
+        while left > 0 {
+            let n = left.min(chunk.len() as u64) as usize;
+            gzip.write_all(&chunk[..n]).unwrap();
+            left -= n as u64;
+        }
+        gzip.finish().unwrap();
+    }
+
+    #[test]
+    fn a_store_that_unpacks_to_too_much_is_not_read_whole() {
+        // The read stops at the limit, whatever the file claims.
+        let gz = gzip(&vec![b' '; 100_000]).unwrap();
+        assert_eq!(read_capped(GzDecoder::new(gz.as_slice()), 100_000).unwrap().len(), 100_000);
+        let error = read_capped(GzDecoder::new(gz.as_slice()), 99_999).unwrap_err();
+        assert!(error.to_string().contains("unpacked"), "{error:#}");
+        // As the store is read at every start: refused, moved aside, started empty.
+        let dir = temp_dir("bomb");
+        let path = dir.join("store.json.gz");
+        spaces_gz(&path, MAX_UNPACKED + 1);
+        assert!(std::fs::metadata(&path).unwrap().len() < 8 << 20, "a small file on disk");
+        assert!(Store::load(&path).unwrap_err().to_string().contains("unpacked"));
+        let store = Store::load_or_empty(&path);
+        assert!(store.conversations.is_empty());
+        assert!(!path.exists(), "moved aside, so it isn't read again");
+        assert!(store.migration_notes[0].contains("couldn't be read"), "{:?}", store.migration_notes);
+        // One under the limit is read through (spaces aren't a store, but that's all it says).
+        spaces_gz(&path, 10 << 20);
+        assert!(!Store::load(&path).unwrap_err().to_string().contains("unpacked"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_archive_month_that_unpacks_to_too_much_is_not_read_whole() {
+        let dir = temp_dir("archive-bomb");
+        spaces_gz(&dir.join(format!("2026-10{ARCHIVE_EXTENSION}")), MAX_UNPACKED + 1);
+        let error = read_archive(&dir, "abc").unwrap_err();
+        assert!(format!("{error:#}").contains("unpacked"), "{error:#}");
+        assert!(remove_from_archive(&dir, "abc", &[]).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
