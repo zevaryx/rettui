@@ -287,7 +287,7 @@ impl App {
                 WebAccess::Change => {}
                 WebAccess::TurnOffOnly if now == "false" => {}
                 WebAccess::TurnOffOnly => {
-                    return Err(format!("{} can only be turned on in the terminal UI: it runs programs on this computer", field.label));
+                    return Err(format!("{} can only be turned on in the terminal UI: {}", field.label, turn_off_only_reason(field.key)));
                 }
                 WebAccess::TerminalOnly => {
                     return Err(format!(
@@ -425,6 +425,15 @@ impl App {
     }
 }
 
+/// Why the web UI may turn this setting off but not on, to end the refusal
+/// it gets. `app.js` gives the same reasons under the setting.
+fn turn_off_only_reason(key: &str) -> &'static str {
+    match key {
+        "disconnect_bootstrap_only" => "it lets interfaces found on the network replace the ones you chose",
+        _ => "it runs programs on this computer",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,6 +541,11 @@ mod tests {
         // Scripts can be turned off, not back on.
         app.update_settings_from_web(&[("node_executable_pages", "false")]).unwrap();
         refused(&mut app, "node_executable_pages", "true");
+        // Each refusal gives the reason for its own setting.
+        let why = |app: &mut App, key: &str| app.update_settings_from_web(&[(key, "true")]).unwrap_err();
+        assert!(why(&mut app, "node_executable_pages").ends_with("it runs programs on this computer"));
+        let e = why(&mut app, "disconnect_bootstrap_only");
+        assert!(e.ends_with("replace the ones you chose") && !e.contains("runs programs"), "{e}");
         // The same values again, and everything else, are fine.
         app.update_settings_from_web(&[("rns_config", &rns), ("display_name", "Changed"), ("messages_kept", "50")]).unwrap();
         let saved = app.saved_settings().unwrap();
