@@ -46,9 +46,10 @@ android {
         }
         // Releases: not debuggable (adb can't read the app's files, the
         // identity among them), signed with the same key as test builds,
-        // so either installs over the other.
+        // so either installs over the other. With no key, packaging one
+        // stops (see below): never with the debug key, which anyone can make.
         release {
-            signingConfig = signingConfigs.findByName("shared") ?: signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("shared")
             isMinifyEnabled = false
         }
     }
@@ -62,6 +63,21 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+// Stop before a release APK is made with no key to sign it with. Checked when
+// the tasks to run are known, so building a debug APK, or compiling the
+// release code, still works without one.
+gradle.taskGraph.whenReady {
+    val making = setOf("assembleRelease", "packageRelease", "bundleRelease", "packageReleaseBundle", "packageReleaseUniversalApk", "signReleaseBundle", "installRelease")
+    val packaging = allTasks.any { it.project == project && it.name in making }
+    if (packaging && android.signingConfigs.findByName("shared") == null) {
+        throw GradleException(
+            "No release signing key. Set RETTUI_KEYSTORE to a keystore file (and RETTUI_KEYSTORE_PASSWORD, " +
+                "RETTUI_KEY_ALIAS and RETTUI_KEY_PASSWORD if they aren't the defaults: see wiki/Android.md for making one). " +
+                "A release is never signed with the Android debug key. For a test build, run assembleDebug instead.",
+        )
     }
 }
 
