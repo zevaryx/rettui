@@ -72,6 +72,35 @@ async fn a_backup_is_not_made_by_opening_its_address() {
 }
 
 #[tokio::test]
+async fn a_copy_of_the_settings_is_fetched_by_a_random_name_as_a_backup_is() {
+    let web = TestWeb::start("settings-copy");
+    assert_eq!(web.post("/api/settings", json!({ "values": { "display_name": "Zed" } })).await.status, StatusCode::OK);
+    // Asked for, then fetched at a random name, as the page does (and as a link would not).
+    let made = web.post("/api/backup", json!({ "settings_only": true })).await;
+    assert_eq!(made.status, StatusCode::OK, "{}", made.text());
+    let id = made.json()["id"].as_str().unwrap().to_string();
+    assert_eq!(id.len(), 32);
+    let link = [("sec-fetch-site", "same-origin"), ("sec-fetch-mode", "navigate")];
+    let fetched = web.send_with(Method::GET, &format!("/api/backup/{id}"), None, false, &link).await;
+    assert_eq!(fetched.status, StatusCode::OK, "{}", fetched.text());
+    assert_eq!(fetched.headers[header::CONTENT_TYPE], "application/json");
+    assert!(fetched.headers[header::CONTENT_DISPOSITION].to_str().unwrap().contains("rettui-settings.json"));
+    let copy: serde_json::Value = serde_json::from_slice(&fetched.body).unwrap();
+    assert_eq!(copy["display_name"], "Zed");
+    // It can't be sealed, and a plain address, opened as a link, still gives nothing.
+    let sealed = web.post("/api/backup", json!({ "settings_only": true, "passphrase": "rosebud" })).await;
+    assert_eq!(sealed.status, StatusCode::BAD_REQUEST, "{}", sealed.text());
+    let opened = web.send_with(Method::GET, "/api/backup", None, false, &link).await;
+    assert_eq!(opened.status, StatusCode::FORBIDDEN);
+    assert!(!String::from_utf8_lossy(&opened.body).contains("display_name"));
+    // Another name isn't there, and a made backup is still a backup.
+    assert_eq!(web.get(&format!("/api/backup/{}", "0".repeat(32))).await.status, StatusCode::NOT_FOUND);
+    let backup = web.post("/api/backup", json!({ "passphrase": "" })).await;
+    let id = backup.json()["id"].as_str().unwrap().to_string();
+    assert!(web.get(&format!("/api/backup/{id}")).await.body.starts_with(&[0x1f, 0x8b]));
+}
+
+#[tokio::test]
 async fn logging_in_and_the_files_every_page_needs() {
     let web = TestWeb::start("login");
     // The link logs in: a cookie, and on to the page.

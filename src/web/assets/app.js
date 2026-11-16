@@ -8077,7 +8077,15 @@ app.views.status = {
         IN_ANDROID_APP ? androidDownloadsButton() : null,
         el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text: IN_ANDROID_APP
           ? 'Download a backup: settings, contacts and messages, without your identity. Identity and backups (the app\'s own screen) saves the identity too, and restores.'
-          : 'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' })),
+          : 'Settings, contacts and messages, without your identity: back that up in the terminal UI (B in Status), or with rettui backup.' }),
+        el('div', { style: 'margin-top:8px' },
+          el('button', { text: 'Save a copy of the settings', title: 'The settings on their own, in one file (Download a backup has them too)',
+            onclick: () => saveSettingsCopy() }),
+          // Not here: a file would replace every setting at once for whoever holds this page's login link.
+          el('button', { text: 'Use settings from a file', disabled: true, title: 'Not done in the web UI: see the note below' })),
+        el('div', { class: 'dim', style: 'font-size:12.5px;margin-top:4px;max-width:34em', text: IN_ANDROID_APP
+          ? 'Using settings from a file is done in the app\'s Identity and backups screen, or with rettui settings import on a computer, not here: it would let anyone with this page\'s login link replace all the settings at once.'
+          : 'Using settings from a file is done with rettui settings import, not here: it would let anyone with this page\'s login link replace all the settings at once.' })),
       label('Known'), el('span', { text: `${s.known} destinations` }),
       // The database was made (older versions can't read it), or can't be used.
       ...(s.db_notice ? [label('Peers and keys'), el('div', { style: `max-width:40em;color:var(${s.db_notice.refused ? '--red' : '--yellow'})`, text: s.db_notice.text })] : []),
@@ -9789,6 +9797,16 @@ function passphraseWeakness(passphrase) {
     return 'That passphrase is short: anyone with the backup can try passphrases as fast as their computer goes, with nothing to stop them. A few words (12 characters or more) are much safer.';
   }
   return '';
+}
+
+// A copy of the settings on their own, fetched the way a backup is: asked
+// for, then downloaded at a random name (a plain address isn't for a page
+// to open).
+async function saveSettingsCopy() {
+  if (!await ask('The settings can hold a password (an MQTT server\'s) and where you are, and the file goes where other apps and computers can read it. Keep it private.',
+    { title: 'Save the settings to a file?', yes: 'Save' })) return;
+  const made = await attempt(() => api.post('/backup', { settings_only: true }));
+  if (made) el('a', { href: `api/backup/${made.id}`, download: '' }).click();
 }
 
 // Download a backup, sealed with a passphrase if one is typed: then
