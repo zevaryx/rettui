@@ -184,6 +184,11 @@ peer protocol).
   `propagation/` in the data directory, at most `pn_storage_mb` (500 MB by
   default). LXMF's 30-day expiry applies, and past the limit the oldest go
   first.
+- **Limits on what it accepts:** a copy of a message it already holds isn't
+  checked again, a new message is checked once, outside the node's lock, a
+  transfer with 16 bad stamps is refused, an `/offer` without a valid peering
+  key is turned away before it is noted, and a peer can't ask for more than
+  10,240 KB in one sync.
 - **Collecting:** a client identifies itself on its Link and asks for its
   messages (`/get`); the node sends them, then deletes the ones it got.
 - **Messages for you:** when the node takes a message addressed to you, it
@@ -244,6 +249,7 @@ and the other RRC clients can join it as they join rrcd.
   operator of it). A hub set up before this kept its setting.
 - **Closed rooms and bans:** someone who isn't in a room that is invite-only, has a key or is private can't post to it, list who's in it or read its topic, and only people in a room (or its operators) set its topic. A ban takes the person out on every connection they have.
 - **Nicks and idle links:** a nick is cleaned of control and invisible characters, and one someone else has (any case), or "hub", isn't given: the person is told, and keeps the one they had. Someone can only leave rooms they're in. Links are pinged every 60 seconds and closed if they don't answer within 30 more (`ping_interval_s` and `ping_timeout_s` in the hub's `config.yaml`; a value of 0 means these defaults).
+- **Limits:** one identity may hold at most 8 connections, a nick sent the older way is cleaned like any other, and a nick that looks like another (the same letters from another alphabet) isn't given. Joining, leaving and closing links don't rewrite `rooms.yaml` each time (at most every 5 seconds); at most 200 rooms may be registered, 8 per visitor. A link that doesn't say who it is within 30 seconds is closed, and no more than 64 may wait.
 - **A damaged rooms file:** if a crash leaves `rooms.yaml` cut off, it is put aside as `rooms.yaml.damaged` and `rooms.yaml.bak` (the rooms as they were when the hub last started) is used.
 - **The Hub tab:** who's connected (their nick, identity, rooms and when they
   came), the rooms (registered or not, modes, topic, who's in them, their

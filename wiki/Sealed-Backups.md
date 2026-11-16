@@ -129,6 +129,9 @@ key; backups already made keep the passphrase they were sealed with.
 A passphrase that's short (under 12 characters) or a PIN of digits alone
 gets a warning everywhere it's typed. It's still yours to use.
 
+A backup holds your identity key, so saving one with no passphrase asks
+first, and so does turning on scheduled backups without one.
+
 ## What it protects against
 
 - Someone with a copy of the backup (in a cloud folder, on a lost USB

@@ -269,5 +269,12 @@ read is left out, and rettui starts with its defaults.
   disk, in megabytes, that `downloads/` may use. A file that came with a
   message and would take it over isn't saved: the message is kept, and the
   log and a notice say which file wasn't. Nothing is deleted to make room. 0 is
-  no limit.
+  no limit. Each received file counts for at least 4 KB, so a flood of tiny
+  files can't fill the folder either.
+- **People who aren't contacts:** rettui keeps at most 500 of their
+  conversations and 32 MB of their messages, and a message may carry at most
+  32 of their reactions. Past that, their oldest conversations are deleted,
+  and rettui says so (in the footer, or as a notice in the web UI), once for
+  each clean-up. Contacts are never cleaned up. Tickets other people give you
+  are kept for 26 days at most, and for 4,096 senders at most.
 - Both settings apply straight away, from the Status tab of either UI.
