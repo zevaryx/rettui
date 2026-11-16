@@ -787,6 +787,7 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
                 }
             }
             _ = save.tick() => owner.app.save_if_dirty(),
+            () = owner.app.save_timer() => owner.app.save_when_due(),
             () = &mut shutdown => break Ok(None),
         }
         for notification in owner.app.take_notifications() {

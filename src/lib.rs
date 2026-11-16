@@ -602,6 +602,7 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
             Some(image) = decoded.recv() => app.on_decoded(image),
             _ = tick.tick() => app.on_tick(),
             _ = save.tick() => app.save_if_dirty(),
+            () = app.save_timer() => app.save_when_due(),
         }
         for notification in app.take_notifications() {
             desktop.show(notification);

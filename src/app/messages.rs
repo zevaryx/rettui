@@ -46,6 +46,11 @@ pub struct Autoplay {
 
 /// Commands from someone are answered at most this often.
 pub(super) const ANSWER_EVERY: Duration = Duration::from_secs(60);
+/// How soon the store is saved after a message arrives or is deleted: a
+/// sender is told a message was delivered as soon as it arrives, so it
+/// mustn't wait for the timer. In a burst, at most this often, as each save
+/// copies the whole store.
+const SAVE_SOON: Duration = Duration::from_millis(250);
 
 impl App {
     /// An attachment image already loaded by [`App::picture`].
@@ -257,7 +262,8 @@ impl App {
         }
         // A game's move: kept apart, and shown in the Games tab.
         if let Some(game) = stored.game.clone() {
-            return self.keep_received_move(&key, stored, &game);
+            self.keep_received_move(&key, stored, &game);
+            return self.save_soon();
         }
         // On screen, in a window that has the focus: what arrives while the
         // user is away counts as unread.
@@ -296,6 +302,7 @@ impl App {
             conversation.unread += 1;
         }
         self.store_dirty = true;
+        self.save_soon();
         let name = self.store.display_name(&key);
         if paper {
             self.notify(format!("Read a paper message from {name}"));
@@ -344,6 +351,7 @@ impl App {
         self.store_dirty = true;
         let yours = conversation.by_hash(&to).filter(|(_, m)| !m.incoming).map(|(_, m)| m.opening());
         let muted = conversation.muted;
+        self.save_soon();
         self.log(format!("{name} reacted {}", reaction.emoji));
         if let Some(opening) = yours
             && self.settings.notify_messages
@@ -1279,6 +1287,7 @@ impl App {
             }
         }
         self.store_dirty = true;
+        self.save_soon();
         Ok(())
     }
 
@@ -1310,7 +1319,46 @@ impl App {
         }
         self.store_dirty = true;
         self.update_policy(false);
+        self.save_soon();
         true
+    }
+
+    /// Save the store soon (see [`SAVE_SOON`]), not only when the timer
+    /// next comes round.
+    pub(crate) fn save_soon(&mut self) {
+        if self.save_due.is_none() {
+            self.save_due = Some((self.saved_soon + SAVE_SOON).max(Instant::now()));
+        }
+    }
+
+    /// Wait until the save [`App::save_soon`] asked for is due (forever if
+    /// none was), for the event loop: then call [`App::save_when_due`].
+    pub fn save_timer(&self) -> impl Future<Output = ()> + use<> {
+        let due = self.save_due;
+        async move {
+            match due {
+                Some(due) => tokio::time::sleep_until(due.into()).await,
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    /// The save [`App::save_soon`] asked for, once it's due. While the last
+    /// save is still being written it waits a little longer, rather than
+    /// copy the whole store again meanwhile.
+    pub fn save_when_due(&mut self) {
+        let Some(due) = self.save_due else { return };
+        let now = Instant::now();
+        if now < due {
+            return;
+        }
+        if self.saver.busy() {
+            self.save_due = Some(now + SAVE_SOON);
+            return;
+        }
+        self.save_due = None;
+        self.saved_soon = now;
+        self.save_if_dirty();
     }
 
     /// Ask before deleting the open conversation (`X`).
@@ -2649,4 +2697,58 @@ mod tests {
         assert_eq!(unread(&app), 0, "read on coming back");
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    /// What the store file says now (the saver may still be writing it).
+    fn saved_store(app: &App, until: impl Fn(&Store) -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if Store::load(&app.paths.store).is_ok_and(|store| until(&store)) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[test]
+    fn a_message_or_a_deletion_is_saved_soon_not_on_the_timer() {
+        use crate::lxmf::Extras;
+        let dir = temp_dir("save-soon");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        app.save_if_dirty();
+        assert!(app.save_due.is_none());
+        // A message: the sender has been told it arrived, so it's saved
+        // within SAVE_SOON, without the ten-second timer.
+        app.on_message(from_them(1, "Are you there?", Extras::default()));
+        let due = app.save_due.expect("a save is due");
+        assert!(due <= Instant::now() + SAVE_SOON);
+        // A burst doesn't put it off, nor ask for one save each.
+        for n in 2..50 {
+            app.on_message(from_them(n, "and again", Extras::default()));
+        }
+        assert_eq!(app.save_due, Some(due));
+        std::thread::sleep(due.saturating_duration_since(Instant::now()));
+        app.save_when_due();
+        assert!(app.save_due.is_none());
+        assert!(saved_store(&app, |store| store.conversations.get(&key()).is_some_and(|c| c.messages.len() == 49)));
+        // While the last save is still being written, the next waits.
+        app.saver.run("be slow", || {
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(Vec::new())
+        });
+        assert!(app.delete_message(&key(), &hex::encode([1u8; 32])).is_ok());
+        std::thread::sleep(app.save_due.unwrap().saturating_duration_since(Instant::now()));
+        app.save_when_due();
+        assert!(app.save_due.is_some(), "put off while the saver is busy");
+        // A deleted conversation stays deleted after a restart.
+        assert!(app.delete_conversation(&key()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.save_due.is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            app.save_when_due();
+        }
+        assert!(saved_store(&app, |store| store.conversations.is_empty()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
 }
