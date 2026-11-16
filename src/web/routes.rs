@@ -2459,16 +2459,19 @@ struct PartialBody {
 }
 
 /// A page's partial, loaded on its own (never from the cache): its HTML.
-/// Partials in it aren't loaded. One on another node than its page's, or
-/// that is a file, is refused.
+/// Partials in it aren't loaded. One that is a file is refused, and so is one
+/// on another node than its page's unless the setting allows it (see
+/// `partial_refusal`); one that is allowed is never identified for.
 async fn partial(State(state): State<WebState>, axum::Json(body): axum::Json<PartialBody>) -> ApiResult {
     let mut location = location(&body.url)?;
-    if let Some(why) = crate::nomad::paths::partial_refusal(self::location(&body.page)?.node, location.node, &location.path) {
+    let (page_node, node) = (self::location(&body.page)?.node, location.node);
+    let (other_nodes, own) = state.read(move |o| (o.app.settings.partials_other_nodes, o.app.is_own_node(node))).await?;
+    if let Some(why) = crate::nomad::paths::partial_refusal(page_node, node, &location.path, other_nodes, own) {
         return Err(bad(why));
     }
     location.fields = body.fields;
-    let node = location.node;
-    let fetched = state.fetch(location, true).await?;
+    // A partial on another node (the setting allows it) is never identified for.
+    let fetched = if node == page_node { state.fetch(location, true).await? } else { state.fetch_unidentified(location).await? };
     let page = micron::parse_partial(&String::from_utf8_lossy(&fetched.data));
     let html = page.to_html(
         |url| link_target(url, node),

@@ -118,6 +118,12 @@ impl Owner {
     /// network, as in the terminal browser.
     pub fn fetch(&mut self, location: Location, refresh: bool, reply: oneshot::Sender<Result<Fetched, String>>) {
         let identified = self.app.identifies_to(location.node);
+        self.fetch_as(location, refresh, identified, reply);
+    }
+
+    /// [`Self::fetch`], with `identified` saying whether the request
+    /// identifies this client to the node (it is what `fetch` asks the app).
+    pub fn fetch_as(&mut self, location: Location, refresh: bool, identified: bool, reply: oneshot::Sender<Result<Fetched, String>>) {
         // This client's own node is read from its folder (see `own_node_content`).
         if self.app.is_own_node(location.node) {
             let id = self.next_request;
@@ -511,6 +517,14 @@ impl WebState {
     pub async fn fetch(&self, location: Location, refresh: bool) -> Result<Fetched, String> {
         let (tx, rx) = oneshot::channel();
         self.read(move |owner| owner.fetch(location, refresh, tx)).await?;
+        rx.await.map_err(|_| "rettui is shutting down".to_string())?
+    }
+
+    /// Fetch from the network without identifying, whatever the user has set
+    /// for that node (for what a page loaded by itself, from another node).
+    pub async fn fetch_unidentified(&self, location: Location) -> Result<Fetched, String> {
+        let (tx, rx) = oneshot::channel();
+        self.read(move |owner| owner.fetch_as(location, true, false, tx)).await?;
         rx.await.map_err(|_| "rettui is shutting down".to_string())?
     }
 }

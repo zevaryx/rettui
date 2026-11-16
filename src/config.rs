@@ -35,6 +35,9 @@ pub struct Settings {
     /// A saved page or node picked from the Browser's list opens in a tab
     /// of its own, and the tabs always show.
     pub browser_new_tabs: bool,
+    /// A page's partials may come from other nodes than the page's (never
+    /// identified, and never from the node hosted here). Off unless turned on.
+    pub partials_other_nodes: bool,
     /// Outbound propagation node (hex destination hash).
     pub propagation_node: Option<String>,
     /// Minutes between automatic propagation node syncs; 0 disables them.
@@ -287,6 +290,7 @@ impl Default for Settings {
             rns_config: None,
             home: None,
             browser_new_tabs: true,
+            partials_other_nodes: false,
             propagation_node: None,
             sync_interval_mins: 120,
             auto_propagation_node: false,
@@ -833,7 +837,10 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "map_tiles_file",
         ],
     ),
-    (Section::Browsing, &["home", "browser_new_tabs", "cache_hours", "nomad_files_dir", "rngit_identity", "rngit_timeout_secs"]),
+    (
+        Section::Browsing,
+        &["home", "browser_new_tabs", "partials_other_nodes", "cache_hours", "nomad_files_dir", "rngit_identity", "rngit_timeout_secs"],
+    ),
     (
         Section::Hosting,
         &[
@@ -1163,6 +1170,13 @@ pub const FIELDS: &[Field] = &[
         key: "browser_new_tabs",
         label: "Open pages in new tabs",
         help: "A saved page or node picked from the Browser's list opens in a tab of its own (an empty one is used first), and the tabs always show. T in the list (Ctrl+click in the web UI) opens it in the tab shown instead",
+        kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "partials_other_nodes",
+        label: "Partials from other nodes",
+        help: "Off, a page's partials (parts it loads by itself, with no tap) come only from the page's own node. On, a page may also load parts of other nodes, so whoever wrote the page can make rettui ask any node for something, and that node learns that you did. Even then rettui never identifies you to that node for a partial and never loads one from your own node",
         kind: FieldKind::Toggle,
         effect: Effect::Now,
     },
@@ -1660,6 +1674,7 @@ impl Settings {
             "rngit_timeout_secs" => self.rngit_timeout_secs.to_string(),
             "nomad_files_dir" => self.nomad_files_dir.clone().unwrap_or_default(),
             "browser_new_tabs" => self.browser_new_tabs.to_string(),
+            "partials_other_nodes" => self.partials_other_nodes.to_string(),
             "node_enabled" => self.node_enabled.to_string(),
             "node_name" => self.node_name.clone().unwrap_or_default(),
             "node_announce_interval_mins" => self.node_announce_interval_mins.to_string(),
@@ -1784,6 +1799,7 @@ impl Settings {
             "keep_running" => self.keep_running = toggle(value).map_err(fail)?,
             "minimize_to_tray" => self.minimize_to_tray = toggle(value).map_err(fail)?,
             "browser_new_tabs" => self.browser_new_tabs = toggle(value).map_err(fail)?,
+            "partials_other_nodes" => self.partials_other_nodes = toggle(value).map_err(fail)?,
             "chat_dates" => self.chat_dates = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,

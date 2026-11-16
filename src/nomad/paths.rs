@@ -143,14 +143,19 @@ pub fn file_name(path: &str) -> Result<&str, PathError> {
 
 /// Why a partial at `node`:`path` may not be loaded for a page on
 /// `page_node`, if it may not. A partial is fetched with no tap, so it stays
-/// on its page's node (otherwise a page could make this client send requests,
-/// identified, or run its owner's own scripts, at a node of the page's
-/// choosing), and it is never a file, which is held whole in memory.
-pub fn partial_refusal(page_node: [u8; 16], node: [u8; 16], path: &str) -> Option<&'static str> {
-    if node != page_node {
-        Some("This part of the page is on another node, so it isn't loaded")
-    } else if path.starts_with(FILE_PREFIX) {
+/// on its page's node (otherwise a page could make this client send requests
+/// at a node of the page's choosing) unless `other_nodes` (the setting) lets
+/// it go elsewhere. Even then it never goes to the node hosted here
+/// (`node_is_own`) from a page on another node, which would run the owner's
+/// own scripts with the page's values, and it is never a file, which is held
+/// whole in memory. The caller never identifies for a partial on another node.
+pub fn partial_refusal(page_node: [u8; 16], node: [u8; 16], path: &str, other_nodes: bool, node_is_own: bool) -> Option<&'static str> {
+    if path.starts_with(FILE_PREFIX) {
         Some("This part of the page is a file, so it isn't loaded")
+    } else if node != page_node && !other_nodes {
+        Some("This part of the page is on another node, so it isn't loaded (the setting Partials from other nodes allows it)")
+    } else if node != page_node && node_is_own {
+        Some("This part of the page is on your own node, so it isn't loaded")
     } else {
         None
     }
@@ -215,11 +220,19 @@ mod tests {
     #[test]
     fn partials_stay_on_their_node_and_are_never_files() {
         let (page, other) = ([1; 16], [2; 16]);
-        assert_eq!(partial_refusal(page, page, "/page/p.mu"), None);
-        assert_eq!(partial_refusal(page, page, "/media/x.webp"), None);
-        assert!(partial_refusal(page, other, "/page/p.mu").is_some());
-        assert!(partial_refusal(page, page, "/file/big.bin").is_some());
-        assert!(partial_refusal(page, other, "/file/big.bin").is_some());
+        // Off: only the page's own node, and never a file.
+        assert_eq!(partial_refusal(page, page, "/page/p.mu", false, false), None);
+        assert_eq!(partial_refusal(page, page, "/media/x.webp", false, false), None);
+        assert!(partial_refusal(page, other, "/page/p.mu", false, false).is_some());
+        assert!(partial_refusal(page, page, "/file/big.bin", false, false).is_some());
+        assert!(partial_refusal(page, other, "/file/big.bin", false, false).is_some());
+        // On: another node's page is let through, but not a file, nor the node hosted here.
+        assert_eq!(partial_refusal(page, other, "/page/p.mu", true, false), None);
+        assert!(partial_refusal(page, other, "/file/big.bin", true, false).is_some());
+        assert!(partial_refusal(page, other, "/page/act.mu", true, true).unwrap().contains("own node"));
+        // A page on the node hosted here may use that node's own partials, with it on or off.
+        assert_eq!(partial_refusal(page, page, "/page/act.mu", false, true), None);
+        assert_eq!(partial_refusal(page, page, "/page/act.mu", true, true), None);
     }
 
     #[test]
