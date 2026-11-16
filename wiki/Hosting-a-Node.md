@@ -219,6 +219,23 @@ peer protocol).
 Tested against Python LXMF 1.2: its clients send through and collect from
 rettui's node, and its propagation nodes peer with it.
 
+### Upgrading the propagation node
+
+rettui 2.0 keeps the node's messages in the store rsLXMF 1.4 uses, which
+can't take over the folder an earlier version left in `propagation/`. If
+the node doesn't start, saying it can't open the message store, stop
+rettui and run:
+
+    rettui migrate-propagation
+
+(in Docker, after `docker compose down`:
+`docker compose run --rm rettui migrate-propagation`). It moves the old
+messages to `propagation.legacy-quarantine` beside the store and starts a
+new one. The old messages are kept but not handed out again, since nothing
+can show where they came from, so people who had messages waiting on your
+node must send them again. Start rettui afterwards as usual. A node that
+never hosted a propagation node before needs nothing.
+
 ## RRC hub
 
 An RRC hub is what people chat on in [RRC](RRC-Chat): rooms, their topics

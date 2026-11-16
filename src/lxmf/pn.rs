@@ -373,7 +373,16 @@ impl HostedPn {
         let node = tokio::task::spawn_blocking(move || PropagationNode::with_storage(node_config, hash, dir))
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|e| format!("Could not open the message store {}: {e}", config.dir.display()))?;
+            .map_err(|e| {
+                if lxmf_core::propagation_store_v2::is_migration_required(&e) {
+                    format!(
+                        "The message store {} is from before rettui 2.0 and has to be converted first: stop rettui and run `rettui migrate-propagation` (the old messages are kept apart, not served). See https://github.com/zevaryx/rettui/wiki/Hosting-a-Node#upgrading-the-propagation-node",
+                        config.dir.display()
+                    )
+                } else {
+                    format!("Could not open the message store {}: {e}", config.dir.display())
+                }
+            })?;
         let node = Arc::new(Mutex::new(node));
         let ingest = Arc::new(Ingest {
             node: node.clone(),
