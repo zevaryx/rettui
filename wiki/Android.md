@@ -94,7 +94,11 @@ repository.
   `rrc://`) opens. Anything else asks which conversation it's for, and goes
   in that conversation's message box, not sent yet (up to 40 MB of files at
   once). Reticulum links tapped in other apps
-  (`lxma://`, `lxmf://`, `nomadnetwork://`, `rrc://`) open in rettui too.
+  (`lxma://`, `lxmf://`, `nomadnetwork://`, `rrc://`) open in rettui too,
+  after it asks whether to load the page, start the conversation or join the
+  room. A shared file is copied only up to that 40 MB; a bigger one is
+  refused and the partial copy removed. A shared address that points at
+  rettui's own files is refused.
 - The web UI uses port 8740 on the phone. If another app has that port,
   rettui takes a free one, and keeps it from then on.
 

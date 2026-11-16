@@ -92,7 +92,11 @@ MeshChat, NomadNet and other LXMF clients).
   the key isn't known, rettui looks it up first (up to 10 s). Messages that
   still can't be checked are marked *unverified*. A message whose signature
   doesn't match its sender's known key was written by someone else: it's
-  dropped, and the log says so (as Python LXMF does).
+  dropped, and the log says so (as Python LXMF does). A message from an
+  unknown sender is shown for up to 10 seconds while the key is looked for,
+  then verified or removed. A location or interface list in an unverified
+  message isn't used, and when the table of known keys is full the key heard
+  longest ago makes room (contacts' keys are always kept).
 - **Peers who are offline:** public keys from announces are kept, so you can
   write to a peer you heard earlier even while they're away.
 - **Announces:** rettui announces your LXMF address when it starts (unless
@@ -416,6 +420,10 @@ rettui shows what each one is, rather than an empty message:
     1400, 1300, 1200, 700C and 450 to 8 kHz mono, and 450PWB (450's bits
     decoded "pseudo wideband") to 16 kHz. A recording without a whole
     frame is saved as it came (`.codec2`) and marked as not playable.
+  - **Not from strangers:** a Codec2 recording from someone who isn't a
+    contact is saved as it came (`.codec2`) and marked as not playable, and
+    stays so if you add them later. Decoding costs time and memory, so only
+    contacts' recordings are decoded.
   - **Recording one** in the web UI: the 🎤 button beside **Attach**
     records from the microphone; press it again (⏹ shows how long so far)
     to stop, listen to it, then **Send** it, with text if you like.

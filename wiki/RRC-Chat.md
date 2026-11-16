@@ -35,6 +35,7 @@ host. rettui works with each of them, as they differ (see
   `/history`, `/away` or `/seen`, say), and the hub says if it doesn't
   have one. `/quote <text>` sends any text to the hub: `/quote /help` for
   the hub's own help.
+- **Rooms and whispers:** a hub can't add rooms you never joined to your list, and rettui keeps at most 100 whisper conversations per hub.
 - **Nicks:** a new nick (`/nick`) goes with your next message, as in
   NomadNet. A hub may give you another than you asked for (rrc-hub keeps
   nicks unique, so you may be `zev1`): your messages show the one it gave,
