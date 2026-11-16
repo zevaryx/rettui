@@ -24,10 +24,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lxmf_core::constants::{MESSAGE_EXPIRY, PEERING_COST, PROPAGATION_COST_FLEX, PROPAGATION_COST_MIN, PeerError, SYNC_LIMIT};
+use lxmf_core::constants::{
+    LXMF_OVERHEAD, MESSAGE_EXPIRY, PEERING_COST, PROPAGATION_COST_FLEX, PROPAGATION_COST_MIN, PeerError, SYNC_LIMIT,
+};
 use lxmf_core::handlers::{PropagationNodeAnnounceData, get_propagation_node_app_data};
-use lxmf_core::propagation_node::{OfferRequestContext, PropagationNode, PropagationNodeConfig};
-use lxmf_core::stamper::validate_pn_stamp;
+use lxmf_core::propagation_node::{
+    OfferRequestContext, PropagationAdmission, PropagationNode, PropagationNodeConfig, ValidatedOpaquePropagationBlob,
+};
+use lxmf_core::stamper::validate_peering_key;
 use rmpv::Value;
 use rns_identity::destination::Destination;
 use rns_runtime::prelude::*;
@@ -168,11 +172,18 @@ impl Ingest {
                 continue;
             }
             // The stamp proves the sender's work; without it, it's not taken.
-            let Some((transient_id, lxmf_data, value, stamp)) = validate_pn_stamp(&data, self.min_stamp) else {
+            // It is checked here, once, off the node's lock: the node then
+            // reserves the message without checking it again.
+            let blob = (data.len() > LXMF_OVERHEAD + STAMP_SIZE)
+                .then(|| ValidatedOpaquePropagationBlob::validate(data.clone().into(), self.min_stamp))
+                .flatten();
+            let Some(blob) = blob else {
                 self.counters.rejected.fetch_add(1, Ordering::Relaxed);
                 bad += 1;
                 continue;
             };
+            let transient_id = blob.transient_id();
+            let lxmf_data = &data[..data.len() - STAMP_SIZE];
             if lxmf_data.len() > 16 && lxmf_data[..16] == self.lxmf_hash {
                 match super::ratchets::decrypt(&self.identity, &self.ring, &lxmf_data[16..]) {
                     Ok(plaintext) => {
@@ -187,15 +198,24 @@ impl Ingest {
                 continue;
             }
             // Reserved under the lock, written without it, then committed.
-            let plan = self.node.lock().unwrap().plan_accept_stamped_propagated_blob(&lxmf_data, &stamp, value.min(255) as u8);
-            let Some(plan) = plan else {
-                // Held already (a duplicate is fine), or over a limit.
-                if self.node.lock().unwrap().contains(&transient_id) {
+            let admission = self.node.lock().unwrap().plan_opaque_admission(blob);
+            let plan = match admission {
+                PropagationAdmission::Reserved(plan) => *plan,
+                // Held already, or being stored from another transfer: a
+                // duplicate is fine.
+                PropagationAdmission::CommittedDuplicate(_) | PropagationAdmission::Pending(_) => {
                     taken += 1;
-                } else {
-                    self.counters.rejected.fetch_add(1, Ordering::Relaxed);
+                    continue;
                 }
-                continue;
+                PropagationAdmission::Rejected => {
+                    // Over a limit, or held without a way to check it.
+                    if self.node.lock().unwrap().contains(&transient_id) {
+                        taken += 1;
+                    } else {
+                        self.counters.rejected.fetch_add(1, Ordering::Relaxed);
+                    }
+                    continue;
+                }
             };
             let size = plan.size();
             match plan.persist() {
@@ -304,6 +324,25 @@ fn error_reply(error: PeerError) -> RequestOutcome {
     RequestOutcome::Reply(encode(&Value::from(error as u8)))
 }
 
+/// Why an `/offer` isn't given to the node, if it isn't: it is from no one
+/// who identified or from someone blocked, or its peering key (the first
+/// 32 bytes of `[key, [id, ...]]`, written as MessagePack writes them) isn't
+/// the work `cost` asks over both identities. rsLXMF notes every offer it
+/// reads, for 3 minutes, in a table nothing empties; with only offers that
+/// proved their work given to it, adding an entry costs that work.
+fn offer_refusal(data: &[u8], remote: Option<&Hash>, blocked: bool, local: &Hash, cost: u8) -> Option<PeerError> {
+    let Some(remote) = remote else { return Some(PeerError::NoIdentity) };
+    if blocked {
+        return Some(PeerError::NoAccess);
+    }
+    let [0x92, 0xc4, 0x20, rest @ ..] = data else { return Some(PeerError::InvalidData) };
+    let Some(key) = rest.get(..32).and_then(|key| <[u8; 32]>::try_from(key).ok()) else { return Some(PeerError::InvalidData) };
+    let mut peering_id = [0u8; 32];
+    peering_id[..16].copy_from_slice(local);
+    peering_id[16..].copy_from_slice(remote);
+    (!validate_peering_key(&peering_id, &key, cost)).then_some(PeerError::InvalidKey)
+}
+
 impl HostedPn {
     /// Start the node on the running Reticulum instance, with this client's
     /// identity (its LXMF address is `lxmf_hash`, its ratchets in `ring`).
@@ -394,12 +433,16 @@ impl HostedPn {
             .handle
             .register_request_handler(lxmf_core::constants::OFFER_REQUEST_PATH, AllowPolicy::AllowAll, Vec::new(), false, move |request| {
                 let remote = request.remote_identity.as_ref().map(|identity| identity.hash);
+                let blocked = remote.is_some_and(|hash| offer_blocked.has_identity(&hash));
+                if let Some(error) = offer_refusal(&request.data, remote.as_ref(), blocked, &local_identity, PEERING_COST) {
+                    return error_reply(error);
+                }
                 let peer_hash = remote.map_or([0; 16], |hash| Destination::hash_from_name_and_identity(PROPAGATION_ASPECT, Some(&hash)));
                 let context = OfferRequestContext {
                     peer_hash,
                     identity_known: remote.is_some(),
                     is_throttled: false,
-                    access_allowed: !remote.is_some_and(|hash| offer_blocked.has_identity(&hash)),
+                    access_allowed: !blocked,
                     local_identity_hash: Some(&local_identity),
                     remote_identity_hash: remote.as_ref(),
                 };
@@ -552,6 +595,7 @@ impl HostedPn {
 mod tests {
     use lxmf_core::message_api::{DeliveryMethod, LxMessage, LxMessageDraft, MessageError};
     use lxmf_core::propagation_send::{AdvertisedNodePolicy, PreparedNode, PropagationEnvelope};
+    use lxmf_core::stamper::validate_pn_stamp;
 
     use super::*;
 
@@ -681,6 +725,35 @@ mod tests {
         let _ = ingest.take(&wrong, false);
         assert!(delivered.try_recv().is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_offer_reaches_the_node_only_with_a_peering_key_that_is_work() {
+        use lxmf_core::constants::STAMP_WORKBLOCK_EXPAND_ROUNDS_PEERING;
+        let (local, remote, cost) = ([1; 16], [2; 16], 8);
+        let mut id = [0u8; 32];
+        id[..16].copy_from_slice(&local);
+        id[16..].copy_from_slice(&remote);
+        let (key, _) = lxmf_core::stamper::generate_stamp(&id, cost, STAMP_WORKBLOCK_EXPAND_ROUNDS_PEERING).unwrap();
+        let offer = |key: &[u8]| encode(&Value::Array(vec![Value::Binary(key.to_vec()), Value::Array(vec![Value::Binary(vec![7; 32])])]));
+        let refusal = |data: &[u8], remote: Option<&Hash>, blocked: bool| offer_refusal(data, remote, blocked, &local, cost);
+        // Work over these two identities: through.
+        assert_eq!(refusal(&offer(&key), Some(&remote), false), None);
+        // Work that isn't (nothing, or someone else's): turned away, so
+        // the node keeps no note of it.
+        let zeros = offer(&[0; 32]);
+        assert!(!lxmf_core::stamper::validate_peering_key(&id, &[0; 32], cost), "a key of nothing is not work");
+        assert_eq!(refusal(&zeros, Some(&remote), false), Some(PeerError::InvalidKey));
+        let other = [3; 16];
+        assert!(refusal(&offer(&key), Some(&other), false).is_some(), "the key is for one identity");
+        // Who it is, and a block.
+        assert_eq!(refusal(&offer(&key), None, false), Some(PeerError::NoIdentity));
+        assert_eq!(refusal(&offer(&key), Some(&remote), true), Some(PeerError::NoAccess));
+        // Not an offer: the wrong shape, a key of another length, too short.
+        assert_eq!(refusal(&[0xc1], Some(&remote), false), Some(PeerError::InvalidData));
+        assert_eq!(refusal(&offer(&[1; 31]), Some(&remote), false), Some(PeerError::InvalidData));
+        assert_eq!(refusal(&offer(&key)[..20], Some(&remote), false), Some(PeerError::InvalidData));
+        assert_eq!(refusal(&[], Some(&remote), false), Some(PeerError::InvalidData));
     }
 
     #[test]

@@ -243,14 +243,26 @@ pub struct Synced {
     pub sent: usize,
 }
 
+/// `policy` with what a peer takes in one sync cut to what this node takes
+/// itself, as [`Peers::heard`] does for an announce: what the peer wants is
+/// read into memory to be sent, and a peer saved earlier, or announcing
+/// no limit (which is none), would have everything read.
+fn within_what_is_taken(policy: &mut OutboundOfferPolicy) {
+    let most = lxmf_core::constants::SYNC_LIMIT as f64;
+    for limit in [&mut policy.propagation_transfer_limit, &mut policy.propagation_sync_limit] {
+        *limit = Some(limit.filter(|kilobytes| kilobytes.is_finite()).map_or(most, |kilobytes| kilobytes.min(most)));
+    }
+}
+
 /// Sync with one peer, as its `policy` says: offer what it hasn't had,
 /// then send what it wants. What it has, or took, is recorded as handled.
 pub async fn sync_peer(
     runtime: &ReticulumHandle,
     identity: &Identity,
     node: &Arc<Mutex<PropagationNode>>,
-    policy: OutboundOfferPolicy,
+    mut policy: OutboundOfferPolicy,
 ) -> Result<Synced, Offered> {
+    within_what_is_taken(&mut policy);
     let refused = |e: String| Offered::Refused(e);
     let offer = {
         let (node, policy) = (node.clone(), policy.clone());
@@ -516,6 +528,22 @@ mod tests {
         let most = lxmf_core::constants::SYNC_LIMIT as f64;
         let peer = &peers.peers[&[1; 16]];
         assert_eq!((peer.propagation_transfer_limit, peer.propagation_sync_limit), (Some(most), Some(most)));
+    }
+
+    #[test]
+    fn a_peer_saved_with_more_than_is_taken_here_is_cut_when_synced() {
+        let most = lxmf_core::constants::SYNC_LIMIT as f64;
+        let policy_of = |transfer: Option<f64>, sync: Option<f64>| {
+            let mut peer = LxmPeer::from_announce([1; 16], 1.0, transfer, sync, Some(16), Some(3), Some(18));
+            peer.propagation_sync_limit = sync;
+            let mut policy = peer.outbound_offer_policy();
+            within_what_is_taken(&mut policy);
+            (policy.propagation_transfer_limit, policy.propagation_sync_limit)
+        };
+        assert_eq!(policy_of(Some(1e18), Some(1e18)), (Some(most), Some(most)));
+        assert_eq!(policy_of(None, None), (Some(most), Some(most)), "no limit announced is no limit");
+        assert_eq!(policy_of(Some(f64::NAN), Some(f64::INFINITY)), (Some(most), Some(most)));
+        assert_eq!(policy_of(Some(256.0), Some(2048.0)), (Some(256.0), Some(2048.0)), "less is left as it is");
     }
 
     #[test]
