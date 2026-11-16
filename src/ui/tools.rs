@@ -10,7 +10,7 @@ use super::{accent, block, dim, human_bytes, selected_bg};
 use crate::app::App;
 use crate::app::paths::{lookup_label, probe_state_label};
 use crate::app::reach::Reach;
-use crate::app::tools::{Tool, reach_label};
+use crate::app::tools::{LISTEN_NOTE, Tool, reach_label};
 
 pub(super) fn draw_tools(frame: &mut Frame, app: &mut App, area: Rect) {
     let history = app.tools.history.len().clamp(1, 8) as u16;
@@ -81,7 +81,9 @@ fn draw_interfaces(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(format!("  ↓{} ↑{}", human_bytes(row.info.rx_bytes), human_bytes(row.info.tx_bytes)), Style::default().fg(dim())),
         ];
         if let Some(entry) = &row.entry {
-            spans.push(Span::styled(format!("  {}:{}", entry.host, entry.port), Style::default().fg(dim())));
+            let place =
+                if entry.listens { format!("  listens on port {}", entry.port) } else { format!("  {}:{}", entry.host, entry.port) };
+            spans.push(Span::styled(place, Style::default().fg(dim())));
             if !entry.enabled {
                 spans.push(Span::styled("  switched off", Style::default().fg(dim())));
             }
@@ -97,6 +99,9 @@ fn draw_interfaces(frame: &mut Frame, app: &App, area: Rect) {
                 Reach::Checking => dim(),
             };
             lines.push(Line::styled(format!("     {}", reach_label(*check)), Style::default().fg(colour)));
+            if row.entry.as_ref().is_some_and(|e| e.listens) {
+                lines.push(Line::styled(format!("     {}", LISTEN_NOTE), Style::default().fg(dim())));
+            }
         } else if !row.info.online && row.entry.is_some() {
             lines.push(Line::styled("     c tries connecting to it", Style::default().fg(dim())));
         }

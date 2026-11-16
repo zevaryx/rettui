@@ -244,7 +244,11 @@ files) is here too, and each keeps working where it was.
   config) the host and port, and whether it has an IFAC network name or
   passphrase (the other end needs the same; the passphrase is never
   shown). The check tries a TCP connection to each entry point that's
-  switched on, from this computer, and closes it at once. It says how long
+  switched on, from this computer, and closes it at once. A server
+  interface (one that listens, such as a `TCPServerInterface`) is tried on
+  this computer's own address and its port: that shows rettui is
+  listening, not whether your router, firewall or Docker port mapping lets
+  others in. It says how long
   the connection took ("up · 120 ms"), or why not ("down · refused": the
   host is down or the port is wrong; "no answer": down, or a firewall;
   "unreachable": no route; "name not found"), with what to do about it. A

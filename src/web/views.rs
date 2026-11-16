@@ -272,7 +272,7 @@ pub fn tools(app: &App) -> Value {
                 "rx": row.info.rx_bytes,
                 "tx": row.info.tx_bytes,
                 "details": row.info.details(),
-                "entry": row.entry.map(|e| json!({ "host": e.host, "port": e.port, "enabled": e.enabled, "ifac": e.ifac })),
+                "entry": row.entry.map(|e| json!({ "host": e.host, "port": e.port, "listens": e.listens, "note": e.listens.then_some(crate::app::tools::LISTEN_NOTE), "enabled": e.enabled, "ifac": e.ifac })),
                 "check": check,
             })
         })

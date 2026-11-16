@@ -69,6 +69,10 @@ pub fn reach_label(reach: Reach) -> String {
     }
 }
 
+/// What a server interface's check shows and doesn't: that it accepts
+/// connections here, not whether others can reach it from outside.
+pub const LISTEN_NOTE: &str = "Tried from this computer: it shows rettui is listening, not whether a router or firewall lets others in.";
+
 pub fn down_hint(why: &str) -> &'static str {
     match why {
         "refused" => "nothing accepted the connection: the host may be down, or the port is wrong",
@@ -138,7 +142,9 @@ impl App {
     pub fn test_entry_points(&mut self) -> Result<usize, String> {
         let entries: Vec<_> = checks::entry_points(&self.rns.text).into_iter().filter(|e| e.enabled).collect();
         if entries.is_empty() {
-            return Err("No entry point in the Reticulum config is switched on: add one in the Reticulum tab".into());
+            return Err(
+                "No interface in the Reticulum config that connects out or listens is switched on: add one in the Reticulum tab".into()
+            );
         }
         if let Ok(mut results) = self.entry_checks.lock() {
             results.clear();

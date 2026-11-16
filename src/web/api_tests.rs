@@ -2394,9 +2394,22 @@ async fn the_tools_tab_lists_what_was_tried_and_checks_entry_points() {
     assert_eq!(interface["entry"]["ifac"], true);
     assert!(!tools.to_string().contains("secret"), "the passphrase stays out: {tools}");
     // Checking asks for no address: the config's own are tried.
+    web.with(|app| {
+        app.rns.text.push_str(
+            "  [[Rettui Public]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 0.0.0.0\n    listen_port = 4242\n",
+        );
+        app.entry_checks.lock().unwrap().insert("Rettui Public".into(), Reach::Up(std::time::Duration::from_millis(2)));
+    })
+    .await;
+    let listening =
+        web.get("/api/tools").await.json()["interfaces"].as_array().unwrap().iter().find(|i| i["name"] == "Rettui Public").cloned();
+    let listening = listening.expect("a server interface is listed");
+    assert_eq!(listening["entry"]["listens"], true);
+    assert_eq!(listening["check"]["state"], "up");
+    assert!(listening["entry"]["note"].as_str().unwrap().contains("not whether a router"), "{listening}");
     let checked = web.post("/api/tools/check", serde_json::json!({ "host": "127.0.0.1" })).await;
     assert_eq!(checked.status, StatusCode::OK);
-    assert_eq!(checked.json()["tried"], 1);
+    assert_eq!(checked.json()["tried"], 2);
     assert_eq!(web.get("/api/tools").await.json()["interfaces"][0]["check"]["state"], "checking");
     web.with(|app| {
         app.entry_checks.lock().unwrap().insert("Testnet".into(), Reach::Down("refused"));

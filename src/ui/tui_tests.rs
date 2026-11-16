@@ -2734,6 +2734,14 @@ fn the_tools_tab_runs_the_network_tests_and_shows_the_interfaces() {
     tui.app.entry_checks.lock().unwrap().insert("Testnet".into(), Reach::Down("refused"));
     let shown = tui.draw();
     assert!(shown.contains("down · refused") && shown.contains("nothing accepted the connection"), "{shown}");
+    // A server interface is tried from here, and says what that shows.
+    tui.app.rns.text.push_str(
+        "  [[Rettui Public]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 0.0.0.0\n    listen_port = 4242\n",
+    );
+    tui.key(KeyCode::Char('c'));
+    tui.app.entry_checks.lock().unwrap().insert("Rettui Public".into(), Reach::Up(std::time::Duration::from_millis(1)));
+    let shown = tui.draw();
+    assert!(shown.contains("listens on port 4242") && shown.contains("up · 1 ms") && shown.contains("not whether a router"), "{shown}");
     // Moving to a tool and Enter, a click, and the tools that open over it.
     tui.key(KeyCode::Down).key(KeyCode::Up).key(KeyCode::Char('j')).key(KeyCode::Char('k'));
     tui.key(KeyCode::Char('I'));

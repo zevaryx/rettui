@@ -8707,8 +8707,9 @@ app.views.tools = {
       el('div', { class: 'main' },
         el('div', { class: 'name' }, el('span', { class: i.online ? 'ok' : 'bad', text: i.online ? '● ' : '○ ' }), i.name,
           el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` })),
-        i.entry ? el('div', { class: 'sub', text: `${i.entry.host}:${i.entry.port}${i.entry.enabled ? '' : ' · switched off'}${i.entry.ifac ? ' · IFAC: the other end needs the same network name and passphrase' : ''}` }) : null,
+        i.entry ? el('div', { class: 'sub', text: `${i.entry.listens ? `listens on port ${i.entry.port}` : `${i.entry.host}:${i.entry.port}`}${i.entry.enabled ? '' : ' · switched off'}${i.entry.ifac ? ' · IFAC: the other end needs the same network name and passphrase' : ''}` }) : null,
         i.details.length ? el('div', { class: 'sub', text: i.details.join(' · ') }) : null,
+        i.entry?.note && i.check ? el('div', { class: 'sub dim', text: i.entry.note }) : null,
         i.check ? el('div', { class: 'sub ' + (i.check.state === 'up' ? 'ok' : i.check.state === 'down' ? 'bad' : ''), text: i.check.label + (i.check.help ? ` (${i.check.help})` : '') }) : null)))
       : [el('div', { class: 'empty', text: 'No interface yet: Reticulum is starting, or the config has none' })]));
     // Followed while something is being found or tried.
