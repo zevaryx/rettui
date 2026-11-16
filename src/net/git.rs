@@ -42,7 +42,13 @@ pub const MAX_OBJECT: u64 = 64 * 1024 * 1024;
 /// What everything one fetch of a copy brings may come to unpacked, and so
 /// about the most unpacking it can hold in memory at once. History unpacks to
 /// about nine times its packed size (rettui's own: 20 MB to 180 MB).
-pub const MAX_UNPACKED: u64 = 1024 * 1024 * 1024;
+pub const MAX_UNPACKED: u64 = max_unpacked(cfg!(target_os = "android"));
+
+/// [`MAX_UNPACKED`] on Android or elsewhere: a phone has far less memory to
+/// spare, so a copy there is held to a quarter.
+const fn max_unpacked(android: bool) -> u64 {
+    if android { 256 * 1024 * 1024 } else { 1024 * 1024 * 1024 }
+}
 /// Longest document, comment or release notes kept, in characters.
 pub const MAX_TEXT: usize = 100_000;
 /// Most comments kept of a document.
@@ -306,6 +312,14 @@ pub fn describe(error: rngit::Error) -> String {
             format!("The node doesn't allow you that ({}). Its owner grants it to your identity", clean_text(&message, 200))
         }
         rngit::Error::Remote { status: Status::NotFound, message } => format!("Not on the node: {}", clean_text(&message, 200)),
+        // What a pack would unpack to, checked before it is (see `limits`).
+        rngit::Error::Protocol(message) if message.starts_with("pack is too big") => {
+            if message.ends_with("an object is over the limit") {
+                format!("It has a file too large to copy on this device (over {} MB once unpacked)", MAX_OBJECT / (1024 * 1024))
+            } else {
+                format!("The repository is too large to copy on this device (over {} MB once unpacked)", MAX_UNPACKED / (1024 * 1024))
+            }
+        }
         other => clean_text(&other.to_string(), 500),
     }
 }
@@ -1490,6 +1504,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_phone_unpacks_less_of_a_copy() {
+        assert_eq!(max_unpacked(true), 256 * 1024 * 1024);
+        assert_eq!(max_unpacked(false), 1024 * 1024 * 1024);
+        assert_eq!(MAX_UNPACKED, max_unpacked(cfg!(target_os = "android")));
+        // The file limit still fits in what may be unpacked.
+        assert!(MAX_OBJECT <= max_unpacked(true));
+    }
+
+    #[test]
+    fn a_pack_too_big_to_unpack_says_so_plainly() {
+        let said = |message: &str| describe(rngit::Error::Protocol(message.into()));
+        let whole = said("pack is too big: everything in it is over the limit");
+        assert_eq!(whole, format!("The repository is too large to copy on this device (over {} MB once unpacked)", MAX_UNPACKED >> 20));
+        assert_eq!(said("pack is too big: too many objects"), whole);
+        assert_eq!(
+            said("pack is too big: an object is over the limit"),
+            "It has a file too large to copy on this device (over 64 MB once unpacked)"
+        );
+        assert!(said("pack has a delta that can't be read").contains("malformed reply"));
+    }
+
+    #[test]
     fn a_copy_with_a_file_too_big_to_unpack_is_refused_before_unpacking() {
         let root = scratch("too-big");
         let source = Source::new(&root.join("source"));
@@ -1502,7 +1538,7 @@ pub(crate) mod tests {
         let client = Client::new(Shared(Arc::new(source.node()))).with_limits(limits());
         let identity = Identity::new();
         let err = block_on(run(&client, &repo(), &IdentitySigner(&identity), GitRequest::Mirror { dir: dir.clone() })).unwrap_err();
-        assert!(err.contains("pack is too big"), "{err}");
+        assert!(err.contains("a file too large to copy on this device"), "{err}");
         assert!(!dir.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
