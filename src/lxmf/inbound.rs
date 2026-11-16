@@ -150,11 +150,10 @@ pub(super) async fn parse_inbound(
     }
     let (attachments, dropped_attachments) = attachments_of(&message);
     let reply = reply_of(&message);
-    let mut extras = Extras::of(&message);
-    // A Codec2 voice message is decoded to play; it can take a moment.
-    if let Some(audio) = extras.audio.take() {
-        extras.audio = Some(tokio::task::spawn_blocking(move || audio.decoded()).await.map_err(|e| e.to_string())?);
-    }
+    // A Codec2 voice message is kept as it came. It is decoded to play when
+    // it's saved, if it's from someone known: it grows about 400 times, which
+    // a stranger must not be able to make happen.
+    let extras = Extras::of(&message);
     Ok(InboundMessage {
         id: Some(message.message_id()),
         source: message.source_hash(),
