@@ -22,7 +22,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ciborium::value::Value;
 use rns_identity::destination::Destination;
@@ -50,6 +50,26 @@ const MAX_LINKS: usize = 256;
 /// Most Links one identity may hold (one per device it's used on is usual):
 /// otherwise one visitor could take every one of [`MAX_LINKS`].
 const MAX_LINKS_EACH: usize = 8;
+/// Most Links at once that haven't said who they are. Nothing tells who
+/// opens a Link before it does, so a count per visitor isn't possible; this
+/// leaves [`MAX_LINKS`] less it to those who have.
+const MAX_UNIDENTIFIED: usize = 64;
+/// Seconds a Link may go without saying who it is, then it's closed:
+/// clients do it as soon as they connect, a slow radio link in a few seconds.
+/// (The idle sweep takes about 90.)
+const IDENTIFY_WITHIN: i64 = 30;
+/// Most rooms kept registered (rsRRCD saves them all in one file, again with
+/// each change, and lists them to everyone): a hub has a few. The hub's
+/// host is not held to this.
+const MAX_REGISTERED_ROOMS: usize = 200;
+/// Most rooms one identity may register: one more than a few, or one
+/// visitor could take every place of [`MAX_REGISTERED_ROOMS`].
+const MAX_REGISTERED_EACH: usize = 8;
+/// How often the rooms file is written when only people came and went
+/// (see [`Core::without_saving`]).
+const ROOMS_SAVE_EVERY: Duration = Duration::from_secs(5);
+/// Where writes go nowhere, for [`Core::without_saving`].
+const DISCARD: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 /// Commands rsRRCD lets only a room's operators run, naming the room first.
 const ROOM_COMMANDS: &[&str] = &["/topic", "/mode", "/op", "/deop", "/voice", "/devoice", "/invite", "/ban", "/unban", "/kick"];
 
@@ -433,6 +453,10 @@ struct Core {
     shown: Option<HubSnapshot>,
     /// Who you've blocked: turned away.
     blocked: crate::store::Blocked,
+    /// People came or went in rooms since the rooms file was written, and
+    /// when it last was (see [`Core::without_saving`]).
+    rooms_changed: bool,
+    rooms_saved: Instant,
 }
 
 fn unix_now() -> f64 {
@@ -467,8 +491,10 @@ impl Hub {
                 }
                 _ = announce_timer.tick(), if self.core.config.announce_interval.is_some() => self.announce().await,
                 _ = maintenance.tick() => {
-                    let actions = self.core.router.liveness_tick();
+                    let mut actions = self.core.router.liveness_tick();
+                    actions.extend(self.core.slow_to_identify().into_iter().map(Action::Close));
                     self.apply(actions).await;
+                    self.core.save_rooms(false);
                     self.core.report();
                 }
                 Some(action) = actions.recv() => {
@@ -481,7 +507,7 @@ impl Hub {
                     self.core.report();
                 }
                 Some(link) = events.links_established.recv() => {
-                    if self.core.connected.len() >= MAX_LINKS {
+                    if !self.core.has_room_for_a_link() {
                         let _ = self.handle.close_link(link, CloseReason::DestinationClosed, true).await;
                         continue;
                     }
@@ -502,7 +528,7 @@ impl Hub {
                 }
                 Some(link) = events.links_closed.recv() => {
                     self.core.connected.remove(&link);
-                    let actions = self.core.router.closed(link);
+                    let actions = self.core.closed(link);
                     self.apply(actions).await;
                 }
                 // Nothing else is used; taken so nothing waits on it.
@@ -517,10 +543,11 @@ impl Hub {
         // Leave properly: everyone sees the hub go at once.
         let links: Vec<[u8; 16]> = self.core.connected.keys().copied().collect();
         for link in links {
-            let actions = self.core.router.closed(link);
+            let actions = self.core.closed(link);
             self.apply(actions).await;
             let _ = self.handle.close_link(link, CloseReason::DestinationClosed, true).await;
         }
+        self.core.save_rooms(true);
         let _ = destination.close().await;
     }
 
@@ -555,7 +582,7 @@ impl Hub {
                     // Others are told now (its close comes later, and does
                     // nothing more then).
                     self.core.connected.remove(&link);
-                    let closed = self.core.router.closed(link);
+                    let closed = self.core.closed(link);
                     Box::pin(self.apply(closed)).await;
                 }
             }
@@ -623,7 +650,17 @@ impl Hub {
 
 impl Core {
     fn new(router: Router, identity: Hash, config: HubHostConfig, events: mpsc::UnboundedSender<NetEvent>) -> Self {
-        Self { router, identity, config, events, connected: HashMap::new(), shown: None, blocked: crate::store::Blocked::default() }
+        Self {
+            router,
+            identity,
+            config,
+            events,
+            connected: HashMap::new(),
+            shown: None,
+            blocked: crate::store::Blocked::default(),
+            rooms_changed: false,
+            rooms_saved: Instant::now(),
+        }
     }
 
     fn emit(&self, event: HubEvent) {
@@ -636,6 +673,70 @@ impl Core {
         let _ = self.router.identified(CONSOLE, self.identity);
         let hello = Envelope::new(t::HELLO, &self.identity).body(super::hello_body()).nick(Some("hub"));
         let _ = self.router.packet(CONSOLE, &hello.encode());
+    }
+
+    /// Whether another Link may be taken: not past [`MAX_LINKS`], nor past
+    /// [`MAX_UNIDENTIFIED`] that haven't said who they are.
+    fn has_room_for_a_link(&self) -> bool {
+        let unidentified =
+            self.connected.keys().filter(|link| self.router.state.sessions.get(*link).is_none_or(|session| session.peer.is_none())).count();
+        self.connected.len() < MAX_LINKS && unidentified < MAX_UNIDENTIFIED
+    }
+
+    /// The Links that haven't said who they are in [`IDENTIFY_WITHIN`].
+    fn slow_to_identify(&self) -> Vec<[u8; 16]> {
+        let now = unix_now() as i64;
+        self.connected
+            .iter()
+            .filter(|(link, since)| {
+                now - **since >= IDENTIFY_WITHIN && self.router.state.sessions.get(*link).is_none_or(|session| session.peer.is_none())
+            })
+            .map(|(link, _)| *link)
+            .collect()
+    }
+
+    /// A Link closed. rsRRCD writes the whole rooms file for it if it was
+    /// in a registered room (see [`Core::without_saving`]).
+    fn closed(&mut self, link: [u8; 16]) -> Vec<Action> {
+        let state = &self.router.state;
+        let registered = state
+            .sessions
+            .get(&link)
+            .is_some_and(|session| session.rooms.iter().any(|room| state.rooms.get(room).is_some_and(|room| room.registered)));
+        self.without_saving(registered, |router| router.closed(link))
+    }
+
+    /// Run `act` as rsRRCD saves rooms as it goes, but not to the rooms
+    /// file: writes of it go nowhere, and the file is written later (see
+    /// [`Core::save_rooms`]). rsRRCD writes the whole file, rooms and all,
+    /// for every join and part of a registered room and every Link that
+    /// closes in one, to note when the room was last used. One visitor
+    /// joining and leaving in a loop, or opening and closing Links, would
+    /// have the phone writing it thousands of times a minute. Only for
+    /// what is that and nothing else: other changes (a topic, a mode, a
+    /// ban) are written as they are made.
+    /// `registered`: it concerns a registered room (the file is to be
+    /// written later).
+    fn without_saving<T>(&mut self, registered: bool, act: impl FnOnce(&mut Router) -> T) -> T {
+        let real = std::mem::replace(&mut self.router.config.room_registry_path, PathBuf::from(DISCARD));
+        let out = act(&mut self.router);
+        self.router.config.room_registry_path = real;
+        self.rooms_changed |= registered;
+        out
+    }
+
+    /// Write the rooms file if people came or went since it was, and
+    /// [`ROOMS_SAVE_EVERY`] has passed (or `now`: before the hub stops,
+    /// and before a command reads it back).
+    fn save_rooms(&mut self, now: bool) {
+        if !self.rooms_changed || !(now || self.rooms_saved.elapsed() >= ROOMS_SAVE_EVERY) {
+            return;
+        }
+        match RoomRegistry::save(&self.router.config.room_registry_path, &self.router.state.rooms) {
+            Ok(()) => self.rooms_changed = false,
+            Err(e) => tracing::warn!("couldn't save the rooms: {e:#}"),
+        }
+        self.rooms_saved = Instant::now();
     }
 
     /// `link` says who it is: closed if they're blocked, or hold
@@ -665,7 +766,16 @@ impl Core {
                         .text(&format!("The nick {nick} isn't available: it's in use or not allowed"));
                     actions.push(Action::Send(link, note.encode()));
                 }
-                actions.extend(self.router.packet(link, &data));
+                // A join or part of a room is only people coming and going.
+                let churn = Envelope::decode_strict(&data).ok().filter(|env| matches!(env.t, t::JOIN | t::PART)).map(|env| {
+                    let state = &self.router.state;
+                    let room = env.room.as_deref().and_then(|room| state.normalize_room(room, &self.router.config).ok());
+                    room.is_some_and(|room| state.rooms.get(&room).is_some_and(|room| room.registered))
+                });
+                actions.extend(match churn {
+                    Some(registered) => self.without_saving(registered, |router| router.packet(link, &data)),
+                    None => self.router.packet(link, &data),
+                });
                 actions
             }
         };
@@ -754,6 +864,9 @@ impl Core {
                 if !text.starts_with('/') {
                     return None;
                 }
+                if let Some(refusal) = self.too_many_registered(link, peer, &env, text) {
+                    return Some(refusal);
+                }
                 if let Some(room) = unlisted_room(&self.router, text) {
                     return no_such_room(&room, "no such room");
                 }
@@ -761,6 +874,39 @@ impl Core {
             }
             _ => None,
         }
+    }
+
+    /// `/register` of one more room than the hub keeps ([`MAX_REGISTERED_ROOMS`]),
+    /// or than this identity may ([`MAX_REGISTERED_EACH`]): refused, unless
+    /// the room is registered already or the hub's host asks. rsRRCD would
+    /// register any room its founder asks for, and rewrite the file of them
+    /// all with each change.
+    fn too_many_registered(&self, link: [u8; 16], peer: Hash, env: &Envelope, text: &str) -> Option<Vec<Action>> {
+        let mut parts = text.split_whitespace();
+        if !parts.next()?.eq_ignore_ascii_case("/register")
+            || peer == self.config.operator
+            || self.router.config.trusted_identities.contains(&peer)
+        {
+            return None;
+        }
+        let state = &self.router.state;
+        let room = state.normalize_room(parts.next()?, &self.router.config).ok()?;
+        if state.rooms.get(&room).is_none_or(|room| room.registered) {
+            return None;
+        }
+        let registered = || state.rooms.values().filter(|room| room.registered);
+        let why = if registered().count() >= MAX_REGISTERED_ROOMS {
+            "the hub keeps no more registered rooms"
+        } else if registered().filter(|room| room.founder == Some(peer)).count() >= MAX_REGISTERED_EACH {
+            "you have registered as many rooms as are allowed"
+        } else {
+            return None;
+        };
+        let mut error = Envelope::new(t::ERROR, &self.identity).text(why);
+        if let Some(context) = env.room.as_deref() {
+            error = error.room(context);
+        }
+        Some(vec![Action::Send(link, error.encode())])
     }
 
     /// What rsRRCD lets through that a room's rules say it shouldn't: someone
@@ -946,6 +1092,8 @@ impl Core {
     /// A hub command, as the console. Room commands want a room operator:
     /// the hub is one for the length of the command.
     fn run_command(&mut self, text: &str) -> Vec<Action> {
+        // Some commands read the file back (`/reload`).
+        self.save_rooms(true);
         if let Some(room) = unlisted_room(&self.router, text) {
             self.emit(HubEvent::Reply { text: format!("There's no room {room}"), error: true });
             return Vec::new();
@@ -1731,6 +1879,136 @@ mod tests {
         // Someone else still gets in.
         core.router.established([100; 16]);
         assert!(!core.identified([100; 16], AMY).iter().any(|a| matches!(a, Action::Close(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn links_that_do_not_say_who_they_are_are_limited_and_closed() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-unidentified-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        let long_ago = unix_now() as i64 - IDENTIFY_WITHIN - 1;
+        // Some are identified: they don't count, nor are they closed.
+        for n in 1..=10u8 {
+            connect(&mut core, n, [n + 100; 16], &format!("n{n}"));
+            core.connected.insert([n; 16], long_ago);
+        }
+        assert!(core.has_room_for_a_link());
+        for n in 11..11 + MAX_UNIDENTIFIED as u8 - 1 {
+            core.router.established([n; 16]);
+            core.connected.insert([n; 16], unix_now() as i64);
+        }
+        assert!(core.has_room_for_a_link(), "one short of the limit");
+        core.router.established([200; 16]);
+        core.connected.insert([200; 16], long_ago);
+        assert!(!core.has_room_for_a_link(), "{MAX_UNIDENTIFIED} that haven't said who they are");
+        // Only the one that has had its time is closed; saying who it is
+        // makes room again.
+        assert_eq!(core.slow_to_identify(), [[200; 16]]);
+        let _ = core.router.identified([200; 16], AMY);
+        assert!(core.slow_to_identify().is_empty() && core.has_room_for_a_link());
+        // As many as MAX_LINKS in all, whoever they are.
+        for n in 0..MAX_LINKS {
+            core.connected.insert([0, n as u8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], 0);
+        }
+        assert!(!core.has_room_for_a_link());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn people_coming_and_going_do_not_rewrite_the_rooms_file_each_time() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-churn-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, false);
+        let (reply, _) = core.register("lobby", true);
+        assert!(matches!(&reply, HubEvent::Reply { error: false, .. }), "{reply:?}");
+        let file = core.router.config.room_registry_path.clone();
+        // A mark in the file, to see whether it was written again.
+        let mark = |core: &Core| {
+            let text = std::fs::read_to_string(&core.router.config.room_registry_path).unwrap();
+            std::fs::write(&core.router.config.room_registry_path, format!("# mark\n{text}")).unwrap();
+        };
+        let marked = |core: &Core| std::fs::read_to_string(&core.router.config.room_registry_path).unwrap().starts_with("# mark\n");
+        mark(&core);
+        connect(&mut core, 1, AMY, "amy");
+        for _ in 0..50 {
+            join(&mut core, 1, AMY, "lobby");
+            assert!(core.router.state.rooms["lobby"].members.contains(&[1; 16]));
+            send(&mut core, 1, Envelope::new(t::PART, &AMY).room("lobby"));
+        }
+        // And Links that close in the room.
+        for n in 2..20u8 {
+            connect(&mut core, n, [n + 50; 16], &format!("u{n}"));
+            join(&mut core, n, [n + 50; 16], "lobby");
+            core.connected.remove(&[n; 16]);
+            core.closed([n; 16]);
+        }
+        assert!(marked(&core), "the rooms file was not written by any of it");
+        assert_eq!(core.router.config.room_registry_path, file, "the real path is put back");
+        assert!(core.router.state.rooms["lobby"].registered);
+        // Soon enough it is, with when the room was last used.
+        core.save_rooms(false);
+        assert!(marked(&core), "not yet");
+        core.rooms_saved = Instant::now() - ROOMS_SAVE_EVERY - Duration::from_secs(1);
+        core.save_rooms(false);
+        assert!(!marked(&core), "written");
+        assert!(RoomRegistry::load(&file).unwrap().contains_key("lobby"));
+        // Nothing to write: not written again.
+        mark(&core);
+        core.rooms_saved = Instant::now() - ROOMS_SAVE_EVERY - Duration::from_secs(1);
+        core.save_rooms(false);
+        assert!(marked(&core));
+        // Other changes are written as they are made, and a command that
+        // reads the file back finds it as it is.
+        join(&mut core, 1, AMY, "lobby");
+        send(&mut core, 1, Envelope::new(t::PART, &AMY).room("lobby"));
+        console(&mut core, "/topic lobby Hello");
+        assert!(!marked(&core));
+        assert!(std::fs::read_to_string(&file).unwrap().contains("Hello"));
+        // A room nobody registered has nothing to write.
+        mark(&core);
+        send(&mut core, 1, Envelope::new(t::PART, &AMY).room("elsewhere"));
+        core.save_rooms(true);
+        assert!(marked(&core));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_identity_registers_only_a_few_rooms_and_the_hub_only_so_many() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-registered-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        let register = |core: &mut Core, link: u8, who: Hash, room: &str| {
+            join(core, link, who, room);
+            let out = send(core, link, Envelope::new(t::MSG, &who).room(room).text(&format!("/register {room}")));
+            core.router.state.rooms.get(room).is_some_and(|state| state.registered).then_some(()).ok_or(sent(&out))
+        };
+        // The first ones are registered; the ninth is turned away, and
+        // says why, and isn't registered.
+        for n in 0..MAX_REGISTERED_EACH {
+            assert!(register(&mut core, 1, AMY, &format!("room{n}")).is_ok(), "room {n}");
+        }
+        let refused = register(&mut core, 1, AMY, "one-too-many").unwrap_err();
+        assert!(
+            refused.iter().any(|(_, kind, _, text)| *kind == t::ERROR && text.as_deref().is_some_and(|t| t.contains("as many rooms"))),
+            "{refused:?}"
+        );
+        // One already registered is left as it is, and someone else may
+        // register theirs.
+        let again = send(&mut core, 1, Envelope::new(t::MSG, &AMY).room("room0").text("/register room0"));
+        assert!(!sent(&again).iter().any(|(_, kind, ..)| *kind == t::ERROR), "{:?}", sent(&again));
+        connect(&mut core, 2, BOB, "bob");
+        assert!(register(&mut core, 2, BOB, "bobs").is_ok());
+        // The hub keeps so many in all; its host (the operator) is not held to it.
+        for n in 0..MAX_REGISTERED_ROOMS {
+            core.router.state.rooms.entry(format!("filler{n}")).or_default().registered = true;
+        }
+        assert!(register(&mut core, 2, BOB, "bobs-too").is_err());
+        let refused = register(&mut core, 2, BOB, "bobs-too").unwrap_err();
+        assert!(
+            refused.iter().any(|(_, kind, _, text)| *kind == t::ERROR && text.as_deref().is_some_and(|t| t.contains("no more registered"))),
+            "{refused:?}"
+        );
+        connect(&mut core, 3, YOU, "you");
+        assert!(register(&mut core, 3, YOU, "hosts").is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
