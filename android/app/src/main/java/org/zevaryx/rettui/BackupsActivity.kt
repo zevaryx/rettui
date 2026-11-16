@@ -124,14 +124,29 @@ class BackupsActivity : Activity() {
      */
     private fun askSchedulePassphrase(then: () -> Unit, cancelled: () -> Unit) {
         askPassphrase(R.string.schedule_passphrase, getString(R.string.schedule_passphrase_note), twice = true, cancelled = cancelled) { passphrase ->
-            work {
-                val problem = ScheduledBackups.setPassphrase(this, passphrase)
-                main.post { if (problem == null) then() else cancelled() }
-                when {
-                    problem != null -> Rettui.Said(false, problem)
-                    passphrase.isEmpty() -> Rettui.Said(true, getString(R.string.schedule_not_sealed))
-                    else -> Rettui.Said(true, getString(R.string.schedule_sealed))
-                }
+            if (passphrase.isEmpty()) {
+                // Each backup holds the identity, and goes to a folder other apps may read.
+                dialog()
+                    .setTitle(R.string.schedule_unsealed)
+                    .setMessage(R.string.schedule_unsealed_note)
+                    .setPositiveButton(R.string.backup_unsealed_back) { _, _ -> askSchedulePassphrase(then, cancelled) }
+                    .setNegativeButton(R.string.schedule_unsealed_save) { _, _ -> keepSchedulePassphrase("", then, cancelled) }
+                    .setOnCancelListener { cancelled() }
+                    .show()
+            } else {
+                keepSchedulePassphrase(passphrase, then, cancelled)
+            }
+        }
+    }
+
+    private fun keepSchedulePassphrase(passphrase: String, then: () -> Unit, cancelled: () -> Unit) {
+        work {
+            val problem = ScheduledBackups.setPassphrase(this, passphrase)
+            main.post { if (problem == null) then() else cancelled() }
+            when {
+                problem != null -> Rettui.Said(false, problem)
+                passphrase.isEmpty() -> Rettui.Said(true, getString(R.string.schedule_not_sealed))
+                else -> Rettui.Said(true, getString(R.string.schedule_sealed))
             }
         }
     }

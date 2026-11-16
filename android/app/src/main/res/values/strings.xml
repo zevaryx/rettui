@@ -59,6 +59,9 @@
     <string name="backup_unsealed_note">This backup holds your identity, the private key behind your address, and is saved where other apps and computers can read it. Without a passphrase, anyone who gets the file can pose as you and read what\'s sent to you.</string>
     <string name="backup_unsealed_back">Add a passphrase</string>
     <string name="backup_unsealed_save">Save without one</string>
+    <string name="schedule_unsealed">Make scheduled backups without a passphrase?</string>
+    <string name="schedule_unsealed_note">Each backup holds your identity, the private key behind your address, and is saved in the folder you chose, where other apps and computers may read it. Without a passphrase, anyone who gets one can pose as you and read what\'s sent to you.</string>
+    <string name="schedule_unsealed_save">Use none</string>
     <string name="restore_passphrase">This backup is sealed</string>
     <string name="restore_passphrase_note">Type the passphrase it was sealed with.</string>
     <string name="schedule_passphrase">A passphrase for scheduled backups?</string>
