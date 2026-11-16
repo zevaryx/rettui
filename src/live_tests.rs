@@ -790,7 +790,7 @@ async fn the_command_line_against_a_running_rettui() {
         )
         .is_err()
     );
-    crate::cli::restore(&empty, &backup, false).unwrap();
+    crate::cli::restore(&empty, &backup, false, false).unwrap();
     assert!(empty.settings.is_file());
     // Sealed to a backup key (`rettui backup --key`): restored with its
     // passphrase; with no terminal here, without one it says what it needs.
@@ -803,7 +803,7 @@ async fn the_command_line_against_a_running_rettui() {
     // (In a terminal, it would ask.)
     let asks = std::io::IsTerminal::is_terminal(&std::io::stdin()) || std::env::var("RETTUI_BACKUP_PASSPHRASE").is_ok();
     if !asks {
-        assert!(crate::cli::restore(&other, &sealed, false).unwrap_err().to_string().contains("sealed with a passphrase"));
+        assert!(crate::cli::restore(&other, &sealed, false, false).unwrap_err().to_string().contains("sealed with a passphrase"));
     }
     // `rettui unseal`: only a sealed backup, never over a file, and its
     // passphrase asked for (or said to be needed).

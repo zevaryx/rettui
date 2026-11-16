@@ -233,11 +233,19 @@ enum Command {
     /// alone, unless --force: then what the backup replaces is moved aside
     /// first, into a before-restore-<time> folder. A sealed backup asks for
     /// its passphrase (or takes it from RETTUI_BACKUP_PASSPHRASE).
+    ///
+    /// Settings that decide which programs run here (the voice recorder and
+    /// print commands, page scripts, rncp, another Reticulum config) are
+    /// left out of a restore, since a backup can come from anyone: with
+    /// --keep-terminal-settings they are restored as the backup has them.
     Restore {
         file: PathBuf,
         /// Restore over what's there (moved aside first).
         #[arg(long)]
         force: bool,
+        /// Restore the settings that decide which programs run, as written: only for a backup you made.
+        #[arg(long)]
+        keep_terminal_settings: bool,
     },
     /// Save a copy of your identity, or keep another from a file.
     ///
@@ -361,7 +369,9 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Some(Command::BackupKey) => return cli::backup_key(),
         Some(Command::Unseal { file, out, identity }) => return cli::unseal(file, out.as_deref(), identity.as_deref()),
-        Some(Command::Restore { file, force }) => return cli::restore(&paths, file, *force),
+        Some(Command::Restore { file, force, keep_terminal_settings }) => {
+            return cli::restore(&paths, file, *force, *keep_terminal_settings);
+        }
         Some(Command::Identity { action: IdentityAction::Export { file } }) => return cli::export_identity(&paths, file),
         Some(Command::Identity { action: IdentityAction::Import { file, name } }) => return cli::import_identity(&paths, file, name),
         _ => {}
