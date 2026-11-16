@@ -113,6 +113,7 @@ pub fn check(text: &str) -> (Option<Config>, Check) {
     }
     result.warnings.extend(enable_warnings(&config));
     result.warnings.extend(bootstrap_warnings(&config));
+    result.warnings.extend(listener_warning(&config));
     (Some(config), result)
 }
 
@@ -135,6 +136,61 @@ pub fn without_enabled(config: &Config) -> Vec<String> {
         .filter(|(_, section)| !section.has_enable_key())
         .map(|(name, _)| name.to_string())
         .collect()
+}
+
+/// Whether `section` is an interface that others can reach this node by,
+/// or that is a radio or link of its own: not one that only dials out
+/// (TCP client, Backbone with a remote) or finds peers on the local network.
+fn takes_others(section: &ConfigSection) -> bool {
+    match section.get("type") {
+        Some("AutoInterface" | "TCPClientInterface") => false,
+        Some("BackboneInterface") => section.get("remote").or_else(|| section.get("target_host")).is_none(),
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// Transport node is on, but every interface that's on only dials out, so
+/// nobody can connect to this node. Turning on Transport node alone opens no
+/// port: a TCP server interface does.
+pub fn listener_missing(config: &Config) -> bool {
+    config.section("reticulum").and_then(|r| r.get_bool("enable_transport")) == Some(true)
+        && !config.subsections("interfaces").iter().any(|(_, section)| section.interface_enabled() && takes_others(section))
+}
+
+/// What [`listener_missing`] says, for the editors and the log.
+pub fn listener_warning(config: &Config) -> Option<String> {
+    listener_missing(config).then(|| {
+        "Transport node is on, but no interface lets others connect to this node, so it only relays for itself. \
+         Add a TCP server interface (Make an entry point), and restart Reticulum"
+            .to_string()
+    })
+}
+
+/// Make this node an entry point others connect to: Transport node on, and
+/// a TCP server interface (named `name`, or with a number after it if that's
+/// taken) listening on `port`. With a `host` it also announces itself for
+/// interface discovery. The new text, and the name used.
+pub fn make_entry_point(text: &str, name: &str, host: &str, port: u16) -> Result<(String, String), String> {
+    let host = host.trim();
+    if host.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("The host name can't have spaces".into());
+    }
+    let mut doc = Doc::new(text);
+    let taken = doc.subsections("interfaces");
+    let name = std::iter::once(name.to_string())
+        .chain((2..).map(|n| format!("{name} {n}")))
+        .find(|candidate| !taken.contains(candidate))
+        .expect("some name is free");
+    let port = port.to_string();
+    let mut keys = vec![("type", "TCPServerInterface"), ("enabled", "Yes"), ("listen_ip", "0.0.0.0"), ("listen_port", port.as_str())];
+    if !host.is_empty() {
+        keys.push(("discoverable", "Yes"));
+        keys.push(("reachable_on", host));
+    }
+    doc.add_subsection("interfaces", &name, &keys)?;
+    doc.set(&["reticulum"], "enable_transport", &[], Some("Yes"));
+    Ok((doc.text(), name))
 }
 
 /// How many entry points interface discovery connects to by itself (0
@@ -642,6 +698,56 @@ pub fn enable_discovery(text: &str, connect: u32) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn making_an_entry_point_opens_a_listener_and_the_warning_goes() {
+        let base = rns_runtime::config::Config::default_config();
+        // Transport node alone: nothing for others to connect to.
+        let transport = super::set_options(base, &super::Section::Reticulum, &[("enable_transport", "Yes")]).unwrap();
+        let config = super::check(&transport).0.unwrap();
+        assert!(super::listener_missing(&config));
+        let warnings = super::check(&transport).1.warnings;
+        assert!(warnings.iter().any(|w| w.starts_with("Transport node is on, but no interface lets others connect")), "{warnings:?}");
+        // Off, or not a transport node: nothing to say.
+        assert!(!super::listener_missing(&super::check(base).0.unwrap()));
+        // Making one: transport on, a TCP server on, and no warning.
+        let (made, name) = super::make_entry_point(base, "Public entry point", "rns.example.org", 4242).unwrap();
+        assert_eq!(name, "Public entry point");
+        let (config, check) = super::check(&made);
+        assert!(check.error.is_none() && check.warnings.is_empty(), "{:?} {:?}", check.error, check.warnings);
+        let config = config.unwrap();
+        assert_eq!(config.section("reticulum").unwrap().get_bool("enable_transport"), Some(true));
+        let section = config.subsection("interfaces", "Public entry point").unwrap();
+        assert_eq!(section.get("type"), Some("TCPServerInterface"));
+        assert_eq!((section.get("listen_ip"), section.get_uint("listen_port")), (Some("0.0.0.0"), Some(4242)));
+        assert!(section.interface_enabled());
+        assert_eq!((section.get_bool("discoverable"), section.get("reachable_on")), (Some(true), Some("rns.example.org")));
+        assert!(!super::listener_missing(&config));
+        // Without a host it isn't announced; a second one gets its own name;
+        // a transport node that's already on stays on.
+        let (quiet, _) = super::make_entry_point(&transport, "Public entry point", " ", 4242).unwrap();
+        assert!(!quiet.contains("discoverable") && !quiet.contains("reachable_on"), "{quiet}");
+        assert_eq!(quiet.matches("enable_transport").count(), 1);
+        let (twice, name) = super::make_entry_point(&made, "Public entry point", "", 4242).unwrap();
+        assert_eq!(name, "Public entry point 2");
+        assert!(twice.contains("[[Public entry point 2]]"));
+        assert!(super::make_entry_point(base, "Public entry point", "bad host", 4242).is_err());
+        // Turned off, it doesn't count: the warning is back.
+        let off = super::set_options(&made, &super::Section::Interface("Public entry point".into()), &[("enabled", "No")]).unwrap();
+        assert!(super::listener_missing(&super::check(&off).0.unwrap()));
+        // Only interfaces that dial out don't count; a radio does.
+        let dial = format!(
+            "{transport}\n  [[Out]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = hill.example\n    target_port = 4242\n"
+        );
+        assert!(super::listener_missing(&super::check(&dial).0.unwrap()), "{dial}");
+        let radio = format!(
+            "{transport}\n  [[Radio]]\n    type = RNodeInterface\n    enabled = Yes\n    port = /dev/ttyUSB0\n    frequency = 867200000\n    bandwidth = 125000\n    spreadingfactor = 8\n    codingrate = 5\n    txpower = 7\n"
+        );
+        assert!(!super::listener_missing(&super::check(&radio).0.unwrap()), "{radio}");
+        let backbone =
+            format!("{transport}\n  [[Back]]\n    type = BackboneInterface\n    enabled = Yes\n    listen_on = 0.0.0.0\n    port = 4242\n");
+        assert!(!super::listener_missing(&super::check(&backbone).0.unwrap()), "{backbone}");
+    }
+
     #[test]
     fn entry_points_and_discovery_for_the_guide() {
         let base = rns_runtime::config::Config::default_config();

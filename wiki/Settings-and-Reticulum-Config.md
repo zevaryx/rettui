@@ -35,6 +35,17 @@ of the Reticulum instance it uses. Where files are kept is in
     own options by type (Auto, TCP, Backbone, UDP, I2P, RNode, serial, KISS,
     AX.25, pipe), plus IFAC, announce, discovery and ingress control. Keys
     rettui doesn't know are listed and kept as written.
+  - **Entry point:** *Transport node* on its own opens no port, so nobody
+    can connect to the node. *Entry point* (the `E` key in the terminal UI)
+    turns Transport node on and adds a TCP server interface listening on
+    `0.0.0.0` port 4242, then asks you to restart Reticulum. Give it your
+    public host name and it also announces itself, so others can find it by
+    interface discovery. Clients connect with a `TCPClientInterface` to that
+    host and port; if you set an IFAC name or passphrase on the interface,
+    they need the same. When Transport node is on and no interface lets
+    others connect, the editors and the log say so. In Docker, publish the
+    port too (see [Docker](Docker)). The interface says 10 Mbps: that is
+    Reticulum's guess for a TCP interface, not a limit.
   - **Interfaces:** add (pick a name and a type), rename, enable or disable,
     and delete them. Reticulum starts an interface only when it says
     `enabled = Yes` (or `interface_enabled = Yes`), as Python Reticulum

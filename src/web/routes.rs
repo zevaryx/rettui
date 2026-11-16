@@ -3358,9 +3358,12 @@ async fn reticulum_options(State(state): State<WebState>, axum::Json(body): axum
 
 #[derive(Deserialize)]
 struct RnsInterfaceBody {
-    /// `add`, `rename` or `delete`.
+    /// `add`, `rename`, `delete` or `entry_point`.
     action: String,
+    #[serde(default)]
     name: String,
+    /// For `entry_point`: the public host name, empty to not announce it.
+    host: Option<String>,
     to: Option<String>,
     #[serde(rename = "type")]
     kind: Option<String>,
@@ -3372,6 +3375,7 @@ async fn reticulum_interfaces(State(state): State<WebState>, axum::Json(body): a
             "add" => o.app.rns_add_interface(&body.name, body.kind.as_deref().unwrap_or("AutoInterface"), true),
             "rename" => o.app.rns_rename_interface(&body.name, body.to.as_deref().unwrap_or_default(), true),
             "delete" => o.app.rns_remove_interface(&body.name, true),
+            "entry_point" => o.app.rns_make_entry_point(body.host.as_deref().unwrap_or_default(), true),
             other => Err(format!("Unknown action {other}")),
         })
         .await??;

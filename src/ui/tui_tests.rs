@@ -369,6 +369,20 @@ fn an_interface_that_doesnt_say_enabled_is_off() {
 }
 
 #[test]
+fn e_makes_this_node_an_entry_point_others_can_connect_to() {
+    let mut tui = Tui::new("rns-entry-point");
+    with_rns_config(&mut tui.app, "[reticulum]\n  enable_transport = Yes\n  share_instance = No\n\n[interfaces]\n");
+    tui.tab(Tab::Reticulum);
+    assert!(tui.app.rns.check.warnings.iter().any(|w| w.contains("no interface lets others connect")), "{:?}", tui.app.rns.check.warnings);
+    tui.key(KeyCode::Char('E')).answer("rns.example.org");
+    let config = std::fs::read_to_string(tui.app.rns_path()).unwrap();
+    assert!(config.contains("type = TCPServerInterface") && config.contains("listen_port = 4242"), "{config}");
+    assert!(config.contains("enabled = Yes") && config.contains("reachable_on = rns.example.org"), "{config}");
+    assert!(tui.app.rns.check.warnings.is_empty(), "{:?}", tui.app.rns.check.warnings);
+    assert_eq!(tui.app.rns_versions()[0].what, "Made this node an entry point (Transport node, and a TCP server on port 4242)");
+}
+
+#[test]
 fn interface_profiles_kept_switched_and_deleted() {
     let mut tui = Tui::new("rns-profiles");
     tui.tab(Tab::Reticulum);

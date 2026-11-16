@@ -252,6 +252,8 @@ pub enum PromptKind {
     ConfirmDiscardPage(String),
     /// Reticulum config: interfaces, an option's value, leaving the text.
     NewInterface,
+    /// The public host name for a new entry point (empty: don't announce it).
+    EntryPointHost,
     RenameInterface(String),
     ConfirmDeleteInterface(String),
     RnsOption(crate::reticulum::Section, String),
@@ -1599,6 +1601,7 @@ impl App {
                 }
             }
             kind @ (PromptKind::NewInterface
+            | PromptKind::EntryPointHost
             | PromptKind::RenameInterface(_)
             | PromptKind::ConfirmDeleteInterface(_)
             | PromptKind::RnsOption(..)

@@ -9377,6 +9377,7 @@ app.views.reticulum = {
         el('section', { class: 'panel grow' },
           el('header', {}, el('h2', { class: 'title grow', text: 'Sections' }),
             IN_ANDROID_APP ? androidRNodesButton() : null,
+            el('button', { text: 'Entry point', title: 'Let others connect to this node: Transport node on, and a TCP server on port 4242', onclick: () => this.showEntryPoint() }),
             el('button', { text: '+ Interface', onclick: () => this.showAdd() })),
           this.addForm, this.sections)),
       el('section', { class: 'panel grow pane-main' },
@@ -9612,6 +9613,27 @@ app.views.reticulum = {
       el('button', { text: 'Cancel', onclick: () => this.addForm.classList.add('hidden') })));
     this.addForm.classList.remove('hidden');
     name.focus();
+  },
+
+  showEntryPoint() {
+    const host = el('input', { type: 'text', placeholder: 'Public host name or address (optional)', title: 'Announced for interface discovery, so others can find this node. Leave empty to not announce it.' });
+    const make = async () => {
+      const result = await attempt(() => api.post('/reticulum/interfaces', { action: 'entry_point', host: host.value.trim() }));
+      if (!result) return;
+      this.report(result, 'Made this node an entry point (a TCP server on port 4242)');
+      this.addForm.classList.add('hidden');
+      this.textMode = false;
+      this.section = 'reticulum';
+      this.load(true);
+    };
+    host.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') make();
+    });
+    this.addForm.replaceChildren(host, el('div', { class: 'row' },
+      el('button', { class: 'primary', text: 'Make entry point', onclick: make }),
+      el('button', { text: 'Cancel', onclick: () => this.addForm.classList.add('hidden') })));
+    this.addForm.classList.remove('hidden');
+    host.focus();
   },
 
   async rename(name) {

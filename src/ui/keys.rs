@@ -632,6 +632,7 @@ pub fn keys(app: &App) -> Keys {
                 ("H", "history"),
                 ("Tab", "section"),
                 ("a", "add"),
+                ("E", "entry point"),
                 ("Space", "on/off"),
                 ("r", "rename"),
                 ("x", "delete"),

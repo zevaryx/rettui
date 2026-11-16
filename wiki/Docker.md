@@ -44,8 +44,8 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
     listen_port = 4242
   ```
 
-  The Reticulum section of the web UI can add it; restart Reticulum
-  after. To announce it for interface discovery, add
+  The Reticulum section of the web UI can add both with its **Entry
+  point** button; restart Reticulum after. To announce it for interface discovery, add
   `discoverable = Yes` and `reachable_on` (the host's public address or
   name). Remove the `"4242:4242"` line from `ports:` if you don't run one.
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.

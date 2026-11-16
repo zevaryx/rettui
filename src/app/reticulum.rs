@@ -23,6 +23,9 @@ use crate::reticulum::{self as rns, Check, OptionView, Section};
 pub const DIFF_CONTEXT: usize = 3;
 use crate::term::textarea::TextArea;
 
+/// Reticulum's usual port, and the one the Docker image publishes.
+const ENTRY_POINT_PORT: u16 = 4242;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RnsFocus {
     Sections,
@@ -188,6 +191,9 @@ impl App {
         for warning in rns::bootstrap_warnings(&config) {
             self.log(format!("Interface {warning}"));
         }
+        if let Some(warning) = rns::listener_warning(&config) {
+            self.warn(warning);
+        }
     }
 
     /// The Reticulum config file in use.
@@ -289,6 +295,15 @@ impl App {
     pub fn rns_add_interface(&mut self, name: &str, kind: &str, restricted: bool) -> Result<Vec<String>, String> {
         let what = format!("Added interface {} ({kind})", name.trim());
         self.rns_edit(restricted, &what, |text| rns::add_interface(text, name, kind))
+    }
+
+    /// Make this node an entry point: Transport node on, and a TCP server
+    /// others connect to (see [`rns::make_entry_point`]).
+    pub fn rns_make_entry_point(&mut self, host: &str, restricted: bool) -> Result<Vec<String>, String> {
+        let what = "Made this node an entry point (Transport node, and a TCP server on port 4242)";
+        self.rns_edit(restricted, what, |text| {
+            rns::make_entry_point(text, "Public entry point", host, ENTRY_POINT_PORT).map(|(text, _)| text)
+        })
     }
 
     pub fn rns_rename_interface(&mut self, name: &str, to: &str, restricted: bool) -> Result<Vec<String>, String> {
@@ -467,6 +482,11 @@ impl App {
                 self.confirm("Reloaded the Reticulum config");
             }
             KeyCode::Char('a') => self.open_prompt(PromptKind::NewInterface, "New interface name", ""),
+            KeyCode::Char('E') => self.open_prompt(
+                PromptKind::EntryPointHost,
+                "Make this an entry point: its public host name or address (empty to not announce it)",
+                "",
+            ),
             _ if self.rns.focus == RnsFocus::Options => self.rns_option_key(key),
             _ => self.rns_section_key(key),
         }
@@ -650,6 +670,10 @@ impl App {
                 let choices = schema::INTERFACE_TYPES.iter().map(|t| (t.name.to_string(), t.label.to_string())).collect();
                 let title = format!("Type of {}", text.trim());
                 self.rns_pick(&title, choices, "AutoInterface", PickFor::NewInterface(text.to_string()));
+            }
+            PromptKind::EntryPointHost => {
+                let result = self.rns_make_entry_point(text, false);
+                self.rns_report(result, "Made this node an entry point");
             }
             PromptKind::RenameInterface(name) if !text.trim().is_empty() && text.trim() != name => {
                 let result = self.rns_rename_interface(&name, text, false);

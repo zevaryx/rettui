@@ -915,6 +915,16 @@ async fn the_hub_hosted_here_and_reticulums_config() {
     );
     assert_eq!(web.post("/api/reticulum/interfaces", json!({ "action": "delete", "name": "Home" })).await.status, StatusCode::OK);
     assert_eq!(web.post("/api/reticulum/interfaces", json!({ "action": "paint", "name": "Home" })).await.status, StatusCode::BAD_REQUEST);
+    // An entry point: Transport node on and a TCP server, announced for the host given.
+    let entry = web.post("/api/reticulum/interfaces", json!({ "action": "entry_point", "host": "rns.example.org" })).await;
+    assert_eq!(entry.status, StatusCode::OK, "{}", entry.text());
+    let config = web.with(|app| std::fs::read_to_string(app.rns_path()).unwrap()).await;
+    assert!(config.contains("enable_transport = Yes") && config.contains("type = TCPServerInterface"), "{config}");
+    assert!(config.contains("listen_port = 4242") && config.contains("reachable_on = rns.example.org"), "{config}");
+    assert_eq!(
+        web.post("/api/reticulum/interfaces", json!({ "action": "entry_point", "host": "two words" })).await.status,
+        StatusCode::BAD_REQUEST
+    );
     // Pipe interfaces run programs: not from the web UI.
     let pipe = web
         .post(
