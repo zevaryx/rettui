@@ -35,6 +35,12 @@ object Shared {
         val left = mutableListOf<String>()
         var total = 0L
         for (uri in uris) {
+            // Before anything reads it: a path in the app's own files is
+            // opened with the app's own rights, so it is never taken.
+            if (!acceptable(context, uri)) {
+                left.add(plainName(uri.lastPathSegment))
+                continue
+            }
             val name = displayName(context, uri)
             try {
                 val id = UUID.randomUUID().toString()
@@ -58,6 +64,20 @@ object Shared {
         return files to left
     }
 
+    /**
+     * Whether `uri` may be copied in: a `content://` address, from another
+     * app (which granted the read with the share). Not `file://`, which any
+     * app can aim at the app's own private files, and not an address of the
+     * app's own providers, which the app can open without a grant.
+     */
+    private fun acceptable(context: Context, uri: Uri): Boolean {
+        if (uri.scheme?.lowercase() != "content") return false
+        // Android lets an address name a user first (`10@authority`), and a port is no part of it.
+        val authority = uri.authority.orEmpty().substringAfterLast('@').substringBefore(':').lowercase()
+        val own = context.packageName.lowercase()
+        return authority.isNotEmpty() && authority != own && !authority.startsWith("$own.")
+    }
+
     /** The file shared as `path`, for the WebView to answer the page with. */
     fun serve(context: Context, path: String): WebResourceResponse? {
         val id = path.removePrefix(PATH)
@@ -75,7 +95,11 @@ object Shared {
             context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) cursor.getString(0) else null
             }
-        }.getOrNull() ?: uri.lastPathSegment ?: "file"
-        return named.substringAfterLast('/').replace(Regex("[\\\\:*?\"<>|]"), "_").take(200).ifBlank { "file" }
+        }.getOrNull() ?: uri.lastPathSegment
+        return plainName(named)
     }
+
+    /** `name` with nothing path-like in it. */
+    private fun plainName(name: String?): String =
+        (name ?: "file").substringAfterLast('/').replace(Regex("[\\\\:*?\"<>|]"), "_").take(200).ifBlank { "file" }
 }
