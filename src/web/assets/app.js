@@ -2733,8 +2733,16 @@ function shareText(text) {
   text = String(text ?? '').slice(0, 50_000).trim();
   if (!text) return;
   const [link] = findLinks(text);
-  if (link && link[0] === 0 && link[1] === text.length && !webUrl(link[2])) return openLink(link[2]);
+  if (link && link[0] === 0 && link[1] === text.length && !webUrl(link[2])) return openSharedLink(link[2]);
   shareDialog(text, link?.[2], []);
+}
+
+// A link another app asked rettui to open (a link tapped in rettui itself
+// goes to `openLink` directly): opened only once the user has said yes, since
+// it starts a page request, a new conversation or a hub room.
+async function openSharedLink(link) {
+  const shown = link.length > 200 ? link.slice(0, 200) + '…' : link;
+  if (await ask(`Another app asked rettui to open this link.\n${shown}`, { title: 'Open a link', yes: 'Open' })) openLink(link);
 }
 
 // Files shared from another app, with any text: the app serves each at a
