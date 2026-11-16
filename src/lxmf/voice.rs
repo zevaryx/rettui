@@ -36,23 +36,34 @@ fn codec2_mode(mode: u8) -> Option<Codec2Mode> {
     })
 }
 
-/// A Codec2 recording as a WAV file, if it's Codec2 and has a whole frame
-/// (a part frame at the end is left out).
-pub fn codec2_wav(mode: u8, data: &[u8]) -> Option<Vec<u8>> {
-    let mut codec = Codec2::new(codec2_mode(mode)?);
+/// A Codec2 recording's decoder, and its frame size in bytes and samples,
+/// the sample rate, and how many whole frames (up to ten minutes) it has.
+fn frames_of(mode: u8, len: usize) -> Option<(Codec2, usize, usize, u32, usize)> {
+    let codec = Codec2::new(codec2_mode(mode)?);
     let frame_bytes = codec.bits_per_frame().div_ceil(8);
     let frame_samples = codec.samples_per_frame();
     let rate = if mode == AM_CODEC2_450PWB { 2 * SAMPLE_RATE } else { SAMPLE_RATE };
     let max_frames = MAX_SECONDS * rate as usize / frame_samples;
-    let frames = (data.len() / frame_bytes).min(max_frames);
-    if frames == 0 {
-        return None;
-    }
+    let frames = (len / frame_bytes).min(max_frames);
+    (frames > 0).then_some((codec, frame_bytes, frame_samples, rate, frames))
+}
+
+/// A Codec2 recording as a WAV file, if it's Codec2 and has a whole frame
+/// (a part frame at the end is left out).
+pub fn codec2_wav(mode: u8, data: &[u8]) -> Option<Vec<u8>> {
+    let (mut codec, frame_bytes, frame_samples, rate, frames) = frames_of(mode, data.len())?;
     let mut samples = vec![0i16; frames * frame_samples];
     for (bits, speech) in data.chunks_exact(frame_bytes).zip(samples.chunks_exact_mut(frame_samples)) {
         codec.decode(speech, bits);
     }
     Some(wav(&samples, rate))
+}
+
+/// How many bytes [`codec2_wav`] makes of `len` bytes of frames, without
+/// decoding them (so that what a message would take can be weighed first).
+pub fn codec2_wav_len(mode: u8, len: usize) -> Option<u64> {
+    let (_, _, frame_samples, _, frames) = frames_of(mode, len)?;
+    Some(44 + 2 * (frames * frame_samples) as u64)
 }
 
 /// Samples as a WAV file (PCM, mono, 16-bit little-endian, at `rate`).
@@ -279,6 +290,19 @@ mod tests {
         let correlation = correlation(&again[1..], &before[..before.len() - 1]);
         assert!(correlation > 0.9, "loudness follows: {correlation}");
         assert!(codec2_encode(AM_CODEC2_450, &samples).is_none(), "450 isn't encoded");
+    }
+
+    #[test]
+    fn the_size_of_the_wav_is_known_before_decoding() {
+        for mode in [AM_CODEC2_450PWB, AM_CODEC2_450, AM_CODEC2_700C, AM_CODEC2_1200, AM_CODEC2_3200] {
+            for len in [0, 3, 40, 1000, 5000] {
+                let data = vec![0u8; len];
+                assert_eq!(codec2_wav_len(mode, len), codec2_wav(mode, &data).map(|wav| wav.len() as u64), "mode {mode:#x}, {len} bytes");
+            }
+        }
+        // The ten minute limit, for a message that is far longer.
+        assert_eq!(codec2_wav_len(AM_CODEC2_450PWB, 900_000), Some(44 + 600 * 16_000 * 2));
+        assert_eq!(codec2_wav_len(AM_OPUS_OGG, 100), None);
     }
 
     #[test]

@@ -647,10 +647,17 @@ impl Audio {
     }
 
     /// With a Codec2 recording decoded, if its mode can be. Ten minutes
-    /// take about a second: not for the async threads.
+    /// take about a second, and a recording gets 400 times its size as WAV:
+    /// not for the async threads, and not for strangers' messages.
     pub fn decoded(self) -> Self {
         let wav = super::voice::codec2_wav(self.mode, &self.data);
         Self { wav, ..self }
+    }
+
+    /// How big the WAV file of a Codec2 recording will be once decoded, if it
+    /// can be (see [`Audio::decoded`]).
+    pub fn decoded_len(&self) -> Option<u64> {
+        super::voice::codec2_wav_len(self.mode, self.data.len())
     }
 
     /// An Ogg file (Opus in its container), or Codec2 decoded to WAV: what

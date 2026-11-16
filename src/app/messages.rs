@@ -62,6 +62,22 @@ impl App {
         self.pictures.get(path).and_then(Option::as_ref)
     }
 
+    /// A Codec2 voice message decoded to WAV, to play. That is about 400 times
+    /// its size and some work, so only for people you know (or a message you
+    /// read in yourself), and only where the result fits under the received
+    /// files limit. Anyone else's is saved as it came.
+    fn decoded_voice(&self, key: &str, paper: bool, audio: &lxmf::fields::Audio) -> Option<lxmf::fields::Audio> {
+        if audio.wav.is_some() || !(paper || self.is_known(key)) {
+            return None;
+        }
+        let size = audio.decoded_len()?;
+        let quota = self.settings.downloads_quota_mb.saturating_mul(1_000_000);
+        if quota > 0 && super::files::folder_size(&self.paths.downloads).saturating_add(size) > quota {
+            return None;
+        }
+        Some(audio.clone().decoded())
+    }
+
     pub(crate) fn on_message(&mut self, mut message: crate::lxmf::InboundMessage) {
         message.timestamp = lxmf::written_at(message.timestamp, super::now());
         let key = hex::encode(message.source);
@@ -178,7 +194,8 @@ impl App {
 
         // Files, and a voice message, are saved as they arrive.
         let mut attachments = Vec::new();
-        let audio = extras.audio.as_ref().map(|a| {
+        let decoded = extras.audio.as_ref().and_then(|a| self.decoded_voice(&key, paper, a));
+        let audio = decoded.as_ref().or(extras.audio.as_ref()).map(|a| {
             let (name, data) = a.file();
             (name, data, false, Some(a.codec()))
         });
@@ -2504,6 +2521,36 @@ mod tests {
         third.timestamp = 1_900_000_002.0;
         app.on_message(third);
         assert_eq!(app.store.conversations[&key()].messages[2].attachments.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn voice_messages_are_decoded_only_for_people_you_know_and_where_they_fit() {
+        use crate::lxmf::Extras;
+        use crate::lxmf::fields::Audio;
+        let dir = temp_dir("voice-known");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        app.set_focus(false);
+        // 45 KB of Codec2 1200 frames: 45,000 / 6 bytes a frame, 320 samples each.
+        let frames = vec![0u8; 45_000];
+        let voice = |n: u8| from_them(n, "", Extras { audio: Some(Audio::new(0x04, frames.clone())), ..Extras::default() });
+        // A stranger's stays as it came: no decoding, no 400 times the size.
+        app.on_message(voice(1));
+        let stranger = &app.store.conversations[&key()].messages[0].attachments[0];
+        assert!(stranger.path.to_string_lossy().ends_with(".codec2") && !stranger.playable(), "{stranger:?}");
+        assert_eq!(stranger.size, 45_000);
+        // A contact's, too, if the result wouldn't fit under the limit.
+        app.set_trust(&key(), Trust::Trusted).unwrap();
+        app.update_settings(&[("downloads_quota_mb", "1")]).unwrap();
+        app.on_message(voice(2));
+        let over = &app.store.conversations[&key()].messages[1].attachments[0];
+        assert!(over.path.to_string_lossy().ends_with(".codec2") && !over.playable(), "{over:?}");
+        // Where it fits, a contact's is decoded to play.
+        app.update_settings(&[("downloads_quota_mb", "0")]).unwrap();
+        app.on_message(voice(3));
+        let contact = &app.store.conversations[&key()].messages[2].attachments[0];
+        assert!(contact.playable() && contact.path.ends_with("voice-message.wav"), "{contact:?}");
+        assert_eq!(contact.size, 44 + 7500 * 320 * 2);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
