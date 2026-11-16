@@ -15,6 +15,7 @@ pub mod gitpages;
 pub mod heard;
 pub mod iface_log;
 pub mod mqtt;
+pub mod pins;
 mod reannounce;
 pub mod remote;
 pub mod rncplisten;
@@ -194,6 +195,11 @@ pub enum NetCommand {
     /// make room for others' either: [`NetCommand::SetContacts`] leaves out
     /// those left as is, as it's also who is spared the stamp.
     KeepKeys(Vec<Hash>),
+    /// The destinations the user chose to keep (contacts, the propagation
+    /// node, saved nodes and hubs), most important first: retained in
+    /// Reticulum so a flood of announces does not push them out (see
+    /// [`pins`]). The whole list each time; what is missing is released.
+    Retain(Vec<Hash>),
     /// Probe any destination (answered with [`NetEvent::Probed`]; how
     /// finding a path goes, with [`NetEvent::PathProgress`]).
     Probe(Hash),
@@ -974,6 +980,10 @@ async fn run(
     // The path table, every so many stats ticks (it can be long).
     let mut routes_due = 0u32;
     let mut known_save_due = KNOWN_SAVE_EVERY;
+    // What the user keeps and uses, told to Reticulum (see [`pins`]); and
+    // when to try again what it could not take yet.
+    let pins = Arc::new(pins::Pins::default());
+    let mut pins_due = pins::RETRY_EVERY;
     // The interfaces discovery found, as last told.
     let mut found_told: Vec<found::FoundInterface> = Vec::new();
     let mut reannounce = reannounce::Reannounce::default();
@@ -1045,6 +1055,12 @@ async fn run(
                 }
                 routes_due = routes_due.saturating_sub(1);
                 known_save_due = known_save_due.saturating_sub(1);
+                pins_due = pins_due.saturating_sub(1);
+                if pins_due == 0 && pins.unsettled() {
+                    pins_due = pins::RETRY_EVERY;
+                    let (pins, runtime) = (pins.clone(), runtime.clone());
+                    tokio::spawn(async move { pins.sync(&runtime).await });
+                }
                 if known_save_due == 0 && known_save.as_ref().is_none_or(|save| save.is_finished()) {
                     known_save_due = KNOWN_SAVE_EVERY;
                     let (known, policy) = (known.clone(), policy.clone());
@@ -1138,7 +1154,13 @@ async fn run(
                     NetCommand::Remember { to, public_key } => known.lock().unwrap().remember(to, &public_key, None),
                     NetCommand::ForgetKnown(peers) => known.lock().unwrap().forget(&peers),
                     NetCommand::KeepKeys(contacts) => known.lock().unwrap().keep_contacts(contacts),
+                    NetCommand::Retain(destinations) => {
+                        pins.want(destinations);
+                        let (pins, runtime) = (pins.clone(), runtime.clone());
+                        tokio::spawn(async move { pins.sync(&runtime).await });
+                    }
                     NetCommand::Ping(to) => {
+                        pins::mark_used(&pins, &runtime, to);
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
                         tokio::spawn(async move {
                             let result = remote::ping(&runtime, &known, to).await;
@@ -1156,6 +1178,7 @@ async fn run(
                         });
                     }
                     NetCommand::Probe(to) => {
+                        pins::mark_used(&pins, &runtime, to);
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
                         tokio::spawn(async move {
                             let progress = |text: String| {
@@ -1201,6 +1224,7 @@ async fn run(
                         });
                     }
                     NetCommand::SpeedSend { to, bytes } => {
+                        pins::mark_used(&pins, &runtime, to);
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
                         tokio::spawn(async move { speedtest::send(&runtime, identity, to, bytes, ev).await });
                     }
@@ -1213,10 +1237,12 @@ async fn run(
                         });
                     }
                     NetCommand::RncpSend { to, name, data } => {
+                        pins::mark_used(&pins, &runtime, to);
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
                         tokio::spawn(async move { remote::rncp_send(&runtime, identity, to, name, data, ev).await });
                     }
                     NetCommand::RncpFetch { to, path, dir } => {
+                        pins::mark_used(&pins, &runtime, to);
                         let (runtime, identity, ev) = (runtime.clone(), identity.clone(), ev.clone());
                         tokio::spawn(async move { remote::rncp_fetch(&runtime, identity, to, path, dir, ev).await });
                     }
@@ -1280,6 +1306,7 @@ async fn run(
                         let local_node = pn_local.clone();
                         let outgoing = lxmf::Outgoing { propagation_node, stamp_ticket, ticket, local_node, ..*message };
                         let (to, gives_ticket) = (outgoing.to, outgoing.ticket.is_some());
+                        pins::mark_used(&pins, &runtime, to);
                         let (stop, cancel) = tokio::sync::watch::channel(false);
                         sending.lock().unwrap().insert(id, stop);
                         let sending = sending.clone();
@@ -1302,6 +1329,7 @@ async fn run(
                         }
                     }
                     NetCommand::RrcConnect { hub, aspect, nick, key } => {
+                        pins::mark_used(&pins, &runtime, hub);
                         let config = rrc_session::SessionConfig { hub, aspect, nick, key };
                         rrc_sessions.connect(&runtime, &known, &identity, config, &ev);
                     }
@@ -1395,6 +1423,7 @@ async fn run(
                         }
                     },
                     NetCommand::Fetch { id, node, path, fields, identify } => {
+                        pins::mark_used(&pins, &runtime, node);
                         let (runtime, links, ev) = (runtime.clone(), links.clone(), ev.clone());
                         let identity = identify.then(|| identity.clone());
                         tokio::spawn(async move {
