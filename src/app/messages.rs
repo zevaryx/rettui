@@ -51,6 +51,13 @@ pub(super) const ANSWER_EVERY: Duration = Duration::from_secs(60);
 /// mustn't wait for the timer. In a burst, at most this often, as each save
 /// copies the whole store.
 const SAVE_SOON: Duration = Duration::from_millis(250);
+/// The most conversations kept with people who aren't contacts (see
+/// [`App::is_known`]): anyone can write from as many addresses as they like.
+/// Past it, the one with the oldest last message goes.
+pub(crate) const MAX_STRANGER_CONVERSATIONS: usize = 500;
+/// The most text kept in those conversations, all together (about 35 of
+/// the largest messages that can arrive, or tens of thousands of usual ones).
+pub(crate) const MAX_STRANGER_BYTES: usize = 32_000_000;
 
 impl App {
     /// An attachment image already loaded by [`App::picture`].
@@ -309,7 +316,12 @@ impl App {
             self.paper_read = Some(key);
             return;
         }
-        self.keep_conversation_selection();
+        // Only the terminal has a list selection to keep (it sorts every
+        // conversation, too much to do for each message of a flood); the
+        // web UI's first conversation is still made the active one.
+        if self.in_terminal || self.active_conversation.is_none() {
+            self.keep_conversation_selection();
+        }
         if quiet {
             self.log(format!("{name}: {summary}"));
             return;
@@ -1295,6 +1307,17 @@ impl App {
     /// files rettui saved. What you keep about the contact stays. False if
     /// there's no such conversation.
     pub fn delete_conversation(&mut self, key: &str) -> bool {
+        if !self.remove_conversation(key) {
+            return false;
+        }
+        self.update_policy(false);
+        self.save_soon();
+        true
+    }
+
+    /// [`App::delete_conversation`], but for telling the network who is a
+    /// contact.
+    fn remove_conversation(&mut self, key: &str) -> bool {
         let Some(conversation) = self.store.conversations.remove(key) else { return false };
         let owned = self.owned_folders();
         for file in conversation.messages.iter().flat_map(|m| &m.attachments).flat_map(StoredAttachment::files) {
@@ -1318,8 +1341,6 @@ impl App {
                 .run("delete the conversation's archived messages", move || crate::store::remove_from_archive(&archive, &key, &owned));
         }
         self.store_dirty = true;
-        self.update_policy(false);
-        self.save_soon();
         true
     }
 
@@ -1354,11 +1375,68 @@ impl App {
         }
         if self.saver.busy() {
             self.save_due = Some(now + SAVE_SOON);
+            self.limit_strangers();
             return;
         }
         self.save_due = None;
         self.saved_soon = now;
         self.save_if_dirty();
+    }
+
+    /// Keep conversations with people who aren't contacts within
+    /// [`MAX_STRANGER_CONVERSATIONS`] and [`MAX_STRANGER_BYTES`], deleting
+    /// those with the oldest last message first. Pinned ones and the one
+    /// open in the terminal stay, and so does the newest: if it alone is
+    /// over, its oldest messages go. Done as the store is saved, not for
+    /// each message.
+    pub(super) fn limit_strangers(&mut self) {
+        let size = |m: &Message| m.content.len() + m.title.len();
+        // The web UI's browsers each show their own.
+        let active = self.active_conversation.as_deref().filter(|_| self.in_terminal);
+        let mut strangers: Vec<(f64, usize, String)> = self
+            .store
+            .conversations
+            .iter()
+            .filter(|(key, c)| !c.pinned && Some(key.as_str()) != active && !self.is_known(key))
+            .map(|(key, c)| (c.messages.last().map_or(0.0, |m| m.timestamp), c.messages.iter().map(size).sum(), key.clone()))
+            .collect();
+        let mut bytes: usize = strangers.iter().map(|s| s.1).sum();
+        if strangers.len() <= MAX_STRANGER_CONVERSATIONS && bytes <= MAX_STRANGER_BYTES {
+            return;
+        }
+        // Newest first: the oldest come off the end.
+        strangers.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
+        let mut removed = 0;
+        while strangers.len() > 1 && (strangers.len() > MAX_STRANGER_CONVERSATIONS || bytes > MAX_STRANGER_BYTES) {
+            let Some((_, held, key)) = strangers.pop() else { break };
+            bytes -= held;
+            self.remove_conversation(&key);
+            if self.active_conversation.as_deref() == Some(key.as_str()) {
+                self.active_conversation = None;
+            }
+            removed += 1;
+        }
+        let (mut cut, owned) = (0, self.owned_folders());
+        if bytes > MAX_STRANGER_BYTES
+            && let Some((_, _, key)) = strangers.first()
+            && let Some(conversation) = self.store.conversations.get_mut(key)
+        {
+            while bytes > MAX_STRANGER_BYTES && cut + 1 < conversation.messages.len() {
+                bytes -= size(&conversation.messages[cut]);
+                cut += 1;
+            }
+            for message in conversation.messages.drain(..cut) {
+                for file in message.attachments.iter().flat_map(StoredAttachment::files) {
+                    crate::store::remove_owned(&file, &owned);
+                }
+            }
+            conversation.unread = conversation.unread.min(conversation.messages.len());
+        }
+        self.store_dirty = true;
+        self.log(format!(
+            "Deleted {removed} conversation(s) and {cut} message(s) from people who aren't contacts, the oldest: at most {MAX_STRANGER_CONVERSATIONS} conversations and {} MB of messages are kept from them",
+            MAX_STRANGER_BYTES / 1_000_000
+        ));
     }
 
     /// Ask before deleting the open conversation (`X`).
@@ -2748,6 +2826,73 @@ mod tests {
             app.save_when_due();
         }
         assert!(saved_store(&app, |store| store.conversations.is_empty()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn conversations_with_strangers_are_kept_within_limits() {
+        let dir = temp_dir("strangers");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        let source = |n: usize| -> [u8; 16] {
+            let mut source = [0x5a; 16];
+            source[..8].copy_from_slice(&(n as u64).to_be_bytes());
+            source
+        };
+        let from = |n: usize, at: f64, content: String| crate::lxmf::InboundMessage {
+            id: Some([0x11; 32]),
+            source: source(n),
+            content,
+            timestamp: at,
+            ..Default::default()
+        };
+        // A contact written to (the first conversation, so the active one
+        // too), a pinned stranger, and a trusted contact, all older than any
+        // stranger.
+        app.on_message(from(0, 1_700_000_000.0, "an old friend".into()));
+        let friend = hex::encode(source(0));
+        app.store.conversations.get_mut(&friend).unwrap().messages.push(Message { id: "local-1".into(), ..Message::default() });
+        app.on_message(from(1, 1_700_000_001.0, "pinned".into()));
+        app.set_pinned(&hex::encode(source(1)), true).unwrap();
+        app.on_message(from(2, 1_700_000_002.0, "trusted".into()));
+        app.store.update_contact(&hex::encode(source(2)), |c| c.trust = crate::store::Trust::Trusted);
+        // Then more strangers than are kept.
+        for n in 3..MAX_STRANGER_CONVERSATIONS + 13 {
+            app.on_message(from(n, 1_800_000_000.0 + n as f64, format!("hello {n}")));
+        }
+        app.save_if_dirty();
+        let strangers = app.store.conversations.keys().filter(|key| !app.is_known(key) && !app.store.conversations[*key].pinned).count();
+        assert_eq!(strangers, MAX_STRANGER_CONVERSATIONS);
+        assert!(app.store.conversations.contains_key(&friend), "a contact's stays, however old");
+        assert!(
+            app.store.conversations.contains_key(&hex::encode(source(1))) && app.store.conversations.contains_key(&hex::encode(source(2)))
+        );
+        assert!(!app.store.conversations.contains_key(&hex::encode(source(3))), "the oldest stranger's went");
+        assert!(app.store.conversations.contains_key(&hex::encode(source(MAX_STRANGER_CONVERSATIONS + 12))));
+        assert!(app.log.iter().any(|line| line.contains("from people who aren't contacts")));
+        // Large messages: at most MAX_STRANGER_BYTES of them, the newest
+        // kept, even when one conversation alone is over.
+        let big = MAX_STRANGER_BYTES / 10;
+        for n in 0..12 {
+            app.on_message(from(1_000 + n, 1_900_000_000.0 + n as f64, "x".repeat(big)));
+        }
+        for n in 0..12 {
+            let mut message = from(2_000, 1_950_000_000.0 + n as f64, "y".repeat(big));
+            message.id = Some([n as u8; 32]);
+            app.on_message(message);
+        }
+        app.save_if_dirty();
+        let held: usize = app
+            .store
+            .conversations
+            .iter()
+            .filter(|(key, c)| !app.is_known(key) && !c.pinned)
+            .flat_map(|(_, c)| &c.messages)
+            .map(|m| m.content.len())
+            .sum();
+        assert!(held <= MAX_STRANGER_BYTES, "{held} bytes held from strangers");
+        let newest = &app.store.conversations[&hex::encode(source(2_000))];
+        assert_eq!(newest.messages.len(), MAX_STRANGER_BYTES / big);
+        assert_eq!(newest.messages.last().unwrap().id, hex::encode([11u8; 32]));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

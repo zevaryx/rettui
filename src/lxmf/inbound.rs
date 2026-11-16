@@ -11,13 +11,21 @@ use tokio::sync::mpsc;
 use super::fields::{self, FIELD_COLUMBA_EXTENSIONS};
 use super::policy::{SharedPolicy, StampCheck};
 use super::{Attachment, Extras, InboundMessage, Reply, bytes_of, is_image_name};
-use crate::net::{Hash, Known, NetEvent, lookup};
+use crate::net::{Hash, Known, NetEvent, lookup, lookup_heard};
 
 /// How many stamps are worked out at once.
 static STAMP_CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 /// How long to look for an unknown sender's announce to verify a message.
 const SENDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How many unknown senders are looked for at once. Each look sends a path
+/// request on every interface and waits up to [`SENDER_LOOKUP_TIMEOUT`], and
+/// anyone can send from as many unknown addresses as they like. Past it, a
+/// message is kept unverified straight away, as when the look finds nothing.
+/// As many as a sync parses at once, so a sync alone never meets it.
+const SENDER_LOOKUPS: usize = 16;
+static LOOKING_FOR_SENDERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(SENDER_LOOKUPS);
 
 /// The most files taken from one message. A message may list thousands of
 /// (even empty) files, and each one is a file on disk.
@@ -134,9 +142,15 @@ pub(super) async fn parse_inbound(
     }
     // Senders of propagated messages are often offline; a bounded lookup
     // (cache, remembered keys, then a path request) finds their key.
-    let sender = tokio::time::timeout(SENDER_LOOKUP_TIMEOUT, lookup(runtime, known, message.source_hash()))
-        .await
-        .unwrap_or_else(|_| Err("timed out".to_string()));
+    let sender = match lookup_heard(runtime, known, message.source_hash()).await {
+        Some(remote) => Ok(remote),
+        None => match LOOKING_FOR_SENDERS.try_acquire() {
+            Ok(_turn) => tokio::time::timeout(SENDER_LOOKUP_TIMEOUT, lookup(runtime, known, message.source_hash()))
+                .await
+                .unwrap_or_else(|_| Err("timed out".to_string())),
+            Err(_) => Err(format!("{SENDER_LOOKUPS} other senders are being looked for already")),
+        },
+    };
     let sender = sender
         .inspect_err(|e| {
             tracing::debug!("sender {} not known ({e}); cannot verify signature", hex::encode(message.source_hash()));
@@ -262,5 +276,31 @@ mod tests {
         let node = rns_identity::destination::Destination::hash_from_name_and_identity("nomadnetwork.node", Some(&alice.hash));
         assert_eq!(check(&signed_from(node, &alice, "hello"), Some(&alice)), Ok(true));
         assert!(check(&signed_from(node, &mallory, "hello"), Some(&alice)).is_err());
+    }
+
+    #[tokio::test]
+    async fn only_a_few_unknown_senders_are_looked_for_at_once() {
+        let dir = std::env::temp_dir().join(format!("rettui-sender-lookups-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config"), "[reticulum]\n  enable_transport = No\n  share_instance = No\n\n[interfaces]\n").unwrap();
+        let runtime = crate::net::start_runtime(Some(&dir.display().to_string())).await.unwrap();
+        let known = crate::net::KnownIdentities::none();
+        let alice = Identity::new();
+        // Every turn taken (a flood of strangers being looked for): the
+        // next is kept unverified at once, rather than wait for its own look.
+        let taken = LOOKING_FOR_SENDERS.acquire_many(SENDER_LOOKUPS as u32).await.unwrap();
+        let started = std::time::Instant::now();
+        let message = parse_inbound(&runtime, &known, None, &signed_by(&alice, &alice, "hello")).await.unwrap();
+        assert!(!message.verified);
+        assert!(started.elapsed() < SENDER_LOOKUP_TIMEOUT / 4, "not looked for: {:?}", started.elapsed());
+        drop(taken);
+        // Someone whose key is known is verified whatever the others do.
+        let _taken = LOOKING_FOR_SENDERS.acquire_many(SENDER_LOOKUPS as u32).await.unwrap();
+        let from = rns_identity::destination::Destination::hash_from_name_and_identity(super::super::LXMF_ASPECT, Some(&alice.hash));
+        known.lock().unwrap().remember(from, &alice.get_public_key(), None);
+        assert!(parse_inbound(&runtime, &known, None, &signed_by(&alice, &alice, "hello")).await.unwrap().verified);
+        runtime.shutdown_and_wait().await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

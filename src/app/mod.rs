@@ -1007,6 +1007,7 @@ impl App {
         }
         self.save_peers(false);
         if self.store_dirty {
+            self.limit_strangers();
             // Only messages change the store's size: archive what's over
             // the limit first (it's queued before the store, so a message
             // is never only in memory).

@@ -446,10 +446,7 @@ pub async fn drop_path(runtime: &ReticulumHandle, destination: Hash) -> bool {
 /// remembered from earlier runs, then a path request (whose response carries
 /// the announce). Does not require a path when the key is already known.
 pub async fn lookup(runtime: &ReticulumHandle, known: &Known, destination: Hash) -> Result<Remote, String> {
-    if let Ok(Some(recalled)) = runtime.recall(destination).await {
-        return Ok(recalled.into());
-    }
-    if let Some(remote) = known.lock().unwrap().get(destination) {
+    if let Some(remote) = lookup_heard(runtime, known, destination).await {
         return Ok(remote);
     }
     ensure_path(runtime, destination).await?;
@@ -459,6 +456,15 @@ pub async fn lookup(runtime: &ReticulumHandle, known: &Known, destination: Hash)
         .map_err(|e| e.to_string())?
         .map(Remote::from)
         .ok_or_else(|| "Destination identity is unknown (no announce heard)".to_string())
+}
+
+/// Keys for a destination already heard: [`lookup`] without the path
+/// request.
+pub async fn lookup_heard(runtime: &ReticulumHandle, known: &Known, destination: Hash) -> Option<Remote> {
+    if let Ok(Some(recalled)) = runtime.recall(destination).await {
+        return Some(recalled.into());
+    }
+    known.lock().unwrap().get(destination)
 }
 
 /// How a peer answered a ping.
