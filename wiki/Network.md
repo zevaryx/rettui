@@ -227,14 +227,14 @@ shows your identity, your interfaces and the log.
 The Tools tab (`-` in the TUI, **Tools** in the web UI) has the tests of
 the network in one place, for trying an address or your own settings
 without picking a row first. What Network and the contact card have
-([paths](#network), probes, whose an address is, the speed test and rncp
+(paths, probes, whose an address is, the speed test and rncp
 files) is here too, and each keeps working where it was.
 
 - **Find a path, Probe, Forget a path (`P`, `T`, `D`):** for any address
   typed (the one last tried is filled in). The addresses tried lately are
   listed with how the path and the probe went, whichever tab or contact
   they were tried from. In the web UI, **Path & probe…** opens the
-  [path dialog](#network) for an address.
+  path dialog (Find path, Probe, Forget path) for an address.
 - **Identities, Speed test, Send a file, Fetch a file (`I`, `v`, `F`,
   `O`):** as in the Network tab. The web UI has the first three as
   buttons, and **Path table** for Reticulum's tables.
