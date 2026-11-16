@@ -105,7 +105,10 @@ fn kind_of(name: &str) -> Option<PeerKind> {
 
 /// Every peer, by destination (hex). Rows it can't read are left out.
 pub fn load_peers(conn: &Connection) -> Result<HashMap<String, Peer>> {
-    let mut statement = conn.prepare("SELECT dest, kind, name, hops, last_seen FROM peers")?;
+    // The newest, if there are more than a real one holds; a long name is none.
+    let mut statement = conn.prepare(&format!(
+        "SELECT dest, kind, CASE WHEN length(name) > {MAX_NAME_CHARS} THEN NULL ELSE name END, hops, last_seen FROM peers ORDER BY last_seen DESC LIMIT {MAX_ROWS}"
+    ))?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, Vec<u8>>(0)?,
@@ -156,7 +159,9 @@ pub struct Known {
 
 /// Every key kept, by destination (hex).
 pub fn load_known(conn: &Connection) -> Result<HashMap<String, Known>> {
-    let mut statement = conn.prepare("SELECT dest, key, app_data FROM known")?;
+    let mut statement = conn.prepare(&format!(
+        "SELECT dest, key, CASE WHEN length(app_data) > {MAX_APP_DATA_BYTES} THEN NULL ELSE app_data END FROM known WHERE length(key) <= {MAX_KEY_BYTES} LIMIT {MAX_ROWS}"
+    ))?;
     let rows =
         statement.query_map([], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, Option<Vec<u8>>>(2)?)))?;
     let mut known = HashMap::new();
@@ -206,6 +211,18 @@ pub struct Migrated {
     pub peers_in: bool,
 }
 
+/// The most `known_identities.json` of earlier versions may be when read
+/// (about 300 bytes for each identity heard, tens of thousands at most).
+const MAX_KNOWN_JSON_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The most rows of the database read into memory, each of peers and keys
+/// (the network has tens of thousands of destinations), and the most of a
+/// row: a restored database may hold anything. The rest are heard again.
+const MAX_ROWS: usize = 250_000;
+const MAX_NAME_CHARS: usize = 1024;
+const MAX_KEY_BYTES: usize = 1024;
+const MAX_APP_DATA_BYTES: usize = 64 * 1024;
+
 /// Move the JSON files of earlier versions in `base` into the database:
 /// `peers.json.gz` (and `extra` peers, from a store older still), and
 /// `known_identities.json`. Each file is read in one transaction, and
@@ -249,9 +266,9 @@ pub fn migrate_files(conn: &mut Connection, base: &Path, extra: &HashMap<String,
     }
     let known_file = base.join("known_identities.json");
     if known_file.exists() {
-        let read = std::fs::read_to_string(&known_file)
+        let read = crate::config::read_limited(&known_file, MAX_KNOWN_JSON_BYTES)
             .map_err(anyhow::Error::from)
-            .and_then(|text| Ok(serde_json::from_str::<HashMap<String, KnownJson>>(&text)?));
+            .and_then(|bytes| Ok(serde_json::from_slice::<HashMap<String, KnownJson>>(&bytes)?));
         match read {
             Ok(entries) => {
                 let known: Vec<(String, Known)> = entries
@@ -446,6 +463,53 @@ mod tests {
         assert_eq!(load_known(&theirs).unwrap().len(), 1);
         assert!(load_peers(&theirs).unwrap().is_empty(), "only the keys");
         drop((conn, theirs));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rows_that_are_far_too_big_are_not_all_read() {
+        let dir = temp_dir("big-rows");
+        let conn = open(&path(&dir)).unwrap();
+        let (a, b, c) = (vec![1u8; 16], vec![2u8; 16], vec![3u8; 16]);
+        let long_name = "n".repeat(MAX_NAME_CHARS + 1);
+        let insert = "INSERT INTO peers (dest, kind, name, hops, last_seen) VALUES (?1, 'Lxmf', ?2, 1, ?3)";
+        conn.execute(insert, params![a, long_name, 5]).unwrap();
+        conn.execute(insert, params![b, "Bob", 6]).unwrap();
+        let peers = load_peers(&conn).unwrap();
+        assert_eq!((peers.len(), peers[&hex::encode(&a)].name.clone()), (2, None), "a long name is dropped, the peer stays");
+        let insert = "INSERT INTO known (dest, key, app_data) VALUES (?1, ?2, ?3)";
+        conn.execute(insert, params![a, vec![7u8; 64], vec![0u8; MAX_APP_DATA_BYTES + 1]]).unwrap();
+        conn.execute(insert, params![b, vec![7u8; MAX_KEY_BYTES + 1], Some(b"x".to_vec())]).unwrap();
+        conn.execute(insert, params![c, vec![7u8; 64], Some(b"x".to_vec())]).unwrap();
+        let known = load_known(&conn).unwrap();
+        assert_eq!(known.len(), 2, "a key far too long is left out");
+        assert_eq!(known[&hex::encode(&a)].app_data, None);
+        assert_eq!(known[&hex::encode(&c)].app_data.as_deref(), Some(&b"x"[..]));
+        // More rows than a real one has: the newest peers are read.
+        conn.execute_batch(&format!(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {}) \
+             INSERT INTO peers (dest, kind, name, hops, last_seen) SELECT CAST(i AS BLOB), 'Lxmf', NULL, 1, 100 + i FROM n",
+            MAX_ROWS + 10
+        ))
+        .unwrap();
+        let peers = load_peers(&conn).unwrap();
+        assert_eq!(peers.len(), MAX_ROWS);
+        assert!(!peers.contains_key(&hex::encode(&a)) && !peers.contains_key(&hex::encode(&b)), "the oldest were left out");
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_known_identities_file_of_far_more_than_identities_is_left_as_it_is() {
+        let dir = temp_dir("big-known");
+        let file = dir.join("known_identities.json");
+        std::fs::write(&file, vec![b' '; MAX_KNOWN_JSON_BYTES as usize + 1]).unwrap();
+        let mut conn = open(&path(&dir)).unwrap();
+        let migrated = migrate_files(&mut conn, &dir, &HashMap::new());
+        assert!(!migrated.moved);
+        assert!(migrated.notes.iter().any(|n| n.contains("known_identities.json") && n.contains("more than")), "{:?}", migrated.notes);
+        assert!(file.exists(), "left as it is");
+        drop(conn);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
