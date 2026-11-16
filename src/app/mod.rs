@@ -632,6 +632,8 @@ pub struct App {
     /// The contacts last told to the network actor (trusted, and spared the
     /// stamp), so it's told only of changes.
     policy_sent: Option<(Vec<Hash>, Vec<Hash>)>,
+    /// The contacts whose keys the network actor was last told to keep.
+    keys_kept_sent: Option<Vec<Hash>>,
     /// A message (its index) to bring into view at the next draw.
     pub scroll_to: Option<usize>,
     /// The message search (`/` in Messages), while open.
@@ -879,6 +881,7 @@ impl App {
             auto_pick: None,
             auto_error: None,
             policy_sent: None,
+            keys_kept_sent: None,
             scroll_to: None,
             message_search: None,
             channel_search: None,
