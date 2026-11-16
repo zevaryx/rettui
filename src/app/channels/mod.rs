@@ -33,6 +33,9 @@ pub(crate) const MAX_WHISPERS: usize = 100;
 /// notices and errors), for this run only: counted on their own, so a busy
 /// room's comings and goings never push its messages out.
 const MAX_OTHER_LINES: usize = 200;
+/// The most a hub's saved history may be when read (a few hundred lines for
+/// each room it is kept for).
+const MAX_HISTORY_BYTES: u64 = 32 * 1024 * 1024;
 
 /// The buffer of a whisper conversation (private notices) with a user:
 /// `@` and their identity in hex. Rooms can't take this form.
@@ -483,7 +486,7 @@ impl Hub {
     }
 
     fn load_history(&mut self, dir: &Path) {
-        let Ok(text) = std::fs::read_to_string(self.history_path(dir)) else {
+        let Ok(text) = crate::config::read_limited_text(&self.history_path(dir), MAX_HISTORY_BYTES) else {
             return;
         };
         if let Ok(rooms) = serde_json::from_str::<BTreeMap<String, Vec<ChatLine>>>(&text) {
@@ -1050,6 +1053,26 @@ mod tests {
         assert_eq!(backoff(3), Duration::from_secs(8));
         assert_eq!(backoff(6), Duration::from_secs(64));
         assert_eq!(backoff(20), Duration::from_secs(15 * 60));
+    }
+
+    #[test]
+    fn a_history_file_of_far_more_than_history_is_not_read() {
+        let dir = std::env::temp_dir().join(format!("rettui-rrc-history-big-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let load = || {
+            let mut hub = Hub::new([1; 16], rrc::DEFAULT_ASPECT.into(), "Hub".into());
+            hub.load_history(&dir);
+            hub
+        };
+        let path = load().history_path(&dir);
+        let line = r#"{"kind":"Msg","src":null,"nick":"amy","text":"hi","ts":1}"#;
+        let good = format!(r#"{{"general":[{line}]}}"#);
+        std::fs::write(&path, &good).unwrap();
+        assert_eq!(load().buffers["general"].len(), 1, "history that fits is read");
+        std::fs::write(&path, format!("{good}{}", " ".repeat(MAX_HISTORY_BYTES as usize))).unwrap();
+        assert!(!load().buffers.contains_key("general"), "history over the limit isn't");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -666,13 +666,16 @@ impl Default for Games {
     }
 }
 
+/// The most `games.json` may be when read: a game is a few KB.
+const MAX_GAMES_BYTES: u64 = 16 * 1024 * 1024;
+
 impl Games {
     /// The games kept in `path`, if there are any; problems with single
     /// games are returned to log.
     pub fn load(path: &Path) -> (Self, Vec<String>) {
         let games = Self::default();
         let mut problems = Vec::new();
-        let sessions: Vec<Session> = match std::fs::read(path) {
+        let sessions: Vec<Session> = match crate::config::read_limited(path, MAX_GAMES_BYTES) {
             Ok(bytes) => match serde_json::from_slice(&bytes) {
                 Ok(sessions) => sessions,
                 Err(e) => {
@@ -1928,5 +1931,16 @@ mod tests {
         let garbled = HashMap::from([(FIELD_CUSTOM_TYPE, vec![0xc1]), (FIELD_CUSTOM_META, vec![0xc1])]);
         assert!(matches!(games.receive("ab", &garbled), Received::Rejected(_)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_games_file_of_far_more_than_games_is_not_read() {
+        let path = std::env::temp_dir().join(format!("rettui-games-big-{}.json", std::process::id()));
+        std::fs::write(&path, vec![b' '; MAX_GAMES_BYTES as usize + 1]).unwrap();
+        let (_, problems) = Games::load(&path);
+        assert!(problems.len() == 1 && problems[0].contains("more than"), "{problems:?}");
+        std::fs::write(&path, "[]").unwrap();
+        assert!(Games::load(&path).1.is_empty());
+        let _ = std::fs::remove_file(&path);
     }
 }

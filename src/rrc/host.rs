@@ -40,6 +40,9 @@ const ROOMS_FILE: &str = "rooms.yaml";
 /// The operators rettui added to `config.yaml` (the hub's identity and
 /// yours), beside it: taken out again when either changes.
 const OPERATORS_FILE: &str = "rettui-operators.json";
+/// The most the hub's `config.yaml`, rooms file and operators list may be
+/// when read: they are a few KB, and a restored backup can hold any file.
+const MAX_HUB_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// The console's session: no Link has this id.
 const CONSOLE: [u8; 16] = [0xff; 16];
 /// Most Links at once; more are closed as they come.
@@ -97,7 +100,14 @@ impl HubHostConfig {
 fn load_router(dir: &Path, config: HubConfig, hub: Hash) -> Result<Router, String> {
     let rooms = dir.join(ROOMS_FILE);
     let backup = dir.join(format!("{ROOMS_FILE}.bak"));
-    match Router::load(config.clone(), hub) {
+    // rsRRCD reads the whole file: one far bigger than a real one is damaged.
+    let loaded = match std::fs::metadata(&rooms) {
+        Ok(meta) if meta.len() > MAX_HUB_FILE_BYTES => {
+            Err(anyhow::anyhow!("{} is more than {} MB, which no rooms file is", rooms.display(), MAX_HUB_FILE_BYTES / 1_000_000))
+        }
+        _ => Router::load(config.clone(), hub),
+    };
+    match loaded {
         Ok(router) => {
             if rooms.is_file() {
                 let _ = std::fs::copy(&rooms, &backup);
@@ -157,7 +167,7 @@ fn write_config(config: &HubHostConfig, hub: Hash) -> Result<HubConfig, String> 
     if fresh {
         HubConfig::write_default(&path).map_err(|e| format!("{e:#}"))?;
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
+    let text = crate::config::read_limited_text(&path, MAX_HUB_FILE_BYTES).map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
     let mut value: serde_json::Value =
         serde_saphyr::from_str(&text).map_err(|e| format!("{} isn't YAML rsRRCD reads: {e}", path.display()))?;
     if !value.is_object() {
@@ -194,8 +204,10 @@ fn write_config(config: &HubHostConfig, hub: Hash) -> Result<HubConfig, String> 
     // left for another, the hub's before it had a new one) are taken out:
     // they'd still be operators, unseen.
     let operators_file = config.dir.join(OPERATORS_FILE);
-    let added_before: Vec<String> =
-        std::fs::read_to_string(&operators_file).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    let added_before: Vec<String> = crate::config::read_limited(&operators_file, MAX_HUB_FILE_BYTES)
+        .ok()
+        .and_then(|text| serde_json::from_slice(&text).ok())
+        .unwrap_or_default();
     let operators = [hex::encode(hub), hex::encode(config.operator)];
     let mut trusted: Vec<String> = section
         .get("trusted_identities")
@@ -1851,6 +1863,32 @@ mod tests {
         // Told again only when something changed.
         core.report();
         assert!(rx.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hub_files_of_far_more_than_a_hub_has_are_not_read() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-big-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = config(&dir, false);
+        write_config(&config, HUB).unwrap();
+        let big = vec![b' '; MAX_HUB_FILE_BYTES as usize + 1];
+        // The operators list: ignored, as one that doesn't read is.
+        std::fs::write(config.dir.join(OPERATORS_FILE), &big).unwrap();
+        assert!(write_config(&config, HUB).is_ok());
+        // The configuration itself: an error that names it.
+        let yaml = config.dir.join(rsrrcd::CONFIG_FILE_NAME);
+        let good = std::fs::read(&yaml).unwrap();
+        std::fs::write(&yaml, &big).unwrap();
+        let error = write_config(&config, HUB).unwrap_err();
+        assert!(error.contains("more than"), "{error}");
+        std::fs::write(&yaml, good).unwrap();
+        // The rooms file: set aside as a damaged one is, and the hub starts.
+        let hub_config = write_config(&config, HUB).unwrap();
+        let rooms = config.dir.join(ROOMS_FILE);
+        std::fs::write(&rooms, &big).unwrap();
+        assert!(load_router(&config.dir, hub_config, HUB).is_ok());
+        assert!(config.dir.join(format!("{ROOMS_FILE}.damaged")).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

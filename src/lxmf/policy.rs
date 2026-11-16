@@ -57,6 +57,10 @@ pub type SharedPolicy = Arc<Mutex<Policy>>;
 
 /// The tickets file: rsLXMF's snapshot, with its map of last deliveries
 /// as a list (JSON keys are text).
+/// The most `tickets.json` may be when read: it holds a few tickets (about
+/// 100 bytes each) for each contact.
+const MAX_TICKETS_BYTES: u64 = 16 * 1024 * 1024;
+
 #[derive(Default, Serialize, Deserialize)]
 struct Saved {
     outbound: Vec<Ticket>,
@@ -76,7 +80,8 @@ pub fn stamp_cost(setting: u64) -> Option<u8> {
 impl Policy {
     /// The policy, with the tickets saved at `path`.
     pub fn load(path: &Path, stamp_cost: Option<u8>, max_bytes: u64) -> SharedPolicy {
-        let saved: Saved = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let saved: Saved =
+            crate::config::read_limited(path, MAX_TICKETS_BYTES).ok().and_then(|t| serde_json::from_slice(&t).ok()).unwrap_or_default();
         let mut tickets = TicketStore::new();
         tickets.replace_snapshot(TicketStoreSnapshot {
             outbound: saved.outbound,
@@ -278,5 +283,19 @@ mod tests {
         assert!(policy.too_big(500_001) && !policy.too_big(500_000));
         assert_eq!((stamp_cost(0), stamp_cost(8), stamp_cost(999)), (None, Some(8), Some(254)));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_tickets_file_of_far_more_than_tickets_is_not_read() {
+        let path = std::env::temp_dir().join(format!("rettui-tickets-big-{}.json", std::process::id()));
+        let ticket = |at: f64| format!(r#"{{"outbound":[],"inbound":[],"last_deliveries":[["{}",{at}]]}}"#, "ab".repeat(16));
+        // A valid file, padded past the limit: ignored. Within it: read.
+        std::fs::write(&path, format!("{}{}", ticket(5.0), " ".repeat(MAX_TICKETS_BYTES as usize))).unwrap();
+        let policy = Policy::load(&path, None, 1000);
+        assert!(policy.lock().unwrap().tickets.snapshot().last_deliveries.is_empty());
+        std::fs::write(&path, ticket(5.0)).unwrap();
+        let policy = Policy::load(&path, None, 1000);
+        assert_eq!(policy.lock().unwrap().tickets.snapshot().last_deliveries.len(), 1);
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -2214,6 +2214,30 @@ pub fn load_identity(path: &Path) -> Result<Identity> {
     Ok(identity)
 }
 
+/// The contents of `path`, if they are `max` bytes at most. For files a
+/// restored backup may have put there, whose size nothing checked: a file
+/// over `max` is an error that names it, and is never read whole.
+pub fn read_limited(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let too_big = || std::io::Error::other(format!("{} is more than {} MB, which no file of its kind is", path.display(), max / 1_000_000));
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() > max {
+        return Err(too_big());
+    }
+    // It may have grown since: never more than `max` is read.
+    let mut data = Vec::new();
+    file.take(max + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > max {
+        return Err(too_big());
+    }
+    Ok(data)
+}
+
+/// [`read_limited`] as text.
+pub fn read_limited_text(path: &Path, max: u64) -> std::io::Result<String> {
+    String::from_utf8(read_limited(path, max)?).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
 /// Where `path` is written before it takes the place of the old file:
 /// beside it, with a dot in front, so a node serving the folder never lists it.
 pub fn temp_beside(path: &Path) -> PathBuf {
@@ -2507,6 +2531,24 @@ mod tests {
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
         assert!(Settings::load_or_aside(&path, true).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_over_its_limit_is_refused_by_name_not_read() {
+        let dir = std::env::temp_dir().join(format!("rettui-read-limited-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("games.json");
+        fs::write(&path, vec![b' '; 1000]).unwrap();
+        assert_eq!(read_limited(&path, 1000).unwrap().len(), 1000);
+        assert_eq!(read_limited_text(&path, 1000).unwrap().len(), 1000);
+        fs::write(&path, vec![b' '; 1001]).unwrap();
+        let error = read_limited(&path, 1000).unwrap_err().to_string();
+        assert!(error.contains("games.json") && error.contains("more than"), "{error}");
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert_eq!(read_limited_text(&path, 1000).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(read_limited(&dir.join("none"), 1000).unwrap_err().kind(), std::io::ErrorKind::NotFound);
         let _ = fs::remove_dir_all(&dir);
     }
 }
