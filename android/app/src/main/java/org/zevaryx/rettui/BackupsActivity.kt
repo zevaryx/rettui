@@ -61,14 +61,7 @@ class BackupsActivity : Activity() {
 
         val backup = page.section(getString(R.string.backup))
         backup.note(getString(R.string.backup_note))
-        backup.primary(getString(R.string.backup_save)) {
-            // A passphrase first (or none), then where.
-            askPassphrase(R.string.backup_passphrase, getString(R.string.backup_passphrase_note), twice = true) { passphrase ->
-                backupPassphrase = passphrase
-                val day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())
-                save(SAVE_BACKUP, "application/gzip", "rettui-backup-$day.tar.gz")
-            }
-        }
+        backup.primary(getString(R.string.backup_save)) { askBackupPassphrase() }
         backup.secondary(getString(R.string.backup_restore)) { open(OPEN_BACKUP) }
 
         val schedule = page.section(getString(R.string.schedule))
@@ -214,6 +207,32 @@ class BackupsActivity : Activity() {
             length < 12 -> R.string.passphrase_short
             else -> null
         }
+    }
+
+    /**
+     * A passphrase for the backup (or none, once they've said they know what
+     * that means: the backup holds the identity, and goes where other apps
+     * can read it), then where to save it.
+     */
+    private fun askBackupPassphrase() {
+        askPassphrase(R.string.backup_passphrase, getString(R.string.backup_passphrase_note), twice = true) { passphrase ->
+            if (passphrase.isEmpty()) {
+                dialog()
+                    .setTitle(R.string.backup_unsealed)
+                    .setMessage(R.string.backup_unsealed_note)
+                    .setPositiveButton(R.string.backup_unsealed_back) { _, _ -> askBackupPassphrase() }
+                    .setNegativeButton(R.string.backup_unsealed_save) { _, _ -> chooseBackupFile("") }
+                    .show()
+            } else {
+                chooseBackupFile(passphrase)
+            }
+        }
+    }
+
+    private fun chooseBackupFile(passphrase: String) {
+        backupPassphrase = passphrase
+        val day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())
+        save(SAVE_BACKUP, "application/gzip", "rettui-backup-$day.tar.gz")
     }
 
     /** Where scheduled backups go, and how the last one went. */
