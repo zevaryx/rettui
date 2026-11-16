@@ -23,6 +23,11 @@ use crate::rrc::{self, Envelope, Limits, t};
 use crate::store::{HubConfig, NotifyLevel};
 use crate::term::input::TextInput;
 
+/// The most whisper conversations kept on one hub: anyone on it can whisper
+/// from as many identities as they like, and each is a conversation listed
+/// and saved. Past it, the one quiet longest goes.
+pub(crate) const MAX_WHISPERS: usize = 100;
+
 /// Other lines kept with the messages of a room or whisper conversation
 /// (as many as "Chat messages kept" says) (people joining and leaving, the hub's
 /// notices and errors), for this run only: counted on their own, so a busy
@@ -396,6 +401,41 @@ impl Hub {
         }
         people.sort_by_key(|(n, _)| n.to_lowercase());
         people
+    }
+
+    /// Whether `room` is joined, or still has its buffer (left, but kept).
+    pub(crate) fn has_room(&self, room: &str) -> bool {
+        self.rooms.contains(room) || self.buffers.contains_key(room)
+    }
+
+    /// Before a whisper conversation `key` is started: if there are
+    /// [`MAX_WHISPERS`] already, the one whose last line is oldest goes
+    /// (not `shown`, the one on screen).
+    pub(crate) fn make_room_for_whisper(&mut self, key: &str, shown: Option<&str>) {
+        if self.buffers.contains_key(key) {
+            return;
+        }
+        let whispers = || self.buffers.iter().filter(|(k, _)| whisper_peer(k).is_some());
+        if whispers().count() < MAX_WHISPERS {
+            return;
+        }
+        let last = |lines: &Vec<ChatLine>| lines.last().map_or(0, |l| l.ts);
+        let Some(oldest) =
+            whispers().filter(|(k, _)| Some(k.as_str()) != shown).min_by_key(|(_, lines)| last(lines)).map(|(k, _)| k.clone())
+        else {
+            return;
+        };
+        tracing::debug!("{MAX_WHISPERS} whisper conversations on {}: the quietest, {oldest}, goes", self.name);
+        self.buffers.remove(&oldest);
+        self.unread.remove(&oldest);
+        self.mentions.remove(&oldest);
+        // Their nick too, unless they're in a room with us.
+        if let Some(peer) = whisper_peer(&oldest)
+            && !self.members.values().any(|members| members.contains(&peer))
+        {
+            self.nicks.remove(&peer);
+        }
+        self.history_dirty = true;
     }
 
     /// Add a line, the oldest of its sort going past their limit (`keep`
@@ -774,6 +814,16 @@ impl App {
         };
         let target = Opens::Room { hub: hex::encode(hub.hash), room: room.to_string() };
         Some(Notification::new(title, notify::body(&text), target))
+    }
+
+    /// Where a line about `room` goes: there, if it's a room we have, else
+    /// where a reply that names no room goes (a hub could otherwise add any
+    /// number of rooms).
+    fn room_or_reply(&self, index: usize, room: Option<String>) -> String {
+        match room {
+            Some(room) if self.channels.hubs[index].has_room(&room) => room,
+            _ => self.reply_room(index),
+        }
     }
 
     /// Room for a reply that names no room: what the user is looking at on

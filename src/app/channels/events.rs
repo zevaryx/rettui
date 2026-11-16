@@ -238,6 +238,15 @@ impl App {
                 if !is_own && self.identity_is_blocked(&env.src) {
                     return;
                 }
+                // Only rooms we're in (or were, and still have): a hub could
+                // otherwise add any number of rooms to the list, and to the
+                // history saved.
+                if let Some(room) = &room
+                    && !self.channels.hubs[index].has_room(room)
+                {
+                    tracing::debug!("ignored a message for #{room}, a room not joined");
+                    return;
+                }
                 let key = room.clone().unwrap_or_default();
                 let id = hex::encode(&env.id);
                 let hub = self.hub_mut(index);
@@ -310,7 +319,10 @@ impl App {
                     let mut line = ChatLine::new(LineKind::Private, text);
                     line.src = Some(hex::encode(&env.src));
                     line.nick = env.nick.clone();
-                    self.record(index, &super::whisper_key(&env.src), line);
+                    let key = super::whisper_key(&env.src);
+                    let shown = self.channels.active().filter(|(i, _)| *i == index).map(|(_, room)| room);
+                    self.hub_mut(index).make_room_for_whisper(&key, shown.as_deref());
+                    self.record(index, &key, line);
                     return;
                 }
                 if !from_hub {
@@ -320,7 +332,7 @@ impl App {
                     let mut line = ChatLine::new(LineKind::Msg, text);
                     line.src = Some(hex::encode(&env.src));
                     line.nick = env.nick.clone().or_else(|| self.channels.hubs[index].nicks.get(&env.src).cloned());
-                    let target = room.unwrap_or_else(|| self.reply_room(index));
+                    let target = self.room_or_reply(index, room);
                     self.record(index, &target, line);
                     return;
                 }
@@ -342,7 +354,7 @@ impl App {
                     self.add_motd(index, text);
                     return;
                 }
-                let target = room.unwrap_or_else(|| self.reply_room(index));
+                let target = self.room_or_reply(index, room);
                 self.record(index, &target, ChatLine::new(LineKind::Notice, text));
             }
             t::ERROR => {
@@ -376,7 +388,7 @@ impl App {
                     }
                     _ => {}
                 }
-                let target = target.unwrap_or_else(|| self.reply_room(index));
+                let target = self.room_or_reply(index, target);
                 self.record(index, &target, ChatLine::new(LineKind::Error, text));
             }
             _ => {}
@@ -1096,5 +1108,36 @@ mod tests {
             sent.iter().map(|e| (e.body_text().unwrap(), e.room.clone())).collect::<Vec<_>>(),
             [("/history", None), ("/help", None)]
         );
+    }
+
+    #[test]
+    fn a_hub_cannot_add_rooms_or_whisper_conversations_without_end() {
+        let mut hubs = Hubs::connected("unjoined");
+        hubs.join("lobby", &[OWN, AMY]);
+        // Messages and notices for rooms never joined make no rooms.
+        for n in 0..50 {
+            hubs.said(&format!("room{n}"), AMY, "amy", "over here");
+        }
+        hubs.notice(Some("elsewhere"), "the topic of #elsewhere");
+        hubs.said("lobby", AMY, "amy", "hello");
+        assert_eq!(hubs.hub().buffers.keys().collect::<Vec<_>>(), ["", "lobby"]);
+        // The notice is shown where a reply would be: the room on screen.
+        assert_eq!(hubs.lines("lobby"), ["You joined #lobby", "the topic of #elsewhere", "hello"]);
+        // Whispers from more people than are kept: the quietest go.
+        let from = |n: usize| -> [u8; 16] {
+            let mut id = [0x77; 16];
+            id[..8].copy_from_slice(&(n as u64).to_be_bytes());
+            id
+        };
+        for n in 0..super::super::MAX_WHISPERS + 20 {
+            let mut env = Envelope::new(t::NOTICE, &from(n)).text("psst");
+            env.dst = Some(OWN.to_vec());
+            hubs.deliver(env);
+        }
+        let whispers = hubs.hub().buffers.keys().filter(|k| super::super::whisper_peer(k).is_some()).count();
+        assert_eq!(whispers, super::super::MAX_WHISPERS);
+        assert!(hubs.hub().nicks.len() <= super::super::MAX_WHISPERS + 2, "and their nicks: {}", hubs.hub().nicks.len());
+        let newest = super::super::whisper_key(&from(super::super::MAX_WHISPERS + 19));
+        assert_eq!(hubs.lines(&newest), ["psst"]);
     }
 }
