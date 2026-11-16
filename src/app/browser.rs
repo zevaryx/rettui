@@ -47,11 +47,10 @@ pub struct Pending {
     pub status: Option<String>,
 }
 
-/// The most images, and the most partials, one page loads, and the least
-/// seconds between a partial's reloads: a page can ask for any number.
+/// The most images one page loads: a page can ask for any number. (Partials
+/// and their reload times are held to [`micron::MAX_PARTIALS`] and
+/// [`micron::MIN_PARTIAL_REFRESH`] when the page is read.)
 const MAX_PAGE_IMAGES: usize = 24;
-const MAX_PARTIALS: usize = 16;
-const MIN_PARTIAL_REFRESH: u64 = 5;
 
 /// The most Browser tabs open at once: each keeps its page and images.
 pub const MAX_TABS: usize = 12;
@@ -253,7 +252,7 @@ impl App {
             self.request_image(url, pending.refresh);
         }
         self.browser.tab.partial_requests.clear();
-        let count = self.browser.tab.page.as_ref().map_or(0, |p| p.partials.len()).min(MAX_PARTIALS);
+        let count = self.browser.tab.page.as_ref().map_or(0, |p| p.partials.len()).min(micron::MAX_PARTIALS);
         self.browser.tab.partials = vec![PartialState::default(); count];
         for index in 0..count {
             self.request_partial(index);
@@ -328,9 +327,9 @@ impl App {
             .enumerate()
             .filter(|(_, (partial, state))| {
                 !state.loading
-                    && partial
-                        .refresh
-                        .is_some_and(|every| state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every.max(MIN_PARTIAL_REFRESH)))
+                    && partial.refresh.is_some_and(|every| {
+                        state.loaded_at.is_some_and(|at| at.elapsed().as_secs() >= every.max(micron::MIN_PARTIAL_REFRESH))
+                    })
             })
             .map(|(index, _)| index)
             .collect();

@@ -6647,6 +6647,11 @@ app.views.browser = {
   // are loading, and their reload timers.
   partials: { page: null, html: [], loading: [], timers: [] },
 
+  // What a page may ask of its partials, as the server holds them (see
+  // micron `MAX_PARTIALS`): how many, and the seconds between reloads. A
+  // timer's delay wraps past 2^31 ms, so a long wait is cut at a day.
+  partialLimits: { count: 16, minRefresh: 5, maxRefresh: 24 * 60 * 60 },
+
   // A new page: its partials start afresh.
   resetPartials() {
     for (const timer of this.partials.timers) clearInterval(timer);
@@ -6659,12 +6664,18 @@ app.views.browser = {
     if (this.viewSource || !this.page) return;
     if (this.partials.page !== this.page) this.resetPartials();
     [...this.content.querySelectorAll('.m-partial')].forEach((node, i) => {
+      if (i >= this.partialLimits.count) {
+        node.textContent = 'More parts than rettui loads';
+        return;
+      }
       node.dataset.index = i;
       if (this.partials.html[i] != null) node.innerHTML = this.partials.html[i];
       else if (!this.partials.loading[i]) this.loadPartial(i);
       const every = Number(node.dataset.refresh);
       if (every > 0 && !this.partials.timers[i]) {
-        this.partials.timers[i] = setInterval(() => showing('browser') && !this.viewSource && this.loadPartial(i), every * 1000);
+        const { minRefresh, maxRefresh } = this.partialLimits;
+        const seconds = Math.min(Math.max(every, minRefresh), maxRefresh);
+        this.partials.timers[i] = setInterval(() => showing('browser') && !this.viewSource && this.loadPartial(i), seconds * 1000);
       }
     });
   },

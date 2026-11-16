@@ -90,6 +90,18 @@ const TABLE_MAX_ROWS: usize = 1000;
 /// first row and many short ones would otherwise cost columns times rows.
 const TABLE_MAX_CELLS: usize = 4096;
 
+/// Partials kept on a page; each one is a request when the page opens and
+/// again on its timer. The rest are dropped (see [`Page::partials_cut`]), so
+/// that a page can't make the app ask for any number of things.
+pub const MAX_PARTIALS: usize = 16;
+
+/// The least and the most seconds a partial may ask to wait between its
+/// reloads: a page can write any number, and a very small one is a flood
+/// while a very large one wraps in a browser's timer. A day is as long as any
+/// page needs.
+pub const MIN_PARTIAL_REFRESH: u64 = 5;
+pub const MAX_PARTIAL_REFRESH: u64 = 24 * 60 * 60;
+
 /// A table: where it sits, how wide it may be, its columns' alignment, and
 /// its rows of cells (the first one a header when a separator follows it).
 /// `cut` is set when cells or rows were dropped, for a note under the table.
@@ -184,6 +196,8 @@ pub struct Page {
     /// Anchors and the line each is on, first declared first.
     anchors: Vec<(String, usize)>,
     pub partials: Vec<Partial>,
+    /// Whether partials past [`MAX_PARTIALS`] were dropped.
+    pub partials_cut: bool,
     /// The line each item is on.
     item_lines: Vec<usize>,
 }
@@ -850,7 +864,11 @@ impl Parser<'_> {
                     if !self.nested {
                         let mut parts = body.split('`');
                         let url = parts.next().unwrap_or_default().trim().to_string();
-                        let refresh = parts.next().and_then(|r| r.trim().parse().ok()).filter(|r: &u64| *r > 0);
+                        let refresh = parts
+                            .next()
+                            .and_then(|r| r.trim().parse().ok())
+                            .filter(|r: &u64| *r > 0)
+                            .map(|r| r.clamp(MIN_PARTIAL_REFRESH, MAX_PARTIAL_REFRESH));
                         let fields: Vec<String> = parts
                             .next()
                             .unwrap_or_default()
@@ -861,8 +879,12 @@ impl Parser<'_> {
                             .collect();
                         let pid = fields.iter().find_map(|f| f.strip_prefix("pid=")).map(str::to_string);
                         if !url.is_empty() {
-                            self.page.partials.push(Partial { url, refresh, fields, pid });
-                            self.partials_due.push(self.page.partials.len() - 1);
+                            if self.page.partials.len() < MAX_PARTIALS {
+                                self.page.partials.push(Partial { url, refresh, fields, pid });
+                                self.partials_due.push(self.page.partials.len() - 1);
+                            } else if !std::mem::replace(&mut self.page.partials_cut, true) {
+                                buf.push_str("[more parts than rettui loads]");
+                            }
                         }
                     }
                 }
@@ -1574,6 +1596,30 @@ mod tests {
         let html = page.to_html(|u| format!("x{u}"), |_| None);
         assert!(html.contains("<div class=\"m-partial\" style=\"padding-left:0ch\" data-url=\"xabcd:/page/p.mu\" data-fields=\"pid=32|name\" data-refresh=\"10\" data-pid=\"32\">"), "{html}");
         assert!(parse_partial("`{abcd:/x}\nhi").partials.is_empty());
+    }
+
+    #[test]
+    fn partials_are_capped_and_their_reloads_kept_within_limits() {
+        // Any number of partials: the first few are kept, once, with a note.
+        let source: String = (0..MAX_PARTIALS + 40).map(|i| format!("`{{abcd:/page/p{i}.mu`1}}\n")).collect();
+        let page = parse(&source);
+        assert_eq!(page.partials.len(), MAX_PARTIALS);
+        assert!(page.partials_cut);
+        let html = page.to_html(|u| u.to_string(), |_| None);
+        assert_eq!(html.matches("class=\"m-partial\"").count(), MAX_PARTIALS);
+        assert_eq!(html.matches("[more parts than rettui loads]").count(), 1);
+        assert!(!parse(&source[..source.find('\n').unwrap()]).partials_cut);
+        // How often one reloads is kept between the least and the most.
+        let refreshes = |text: &str| parse(&format!("`{{abcd:/x`{text}}}")).partials.first().map(|p| p.refresh);
+        assert_eq!(refreshes("1"), Some(Some(MIN_PARTIAL_REFRESH)));
+        assert_eq!(refreshes("30"), Some(Some(30)));
+        // A browser timer wraps past 2^31 ms: 4294967 s was 4 ms, and the largest u64 wrapped to 0.
+        assert_eq!(refreshes("4294967"), Some(Some(MAX_PARTIAL_REFRESH)));
+        assert_eq!(refreshes("18446744073709551615"), Some(Some(MAX_PARTIAL_REFRESH)));
+        // No reload stays none.
+        assert_eq!(refreshes("0"), Some(None));
+        assert_eq!(refreshes("never"), Some(None));
+        assert!(MAX_PARTIAL_REFRESH * 1000 < i32::MAX as u64);
     }
 
     #[test]
