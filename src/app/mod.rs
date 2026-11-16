@@ -553,6 +553,10 @@ pub struct App {
     /// on or last done, and whether browsers have been told of it.
     pub(crate) stranger_cleanup: Option<messages::StrangerCleanup>,
     cleanup_news: bool,
+    /// Messages kept while their senders' keys are looked for (conversation,
+    /// message id), and whether that made the conversation: see
+    /// [`App::on_checking`].
+    checking: HashMap<(String, String), bool>,
     /// Peers heard or changed, and forgotten, since they were last saved
     /// (to the database, apart from the store; see [`App::save_peers`]).
     pub(crate) peers_changed: HashSet<String>,
@@ -836,6 +840,7 @@ impl App {
             saved_soon: Instant::now(),
             stranger_cleanup: None,
             cleanup_news: false,
+            checking: HashMap::new(),
             peers_changed: HashSet::new(),
             peers_removed: HashSet::new(),
             peers_saved: Instant::now(),
@@ -1292,6 +1297,8 @@ impl App {
                 self.log("Announced LXMF destination");
             }
             NetEvent::Message(message) => self.on_message(*message),
+            NetEvent::Checking(message) => self.on_checking(*message),
+            NetEvent::Forged { source, id } => self.on_forged(source, id),
             NetEvent::SendProgress { id, text } => {
                 // A cancel asked for says so until the send ends.
                 if self.send_progress.get(&id).is_none_or(|said| said != CANCELLING) {

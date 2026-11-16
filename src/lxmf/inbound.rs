@@ -110,6 +110,24 @@ pub(super) async fn parse_inbound(
     policy: Option<&SharedPolicy>,
     data: &[u8],
 ) -> Result<InboundMessage, String> {
+    parse_inbound_holding(runtime, known, policy, data, None).await
+}
+
+/// What a message is handed to while its sender's key is looked for.
+type Holding<'a> = &'a (dyn Fn(InboundMessage) + Sync);
+
+/// [`parse_inbound`]; and if the sender's key has to be looked for (a path
+/// request, and a wait of up to [`SENDER_LOOKUP_TIMEOUT`]), the message is
+/// first handed to `holding`, unverified, so it can be kept meanwhile: the
+/// sender has been told it was delivered already. (Not a game's move: those
+/// wait, as they did.)
+async fn parse_inbound_holding(
+    runtime: &ReticulumHandle,
+    known: &Known,
+    policy: Option<&SharedPolicy>,
+    data: &[u8],
+    holding: Option<Holding<'_>>,
+) -> Result<InboundMessage, String> {
     let mut message = LxMessage::unpack(data).map_err(|e| e.to_string())?;
     if let Some(policy) = policy {
         // The policy is let go before the stamp is worked out: that takes a while, and
@@ -140,14 +158,39 @@ pub(super) async fn parse_inbound(
             }
         }
     }
+    let (attachments, dropped_attachments) = attachments_of(&message);
+    // A Codec2 voice message is kept as it came. It is decoded to play when
+    // it's saved, if it's from someone known: it grows about 400 times, which
+    // a stranger must not be able to make happen.
+    let mut inbound = InboundMessage {
+        id: Some(message.message_id()),
+        source: message.source_hash(),
+        title: message.title_text().into_owned(),
+        content: message.content_text().into_owned(),
+        timestamp: message.timestamp(),
+        verified: false,
+        attachments,
+        dropped_attachments,
+        paper: false,
+        reply: reply_of(&message),
+        extras: Extras::of(&message),
+        signal: None,
+    };
     // Senders of propagated messages are often offline; a bounded lookup
     // (cache, remembered keys, then a path request) finds their key.
     let sender = match lookup_heard(runtime, known, message.source_hash()).await {
         Some(remote) => Ok(remote),
         None => match LOOKING_FOR_SENDERS.try_acquire() {
-            Ok(_turn) => tokio::time::timeout(SENDER_LOOKUP_TIMEOUT, lookup(runtime, known, message.source_hash()))
-                .await
-                .unwrap_or_else(|_| Err("timed out".to_string())),
+            Ok(_turn) => {
+                if let Some(holding) = holding
+                    && inbound.extras.game.is_none()
+                {
+                    holding(inbound.clone());
+                }
+                tokio::time::timeout(SENDER_LOOKUP_TIMEOUT, lookup(runtime, known, message.source_hash()))
+                    .await
+                    .unwrap_or_else(|_| Err("timed out".to_string()))
+            }
             Err(_) => Err(format!("{SENDER_LOOKUPS} other senders are being looked for already")),
         },
     };
@@ -162,26 +205,8 @@ pub(super) async fn parse_inbound(
     if verified && let Some(policy) = policy {
         policy.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take_ticket(&message);
     }
-    let (attachments, dropped_attachments) = attachments_of(&message);
-    let reply = reply_of(&message);
-    // A Codec2 voice message is kept as it came. It is decoded to play when
-    // it's saved, if it's from someone known: it grows about 400 times, which
-    // a stranger must not be able to make happen.
-    let extras = Extras::of(&message);
-    Ok(InboundMessage {
-        id: Some(message.message_id()),
-        source: message.source_hash(),
-        title: message.title_text().into_owned(),
-        content: message.content_text().into_owned(),
-        timestamp: message.timestamp(),
-        verified,
-        attachments,
-        dropped_attachments,
-        paper: false,
-        reply,
-        extras,
-        signal: None,
-    })
+    inbound.verified = verified;
+    Ok(inbound)
 }
 
 pub fn with_destination(lxmf_hash: Hash, data: Vec<u8>) -> Vec<u8> {
@@ -202,7 +227,14 @@ pub(super) async fn deliver_inbound(
     heard: Heard,
     ev: &mpsc::UnboundedSender<NetEvent>,
 ) {
-    let event = match parse_inbound(runtime, known, Some(policy), data).await {
+    // Kept while its sender's key is looked for, then confirmed (as a
+    // Message) or taken back (Forged).
+    let held = std::sync::Mutex::new(None);
+    let holding = |message: InboundMessage| {
+        *held.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = message.id.map(|id| (message.source, id));
+        let _ = ev.send(NetEvent::Checking(Box::new(message)));
+    };
+    let event = match parse_inbound_holding(runtime, known, Some(policy), data, Some(&holding)).await {
         Ok(mut message) => {
             message.signal = match heard {
                 Heard::Unknown => None,
@@ -210,7 +242,12 @@ pub(super) async fn deliver_inbound(
             };
             NetEvent::Message(Box::new(message))
         }
-        Err(e) if e.starts_with("Dropped") => NetEvent::Log(e),
+        Err(e) if e.starts_with("Dropped") => {
+            if let Some((source, id)) = held.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+                let _ = ev.send(NetEvent::Forged { source, id });
+            }
+            NetEvent::Log(e)
+        }
         Err(e) => NetEvent::Log(format!("Dropped malformed LXMF message: {e}")),
     };
     let _ = ev.send(event);
@@ -278,8 +315,13 @@ mod tests {
         assert!(check(&signed_from(node, &mallory, "hello"), Some(&alice)).is_err());
     }
 
+    /// The tests that take every lookup turn, or need one, one at a time
+    /// (the turns are shared by the whole program).
+    static LOOKUP_TURNS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn only_a_few_unknown_senders_are_looked_for_at_once() {
+        let _alone = LOOKUP_TURNS.lock().await;
         let dir = std::env::temp_dir().join(format!("rettui-sender-lookups-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -300,6 +342,41 @@ mod tests {
         let from = rns_identity::destination::Destination::hash_from_name_and_identity(super::super::LXMF_ASPECT, Some(&alice.hash));
         known.lock().unwrap().remember(from, &alice.get_public_key(), None);
         assert!(parse_inbound(&runtime, &known, None, &signed_by(&alice, &alice, "hello")).await.unwrap().verified);
+        runtime.shutdown_and_wait().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_message_is_handed_over_before_its_senders_key_is_looked_for() {
+        let _alone = LOOKUP_TURNS.lock().await;
+        let dir = std::env::temp_dir().join(format!("rettui-holding-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config"), "[reticulum]\n  enable_transport = No\n  share_instance = No\n\n[interfaces]\n").unwrap();
+        let runtime = crate::net::start_runtime(Some(&dir.display().to_string())).await.unwrap();
+        let known = crate::net::KnownIdentities::none();
+        let policy = crate::lxmf::Policy::load(&dir.join("tickets.json"), None, 1_000_000);
+        let (ev, mut events) = mpsc::unbounded_channel();
+        let alice = Identity::new();
+        // Nobody knows Alice's key: her message is handed over at once,
+        // unverified, then again once the look is over (no path here).
+        let started = std::time::Instant::now();
+        let hello = signed_by(&alice, &alice, "hello");
+        let ((), (first, handed)) = tokio::join!(deliver_inbound(&runtime, &known, &policy, &hello, Heard::Unknown, &ev), async {
+            let first = events.recv().await.unwrap();
+            (first, started.elapsed())
+        });
+        assert!(handed < SENDER_LOOKUP_TIMEOUT / 4, "handed over after {handed:?}");
+        let NetEvent::Checking(held) = first else { panic!("{first:?}") };
+        assert!(!held.verified && held.content == "hello");
+        let Ok(NetEvent::Message(last)) = events.try_recv() else { panic!() };
+        assert_eq!((last.id, last.verified), (held.id, false));
+        // Her key known: verified straight away, nothing handed over before.
+        let from = rns_identity::destination::Destination::hash_from_name_and_identity(super::super::LXMF_ASPECT, Some(&alice.hash));
+        known.lock().unwrap().remember(from, &alice.get_public_key(), None);
+        deliver_inbound(&runtime, &known, &policy, &signed_by(&alice, &alice, "again"), Heard::Unknown, &ev).await;
+        assert!(matches!(events.try_recv(), Ok(NetEvent::Message(m)) if m.verified));
+        assert!(events.try_recv().is_err());
         runtime.shutdown_and_wait().await;
         let _ = std::fs::remove_dir_all(&dir);
     }

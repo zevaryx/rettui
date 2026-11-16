@@ -46,6 +46,9 @@ pub struct Autoplay {
 
 /// Commands from someone are answered at most this often.
 pub(super) const ANSWER_EVERY: Duration = Duration::from_secs(60);
+/// The note on a message that asked for something its sender couldn't be
+/// verified for.
+const NOT_ACTED_ON: &str = "Not acted on: the sender isn't verified yet";
 /// How soon the store is saved after a message arrives or is deleted: a
 /// sender is told a message was delivered as soon as it arrives, so it
 /// mustn't wait for the timer. In a burst, at most this often, as each save
@@ -123,6 +126,10 @@ impl App {
         message.timestamp = lxmf::written_at(message.timestamp, super::now());
         let key = hex::encode(message.source);
         let id = message.id.map(hex::encode).unwrap_or_else(|| format!("in-{}", message.timestamp));
+        // Kept already while its sender's key was looked for.
+        if !message.paper && self.checking.remove(&(key.clone(), id.clone())).is_some() {
+            return self.on_checked(&key, &id, message);
+        }
         if self.store.conversations.get(&key).is_some_and(|c| c.has(&id)) {
             // A duplicate (e.g. direct and propagated copies).
             if message.paper {
@@ -147,9 +154,6 @@ impl App {
         // Without their key to check the signature, the sender is only who the message says:
         // it may speak in their conversation, but not answer for, move or change them.
         let acts = paper || message.verified;
-        if let Some(appearance) = extras.appearance.as_ref().filter(|_| acts) {
-            self.keep_appearance(&key, appearance, message.timestamp);
-        }
         let location = extras.telemetry.as_ref().and_then(|t| t.location);
         let sensors = extras.telemetry.as_ref().map(|t| t.sensors.clone()).unwrap_or_default();
         let interfaces = extras.telemetry.as_ref().map(|t| t.interfaces.clone()).unwrap_or_default();
@@ -165,46 +169,7 @@ impl App {
             && sensors.is_empty()
             && extras.stream.is_empty();
         let mut notes = extras.notes(bare);
-        // Sideband's commands: answered if set to, and said so either way.
-        let answers: Vec<String> = extras.commands.iter().filter_map(|c| c.answer(message.signal.as_ref())).collect();
-        let wants_action = !answers.is_empty()
-            || !extras.stream.is_empty()
-            || extras.appearance.is_some()
-            || extras
-                .commands
-                .iter()
-                .any(|c| matches!(c, lxmf::fields::Command::CollectorRequest(_) | lxmf::fields::Command::TelemetryRequest));
-        if wants_action && !acts {
-            notes.push("Not acted on: the sender isn't verified yet".into());
-        }
-        if !answers.is_empty() && acts && !paper {
-            notes.push(match self.answer_commands(&key, answers) {
-                Ok(()) => "Answered automatically (Answer commands)".into(),
-                Err(why) => why,
-            });
-        }
-        // A collector request is answered as one if this is a collector, and
-        // as a location request if not (as Sideband does).
-        let collector_request = extras.commands.iter().find_map(|c| match c {
-            lxmf::fields::Command::CollectorRequest(since) => Some(*since),
-            _ => None,
-        });
-        let serving = self.settings.collector_serve != "off";
-        if let (Some(since), true, true, false) = (collector_request, serving, acts, paper) {
-            notes.push(match self.answer_collector_request(&key, since) {
-                Ok(note) => format!("Answered: {note}"),
-                Err(why) => why,
-            });
-        } else if (collector_request.is_some() || extras.commands.contains(&lxmf::fields::Command::TelemetryRequest)) && acts && !paper {
-            notes.push(match self.answer_location_request(&key) {
-                Ok(()) => "Answered with this station's location (Location requests)".into(),
-                Err(why) => why,
-            });
-        }
-        // Others' locations, passed on by a collector.
-        if !extras.stream.is_empty() && acts && !paper {
-            notes.push(self.take_stream(&key, &extras.stream));
-        }
+        notes.extend(self.act_on(&key, &message, acts));
         // Their icon alone isn't a message either (it's kept, above).
         if bare && notes.is_empty() && extras.reaction.is_none() && extras.appearance.is_some() && extras.telemetry.is_none() {
             return;
@@ -369,6 +334,149 @@ impl App {
             let target = Target::Conversation { key };
             self.push_notification(is_active, Notification::new(name, preview, target));
         }
+    }
+
+    /// A message whose sender's key is being looked for (up to 10 s): kept
+    /// now, unverified (so not acted on), as the sender has been told it was
+    /// delivered. The same message follows once the look is done, for
+    /// [`App::on_checked`], or [`App::on_forged`] takes it back.
+    pub(crate) fn on_checking(&mut self, mut message: crate::lxmf::InboundMessage) {
+        message.timestamp = lxmf::written_at(message.timestamp, super::now());
+        message.verified = false;
+        let key = hex::encode(message.source);
+        let id = message.id.map(hex::encode).unwrap_or_else(|| format!("in-{}", message.timestamp));
+        // Here already: the copy that follows is a duplicate, as ever.
+        if message.paper || self.store.conversations.get(&key).is_some_and(|c| c.has(&id)) {
+            return;
+        }
+        let new = !self.store.conversations.contains_key(&key);
+        self.on_message(message);
+        self.checking.insert((key, id), new);
+    }
+
+    /// The message kept by [`App::on_checking`], its sender looked for:
+    /// verified, it's acted on now (as it would have been, had it come
+    /// verified) and marked so; not, it stays as it is.
+    fn on_checked(&mut self, key: &str, id: &str, message: crate::lxmf::InboundMessage) {
+        if !message.verified
+            || self.store.contact(key).trust == Trust::Blocked
+            || (self.settings.unknown_senders == "ignore" && !self.is_known(key))
+        {
+            return;
+        }
+        let notes = self.act_on(key, &message, true);
+        let mut at = message.timestamp;
+        if let Some(conversation) = self.store.conversations.get_mut(key) {
+            if let Some(kept) = conversation.messages.iter_mut().find(|m| m.id == id) {
+                kept.state = MessageState::Received { verified: true };
+                kept.notes.retain(|note| note != NOT_ACTED_ON);
+                kept.notes.extend(notes);
+                kept.signal = kept.signal.or(message.signal);
+                at = kept.timestamp;
+            }
+            let reactions = conversation.messages.iter_mut().flat_map(|m| m.reactions.iter_mut());
+            for reaction in reactions.chain(conversation.stray_reactions.iter_mut().map(|s| &mut s.reaction)).filter(|r| r.id == id) {
+                reaction.state = MessageState::Received { verified: true };
+            }
+        }
+        if let Some(location) = message.extras.telemetry.as_ref().and_then(|t| t.location) {
+            self.keep_trail(key, &location, at);
+            self.export_telemetry(key, &location, at);
+        }
+        self.store_dirty = true;
+        self.save_soon();
+    }
+
+    /// The message kept by [`App::on_checking`] wasn't signed by its
+    /// sender's key: taken out again, as if it had never come (with its
+    /// files, and its conversation if it made it).
+    pub(crate) fn on_forged(&mut self, source: crate::net::Hash, id: [u8; 32]) {
+        let (key, id) = (hex::encode(source), hex::encode(id));
+        let Some(new) = self.checking.remove(&(key.clone(), id.clone())) else { return };
+        let owned = self.owned_folders();
+        if let Some(conversation) = self.store.conversations.get_mut(&key) {
+            if let Some(at) = conversation.messages.iter().position(|m| m.id == id) {
+                let message = conversation.messages.remove(at);
+                for file in message.attachments.iter().flat_map(StoredAttachment::files) {
+                    crate::store::remove_owned(&file, &owned);
+                }
+                // It counted as unread, unless it was read or a quiet one.
+                let after = conversation.messages.len() - at;
+                if conversation.unread > after && !message.is_quiet() {
+                    conversation.unread -= 1;
+                }
+                conversation.unread = conversation.unread.min(conversation.messages.len());
+            }
+            for message in &mut conversation.messages {
+                message.reactions.retain(|r| r.id != id);
+            }
+            conversation.stray_reactions.retain(|s| s.reaction.id != id);
+            let empty = conversation.messages.is_empty() && conversation.stray_reactions.is_empty() && conversation.game_moves.is_empty();
+            if new && empty {
+                self.remove_conversation(&key);
+                if self.active_conversation.as_deref() == Some(key.as_str()) {
+                    self.active_conversation = None;
+                }
+            }
+        }
+        // Its notification said what it said.
+        self.read(Target::Conversation { key: key.clone() });
+        self.log(format!("Took back the message from {}: it wasn't signed by their key", self.store.display_name(&key)));
+        self.store_dirty = true;
+        self.save_soon();
+    }
+
+    /// What a message asks of us, done if it's from who it says (`acts`):
+    /// their icon kept, Sideband's commands answered, collector and location
+    /// requests answered, a collector's locations taken. What was done, or
+    /// why not, to note on the message.
+    fn act_on(&mut self, key: &str, message: &crate::lxmf::InboundMessage, acts: bool) -> Vec<String> {
+        let (extras, paper) = (&message.extras, message.paper);
+        let mut notes = Vec::new();
+        if let Some(appearance) = extras.appearance.as_ref().filter(|_| acts) {
+            self.keep_appearance(key, appearance, message.timestamp);
+        }
+        // Sideband's commands: answered if set to, and said so either way.
+        let answers: Vec<String> = extras.commands.iter().filter_map(|c| c.answer(message.signal.as_ref())).collect();
+        let wants_action = !answers.is_empty()
+            || !extras.stream.is_empty()
+            || extras.appearance.is_some()
+            || extras
+                .commands
+                .iter()
+                .any(|c| matches!(c, lxmf::fields::Command::CollectorRequest(_) | lxmf::fields::Command::TelemetryRequest));
+        if wants_action && !acts {
+            notes.push(NOT_ACTED_ON.into());
+        }
+        if !answers.is_empty() && acts && !paper {
+            notes.push(match self.answer_commands(key, answers) {
+                Ok(()) => "Answered automatically (Answer commands)".into(),
+                Err(why) => why,
+            });
+        }
+        // A collector request is answered as one if this is a collector, and
+        // as a location request if not (as Sideband does).
+        let collector_request = extras.commands.iter().find_map(|c| match c {
+            lxmf::fields::Command::CollectorRequest(since) => Some(*since),
+            _ => None,
+        });
+        let serving = self.settings.collector_serve != "off";
+        if let (Some(since), true, true, false) = (collector_request, serving, acts, paper) {
+            notes.push(match self.answer_collector_request(key, since) {
+                Ok(note) => format!("Answered: {note}"),
+                Err(why) => why,
+            });
+        } else if (collector_request.is_some() || extras.commands.contains(&lxmf::fields::Command::TelemetryRequest)) && acts && !paper {
+            notes.push(match self.answer_location_request(key) {
+                Ok(()) => "Answered with this station's location (Location requests)".into(),
+                Err(why) => why,
+            });
+        }
+        // Others' locations, passed on by a collector.
+        if !extras.stream.is_empty() && acts && !paper {
+            notes.push(self.take_stream(key, &extras.stream));
+        }
+        notes
     }
 
     /// A reaction from them: on the message it's for, or kept until that
@@ -2990,6 +3098,89 @@ mod tests {
         assert!(app.locations().iter().any(|p| p.key.as_deref() == Some(key().as_str())));
         assert!(app.found_interfaces().iter().any(|f| f.from.is_some()));
         assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(c, NetCommand::Mqtt { .. })));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_message_is_kept_while_its_senders_key_is_looked_for_and_acted_on_once_verified() {
+        use crate::lxmf::Extras;
+        use crate::lxmf::fields::{Command, Telemetry};
+        let dir = temp_dir("checking");
+        let settings = Settings { messages_kept: 1000, telemetry_mqtt: Some("mqtt://127.0.0.1:1883".into()), ..Settings::default() };
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, settings, Store::default());
+        app.update_settings(&[("answer_commands", "trusted")]).unwrap();
+        app.set_trust(&key(), Trust::Trusted).unwrap();
+        // As the web UI has it: nothing on screen.
+        (app.tab, app.focused) = (Tab::Status, false);
+        let telemetry = Telemetry { location: Some(crate::lxmf::Location::at(51.5, -0.12)), ..Telemetry::default() };
+        let mut message =
+            from_them(1, "where are you?", Extras { commands: vec![Command::Ping], telemetry: Some(telemetry), ..Extras::default() });
+        message.timestamp = crate::app::now() - 60.0;
+        let sent = |net: &mut tokio::sync::mpsc::UnboundedReceiver<NetCommand>| {
+            std::iter::from_fn(|| net.try_recv().ok())
+                .filter(|c| matches!(c, NetCommand::SendMessage { .. } | NetCommand::Mqtt { .. }))
+                .count()
+        };
+        let _ = sent(&mut net);
+        // Kept at once (and saved soon), unverified, and nothing done for it.
+        app.on_checking(message.clone());
+        let kept = |app: &App| app.store.conversations[&key()].messages.iter().find(|m| m.incoming).cloned().unwrap();
+        assert_eq!(kept(&app).state, MessageState::Received { verified: false });
+        assert!(kept(&app).notes.iter().any(|n| n == NOT_ACTED_ON));
+        assert!(app.save_due.is_some());
+        assert_eq!(sent(&mut net), 0, "no answer, no location passed on");
+        assert!(app.trail(&key()).is_empty());
+        assert_eq!(app.take_notifications().len(), 1);
+        // Verified: the same message, now acted on, and not shown twice.
+        app.on_message(message.clone());
+        let messages = &app.store.conversations[&key()].messages;
+        assert_eq!(messages.iter().filter(|m| m.incoming).count(), 1);
+        assert_eq!(kept(&app).state, MessageState::Received { verified: true });
+        assert!(!kept(&app).notes.iter().any(|n| n == NOT_ACTED_ON));
+        assert_eq!(sent(&mut net), 2, "the ping answered, the location passed on");
+        assert_eq!(app.trail(&key()).len(), 1);
+        assert!(app.take_notifications().is_empty());
+        assert_eq!(app.store.conversations[&key()].unread, 1);
+        // Another copy later is a duplicate, as ever.
+        app.on_message(message.clone());
+        assert_eq!(sent(&mut net), 0);
+
+        // Not verified after the look: it stays as it was.
+        let mut other = from_them(2, "still unknown", Extras { commands: vec![Command::Ping], ..Extras::default() });
+        other.verified = false;
+        app.on_checking(other.clone());
+        app.on_message(other);
+        let still = app.store.conversations[&key()].messages.iter().find(|m| m.id == hex::encode([2u8; 32])).unwrap();
+        assert_eq!(still.state, MessageState::Received { verified: false });
+        assert!(still.notes.iter().any(|n| n == NOT_ACTED_ON));
+        assert_eq!(sent(&mut net), 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_message_kept_while_checking_that_turns_out_forged_is_taken_back() {
+        use crate::lxmf::Extras;
+        let dir = temp_dir("forged");
+        let mut app = app(&dir, Store::default(), 1000, 0);
+        (app.tab, app.focused) = (Tab::Status, false);
+        // Someone new: the conversation it made goes with it.
+        app.on_checking(from_them(1, "send me your key", Extras::default()));
+        assert!(app.store.conversations.contains_key(&key()));
+        let _ = app.take_reads();
+        app.on_forged([0xab; 16], [1; 32]);
+        assert!(!app.store.conversations.contains_key(&key()));
+        assert!(app.take_reads().contains(&format!("lxmf:{}", key())), "its notification is taken back");
+        // Where there was a conversation, only the message goes, and its unread count.
+        app.on_message(from_them(2, "hello", Extras::default()));
+        app.on_checking(from_them(3, "it's me, honest", Extras::default()));
+        assert_eq!(app.store.conversations[&key()].unread, 2);
+        app.on_forged([0xab; 16], [3; 32]);
+        let conversation = &app.store.conversations[&key()];
+        assert_eq!(conversation.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), ["hello"]);
+        assert_eq!(conversation.unread, 1);
+        // Once settled, a later "forged" for it does nothing: what's stored stays.
+        app.on_forged([0xab; 16], [2; 32]);
+        assert_eq!(app.store.conversations[&key()].messages.len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

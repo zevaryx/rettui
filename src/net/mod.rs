@@ -412,6 +412,16 @@ pub enum NetEvent {
     /// Any announce heard, of any kind, for the announce viewer.
     Heard(heard::Heard),
     Message(Box<InboundMessage>),
+    /// A message whose sender's key is being looked for, to keep meanwhile,
+    /// unverified: a [`NetEvent::Message`] with the same id follows once
+    /// that's done (verified or not), or [`NetEvent::Forged`].
+    Checking(Box<InboundMessage>),
+    /// The message kept with [`NetEvent::Checking`] wasn't signed by the
+    /// key found for its sender: someone else wrote it.
+    Forged {
+        source: Hash,
+        id: [u8; 32],
+    },
     Delivery {
         id: u64,
         result: Result<lxmf::Sent, String>,
