@@ -49,6 +49,7 @@ pub mod reach;
 pub mod recorder;
 pub mod repo_files;
 pub mod repos;
+mod retain;
 pub mod reticulum;
 pub mod rncp;
 pub mod rncp_in;
@@ -638,6 +639,8 @@ pub struct App {
     policy_sent: Option<(Vec<Hash>, Vec<Hash>)>,
     /// The contacts whose keys the network actor was last told to keep.
     keys_kept_sent: Option<Vec<Hash>>,
+    /// The destinations the network actor was last told to retain.
+    retained_sent: Option<Vec<Hash>>,
     /// A message (its index) to bring into view at the next draw.
     pub scroll_to: Option<usize>,
     /// The message search (`/` in Messages), while open.
@@ -887,6 +890,7 @@ impl App {
             auto_error: None,
             policy_sent: None,
             keys_kept_sent: None,
+            retained_sent: None,
             scroll_to: None,
             message_search: None,
             channel_search: None,
@@ -1248,6 +1252,7 @@ impl App {
                 self.interfaces_off.clear();
                 // A new network actor knows no contacts yet.
                 self.update_policy(true);
+                self.update_retained(true);
                 if self.settings.auto_propagation_node {
                     self.apply_auto_propagation();
                 }
@@ -1794,6 +1799,7 @@ impl App {
         self.channels_tick();
         self.watch_connection();
         self.refresh_partials();
+        self.update_retained(false);
         if self.peers_pruned.elapsed() >= PRUNE_PEERS_EVERY {
             self.prune_peers();
         }
