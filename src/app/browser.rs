@@ -866,10 +866,27 @@ impl App {
     fn open_in_tab(&mut self, location: Location, new: bool) {
         let tab = &self.browser.tab;
         if new && (tab.location.is_some() || tab.loading.is_some()) {
+            // A node's home page already open in a tab is shown again.
+            if let Some(index) = self.tab_on_home(&location) {
+                self.switch_browser_tab(index);
+                return;
+            }
             self.new_browser_tab(Some(location));
         } else {
             self.navigate(location);
         }
+    }
+
+    /// The tab (in tab order) on `location` when that is a node's home page,
+    /// what it is loading counting as where it is.
+    fn tab_on_home(&self, location: &Location) -> Option<usize> {
+        if location.path != crate::nomad::paths::INDEX_PATH || !location.fields.is_empty() {
+            return None;
+        }
+        self.browser_tabs().iter().position(|tab| {
+            let at = tab.loading.as_ref().map(|pending| &pending.location).or(tab.location.as_ref());
+            at.is_some_and(|at| at.node == location.node && at.path == location.path && at.fields.is_empty())
+        })
     }
 
     /// The saved page or node selected in the list.
@@ -1551,6 +1568,35 @@ mod tests {
     }
 
     #[test]
+    fn a_node_open_on_its_home_page_is_shown_not_opened_again() {
+        let dir = std::env::temp_dir().join(format!("rettui-browser-home-tab-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = crate::app::test_app(&dir, Settings::default(), Store::default());
+        app.tab = Tab::Browser;
+        let at = |path: &str| Location { node: [0xab; 16], path: path.into(), fields: BTreeMap::new() };
+        app.store.saved.push(Bookmark { name: "Index".into(), url: at("/page/index.mu").url() });
+        app.browser.pane = BrowserPane::Saved;
+        app.browser.saved_list.select(Some(0));
+        let pick = |app: &mut App| {
+            app.browser.focus = BrowserFocus::Pane;
+            press(app, KeyCode::Enter);
+        };
+        // The first pick opens the home page in the (empty) tab shown.
+        pick(&mut app);
+        assert_eq!((app.browser_tab_count(), app.browser.current), (1, 0));
+        // A second tab elsewhere; picking the node again goes back to its tab.
+        app.new_browser_tab(Some(at("/page/about.mu")));
+        assert_eq!((app.browser_tab_count(), app.browser.current), (2, 1));
+        pick(&mut app);
+        assert_eq!((app.browser_tab_count(), app.browser.current), (2, 0));
+        // Once that tab has gone to another page, a pick opens a new tab.
+        app.navigate(at("/page/about.mu"));
+        pick(&mut app);
+        assert_eq!((app.browser_tab_count(), app.browser.current), (3, 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn tabs_keep_their_pages_and_get_what_they_asked_for() {
         let dir = std::env::temp_dir().join(format!("rettui-browser-tabs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1609,7 +1655,7 @@ mod tests {
         app.browser.tab.selected = None;
         press(&mut app, KeyCode::Char('T'));
         assert_eq!((app.browser_tab_count(), app.browser.current), (3, 2));
-        app.store.saved.push(Bookmark { name: "Index".into(), url: at("/page/index.mu").url() });
+        app.store.saved.push(Bookmark { name: "Other".into(), url: at("/page/other.mu").url() });
         app.browser.focus = BrowserFocus::Pane;
         app.browser.pane = BrowserPane::Saved;
         app.browser.saved_list.select(Some(0));
@@ -1634,7 +1680,7 @@ mod tests {
         assert_eq!(app.browser_tab_count(), 6);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.browser_tab_count(), 6);
-        assert_eq!(app.browser.tab.location, Some(at("/page/index.mu")));
+        assert_eq!(app.browser.tab.loading.as_ref().map(|p| p.location.clone()), Some(at("/page/other.mu")));
         for _ in 0..2 {
             app.close_browser_tab();
         }

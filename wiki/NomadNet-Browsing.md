@@ -71,7 +71,8 @@ network.
 - **History:** `b` (or a right-click) goes back.
 - **Tabs:** several pages open at once, each with its own history. A saved
   page or node picked from the list (a click or `Enter`) opens in a new tab,
-  unless the tab shown is empty, which takes it; `T` in the list opens it in
+  unless the tab shown is empty, which takes it, or a tab is already on that
+  node's home page, which is shown again; `T` in the list opens it in
   the tab shown instead. With the setting **Open pages in new tabs**
   (Settings > Browsing) off, it's the other way round. On a page, `T` opens
   the selected link in a new tab (with nothing selected, the page shown

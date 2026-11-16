@@ -6845,8 +6845,23 @@ app.views.browser = {
     const flip = !!e && (e.ctrlKey || e.metaKey || e.button === 1);
     if (flip) e.preventDefault();
     const empty = !this.page && !this.loading;
-    if (newTabs() !== flip && !empty) this.newTab(url);
-    else this.go(url);
+    if (newTabs() !== flip && !empty) {
+      // A node's home page already open in a tab is shown, not opened again.
+      const open = this.tabOnHome(url);
+      if (open) this.showTab(open);
+      else this.newTab(url);
+    } else this.go(url);
+  },
+
+  // The tab on `url` if it is a node's home page (or the bare node), what
+  // it is loading counting as where it is.
+  tabOnHome(url) {
+    const home = /^[0-9a-f]{32}$/i.test(url) ? `${url}:/page/index.mu` : url;
+    if (!/^[0-9a-f]{32}:\/page\/index\.mu$/i.test(home)) return null;
+    return this.tabs.find((tab) => {
+      const [page, loading] = tab === this.tab ? [this.page, this.loading] : [tab.page, tab.loading];
+      return (loading ? loading.url : page?.url)?.toLowerCase() === home.toLowerCase();
+    }) || null;
   },
 
   // A page that came for a tab out of sight.
