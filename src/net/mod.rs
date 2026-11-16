@@ -41,7 +41,7 @@ use crate::rrc::session::{self as rrc_session, RrcEvent, SessionCommand};
 
 pub use remote::{
     AnnounceRate, Identified, Known, KnownIdentities, PathInfo, Ping, Probe, Progress, RncpState, connect, drop_path, ensure_path,
-    find_path, link_options, lookup, paths, probe, trace_path,
+    find_path, link_options, lookup, lookup_heard, paths, probe, trace_path,
 };
 
 const STATS_INTERVAL: Duration = Duration::from_secs(5);

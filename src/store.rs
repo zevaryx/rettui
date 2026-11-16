@@ -109,6 +109,9 @@ pub struct StrayReaction {
 
 /// The most reactions kept waiting for their messages, a conversation.
 const STRAY_REACTIONS: usize = 100;
+/// The most reactions of theirs kept on one message: anyone can send as many
+/// as they like, each a different emoji, and each is shown and saved.
+pub const MAX_REACTIONS: usize = 32;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Message {
@@ -317,6 +320,10 @@ impl Conversation {
         match self.messages.iter_mut().find(|m| m.lxmf_hash() == Some(to)) {
             Some(message) => {
                 if message.reactions.iter().any(|r| r.incoming == reaction.incoming && r.emoji == reaction.emoji) {
+                    return false;
+                }
+                if reaction.incoming && message.reactions.iter().filter(|r| r.incoming).count() >= MAX_REACTIONS {
+                    tracing::debug!("a reaction to {to} wasn't kept: it has {MAX_REACTIONS} already");
                     return false;
                 }
                 message.reactions.push(reaction);
@@ -1608,6 +1615,27 @@ mod tests {
         assert_eq!(ids(&conversation.game_moves), ["d", "e"]);
         assert!(conversation.has("d") && conversation.find_mut("e").is_some());
         assert_eq!(conversation.last_move("s1", true).map(|m| m.id.as_str()), Some("d"));
+    }
+
+    #[test]
+    fn a_message_keeps_a_limited_number_of_their_reactions() {
+        let mut conversation = Conversation {
+            messages: vec![Message { id: "local-1".into(), hash: Some("aa".repeat(32)), ..Message::default() }],
+            ..Conversation::default()
+        };
+        let reaction = |n: usize, incoming: bool| Reaction {
+            emoji: format!("{n}"),
+            incoming,
+            timestamp: 1.0,
+            id: format!("r{n}-{incoming}"),
+            state: MessageState::Received { verified: false },
+        };
+        let to = "aa".repeat(32);
+        let kept = (0..MAX_REACTIONS + 10).filter(|&n| conversation.add_reaction(&to, reaction(n, true))).count();
+        assert_eq!(kept, MAX_REACTIONS);
+        // Yours still go on it.
+        assert!(conversation.add_reaction(&to, reaction(0, false)));
+        assert_eq!(conversation.messages[0].reactions.len(), MAX_REACTIONS + 1);
     }
 
     #[test]
