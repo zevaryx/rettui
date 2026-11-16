@@ -608,16 +608,38 @@ impl Settings {
         if !aside || !bad_contents {
             return Err(error);
         }
-        tracing::warn!("settings.json couldn't be read, starting with the defaults: {error:#}");
-        let kept = path.with_file_name(format!("settings-unreadable-{}.json", chrono::Utc::now().timestamp()));
+        tracing::warn!("settings.json couldn't be read: {error:#}");
+        // What can be read of it, before it goes aside.
+        let salvaged = read_limited_text(path, MAX_SALVAGE_BYTES).ok().as_deref().and_then(salvage_settings);
+        let kept = path.with_file_name(format!("{UNREADABLE_PREFIX}{}.json", chrono::Utc::now().timestamp()));
         let moved = replace(path, &kept);
-        let defaults = Self::default();
-        defaults.save(path)?;
+        let (settings, started) = match salvaged {
+            Some(mut found) => {
+                // Settings only a terminal may change (see [`WebAccess`]) can't have been set in the app.
+                found.dropped.extend(withhold_web_barred(&mut found.value, None).into_iter().map(str::to_string));
+                match write_private(path, found.value.to_string().as_bytes()).and_then(|()| Self::load(path)) {
+                    Ok(settings) => (settings, found.said()),
+                    Err(_) => (Self::default(), "its default settings".to_string()),
+                }
+            }
+            None => (Self::default(), "its default settings".to_string()),
+        };
+        if !path.exists() {
+            settings.save(path)?;
+        }
         let why = match moved {
             Ok(()) => format!("The file is kept as {}", kept.display()),
             Err(e) => format!("It couldn't be moved aside ({e}), and is written over"),
         };
-        Ok((defaults, Some(format!("Your settings couldn't be read ({error:#}), so rettui started with its default settings. {why}"))))
+        Ok((settings, Some(format!("Your settings couldn't be read ({error:#}), so rettui started with {started}. {why}"))))
+    }
+
+    /// The settings file rettui last set aside in `dir` because it couldn't
+    /// read it (see [`Settings::load_or_aside`]), if there is one.
+    pub fn newest_unreadable(dir: &Path) -> Option<PathBuf> {
+        let named = |p: &PathBuf| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(UNREADABLE_PREFIX));
+        // The time is in the name, and the same number of digits for a long time yet.
+        fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).filter(named).max()
     }
 
     /// Where this station is, if that's set.
@@ -703,6 +725,80 @@ pub fn note_at_start(note: String) {
 /// What was said with [`note_at_start`], once.
 pub fn take_start_notes() -> Vec<String> {
     std::mem::take(&mut *START_NOTES.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// What a settings file set aside is called, then the time.
+pub const UNREADABLE_PREFIX: &str = "settings-unreadable-";
+
+/// The most of a settings file looked through for what can be read (a real
+/// one is about 3 KB), and the most places tried to cut it.
+const MAX_SALVAGE_BYTES: u64 = 64 * 1024;
+const MAX_SALVAGE_CUTS: usize = 2000;
+
+/// What could be read of a settings file that doesn't read as a whole.
+struct Salvaged {
+    value: serde_json::Value,
+    /// Settings in it that are the wrong kind of value (left out, so at their defaults).
+    dropped: Vec<String>,
+    /// Whether the file ended early (or had something after it that was
+    /// left out): what it held after that is lost.
+    cut: bool,
+}
+
+impl Salvaged {
+    /// "the 70 settings that could be read" and what was lost, for the note.
+    fn said(&self) -> String {
+        let count = self.value.as_object().map_or(0, |o| o.len());
+        let mut said = format!("the {count} settings that could be read");
+        if self.cut {
+            said.push_str(", the file being cut short (what was after is at its default)");
+        }
+        if !self.dropped.is_empty() {
+            let names: Vec<&str> = self.dropped.iter().take(10).map(String::as_str).collect();
+            said.push_str(&format!(" and these, which weren't right, at their defaults: {}", names.join(", ")));
+            if self.dropped.len() > names.len() {
+                said.push_str(&format!(" and {} more", self.dropped.len() - names.len()));
+            }
+        }
+        said
+    }
+}
+
+/// The settings that can be read in `text`, a settings file that doesn't
+/// read as a whole: the object in it as far as it is whole (a file cut short
+/// is cut back to its last whole setting; something after the object is
+/// left out), without a setting whose value is the wrong kind for it.
+fn salvage_settings(text: &str) -> Option<Salvaged> {
+    use serde_json::Value;
+    // The first JSON value in `text`, if it is an object, and where it ends.
+    let first = |text: &str| {
+        let mut stream = serde_json::Deserializer::from_str(text).into_iter::<Value>();
+        match stream.next()? {
+            Ok(value @ Value::Object(_)) => Some((value, stream.byte_offset())),
+            _ => None,
+        }
+    };
+    let (mut value, cut) = match first(text) {
+        Some((value, end)) => (value, !text[end..].trim().is_empty()),
+        // Cut short: back to a comma that leaves a whole object when closed.
+        None => {
+            let mut commas = text.char_indices().rev().filter(|(_, c)| *c == ',').take(MAX_SALVAGE_CUTS);
+            (commas.find_map(|(at, _)| first(&format!("{}}}", &text[..at])).map(|(value, _)| value))?, true)
+        }
+    };
+    let object = value.as_object_mut()?;
+    let mut dropped = Vec::new();
+    for key in object.keys().cloned().collect::<Vec<_>>() {
+        let alone = Value::Object([(key.clone(), object[&key].clone())].into_iter().collect());
+        if serde_json::from_value::<Settings>(alone).is_err() {
+            object.remove(&key);
+            dropped.push(key);
+        }
+    }
+    if object.is_empty() || serde_json::from_value::<Settings>(value.clone()).is_err() {
+        return None;
+    }
+    Some(Salvaged { value, dropped, cut })
 }
 
 /// The most `settings.json` may be when read: the settings are a few KB.
@@ -2549,6 +2645,51 @@ mod tests {
         fs::write(&path, [0xff, 0xfe]).unwrap();
         assert_eq!(read_limited_text(&path, 1000).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
         assert_eq!(read_limited(&dir.join("none"), 1000).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn what_can_be_read_of_a_damaged_settings_file_is_kept_in_the_app() {
+        let dir = std::env::temp_dir().join(format!("rettui-settings-salvage-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let read = |text: &str| {
+            fs::write(&path, text).unwrap();
+            let (settings, note) = Settings::load_or_aside(&path, true).unwrap();
+            let kept = Settings::newest_unreadable(&dir).unwrap();
+            assert_eq!(fs::read_to_string(&kept).unwrap(), text, "the file is kept as it was");
+            fs::remove_file(kept).unwrap();
+            assert!(Settings::load(&path).is_ok(), "the next start reads");
+            (settings, note.unwrap())
+        };
+        // Cut short, as by a crash while writing: what was whole before the cut is kept.
+        let whole =
+            serde_json::to_string_pretty(&Settings { display_name: "Zed".into(), messages_kept: 500, ..Settings::default() }).unwrap();
+        let (settings, note) = read(&whole[..whole.len() * 6 / 10]);
+        assert_eq!((settings.display_name.as_str(), settings.messages_kept), ("Zed", 500));
+        assert!(note.contains("settings that could be read") && note.contains("cut short"), "{note}");
+        // Something after it: left out.
+        let (settings, note) = read(&format!("{whole}\n\u{0}\u{0}garbage"));
+        assert_eq!(settings.display_name, "Zed");
+        assert!(note.contains("cut short"), "{note}");
+        // One setting of the wrong kind: that one is left at its default, and named.
+        let (settings, note) = read(r#"{"display_name":"Zed","message_storage_mb":"lots","messages_kept":500}"#);
+        assert_eq!((settings.display_name.as_str(), settings.messages_kept, settings.message_storage_mb), ("Zed", 500, 0));
+        assert!(note.contains("message_storage_mb") && !note.contains("cut short"), "{note}");
+        // Settings only a terminal may change aren't taken from it.
+        let (settings, note) = read(r#"{"display_name":"Zed","voice_recorder":"sh -c id","rncp_listen":true,"#);
+        assert_eq!(settings.display_name, "Zed");
+        assert!(settings.voice_recorder.is_none() && !settings.rncp_listen, "{note}");
+        assert!(note.contains("Voice recorder") && note.contains("Receive files with rncp"), "{note}");
+        // Nothing whole in it: the defaults, as before.
+        for text in ["{not json", "", "[", "{\"display_name\": \"Zed"] {
+            let (settings, note) = read(text);
+            assert_eq!(settings.display_name, Settings::default().display_name, "{text}");
+            assert!(note.contains("its default settings"), "{note}");
+        }
+        // Nothing set aside means nothing to find.
+        assert!(Settings::newest_unreadable(&dir).is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 }

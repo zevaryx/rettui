@@ -540,6 +540,38 @@ pub fn import_identity(paths: &Paths, file: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Save a copy of the settings (or, with `unreadable`, the file rettui last
+/// set aside because it couldn't read it) to the new file `file`.
+pub fn export_settings(paths: &Paths, file: &Path, unreadable: bool) -> Result<()> {
+    let from = if unreadable {
+        Settings::newest_unreadable(&paths.base).ok_or_else(|| anyhow!("rettui hasn't set any settings file aside"))?
+    } else {
+        paths.settings.clone()
+    };
+    if file.exists() {
+        bail!("{} exists already: pick another name", file.display());
+    }
+    let bytes =
+        crate::config::read_limited(&from, crate::config::MAX_SETTINGS_BYTES).map_err(|e| anyhow!("Couldn't read the settings: {e}"))?;
+    crate::config::write_private(file, &bytes)?;
+    println!(
+        "Saved {} to {}. It can hold a password (an MQTT server's) and your location: keep it private.",
+        from.display(),
+        file.display()
+    );
+    Ok(())
+}
+
+/// Use the settings in `file` (see [`crate::backup::import_settings`]).
+pub fn import_settings(paths: &Paths, file: &Path, keep_terminal_settings: bool) -> Result<()> {
+    if keep_terminal_settings && cfg!(target_os = "android") {
+        bail!("--keep-terminal-settings isn't available in the Android app: set those settings by hand");
+    }
+    let done = crate::backup::import_settings(file, &paths.base, keep_terminal_settings).map_err(|e| anyhow!(e))?;
+    println!("{done}.");
+    Ok(())
+}
+
 /// Restore the backup `file` into the data directory; with
 /// `keep_terminal_settings`, the settings that decide which programs run are
 /// restored as the backup has them (only the command line asks for this: the
@@ -613,5 +645,31 @@ mod tests {
         // Tests don't print to a terminal: nothing, and no failure.
         print_qr("lxma://abc");
         print_qr(&"x".repeat(5000));
+    }
+
+    #[test]
+    fn settings_are_saved_to_a_new_file_and_brought_back() {
+        let dir = std::env::temp_dir().join(format!("rettui-cli-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = Paths::new(Some(dir.clone())).unwrap();
+        let out = dir.join("out.json");
+        // Nothing set aside yet.
+        assert!(export_settings(&paths, &out, true).unwrap_err().to_string().contains("hasn't set any"));
+        std::fs::write(&paths.settings, b"{\"display_name\":\"Zed\",\"messages_kept\":").unwrap();
+        let (_, note) = Settings::load_or_aside(&paths.settings, true).unwrap();
+        assert!(note.is_some());
+        export_settings(&paths, &out, true).unwrap();
+        assert!(std::fs::read_to_string(&out).unwrap().contains("messages_kept"), "the file as it was");
+        assert!(export_settings(&paths, &out, true).unwrap_err().to_string().contains("exists already"));
+        // The settings in use, to another file; and a good file brought in.
+        let copy = dir.join("copy.json");
+        export_settings(&paths, &copy, false).unwrap();
+        std::fs::write(&out, br#"{"display_name":"Amy"}"#).unwrap();
+        import_settings(&paths, &out, false).unwrap();
+        assert_eq!(Settings::load(&paths.settings).unwrap().display_name, "Amy");
+        std::fs::write(&out, b"{").unwrap();
+        assert!(import_settings(&paths, &out, false).is_err());
+        assert_eq!(Settings::load(&paths.settings).unwrap().display_name, "Amy", "unchanged");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

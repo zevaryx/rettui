@@ -376,6 +376,44 @@ fn vet_settings(path: &Path, current: Option<&serde_json::Value>, keep_terminal_
     ))
 }
 
+/// Use the settings in `file`, as the settings of the data directory `base`,
+/// checked as a backup's are (see [`vet_settings`]): a file that is too big or
+/// doesn't read as settings is refused with the reason and nothing changes.
+/// The settings it replaces are kept as `settings-before-import.json`. What
+/// was done.
+pub fn import_settings(file: &Path, base: &Path, keep_terminal_settings: bool) -> Result<String, String> {
+    let refused = |why: &dyn std::fmt::Display| format!("{} isn't settings rettui can read: {why}", file.display());
+    let bytes = crate::config::read_limited(file, crate::config::MAX_SETTINGS_BYTES).map_err(|e| refused(&e))?;
+    std::fs::create_dir_all(base).map_err(|e| format!("Couldn't make {}: {e}", base.display()))?;
+    let (target, stage) = (base.join(SETTINGS), base.join(format!("{SETTINGS}.importing")));
+    crate::config::write_private(&stage, &bytes).map_err(|e| format!("Couldn't write {}: {e}", stage.display()))?;
+    let undo = |why: String| {
+        let _ = std::fs::remove_file(&stage);
+        why
+    };
+    if let Err(e) = crate::config::Settings::load(&stage) {
+        return Err(undo(refused(&format!("{e:#}").replace(&stage.display().to_string(), "the file"))));
+    }
+    let note = vet_settings(&stage, settings_json(&target).as_ref(), keep_terminal_settings);
+    let before = base.join("settings-before-import.json");
+    let kept = target.is_file() && crate::config::replace(&target, &before).is_ok();
+    if let Err(e) = crate::config::replace(&stage, &target) {
+        if kept {
+            let _ = crate::config::replace(&before, &target);
+        }
+        return Err(undo(format!("Couldn't use the settings: {e}")));
+    }
+    let mut done = format!("Using the settings in {}", file.display());
+    if let Some(note) = note {
+        done.push_str("; ");
+        done.push_str(&note);
+    }
+    if kept {
+        done.push_str(&format!("; the ones replaced are kept as {}", before.display()));
+    }
+    Ok(done)
+}
+
 /// What a backup holds, checked without restoring it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Contents {
@@ -895,6 +933,50 @@ mod tests {
             assert!(!to.join(SETTINGS).exists(), "{name}");
             assert!(to.join("store.json.gz").exists(), "{name}: the rest is restored");
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn settings_brought_in_from_a_file_are_checked_as_a_backups_are() {
+        let base = std::env::temp_dir().join(format!("rettui-import-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let data = base.join("data");
+        let mine = crate::config::Settings { display_name: "Amy".into(), voice_recorder: Some("arecord".into()), ..Default::default() };
+        std::fs::create_dir_all(&data).unwrap();
+        mine.save(&data.join(SETTINGS)).unwrap();
+        let before = std::fs::read(data.join(SETTINGS)).unwrap();
+        let file = base.join("theirs.json");
+        // A file that can't be read, or is far too big: refused with the reason, nothing changes.
+        for (name, text) in
+            [("syntax", &b"{not json"[..]), ("type", br#"{"message_storage_mb":"x"}"#), ("huge", &vec![b' '; 2_000_000][..])]
+        {
+            std::fs::write(&file, text).unwrap();
+            let error = import_settings(&file, &data, false).unwrap_err();
+            assert!(error.contains("isn't settings rettui can read"), "{name}: {error}");
+            assert_eq!(std::fs::read(data.join(SETTINGS)).unwrap(), before, "{name}");
+            assert!(!data.join("settings.json.importing").exists() && !data.join("settings-before-import.json").exists(), "{name}");
+        }
+        assert!(import_settings(&base.join("none.json"), &data, false).is_err());
+        // One that reads: used, the ones in use kept, and what only a terminal sets stays as it was.
+        let theirs =
+            serde_json::json!({ "display_name": "Zed", "voice_recorder": "sh -c id", "print_command": "sh -c id", "messages_kept": 300 });
+        std::fs::write(&file, theirs.to_string()).unwrap();
+        let done = import_settings(&file, &data, false).unwrap();
+        assert!(done.contains("not restored") && done.contains("Print command") && done.contains("settings-before-import.json"), "{done}");
+        let now = crate::config::Settings::load(&data.join(SETTINGS)).unwrap();
+        assert_eq!((now.display_name.as_str(), now.messages_kept), ("Zed", 300));
+        assert_eq!(now.voice_recorder.as_deref(), Some("arecord"), "kept as it was");
+        assert!(now.print_command.is_none());
+        assert_eq!(std::fs::read(data.join("settings-before-import.json")).unwrap(), before);
+        // With the terminal's flag, as written.
+        let done = import_settings(&file, &data, true).unwrap();
+        assert!(done.contains("restored as written"), "{done}");
+        assert_eq!(crate::config::Settings::load(&data.join(SETTINGS)).unwrap().print_command.as_deref(), Some("sh -c id"));
+        // Into a data directory with none.
+        let fresh = base.join("fresh");
+        assert!(!import_settings(&file, &fresh, false).unwrap().contains("kept as"));
+        assert_eq!(crate::config::Settings::load(&fresh.join(SETTINGS)).unwrap().display_name, "Zed");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -36,6 +36,9 @@ class BackupsActivity : Activity() {
         private const val SAVE_BACKUP = 3
         private const val OPEN_BACKUP = 4
         private const val PICK_FOLDER = 5
+        private const val SAVE_SETTINGS = 6
+        private const val SAVE_UNREADABLE = 7
+        private const val OPEN_SETTINGS = 8
     }
 
     private lateinit var scheduleFolder: TextView
@@ -63,6 +66,12 @@ class BackupsActivity : Activity() {
         backup.note(getString(R.string.backup_note))
         backup.primary(getString(R.string.backup_save)) { askBackupPassphrase() }
         backup.secondary(getString(R.string.backup_restore)) { open(OPEN_BACKUP) }
+
+        val settings = page.section(getString(R.string.settings))
+        settings.note(getString(R.string.settings_note))
+        settings.primary(getString(R.string.settings_save)) { askSettingsSaved(SAVE_SETTINGS) }
+        settings.secondary(getString(R.string.settings_save_unreadable)) { askSettingsSaved(SAVE_UNREADABLE) }
+        settings.secondary(getString(R.string.settings_use)) { open(OPEN_SETTINGS) }
 
         val schedule = page.section(getString(R.string.schedule))
         schedule.note(getString(R.string.schedule_note, ScheduledBackups.KEPT))
@@ -300,6 +309,14 @@ class BackupsActivity : Activity() {
                 val sealing = if (passphrase.isEmpty()) "--no-passphrase" else "--passphrase"
                 work { saveThrough(uri) { file -> Rettui.withPassphrase(this, passphrase, "backup", file.path, sealing) } }
             }
+            SAVE_SETTINGS -> work { saveThrough(uri) { file -> Rettui.command(this, "settings", "export", file.path) } }
+            SAVE_UNREADABLE -> work { saveThrough(uri) { file -> Rettui.command(this, "settings", "export", file.path, "--unreadable") } }
+            OPEN_SETTINGS -> dialog()
+                .setTitle(R.string.settings_use)
+                .setMessage(R.string.settings_use_confirm)
+                .setPositiveButton(R.string.settings_use_ok) { _, _ -> work { useSettings(uri) } }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
             OPEN_IDENTITY -> askName { name -> work { openThrough(uri) { file -> Rettui.command(this, "identity", "import", file.path, "--name", name) } } }
             OPEN_BACKUP -> dialog()
                 .setTitle(R.string.backup_restore)
@@ -361,6 +378,26 @@ class BackupsActivity : Activity() {
             return Rettui.Said(false, getString(R.string.restore_not_stopped))
         }
         val said = openThrough(uri) { file -> Rettui.withPassphrase(this, passphrase, "restore", "--force", file.path) }
+        RettuiService.start(this)
+        return said
+    }
+
+    /** Before settings are saved to a file: it can hold a password, and goes where other apps may read it. */
+    private fun askSettingsSaved(request: Int) {
+        dialog()
+            .setTitle(R.string.settings_save_title)
+            .setMessage(R.string.settings_save_note)
+            .setPositiveButton(R.string.settings_save_ok) { _, _ -> save(request, "application/json", "rettui-settings.json") }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /** Using settings from a file needs rettui stopped, as a restore does; it starts again after, either way. */
+    private fun useSettings(uri: Uri): Rettui.Said {
+        if (!RettuiService.stopAndWait(this)) {
+            return Rettui.Said(false, getString(R.string.restore_not_stopped))
+        }
+        val said = openThrough(uri) { file -> Rettui.command(this, "settings", "import", file.path) }
         RettuiService.start(this)
         return said
     }

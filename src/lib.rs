@@ -257,6 +257,14 @@ enum Command {
         #[command(subcommand)]
         action: IdentityAction,
     },
+    /// Save a copy of the settings, or bring settings in from a file.
+    ///
+    /// For the Android app, whose settings file can't be reached otherwise,
+    /// and for any settings file rettui set aside because it couldn't read it.
+    Settings {
+        #[command(subcommand)]
+        action: SettingsAction,
+    },
     /// Download waiting messages from the propagation node.
     Sync {
         /// Propagation node to use instead of the configured one.
@@ -276,6 +284,29 @@ enum IdentityAction {
         /// The name it announces.
         #[arg(long)]
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SettingsAction {
+    /// Save a copy of the settings to a new file: it can hold a password (an
+    /// MQTT server's) and your location, so keep it private.
+    Export {
+        file: PathBuf,
+        /// The settings file rettui last set aside because it couldn't read it, not the ones in use.
+        #[arg(long)]
+        unreadable: bool,
+    },
+    /// Use the settings in a file, with rettui stopped. They're checked as a
+    /// backup's are: a file rettui can't read is refused and nothing changes,
+    /// and the settings that decide which programs run are left out (see
+    /// --keep-terminal-settings of restore). The settings in use are kept as
+    /// settings-before-import.json.
+    Import {
+        file: PathBuf,
+        /// Use the settings that decide which programs run as the file has them: only for a file you made.
+        #[arg(long)]
+        keep_terminal_settings: bool,
     },
 }
 
@@ -372,6 +403,12 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Restore { file, force, keep_terminal_settings }) => {
             return cli::restore(&paths, file, *force, *keep_terminal_settings);
         }
+        Some(Command::Settings { action: SettingsAction::Export { file, unreadable } }) => {
+            return cli::export_settings(&paths, file, *unreadable);
+        }
+        Some(Command::Settings { action: SettingsAction::Import { file, keep_terminal_settings } }) => {
+            return cli::import_settings(&paths, file, *keep_terminal_settings);
+        }
         Some(Command::Identity { action: IdentityAction::Export { file } }) => return cli::export_identity(&paths, file),
         Some(Command::Identity { action: IdentityAction::Import { file, name } }) => return cli::import_identity(&paths, file, name),
         _ => {}
@@ -439,7 +476,14 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         Some(Command::Update { yes }) => cli::update(&settings, yes).await,
-        Some(Command::Backup { .. } | Command::BackupKey | Command::Unseal { .. } | Command::Restore { .. } | Command::Identity { .. }) => {
+        Some(
+            Command::Backup { .. }
+            | Command::BackupKey
+            | Command::Unseal { .. }
+            | Command::Restore { .. }
+            | Command::Settings { .. }
+            | Command::Identity { .. },
+        ) => {
             unreachable!("handled before loading")
         }
         None => {

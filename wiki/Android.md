@@ -171,6 +171,18 @@ shown when rettui stops. On it:
   sealed one asks for its passphrase). rettui
   stops, the backup takes the place of what's here (moved aside into a
   `before-restore-<time>` folder, not deleted), and rettui starts again.
+- **Settings:** a copy of the settings on their own (no messages or
+  identity), or **the settings file rettui couldn't read**, and **Use
+  settings from a file**. If the settings file is damaged when rettui
+  starts, it sets the file aside as `settings-unreadable-<time>.json` in its
+  folder, keeps the settings it can read (a file cut short keeps what came
+  before the cut; a setting of the wrong kind is left at its default) and
+  says so in the log. Save the set-aside file here to mend it on a computer
+  and bring it back with **Use settings from a file**, which refuses a file
+  rettui can't read and changes nothing. Settings that decide which
+  programs run aren't taken from a file or a backup in the app. A saved
+  settings file can hold an MQTT password and your location: keep it
+  private.
 
 - **Backups on a schedule:** choose a folder, then **Every day** or
   **Every week**. The first time, it asks for a passphrase to seal them
