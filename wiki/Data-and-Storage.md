@@ -235,6 +235,16 @@ yours too (`i` in the Status tab, or copy it over `identity`) to keep
 them. Restoring takes only rettui's own files from the backup, and never
 writes outside the data directory.
 
+A backup can come from anyone, so a restore leaves out the settings that
+decide which programs run on this computer, and says which: the voice
+recorder and print commands, page scripts, rncp, another Reticulum config
+or node folder, and the like (the ones the web UI may not change either).
+They keep what the data directory had, or their defaults. A backup you made
+yourself can bring them back as written with
+`rettui restore FILE --keep-terminal-settings`; the web UI, the desktop app
+and the Android app can't. A settings file in a backup that rettui can't
+read is left out, and rettui starts with its defaults.
+
 ## Message history
 
 - **Messages kept** (`messages_kept`, 1000 by default): each conversation

@@ -540,8 +540,14 @@ pub fn import_identity(paths: &Paths, file: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Restore the backup `file` into the data directory.
-pub fn restore(paths: &Paths, file: &Path, force: bool) -> Result<()> {
+/// Restore the backup `file` into the data directory; with
+/// `keep_terminal_settings`, the settings that decide which programs run are
+/// restored as the backup has them (only the command line asks for this: the
+/// web UI and the Android app restore without it).
+pub fn restore(paths: &Paths, file: &Path, force: bool, keep_terminal_settings: bool) -> Result<()> {
+    if keep_terminal_settings && cfg!(target_os = "android") {
+        bail!("--keep-terminal-settings isn't available in the Android app: set those settings by hand");
+    }
     // A sealed one: its passphrase, from the environment or typed.
     let passphrase = if crate::backup::is_sealed(file) {
         match passphrase_from_env() {
@@ -552,7 +558,8 @@ pub fn restore(paths: &Paths, file: &Path, force: bool) -> Result<()> {
     } else {
         None
     };
-    let done = crate::backup::restore(file, &paths.base, force, passphrase.as_deref().map(String::as_str)).map_err(|e| anyhow!(e))?;
+    let done = crate::backup::restore_with(file, &paths.base, force, passphrase.as_deref().map(String::as_str), keep_terminal_settings)
+        .map_err(|e| anyhow!(e))?;
     println!("{done}.");
     Ok(())
 }

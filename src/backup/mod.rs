@@ -344,20 +344,28 @@ fn settings_json(path: &Path) -> Option<serde_json::Value> {
 /// Check the settings just restored to `path`, which came from outside:
 /// ones rettui can't read are left out (it would stop at every start), and
 /// the ones the web UI may not set, which decide what runs here, are put
-/// back as `current` has them (see [`crate::config::withhold_web_barred`]).
-/// What to tell the user, if anything was changed.
-fn vet_settings(path: &Path, current: Option<&serde_json::Value>) -> Option<String> {
+/// back as `current` has them (see [`crate::config::withhold_web_barred`]),
+/// unless the user asked for them as written (`keep_terminal_settings`:
+/// then only said). What to tell the user, if anything was changed.
+fn vet_settings(path: &Path, current: Option<&serde_json::Value>, keep_terminal_settings: bool) -> Option<String> {
     if let Err(e) = crate::config::Settings::load(path) {
         let _ = std::fs::remove_file(path);
         return Some(format!("its settings.json can't be read ({e:#}), so rettui starts with its default settings"));
     }
-    let mut value = settings_json(path)?;
-    let withheld = crate::config::withhold_web_barred(&mut value, current);
+    let mut checked = settings_json(path)?;
+    let withheld = crate::config::withhold_web_barred(&mut checked, current);
     if withheld.is_empty() {
         return None;
     }
+    if keep_terminal_settings {
+        return Some(format!(
+            "restored as written, with --keep-terminal-settings, though they decide what runs on this computer: {}",
+            withheld.join(", ")
+        ));
+    }
     // Written back the way rettui writes it.
-    let written = serde_json::to_vec_pretty(&value).map_err(anyhow::Error::from).and_then(|text| crate::config::write_private(path, &text));
+    let written =
+        serde_json::to_vec_pretty(&checked).map_err(anyhow::Error::from).and_then(|text| crate::config::write_private(path, &text));
     if let Err(e) = written {
         let _ = std::fs::remove_file(path);
         return Some(format!("its settings.json couldn't be checked ({e:#}), so rettui starts with its default settings"));
@@ -384,6 +392,20 @@ pub fn check(archive: &Path, passphrase: Option<&str>) -> Result<Contents, Strin
 }
 
 pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str>) -> Result<String, String> {
+    restore_with(archive, base, force, passphrase, false)
+}
+
+/// [`restore`]; with `keep_terminal_settings`, the settings that only the
+/// terminal may change are restored as the backup has them (see
+/// [`vet_settings`]). Only the command line passes it: the web UI's and the
+/// Android app's restores call [`restore`].
+pub fn restore_with(
+    archive: &Path,
+    base: &Path,
+    force: bool,
+    passphrase: Option<&str>,
+    keep_terminal_settings: bool,
+) -> Result<String, String> {
     let bad = |e: &dyn std::fmt::Display| format!("{} isn't a rettui backup: {e}", archive.display());
     let Inspected { opener, manifest, names, .. } = inspect(archive, passphrase)?;
     let found = Inspected { archive, opener, manifest, names, files: 0 };
@@ -443,7 +465,7 @@ pub fn restore(archive: &Path, base: &Path, force: bool, passphrase: Option<&str
     }
     let mut done = format!("Restored {count} files from rettui {}'s backup into {}", manifest.version, base.display());
     if names.iter().any(|n| n == SETTINGS)
-        && let Some(note) = vet_settings(&base.join(SETTINGS), current.as_ref())
+        && let Some(note) = vet_settings(&base.join(SETTINGS), current.as_ref(), keep_terminal_settings)
     {
         done.push_str("; ");
         done.push_str(&note);
@@ -812,6 +834,32 @@ mod tests {
         assert_eq!(settings.display_name, "Zed");
         assert_eq!(settings.voice_recorder.as_deref(), Some("arecord"));
         assert!(settings.rncp_listen && settings.print_command.is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_command_line_can_ask_for_terminal_only_settings_as_written() {
+        let base = std::env::temp_dir().join(format!("rettui-backup-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let mine = serde_json::json!({ "display_name": "Zed", "voice_recorder": "arecord -q", "rncp_listen": true });
+        let file = base.join("mine.tar.gz");
+        backup_of(&file, MANIFEST_JSON, &[(SETTINGS, mine.to_string().as_bytes())]);
+        let done = restore_with(&file, &base.join("kept"), false, None, true).unwrap();
+        assert!(done.contains("restored as written") && done.contains("Voice recorder"), "{done}");
+        let settings = crate::config::Settings::load(&base.join("kept").join(SETTINGS)).unwrap();
+        assert_eq!(settings.voice_recorder.as_deref(), Some("arecord -q"));
+        assert!(settings.rncp_listen);
+        // The same call without it (as the web UI and the app make it) leaves them out.
+        let done = restore(&file, &base.join("left"), false, None).unwrap();
+        assert!(done.contains("not restored"), "{done}");
+        let settings = crate::config::Settings::load(&base.join("left").join(SETTINGS)).unwrap();
+        assert!(settings.voice_recorder.is_none() && !settings.rncp_listen);
+        // A file that can't be read is left out either way.
+        let bad = base.join("bad.tar.gz");
+        backup_of(&bad, MANIFEST_JSON, &[(SETTINGS, b"{not json")]);
+        assert!(restore_with(&bad, &base.join("bad"), false, None, true).unwrap().contains("can't be read"));
+        assert!(!base.join("bad").join(SETTINGS).exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 
