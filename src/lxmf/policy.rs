@@ -11,11 +11,11 @@
 //! - **Size:** the largest message taken; larger transfers are refused
 //!   before they're downloaded.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use lxmf_core::constants::{FIELD_TICKET, TICKET_EXPIRY};
+use lxmf_core::constants::{FIELD_TICKET, TICKET_EXPIRY, TICKET_GRACE};
 use lxmf_core::message_api::LxMessage;
 use lxmf_core::ticket::{Ticket, TicketStore, TicketStoreSnapshot};
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,9 @@ pub struct Policy {
     /// Contacts given tickets.
     trusted: HashSet<Hash>,
     tickets: TicketStore,
+    /// Who gave a ticket kept to stamp messages to them with, and when it
+    /// runs out: [`TicketStore`] doesn't say how many it holds.
+    learned: HashMap<Hash, f64>,
     path: PathBuf,
     /// Tickets changed since the last save.
     dirty: bool,
@@ -60,6 +63,15 @@ pub type SharedPolicy = Arc<Mutex<Policy>>;
 /// The most `tickets.json` may be when read: it holds a few tickets (about
 /// 100 bytes each) for each contact.
 const MAX_TICKETS_BYTES: u64 = 16 * 1024 * 1024;
+/// The most tickets kept that others gave, one per sender (about 160 bytes
+/// each in the file): a contact sends one, so this is far more contacts than
+/// anyone has, and enough that strangers can't fill the file.
+const MAX_LEARNED_TICKETS: usize = 4096;
+/// The longest a ticket that someone gave is kept, from when it arrived.
+/// LXMF issues them for [`TICKET_EXPIRY`]; the grace period covers a clock
+/// that is a few days out. One that says it lasts longer is cut to this,
+/// so it is culled in time.
+const MAX_LEARNED_LIFETIME: f64 = (TICKET_EXPIRY + TICKET_GRACE) as f64;
 
 #[derive(Default, Serialize, Deserialize)]
 struct Saved {
@@ -82,9 +94,22 @@ impl Policy {
     pub fn load(path: &Path, stamp_cost: Option<u8>, max_bytes: u64) -> SharedPolicy {
         let saved: Saved =
             crate::config::read_limited(path, MAX_TICKETS_BYTES).ok().and_then(|t| serde_json::from_slice(&t).ok()).unwrap_or_default();
+        // What others gave: not past what they may be, nor more than are
+        // kept (a file from before this, or restored, may hold any).
+        let at = now();
+        let mut learned = HashMap::new();
+        let mut outbound = Vec::new();
+        for mut ticket in saved.outbound.into_iter().filter(|ticket| ticket.is_valid(at)) {
+            if !learned.contains_key(&ticket.destination_hash) && learned.len() >= MAX_LEARNED_TICKETS {
+                continue;
+            }
+            ticket.expires = ticket.expires.min(at + MAX_LEARNED_LIFETIME);
+            learned.insert(ticket.destination_hash, ticket.expires);
+            outbound.push(ticket);
+        }
         let mut tickets = TicketStore::new();
         tickets.replace_snapshot(TicketStoreSnapshot {
-            outbound: saved.outbound,
+            outbound,
             inbound: saved.inbound,
             last_deliveries: saved
                 .last_deliveries
@@ -99,6 +124,7 @@ impl Policy {
             exempt: HashSet::new(),
             trusted: HashSet::new(),
             tickets,
+            learned,
             path: path.to_path_buf(),
             dirty: false,
         }))
@@ -139,10 +165,29 @@ impl Policy {
     /// sender with.
     pub fn take_ticket(&mut self, message: &LxMessage) {
         let Some(field) = message.get_field(FIELD_TICKET) else { return };
-        if let Some(ticket) = Ticket::decode_field(message.source_hash(), super::fields::raw(field), now()) {
-            self.tickets.remember_outbound(ticket);
-            self.dirty = true;
+        let at = now();
+        if let Some(ticket) = Ticket::decode_field(message.source_hash(), super::fields::raw(field), at) {
+            self.learn(ticket, at);
         }
+    }
+
+    /// Keep `ticket` to stamp messages to its sender with: for no longer
+    /// than [`MAX_LEARNED_LIFETIME`] (one that says it lasts for ever would
+    /// never be culled), and not past [`MAX_LEARNED_TICKETS`] senders, whose
+    /// expired tickets go first (a sender already kept is always updated).
+    fn learn(&mut self, mut ticket: Ticket, at: f64) {
+        ticket.expires = ticket.expires.min(at + MAX_LEARNED_LIFETIME);
+        if !self.learned.contains_key(&ticket.destination_hash) && self.learned.len() >= MAX_LEARNED_TICKETS {
+            self.tickets.cull(at);
+            self.learned.retain(|_, expires| *expires > at);
+            if self.learned.len() >= MAX_LEARNED_TICKETS {
+                tracing::debug!("a ticket was not kept: {MAX_LEARNED_TICKETS} senders have given one that is still good");
+                return;
+            }
+        }
+        self.learned.insert(ticket.destination_hash, ticket.expires);
+        self.tickets.remember_outbound(ticket);
+        self.dirty = true;
     }
 
     /// For a message to `to`: their ticket to stamp it with, and a ticket of
@@ -175,7 +220,9 @@ impl Policy {
                 return;
             }
             policy.dirty = false;
-            policy.tickets.cull(now());
+            let at = now();
+            policy.tickets.cull(at);
+            policy.learned.retain(|_, expires| *expires > at);
             let snapshot = policy.tickets.snapshot();
             let saved = Saved {
                 outbound: snapshot.outbound,
@@ -283,6 +330,60 @@ mod tests {
         assert!(policy.too_big(500_001) && !policy.too_big(500_000));
         assert_eq!((stamp_cost(0), stamp_cost(8), stamp_cost(999)), (None, Some(8), Some(254)));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn tickets_given_are_cut_to_a_normal_life_and_kept_for_only_so_many_senders() {
+        let (path, shared) = policy("learned", None);
+        let mut policy = shared.lock().unwrap();
+        let at = 1_800_000_000.0;
+        let from = |n: usize| {
+            let mut sender = [0u8; 16];
+            sender[..8].copy_from_slice(&(n as u64 + 1).to_be_bytes());
+            sender
+        };
+        // One that says it lasts for ever lasts as long as a ticket may.
+        policy.learn(Ticket::new([1; 16], from(0), 1e300), at);
+        assert!(policy.tickets.find_outbound(&from(0), at + MAX_LEARNED_LIFETIME - 1.0).is_some());
+        assert!(policy.tickets.find_outbound(&from(0), at + MAX_LEARNED_LIFETIME + 1.0).is_none());
+        // Senders up to the limit: then no more, though one kept is updated.
+        for n in 1..MAX_LEARNED_TICKETS + 100 {
+            policy.learn(Ticket::new([2; 16], from(n), at + 1000.0), at);
+        }
+        assert_eq!(policy.tickets.snapshot().outbound.len(), MAX_LEARNED_TICKETS);
+        assert!(policy.tickets.find_outbound(&from(MAX_LEARNED_TICKETS + 50), at).is_none());
+        policy.learn(Ticket::new([3; 16], from(1), at + 2000.0), at);
+        assert_eq!(policy.tickets.find_outbound(&from(1), at).map(|t| t.token), Some([3; 16]));
+        assert_eq!(policy.tickets.snapshot().outbound.len(), MAX_LEARNED_TICKETS);
+        // Once those have run out, room is made.
+        policy.learn(Ticket::new([4; 16], from(MAX_LEARNED_TICKETS + 50), at + 5000.0), at + 1500.0);
+        assert_eq!(policy.tickets.find_outbound(&from(MAX_LEARNED_TICKETS + 50), at + 1500.0).map(|t| t.token), Some([4; 16]));
+        assert!(policy.tickets.snapshot().outbound.len() < 10);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn tickets_read_from_the_file_are_cut_and_counted_too() {
+        let path = std::env::temp_dir().join(format!("rettui-tickets-cut-{}.json", std::process::id()));
+        let at = now();
+        let from = |n: usize| {
+            let mut sender = [0u8; 16];
+            sender[..8].copy_from_slice(&(n as u64 + 1).to_be_bytes());
+            sender
+        };
+        let mut saved = Saved::default();
+        saved.outbound.push(Ticket::new([1; 16], from(0), 1e300));
+        saved.outbound.push(Ticket::new([1; 16], from(1), at - 5.0));
+        for n in 2..MAX_LEARNED_TICKETS + 50 {
+            saved.outbound.push(Ticket::new([1; 16], from(n), at + 3600.0));
+        }
+        std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        let policy = Policy::load(&path, None, 0);
+        let kept = policy.lock().unwrap().tickets.snapshot().outbound;
+        assert_eq!(kept.len(), MAX_LEARNED_TICKETS, "no more than the limit, none that had run out");
+        assert!(kept.iter().all(|ticket| ticket.expires <= at + MAX_LEARNED_LIFETIME + 5.0), "none that lasts for ever");
+        assert!(kept.iter().all(|ticket| ticket.destination_hash != from(1)));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
