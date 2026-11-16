@@ -309,17 +309,19 @@ impl App {
             let add: Vec<&EntryPoint> =
                 ENTRY_POINTS.iter().enumerate().filter(|&(i, _)| chosen(i) && !view.has_entry_point[i]).map(|(_, entry)| entry).collect();
             let discover = choices.discover && !view.has_discovery;
-            // rettui connects to the entry points found (and the ones
-            // added are Bootstrap only), unless Reticulum's config does it
-            // itself: see crate::net::discovered.
+            // rettui connects to the entry points found, unless Reticulum's
+            // config does it itself (see crate::net::discovered); the ones
+            // added are Bootstrap only, used until those are up, only if the
+            // user asked for that.
             let ours = (discover || view.has_discovery) && rns::discovery_connects(&self.guide_config()) == 0;
+            let bootstrap = ours && self.settings.disconnect_bootstrap_only;
             if !add.is_empty() || discover {
                 let mut added = Vec::new();
                 let what = "Added entry points (Getting started)";
                 let warnings = self.rns_edit(restricted, what, |text| {
                     let mut text = text.to_string();
                     for entry in &add {
-                        let (with, name) = rns::add_entry_point(&text, entry.name, entry.host, entry.port, ours)?;
+                        let (with, name) = rns::add_entry_point(&text, entry.name, entry.host, entry.port, bootstrap)?;
                         added.push((name, **entry));
                         text = with;
                     }
@@ -341,7 +343,7 @@ impl App {
                         done.extend(self.update_settings(&[("discovered_entry_points", count.as_str())])?);
                     }
                 }
-                if ours && any_added {
+                if bootstrap && any_added {
                     done.push(format!(
                         "The entry points added are used until {} found by discovery are up, and again if none is",
                         self.settings.discovered_entry_points
@@ -626,12 +628,11 @@ mod tests {
         assert!(config.contains("target_host = rmap.world") && config.contains("target_host = rns.ratspeak.org"), "{config}");
         assert!(config.contains("[[Ratspeak & Colorado Mesh]]"), "{config}");
         assert!(!config.contains(ENTRY_POINTS[borders].host) && !config.contains(ENTRY_POINTS[simply].host), "{config}");
-        // Discovery finds entry points and rettui connects to 2 of them;
-        // the ones added are Bootstrap only, used until those are up.
-        assert_eq!(config.matches("bootstrap_only = Yes").count(), 2, "{config}");
+        // Discovery finds entry points and rettui connects to 2 of them
+        // as well: the ones added stay, not marked Bootstrap only.
+        assert!(!config.contains("bootstrap_only"), "{config}");
         assert!(rns::discovery_finds(&config) && rns::discovery_connects(&config) == 0, "{config}");
         assert_eq!(app.settings.discovered_entry_points, 2);
-        assert!(done.iter().any(|d| d.contains("used until 2 found by discovery are up")), "{done:?}");
         assert!(app.take_rns_restart());
         // Once Reticulum is back, it says as each connects; and, for one
         // that doesn't, why.
@@ -712,6 +713,30 @@ mod tests {
         assert!(written.contains("autoconnect_discovered_interfaces = 2"));
         assert_eq!(app.settings.discovered_entry_points, 0, "left to Reticulum");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_entry_points_added_are_bootstrap_only_only_where_asked() {
+        for (asked, marks) in [(false, 0), (true, 1)] {
+            let dir = std::env::temp_dir().join(format!("rettui-guide-bootstrap-{asked}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let rns_dir = dir.join("rns");
+            std::fs::create_dir_all(&rns_dir).unwrap();
+            std::fs::write(rns_dir.join("config"), "[interfaces]\n  [[Default Interface]]\n    type = AutoInterface\n    enabled = Yes\n")
+                .unwrap();
+            let settings =
+                Settings { rns_config: Some(rns_dir.display().to_string()), disconnect_bootstrap_only: asked, ..Settings::default() };
+            let mut app = crate::app::test_app(&dir, settings, Store::default());
+            let mut connect = vec![false; ENTRY_POINTS.len()];
+            connect[1] = true;
+            app.entry_reach.set(vec![Reach::Up(Duration::from_millis(50)); ENTRY_POINTS.len()]);
+            let choices = GuideChoices { name: String::new(), connect, discover: true, auto_propagation: false, update_check: false };
+            let done = app.apply_guide(&choices, false).unwrap();
+            let written = std::fs::read_to_string(rns_dir.join("config")).unwrap();
+            assert_eq!(written.matches("bootstrap_only = Yes").count(), marks, "{written}");
+            assert_eq!(done.iter().any(|d| d.contains("used until 2 found by discovery are up")), asked, "{done:?}");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
     }
 
     #[test]

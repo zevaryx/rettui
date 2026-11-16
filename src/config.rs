@@ -199,10 +199,14 @@ pub struct Settings {
     /// build) as well as releases.
     pub update_prereleases: bool,
     /// How many entry points interface discovery finds rettui connects to
-    /// itself, Bootstrap only interfaces going once that many are up and
-    /// coming back when none is (see `crate::net::discovered`). 0: none,
-    /// or as the Reticulum config's own auto-connect does.
+    /// itself, besides the interfaces in the Reticulum config (see
+    /// `crate::net::discovered`). 0: none, or as the Reticulum config's own
+    /// auto-connect does.
     pub discovered_entry_points: u32,
+    /// Whether interfaces in the Reticulum config marked Bootstrap only are
+    /// disconnected for the entry points found (see
+    /// `crate::net::discovered`). Off: they never are.
+    pub disconnect_bootstrap_only: bool,
     /// How times and dates read: one of [`crate::clock::CLOCKS`], and of
     /// [`crate::clock::DATE_STYLES`].
     pub clock: String,
@@ -353,6 +357,7 @@ impl Default for Settings {
             update_check: false,
             update_prereleases: false,
             discovered_entry_points: 0,
+            disconnect_bootstrap_only: false,
             clock: "24-hour".into(),
             tui_theme: "dark".into(),
             pane_widths: Default::default(),
@@ -849,6 +854,9 @@ impl Field {
             // Which folder is served.
             "git_host_dir" => WebAccess::TerminalOnly,
             "node_executable_pages" | "rncp_listen" => WebAccess::TurnOffOnly,
+            // Turning it on lets announced entry points replace the ones
+            // chosen: the web login may only put the safer way back.
+            "disconnect_bootstrap_only" => WebAccess::TurnOffOnly,
             _ => WebAccess::Change,
         }
     }
@@ -1039,6 +1047,7 @@ const SECTIONS: &[(Section, &[&str])] = &[
             "update_check",
             "update_prereleases",
             "discovered_entry_points",
+            "disconnect_bootstrap_only",
             "keep_awake",
             "keep_running",
             "minimize_to_tray",
@@ -1706,9 +1715,16 @@ pub const FIELDS: &[Field] = &[
     Field {
         key: "discovered_entry_points",
         label: "Discovered entry points",
-        help: "How many entry points found by interface discovery rettui connects to (2 is what Reticulum's manual suggests; 0, the default: none). Interfaces marked Bootstrap only are disconnected once that many are up, and connect again when none is; one that stays down is swapped for another. Needs discovery on in the Reticulum config, with its own auto-connect (autoconnect_discovered_interfaces) at 0: rsReticulum's drops Bootstrap only interfaces before the others are up, and never brings them back. The getting-started guide sets this up",
+        help: "How many entry points found by interface discovery rettui connects to (2 is what Reticulum's manual suggests; 0, the default: none). The interfaces in your Reticulum config stay as they are, marked Bootstrap only or not, unless Disconnect Bootstrap only interfaces is on; one found that stays down is swapped for another. Needs discovery on in the Reticulum config, with its own auto-connect (autoconnect_discovered_interfaces) at 0: rsReticulum's drops Bootstrap only interfaces before the others are up, and never brings them back. The getting-started guide sets this up",
         kind: FieldKind::Number,
         effect: Effect::Now,
+    },
+    Field {
+        key: "disconnect_bootstrap_only",
+        label: "Disconnect Bootstrap only interfaces",
+        help: "With Discovered entry points on: disconnect the interfaces in your Reticulum config marked Bootstrap only once that many found entry points are up, and connect them again when none is, as Python Reticulum does. Off, the default: they stay connected, and the entry points found are added to yours. Turning it on lets whoever announces entry points that pass discovery's stamp check take the place of the ones you chose (traffic through them is still encrypted, but they see who you connect through, and can drop it). The getting-started guide marks the entry points it adds Bootstrap only only while this is on. From the next start",
+        kind: FieldKind::Toggle,
+        effect: Effect::NextStart,
     },
     Field {
         key: "rns_config",
@@ -1877,6 +1893,7 @@ impl Settings {
             "update_check" => self.update_check.to_string(),
             "update_prereleases" => self.update_prereleases.to_string(),
             "discovered_entry_points" => self.discovered_entry_points.to_string(),
+            "disconnect_bootstrap_only" => self.disconnect_bootstrap_only.to_string(),
             "clock" => self.clock.clone(),
             "tui_theme" => self.tui_theme.clone(),
             "date_style" => self.date_style.clone(),
@@ -2192,6 +2209,7 @@ impl Settings {
             "sync_interval_mins" => self.sync_interval_mins = number(value, MAX_MINUTES).map_err(fail)?,
             "messages_kept" => self.messages_kept = number(value, MAX_MESSAGES_KEPT).map_err(fail)?,
             "discovered_entry_points" => self.discovered_entry_points = number(value, MAX_DISCOVERED_ENTRY_POINTS).map_err(fail)? as u32,
+            "disconnect_bootstrap_only" => self.disconnect_bootstrap_only = toggle(value).map_err(fail)?,
             "rrc_messages_kept" => {
                 let n = number(value, MAX_RRC_MESSAGES_KEPT).map_err(fail)?;
                 if n < MIN_RRC_MESSAGES_KEPT {
@@ -2494,6 +2512,19 @@ mod tests {
             copy.set_field(field.key, &value).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(copy.field_value(field.key), value, "{}", field.key);
         }
+    }
+
+    #[test]
+    fn bootstrap_only_interfaces_are_disconnected_only_when_asked() {
+        let mut s = Settings::default();
+        assert!(!s.disconnect_bootstrap_only, "off by default");
+        s.set_field("disconnect_bootstrap_only", "true").unwrap();
+        assert_eq!(s.field_value("disconnect_bootstrap_only"), "true");
+        assert!(s.set_field("disconnect_bootstrap_only", "maybe").is_err());
+        let field = FIELDS.iter().find(|f| f.key == "disconnect_bootstrap_only").unwrap();
+        // The web login may turn it off, not on (it would let found entry
+        // points take the place of the user's); it starts with the next start.
+        assert_eq!((field.web_access(), field.effect), (WebAccess::TurnOffOnly, Effect::NextStart));
     }
 
     #[test]

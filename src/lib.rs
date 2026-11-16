@@ -569,6 +569,7 @@ fn net_options(settings: &Settings, paths: &Paths, identity: rns_identity::ident
         tickets: paths.tickets.clone(),
         ratchets: paths.ratchets.clone(),
         discovered_entry_points: settings.discovered_entry_points,
+        disconnect_bootstrap_only: settings.disconnect_bootstrap_only,
         notes: android_start(settings, paths),
     }
 }

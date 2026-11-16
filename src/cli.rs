@@ -39,6 +39,7 @@ fn options(settings: &Settings, paths: &Paths, identity: Identity, announce: boo
         ratchets: paths.ratchets.clone(),
         // A command runs briefly: no connecting to entry points found.
         discovered_entry_points: 0,
+        disconnect_bootstrap_only: false,
         notes: Vec::new(),
     }
 }
