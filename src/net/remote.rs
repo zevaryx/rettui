@@ -66,8 +66,9 @@ pub struct KnownIdentities {
     heard: std::collections::BTreeMap<u64, String>,
     next_heard: u64,
     /// Contacts' destinations, never made room for (see
-    /// [`KnownIdentities::keep`]).
+    /// [`KnownIdentities::keep`] and [`KnownIdentities::keep_contacts`]).
     kept: HashSet<String>,
+    kept_contacts: HashSet<String>,
 }
 
 pub type Known = Arc<std::sync::Mutex<KnownIdentities>>;
@@ -204,7 +205,10 @@ impl KnownIdentities {
     /// Forget the destination heard from longest ago that isn't a contact's.
     /// False if there's none.
     fn make_room(&mut self) -> bool {
-        let Some((&at, dest)) = self.heard.iter().find(|(_, dest)| !self.kept.contains(*dest)) else { return false };
+        let Some((&at, dest)) = self.heard.iter().find(|(_, dest)| !self.kept.contains(*dest) && !self.kept_contacts.contains(*dest))
+        else {
+            return false;
+        };
         let dest = dest.clone();
         self.heard.remove(&at);
         self.entries.remove(&dest);
@@ -217,6 +221,12 @@ impl KnownIdentities {
     /// never forgotten to make room for others.
     pub(crate) fn keep(&mut self, destinations: impl IntoIterator<Item = Hash>) {
         self.kept = destinations.into_iter().map(hex::encode).collect();
+    }
+
+    /// The contacts' destinations, trusted or left as is: kept as those of
+    /// [`KnownIdentities::keep`] are.
+    pub(crate) fn keep_contacts(&mut self, destinations: impl IntoIterator<Item = Hash>) {
+        self.kept_contacts = destinations.into_iter().map(hex::encode).collect();
     }
 
     /// Forget what was kept for `destinations`.
@@ -721,6 +731,10 @@ mod tests {
         assert!(known.public_key_of(dest(1)).is_some(), "one heard again stays");
         assert!(known.public_key_of(dest(2)).is_none() && known.public_key_of(dest(3)).is_none(), "the oldest went");
         assert!(known.removed.contains(&hex::encode(dest(2))), "and goes from the database");
+        // A contact left as is, never written to, stays too.
+        known.keep_contacts([dest(4)]);
+        known.remember(dest(MAX_KNOWN as u32 + 2), &[8; 64], None);
+        assert!(known.public_key_of(dest(4)).is_some() && known.public_key_of(dest(5)).is_none());
         // Only contacts left to forget: nothing new is kept.
         let mut full = KnownIdentities::default();
         full.keep((0..MAX_KNOWN as u32).map(dest));

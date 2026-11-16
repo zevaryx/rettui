@@ -190,6 +190,10 @@ pub enum NetCommand {
     /// Forget the keys kept for peers the app forgot (not heard from in a
     /// while).
     ForgetKnown(Vec<Hash>),
+    /// Contacts (trusted, or left as is), whose keys are never forgotten to
+    /// make room for others' either: [`NetCommand::SetContacts`] leaves out
+    /// those left as is, as it's also who is spared the stamp.
+    KeepKeys(Vec<Hash>),
     /// Probe any destination (answered with [`NetEvent::Probed`]; how
     /// finding a path goes, with [`NetEvent::PathProgress`]).
     Probe(Hash),
@@ -1123,6 +1127,7 @@ async fn run(
                     }
                     NetCommand::Remember { to, public_key } => known.lock().unwrap().remember(to, &public_key, None),
                     NetCommand::ForgetKnown(peers) => known.lock().unwrap().forget(&peers),
+                    NetCommand::KeepKeys(contacts) => known.lock().unwrap().keep_contacts(contacts),
                     NetCommand::Ping(to) => {
                         let (runtime, known, ev) = (runtime.clone(), known.clone(), ev.clone());
                         tokio::spawn(async move {

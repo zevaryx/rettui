@@ -301,7 +301,8 @@ impl App {
     }
 
     /// Tell the network actor who's spared the stamp (contacts) and who is
-    /// given tickets (trusted contacts), if that changed (or `always`).
+    /// given tickets (trusted contacts), and whose keys it always keeps
+    /// (contacts, trusted or left as is), if that changed (or `always`).
     pub(super) fn update_policy(&mut self, always: bool) {
         let hashes = |keys: Vec<&String>| keys.into_iter().filter_map(|k| parse_hash(k)).collect::<Vec<_>>();
         let trusted = hashes(self.store.contacts.iter().filter(|(_, c)| c.trust == Trust::Trusted).map(|(k, _)| k).collect());
@@ -312,6 +313,14 @@ impl App {
         if always || self.policy_sent.as_ref() != Some(&contacts) {
             self.send(NetCommand::SetContacts { trusted: contacts.0.clone(), exempt: contacts.1.clone() });
             self.policy_sent = Some(contacts);
+        }
+        let mut keep = hashes(
+            self.store.contacts.iter().filter(|(_, c)| matches!(c.trust, Trust::Trusted | Trust::Untrusted)).map(|(k, _)| k).collect(),
+        );
+        keep.sort_unstable();
+        if always || self.keys_kept_sent.as_ref() != Some(&keep) {
+            self.send(NetCommand::KeepKeys(keep.clone()));
+            self.keys_kept_sent = Some(keep);
         }
     }
 
@@ -687,6 +696,31 @@ mod tests {
             _ => None,
         });
         assert_eq!(policy, Some((Some(12), 500_000)));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_network_keeps_the_keys_of_contacts_left_as_is_without_sparing_them_the_stamp() {
+        let dir = std::env::temp_dir().join(format!("rettui-keep-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, mut net) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let told = |net: &mut tokio::sync::mpsc::UnboundedReceiver<NetCommand>| {
+            let commands: Vec<NetCommand> = std::iter::from_fn(|| net.try_recv().ok()).collect();
+            let kept = commands.iter().rev().find_map(|c| match c {
+                NetCommand::KeepKeys(keys) => Some(keys.clone()),
+                _ => None,
+            });
+            (kept, commands.iter().any(|c| matches!(c, NetCommand::SetContacts { .. })))
+        };
+        // As at the start: both lists, empty.
+        app.update_policy(true);
+        assert_eq!(told(&mut net), (Some(Vec::new()), true));
+        app.set_trust(&"ab".repeat(16), Trust::Untrusted).unwrap();
+        assert_eq!(told(&mut net), (Some(vec![[0xab; 16]]), false), "kept, and the stamp policy is as it was");
+        app.set_trust(&"cd".repeat(16), Trust::Trusted).unwrap();
+        assert_eq!(told(&mut net), (Some(vec![[0xab; 16], [0xcd; 16]]), true));
+        app.set_trust(&"ab".repeat(16), Trust::Unknown).unwrap();
+        assert_eq!(told(&mut net), (Some(vec![[0xcd; 16]]), false));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
