@@ -141,6 +141,14 @@ pub fn file_name(path: &str) -> Result<&str, PathError> {
     name_after(path, FILE_PREFIX)
 }
 
+/// Why a partial at `path` may not be loaded, if it may not. A partial is
+/// fetched with no tap, and a file is held whole in memory (and again as text,
+/// then as HTML, at 6 to 54 times its size), so a partial is never a file:
+/// downloading one is the user's own act.
+pub fn partial_refusal(path: &str) -> Option<&'static str> {
+    path.starts_with(FILE_PREFIX).then_some("This part of the page is a file, so it isn't loaded")
+}
+
 /// Text to put in a page rettui writes (a name, a path): without control
 /// characters or backticks, which Micron reads as formatting, and not long.
 pub fn clean_text(text: &str) -> String {
@@ -195,6 +203,13 @@ mod tests {
             assert!(page_name(path).is_err(), "{path}");
         }
         assert!(file_name("/page/x").is_err() && file_name("/file/").is_err());
+    }
+
+    #[test]
+    fn partials_are_never_files() {
+        assert_eq!(partial_refusal("/page/p.mu"), None);
+        assert_eq!(partial_refusal("/media/x.webp"), None);
+        assert!(partial_refusal("/file/big.bin").is_some());
     }
 
     #[test]

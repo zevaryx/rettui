@@ -1387,6 +1387,24 @@ async fn the_guide_pages_partials_and_previews() {
     assert!(preview.contains("api/node/media?path=own.png") && preview.contains("api/media?url=cdcd"), "{preview}");
 }
 
+/// A partial is never a file: it is fetched with no tap, and a file is held
+/// whole in memory. A download the user asks for still works.
+#[tokio::test]
+async fn partials_are_never_files() {
+    let web = TestWeb::start("partial-files");
+    web.serve("/page/part.mu", "the part");
+    web.serve("/file/big.bin", "file bytes");
+    let fetches = |web: &TestWeb| web.sent().iter().filter(|c| matches!(c, NetCommand::Fetch { .. })).count();
+
+    let page = web.post("/api/partial", json!({ "url": format!("{NODE}:/page/part.mu") })).await;
+    assert_eq!((page.status, fetches(&web)), (StatusCode::OK, 1), "{}", page.text());
+    let file = web.post("/api/partial", json!({ "url": format!("{NODE}:/file/big.bin") })).await;
+    assert_eq!((file.status, fetches(&web)), (StatusCode::BAD_REQUEST, 0), "{}", file.text());
+    assert!(file.error().contains("a file"), "{}", file.text());
+    let download = web.get(&format!("/api/download?url={NODE}:/file/big.bin")).await;
+    assert_eq!(download.body, b"file bytes");
+}
+
 /// A script page of the node hosted here runs for the web UI's Browser as
 /// it would for a visitor, form fields and all.
 #[cfg(unix)]
