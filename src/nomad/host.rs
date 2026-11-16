@@ -80,6 +80,26 @@ pub struct Stats {
 const MAX_REQUESTS: u32 = 60;
 const WINDOW: Duration = Duration::from_secs(10);
 
+/// The most of those one visitor may have in [`WINDOW`] (a visitor is a link,
+/// or an identity once it has identified), so that one can't use up what
+/// everyone shares. A page with its 24 pictures and 16 partials (what rettui
+/// loads at most) is 41 requests on one link.
+const MAX_REQUESTS_PER_VISITOR: u32 = 42;
+
+/// What has been answered in the current [`WINDOW`].
+struct Budget {
+    began: Instant,
+    requests: u32,
+    /// Requests answered for each visitor (never more entries than requests).
+    visitors: HashMap<[u8; 16], u32>,
+}
+
+impl Budget {
+    fn new() -> Self {
+        Self { began: Instant::now(), requests: 0, visitors: HashMap::new() }
+    }
+}
+
 /// The most identities remembered to count visitors.
 const MAX_VISITORS: usize = 10_000;
 
@@ -129,8 +149,8 @@ struct Shared {
     counts: Counts,
     /// The paths answered at, by the hash a request names them with.
     routes: RwLock<HashMap<[u8; 16], String>>,
-    /// When the current window began, and the requests taken in it.
-    window: Mutex<(Instant, u32)>,
+    /// What the current window has taken.
+    window: Mutex<Budget>,
     converted: Mutex<Converted>,
     /// Who you've blocked.
     blocked: crate::store::Blocked,
@@ -162,7 +182,7 @@ impl Shared {
             limits: config.limits.clone(),
             counts: Counts::default(),
             routes: RwLock::default(),
-            window: Mutex::new((Instant::now(), 0)),
+            window: Mutex::new(Budget::new()),
             converted: Mutex::default(),
         }
     }
@@ -181,14 +201,20 @@ impl Shared {
         }
     }
 
-    /// Whether there's room for one more request in this window.
-    fn admit(&self) -> bool {
+    /// Whether there's room for one more request from `visitor` in this
+    /// window, for everyone and for that visitor.
+    fn admit(&self, visitor: [u8; 16]) -> bool {
         let mut window = locked(&self.window);
-        if window.0.elapsed() >= WINDOW {
-            *window = (Instant::now(), 0);
+        if window.began.elapsed() >= WINDOW {
+            *window = Budget::new();
         }
-        window.1 += 1;
-        window.1 <= MAX_REQUESTS
+        let used = window.visitors.get(&visitor).copied().unwrap_or(0);
+        if window.requests >= MAX_REQUESTS || used >= MAX_REQUESTS_PER_VISITOR {
+            return false;
+        }
+        window.requests += 1;
+        window.visitors.insert(visitor, used + 1);
+        true
     }
 
     fn missing(&self, path: &str) -> RequestOutcome {
@@ -244,7 +270,7 @@ impl Shared {
 
     fn answer(&self, link_id: [u8; 16], path_hash: [u8; 16], data: &[u8], who: Option<[u8; 16]>) -> RequestOutcome {
         // Someone you've blocked gets no answer.
-        if who.is_some_and(|who| self.blocked.has_identity(&who)) || !self.admit() {
+        if who.is_some_and(|who| self.blocked.has_identity(&who)) || !self.admit(who.unwrap_or(link_id)) {
             return RequestOutcome::Drop;
         }
         self.counts.requests.fetch_add(1, Ordering::Relaxed);
@@ -593,8 +619,13 @@ mod tests {
 
         /// Ask as a visitor does, the folder looked at just before.
         fn ask(&self, path: &str, data: &[u8], who: Option<&Identity>) -> RequestOutcome {
+            self.ask_on([0xcd; 16], path, data, who)
+        }
+
+        /// The same, on the link `link`.
+        fn ask_on(&self, link: [u8; 16], path: &str, data: &[u8], who: Option<&Identity>) -> RequestOutcome {
             self.shared.reload().unwrap();
-            self.shared.answer([0xcd; 16], rns_crypto::sha::truncated_hash(path.as_bytes()), data, who.map(|identity| identity.hash))
+            self.shared.answer(link, rns_crypto::sha::truncated_hash(path.as_bytes()), data, who.map(|identity| identity.hash))
         }
 
         fn page(&self, path: &str, who: Option<&Identity>) -> String {
@@ -808,14 +839,37 @@ mod tests {
     fn a_flood_of_requests_gets_nothing_until_it_eases() {
         let node = node("flood", false);
         node.put("pages/index.mu", b">Home\n");
-        for _ in 0..MAX_REQUESTS {
-            node.page("/page/index.mu", None);
+        // Visitors on links of their own, so that only the whole budget is in play.
+        for i in 0..MAX_REQUESTS as u8 {
+            assert!(matches!(node.ask_on([i; 16], "/page/index.mu", b"", None), RequestOutcome::Reply(_)));
         }
-        assert!(matches!(node.ask("/page/index.mu", b"", None), RequestOutcome::Drop));
+        assert!(matches!(node.ask_on([0xee; 16], "/page/index.mu", b"", None), RequestOutcome::Drop));
         assert_eq!(node.shared.stats().request_count, u64::from(MAX_REQUESTS));
         // A new window.
-        locked(&node.shared.window).0 = Instant::now().checked_sub(WINDOW).unwrap();
+        locked(&node.shared.window).began = Instant::now().checked_sub(WINDOW).unwrap();
         assert_eq!(node.page("/page/index.mu", None), ">Home\n");
+    }
+
+    #[test]
+    fn one_visitor_cannot_use_up_what_everyone_shares() {
+        let node = node("share", false);
+        node.put("pages/index.mu", b">Home\n");
+        let answered =
+            |link: [u8; 16], who: Option<&Identity>| matches!(node.ask_on(link, "/page/index.mu", b"", who), RequestOutcome::Reply(_));
+        // One link asking for more than its share is answered up to the share only; another link is still answered.
+        let flood = (0..MAX_REQUESTS).filter(|_| answered([1; 16], None)).count();
+        assert_eq!(flood, MAX_REQUESTS_PER_VISITOR as usize);
+        assert!(answered([2; 16], None));
+        // The refused ones didn't use the shared budget up.
+        assert_eq!(node.shared.stats().request_count, u64::from(MAX_REQUESTS_PER_VISITOR) + 1);
+        // An identity that has identified is one visitor, however many links it opens.
+        locked(&node.shared.window).began = Instant::now().checked_sub(WINDOW).unwrap();
+        let alice = Identity::new();
+        let by_alice = (0..MAX_REQUESTS as u8).filter(|i| answered([0x10 + i; 16], Some(&alice))).count();
+        assert_eq!(by_alice, MAX_REQUESTS_PER_VISITOR as usize);
+        // Next window: the flooding link is answered again.
+        locked(&node.shared.window).began = Instant::now().checked_sub(WINDOW).unwrap();
+        assert!(answered([1; 16], None));
     }
 
     #[test]
