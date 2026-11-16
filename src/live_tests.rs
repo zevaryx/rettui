@@ -1374,6 +1374,9 @@ async fn a_file_sent_to_an_rncp_listener() {
     amy.app.rncp_send(&refused, "secret.txt", b"no".to_vec()).unwrap();
     until_one(&mut amy, "both sends finishing", |a| a.app.rncp.iter().all(|s| !matches!(s.state, net::RncpState::Sending(_)))).await;
     assert!(matches!(amy.app.rncp[0].state, net::RncpState::Sent { bytes: 24, .. }), "{:?}", amy.app.rncp[0].state);
+    // The listener writes the file as it finishes: Amy can hear it was
+    // proved a moment before.
+    until_one(&mut amy, "the file being saved", |_| saved.join("notes.txt").is_file()).await;
     assert_eq!(std::fs::read_to_string(saved.join("notes.txt")).unwrap(), "Meet at the hill at noon");
     assert!(
         matches!(&amy.app.rncp[1].state, net::RncpState::Failed(e) if e.contains("may not allow your identity")),
