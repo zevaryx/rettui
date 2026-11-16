@@ -456,7 +456,12 @@ async fn run(cli: Cli) -> Result<()> {
 /// The settings in `paths` (with the Reticulum config given on the command
 /// line, if one was), applied to what's global.
 fn load_settings(paths: &Paths, rns_config: Option<String>) -> Result<Settings> {
-    let mut settings = Settings::load(&paths.settings)?;
+    // In the Android app nobody can mend a settings file by hand, so one that
+    // can't be read is set aside and the defaults used (the log says so).
+    let (mut settings, note) = Settings::load_or_aside(&paths.settings, cfg!(target_os = "android"))?;
+    if let Some(note) = note {
+        config::note_at_start(note);
+    }
     if rns_config.is_some() {
         settings.rns_config = rns_config;
     }

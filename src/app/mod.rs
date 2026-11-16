@@ -953,7 +953,12 @@ impl App {
             game_filter: games::GameFilter::All,
             game_menu: None,
         };
-        for note in std::mem::take(&mut app.store.migration_notes).into_iter().chain(game_problems).chain(app.db_notice.clone()) {
+        for note in std::mem::take(&mut app.store.migration_notes)
+            .into_iter()
+            .chain(game_problems)
+            .chain(app.db_notice.clone())
+            .chain(crate::config::take_start_notes())
+        {
             app.log(note);
         }
         // Stores of earlier versions (or a lower "Messages kept") may hold
