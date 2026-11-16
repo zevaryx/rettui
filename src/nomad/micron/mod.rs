@@ -78,8 +78,21 @@ struct Section {
     fold: Option<usize>,
 }
 
+/// Cells kept in a table row. The rest are dropped, so that one line of
+/// pipes can't make a table of any width.
+const TABLE_MAX_COLUMNS: usize = 64;
+
+/// Rows kept in a table.
+const TABLE_MAX_ROWS: usize = 1000;
+
+/// Cells in a table once every row is padded to the widest one, which is how
+/// the terminal draws it. Rows that would go past this are dropped: a wide
+/// first row and many short ones would otherwise cost columns times rows.
+const TABLE_MAX_CELLS: usize = 4096;
+
 /// A table: where it sits, how wide it may be, its columns' alignment, and
 /// its rows of cells (the first one a header when a separator follows it).
+/// `cut` is set when cells or rows were dropped, for a note under the table.
 #[derive(Debug, Clone)]
 struct Table {
     indent: usize,
@@ -88,6 +101,14 @@ struct Table {
     columns: Vec<Alignment>,
     header: bool,
     rows: Vec<Vec<Vec<MSpan>>>,
+    cut: bool,
+}
+
+impl Table {
+    /// How many columns it is drawn with: the widest row, or the separator's.
+    fn column_count(&self) -> usize {
+        self.rows.iter().map(Vec::len).max().unwrap_or(0).max(self.columns.len())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -336,7 +357,13 @@ fn table_cells(line: &str) -> Vec<String> {
                     _ => {}
                 }
             }
-            '|' if closing.is_none() => cells.push(String::new()),
+            '|' if closing.is_none() => {
+                // One past the limit, so that the caller can tell it was cut.
+                if cells.len() > TABLE_MAX_COLUMNS {
+                    break;
+                }
+                cells.push(String::new());
+            }
             c => {
                 if closing == Some(c) {
                     closing = None;
@@ -491,11 +518,20 @@ impl Parser<'_> {
 
     /// A line between a table's `` `t `` lines: a row, or the separator.
     fn table_row(&mut self, line: &str) {
-        let cells = table_cells(line);
+        let mut cells = table_cells(line);
         let Some(table) = self.table.as_mut() else { return };
+        let cut = cells.len() > TABLE_MAX_COLUMNS;
+        cells.truncate(TABLE_MAX_COLUMNS);
         if let Some(columns) = cells.iter().map(|c| separator(c)).collect::<Option<Vec<_>>>() {
             table.columns = columns;
             table.header = table.rows.len() == 1;
+            table.cut |= cut;
+            return;
+        }
+        // Past the limits the row is dropped; its cells are never parsed.
+        let width = table.column_count().max(cells.len());
+        if table.rows.len() >= TABLE_MAX_ROWS || width * (table.rows.len() + 1) > TABLE_MAX_CELLS {
+            table.cut = true;
             return;
         }
         // Each cell starts from the formatting in effect at the row.
@@ -509,6 +545,7 @@ impl Parser<'_> {
         // Images aren't drawn in cells.
         self.images.clear();
         if let Some(table) = self.table.as_mut() {
+            table.cut |= cut;
             table.rows.push(row);
         }
     }
@@ -532,8 +569,15 @@ impl Parser<'_> {
             match self.table.take() {
                 Some(table) => self.page.lines.push(MLine::Table(table)),
                 None => {
-                    let table =
-                        Table { indent: self.content_indent(), align, max_width, columns: Vec::new(), header: false, rows: Vec::new() };
+                    let table = Table {
+                        indent: self.content_indent(),
+                        align,
+                        max_width,
+                        columns: Vec::new(),
+                        header: false,
+                        rows: Vec::new(),
+                        cut: false,
+                    };
                     self.table = Some(table);
                 }
             }
@@ -1410,6 +1454,57 @@ mod tests {
         assert_eq!(page.items.len(), 2);
         let Interactive::Link { fields, .. } = &page.items[0] else { panic!() };
         assert_eq!(fields, &["a", "b"]);
+    }
+
+    #[test]
+    fn a_wide_row_and_many_short_ones_make_a_bounded_table() {
+        // The shape of a 30 KB message that once made gigabytes of HTML: one
+        // very wide row, then thousands of one-cell rows.
+        let mut source = String::from("`t\n");
+        source.push_str(&"a|".repeat(15000));
+        source.push('\n');
+        source.push_str(&"b\n".repeat(7500));
+        source.push_str("`t\nafter");
+        assert!(source.len() > 30_000);
+        let page = parse(&source);
+        // The web page: no padding of the short rows, so what is kept is
+        // what is drawn.
+        let html = page.to_html(|url| url.to_string(), |_| None);
+        assert!(html.len() < source.len(), "{} bytes of HTML for {} of source", html.len(), source.len());
+        assert!(html.contains("[table cut short]") && html.contains("after"));
+        // The terminal: every row is as wide as the widest, so rows are
+        // dropped to keep that area down.
+        let layout = page.layout(300, None, &HashMap::new(), None);
+        let drawn: usize = text(&layout).iter().map(|row| row.chars().count()).sum();
+        assert!(drawn < source.len() * 4, "{drawn} characters for {} of source", source.len());
+        assert!(text(&layout).iter().any(|row| row.contains("[table cut short]")));
+    }
+
+    #[test]
+    fn tables_keep_a_number_of_columns_and_rows() {
+        let page = parse(&format!("`t\n{}\n`t", "x|".repeat(TABLE_MAX_COLUMNS + 10)));
+        let html = page.to_html(|url| url.to_string(), |_| None);
+        assert_eq!(html.matches("<td ").count(), TABLE_MAX_COLUMNS + 1, "the cells and the note");
+        assert!(html.contains("[table cut short]"));
+        let page = parse(&format!("`t\n{}`t", "x\n".repeat(TABLE_MAX_ROWS + 10)));
+        let html = page.to_html(|url| url.to_string(), |_| None);
+        assert_eq!(html.matches("<tr>").count(), TABLE_MAX_ROWS + 1, "the rows and the note");
+        assert!(html.contains("[table cut short]"));
+        // A table within the limits is whole, a short row's last cell spanning the rest.
+        let page = parse("`t\n| a | b | c |\n| d |\n`t");
+        let html = page.to_html(|url| url.to_string(), |_| None);
+        assert!(html.contains("colspan=\"3\"") && !html.contains("table cut short"), "{html}");
+        assert_eq!(html.matches("<td ").count(), 4, "{html}");
+    }
+
+    #[test]
+    fn a_page_of_too_much_html_stops_with_a_note() {
+        let page = parse(&"x\n".repeat(250_000));
+        let html = page.to_html(|url| url.to_string(), |_| None);
+        assert!(html.len() < html::MAX_HTML_BYTES + 1024, "{}", html.len());
+        assert!(html.contains("[page too large to show]") && html.ends_with("</div>"));
+        let small = parse("one\ntwo").to_html(|url| url.to_string(), |_| None);
+        assert!(!small.contains("too large"));
     }
 
     #[test]
