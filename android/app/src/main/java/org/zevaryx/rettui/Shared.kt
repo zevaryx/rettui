@@ -7,6 +7,8 @@ import android.webkit.WebResourceResponse
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.UUID
 
 /**
@@ -42,13 +44,15 @@ object Shared {
                 continue
             }
             val name = displayName(context, uri)
+            val id = UUID.randomUUID().toString()
+            val copy = File(dir, id)
             try {
-                val id = UUID.randomUUID().toString()
-                val copy = File(dir, id)
+                // Stops at what is left of the limit: another app may offer
+                // a file with no end, and what is copied fills the phone.
                 val copied = context.contentResolver.openInputStream(uri)?.use { input ->
-                    copy.outputStream().use { output -> input.copyTo(output) }
+                    copy.outputStream().use { output -> copyWithin(input, output, MOST_BYTES - total) }
                 } ?: 0L
-                if (total + copied > MOST_BYTES) {
+                if (copied < 0) {
                     copy.delete()
                     left.add(name)
                     continue
@@ -58,10 +62,27 @@ object Shared {
                 File(dir, "$id.type").writeText(type)
                 files.put(JSONObject().put("url", PATH + id).put("name", name).put("type", type))
             } catch (e: Exception) {
+                copy.delete()
                 left.add(name)
             }
         }
         return files to left
+    }
+
+    /**
+     * Copy at most `limit` bytes of `input` to `output`: how many, or -1 if
+     * there is more (what was written is the caller's to delete).
+     */
+    private fun copyWithin(input: InputStream, output: OutputStream, limit: Long): Long {
+        val buffer = ByteArray(64 * 1024)
+        var copied = 0L
+        while (true) {
+            val n = input.read(buffer)
+            if (n < 0) return copied
+            copied += n
+            if (copied > limit) return -1
+            output.write(buffer, 0, n)
+        }
     }
 
     /**
