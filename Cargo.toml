@@ -63,6 +63,7 @@ axum = { version = "0.8.9", default-features = false, features = ["http1", "json
 p256 = { version = "0.14", default-features = false, features = ["ecdh", "ecdsa", "sha256", "std"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
+hmac = "0.12"
 sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls", "proxy-from-env"] }
 # What rettui's own HTTPS requests trust (see src/https.rs): the bundled

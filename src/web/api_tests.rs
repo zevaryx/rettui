@@ -996,6 +996,44 @@ async fn paper_backups_tiles_and_signing_out() {
 }
 
 #[tokio::test]
+async fn rettui_proves_itself_to_a_client_that_knows_the_token() {
+    use hmac::{Hmac, Mac};
+    let web = TestWeb::start("hello");
+    let nonce = "00112233445566778899aabbccddeeff";
+    // Without logging in: the app asks before it has sent the token anywhere.
+    let said = web.send(Method::GET, &format!("/api/hello?nonce={nonce}"), None, true).await;
+    assert_eq!(said.status, StatusCode::OK, "{}", said.text());
+    // HMAC-SHA256, keyed by the token, of the nonce and the port asked.
+    let proof = |token: &str, port: u16| {
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(token.as_bytes()).unwrap();
+        mac.update(format!("rettui-hello:{port}:{nonce}").as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    };
+    assert_eq!(said.text(), proof(TOKEN, 8740));
+    assert_eq!(said.text().len(), 64);
+    // Not one that doesn't have the token, nor for another port (so another
+    // program can't pass the question on to rettui and give its answer).
+    assert_ne!(said.text(), proof("not the token", 8740));
+    assert_ne!(said.text(), proof(TOKEN, 41165));
+    // Another nonce, another answer; the same one, the same.
+    let other = web.send(Method::GET, "/api/hello?nonce=ffeeddccbbaa99887766554433221100", None, true).await;
+    assert_ne!(other.text(), said.text());
+    assert_eq!(web.send(Method::GET, &format!("/api/hello?nonce={nonce}"), None, true).await.text(), said.text());
+    // Only a nonce of the right shape is answered, so nothing else is signed.
+    for wrong in ["", "?nonce=", "?nonce=abc", "?nonce=zz112233445566778899aabbccddeeff", "?nonce=00112233445566778899aabbccddeeff00"] {
+        let refused = web.send(Method::GET, &format!("/api/hello{wrong}"), None, true).await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{wrong}");
+    }
+    // It is the only thing in the API open to everyone.
+    assert_eq!(web.send(Method::GET, "/api/state", None, true).await.status, StatusCode::UNAUTHORIZED);
+    // A new token (signing the others out) is what proves it from then on.
+    assert_eq!(web.post("/api/sign-out-others", json!({})).await.status, StatusCode::OK);
+    let renewed = web.send(Method::GET, &format!("/api/hello?nonce={nonce}"), None, true).await;
+    assert_eq!(renewed.text(), proof(&web.state().token(), 8740));
+    assert_ne!(renewed.text(), said.text());
+}
+
+#[tokio::test]
 async fn notifications_a_browser_missed_while_away() {
     let web = TestWeb::start("missed");
     web.with(|app| {

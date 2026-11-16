@@ -28,8 +28,6 @@ import android.util.Log
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.net.URL
 
 /**
@@ -107,13 +105,11 @@ class RettuiService : Service() {
         fun token(context: Context): String? =
             File(Rettui.dataDir(context), "web_token").takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.length >= 32 }
 
-        /** Whether the web UI answers. */
-        fun listening(context: Context): Boolean = try {
-            Socket().use { it.connect(InetSocketAddress("127.0.0.1", Rettui.port(context)), 300) }
-            true
-        } catch (e: Exception) {
-            false
-        }
+        /**
+         * Whether the web UI answers, and is rettui's (see [Rettui.genuine]):
+         * another app may be holding its port.
+         */
+        fun listening(context: Context): Boolean = Rettui.genuine(context)
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, RettuiService::class.java))
@@ -190,7 +186,7 @@ class RettuiService : Service() {
 
         val log = logFile(this).apply { writeText("") }
         Os.setenv("RUST_BACKTRACE", "1", true)
-        val args = Rettui.args(this, "--web", "127.0.0.1:${Rettui.choosePort(this)}")
+        val args = Rettui.args(this, "--web", "127.0.0.1:${Rettui.prepareStart(this)}")
         runner = Thread({
             val code = try {
                 Native.run(args, log.path)

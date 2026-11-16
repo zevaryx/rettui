@@ -6,9 +6,11 @@ import android.system.Os
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
-import java.net.InetAddress
-import java.net.ServerSocket
 import java.net.URL
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /** rettui as the app has it: where its data is, its commands, and its process. */
 object Rettui {
@@ -21,19 +23,77 @@ object Rettui {
     /** The web UI's usual port. */
     private const val PORT = 8740
 
-    /** The port the web UI is on (kept in a file, for the app's other process). */
-    fun port(context: Context): Int = runCatching { File(context.filesDir, "port").readText().trim().toInt() }.getOrDefault(PORT)
+    /**
+     * Where rettui writes the port it listens on, once it listens (the app's
+     * other process reads it). Not written by the app: a port written before
+     * rettui had it could be read while another app held it.
+     */
+    fun portFile(context: Context) = File(context.filesDir, "port")
+
+    /** The port the web UI is on, once rettui has said so. */
+    fun boundPort(context: Context): Int? = runCatching { portFile(context).readText().trim().toInt() }.getOrNull()
 
     /**
-     * Pick the web UI's port before it starts: the one it had (so the page
-     * keeps what this browser saved for it), or another app has that one:
-     * any free one.
+     * The port the web UI is on, or was last (what rettui is asked for next
+     * time, so that the page keeps what this browser saved for it), else the
+     * usual one.
      */
-    fun choosePort(context: Context): Int {
-        val loopback = InetAddress.getByName("127.0.0.1")
-        val free = { port: Int -> runCatching { ServerSocket(port, 1, loopback).use { it.localPort } }.getOrNull() }
-        val port = free(port(context)) ?: free(0) ?: PORT
-        File(context.filesDir, "port").writeText(port.toString())
+    fun port(context: Context): Int = boundPort(context) ?: PORT
+
+    /** Forget the port of a run that is over, before the next starts. */
+    fun forgetPort(context: Context) {
+        portFile(context).delete()
+    }
+
+    /** The variable rettui takes the file to write its port to from. */
+    private const val PORT_FILE = "RETTUI_PORT_FILE"
+
+    /** Hex digits of `bytes`. */
+    private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
+
+    /**
+     * Whether what answers on the web UI's port is rettui, and not another app
+     * that holds the port: the login token is sent only to what has proved
+     * it. It is asked for the HMAC-SHA256, keyed by the token, of a nonce
+     * made here and the port (`GET /api/hello`, see `hello` in
+     * src/web/routes.rs); only a program that has the token can give it, and
+     * nothing is given away by asking.
+     */
+    fun genuine(context: Context): Boolean {
+        val port = boundPort(context) ?: return false
+        val token = RettuiService.token(context) ?: return false
+        return try {
+            val nonce = hex(ByteArray(16).also { SecureRandom().nextBytes(it) })
+            val connection = URL("http://127.0.0.1:$port/api/hello?nonce=$nonce").openConnection() as HttpURLConnection
+            connection.connectTimeout = 500
+            connection.readTimeout = 2000
+            // An answer from somewhere else is not rettui's.
+            connection.instanceFollowRedirects = false
+            try {
+                if (connection.responseCode != 200) return false
+                val buffer = CharArray(128)
+                val length = connection.inputStream.bufferedReader().use { it.read(buffer) }
+                val said = if (length > 0) String(buffer, 0, length).trim() else ""
+                val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(token.toByteArray(), "HmacSHA256")) }
+                val proof = hex(mac.doFinal("rettui-hello:$port:$nonce".toByteArray()))
+                MessageDigest.isEqual(proof.toByteArray(), said.toByteArray())
+            } finally {
+                connection.disconnect()
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Get ready for rettui to start: the port it had is asked for, what the
+     * last run said about its port is forgotten, and rettui is told where to
+     * write the port it gets. The port to ask for.
+     */
+    fun prepareStart(context: Context): Int {
+        val port = port(context)
+        forgetPort(context)
+        Os.setenv(PORT_FILE, portFile(context).path, true)
         return port
     }
 
@@ -137,6 +197,8 @@ object Rettui {
      */
     fun api(context: Context, path: String, body: JSONObject? = null): Said = try {
         val token = RettuiService.token(context) ?: error(context.getString(R.string.not_running))
+        // Only rettui is given the token.
+        if (!genuine(context)) error(context.getString(R.string.not_running))
         val connection = URL("http://127.0.0.1:${port(context)}/api/$path").openConnection() as HttpURLConnection
         connection.setRequestProperty("Authorization", "Bearer $token")
         connection.connectTimeout = 3000

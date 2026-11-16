@@ -75,6 +75,7 @@ fn ok() -> ApiResult {
 
 pub fn router(state: WebState) -> Router {
     let api = Router::new()
+        .route("/hello", get(hello))
         .route("/state", get(get_state))
         .route("/events", get(events))
         .route("/push", get(push_key))
@@ -273,8 +274,8 @@ style=\"font:inherit;padding:.4em;width:min(28em,100%);box-sizing:border-box\"><
 /// app added to a home screen; the manifest (browsers fetch it without the
 /// login cookie); and the service worker (browsers fetch it again on their
 /// own). None of them hold anything private.
-const PUBLIC: [&str; 6] =
-    ["/brand/wordmark.png", "/brand/icon.png", "/brand/icon-512.png", "/manifest.webmanifest", "/sw.js", "/rettui-ca.crt"];
+const PUBLIC: [&str; 7] =
+    ["/brand/wordmark.png", "/brand/icon.png", "/brand/icon-512.png", "/manifest.webmanifest", "/sw.js", "/rettui-ca.crt", "/api/hello"];
 
 /// Tokens a request carries: in the login cookie, an `Authorization: Bearer`
 /// header or an `X-Rettui-Token` header.
@@ -567,6 +568,34 @@ async fn face(Path(address): Path<String>) -> Response {
 }
 
 // ---- state and live updates ----------------------------------------------
+
+/// What `hello` signs, for a client to check: a nonce it made, and the port
+/// it is talking to. With the port in it, a program that holds another port
+/// can't pass a client's question on to rettui and hand back the answer.
+fn hello_proof(token: &str, port: u16, nonce: &str) -> String {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(token.as_bytes()).expect("HMAC takes a key of any length");
+    mac.update(format!("rettui-hello:{port}:{nonce}").as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Proof that this is rettui, for the Android app to ask before it sends the
+/// login token anywhere: another app may be holding the port. The answer is
+/// an HMAC (SHA-256) of the nonce asked with (32 hex digits) and this port,
+/// keyed by the token, so only a server that knows the token can give it and
+/// the token isn't given away. It is the same work whoever asks.
+async fn hello(State(state): State<WebState>, Query(query): Query<HelloQuery>) -> Result<String, ApiError> {
+    if query.nonce.len() != 32 || !query.nonce.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(bad("nonce must be 32 hex digits"));
+    }
+    Ok(hello_proof(&state.token(), state.port, &query.nonce))
+}
+
+#[derive(Deserialize)]
+struct HelloQuery {
+    #[serde(default)]
+    nonce: String,
+}
 
 /// Sign every other browser out: a new login secret, kept by this
 /// browser's cookie (scripts using the old one need the new one, from the

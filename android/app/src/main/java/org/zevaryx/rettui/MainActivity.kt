@@ -331,7 +331,13 @@ open class MainActivity : Activity() {
         web.visibility = android.view.View.VISIBLE
         // Loaded again after rettui was away: its page starts over.
         loaded = false
-        web.loadUrl("http://127.0.0.1:${Rettui.port(this)}/?token=$token")
+        // Logged in by the cookie rettui would have given for the link with
+        // the token in it, so that the token is in no address (the page's
+        // history, the logs, what it sends as its referrer). Loaded once the
+        // cookie is set.
+        val origin = "http://127.0.0.1:${Rettui.port(this)}"
+        val cookie = "rettui_token=$token; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000"
+        CookieManager.getInstance().setCookie(origin, cookie) { web.loadUrl("$origin/") }
         main.postDelayed(watch, 2000)
     }
 
@@ -610,6 +616,8 @@ open class MainActivity : Activity() {
         Toast.makeText(this, getString(R.string.downloading, name), Toast.LENGTH_SHORT).show()
         Thread {
             val result = try {
+                // The token and the login cookie go to rettui only.
+                if (!Rettui.genuine(this)) error(getString(R.string.not_running))
                 val connection = URL(url).openConnection() as HttpURLConnection
                 cookie?.let { connection.setRequestProperty("Cookie", it) }
                 RettuiService.token(this)?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
