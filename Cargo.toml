@@ -44,6 +44,8 @@ futures-util = "0.3"
 unicode-width = "0.2"
 unicode-segmentation = "1"
 unicode-normalization = "0.1"
+# Look-alike nicknames on a hosted RRC hub (Unicode confusables, TS #39).
+unicode-security = "0.1"
 # Emoji names, groups and shortcodes, for the emoji pickers.
 emojis = "0.9"
 # Pictures in pages and messages, and a hosted node's pictures made into WebP.

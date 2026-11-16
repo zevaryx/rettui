@@ -687,14 +687,17 @@ impl Core {
         }
         let Some(nick) = env.nick.clone() else { return (if moved { env.encode() } else { data.to_vec() }, None) };
         let cleaned = crate::names::clean(&nick);
+        let sessions = &self.router.state.sessions;
+        // Taken: the hub's, or someone else's, by how it looks (in any case,
+        // and in letters of any script). The nick this link has already was
+        // looked at when it got it.
         let taken = |wanted: &str| {
-            wanted.eq_ignore_ascii_case("hub")
-                || self
-                    .router
-                    .state
-                    .sessions
-                    .iter()
-                    .any(|(other, session)| *other != link && session.nick.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(wanted)))
+            if sessions.get(&link).is_some_and(|s| s.nick.as_deref() == Some(wanted)) {
+                return false;
+            }
+            let wanted = looks(wanted);
+            let alike = |other: &str| looks(other).iter().any(|look| wanted.contains(look));
+            alike("hub") || sessions.iter().any(|(other, session)| *other != link && session.nick.as_deref().is_some_and(alike))
         };
         let usable = cleaned.filter(|n| !taken(n));
         if usable.as_deref() == Some(nick.as_str()) {
@@ -1270,6 +1273,14 @@ fn modes(room: &rsrrcd::Room) -> String {
     if flags.is_empty() { "(none)".into() } else { format!("+{flags}") }
 }
 
+/// What a nick looks like: its confusable "skeleton" (Unicode TS #39), as
+/// written and in lower case. Two nicks that share one look alike: `amy`,
+/// `AMY` and `аmy` (with a Cyrillic а), or `rn` and `m`.
+fn looks(nick: &str) -> [String; 2] {
+    let skeleton = |text: &str| unicode_security::skeleton(text).collect::<String>();
+    [skeleton(nick), skeleton(&nick.to_lowercase())]
+}
+
 /// Where older clients put a HELLO's nick: in its body.
 const B_HELLO_NICK_LEGACY: u64 = 64;
 
@@ -1664,6 +1675,44 @@ mod tests {
         assert_eq!(nick(&core, 2).as_deref(), Some("bob"), "hidden characters are taken out");
         let out = send(&mut core, 2, Envelope::new(t::PART, &BOB).room("lobby"));
         assert!(sent(&out).iter().any(|(link, kind, ..)| *link == 1 && *kind == t::PARTED), "members still part");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nicks_that_look_alike_are_one_nick() {
+        use ciborium::value::Integer;
+        let dir = std::env::temp_dir().join(format!("rettui-hub-look-alikes-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        connect(&mut core, 1, AMY, "amy");
+        let nick = |core: &Core, link: u8| core.router.state.sessions[&[link; 16]].nick.clone();
+        // A HELLO again, with the nick where clients put it, or the older way.
+        let hello = |nick: &str| Envelope::new(t::HELLO, &BOB).body(crate::rrc::hello_body()).nick(Some(nick));
+        let legacy = |nick: &str| {
+            let body = Value::Map(vec![(Value::Integer(Integer::from(B_HELLO_NICK_LEGACY)), Value::Text(nick.into()))]);
+            Envelope::new(t::HELLO, &BOB).body(body)
+        };
+        connect(&mut core, 2, BOB, "bob");
+        // A Cyrillic а, an Armenian ս in hub, and rn for m: taken, either way.
+        for wanted in ["\u{0430}my", "\u{0410}MY", "h\u{057d}b", "arny"] {
+            for frame in [hello(wanted), legacy(wanted)] {
+                let out = send(&mut core, 2, frame);
+                assert_eq!(nick(&core, 2).as_deref(), Some("bob"), "{wanted}");
+                assert!(
+                    sent(&out)
+                        .iter()
+                        .any(|(link, _, _, text)| *link == 2 && text.as_deref().is_some_and(|t| t.contains("isn't available")))
+                );
+            }
+        }
+        // Other scripts are welcome.
+        let ivan = "\u{0418}\u{0432}\u{0430}\u{043d}";
+        let _ = send(&mut core, 2, legacy(ivan));
+        assert_eq!(nick(&core, 2).as_deref(), Some(ivan));
+        let _ = send(&mut core, 2, hello(ivan));
+        assert_eq!(nick(&core, 2).as_deref(), Some(ivan), "its own nick again");
+        // And someone else can't take a look-alike of it (a Latin a).
+        connect(&mut core, 3, YOU, "\u{0418}\u{0432}a\u{043d}");
+        assert_eq!(nick(&core, 3), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
