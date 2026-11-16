@@ -131,7 +131,8 @@ impl Tui {
 
     pub fn tab(&mut self, tab: Tab) -> &mut Self {
         let number = Tab::ALL.iter().position(|t| *t == tab).unwrap() + 1;
-        self.key(KeyCode::Char(char::from(b'0' + (number % 10) as u8)))
+        // The eleventh has `-`.
+        self.key(KeyCode::Char(if number == 11 { '-' } else { char::from(b'0' + (number % 10) as u8) }))
     }
 
     /// Nothing over the tab: whatever an earlier step left open closed.
@@ -2701,4 +2702,54 @@ fn a_tiny_terminal_and_footers_with_nothing_to_pick() {
     with_bob(&mut tui);
     tui.tab(Tab::Messages);
     assert!(tui.draw().lines().last().unwrap().contains("r reply"));
+}
+
+#[test]
+fn the_tools_tab_runs_the_network_tests_and_shows_the_interfaces() {
+    use crate::app::reach::Reach;
+    let mut tui = Tui::new("tools-tab");
+    tui.app.rns.text = "[interfaces]\n  [[Testnet]]\n    type = TCPClientInterface\n    enabled = yes\n    target_host = example.org\n    target_port = 4242\n    networkname = net\n".into();
+    tui.app.interfaces.push(crate::net::InterfaceInfo { name: "TCPInterface[Testnet]".into(), online: true, ..Default::default() });
+    // The eleventh tab, by `-`.
+    tui.tab(Tab::Messages).key(KeyCode::Char('-'));
+    assert_eq!(tui.app.tab, Tab::Tools);
+    let shown = tui.draw();
+    assert!(shown.contains("Find a path") && shown.contains("Check interfaces") && shown.contains("Nothing tried yet"), "{shown}");
+    assert!(shown.contains("TCPInterface[Testnet]") && shown.contains("example.org:4242") && shown.contains("IFAC"), "{shown}");
+    // A path asked for any address typed; then it's remembered, with a probe.
+    let address = "ab".repeat(16);
+    tui.key(KeyCode::Char('P')).keys(&address).key(KeyCode::Enter);
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::FindPath(hash) if *hash == [0xab; 16])));
+    // The address last tried is filled in.
+    tui.key(KeyCode::Char('T')).key(KeyCode::Enter);
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::Probe(hash) if *hash == [0xab; 16])));
+    let shown = tui.draw();
+    assert!(shown.contains(&address) && shown.contains("path: ") && shown.contains("probe: "), "{shown}");
+    // Forgetting one, with the last address filled in.
+    tui.key(KeyCode::Char('D')).key(KeyCode::Enter);
+    assert!(tui.sent().iter().any(|c| matches!(c, NetCommand::ForgetPath(hash) if *hash == [0xab; 16])));
+    // The entry points tried, and how it went.
+    tui.key(KeyCode::Char('c'));
+    assert_eq!(tui.app.entry_check("Testnet"), Some(Reach::Checking));
+    tui.app.entry_checks.lock().unwrap().insert("Testnet".into(), Reach::Down("refused"));
+    let shown = tui.draw();
+    assert!(shown.contains("down · refused") && shown.contains("nothing accepted the connection"), "{shown}");
+    // Moving to a tool and Enter, a click, and the tools that open over it.
+    tui.key(KeyCode::Down).key(KeyCode::Up).key(KeyCode::Char('j')).key(KeyCode::Char('k'));
+    tui.key(KeyCode::Char('I'));
+    assert!(tui.app.whois.open);
+    assert!(tui.draw().contains("Identities"));
+    // Its question first, then it.
+    tui.key(KeyCode::Esc).key(KeyCode::Esc);
+    assert!(!tui.app.whois.open);
+    tui.key(KeyCode::Char('v'));
+    assert!(tui.app.speed.open);
+    tui.key(KeyCode::Esc).key(KeyCode::Esc);
+    assert!(!tui.app.speed.open);
+    let list = tui.app.regions.tools;
+    tui.click(list.x + 4, list.y + 7);
+    assert_eq!(tui.app.tools.selected, 7);
+    tui.key(KeyCode::Char('y'));
+    tui.scroll(list.x + 4, list.y + 1, false);
+    assert!(tui.app.tools.selected < 7);
 }

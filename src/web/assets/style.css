@@ -1518,3 +1518,12 @@ button.inline { min-height: 0; padding: 0 8px; font-size: 12px; line-height: 1.5
 @media (pointer: coarse) and (max-height: 260px) {
   #bottombar, #appbar, .pane-main > header, .compose .reply-bar { display: none; }
 }
+
+/* A hold on a conversation's picture counts as a hold on the conversation. */
+.list-item > .avatar { pointer-events: none; -webkit-touch-callout: none; user-select: none; }
+
+/* Tools tab */
+.tools-buttons { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+.tools-recent { max-height: 30vh; }
+.tools-interfaces .ok { color: var(--green); }
+.tools-interfaces .bad { color: var(--red); }

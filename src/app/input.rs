@@ -221,6 +221,11 @@ impl App {
                 self.switch_tab(Tab::Repos);
                 return;
             }
+            // The eleventh.
+            KeyCode::Char('-') if !key.modifiers.contains(KeyModifiers::ALT) => {
+                self.switch_tab(Tab::Tools);
+                return;
+            }
             KeyCode::Char('A') => {
                 self.send(NetCommand::Announce);
                 return;
@@ -261,6 +266,7 @@ impl App {
             Tab::Reticulum => self.rns_key(key),
             Tab::Hub => self.hub_key(key),
             Tab::Repos => self.repos_key(key),
+            Tab::Tools => self.tools_key(key),
         }
     }
 
@@ -569,6 +575,7 @@ impl App {
             Tab::Reticulum => self.scroll_rns(at, delta),
             Tab::Hub => self.scroll_hub(delta.signum()),
             Tab::Repos => self.scroll_repos(delta.signum()),
+            Tab::Tools => self.tools.selected = apply(self.tools.selected).min(super::tools::Tool::ALL.len() - 1),
         }
     }
 
@@ -595,6 +602,7 @@ impl App {
             Tab::Reticulum => self.click_rns(at, double),
             Tab::Hub => self.click_hub(at),
             Tab::Repos => self.click_repos(at),
+            Tab::Tools => self.click_tools(at),
         }
     }
 }

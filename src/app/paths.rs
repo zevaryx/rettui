@@ -91,6 +91,7 @@ impl App {
         if matches!(self.path_lookups.get(&key), Some(PathLookup::Waiting(_))) {
             return Ok(());
         }
+        self.note_tool_address(&key);
         self.path_lookups.insert(key.clone(), PathLookup::Waiting(None));
         self.send(NetCommand::FindPath(hash));
         self.confirm(format!("Finding a path to {}…", self.store.display_name(&key)));
@@ -113,6 +114,7 @@ impl App {
         if matches!(self.probes.get(&key), Some(ProbeState::Waiting(_))) {
             return Ok(());
         }
+        self.note_tool_address(&key);
         self.probes.insert(key.clone(), ProbeState::Waiting(None));
         self.send(NetCommand::Probe(hash));
         self.confirm(format!("Probing {}…", self.store.display_name(&key)));

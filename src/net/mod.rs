@@ -7,6 +7,7 @@
 //! [`crate::nomad`] and [`crate::rrc`].
 
 pub mod autopn;
+pub mod checks;
 pub mod discovered;
 pub mod found;
 pub mod git;

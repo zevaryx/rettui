@@ -11,6 +11,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{accent, ago, block, dim, picked_style, wrap};
 use crate::app::App;
 use crate::app::contacts::{CardAction, PingState, ping_label, trust_label};
+use crate::app::paths::{lookup_label, probe_state_label};
 
 /// The card's widest, in columns.
 const WIDTH: u16 = 64;
@@ -94,6 +95,12 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
             PingState::Waiting => String::new(),
         };
         lines.push(field("Ping", format!("{}{when}", ping_label(ping))));
+    }
+    if let Some(lookup) = app.path_lookups.get(&key) {
+        lines.push(field("Path", lookup_label(lookup, chrono::Utc::now().timestamp())));
+    }
+    if let Some(probe) = app.probes.get(&key) {
+        lines.push(field("Probe", probe_state_label(probe)));
     }
     if let Some(conversation) = app.store.conversations.get(&key) {
         let mut count = format!("{}", conversation.messages.len());

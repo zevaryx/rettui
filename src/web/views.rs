@@ -231,6 +231,55 @@ pub fn guide_reach(app: &App) -> Value {
     )
 }
 
+/// The Tools tab: the addresses tried lately with how the path and the
+/// probe went, and each interface with how reaching its entry point went.
+pub fn tools(app: &App) -> Value {
+    use crate::app::paths::{lookup_label, probe_state_label};
+    use crate::app::reach::Reach;
+    let now = chrono::Utc::now().timestamp();
+    let history: Vec<Value> = app
+        .tools
+        .history
+        .iter()
+        .map(|key| {
+            json!({
+                "key": key,
+                "name": app.store.display_name(key),
+                "path": app.path_lookups.get(key).map(|l| lookup_label(l, now)),
+                "probe": app.probes.get(key).map(probe_state_label),
+            })
+        })
+        .collect();
+    let interfaces: Vec<Value> = app
+        .interface_rows()
+        .into_iter()
+        .map(|row| {
+            let check = row.check.map(|check| {
+                let state = match check {
+                    Reach::Checking => "checking",
+                    Reach::Up(_) => "up",
+                    Reach::Down(_) => "down",
+                };
+                let help = match check {
+                    Reach::Down(why) => Some(crate::app::tools::down_hint(why)),
+                    _ => None,
+                };
+                json!({ "state": state, "label": check.label(), "help": help })
+            });
+            json!({
+                "name": row.info.name,
+                "online": row.info.online,
+                "rx": row.info.rx_bytes,
+                "tx": row.info.tx_bytes,
+                "details": row.info.details(),
+                "entry": row.entry.map(|e| json!({ "host": e.host, "port": e.port, "enabled": e.enabled, "ifac": e.ifac })),
+                "check": check,
+            })
+        })
+        .collect();
+    json!({ "history": history, "interfaces": interfaces })
+}
+
 fn reach(reach: crate::app::reach::Reach) -> Value {
     use crate::app::reach::Reach;
     match reach {

@@ -4,7 +4,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Position;
 
-use super::{App, PromptKind};
+use super::{App, PromptKind, Tab};
 use crate::net::{Hash, NetCommand, Ping, parse_hash};
 use crate::store::{MAX_ALIAS, MAX_NOTES, Trust};
 
@@ -15,6 +15,14 @@ pub enum CardAction {
     Notes,
     Copy,
     Ping,
+    /// Find the path to them, as `rnpath` does.
+    FindPath,
+    /// Time an answer from them, as `rnprobe` does.
+    Probe,
+    /// Forget the path to them, so the next use asks for a fresh one.
+    ForgetPath,
+    /// Whose address this is: the identity behind it and its other addresses.
+    Identity,
     /// Ask where they are (a Sideband telemetry request).
     AskLocation,
     /// Send a Sideband command.
@@ -40,6 +48,10 @@ impl CardAction {
             CardAction::Notes => ("Notes", "e"),
             CardAction::Copy => ("Copy address", "y"),
             CardAction::Ping => ("Ping", "p"),
+            CardAction::FindPath => ("Path", "P"),
+            CardAction::Probe => ("Probe", "T"),
+            CardAction::ForgetPath => ("Forget path", "D"),
+            CardAction::Identity => ("Identity", "I"),
             CardAction::AskLocation => ("Ask where they are", "w"),
             CardAction::Command => ("Command", "k"),
             CardAction::Track => ("Track", "f"),
@@ -241,7 +253,16 @@ impl App {
     /// The card's buttons for someone, by how far they're trusted.
     pub fn card_actions(&self, key: &str) -> Vec<CardAction> {
         let trust = self.store.contact(key).trust;
-        let mut actions = vec![CardAction::Rename, CardAction::Notes, CardAction::Copy, CardAction::Ping];
+        let mut actions = vec![
+            CardAction::Rename,
+            CardAction::Notes,
+            CardAction::Copy,
+            CardAction::Ping,
+            CardAction::FindPath,
+            CardAction::Probe,
+            CardAction::ForgetPath,
+            CardAction::Identity,
+        ];
         if trust != Trust::Blocked {
             let track = if self.track(key).is_some() { CardAction::StopTracking } else { CardAction::Track };
             actions.extend([CardAction::AskLocation, track, CardAction::Command]);
@@ -365,6 +386,26 @@ impl App {
                 if let Err(e) = self.ping(&key) {
                     self.warn(e);
                 }
+            }
+            CardAction::FindPath => {
+                if let Err(e) = self.find_path_to(&key) {
+                    self.warn(e);
+                }
+            }
+            CardAction::Probe => {
+                if let Err(e) = self.probe(&key) {
+                    self.warn(e);
+                }
+            }
+            CardAction::ForgetPath => match self.forget_path(&key) {
+                Ok(()) => self.confirm(format!("Forgot the path to {}", self.store.display_name(&key))),
+                Err(e) => self.warn(e),
+            },
+            // The identities lookup is the Network tab's.
+            CardAction::Identity => {
+                self.contact_card = None;
+                self.switch_tab(Tab::Network);
+                self.open_whois(Some(key));
             }
             CardAction::AskLocation => self.ask_location(&key),
             CardAction::Command => self.open_command_prompt(key),
@@ -564,7 +605,7 @@ mod tests {
         };
         app.on_message(from(0xab, 1));
         assert!(!app.is_known(&alice), "never written to");
-        assert_eq!(app.card_actions(&alice)[7..10], [CardAction::Trust, CardAction::LeaveAsIs, CardAction::Block]);
+        assert_eq!(app.card_actions(&alice)[11..14], [CardAction::Trust, CardAction::LeaveAsIs, CardAction::Block]);
         while net.try_recv().is_ok() {}
         app.block_contact(&alice).unwrap();
         assert!(!app.store.conversations.contains_key(&alice));
@@ -722,5 +763,30 @@ mod tests {
         app.set_trust(&"ab".repeat(16), Trust::Unknown).unwrap();
         assert_eq!(told(&mut net), (Some(vec![[0xcd; 16]]), false));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_card_finds_probes_and_forgets_paths_and_looks_up_who_they_are() {
+        use crate::app::paths::{PathLookup, ProbeState};
+        let dir = std::env::temp_dir().join(format!("rettui-card-tools-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut app, mut commands) = crate::app::test_app_with_net(&dir, Settings::default(), Store::default());
+        let key = "ab".repeat(16);
+        let press = |app: &mut App, c: char| app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        app.contact_card = Some(key.clone());
+        press(&mut app, 'P');
+        assert_eq!(app.path_lookups.get(&key), Some(&PathLookup::Waiting(None)));
+        press(&mut app, 'T');
+        assert_eq!(app.probes.get(&key), Some(&ProbeState::Waiting(None)));
+        press(&mut app, 'D');
+        assert!(!app.path_lookups.contains_key(&key));
+        let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
+        assert!(sent.iter().any(|c| matches!(c, NetCommand::FindPath(_))));
+        assert!(sent.iter().any(|c| matches!(c, NetCommand::Probe(_))));
+        assert!(sent.iter().any(|c| matches!(c, NetCommand::ForgetPath(_))));
+        // Identity: the card closes and the lookup opens in the Network tab.
+        press(&mut app, 'I');
+        assert!(app.contact_card.is_none() && app.whois.open && app.tab == Tab::Network);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -59,6 +59,7 @@ mod settings;
 pub mod shrink;
 pub mod speedtest;
 pub mod tables;
+pub mod tools;
 pub mod traffic;
 pub mod trails;
 mod updates;
@@ -66,6 +67,7 @@ pub mod whois;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::{Position, Rect};
@@ -139,10 +141,11 @@ pub enum Tab {
     Reticulum,
     Hub,
     Repos,
+    Tools,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 10] = [
+    pub const ALL: [Tab; 11] = [
         Tab::Messages,
         Tab::Games,
         Tab::Channels,
@@ -153,6 +156,7 @@ impl Tab {
         Tab::Reticulum,
         Tab::Hub,
         Tab::Repos,
+        Tab::Tools,
     ];
 
     pub fn title(self) -> &'static str {
@@ -167,6 +171,7 @@ impl Tab {
             Tab::Reticulum => "Reticulum",
             Tab::Hub => "Hub",
             Tab::Repos => "Repos",
+            Tab::Tools => "Tools",
         }
     }
 }
@@ -177,6 +182,9 @@ pub enum PromptKind {
     GoTo,
     /// An address to find a path to (see [`paths`]).
     FindPath,
+    /// An address to probe, or whose path to forget (from the Tools tab).
+    ProbeAddress,
+    ForgetAddress,
     EditField(usize),
     /// A `settings.json` entry, by key.
     EditSetting(&'static str),
@@ -390,6 +398,8 @@ pub struct Regions {
     pub card_buttons: Vec<(Rect, contacts::CardAction)>,
     pub compose: Rect,
     pub peers: Rect,
+    /// The Tools tab's list of tools.
+    pub tools: Rect,
     /// Network tab search box.
     pub net_search: Rect,
     pub address: Rect,
@@ -594,6 +604,10 @@ pub struct App {
     /// The public keys heard from others (the network actor's).
     known: Option<crate::net::remote::Known>,
     pub interfaces: Vec<crate::net::InterfaceInfo>,
+    /// The Tools tab: what it remembers, and how connecting to each entry
+    /// point of the config went (by its name there).
+    pub tools: tools::ToolsState,
+    pub entry_checks: Arc<Mutex<HashMap<String, reach::Reach>>>,
     /// Bytes in and out over all interfaces, and their rates.
     pub traffic: traffic::Traffic,
     pub log: VecDeque<String>,
@@ -867,6 +881,8 @@ impl App {
             public_key: None,
             known: None,
             interfaces: Vec::new(),
+            tools: tools::ToolsState::default(),
+            entry_checks: Arc::default(),
             traffic: traffic::Traffic::default(),
             log: VecDeque::new(),
             should_quit: false,
@@ -1433,6 +1449,15 @@ impl App {
                     self.warn(e);
                 }
             }
+            PromptKind::ProbeAddress => {
+                if let Err(e) = self.probe(&text) {
+                    self.warn(e);
+                }
+            }
+            PromptKind::ForgetAddress => match self.forget_path(&text) {
+                Ok(()) => self.confirm("Forgot the path"),
+                Err(e) => self.warn(e),
+            },
             PromptKind::EditSetting(key) => self.update_setting(key, prompt.input.text()),
             PromptKind::EditField(f) => {
                 if let Some(page) = &mut self.browser.tab.page

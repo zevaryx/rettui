@@ -120,6 +120,8 @@ pub fn router(state: WebState) -> Router {
         .route("/conversations/{key}/delete", post(delete_conversation))
         .route("/conversations/{key}/contact", post(save_contact))
         .route("/conversations/{key}/ping", post(ping))
+        .route("/tools", get(tools_state))
+        .route("/tools/check", post(tools_check))
         .route("/path/{key}", get(path_state).post(find_path).delete(forget_path))
         .route("/probe/{key}", get(probe_state).post(probe))
         .route("/conversations/{key}/delivery", post(set_delivery))
@@ -1252,6 +1254,18 @@ async fn probe(State(state): State<WebState>, Path(key): Path<String>) -> ApiRes
         }
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
+}
+
+/// What the Tools tab shows.
+async fn tools_state(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::tools(&o.app)).await?))
+}
+
+/// Try connecting to the entry points of the Reticulum config. The hosts
+/// are the config's own: nothing in the request says where to connect.
+async fn tools_check(State(state): State<WebState>) -> ApiResult {
+    let tried = state.write(|o| o.app.test_entry_points()).await?.map_err(bad)?;
+    Ok(axum::Json(json!({ "ok": true, "tried": tried })))
 }
 
 /// Forget the path to a destination: the next use asks for a fresh one.

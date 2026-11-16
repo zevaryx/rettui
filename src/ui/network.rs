@@ -109,7 +109,7 @@ fn draw_found(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Your addresses, and whose another is (`I`).
-fn draw_whois(frame: &mut Frame, app: &mut App, area: Rect) {
+pub(super) fn draw_whois(frame: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = app
         .whois_rows()
         .into_iter()
@@ -134,7 +134,7 @@ fn draw_whois(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// The speed test (`v`): both addresses, the size, how it's going and what
 /// happened.
-fn draw_speed(frame: &mut Frame, app: &mut App, area: Rect) {
+pub(super) fn draw_speed(frame: &mut Frame, app: &mut App, area: Rect) {
     use crate::app::speedtest::SIZES;
     let test = &app.speed;
     let label = |s: &str| Span::styled(format!("{s:<16}"), Style::default().fg(dim()));

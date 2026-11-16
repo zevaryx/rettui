@@ -26,6 +26,7 @@ mod repos;
 mod reticulum;
 mod search;
 mod status;
+mod tools;
 #[cfg(test)]
 pub(crate) mod tui_tests;
 
@@ -341,6 +342,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Tab::Reticulum => draw_reticulum(frame, app, body),
         Tab::Hub => hub::draw_hub(frame, app, body),
         Tab::Repos => repos::draw_repos(frame, app, body),
+        Tab::Tools => tools::draw_tools(frame, app, body),
     }
     draw_footer(frame, app, footer);
     if app.contact_card.is_some() && app.tab == Tab::Messages {

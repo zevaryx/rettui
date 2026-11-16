@@ -717,6 +717,7 @@ const TABS = [
   { id: 'reticulum', icon: '⛭', title: 'Reticulum' },
   { id: 'hub', icon: '⊛', title: 'Hub' },
   { id: 'repos', icon: '⑂', title: 'Repos' },
+  { id: 'tools', icon: '⚒', title: 'Tools' },
 ];
 
 // On a phone, the bar at the bottom of the screen has these; the rest are
@@ -4327,12 +4328,11 @@ app.views.messages = {
     const requestsMark = el('div', { class: 'list-heading', text: `Message requests (${requests})`,
       title: 'From people who aren\'t contacts: no notifications until you trust them, leave them as they are, or reply' });
     if (this.query.trim()) this.runSearch();
-    else if (changed(this, 'list:' + this.selected, conversations)) refill(this.list, ...(conversations.length ? conversations.flatMap((c, i) => [c.request && !conversations[i - 1]?.request ? requestsMark : null, el('div', {
+    else if (changed(this, 'list:' + this.selected, conversations)) refill(this.list, ...(conversations.length ? conversations.flatMap((c, i) => [c.request && !conversations[i - 1]?.request ? requestsMark : null, this.holdForContact(c, el('div', {
       class: 'list-item' + (c.key === this.selected ? ' selected' : ''),
       dataset: { key: c.key },
       // Start loading as the button goes down; the click shows it.
       onpointerdown: () => this.load(c.key).catch(() => {}),
-      onclick: () => this.select(c.key),
     },
     avatar(c.icon, c.name, c.key),
     el('div', { class: 'main' },
@@ -4342,7 +4342,7 @@ app.views.messages = {
       el('div', { class: 'sub', text: c.last ? `${c.last.incoming ? '' : 'You: '}${c.last.text}` : 'No messages yet' })),
     el('div', { class: 'dim', style: 'font-size:12px;text-align:right' },
       c.last ? timeLabel(c.last.timestamp) : '',
-      c.unread ? el('div', {}, el('span', { class: 'badge' + (c.request ? ' quiet' : ''), text: c.unread })) : null))].filter(Boolean)) :
+      c.unread ? el('div', {}, el('span', { class: 'badge' + (c.request ? ' quiet' : ''), text: c.unread })) : null)))].filter(Boolean)) :
       [el('div', { class: 'empty', text: `No conversations yet. Press ${phone.matches ? 'the + button' : '+ New'}, or message a peer from the Network tab.` })]));
     this.compose.classList.toggle('hidden', !this.selected);
     if (!this.selected) {
@@ -4937,6 +4937,26 @@ app.views.messages = {
     }
   },
 
+  // Holding a conversation in the list (on a touch screen) opens its
+  // contact actions: a tap opens it as before, and the tap that ends a hold
+  // does nothing more.
+  holdForContact(c, row) {
+    let held = false;
+    row.addEventListener('click', () => {
+      if (held) held = false;
+      else this.select(c.key);
+    });
+    if (touchScreen.matches) {
+      messageGestures(row, { hold: async () => {
+        held = true;
+        setTimeout(() => { held = false; }, 800);
+        const conversation = await api.get(`/conversations/${c.key}`).catch(() => null);
+        if (conversation) this.contactDialog(c.key, conversation);
+      } });
+    }
+    return row;
+  },
+
   // Your name for them, notes about them, and deleting the conversation.
   contactDialog(key, conversation) {
     const contact = conversation.contact || {};
@@ -4957,6 +4977,10 @@ app.views.messages = {
           pingText.textContent = result ? result.text : 'no answer';
           e.target.disabled = false;
         } })),
+      el('div', { class: 'row trust' },
+        el('span', { class: 'grow dim row-label', text: 'Network:' }),
+        el('button', { text: 'Path…', title: 'Find, probe or forget the path to them, as rnpath and rnprobe do', onclick: () => pathDialog(key, conversation.name) }),
+        el('button', { text: 'Identity…', title: 'The identity behind their address, and its other addresses', onclick: () => identityDialog(key) })),
       contact.trust === 'blocked' ? null : el('div', { class: 'row trust' },
         el('span', { class: 'grow dim row-label', text: 'Sideband commands:' }),
         el('button', { text: '📍 Ask where they are', title: 'Ask for their location, as Sideband does: Sideband answers with it (if it\'s set to), and it goes on the map',
@@ -8629,6 +8653,70 @@ async function openRepo(url) {
 
 // An identity, by the name it's known by (or its hash).
 const whoName = (who) => (who ? (who.name && who.name !== who.hash ? who.name : who.hash.slice(0, 12)) : '?');
+
+// The tests of the network in one place: a path or a probe to any address
+// (as in the Network tab), the speed test, rncp and identities, and a check
+// of the interfaces and of whether each entry point of the Reticulum config
+// can be reached.
+app.views.tools = {
+  data: null,
+  timer: 0,
+
+  mount(root) {
+    this.recent = el('div', { class: 'scroll tools-recent' });
+    this.interfaces = el('div', { class: 'scroll tools-interfaces' });
+    this.checkButton = el('button', { class: 'primary', text: 'Check entry points', title: 'Try connecting to each entry point in the Reticulum config, as Reticulum would (nothing is sent to it)',
+      onclick: async () => {
+        if (await attempt(() => api.post('/tools/check'))) this.update();
+      } });
+    const ask = async (title, then) => {
+      const address = await askText(title, { label: 'The address', value: this.data?.history[0]?.key || '', ok: 'Go', mono: true });
+      if (address) then(address.trim());
+    };
+    const tool = (text, title, onclick) => el('button', { text, title, onclick });
+    root.append(el('div', { class: 'column grow' },
+      el('section', { class: 'panel' },
+        el('header', {}, el('h2', { class: 'title grow', text: 'Tools' })),
+        el('div', { class: 'row tools-buttons' },
+          tool('Path & probe…', 'Find, probe or forget the path to any address, as rnpath and rnprobe do', () => ask('Path and probe', (a) => pathDialog(a, this.nameOf(a)))),
+          tool('Identities…', 'Your addresses, and whose another address is', () => identityDialog(this.data?.history[0]?.key)),
+          tool('Speed test', 'Measure how fast data goes between you and someone else, with rettui or NomadNet', () => speedDialog()),
+          tool('Send a file…', 'Send a file to someone running rncp -l', () => rncpDialog(this.data?.history[0]?.key)),
+          tool('Path table', 'Reticulum\'s path table and announce rates', () => tablesDialog()))),
+      el('section', { class: 'panel' }, el('header', { text: 'Tried lately' }), this.recent),
+      el('section', { class: 'panel grow' }, el('header', {}, el('h2', { class: 'title grow', text: 'Interfaces' }), this.checkButton), this.interfaces)));
+    this.update();
+  },
+
+  nameOf(key) {
+    return this.data?.history.find((h) => h.key === key)?.name || key;
+  },
+
+  async update() {
+    clearTimeout(this.timer);
+    const data = await api.get('/tools').catch(() => null);
+    if (!data || app.tab !== 'tools') return;
+    this.data = data;
+    this.recent.replaceChildren(...(data.history.length ? data.history.map((h) => el('div', { class: 'list-item' },
+      el('div', { class: 'main' },
+        el('div', { class: 'name' }, h.name, h.name !== h.key ? el('span', { class: 'dim mono', text: ' ' + h.key }) : null),
+        el('div', { class: 'sub', text: [h.path && 'Path: ' + h.path, h.probe && 'Probe: ' + h.probe].filter(Boolean).join(' · ') || 'Nothing found yet' })),
+      el('button', { text: 'Path…', onclick: () => pathDialog(h.key, h.name) })))
+      : [el('div', { class: 'empty', text: 'Nothing tried yet: Path & probe… tries an address, or use Path on a contact or in the Network tab' })]));
+    this.interfaces.replaceChildren(...(data.interfaces.length ? data.interfaces.map((i) => el('div', { class: 'list-item' },
+      el('div', { class: 'main' },
+        el('div', { class: 'name' }, el('span', { class: i.online ? 'ok' : 'bad', text: i.online ? '● ' : '○ ' }), i.name,
+          el('span', { class: 'dim', text: `  ↓${humanBytes(i.rx)} ↑${humanBytes(i.tx)}` })),
+        i.entry ? el('div', { class: 'sub', text: `${i.entry.host}:${i.entry.port}${i.entry.enabled ? '' : ' · switched off'}${i.entry.ifac ? ' · IFAC: the other end needs the same network name and passphrase' : ''}` }) : null,
+        i.details.length ? el('div', { class: 'sub', text: i.details.join(' · ') }) : null,
+        i.check ? el('div', { class: 'sub ' + (i.check.state === 'up' ? 'ok' : i.check.state === 'down' ? 'bad' : ''), text: i.check.label + (i.check.help ? ` (${i.check.help})` : '') }) : null)))
+      : [el('div', { class: 'empty', text: 'No interface yet: Reticulum is starting, or the config has none' })]));
+    // Followed while something is being found or tried.
+    const working = data.interfaces.some((i) => i.check?.state === 'checking')
+      || data.history.some((h) => /^looking|^waiting/.test(h.path || '') || /^looking|^waiting/.test(h.probe || ''));
+    if (working) this.timer = setTimeout(() => this.update(), 1500);
+  },
+};
 
 const REPO_PANES = [['refs', 'Branches and tags'], ['releases', 'Releases'], ['work', 'Work'], ['perms', 'Permissions']];
 const WORK_SCOPES = [['active', 'Active'], ['proposed', 'Proposed'], ['completed', 'Done']];

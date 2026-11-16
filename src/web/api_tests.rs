@@ -2367,3 +2367,42 @@ async fn a_clean_up_of_strangers_conversations_is_said_once_with_the_total() {
     let text = state["stranger_cleanup"]["text"].as_str().unwrap();
     assert!(text.starts_with(&format!("Deleted {} conversations from people who aren't contacts", removed + 2)), "{text}");
 }
+
+#[tokio::test]
+async fn the_tools_tab_lists_what_was_tried_and_checks_entry_points() {
+    use crate::app::reach::Reach;
+    let web = TestWeb::start("tools");
+    // Nothing tried, no entry point to check.
+    let tools = web.get("/api/tools").await.json();
+    assert_eq!(tools["history"].as_array().unwrap().len(), 0, "{tools}");
+    let none = web.post("/api/tools/check", serde_json::json!({})).await;
+    assert_eq!(none.status, StatusCode::BAD_REQUEST, "{}", none.text());
+    // An address tried (from here or the contact dialog) is listed with how it went.
+    web.with(|app| {
+        app.rns.text = "[interfaces]\n  [[Testnet]]\n    type = TCPClientInterface\n    enabled = yes\n    target_host = example.org\n    target_port = 4242\n    passphrase = secret\n".into();
+        app.interfaces.push(crate::net::InterfaceInfo { name: "TCPInterface[Testnet]".into(), online: true, ..Default::default() });
+        app.find_path_to(BOB).unwrap();
+        app.probe(BOB).unwrap();
+    })
+    .await;
+    let tools = web.get("/api/tools").await.json();
+    assert_eq!(tools["history"][0]["key"], BOB, "{tools}");
+    assert!(tools["history"][0]["path"].as_str().unwrap().contains("looking for a path"), "{tools}");
+    let interface = &tools["interfaces"][0];
+    assert_eq!(interface["name"], "TCPInterface[Testnet]");
+    assert_eq!(interface["entry"]["host"], "example.org");
+    assert_eq!(interface["entry"]["ifac"], true);
+    assert!(!tools.to_string().contains("secret"), "the passphrase stays out: {tools}");
+    // Checking asks for no address: the config's own are tried.
+    let checked = web.post("/api/tools/check", serde_json::json!({ "host": "127.0.0.1" })).await;
+    assert_eq!(checked.status, StatusCode::OK);
+    assert_eq!(checked.json()["tried"], 1);
+    assert_eq!(web.get("/api/tools").await.json()["interfaces"][0]["check"]["state"], "checking");
+    web.with(|app| {
+        app.entry_checks.lock().unwrap().insert("Testnet".into(), Reach::Down("refused"));
+    })
+    .await;
+    let check = web.get("/api/tools").await.json()["interfaces"][0]["check"].clone();
+    assert_eq!(check["state"], "down");
+    assert!(check["help"].as_str().unwrap().contains("nothing accepted the connection"), "{check}");
+}

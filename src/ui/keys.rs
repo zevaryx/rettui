@@ -297,6 +297,10 @@ pub fn keys(app: &App) -> Keys {
                 ("b", "block"),
                 ("y", "copy"),
                 ("p", "ping"),
+                ("P", "path"),
+                ("T", "probe"),
+                ("D", "forget path"),
+                ("I", "identity"),
                 ("w", "ask where"),
                 ("f", "track"),
                 ("k", "command"),
@@ -679,6 +683,28 @@ pub fn keys(app: &App) -> Keys {
             ],
         ),
         Tab::Repos => repos_keys(app),
+        Tab::Tools if app.whois.open => {
+            mode("Tools: identities", &[("e", "other address"), ("y", "copy"), ("↑↓", "select"), ("Esc", "close")])
+        }
+        Tab::Tools if app.speed.open => {
+            mode("Tools: speed test", &[("Enter", "send"), ("←→", "size"), ("e", "their address"), ("y", "copy yours"), ("Esc", "close")])
+        }
+        Tab::Tools => mode(
+            "Tools",
+            &[
+                ("Enter", "run"),
+                ("P", "path"),
+                ("T", "probe"),
+                ("D", "forget path"),
+                ("I", "whose"),
+                ("v", "speed test"),
+                ("F", "send file"),
+                ("O", "get file"),
+                ("c", "check interfaces"),
+                ("y", "copy"),
+                ("↑↓", "select"),
+            ],
+        ),
         Tab::Hub if !app.hub.running() => mode("Hub", &[("e", "start"), ("y", "copy link"), ("Tab", "pane"), ("↑↓", "select")]),
         Tab::Hub if app.hub.pane == HubPane::People => mode(
             "Hub: people",

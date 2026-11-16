@@ -249,9 +249,20 @@ everywhere else), and notes for you alone.
   are, the name they announce, their address, when they were last heard
   and how far away, and your notes. `r` renames them (empty goes back to
   their own name), `e` edits the notes (line breaks show as ↵ while
-  editing), `y` copies their address, `p` pings them, `X` deletes the
+  editing), `y` copies their address, `p` pings them, `P`, `T`, `D` and `I`
+  find, probe and forget their path and look up whose address it is, `X` deletes the
   conversation, and `Esc` closes the card. Its buttons can be clicked too.
-- **In the web UI:** the **Contact** button above the conversation.
+- **In the web UI:** the **Contact** button above the conversation. On a
+  touch screen (the Android app, say), holding a conversation in the list
+  opens it too, so the actions are a press away without opening the chat.
+- **Network tools:** the card has **Path** (`P`), **Probe** (`T`), **Forget
+  path** (`D`) and **Identity** (`I`), as in the
+  [Network tab](Network): they find the path to
+  them, time an answer as `rnprobe` does, drop a path that has gone stale,
+  and show whose address it is. The card shows the last path and probe
+  results. In the web UI the **Contact** dialog has **Path…** (with Find
+  path, Probe and Forget path) and **Identity…**. The
+  [Tools tab](Network#the-tools-tab) has the same tests for any address.
 - **Ping:** rettui finds a path to them and times setting up a Link to
   their LXMF address (closed straight away; nothing is sent over it), then
   shows how long it took and how many hops away they are, and how well

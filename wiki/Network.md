@@ -221,3 +221,33 @@ shows your identity, your interfaces and the log.
   in the terminal UI, lines in the web UI (in cyan, out magenta). An
   interface that's been quiet throughout has none. The graphs start when
   rettui does.
+
+## The Tools tab
+
+The Tools tab (`-` in the TUI, **Tools** in the web UI) has the tests of
+the network in one place, for trying an address or your own settings
+without picking a row first. What Network and the contact card have
+([paths](#network), probes, whose an address is, the speed test and rncp
+files) is here too, and each keeps working where it was.
+
+- **Find a path, Probe, Forget a path (`P`, `T`, `D`):** for any address
+  typed (the one last tried is filled in). The addresses tried lately are
+  listed with how the path and the probe went, whichever tab or contact
+  they were tried from. In the web UI, **Path & probe…** opens the
+  [path dialog](#network) for an address.
+- **Identities, Speed test, Send a file, Fetch a file (`I`, `v`, `F`,
+  `O`):** as in the Network tab. The web UI has the first three as
+  buttons, and **Path table** for Reticulum's tables.
+- **Check interfaces (`c`):** the Interfaces list shows each one, up or
+  down, with its traffic, rate and settings, as the Status tab does, and
+  for those that connect to a host (the entry points of the Reticulum
+  config) the host and port, and whether it has an IFAC network name or
+  passphrase (the other end needs the same; the passphrase is never
+  shown). The check tries a TCP connection to each entry point that's
+  switched on, from this computer, and closes it at once. It says how long
+  the connection took ("up · 120 ms"), or why not ("down · refused": the
+  host is down or the port is wrong; "no answer": down, or a firewall;
+  "unreachable": no route; "name not found"), with what to do about it. A
+  host that answers here may still not take Reticulum's traffic (an IFAC
+  mismatch, say, shows in the log). Only the config's own hosts are tried:
+  the web UI can't make rettui connect anywhere else.

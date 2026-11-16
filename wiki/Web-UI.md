@@ -155,7 +155,7 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   layout:
   - **Bottom bar:** the sections are in a bar at the bottom of the screen:
     Messages, Channels, Games and Browser, each with how many are unread,
-    and **More** for Network, Node, Status, Reticulum, Hub and Repos. The bar shows
+    and **More** for Network, Node, Status, Reticulum, Hub, Repos and Tools. The bar shows
     under the lists; tapping the section you're in goes back to its list.
     With the phone held sideways, the sections are in a rail down the left
     instead, and the bars and headers are shorter, so the list or page gets
