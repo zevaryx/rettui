@@ -549,6 +549,10 @@ pub struct App {
     /// was last done (see [`App::save_soon`]).
     save_due: Option<Instant>,
     saved_soon: Instant,
+    /// The clean-up of conversations with people who aren't contacts going
+    /// on or last done, and whether browsers have been told of it.
+    pub(crate) stranger_cleanup: Option<messages::StrangerCleanup>,
+    cleanup_news: bool,
     /// Peers heard or changed, and forgotten, since they were last saved
     /// (to the database, apart from the store; see [`App::save_peers`]).
     pub(crate) peers_changed: HashSet<String>,
@@ -828,6 +832,8 @@ impl App {
             store_dirty: store.rewrite_store,
             save_due: None,
             saved_soon: Instant::now(),
+            stranger_cleanup: None,
+            cleanup_news: false,
             peers_changed: HashSet::new(),
             peers_removed: HashSet::new(),
             peers_saved: Instant::now(),

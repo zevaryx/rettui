@@ -1409,10 +1409,28 @@ function applyWrap(textarea) {
   textarea.wrap = wrap ? 'soft' : 'off';
 }
 
+// The last clean-up of conversations with non-contacts this browser showed.
+let shownCleanup = (() => {
+  try {
+    return localStorage.getItem('rettui.cleanup') || '';
+  } catch {
+    return '';
+  }
+})();
+
 async function refreshStatus() {
   try {
     // The log only for Status, which shows it.
     app.status = await api.get('/state' + (app.tab === 'status' ? '?log=1' : ''));
+    // Conversations deleted automatically: said once each time it happens.
+    const cleanup = app.status.stranger_cleanup;
+    if (cleanup && String(cleanup.id) !== shownCleanup) {
+      shownCleanup = String(cleanup.id);
+      try {
+        localStorage.setItem('rettui.cleanup', shownCleanup);
+      } catch {}
+      toast(cleanup.text, true);
+    }
     // A new install: the guide opens by itself, once a page load.
     if (app.status.welcome && !app.guideShown) {
       app.guideShown = true;
