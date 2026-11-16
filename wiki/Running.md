@@ -50,10 +50,11 @@ the web UI's Status page, opens it again):
   you tick them; one it already has (by address) shows as in your config
   already. Each operator sees your IP address, and anyone watching
   your connection can tell you use Reticulum. With discovery ticked too,
-  they're added as *Bootstrap only*: used until two of the entry points
-  discovery finds are up, then disconnected (so the public ones aren't
-  carrying you for good), and connected again as soon as none of those
-  is. Without discovery they stay connected.
+  rettui also connects to two of the entry points discovery finds, and
+  these ones stay connected either way. (With *Disconnect Bootstrap only
+  interfaces* on, in the settings, they're added as *Bootstrap only* instead:
+  used until two found are up, then disconnected, and connected again as soon
+  as none of those is.)
 - **Also find entry points near you over time:** turns on
   interface discovery, as Reticulum's manual recommends, and sets
   *Discovered entry points* to 2: rettui connects to two entry points

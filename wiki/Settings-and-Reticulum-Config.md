@@ -21,7 +21,9 @@ of the Reticulum instance it uses. Where files are kept is in
   send files* and *Received files folder* (for rncp), nor
   *Use rngit's identity* (which reads another program's
   identity key, see [Repos](Repos#who-you-are-to-a-node)), and it can turn
-  "Run page scripts" and "Receive files with rncp" off but not on. These decide
+  "Run page scripts" and "Receive files with rncp" off but not on (and
+  "Disconnect Bootstrap only interfaces" too, which lets entry points found
+  take the place of yours). These decide
   what runs on the computer rettui runs on (a config's pipe interfaces run
   commands, and scripts are programs), and the web login must not be able to
   run programs there. Change them in the terminal UI, or in `settings.json`
@@ -47,12 +49,19 @@ of the Reticulum instance it uses. Where files are kept is in
       entry points* in rettui's settings (System) says how many, with
       *Auto-connect* (`autoconnect_discovered_interfaces`) left at 0.
       rettui connects to the best ones found (run by transport nodes, heard
-      in the last 3 days), drops one that isn't up within 12 seconds and
-      tries another (one dropped is tried again after 5 minutes), and
-      handles interfaces marked *Bootstrap only* as Python Reticulum does:
-      they're disconnected once that many found entry points are up, and
-      connected again as soon as none is. A TCP client interface can be
-      brought back; another kind marked *Bootstrap only* stays connected.
+      in the last 3 days; those known longest first), drops one that isn't
+      up within 12 seconds and tries another (one dropped is tried again
+      after 5 minutes). Your own interfaces stay connected, whether marked
+      *Bootstrap only* or not: anyone can announce an entry point, so those
+      found are added to yours and don't replace them. A name announced is
+      resolved first, and not connected to if any address it gives is this
+      device's. With *Disconnect Bootstrap only interfaces* (System, off by
+      default, from the next start) rettui handles interfaces marked
+      *Bootstrap only* as Python Reticulum does: they're disconnected once
+      that many found entry points are up, and connected again as soon as
+      none is. A TCP client interface can be brought back; another kind
+      marked *Bootstrap only* stays connected. Turn it on only if you want
+      entry points found to take the place of those you chose.
     - **Reticulum**, with *Auto-connect* set to how many. rsReticulum
       drops interfaces marked *Bootstrap only* as soon as it starts
       connecting to that many, before any of them is up, never brings
@@ -66,8 +75,9 @@ of the Reticulum instance it uses. Where files are kept is in
     rettui's own Reticulum does this; a shared instance run by another
     program does its own. With discovery on, the log says so each time
     rettui's Reticulum starts, and says as it connects to an entry point
-    found, drops one, or disconnects or reconnects the *Bootstrap only*
-    ones. Your own interfaces marked *Discoverable* are announced too.
+    found, drops one, or (with *Disconnect Bootstrap only interfaces* on)
+    disconnects or reconnects the *Bootstrap only* ones. Your own interfaces
+    marked *Discoverable* are announced too.
   - **As text:** edit the whole file, with a live check of whether Reticulum
     can load it.
   - **Safe edits:** changes are made in place, so comments and layout stay.

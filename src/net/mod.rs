@@ -585,6 +585,8 @@ pub struct NetOptions {
     /// Entry points interface discovery finds to connect to (see
     /// [`discovered`]).
     pub discovered_entry_points: u32,
+    /// Whether Bootstrap only interfaces are dropped for those found.
+    pub disconnect_bootstrap_only: bool,
     /// Lines for the log once it's running (what was done to the config
     /// before it started).
     pub notes: Vec<String>,
@@ -990,7 +992,13 @@ async fn run(
     let log = |line: String| {
         let _ = ev.send(NetEvent::Log(line));
     };
-    let mut discovered = discovered::start(&runtime, options.rns_config.as_deref(), options.discovered_entry_points, &log);
+    let mut discovered = discovered::start(
+        &runtime,
+        options.rns_config.as_deref(),
+        options.discovered_entry_points,
+        options.disconnect_bootstrap_only,
+        &log,
+    );
 
     loop {
         tokio::select! {

@@ -1187,7 +1187,10 @@ async fn the_network_actor_command_by_command() {
         free_port(),
         free_port()
     );
-    let mut amy = Peer::start_in("actor", "  discover_interfaces = Yes\n", &interfaces, |s| s.discovered_entry_points = 1);
+    let mut amy = Peer::start_in("actor", "  discover_interfaces = Yes\n", &interfaces, |s| {
+        s.discovered_entry_points = 1;
+        s.disconnect_bootstrap_only = true;
+    });
     until_one(&mut amy, "Amy starting", |a| a.app.lxmf_hash.is_some()).await;
     let me = amy.app.lxmf_hash.unwrap();
     let send = |amy: &mut Peer, command: NetCommand| amy.app.send(command);
@@ -1254,11 +1257,29 @@ async fn the_network_actor_command_by_command() {
     })
     .await;
 
-    // Bootstrap only: the entry point that can't be brought back is said.
+    // Bootstrap only: the entry point that can't be brought back is said
+    // (the setting is on here).
     until_one(&mut amy, "the Bootstrap only note", |a| a.app.log.iter().any(|l| l.contains("Odd is Bootstrap only"))).await;
     // A few looks for entry points (none are found here), once started.
     let started = Instant::now();
     until_one(&mut amy, "a few looks for entry points", |_| started.elapsed() > Duration::from_secs(8)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bootstrap_only_interfaces_are_left_alone_unless_asked() {
+    // As the actor test's config, but with the setting at its default: no
+    // note of what would be brought back, and discovery is on all the same.
+    let interfaces = format!(
+        "  [[Entry]]\n    type = TCPClientInterface\n    enabled = Yes\n    bootstrap_only = Yes\n    target_host = 127.0.0.1\n    target_port = 1\n\
+         \n  [[Odd]]\n    type = UDPInterface\n    enabled = Yes\n    bootstrap_only = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {}\n    forward_ip = 127.0.0.1\n    forward_port = {}\n",
+        free_port(),
+        free_port()
+    );
+    let mut peer = Peer::start_in("bootstrap-default", "  discover_interfaces = Yes\n", &interfaces, |s| s.discovered_entry_points = 1);
+    until_one(&mut peer, "discovery on", |p| p.app.log.iter().any(|l| l.contains("Interface discovery is on"))).await;
+    let started = Instant::now();
+    until_one(&mut peer, "a few looks for entry points", |_| started.elapsed() > Duration::from_secs(8)).await;
+    assert!(!peer.app.log.iter().any(|l| l.contains("is Bootstrap only")), "{:?}", peer.app.log);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
