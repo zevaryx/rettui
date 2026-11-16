@@ -545,6 +545,10 @@ pub struct App {
     pub paths: Paths,
     pub store: Store,
     pub(crate) store_dirty: bool,
+    /// When the store is saved without waiting for the timer, and when that
+    /// was last done (see [`App::save_soon`]).
+    save_due: Option<Instant>,
+    saved_soon: Instant,
     /// Peers heard or changed, and forgotten, since they were last saved
     /// (to the database, apart from the store; see [`App::save_peers`]).
     pub(crate) peers_changed: HashSet<String>,
@@ -822,6 +826,8 @@ impl App {
             settings_section: crate::config::Section::Profile,
             paths,
             store_dirty: store.rewrite_store,
+            save_due: None,
+            saved_soon: Instant::now(),
             peers_changed: HashSet::new(),
             peers_removed: HashSet::new(),
             peers_saved: Instant::now(),

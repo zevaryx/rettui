@@ -9,7 +9,8 @@
 //! in order.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
 use anyhow::Result;
@@ -59,12 +60,16 @@ pub struct Saver {
     jobs: Option<mpsc::Sender<Job>>,
     reports: mpsc::Receiver<Report>,
     worker: Option<JoinHandle<()>>,
+    /// Jobs handed over and not yet done (see [`Saver::busy`]).
+    pending: Arc<AtomicUsize>,
 }
 
 impl Saver {
     pub fn new() -> Self {
         let (jobs, queue) = mpsc::channel::<Job>();
         let (report, reports) = mpsc::channel();
+        let pending = Arc::new(AtomicUsize::new(0));
+        let done = pending.clone();
         let worker = std::thread::Builder::new()
             .name("rettui-saver".into())
             .spawn(move || {
@@ -73,6 +78,7 @@ impl Saver {
                     // or removal per file, and every append and task.
                     let mut batch = vec![first];
                     batch.extend(queue.try_iter());
+                    let taken = batch.len();
                     let mut latest: Vec<Job> = Vec::with_capacity(batch.len());
                     for job in batch {
                         // A newer write or removal replaces an older one of
@@ -99,10 +105,18 @@ impl Saver {
                             }
                         }
                     }
+                    done.fetch_sub(taken, Ordering::AcqRel);
                 }
             })
             .expect("spawning the save thread");
-        Self { jobs: Some(jobs), reports, worker: Some(worker) }
+        Self { jobs: Some(jobs), reports, worker: Some(worker), pending }
+    }
+
+    /// Whether anything handed over is still being written or waits to be.
+    /// A save asked for meanwhile can wait for it, rather than copy a large
+    /// store again while the last copy is still being written.
+    pub fn busy(&self) -> bool {
+        self.pending.load(Ordering::Acquire) > 0
     }
 
     /// Encode and write `path` in the background; `what` names it in errors.
@@ -129,8 +143,11 @@ impl Saver {
 
     fn send(&self, job: Job) {
         if let Some(jobs) = &self.jobs {
+            self.pending.fetch_add(1, Ordering::AcqRel);
             // The worker only stops when `jobs` is dropped.
-            let _ = jobs.send(job);
+            if jobs.send(job).is_err() {
+                self.pending.fetch_sub(1, Ordering::AcqRel);
+            }
         }
     }
 
@@ -239,7 +256,9 @@ mod tests {
         let seen = file.clone();
         saver.run("look", move || Ok(vec![std::fs::read_to_string(&seen)?]));
         saver.write(file.clone(), "f", || Ok(b"second".to_vec()));
+        assert!(saver.busy(), "still writing");
         saver.finish();
+        assert!(!saver.busy());
         assert_eq!(saver.reports(), vec![Report::Note("first".into())]);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "second");
         std::fs::remove_dir_all(dir).unwrap();
