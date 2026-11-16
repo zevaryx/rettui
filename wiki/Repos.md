@@ -111,6 +111,11 @@ deletes its copy too.
   branch or tag with a name git wouldn't allow is refused, and nothing of
   that copy is kept.
 - A copy may come to 256 MB. A bigger repository isn't copied, and says so.
+  What a node sends is also checked before it is unpacked: no file in it may
+  come to more than 64 MB, and one step of a copy to more than 1 GB, once
+  unpacked (a download of a few hundred bytes can claim gigabytes, and
+  unpacking holds it in memory). A copy over that stops, and says the pack is
+  too big.
   A copy may take an hour (or **rngit timeout**, below, if that's longer), so
   a big repository over a slow link gets there.
 - A copy is fetched a step at a time: the branch HEAD is on, then each other
@@ -141,7 +146,9 @@ connection. If the node doesn't answer when a repository is opened, its
 branches and tags are the copy's, and the pane says so.
 
 - A file is shown as text up to 256 KB, with control characters taken out; a
-  file that isn't text (or isn't valid UTF-8) says so and shows nothing.
+  file that isn't text (or isn't valid UTF-8) says so and shows nothing. A
+  file over 8 MB isn't read at all (it would be read whole to show its start),
+  and says how big it is.
   Symbolic links show as links; the folder of a submodule isn't in the copy.
 - Only the copy's own files are read, and a path that tries to leave the
   repository is refused. The web UI names a repository, a branch or tag and a
