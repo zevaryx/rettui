@@ -341,7 +341,9 @@ changing who may do what, and forks, mirrors and sync.
   (1 GB) on disk, and a push that would go over is refused. A pushed pack is
   read before it is kept: it may hold 2 million objects, none over 128 MB
   once unpacked (a small delta that would grow into a huge file counts as the
-  huge file), and 2 GB together. A group holds 1,000 repositories. Only
+  huge file), and 2 GB together. A fork, mirror or sync from an `rns://`
+  source is read the same way before it is kept; from an `https://` source no
+  object over 128 MB is unpacked. A group holds 1,000 repositories. Only
   branches and tags can be pushed; a branch moves forward unless the push is
   forced, and a tag stays where it is. A request over 1 MB is
   refused. Recent bundles are kept for ten minutes (64 MB in all), so the next
@@ -379,7 +381,8 @@ changing who may do what, and forks, mirrors and sync.
   same identity, announced with the node's name. They list its groups and
   repositories (with each one's description, from its `description` file),
   and for each repository its clone command, its files, its README (Markdown
-  formatted, with links to other files in it made into page links), each file
+  formatted, with links to other files in it made into page links; one over
+  8 MB isn't shown), each file
   with its lines numbered and its syntax coloured, its history 50 commits a page,
   each commit with the files it changed, and its branches and tags. A file is
   shown 1,000 lines a page; one over 8 MB can only be downloaded, and one over

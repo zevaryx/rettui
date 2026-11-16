@@ -36,6 +36,13 @@ pub const MAX_ARTIFACT: usize = 64 * 1024 * 1024;
 /// Largest copy of a repository taken in one go: its bundle is held in
 /// memory while it's unpacked.
 pub const MAX_MIRROR: usize = 256 * 1024 * 1024;
+/// Largest one file (or other object) in a copy may be once unpacked:
+/// unpacking holds it whole in memory, and a pack can declare any size.
+pub const MAX_OBJECT: u64 = 64 * 1024 * 1024;
+/// What everything one fetch of a copy brings may come to unpacked, and so
+/// about the most unpacking it can hold in memory at once. History unpacks to
+/// about nine times its packed size (rettui's own: 20 MB to 180 MB).
+pub const MAX_UNPACKED: u64 = 1024 * 1024 * 1024;
 /// Longest document, comment or release notes kept, in characters.
 pub const MAX_TEXT: usize = 100_000;
 /// Most comments kept of a document.
@@ -609,6 +616,7 @@ fn limits() -> Limits {
         max_bundle_bytes: MAX_MIRROR,
         max_refs: 10_000,
         max_list_entries: 2_000,
+        pack: rngit::bundle::PackLimits { max_object_bytes: MAX_OBJECT, max_total_bytes: MAX_UNPACKED, ..Default::default() },
         ..Limits::default()
     }
 }
@@ -1477,6 +1485,26 @@ pub(crate) mod tests {
     fn what_a_node_sends_for_a_copy_is_capped() {
         // The bundle is held in memory while it's unpacked.
         assert_eq!(limits().max_bundle_bytes, MAX_MIRROR);
+        // And so is what it unpacks to.
+        assert_eq!((limits().pack.max_object_bytes, limits().pack.max_total_bytes), (MAX_OBJECT, MAX_UNPACKED));
+    }
+
+    #[test]
+    fn a_copy_with_a_file_too_big_to_unpack_is_refused_before_unpacking() {
+        let root = scratch("too-big");
+        let source = Source::new(&root.join("source"));
+        // Zeros pack to under a hundred kilobytes, far under the bundle cap.
+        std::fs::write(root.join("source/big.bin"), vec![0u8; MAX_OBJECT as usize + 1]).unwrap();
+        source.git(&["add", "."]);
+        source.git(&["commit", "-q", "-m", "big"]);
+        let dir = root.join("repos").join("node").join("public").join("demo.git");
+        // With the limits the app's clients have.
+        let client = Client::new(Shared(Arc::new(source.node()))).with_limits(limits());
+        let identity = Identity::new();
+        let err = block_on(run(&client, &repo(), &IdentitySigner(&identity), GitRequest::Mirror { dir: dir.clone() })).unwrap_err();
+        assert!(err.contains("pack is too big"), "{err}");
+        assert!(!dir.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
