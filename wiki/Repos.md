@@ -112,10 +112,10 @@ deletes its copy too.
   that copy is kept.
 - A copy may come to 256 MB. A bigger repository isn't copied, and says so.
   What a node sends is also checked before it is unpacked: no file in it may
-  come to more than 64 MB, and one step of a copy to more than 1 GB, once
-  unpacked (a download of a few hundred bytes can claim gigabytes, and
-  unpacking holds it in memory). A copy over that stops, and says the pack is
-  too big.
+  come to more than 64 MB, and one step of a copy to more than 1 GB (256 MB
+  on Android), once unpacked (a download of a few hundred bytes can claim
+  gigabytes, and unpacking holds it in memory). A copy over that stops, and
+  says it is too large to copy on this device.
   A copy may take an hour (or **rngit timeout**, below, if that's longer), so
   a big repository over a slow link gets there.
 - A copy is fetched a step at a time: the branch HEAD is on, then each other
