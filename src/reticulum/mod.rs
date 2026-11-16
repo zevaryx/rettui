@@ -872,7 +872,8 @@ mod tests {
     #[test]
     fn the_stamps_and_filter_pages_set_what_rsreticulum_reads() {
         let text = set_options(DEFAULT, &Section::Stamps, &[("enforce_stamps", "yes"), ("destination_cost", "12.5")]).unwrap();
-        let text = set_options(&text, &Section::Filter, &[("hop_limiter", "64"), ("ignored_types", "lxmf.delivery, nomadnetwork.node")]).unwrap();
+        let text =
+            set_options(&text, &Section::Filter, &[("hop_limiter", "64"), ("ignored_types", "lxmf.delivery, nomadnetwork.node")]).unwrap();
         let (config, check) = super::check(&text);
         assert!(check.error.is_none(), "{:?}", check.error);
         let config = config.unwrap();
