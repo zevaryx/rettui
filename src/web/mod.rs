@@ -790,6 +790,9 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
             () = owner.app.save_timer() => owner.app.save_when_due(),
             () = &mut shutdown => break Ok(None),
         }
+        if owner.app.take_cleanup_news() {
+            notify(&changes, Scope::STATUS);
+        }
         for notification in owner.app.take_notifications() {
             next_notice += 1;
             push.notify(&notification);

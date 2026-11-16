@@ -58,6 +58,35 @@ pub(crate) const MAX_STRANGER_CONVERSATIONS: usize = 500;
 /// The most text kept in those conversations, all together (about 35 of
 /// the largest messages that can arrive, or tens of thousands of usual ones).
 pub(crate) const MAX_STRANGER_BYTES: usize = 32_000_000;
+/// Clean-ups of those conversations less than this apart are one, and said
+/// once (a flood brings one each time the store is saved).
+const CLEANUP_BURST: Duration = Duration::from_secs(60);
+
+/// Conversations with people who aren't contacts deleted to keep within
+/// the limits, since the clean-up began (see [`App::limit_strangers`]).
+pub(crate) struct StrangerCleanup {
+    /// When it began (Unix milliseconds): a browser shows each once.
+    pub id: u64,
+    pub conversations: usize,
+    pub messages: usize,
+    last: Instant,
+}
+
+impl StrangerCleanup {
+    pub fn text(&self) -> String {
+        let messages = match self.messages {
+            0 => String::new(),
+            1 => " and 1 older message".to_string(),
+            n => format!(" and {n} older messages"),
+        };
+        format!(
+            "Deleted {} conversation{}{messages} from people who aren't contacts, the oldest first: rettui keeps at most {MAX_STRANGER_CONVERSATIONS} such conversations and {} MB of their messages",
+            self.conversations,
+            if self.conversations == 1 { "" } else { "s" },
+            MAX_STRANGER_BYTES / 1_000_000
+        )
+    }
+}
 
 impl App {
     /// An attachment image already loaded by [`App::picture`].
@@ -1438,6 +1467,34 @@ impl App {
             "Deleted {removed} conversation(s) and {cut} message(s) from people who aren't contacts, the oldest: at most {MAX_STRANGER_CONVERSATIONS} conversations and {} MB of messages are kept from them",
             MAX_STRANGER_BYTES / 1_000_000
         ));
+        self.say_stranger_cleanup(removed, cut);
+    }
+
+    /// Tell the user of a clean-up: in the footer (kept up to date while it
+    /// goes on), and once to each browser (see [`StrangerCleanup`]).
+    fn say_stranger_cleanup(&mut self, conversations: usize, messages: usize) {
+        let now = Instant::now();
+        let cleanup = match self.stranger_cleanup.take() {
+            Some(going) if now.duration_since(going.last) < CLEANUP_BURST => StrangerCleanup {
+                conversations: going.conversations + conversations,
+                messages: going.messages + messages,
+                last: now,
+                ..going
+            },
+            _ => {
+                let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+                StrangerCleanup { id, conversations, messages, last: now }
+            }
+        };
+        self.show(cleanup.text(), super::NoticeKind::Warn);
+        self.stranger_cleanup = Some(cleanup);
+        self.cleanup_news = true;
+    }
+
+    /// Whether a clean-up was said since last asked (for the web UI, to
+    /// tell browsers to look).
+    pub fn take_cleanup_news(&mut self) -> bool {
+        std::mem::take(&mut self.cleanup_news)
     }
 
     /// Ask before deleting the open conversation (`X`).

@@ -143,6 +143,8 @@ pub fn state(app: &App) -> Value {
         "known": app.store.peers.len(),
         // The database was made, or can't be used (see `Store::db_notice`).
         "db_notice": app.db_notice.as_ref().map(|text| json!({ "text": text, "refused": app.store.db_refused })),
+        // Conversations deleted to keep within the limits for people who aren't contacts.
+        "stranger_cleanup": app.stranger_cleanup.as_ref().map(|c| json!({ "id": c.id, "text": c.text() })),
         // Off only because they have no `enabled` line.
         "interfaces_off": app.interfaces_off,
         "interfaces": app.interfaces.iter().map(|i| json!({

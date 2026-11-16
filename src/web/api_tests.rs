@@ -2310,3 +2310,50 @@ async fn interfaces_found_listed_mapped_and_added_over_the_api() {
     assert!(text.contains("target_host = hill.example.net"), "{text}");
     assert_eq!(web.post("/api/found/nope/add", json!({})).await.status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn a_clean_up_of_strangers_conversations_is_said_once_with_the_total() {
+    let web = TestWeb::start("stranger-cleanup");
+    assert!(web.get("/api/state").await.json()["stranger_cleanup"].is_null());
+    let from = |n: u64| InboundMessage {
+        id: Some([1; 32]),
+        source: { std::array::from_fn(|i| if i < 8 { n.to_be_bytes()[i] } else { 0x5a }) },
+        content: "hello".into(),
+        timestamp: 1_800_000_000.0 + n as f64,
+        ..InboundMessage::default()
+    };
+    // Strangers until the first clean-up, then two more of them.
+    let said = web
+        .with(move |app| {
+            let mut n = 0;
+            while app.stranger_cleanup.is_none() && n < 10_000 {
+                app.on_message(from(n));
+                n += 1;
+                if n % 50 == 0 {
+                    app.save_if_dirty();
+                }
+            }
+            let first = app.stranger_cleanup.as_ref().map(|c| (c.id, c.conversations)).unwrap();
+            let footer = app.notice.as_ref().map(|notice| (notice.text.clone(), notice.kind));
+            let news = (app.take_cleanup_news(), app.take_cleanup_news());
+            for more in n..n + 2 {
+                app.on_message(from(more));
+            }
+            app.save_if_dirty();
+            let total = app.stranger_cleanup.as_ref().map(|c| (c.id, c.conversations)).unwrap();
+            (first, footer, news, total, app.log.iter().filter(|l| l.contains("from people who aren't contacts")).count())
+        })
+        .await;
+    let ((id, removed), footer, news, total, logged) = said;
+    assert!(removed > 0);
+    let (text, kind) = footer.expect("a footer notice");
+    assert!(text.contains("from people who aren't contacts") && kind == crate::app::NoticeKind::Warn, "{text}");
+    assert_eq!(news, (true, false), "browsers are told once");
+    assert_eq!(total, (id, removed + 2), "the same clean-up, counted on");
+    assert_eq!(logged, 2, "and a log line each time");
+    // Browsers get it with the state, to show once by its id.
+    let state = web.get("/api/state").await.json();
+    assert_eq!(state["stranger_cleanup"]["id"], id);
+    let text = state["stranger_cleanup"]["text"].as_str().unwrap();
+    assert!(text.starts_with(&format!("Deleted {} conversations from people who aren't contacts", removed + 2)), "{text}");
+}
