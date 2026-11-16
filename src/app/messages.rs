@@ -263,7 +263,8 @@ impl App {
             game,
             ..Message::default()
         };
-        if let (Some(location), false) = (&stored.location, paper) {
+        // Only from who it says: an unverified location stays in the message.
+        if let (Some(location), false, true) = (&stored.location, paper, message.verified) {
             self.keep_trail(&key, location, stored.timestamp);
             self.export_telemetry(&key, location, stored.timestamp);
         }
@@ -2896,4 +2897,42 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn an_unverified_senders_location_and_interfaces_stay_in_their_message() {
+        use crate::lxmf::Extras;
+        use crate::lxmf::fields::Telemetry;
+        let dir = temp_dir("unverified-location");
+        let settings = Settings { telemetry_mqtt: Some("mqtt://127.0.0.1:1883".into()), ..Settings::default() };
+        let (mut app, mut commands) = crate::app::test_app_with_net(&dir, settings, Store::default());
+        let telemetry = Telemetry {
+            location: Some(crate::lxmf::Location::at(51.5, -0.12)),
+            interfaces: vec![crate::net::found::FoundInterface {
+                name: "Free entry point".into(),
+                kind: "BackboneInterface".into(),
+                reachable_on: Some("elsewhere.example".into()),
+                port: Some(4242),
+                ..Default::default()
+            }],
+            ..Telemetry::default()
+        };
+        let mut message = from_them(1, "", Extras { telemetry: Some(telemetry), ..Extras::default() });
+        message.timestamp = crate::app::now() - 60.0;
+        message.verified = false;
+        app.on_message(message.clone());
+        let stored = &app.store.conversations[&key()].messages[0];
+        assert!(stored.location.is_some() && stored.interfaces.len() == 1, "kept in the message");
+        assert!(app.trail(&key()).is_empty());
+        assert!(!app.locations().iter().any(|p| p.key.as_deref() == Some(key().as_str())));
+        assert!(!app.found_interfaces().iter().any(|f| f.from.is_some()));
+        assert!(!std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(c, NetCommand::Mqtt { .. })));
+        // The same, verified: on the trail, the map and the list, and passed on.
+        message.id = Some([2; 32]);
+        message.verified = true;
+        app.on_message(message);
+        assert_eq!(app.trail(&key()).len(), 1);
+        assert!(app.locations().iter().any(|p| p.key.as_deref() == Some(key().as_str())));
+        assert!(app.found_interfaces().iter().any(|f| f.from.is_some()));
+        assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(c, NetCommand::Mqtt { .. })));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

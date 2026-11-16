@@ -38,11 +38,14 @@ pub type Progress<'a> = &'a (dyn Fn(String) + Send + Sync);
 struct KnownEntry {
     key: String,
     app_data: Option<String>,
+    /// When it was last heard, in this run (see [`KnownIdentities::heard`]).
+    #[serde(skip)]
+    heard: u64,
 }
 
 /// The most destinations kept, and the most announce data kept for one: anyone
-/// can announce as many destinations as they like. Once it's full, those not
-/// known yet aren't kept.
+/// can announce as many destinations as they like. Once it's full, the one
+/// heard from longest ago makes room, unless it's a contact's.
 const MAX_KNOWN: usize = 100_000;
 const MAX_KNOWN_DATA: usize = 4096;
 
@@ -57,6 +60,14 @@ pub struct KnownIdentities {
     /// actor to a crawl during bursts, and announces were dropped.
     changed: HashSet<String>,
     removed: HashSet<String>,
+    /// Destinations by when they were last heard, oldest first: a count
+    /// that goes up with each announce (those read from the database
+    /// count as heard first, in no order).
+    heard: std::collections::BTreeMap<u64, String>,
+    next_heard: u64,
+    /// Contacts' destinations, never made room for (see
+    /// [`KnownIdentities::keep`]).
+    kept: HashSet<String>,
 }
 
 pub type Known = Arc<std::sync::Mutex<KnownIdentities>>;
@@ -75,7 +86,12 @@ impl KnownIdentities {
             tracing::warn!("could not read the known identities: {e:#}");
             HashMap::new()
         });
-        Arc::new(std::sync::Mutex::new(Self { path: path.to_path_buf(), entries, ..Self::default() }))
+        let mut known = Self { path: path.to_path_buf(), entries, ..Self::default() };
+        let dests: Vec<String> = known.entries.keys().cloned().collect();
+        for dest in dests {
+            known.touch(&dest);
+        }
+        Arc::new(std::sync::Mutex::new(known))
     }
 
     fn read(path: &Path) -> anyhow::Result<HashMap<String, KnownEntry>> {
@@ -90,7 +106,7 @@ impl KnownIdentities {
         let known = crate::db::load_known(&conn)?;
         Ok(known
             .into_iter()
-            .map(|(dest, known)| (dest, KnownEntry { key: hex::encode(known.key), app_data: known.app_data.map(hex::encode) }))
+            .map(|(dest, known)| (dest, KnownEntry { key: hex::encode(known.key), app_data: known.app_data.map(hex::encode), heard: 0 }))
             .collect())
     }
 
@@ -151,11 +167,13 @@ impl KnownIdentities {
     }
 
     pub(crate) fn remember(&mut self, destination: Hash, key: &[u8; 64], app_data: Option<&[u8]>) {
-        if self.entries.len() >= MAX_KNOWN && !self.entries.contains_key(&hex::encode(destination)) {
+        let dest = hex::encode(destination);
+        if self.entries.len() >= MAX_KNOWN && !self.entries.contains_key(&dest) && !self.make_room() {
             return;
         }
         let app_data = app_data.filter(|data| data.len() <= MAX_KNOWN_DATA);
-        let slot = self.entries.entry(hex::encode(destination)).or_default();
+        self.touch(&dest);
+        let slot = self.entries.entry(dest.clone()).or_default();
         let key = hex::encode(key);
         // Announces without app data (such as the automatic path responses
         // of Python shared-instance clients) keep what an earlier one said.
@@ -167,17 +185,46 @@ impl KnownIdentities {
         if slot.key == key && slot.app_data == app_data {
             return;
         }
-        *slot = KnownEntry { key, app_data };
-        let dest = hex::encode(destination);
+        (slot.key, slot.app_data) = (key, app_data);
         self.removed.remove(&dest);
         self.changed.insert(dest);
+    }
+
+    /// Mark `dest` heard now (adding an empty entry if there's none).
+    fn touch(&mut self, dest: &str) {
+        let entry = self.entries.entry(dest.to_string()).or_default();
+        if self.heard.get(&entry.heard).is_some_and(|d| d == dest) {
+            self.heard.remove(&entry.heard);
+        }
+        entry.heard = self.next_heard;
+        self.heard.insert(self.next_heard, dest.to_string());
+        self.next_heard += 1;
+    }
+
+    /// Forget the destination heard from longest ago that isn't a contact's.
+    /// False if there's none.
+    fn make_room(&mut self) -> bool {
+        let Some((&at, dest)) = self.heard.iter().find(|(_, dest)| !self.kept.contains(*dest)) else { return false };
+        let dest = dest.clone();
+        self.heard.remove(&at);
+        self.entries.remove(&dest);
+        self.changed.remove(&dest);
+        self.removed.insert(dest);
+        true
+    }
+
+    /// The contacts' destinations (trusted, or written to), whose keys are
+    /// never forgotten to make room for others.
+    pub(crate) fn keep(&mut self, destinations: impl IntoIterator<Item = Hash>) {
+        self.kept = destinations.into_iter().map(hex::encode).collect();
     }
 
     /// Forget what was kept for `destinations`.
     pub(crate) fn forget(&mut self, destinations: &[Hash]) {
         for destination in destinations {
             let dest = hex::encode(destination);
-            if self.entries.remove(&dest).is_some() {
+            if let Some(entry) = self.entries.remove(&dest) {
+                self.heard.remove(&entry.heard);
                 self.changed.remove(&dest);
                 self.removed.insert(dest);
             }
@@ -648,13 +695,40 @@ mod tests {
         known.remember([1; 16], &[7; 64], Some(&vec![0; MAX_KNOWN_DATA + 1]));
         assert!(known.public_key_of([1; 16]).is_some());
         assert!(known.app_data_of([1; 16]).is_none(), "announce data over the limit isn't kept");
-        for n in 0..MAX_KNOWN {
-            known.entries.insert(format!("{n:032x}-filler"), KnownEntry::default());
-        }
-        known.remember([2; 16], &[8; 64], None);
-        assert!(known.public_key_of([2; 16]).is_none(), "a full list takes no more");
         known.remember([1; 16], &[7; 64], Some(b"name"));
-        assert_eq!(known.app_data_of([1; 16]), Some(b"name".to_vec()), "one already kept still updates");
+        assert_eq!(known.app_data_of([1; 16]), Some(b"name".to_vec()), "one already kept updates");
+    }
+
+    #[test]
+    fn a_full_list_forgets_who_was_heard_longest_ago_but_not_contacts() {
+        let mut known = KnownIdentities::default();
+        let dest = |n: u32| -> Hash {
+            let mut hash = [0u8; 16];
+            hash[..4].copy_from_slice(&n.to_be_bytes());
+            hash
+        };
+        known.keep([dest(0)]);
+        for n in 0..MAX_KNOWN as u32 {
+            known.remember(dest(n), &[7; 64], None);
+        }
+        // Heard again: no longer the oldest.
+        known.remember(dest(1), &[7; 64], None);
+        known.remember(dest(MAX_KNOWN as u32), &[8; 64], None);
+        known.remember(dest(MAX_KNOWN as u32 + 1), &[8; 64], None);
+        assert_eq!(known.entries.len(), MAX_KNOWN, "still full");
+        assert!(known.public_key_of(dest(MAX_KNOWN as u32 + 1)).is_some(), "a new one is kept");
+        assert!(known.public_key_of(dest(0)).is_some(), "a contact's stays");
+        assert!(known.public_key_of(dest(1)).is_some(), "one heard again stays");
+        assert!(known.public_key_of(dest(2)).is_none() && known.public_key_of(dest(3)).is_none(), "the oldest went");
+        assert!(known.removed.contains(&hex::encode(dest(2))), "and goes from the database");
+        // Only contacts left to forget: nothing new is kept.
+        let mut full = KnownIdentities::default();
+        full.keep((0..MAX_KNOWN as u32).map(dest));
+        for n in 0..MAX_KNOWN as u32 {
+            full.remember(dest(n), &[7; 64], None);
+        }
+        full.remember(dest(MAX_KNOWN as u32), &[8; 64], None);
+        assert!(full.public_key_of(dest(MAX_KNOWN as u32)).is_none());
     }
 }
 
