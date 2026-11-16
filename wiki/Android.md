@@ -128,6 +128,13 @@ can then:
   firewall lets in UDP ports 29716 (discovery) and 42671 (data), or the ones
   set as *Discovery port* and *Data port*. A blocked port shows as nothing
   coming through the phone's Default Interface in Status.
+- **On a network you share with strangers, give AutoInterface a *Group ID*
+  of your own.** Everyone on the same Wi-Fi with the same group ID becomes a
+  peer, and the default is the same for everyone. Someone there can then
+  send the phone traffic and take up its peer slots (a limited number per
+  network), which keeps your own devices out. Set the same *Group ID* on each
+  of your devices (Reticulum, the interface's options) and only they find
+  each other.
 - **The page rests in the background.** Out of sight, the web UI fetches
   nothing; it catches up when you open the app again. Notifications come
   from the service meanwhile, which hears only about notifications, not
