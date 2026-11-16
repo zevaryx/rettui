@@ -79,7 +79,7 @@ pub fn bounds(places: &[Placed], view: &MapView, width: u16, height: u16) -> ([f
 
 impl App {
     /// Everyone's newest location, the newest first (this station's first
-    /// of all, if set): from the newest of their messages that brought one,
+    /// of all, if set): from the newest of their verified messages that brought one,
     /// unless they've since said they stopped sharing it. Blocked
     /// contacts' are left out.
     pub fn locations(&self) -> Vec<Placed> {
@@ -94,7 +94,7 @@ impl App {
                     .messages
                     .iter()
                     .rev()
-                    .filter(|m| m.incoming && !self.location_forgotten(key, m.timestamp))
+                    .filter(|m| m.incoming && m.verified() && !self.location_forgotten(key, m.timestamp))
                     .find(|m| m.location.is_some() || stopped(m))?;
                 Some(Placed {
                     key: Some(key.clone()),

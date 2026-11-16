@@ -48,8 +48,8 @@ impl App {
     }
 
     /// Every interface made known: those discovery found (newest first),
-    /// then those contacts sent, from the newest telemetry of each that
-    /// brought any. Blocked contacts' are left out, and one heard both
+    /// then those contacts sent, from the newest verified telemetry of each
+    /// that brought any. Blocked contacts' are left out, and one heard both
     /// ways is listed once.
     pub fn found_interfaces(&self) -> Vec<Found> {
         let mut found: Vec<Found> = self
@@ -67,7 +67,7 @@ impl App {
             .iter()
             .filter(|(key, _)| self.store.contact(key).trust != Trust::Blocked)
             .filter_map(|(key, conversation)| {
-                let newest = conversation.messages.iter().rev().find(|m| m.incoming && !m.interfaces.is_empty())?;
+                let newest = conversation.messages.iter().rev().find(|m| m.verified() && !m.interfaces.is_empty())?;
                 Some((key, newest))
             })
             .flat_map(|(key, message)| {

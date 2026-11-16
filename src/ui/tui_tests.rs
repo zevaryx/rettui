@@ -2397,6 +2397,7 @@ fn ask_where_someone_is_from_the_map_and_see_what_runs_a_propagation_node() {
     let message = InboundMessage {
         source: [0xab; 16],
         timestamp: crate::app::now() - 60.0,
+        verified: true,
         extras: Extras { telemetry: Some(telemetry), ..Extras::default() },
         ..InboundMessage::default()
     };

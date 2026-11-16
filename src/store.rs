@@ -188,6 +188,12 @@ impl Message {
         }
     }
 
+    /// Received, and signed with the key known for its sender: what it
+    /// says of where they are, or how to reach a network, is theirs.
+    pub fn verified(&self) -> bool {
+        matches!(self.state, MessageState::Received { verified: true })
+    }
+
     /// The LXMF hash (hex) replies to this message name it by, if it has
     /// one (a message being sent, or that failed, has none yet).
     pub fn lxmf_hash(&self) -> Option<&str> {

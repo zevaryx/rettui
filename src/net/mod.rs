@@ -132,7 +132,8 @@ pub enum NetCommand {
         max_bytes: u64,
     },
     /// Contacts: those given stamp tickets (trusted), and those spared the
-    /// stamp (trusted, or written to).
+    /// stamp (trusted, or written to). Their keys are never forgotten to
+    /// make room for others'.
     SetContacts {
         trusted: Vec<Hash>,
         exempt: Vec<Hash>,
@@ -1116,7 +1117,10 @@ async fn run(
                             announce_lxmf(&runtime, &delivery.handle, announce_data(&display_name), &mut reannounce, &ev).await;
                         }
                     }
-                    NetCommand::SetContacts { trusted, exempt } => policy.lock().unwrap().set_contacts(trusted, exempt),
+                    NetCommand::SetContacts { trusted, exempt } => {
+                        known.lock().unwrap().keep(trusted.iter().chain(&exempt).copied());
+                        policy.lock().unwrap().set_contacts(trusted, exempt);
+                    }
                     NetCommand::Remember { to, public_key } => known.lock().unwrap().remember(to, &public_key, None),
                     NetCommand::ForgetKnown(peers) => known.lock().unwrap().forget(&peers),
                     NetCommand::Ping(to) => {
