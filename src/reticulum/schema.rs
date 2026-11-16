@@ -388,7 +388,13 @@ pub const INTERFACE_TYPES: &[InterfaceType] = &[
         name: "AutoInterface",
         label: "Auto (local network)",
         opts: &[
-            opt("group_id", "Group ID", Text, "reticulum", "Only peers with the same group ID find each other"),
+            opt(
+                "group_id",
+                "Group ID",
+                Text,
+                "reticulum",
+                "Only peers with the same group ID find each other. On a network you share with strangers, set one of your own on every device: with the default, anyone there becomes a peer",
+            ),
             opt(
                 "discovery_scope",
                 "Discovery scope",
