@@ -678,13 +678,28 @@ mod tests {
         let paths = Paths::new(Some(dir.clone())).unwrap();
         std::fs::create_dir_all(&paths.propagation).unwrap();
         std::fs::write(paths.propagation.join("0123"), b"an old message").unwrap();
-        let open = || lxmf_core::propagation_store_v2::open_store(&paths.propagation);
+        // Other tests start programs while this runs. A program started
+        // holds a copy of every file open until it's running, the store's
+        // lock included, so for a moment after the lock is let go it can
+        // still look taken. The lock says so, and it's tried again.
+        fn settled<T, E: std::fmt::Display>(mut what: impl FnMut() -> Result<T, E>) -> Result<T, E> {
+            let started = std::time::Instant::now();
+            loop {
+                match what() {
+                    Err(e) if e.to_string().contains("locked by another owner") && started.elapsed() < Duration::from_secs(10) => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    done => return done,
+                }
+            }
+        }
+        let open = || settled(|| lxmf_core::propagation_store_v2::open_store(&paths.propagation));
         assert!(lxmf_core::propagation_store_v2::is_migration_required(&open().unwrap_err()));
-        migrate_propagation(&paths).unwrap();
+        settled(|| migrate_propagation(&paths)).unwrap();
         assert!(open().is_ok());
         assert!(dir.join("propagation.legacy-quarantine").exists(), "old messages kept");
         // Again, with nothing left to convert.
-        migrate_propagation(&paths).unwrap();
+        settled(&|| migrate_propagation(&paths)).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
