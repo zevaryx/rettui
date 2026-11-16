@@ -38,6 +38,9 @@ pub struct Settings {
     /// A page's partials may come from other nodes than the page's (never
     /// identified, and never from the node hosted here). Off unless turned on.
     pub partials_other_nodes: bool,
+    /// The fewest seconds between a partial's reloads (1 at least); a page
+    /// that asks for less waits this long.
+    pub partial_min_refresh_secs: u64,
     /// Outbound propagation node (hex destination hash).
     pub propagation_node: Option<String>,
     /// Minutes between automatic propagation node syncs; 0 disables them.
@@ -291,6 +294,7 @@ impl Default for Settings {
             home: None,
             browser_new_tabs: true,
             partials_other_nodes: false,
+            partial_min_refresh_secs: crate::nomad::micron::DEFAULT_PARTIAL_REFRESH,
             propagation_node: None,
             sync_interval_mins: 120,
             auto_propagation_node: false,
@@ -839,7 +843,16 @@ const SECTIONS: &[(Section, &[&str])] = &[
     ),
     (
         Section::Browsing,
-        &["home", "browser_new_tabs", "partials_other_nodes", "cache_hours", "nomad_files_dir", "rngit_identity", "rngit_timeout_secs"],
+        &[
+            "home",
+            "browser_new_tabs",
+            "partials_other_nodes",
+            "partial_min_refresh_secs",
+            "cache_hours",
+            "nomad_files_dir",
+            "rngit_identity",
+            "rngit_timeout_secs",
+        ],
     ),
     (
         Section::Hosting,
@@ -1178,6 +1191,13 @@ pub const FIELDS: &[Field] = &[
         label: "Partials from other nodes",
         help: "Off, a page's partials (parts it loads by itself, with no tap) come only from the page's own node. On, a page may also load parts of other nodes, so whoever wrote the page can make rettui ask any node for something, and that node learns that you did. Even then rettui never identifies you to that node for a partial and never loads one from your own node",
         kind: FieldKind::Toggle,
+        effect: Effect::Now,
+    },
+    Field {
+        key: "partial_min_refresh_secs",
+        label: "Shortest partial reload (s)",
+        help: "Seconds a page's partial waits at least between reloads, whatever the page asks for (1 to 86400; 5 by default). A page asking for less waits this long; a lower number makes live pages, such as a chat page, faster and rettui asks the node more often. A page still loads at most 16 partials, and none reloads less often than once a day",
+        kind: FieldKind::Number,
         effect: Effect::Now,
     },
     Field {
@@ -1675,6 +1695,7 @@ impl Settings {
             "nomad_files_dir" => self.nomad_files_dir.clone().unwrap_or_default(),
             "browser_new_tabs" => self.browser_new_tabs.to_string(),
             "partials_other_nodes" => self.partials_other_nodes.to_string(),
+            "partial_min_refresh_secs" => self.partial_min_refresh_secs.to_string(),
             "node_enabled" => self.node_enabled.to_string(),
             "node_name" => self.node_name.clone().unwrap_or_default(),
             "node_announce_interval_mins" => self.node_announce_interval_mins.to_string(),
@@ -1800,6 +1821,10 @@ impl Settings {
             "minimize_to_tray" => self.minimize_to_tray = toggle(value).map_err(fail)?,
             "browser_new_tabs" => self.browser_new_tabs = toggle(value).map_err(fail)?,
             "partials_other_nodes" => self.partials_other_nodes = toggle(value).map_err(fail)?,
+            "partial_min_refresh_secs" => {
+                use crate::nomad::micron::{MAX_PARTIAL_REFRESH, MIN_PARTIAL_REFRESH};
+                self.partial_min_refresh_secs = between(value, (MIN_PARTIAL_REFRESH, MAX_PARTIAL_REFRESH)).map_err(fail)?;
+            }
             "chat_dates" => self.chat_dates = toggle(value).map_err(fail)?,
             "notify_messages" => self.notify_messages = toggle(value).map_err(fail)?,
             "notify_rrc" => self.notify_rrc = toggle(value).map_err(fail)?,
@@ -2317,6 +2342,11 @@ mod tests {
         assert!(s.set_field("announce_interval_mins", "-5").is_err());
         assert!(s.set_field("announce_interval_mins", "99999999999").is_err());
         s.set_field("sync_interval_mins", "0").unwrap();
+        // The shortest partial reload: 5 by default, never under 1 second or over a day.
+        assert_eq!((s.partial_min_refresh_secs, s.partials_other_nodes), (5, false));
+        assert!(s.set_field("partial_min_refresh_secs", "0").is_err() && s.set_field("partial_min_refresh_secs", "86401").is_err());
+        s.set_field("partial_min_refresh_secs", "1").unwrap();
+        assert_eq!(s.partial_min_refresh_secs, 1);
         s.set_field("announce_at_start", "off").unwrap();
         assert!(!s.announce_at_start);
         assert!(s.set_field("propagation_node", "xyz").is_err());

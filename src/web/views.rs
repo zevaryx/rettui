@@ -86,6 +86,8 @@ pub fn state(app: &App) -> Value {
         "wrap_lines": app.settings.wrap_lines,
         // Pages picked from the Browser's list open in new tabs.
         "browser_new_tabs": app.settings.browser_new_tabs,
+        // The fewest seconds between a partial's reloads (see `fillPartials`).
+        "partial_min_refresh": crate::nomad::micron::min_partial_refresh(app.settings.partial_min_refresh_secs),
         // How times and dates read (see `clock`).
         "clock": app.settings.clock,
         "date_style": app.settings.date_style,
