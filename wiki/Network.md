@@ -97,8 +97,8 @@ shows your identity, your interfaces and the log.
   Link to them instead, closed straight away, and says so ("a Link opened
   in 240 ms").
 - **From the command line:** `rettui path <address>` finds and prints a
-  path, `-d` forgets it, and `-t` lists every path known; `rettui probe
-  <address>` probes (see [Running](Running#commands)). While rettui is the
+  path, `-d` forgets it, and `-t` lists every path known; `rettui probe <address>`
+  probes (see [Running](Running#commands)). While rettui is the
   shared instance (the first Reticulum program started with
   `share_instance` on; a config rettui makes for you has it off, so other
   programs on the machine can't use rettui until you turn it on), these use its paths, and Reticulum's own `rnpath`
