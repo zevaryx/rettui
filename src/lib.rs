@@ -2,6 +2,10 @@
 //! program runs [`main`]; the Android app loads this as a library and runs
 //! [`run_with`] (see `android`).
 
+// The web UI's state (`web::views`) is one `json!` of more keys than the
+// default limit lets the macro expand.
+#![recursion_limit = "256"]
+
 #[cfg(target_os = "android")]
 mod android;
 mod app;
