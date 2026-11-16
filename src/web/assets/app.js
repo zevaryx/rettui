@@ -7939,7 +7939,10 @@ app.views.status = {
         el('div', {}, input, field.key === 'icon' ? this.iconPicker(input) : null, el('div', { class: 'help', text: field.help }),
           field.web === 'change' ? null : el('div', { class: 'help locked', text: field.web === 'terminal_only'
             ? 'Changed in the terminal UI (or settings.json), not here: it decides what runs on this computer.'
-            : 'Turned on in the terminal UI, not here: scripts run programs on this computer.'
+            : 'Turned on in the terminal UI, not here: '
+              + (field.key === 'disconnect_bootstrap_only'
+                ? 'it lets interfaces found on the network replace the ones you chose.'
+                : 'scripts run programs on this computer.')
               + (field.value === 'true' ? ' It can be turned off here.' : '') })));
     }));
     const notes = [`Saved in ${data.path}`];
