@@ -39,6 +39,11 @@ rettui keeps its data in `~/.local/share/rettui/`:
   it can't be read when rettui starts, rettui starts without your messages
   and moves the file aside as `store-unreadable-<time>.json.gz`, rather
   than saving over it, and the log says so.
+- Reticulum's own storage (in the Reticulum config folder): from
+  rsReticulum 1.5, the destinations known, their ratchets and the announces
+  cached are SQLite files, the ones Python Reticulum 1.6 uses. The first
+  start imports the old files. **This is one-way:** an older rettui starts
+  with no known destinations and hears them again as they announce.
 - `rettui.db`: the LXMF peers, NomadNet nodes and propagation nodes heard,
   and the public keys they announced, so you can reach peers that are
   offline now. It's an SQLite database (open it with `sqlite3 rettui.db`),

@@ -45,6 +45,7 @@ pub fn default_text() -> String {
 pub fn seed_default(rns_config: Option<&str>) {
     let path = config_path(rns_config);
     if path.exists() {
+        migrate_ifac_sizes_in(&path);
         return;
     }
     if let Some(dir) = path.parent()
@@ -54,6 +55,43 @@ pub fn seed_default(rns_config: Option<&str>) {
     }
     // A failure leaves rsReticulum to make its own default.
     let _ = crate::config::write_private(&path, default_text().as_bytes());
+}
+
+/// rsReticulum 1.5 reads `ifac_size` in bits, as Python Reticulum does; 1.4
+/// read bytes (1 to 64). A size left as it was would be read as a few bits,
+/// and the interface would stop talking to the network it was set up for.
+/// An interface with a size and no unit gets that size in bits, and
+/// `ifac_size_unit = bits`, which says so (Python ignores the key). Returns
+/// the new text and the interfaces changed, or `None` when nothing needs it.
+pub fn migrate_ifac_sizes(text: &str) -> Option<(String, Vec<String>)> {
+    let mut doc = Doc::new(text);
+    let mut changed = Vec::new();
+    for name in doc.subsections("interfaces") {
+        let path = ["interfaces", name.as_str()];
+        if doc.present_key(&path, &["ifac_size_unit", "ifac_size_bytes"]).is_some() {
+            continue;
+        }
+        let Some(bytes) = doc.raw_value(&path, "ifac_size").and_then(|v| v.trim_matches(['"', '\'']).parse::<u32>().ok()) else { continue };
+        if !(1..=64).contains(&bytes) {
+            continue;
+        }
+        doc.set(&path, "ifac_size", &[], Some(&(bytes * 8).to_string()));
+        doc.set(&path, "ifac_size_unit", &[], Some("bits"));
+        changed.push(name);
+    }
+    (!changed.is_empty()).then(|| (doc.text(), changed))
+}
+
+fn migrate_ifac_sizes_in(path: &Path) {
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let Some((migrated, changed)) = migrate_ifac_sizes(&text) else { return };
+    match save(path, &migrated) {
+        Ok(()) => tracing::warn!(
+            "IFAC sizes are in bits now (rsReticulum 1.5): changed the size of {} in the Reticulum config, which keeps the old one as config.backup",
+            changed.join(", ")
+        ),
+        Err(e) => tracing::warn!("could not change the IFAC sizes in the Reticulum config to bits: {e}"),
+    }
 }
 
 /// The file's text, or the default config when there is none yet (saving
@@ -233,6 +271,8 @@ pub fn bootstrap_warnings(config: &Config) -> Vec<String> {
 pub enum Section {
     Reticulum,
     Logging,
+    Stamps,
+    Filter,
     Interface(String),
 }
 
@@ -241,6 +281,8 @@ impl Section {
         match self {
             Section::Reticulum => vec!["reticulum"],
             Section::Logging => vec!["logging"],
+            Section::Stamps => vec!["stamps"],
+            Section::Filter => vec!["filter"],
             Section::Interface(name) => vec!["interfaces", name.as_str()],
         }
     }
@@ -249,6 +291,8 @@ impl Section {
         match self {
             Section::Reticulum => "Reticulum".into(),
             Section::Logging => "Logging".into(),
+            Section::Stamps => "Stamps".into(),
+            Section::Filter => "Filter".into(),
             Section::Interface(name) => name.clone(),
         }
     }
@@ -258,6 +302,8 @@ impl Section {
         match self {
             Section::Reticulum => "reticulum".into(),
             Section::Logging => "logging".into(),
+            Section::Stamps => "stamps".into(),
+            Section::Filter => "filter".into(),
             Section::Interface(name) => format!("interface:{name}"),
         }
     }
@@ -266,6 +312,8 @@ impl Section {
         match id {
             "reticulum" => Some(Section::Reticulum),
             "logging" => Some(Section::Logging),
+            "stamps" => Some(Section::Stamps),
+            "filter" => Some(Section::Filter),
             _ => id.strip_prefix("interface:").map(|n| Section::Interface(n.to_string())),
         }
     }
@@ -273,7 +321,7 @@ impl Section {
 
 /// The sections of a config, interfaces in file order.
 pub fn sections(text: &str) -> Vec<Section> {
-    let mut sections = vec![Section::Reticulum, Section::Logging];
+    let mut sections = vec![Section::Reticulum, Section::Logging, Section::Stamps, Section::Filter];
     sections.extend(Doc::new(text).subsections("interfaces").into_iter().map(Section::Interface));
     sections
 }
@@ -328,6 +376,8 @@ fn groups(config: Option<&Config>, section: &Section) -> Vec<(&'static str, &'st
     match section {
         Section::Reticulum => schema::RETICULUM.iter().map(group).collect(),
         Section::Logging => schema::LOGGING.iter().map(group).collect(),
+        Section::Stamps => schema::STAMPS.iter().map(group).collect(),
+        Section::Filter => schema::FILTER.iter().map(group).collect(),
         Section::Interface(_) => {
             let kind = config.and_then(|c| section_of(c, section)).and_then(|s| s.get("type")).and_then(schema::interface_type);
             let mut groups = vec![("Interface", std::slice::from_ref(&TYPE_OPT)), group(&schema::INTERFACE_BASIC)];
@@ -444,18 +494,23 @@ fn encode(view: &OptionView, value: &str, existing: Option<&str>) -> Result<Opti
     Ok(Some(text))
 }
 
-/// Commands of the pipe interfaces (programs Reticulum runs), with how
+/// Commands of the pipe interfaces and location commands (programs Reticulum runs), with how
 /// many interfaces that are on run each.
 fn pipe_commands(config: Option<&Config>) -> BTreeMap<String, usize> {
     let mut commands = BTreeMap::new();
     let Some(config) = config else { return commands };
     for (_, section) in config.subsections("interfaces") {
-        if section.get("type") != Some("PipeInterface") {
-            continue;
-        }
-        let Some(command) = section.get("command") else { continue };
         // On only if it says so, as Reticulum reads it.
-        *commands.entry(command.to_string()).or_default() += usize::from(section.interface_enabled());
+        let on = usize::from(section.interface_enabled());
+        if section.get("type") == Some("PipeInterface")
+            && let Some(command) = section.get("command")
+        {
+            *commands.entry(command.to_string()).or_default() += on;
+        }
+        // Any interface may name a program that tells its position.
+        if let Some(command) = section.get("location_cmd") {
+            *commands.entry(format!("location_cmd: {command}")).or_default() += on;
+        }
     }
     commands
 }
@@ -473,7 +528,10 @@ pub fn validate(before: &str, after: &str, restricted: bool) -> Result<Check, St
         let had = pipe_commands(check_config(before).as_ref());
         let runs_more = pipe_commands(config.as_ref()).into_iter().any(|(command, on)| had.get(&command).is_none_or(|was| on > *was));
         if runs_more {
-            return Err("Pipe interface commands run programs, so they can only be changed or turned on from the terminal".into());
+            return Err(
+                "Pipe interface commands and location commands run programs, so they can only be changed or turned on from the terminal"
+                    .into(),
+            );
         }
     }
     Ok(check)
@@ -812,6 +870,43 @@ mod tests {
     const DEFAULT: &str = "[reticulum]\n  enable_transport = False\n  share_instance = Yes\n\n[logging]\n  loglevel = 4\n\n[interfaces]\n  [[Default Interface]]\n    type = AutoInterface\n    enabled = Yes\n";
 
     #[test]
+    fn the_stamps_and_filter_pages_set_what_rsreticulum_reads() {
+        let text = set_options(DEFAULT, &Section::Stamps, &[("enforce_stamps", "yes"), ("destination_cost", "12.5")]).unwrap();
+        let text = set_options(&text, &Section::Filter, &[("hop_limiter", "64"), ("ignored_types", "lxmf.delivery, nomadnetwork.node")]).unwrap();
+        let (config, check) = super::check(&text);
+        assert!(check.error.is_none(), "{:?}", check.error);
+        let config = config.unwrap();
+        assert_eq!(config.section("stamps").unwrap().get("enforce_stamps"), Some("Yes"));
+        let policy = config.filter_policy().unwrap();
+        assert_eq!((policy.hop_limiter, policy.ignored_types), (64, vec!["lxmf.delivery".to_string(), "nomadnetwork.node".to_string()]));
+        assert!(sections(&text).contains(&Section::Stamps) && sections(&text).contains(&Section::Filter));
+        assert_eq!(Section::from_id("filter"), Some(Section::Filter));
+        assert!(set_options(&text, &Section::Stamps, &[("lr_cost", "many")]).is_err());
+    }
+
+    #[test]
+    fn a_location_command_runs_a_program_so_the_web_ui_cannot_set_it() {
+        let text = set_options(DEFAULT, &Section::Interface("Default Interface".into()), &[("location_cmd", "/bin/where")]).unwrap();
+        assert!(validate(DEFAULT, &text, true).is_err());
+        assert!(validate(DEFAULT, &text, false).is_ok());
+        assert!(validate(&text, &text, true).is_ok(), "one already there is left alone");
+    }
+
+    #[test]
+    fn ifac_sizes_from_before_rsreticulum_1_5_are_changed_from_bytes_to_bits_once() {
+        let old = "[interfaces]\n  [[Hub]]\n    type = TCPClientInterface\n    ifac_size = 16\n    network_name = x\n  [[Other]]\n    type = AutoInterface\n  [[Done]]\n    type = AutoInterface\n    ifac_size = 16\n    ifac_size_unit = bits\n  [[Big]]\n    type = AutoInterface\n    ifac_size = 128\n";
+        let (new, changed) = migrate_ifac_sizes(old).unwrap();
+        assert_eq!(changed, ["Hub"]);
+        let config = Config::parse(&new).unwrap();
+        let hub = config.subsection("interfaces", "Hub").unwrap();
+        assert_eq!((hub.get("ifac_size"), hub.get("ifac_size_unit")), (Some("128"), Some("bits")));
+        assert_eq!(config.subsection("interfaces", "Done").unwrap().get("ifac_size"), Some("16"), "one with a unit is left alone");
+        assert_eq!(config.subsection("interfaces", "Big").unwrap().get("ifac_size"), Some("128"), "more than 64 can only be bits");
+        assert!(check(&new).1.error.is_none());
+        assert!(migrate_ifac_sizes(&new).is_none(), "the second time changes nothing");
+    }
+
+    #[test]
     fn a_new_install_does_not_share_its_instance_and_an_old_config_is_left_alone() {
         let dir = std::env::temp_dir().join(format!("rettui-seed-config-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -842,7 +937,7 @@ mod tests {
         assert_eq!(get("group_id").value, None);
         assert_eq!(get("group_id").default, "reticulum");
         assert_eq!(get("custom_thing").group, "Other");
-        assert_eq!(sections(&text).len(), 3);
+        assert_eq!(sections(&text).len(), 5);
         assert_eq!(Section::from_id(&section.id()), Some(section));
     }
 
@@ -871,7 +966,7 @@ mod tests {
         let text = rename_interface(&text, "Hub", "Remote").unwrap();
         assert!(set_options(&text, &hub, &[("bitrate", "1")]).is_err());
         let text = remove_interface(&text, "Remote").unwrap();
-        assert_eq!(sections(&text).len(), 3);
+        assert_eq!(sections(&text).len(), 5);
     }
 
     #[test]

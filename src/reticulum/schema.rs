@@ -120,6 +120,20 @@ pub const RETICULUM: &[Group] = &[
             ),
             opt("respond_to_probes", "Answer probes", Bool, "No", "Answer rnprobe requests sent to this instance"),
             opt("use_implicit_proof", "Implicit proofs", Bool, "Yes", "Send short implicit packet proofs instead of explicit ones"),
+            opt(
+                "enable_interface_management",
+                "Interface management",
+                Bool,
+                "No",
+                "Let programs on this instance (such as rnstatus) attach, detach and reload interfaces",
+            ),
+            opt(
+                "default_gravity",
+                "Default gravity",
+                Int,
+                "",
+                "Gravity of interfaces without a gravity of their own, to rank paths that are otherwise alike",
+            ),
             opt("link_mtu_discovery", "Link MTU discovery", Bool, "Yes", "Negotiate larger packet sizes on links where the path allows it"),
             opt(
                 "static_transport_identity",
@@ -192,6 +206,22 @@ pub const RETICULUM: &[Group] = &[
                 "",
                 "Only use interfaces announced by these network identities, comma-separated",
             ),
+            opt(
+                "autoconnect_unverified_implementations",
+                "Auto-connect to any software",
+                Bool,
+                "No",
+                "Auto-connect to discovered entry points even when they aren't announced by Python Reticulum 1.5.7 or later or rsReticulum 1.5.0 or later. What a node announces about itself is its own claim",
+            ),
+            opt("autoconnect_interface_mode", "Auto-connect mode", Choice(MODES), "", "Mode given to interfaces made by auto-connecting"),
+            opt("autoconnect_interface_gravity", "Auto-connect gravity", Int, "", "Gravity given to interfaces made by auto-connecting"),
+            opt(
+                "autoconnect_announces_to_internal",
+                "Auto-connect: pass announces on",
+                Bool,
+                "",
+                "Whether interfaces made by auto-connecting send announces to internal interfaces",
+            ),
             opt("bootstrap_configs", "Bootstrap configs", List, "", "Extra config files with interfaces used to bootstrap discovery"),
         ],
     },
@@ -231,6 +261,46 @@ pub const RETICULUM: &[Group] = &[
     },
     Group { title: "Ingress tuning", opts: INGRESS_TUNING },
 ];
+
+pub const STAMPS: &[Group] = &[
+    Group {
+        title: "What is stamped",
+        opts: &[
+            opt("stamp_destinations", "Stamp announces", Bool, "No", "Put a stamp (proof of work) on the announces this node sends"),
+            opt("stamp_prs", "Stamp path requests", Bool, "No", "Put a stamp on the path requests this node sends"),
+            opt("always_stamp_lrs", "Stamp link requests", Bool, "No", "Put a stamp on every link request, not only when one is asked for"),
+            opt(
+                "enforce_stamps",
+                "Require stamps",
+                Bool,
+                "No",
+                "Drop announces, path requests and link requests that arrive without a valid stamp",
+            ),
+        ],
+    },
+    Group {
+        title: "How much work",
+        opts: &[
+            opt("destination_cost", "Announce cost", Float, "", "Work asked of an announce's stamp, in bits"),
+            opt("destination_value", "Announce value", Float, "", "Work this node's own announce stamps are made with"),
+            opt("pr_cost", "Path request cost", Float, "", "Work asked of a path request's stamp"),
+            opt("pr_value", "Path request value", Float, "", "Work this node's own path request stamps are made with"),
+            opt("lr_cost", "Link request cost", Float, "", "Work asked of a link request's stamp"),
+            opt("lr_stamp_timeout", "Link request wait (s)", Float, "", "How long to wait for a link request's stamp"),
+            opt("pr_stamp_timeout", "Path request wait (s)", Float, "", "How long to wait for a path request's stamp"),
+        ],
+    },
+];
+
+pub const FILTER: &[Group] = &[Group {
+    title: "Filter",
+    opts: &[
+        opt("required_only", "Only required types", Bool, "No", "Drop destination types this node doesn't need to carry traffic"),
+        opt("ignored_types", "Ignored types", List, "", "Destination types to drop, comma-separated (for example lxmf.delivery)"),
+        opt("allowed_types", "Allowed types", List, "", "Only these destination types are kept, comma-separated"),
+        opt("hop_limiter", "Hop limit", Int, "", "Drop packets that have travelled more than this many hops (0 to 128)"),
+    ],
+}];
 
 pub const LOGGING: &[Group] = &[Group {
     title: "Logging",
@@ -292,7 +362,13 @@ pub const INTERFACE_ADVANCED: &[Group] = &[
                 "Only peers with the same network name (and passphrase) can use this interface",
             ),
             alias("passphrase", &["pass_phrase"], "Passphrase", Secret, "", "Passphrase for the isolated network"),
-            opt("ifac_size", "IFAC size", Int, "", "Size of the access code on each packet, in bytes (1-64)"),
+            opt(
+                "ifac_size",
+                "IFAC size (bits)",
+                Int,
+                "",
+                "Size of the access code on each packet, in bits (8 to 512, a multiple of 8; 128 is 16 bytes). Before rsReticulum 1.5 this was bytes: rettui converts old values",
+            ),
         ],
     },
     Group {
@@ -303,6 +379,7 @@ pub const INTERFACE_ADVANCED: &[Group] = &[
             opt("announce_rate_grace", "Rate grace", Int, "", "Rate breaks allowed before the penalty applies"),
             opt("announce_rate_penalty", "Rate penalty (s)", Int, "", "Extra seconds a destination waits after breaking the rate"),
             opt("recursive_prs", "Recursive path requests", Bool, "No", "Always look further for unknown paths requested here"),
+            opt("announces_to_internal", "Send announces to internal", Bool, "Yes", "Pass announces heard here on to internal interfaces"),
             opt(
                 "announces_from_internal",
                 "Pass internal announces",
@@ -352,8 +429,26 @@ pub const INTERFACE_ADVANCED: &[Group] = &[
             opt("discovery_coding_rate", "Coding rate", Int, "", "LoRa coding rate announced with the interface"),
             opt("discovery_modulation", "Modulation", Text, "", "Modulation announced with the interface"),
             opt("discovery_channel", "Channel", Int, "", "Channel announced with the interface"),
+            opt(
+                "discovery_lxmf_address",
+                "Contact address",
+                Text,
+                "",
+                "LXMF address of whoever runs the interface, announced with it (hex)",
+            ),
+            opt(
+                "location_cmd",
+                "Location command",
+                Text,
+                "",
+                "Program that prints this interface's position, run when it announces. It runs a program, so it can only be set from the terminal",
+            ),
             opt("ignore_config_warnings", "Ignore warnings", Bool, "No", "Keep the configured mode even when discovery suggests another"),
         ],
+    },
+    Group {
+        title: "Routing",
+        opts: &[opt("gravity", "Gravity", Int, "", "Ranks paths that are otherwise alike: the higher one is preferred")],
     },
     Group {
         title: "Ingress control",

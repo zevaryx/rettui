@@ -31,10 +31,18 @@ of the Reticulum instance it uses. Where files are kept is in
 - **Reticulum config editor:** the Reticulum tab (in both UIs) edits the
   config file of the Reticulum instance rettui uses.
   - **Options:** every option rsReticulum reads, with a description and its
-    default: the `[reticulum]` and `[logging]` sections, and each interface's
+    default: the `[reticulum]`, `[logging]`, `[stamps]` and `[filter]` sections, and each interface's
     own options by type (Auto, TCP, Backbone, UDP, I2P, RNode, serial, KISS,
     AX.25, pipe), plus IFAC, announce, discovery and ingress control. Keys
     rettui doesn't know are listed and kept as written.
+  - **IFAC size is in bits:** rsReticulum 1.5 reads `ifac_size` in bits, as
+    Python Reticulum does (128 is 16 bytes); before 1.5 it was bytes. The
+    first time rettui 2.0 starts it changes each interface's old size to bits
+    and adds `ifac_size_unit = bits` beside it (Python ignores that line), and
+    keeps the old file as `config.backup`. A size that already has
+    `ifac_size_unit` is left alone.
+  - **What runs programs:** a pipe interface's command and an interface's
+    `location_cmd` run programs, so the web UI can't set or turn them on.
   - **Entry point:** *Transport node* on its own opens no port, so nobody
     can connect to the node. *Entry point* (the `E` key in the terminal UI)
     turns Transport node on and adds a TCP server interface listening on
