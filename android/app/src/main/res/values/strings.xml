@@ -55,6 +55,10 @@
     <string name="passphrase_needed">Type its passphrase</string>
     <string name="backup_passphrase">Seal it with a passphrase?</string>
     <string name="backup_passphrase_note">Sealed, the backup can\'t be restored without the passphrase, here or with rettui restore on a computer: don\'t lose it. Leave it empty for none.</string>
+    <string name="backup_unsealed">Save it without a passphrase?</string>
+    <string name="backup_unsealed_note">This backup holds your identity, the private key behind your address, and is saved where other apps and computers can read it. Without a passphrase, anyone who gets the file can pose as you and read what\'s sent to you.</string>
+    <string name="backup_unsealed_back">Add a passphrase</string>
+    <string name="backup_unsealed_save">Save without one</string>
     <string name="restore_passphrase">This backup is sealed</string>
     <string name="restore_passphrase_note">Type the passphrase it was sealed with.</string>
     <string name="schedule_passphrase">A passphrase for scheduled backups?</string>
