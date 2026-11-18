@@ -52,12 +52,24 @@ const MAX_LINKS: usize = 256;
 const MAX_LINKS_EACH: usize = 8;
 /// Most Links at once that haven't said who they are. Nothing tells who
 /// opens a Link before it does, so a count per visitor isn't possible; this
-/// leaves [`MAX_LINKS`] less it to those who have.
+/// leaves [`MAX_LINKS`] less it to those who have. When it is reached, the
+/// one that has waited longest is closed to make room (see
+/// [`Core::admit`]), so those who keep Links open without saying who they
+/// are can't keep others out.
 const MAX_UNIDENTIFIED: usize = 64;
 /// Seconds a Link may go without saying who it is, then it's closed:
 /// clients do it as soon as they connect, a slow radio link in a few seconds.
 /// (The idle sweep takes about 90.)
 const IDENTIFY_WITHIN: i64 = 30;
+/// How long a Link that hasn't said who it is must have been up before it may
+/// be closed for a newcomer (see [`Core::admit`]): a newcomer's own Link is
+/// not to be closed by a burst of others before it has had time to identify,
+/// which takes a second on a fast link. When every such Link is younger, the
+/// newcomer is turned away instead. Kept short because someone who reopens
+/// each Link they lose (about 30 a second in the retest) keeps all of them
+/// younger than this, and then newcomers are turned away again: at 5 seconds
+/// that happened every time, at 2 it didn't.
+const MIN_AGE_TO_EVICT: Duration = Duration::from_secs(2);
 /// Most rooms kept registered (rsRRCD saves them all in one file, again with
 /// each change, and lists them to everyone): a hub has a few. The hub's
 /// host is not held to this.
@@ -447,8 +459,10 @@ struct Core {
     identity: Hash,
     config: HubHostConfig,
     events: mpsc::UnboundedSender<NetEvent>,
-    /// Links, and when they came (Unix seconds).
-    connected: HashMap<[u8; 16], i64>,
+    /// Links, and when and in what order they came.
+    connected: HashMap<[u8; 16], Arrival>,
+    /// How many Links have come (the order of [`Arrival`]).
+    arrivals: u64,
     /// The snapshot last sent.
     shown: Option<HubSnapshot>,
     /// Who you've blocked: turned away.
@@ -457,6 +471,27 @@ struct Core {
     /// when it last was (see [`Core::without_saving`]).
     rooms_changed: bool,
     rooms_saved: Instant,
+}
+
+/// When a Link came: Unix seconds, the moment (to tell its age to the
+/// millisecond), and the count of Links before it (many come in one second,
+/// and the oldest is told by that).
+#[derive(Clone, Copy, Debug)]
+struct Arrival {
+    at: i64,
+    seen: Instant,
+    order: u64,
+}
+
+/// What [`Core::admit`] did with a new Link.
+#[derive(Debug)]
+enum Admission {
+    /// Too many Links, and each has said who it is: this one is closed.
+    Refused,
+    /// Taken. `evicted`: the Link that hadn't said who it was and had
+    /// waited longest, which is closed (on the wire) to make room, and
+    /// `actions` what the others are told of that.
+    Taken { evicted: Option<[u8; 16]>, actions: Vec<Action> },
 }
 
 fn unix_now() -> f64 {
@@ -507,12 +542,18 @@ impl Hub {
                     self.core.report();
                 }
                 Some(link) = events.links_established.recv() => {
-                    if !self.core.has_room_for_a_link() {
-                        let _ = self.handle.close_link(link, CloseReason::DestinationClosed, true).await;
-                        continue;
+                    match self.core.admit(link) {
+                        Admission::Refused => {
+                            let _ = self.handle.close_link(link, CloseReason::DestinationClosed, true).await;
+                        }
+                        Admission::Taken { evicted, actions } => {
+                            if let Some(old) = evicted {
+                                tracing::debug!("closed a link that hasn't said who it is, for a new one");
+                                let _ = self.handle.close_link(old, CloseReason::DestinationClosed, true).await;
+                            }
+                            self.apply(actions).await;
+                        }
                     }
-                    self.core.connected.insert(link, unix_now() as i64);
-                    self.core.router.established(link);
                 }
                 Some((link, peer)) = events.links_identified.recv() => {
                     let actions = self.core.identified(link, peer);
@@ -658,6 +699,7 @@ impl Core {
             connected: HashMap::new(),
             shown: None,
             blocked: crate::store::Blocked::default(),
+            arrivals: 0,
             rooms_changed: false,
             rooms_saved: Instant::now(),
         }
@@ -675,12 +717,51 @@ impl Core {
         let _ = self.router.packet(CONSOLE, &hello.encode());
     }
 
-    /// Whether another Link may be taken: not past [`MAX_LINKS`], nor past
-    /// [`MAX_UNIDENTIFIED`] that haven't said who they are.
-    fn has_room_for_a_link(&self) -> bool {
-        let unidentified =
-            self.connected.keys().filter(|link| self.router.state.sessions.get(*link).is_none_or(|session| session.peer.is_none())).count();
-        self.connected.len() < MAX_LINKS && unidentified < MAX_UNIDENTIFIED
+    /// Whether `link` has not said who it is.
+    fn is_unidentified(&self, link: &[u8; 16]) -> bool {
+        self.router.state.sessions.get(link).is_none_or(|session| session.peer.is_none())
+    }
+
+    /// Remember `link`, which came at `at` (Unix seconds).
+    fn track(&mut self, link: [u8; 16], at: i64) {
+        self.arrivals += 1;
+        self.connected.insert(link, Arrival { at, seen: Instant::now(), order: self.arrivals });
+    }
+
+    /// The Link that hasn't said who it is, came first, and has been up
+    /// [`MIN_AGE_TO_EVICT`].
+    fn oldest_unidentified(&self, now: Instant) -> Option<[u8; 16]> {
+        self.connected
+            .iter()
+            .filter(|(link, arrival)| now.duration_since(arrival.seen) >= MIN_AGE_TO_EVICT && self.is_unidentified(link))
+            .min_by_key(|(_, arrival)| arrival.order)
+            .map(|(link, _)| *link)
+    }
+
+    /// Take a new Link, if there is room: fewer than [`MAX_LINKS`], and
+    /// fewer than [`MAX_UNIDENTIFIED`] that haven't said who they are. If
+    /// either is reached and some Link hasn't said who it is, the one that
+    /// has waited longest is closed for this one: a newcomer says who it
+    /// is within a second or two, and one that has waited much longer is
+    /// likely not going to. Otherwise the new Link would be the one turned
+    /// away, and someone opening [`MAX_UNIDENTIFIED`] Links and never
+    /// speaking on them could keep everyone out. A Link that has said who
+    /// it is is never closed for this (so nobody can be pushed out by
+    /// opening Links); when all are such, or none has been up
+    /// [`MIN_AGE_TO_EVICT`] yet, the new one is refused.
+    fn admit(&mut self, link: [u8; 16]) -> Admission {
+        let unidentified = self.connected.keys().filter(|other| self.is_unidentified(other)).count();
+        let mut evicted = None;
+        let mut actions = Vec::new();
+        if self.connected.len() >= MAX_LINKS || unidentified >= MAX_UNIDENTIFIED {
+            let Some(old) = self.oldest_unidentified(Instant::now()) else { return Admission::Refused };
+            self.connected.remove(&old);
+            actions = self.closed(old);
+            evicted = Some(old);
+        }
+        self.track(link, unix_now() as i64);
+        self.router.established(link);
+        Admission::Taken { evicted, actions }
     }
 
     /// The Links that haven't said who they are in [`IDENTIFY_WITHIN`].
@@ -688,9 +769,7 @@ impl Core {
         let now = unix_now() as i64;
         self.connected
             .iter()
-            .filter(|(link, since)| {
-                now - **since >= IDENTIFY_WITHIN && self.router.state.sessions.get(*link).is_none_or(|session| session.peer.is_none())
-            })
+            .filter(|(link, arrival)| now - arrival.at >= IDENTIFY_WITHIN && self.is_unidentified(link))
             .map(|(link, _)| *link)
             .collect()
     }
@@ -1299,7 +1378,7 @@ impl Core {
                 unidentified += 1;
                 continue;
             };
-            let since = self.connected.get(link).copied().unwrap_or_default();
+            let since = self.connected.get(link).map_or(0, |arrival| arrival.at);
             let person = people.entry(peer).or_insert_with(|| HubPerson {
                 identity: hex::encode(peer),
                 nick: None,
@@ -1477,7 +1556,7 @@ mod tests {
     /// Someone connects (on Link `link`) and says hello.
     fn connect(core: &mut Core, link: u8, who: Hash, nick: &str) {
         core.router.established([link; 16]);
-        core.connected.insert([link; 16], 1_800_000_000);
+        core.track([link; 16], 1_800_000_000);
         let _ = core.router.identified([link; 16], who);
         let hello = Envelope::new(t::HELLO, &who).body(crate::rrc::hello_body()).nick(Some(nick));
         let _ = core.forward([link; 16], &hello.encode());
@@ -1871,7 +1950,7 @@ mod tests {
         let mut closed = 0;
         for n in 1..=MAX_LINKS_EACH as u8 + 3 {
             core.router.established([n; 16]);
-            core.connected.insert([n; 16], 1_800_000_000);
+            core.track([n; 16], 1_800_000_000);
             let actions = core.identified([n; 16], BOB);
             closed += actions.iter().filter(|a| matches!(a, Action::Close(link) if *link == [n; 16])).count();
         }
@@ -1882,35 +1961,167 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A link number as a link id that no other test link has.
+    fn id(n: u16) -> [u8; 16] {
+        let mut id = [9; 16];
+        id[..2].copy_from_slice(&n.to_be_bytes());
+        id
+    }
+
+    /// `n` Links that haven't said who they are, as they would come in.
+    fn open_unidentified(core: &mut Core, range: std::ops::Range<u16>) {
+        for n in range {
+            assert!(matches!(core.admit(id(n)), Admission::Taken { evicted: None, .. }), "link {n} has room");
+        }
+    }
+
+    /// Every link has been up `seconds` longer.
+    fn age(core: &mut Core, by: Duration) {
+        for arrival in core.connected.values_mut() {
+            arrival.seen = arrival.seen.checked_sub(by).expect("the machine has been up longer than a test's ages");
+        }
+    }
+
     #[test]
-    fn links_that_do_not_say_who_they_are_are_limited_and_closed() {
+    fn links_that_do_not_say_who_they_are_are_closed_after_their_time() {
         let dir = std::env::temp_dir().join(format!("rettui-hub-unidentified-{}", std::process::id()));
         let (mut core, _rx) = core(&dir, true);
         let long_ago = unix_now() as i64 - IDENTIFY_WITHIN - 1;
-        // Some are identified: they don't count, nor are they closed.
+        // Some are identified: they aren't closed.
         for n in 1..=10u8 {
             connect(&mut core, n, [n + 100; 16], &format!("n{n}"));
-            core.connected.insert([n; 16], long_ago);
+            core.track([n; 16], long_ago);
         }
-        assert!(core.has_room_for_a_link());
-        for n in 11..11 + MAX_UNIDENTIFIED as u8 - 1 {
-            core.router.established([n; 16]);
-            core.connected.insert([n; 16], unix_now() as i64);
-        }
-        assert!(core.has_room_for_a_link(), "one short of the limit");
         core.router.established([200; 16]);
-        core.connected.insert([200; 16], long_ago);
-        assert!(!core.has_room_for_a_link(), "{MAX_UNIDENTIFIED} that haven't said who they are");
-        // Only the one that has had its time is closed; saying who it is
-        // makes room again.
-        assert_eq!(core.slow_to_identify(), [[200; 16]]);
+        core.track([200; 16], long_ago);
+        core.router.established([201; 16]);
+        core.track([201; 16], unix_now() as i64);
+        assert_eq!(core.slow_to_identify(), [[200; 16]], "only the one that has had its time");
         let _ = core.router.identified([200; 16], AMY);
-        assert!(core.slow_to_identify().is_empty() && core.has_room_for_a_link());
-        // As many as MAX_LINKS in all, whoever they are.
-        for n in 0..MAX_LINKS {
-            core.connected.insert([0, n as u8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], 0);
+        assert!(core.slow_to_identify().is_empty(), "saying who it is keeps it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_full_table_closes_the_oldest_link_that_has_not_said_who_it_is() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-unidentified-full-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        // Ten who have said who they are, then the most there may be of
+        // those who haven't. Ids are not in the order they came.
+        for n in 1..=10u8 {
+            connect(&mut core, n, [n + 100; 16], &format!("n{n}"));
         }
-        assert!(!core.has_room_for_a_link());
+        let count = MAX_UNIDENTIFIED as u16;
+        open_unidentified(&mut core, 0..count);
+        age(&mut core, MIN_AGE_TO_EVICT);
+        // One more takes the place of the first of them, and then the next.
+        for n in count..count + 3 {
+            match core.admit(id(n)) {
+                Admission::Taken { evicted, .. } => assert_eq!(evicted, Some(id(n - count)), "the longest waiting goes"),
+                Admission::Refused => panic!("a newcomer was turned away while others hold Links without saying who they are"),
+            }
+        }
+        assert!(!core.connected.contains_key(&id(0)) && core.connected.contains_key(&id(3)));
+        // Those who said who they are stay, whatever is opened.
+        for n in 1..=10u8 {
+            assert!(core.connected.contains_key(&[n; 16]), "link {n} was closed");
+        }
+        assert_eq!(core.connected.len(), 10 + MAX_UNIDENTIFIED);
+        // One that says who it is is no longer a candidate, and the cap
+        // doesn't count it.
+        let _ = core.router.identified(id(3), AMY);
+        assert!(matches!(core.admit(id(500)), Admission::Taken { evicted: None, .. }));
+        for n in 501..501 + count {
+            age(&mut core, MIN_AGE_TO_EVICT);
+            let Admission::Taken { evicted, .. } = core.admit(id(n)) else { panic!("refused") };
+            assert_ne!(evicted, Some(id(3)), "one that has said who it is is not closed for a new one");
+        }
+        assert!(core.connected.contains_key(&id(3)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn someone_holding_links_cannot_keep_newcomers_out_nor_push_out_people() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-unidentified-flood-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        for n in 1..=5u8 {
+            connect(&mut core, n, [n + 100; 16], &format!("n{n}"));
+        }
+        // The attacker's links never say who they are, and are reopened as
+        // they close.
+        let held = MAX_UNIDENTIFIED as u16;
+        open_unidentified(&mut core, 0..held);
+        let mut next = held;
+        for round in 0..20u8 {
+            age(&mut core, MIN_AGE_TO_EVICT);
+            // A newcomer is welcomed, and says who it is.
+            let link = id(1000 + u16::from(round));
+            assert!(matches!(core.admit(link), Admission::Taken { .. }), "newcomer {round} was turned away");
+            let _ = core.router.identified(link, [round + 150; 16]);
+            // The attacker opens another few.
+            for _ in 0..3 {
+                assert!(matches!(core.admit(id(next)), Admission::Taken { .. }));
+                next += 1;
+            }
+        }
+        // All 20 newcomers and the first 5 are still here.
+        for round in 0..20u16 {
+            assert!(core.connected.contains_key(&id(1000 + round)), "newcomer {round} was pushed out");
+        }
+        for n in 1..=5u8 {
+            assert!(core.connected.contains_key(&[n; 16]));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_flood_of_new_links_does_not_push_out_a_newcomer_that_has_had_no_time_to_say_who_it_is() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-unidentified-young-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        let count = MAX_UNIDENTIFIED as u16;
+        open_unidentified(&mut core, 0..count);
+        age(&mut core, MIN_AGE_TO_EVICT);
+        // A newcomer takes the place of the oldest, and has yet to identify.
+        assert!(matches!(core.admit(id(1000)), Admission::Taken { evicted: Some(_), .. }));
+        // The attacker opens as many again at once: the table is the newcomer's
+        // and the attacker's old links (these go), then only young ones.
+        let mut refused = 0;
+        for n in 2000..2000 + count + 10 {
+            match core.admit(id(n)) {
+                Admission::Taken { evicted, .. } => {
+                    assert_ne!(evicted, Some(id(1000)), "the newcomer was closed within {MIN_AGE_TO_EVICT:?}")
+                }
+                Admission::Refused => refused += 1,
+            }
+        }
+        assert!(core.connected.contains_key(&id(1000)));
+        assert!(refused > 0, "links younger than {MIN_AGE_TO_EVICT:?} are not closed for more");
+        // Once it has been up long enough, it is no longer spared.
+        age(&mut core, MIN_AGE_TO_EVICT);
+        assert!(matches!(core.admit(id(5000)), Admission::Taken { evicted: Some(_), .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn links_that_have_all_said_who_they_are_fill_the_hub_and_turn_a_newcomer_away() {
+        let dir = std::env::temp_dir().join(format!("rettui-hub-links-full-{}", std::process::id()));
+        let (mut core, _rx) = core(&dir, true);
+        for n in 0..MAX_LINKS as u16 {
+            assert!(matches!(core.admit(id(n)), Admission::Taken { .. }));
+            let _ = core.router.identified(id(n), [(n % 250) as u8 + 1; 16]);
+        }
+        assert!(matches!(core.admit(id(9000)), Admission::Refused), "nobody is closed for it");
+        assert_eq!(core.connected.len(), MAX_LINKS);
+        // When one of the full table hasn't said who it is, it goes instead.
+        core.connected.remove(&id(7));
+        assert!(matches!(core.admit(id(9001)), Admission::Taken { evicted: None, .. }));
+        // The one that hasn't (and is young) is not closed for another yet.
+        assert!(matches!(core.admit(id(9002)), Admission::Refused), "9001 has been up no time");
+        age(&mut core, MIN_AGE_TO_EVICT);
+        match core.admit(id(9003)) {
+            Admission::Taken { evicted, .. } => assert_eq!(evicted, Some(id(9001))),
+            Admission::Refused => panic!("9001 had waited long enough"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2024,7 +2235,7 @@ mod tests {
             Envelope::new(t::HELLO, &BOB).body(body)
         };
         core.router.established([2; 16]);
-        core.connected.insert([2; 16], 1_800_000_000);
+        core.track([2; 16], 1_800_000_000);
         let _ = core.router.identified([2; 16], BOB);
         for taken in ["hub", "HUB", "amy", "AMY"] {
             let out = send(&mut core, 2, hello(taken));
