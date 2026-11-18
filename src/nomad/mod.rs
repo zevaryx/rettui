@@ -11,4 +11,4 @@ pub mod request;
 pub mod script;
 pub mod store;
 
-pub use fetch::{FetchedContent, LinkCache, fetch, fetch_once};
+pub use fetch::{DownloadedFile, FetchedContent, LinkCache, fetch, fetch_once};

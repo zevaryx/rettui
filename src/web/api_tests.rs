@@ -6,6 +6,10 @@ use p256::elliptic_curve::Generate;
 use serde_json::json;
 
 use super::testing::{TOKEN, TestWeb};
+
+/// Held by the tests that download a file: the web UI keeps the last one
+/// for the whole process (see `routes::download`).
+static DOWNLOADS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 use crate::lxmf::{Extras, InboundMessage};
 use crate::net::{NetCommand, NetEvent, PeerKind};
 
@@ -818,6 +822,8 @@ const NODE: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 
 #[tokio::test]
 async fn browsing_pages_forms_and_files() {
+    // The last download is kept for the whole process: one test at a time.
+    let _downloads = DOWNLOADS.lock().await;
     let web = TestWeb::start("browse");
     web.serve(
         "/page/index.mu",
@@ -1564,6 +1570,8 @@ async fn the_guide_pages_partials_and_previews() {
 /// user's.
 #[tokio::test]
 async fn partials_stay_on_their_node_and_are_never_files() {
+    // The last download is kept for the whole process: one test at a time.
+    let _downloads = DOWNLOADS.lock().await;
     let web = TestWeb::start("partial-limits");
     web.serve("/page/part.mu", "the part");
     web.serve("/file/big.bin", "file bytes");
@@ -2545,4 +2553,43 @@ async fn the_tools_tab_lists_what_was_tried_and_checks_entry_points() {
     let check = web.get("/api/tools").await.json()["interfaces"][0]["check"].clone();
     assert_eq!(check["state"], "down");
     assert!(check["help"].as_str().unwrap().contains("nothing accepted the connection"), "{check}");
+}
+
+/// A file the network task kept on disk is sent from there as it is read,
+/// with its length; the Android app's second request gets the same file,
+/// and the next download replaces it on disk.
+#[tokio::test]
+async fn a_downloaded_file_is_sent_from_disk_and_kept_only_until_the_next() {
+    // The last download is kept for the whole process: one test at a time.
+    let _downloads = DOWNLOADS.lock().await;
+    let web = TestWeb::start("download-from-disk");
+    let spool = web.dir.join("downloading");
+    let files = || std::fs::read_dir(&spool).map(|entries| entries.count()).unwrap_or(0);
+    let fetches = |web: &TestWeb| web.sent().iter().filter(|c| matches!(c, NetCommand::Fetch { .. })).count();
+    let big = "0123456789".repeat(50_000);
+    web.serve("/file/disk/big.bin", &big);
+    let download = web.get(&format!("/api/download?url={NODE}:/file/disk/big.bin")).await;
+    assert_eq!(download.status, StatusCode::OK);
+    assert_eq!(download.body, big.as_bytes());
+    assert_eq!(download.headers[header::CONTENT_LENGTH], big.len().to_string().as_str());
+    assert_eq!(download.headers[header::CONTENT_TYPE], "application/octet-stream");
+    assert!(download.headers[header::CONTENT_DISPOSITION].to_str().unwrap().starts_with("attachment; filename=\"big.bin\""));
+    assert_eq!(files(), 1, "kept for a second request");
+    // Asked for again at once: the same file, not another fetch.
+    let again = web.get(&format!("/api/download?url={NODE}:/file/disk/big.bin")).await;
+    assert_eq!((again.body.len(), fetches(&web)), (big.len(), 1));
+    // Prepared, then the next download: the file before it is removed.
+    web.serve("/file/disk/notes.txt", "notes");
+    let ahead = web.get(&format!("/api/download?url={NODE}:/file/disk/notes.txt&prepare=true")).await;
+    assert_eq!(ahead.json()["name"], "notes.txt");
+    assert_eq!(files(), 1);
+    // One that fails keeps the one before: asked for again, it still comes
+    // without another fetch.
+    web.pages.lock().unwrap().insert("/file/disk/gone.bin".into(), Err("no path".into()));
+    assert_eq!(web.get(&format!("/api/download?url={NODE}:/file/disk/gone.bin")).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(files(), 1);
+    // (`sent` hands over what was sent since it was last asked.)
+    let _ = fetches(&web);
+    assert_eq!(web.get(&format!("/api/download?url={NODE}:/file/disk/notes.txt")).await.body, b"notes");
+    assert_eq!(fetches(&web), 0);
 }

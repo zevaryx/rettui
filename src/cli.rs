@@ -41,6 +41,7 @@ fn options(settings: &Settings, paths: &Paths, identity: Identity, announce: boo
         discovered_entry_points: 0,
         disconnect_bootstrap_only: false,
         notes: Vec::new(),
+        downloading: paths.downloading.clone(),
     }
 }
 

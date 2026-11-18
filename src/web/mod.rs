@@ -51,8 +51,11 @@ const FIRST_WEB_REQUEST: u64 = 1 << 40;
 
 /// A page, file or image fetched for the web UI.
 pub struct Fetched {
+    /// What came, unless it is kept on disk (`file`): then empty.
     pub data: Vec<u8>,
     pub metadata: Option<Vec<u8>>,
+    /// A file downloaded, kept on disk (see [`crate::nomad::FetchedContent::file`]).
+    pub file: Option<crate::nomad::DownloadedFile>,
     /// Set when it came from the cache.
     pub cached_age: Option<Duration>,
 }
@@ -132,7 +135,12 @@ impl Owner {
             self.next_request += 1;
             match self.app.own_node_content(id, &location, identified) {
                 Some(result) => {
-                    let _ = reply.send(result.map(|content| Fetched { data: content.data, metadata: None, cached_age: None }));
+                    let _ = reply.send(result.map(|content| Fetched {
+                        data: content.data,
+                        metadata: None,
+                        file: content.file,
+                        cached_age: None,
+                    }));
                 }
                 // A script page, running: its page comes as a fetch's would.
                 None => _ = self.fetches.insert(id, PendingFetch { location, identified, cacheable: false, reply }),
@@ -146,7 +154,7 @@ impl Owner {
             && !refresh
             && let Some(cached) = self.app.page_cache().get(location.node, &location.path, identified)
         {
-            let _ = reply.send(Ok(Fetched { data: cached.data, metadata: None, cached_age: Some(cached.age) }));
+            let _ = reply.send(Ok(Fetched { data: cached.data, metadata: None, file: None, cached_age: Some(cached.age) }));
             return;
         }
         let id = self.next_request;
@@ -224,7 +232,7 @@ impl Owner {
                             .map(Duration::from_secs);
                         self.app.page_cache().put(location.node, &location.path, pending.identified, &content.data, ttl);
                     }
-                    Fetched { data: content.data, metadata: content.metadata, cached_age: None }
+                    Fetched { data: content.data, metadata: content.metadata, file: content.file, cached_age: None }
                 });
                 let _ = pending.reply.send(result);
             }
@@ -1226,13 +1234,25 @@ pub(crate) mod testing {
                         if let NetCommand::Fetch { id, path, .. } = &command
                             && let Some(page) = served.lock().unwrap().get(path).cloned()
                         {
-                            let result = page.map(|data| FetchedContent { data, metadata: None });
+                            // Files under `/file/disk/` come as the network task hands a
+                            // downloaded file over: on disk, in the spool folder.
+                            let result = page.map(|data| match path.strip_prefix("/file/disk/") {
+                                Some(name) => {
+                                    let spool = test_dir.join("downloading");
+                                    std::fs::create_dir_all(&spool).unwrap();
+                                    let spooled = spool.join(format!("{id}-{name}"));
+                                    std::fs::write(&spooled, &data).unwrap();
+                                    let file = crate::nomad::DownloadedFile::new(spooled, data.len() as u64);
+                                    FetchedContent { data: Vec::new(), metadata: None, file: Some(file) }
+                                }
+                                None => FetchedContent { data, metadata: None, file: None },
+                            });
                             owner.apply(NetEvent::Fetched { id: *id, result });
                         }
                         // Script pages of its own node run, as in the network task.
                         if let NetCommand::RunScript { id, script, fields, limits, .. } = &command {
                             let data = crate::nomad::script::preview(script, None, fields, limits);
-                            owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None }) });
+                            owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None, file: None }) });
                         }
                         if let NetCommand::Git { id, repo, request, .. } = &command
                             && let Some(node) = node.lock().unwrap().clone()
@@ -1249,7 +1269,7 @@ pub(crate) mod testing {
                                 crate::net::gitpages::Reply::Page(page) => page.into_bytes(),
                                 crate::net::gitpages::Reply::File { data, .. } => data,
                             };
-                            owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None }) });
+                            owner.apply(NetEvent::Fetched { id: *id, result: Ok(FetchedContent { data, metadata: None, file: None }) });
                         }
                         // The rngit node hosted here, which mirrors from `source/` in the test's folder.
                         if let NetCommand::GitHostAction { id, action } = &command {

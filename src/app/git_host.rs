@@ -648,7 +648,7 @@ mod tests {
         let crate::net::gitpages::Reply::Page(page) = crate::net::gitpages::answer(&node, &site, &path, &fields, None).0 else {
             panic!("a file");
         };
-        let content = crate::nomad::FetchedContent { data: page.into_bytes(), metadata: None };
+        let content = crate::nomad::FetchedContent { data: page.into_bytes(), metadata: None, file: None };
         tui.app.on_net(NetEvent::Fetched { id, result: Ok(content) });
         assert!(tui.draw().contains("Nothing has been pushed here yet"), "{}", tui.draw());
         // With its pages off, `b` says how to turn them on.

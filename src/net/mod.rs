@@ -23,7 +23,7 @@ pub mod rncplisten;
 pub mod speedtest;
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -591,6 +591,9 @@ pub struct NetOptions {
     /// Lines for the log once it's running (what was done to the config
     /// before it started).
     pub notes: Vec<String>,
+    /// Where files being downloaded are written until they are saved or
+    /// sent on (see [`crate::config::Paths::downloading`]).
+    pub downloading: PathBuf,
 }
 
 /// When the LXMF address is announced on its own (besides at start, when
@@ -671,7 +674,7 @@ pub fn spawn(options: NetOptions) -> (mpsc::UnboundedSender<NetCommand>, mpsc::U
 }
 
 /// The most a file response is read back into memory: what a Resource may hold.
-const MAX_FILE_RESPONSE: u64 = 134_217_727;
+pub(crate) const MAX_FILE_RESPONSE: u64 = 134_217_727;
 
 /// A response's bytes and its file metadata. rsReticulum 1.5 saves a file
 /// response (one with metadata) to a file of its own, which is read back
@@ -687,6 +690,91 @@ pub async fn response_bytes(response: LinkSessionResponse) -> Result<(Vec<u8>, O
     .await
     .map_err(|e| format!("It stopped: {e}"))?;
     Ok((read.map_err(|e| format!("Could not read the file the node sent: {e}"))?, metadata))
+}
+
+/// A file response kept on disk where the library wrote it, rather than read
+/// into memory. One without file metadata the library reads back into memory
+/// itself: unless it is small, it is written to `spool` (a temporary file,
+/// renamed into place) and the bytes let go. Over [`MAX_FILE_RESPONSE`], as
+/// [`response_bytes`] would refuse it: removed.
+pub async fn response_file(response: LinkSessionResponse, spool: &Path) -> Result<FetchedContent, String> {
+    let LinkSessionResponse { data, metadata, file, .. } = response;
+    let Some(path) = file else {
+        if data.len() < SPOOL_FROM {
+            return Ok(FetchedContent::bytes(data, metadata));
+        }
+        let dir = spool.to_path_buf();
+        return tokio::task::spawn_blocking(move || spool_bytes(&dir, data, metadata)).await.map_err(|e| format!("It stopped: {e}"));
+    };
+    let len = tokio::fs::metadata(&path).await.map(|meta| meta.len());
+    match len {
+        Ok(len) if len <= MAX_FILE_RESPONSE => {
+            Ok(FetchedContent { data: Vec::new(), metadata, file: Some(nomad::DownloadedFile::new(path, len)) })
+        }
+        Ok(_) => {
+            let _ = tokio::fs::remove_file(&path).await;
+            Err(format!("Could not read the file the node sent: it is more than {} MB", MAX_FILE_RESPONSE / 1_000_000))
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&path).await;
+            Err(format!("Could not read the file the node sent: {e}"))
+        }
+    }
+}
+
+/// Downloads that came in memory from this size on are written to disk (see
+/// [`response_file`]); smaller ones (a packet or two) are kept as they are.
+const SPOOL_FROM: usize = 64 * 1024;
+
+/// `data` written to a file of its own in `dir`: first to a temporary file
+/// beside it, then renamed, so a half-written one never has the name. If it
+/// can't be written, it stays in memory, as downloads were before.
+fn spool_bytes(dir: &Path, data: Vec<u8>, metadata: Option<Vec<u8>>) -> FetchedContent {
+    use std::io::Write;
+    let path = dir.join(hex::encode(rns_crypto::random::random_bytes(16)));
+    let tmp = crate::config::temp_beside(&path);
+    let written = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options.open(&tmp)?;
+        file.write_all(&data)?;
+        drop(file);
+        crate::config::replace(&tmp, &path)
+    })();
+    match written {
+        Ok(()) => {
+            let file = nomad::DownloadedFile::new(path, data.len() as u64);
+            FetchedContent { data: Vec::new(), metadata, file: Some(file) }
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            tracing::warn!("could not write a download to {}, keeping it in memory: {e}", dir.display());
+            FetchedContent::bytes(data, metadata)
+        }
+    }
+}
+
+/// Where files being downloaded are written, made if need be, without
+/// what an earlier run left there (it stopped before they were saved or
+/// sent): those over a day old, so a second instance's are left alone.
+fn prepare_spool(dir: &Path) {
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let day_ago = std::time::SystemTime::now() - Duration::from_secs(86_400);
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let old = entry.metadata().and_then(|meta| meta.modified()).is_ok_and(|modified| modified < day_ago);
+        if old && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Start the runtime without registering any destination, for one-shot CLI use.
@@ -727,6 +815,11 @@ async fn run(
 ) -> Result<(), String> {
     let runtime = start_runtime(options.rns_config.as_deref()).await?;
     let blocked = options.blocked.clone();
+    let options_spool = options.downloading.clone();
+    tokio::task::spawn_blocking({
+        let dir = options_spool.clone();
+        move || prepare_spool(&dir)
+    });
     for note in &options.notes {
         let _ = ev.send(NetEvent::Log(note.clone()));
     }
@@ -1469,13 +1562,13 @@ async fn run(
                     },
                     NetCommand::Fetch { id, node, path, fields, identify } => {
                         pins::mark_used(&pins, &runtime, node);
-                        let (runtime, links, ev) = (runtime.clone(), links.clone(), ev.clone());
+                        let (runtime, links, ev, spool) = (runtime.clone(), links.clone(), ev.clone(), options_spool.clone());
                         let identity = identify.then(|| identity.clone());
                         tokio::spawn(async move {
                             let progress = |text: String| {
                                 let _ = ev.send(NetEvent::FetchProgress { id, text });
                             };
-                            let result = nomad::fetch(&runtime, &links, node, &path, &fields, identity, &progress).await;
+                            let result = nomad::fetch(&runtime, &links, node, &path, &fields, identity, &progress, Some(spool.as_path())).await;
                             let _ = ev.send(NetEvent::Fetched { id, result });
                         });
                     }
@@ -1488,11 +1581,10 @@ async fn run(
                                 None => Err("The rngit node's pages aren't being served".to_string()),
                                 Some((node, site)) => tokio::task::spawn_blocking(move || {
                                     match gitpages::answer(&node, &site, &path, &fields, peer).0 {
-                                        gitpages::Reply::Page(page) => FetchedContent { data: page.into_bytes(), metadata: None },
-                                        gitpages::Reply::File { name, data } => FetchedContent {
-                                            data,
-                                            metadata: Some(rns_runtime::link_manager::pack_file_name_metadata(&name)),
-                                        },
+                                        gitpages::Reply::Page(page) => FetchedContent { data: page.into_bytes(), metadata: None, file: None },
+                                        gitpages::Reply::File { name, data } => {
+                                            FetchedContent::bytes(data, Some(rns_runtime::link_manager::pack_file_name_metadata(&name)))
+                                        }
                                     }
                                 })
                                 .await
@@ -1506,7 +1598,7 @@ async fn run(
                         let remote_identity = identify.then_some(identity.hash);
                         tokio::task::spawn_blocking(move || {
                             let data = nomad::script::preview(&script, remote_identity, &fields, &limits);
-                            let _ = ev.send(NetEvent::Fetched { id, result: Ok(FetchedContent { data, metadata: None }) });
+                            let _ = ev.send(NetEvent::Fetched { id, result: Ok(FetchedContent { data, metadata: None, file: None }) });
                         });
                     }
                 }
@@ -1839,5 +1931,86 @@ mod tests {
         assert!(many.details().join(", ").contains("4 clients"));
         assert_eq!([bit_rate(2_500_000_000), bit_rate(1_500), bit_rate(10)], ["2.50 Gbps", "1.50 kbps", "10 bps"]);
         assert!(Stop::Restart.total_wait() > Stop::Quit.total_wait() && Stop::Restart.runtime_wait() > Stop::Quit.runtime_wait());
+    }
+
+    fn file_response(file: Option<PathBuf>, data: &[u8]) -> LinkSessionResponse {
+        LinkSessionResponse {
+            request_id: [0; 16],
+            data: data.to_vec(),
+            value: rmpv::Value::Nil,
+            metadata: Some(b"meta".to_vec()),
+            file,
+            response_time: Duration::ZERO,
+            response_size: None,
+            response_transfer_size: None,
+            started_at: None,
+            response_concluded_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_file_response_stays_on_disk_unless_it_is_too_big() {
+        let dir = std::env::temp_dir().join(format!("rettui-response-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // On disk: handed over as it is, nothing read into memory.
+        let path = dir.join("spooled");
+        std::fs::write(&path, b"file bytes").unwrap();
+        let content = response_file(file_response(Some(path.clone()), b""), &dir).await.unwrap();
+        assert!(content.data.is_empty());
+        assert_eq!(content.metadata.as_deref(), Some(&b"meta"[..]));
+        let file = content.file.clone().unwrap();
+        assert_eq!((file.path(), file.size()), (path.as_path(), 10));
+        // Removed once nothing holds it.
+        drop((content, file));
+        assert!(!path.exists());
+        // A small one that came in a packet: in memory.
+        let small = response_file(file_response(None, b"small"), &dir).await.unwrap();
+        assert_eq!((small.data.as_slice(), small.file.is_none()), (&b"small"[..], true));
+        // Over what a Resource may hold: refused and removed, as reading it was.
+        let big = dir.join("big");
+        std::fs::File::create(&big).unwrap().set_len(MAX_FILE_RESPONSE + 1).unwrap();
+        let refused = response_file(file_response(Some(big.clone()), b""), &dir).await.unwrap_err();
+        assert!(refused.contains("more than"), "{refused}");
+        assert!(!big.exists());
+        // Gone before it could be looked at: said.
+        assert!(response_file(file_response(Some(dir.join("gone")), b""), &dir).await.is_err());
+        // A big one without file metadata, which the library hands over in
+        // memory: written to the folder, the bytes let go, nothing half-written left.
+        let spool = dir.join("spool");
+        std::fs::create_dir_all(&spool).unwrap();
+        let data = vec![7u8; SPOOL_FROM];
+        let spooled = response_file(file_response(None, &data), &spool).await.unwrap();
+        let file = spooled.file.clone().unwrap();
+        assert!(spooled.data.is_empty() && file.path().starts_with(&spool));
+        assert_eq!((std::fs::read(file.path()).unwrap(), file.size()), (data.clone(), SPOOL_FROM as u64));
+        assert_eq!(std::fs::read_dir(&spool).unwrap().count(), 1);
+        drop((spooled, file));
+        assert_eq!(std::fs::read_dir(&spool).unwrap().count(), 0);
+        // With nowhere to write it: kept in memory, as before.
+        let kept = response_file(file_response(None, &data), &dir.join("no-such-folder")).await.unwrap();
+        assert_eq!((kept.data.len(), kept.file.is_none()), (SPOOL_FROM, true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_download_folder_is_made_and_old_leftovers_go() {
+        let dir = std::env::temp_dir().join(format!("rettui-spool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        prepare_spool(&dir);
+        assert!(dir.is_dir());
+        let (old, new) = (dir.join("old"), dir.join("new"));
+        std::fs::write(&old, b"x").unwrap();
+        std::fs::write(&new, b"y").unwrap();
+        let two_days_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 86_400);
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(two_days_ago).unwrap();
+        prepare_spool(&dir);
+        assert!(!old.exists() && new.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

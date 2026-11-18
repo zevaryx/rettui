@@ -679,7 +679,7 @@ fn browsing_this_clients_own_script_pages() {
         }
     }
     let (id, data) = ran.expect("the script was asked to run");
-    tui.app.on_net(NetEvent::Fetched { id, result: Ok(FetchedContent { data, metadata: None }) });
+    tui.app.on_net(NetEvent::Fetched { id, result: Ok(FetchedContent { data, metadata: None, file: None }) });
     let shown = tui.draw();
     assert!(shown.contains("Hello") && shown.contains("Hi Bob"), "{shown}");
 

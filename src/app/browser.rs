@@ -201,7 +201,12 @@ impl App {
                     self.settings.nomad_files_dir.as_deref().map_or_else(|| self.paths.downloads.clone(), super::files::path_from_input);
                 let saved = std::fs::create_dir_all(&folder).and_then(|()| {
                     let target = unique_path(&folder, &name);
-                    std::fs::write(&target, &content.data).map(|()| target)
+                    // A file kept on disk as it came is copied there from disk, never read into memory.
+                    match content.file {
+                        Some(file) => file.save_as(&target),
+                        None => std::fs::write(&target, &content.data),
+                    }
+                    .map(|()| target)
                 });
                 match saved {
                     Ok(target) => self.notify(format!("Saved {}", target.display())),
@@ -1535,33 +1540,42 @@ mod tests {
         // A file: saved in Downloads under the name it came with.
         app.navigate(Location { node, path: "/file/notes.txt".into(), fields: BTreeMap::new() });
         let (id, _) = fetched(&mut net).unwrap();
-        app.on_fetched(id, Ok(FetchedContent { data: b"notes".to_vec(), metadata: None }));
+        app.on_fetched(id, Ok(FetchedContent { data: b"notes".to_vec(), metadata: None, file: None }));
         assert_eq!(std::fs::read(app.paths.downloads.join("notes.txt")).unwrap(), b"notes");
         // With a folder chosen: saved there instead, made if it's new.
         let chosen = app.paths.base.join("elsewhere");
         app.update_settings(&[("nomad_files_dir", &chosen.display().to_string())]).unwrap();
         app.navigate(Location { node, path: "/file/more.txt".into(), fields: BTreeMap::new() });
         let (id, _) = fetched(&mut net).unwrap();
-        app.on_fetched(id, Ok(FetchedContent { data: b"more".to_vec(), metadata: None }));
+        app.on_fetched(id, Ok(FetchedContent { data: b"more".to_vec(), metadata: None, file: None }));
         assert_eq!(std::fs::read(chosen.join("more.txt")).unwrap(), b"more");
         assert!(!app.paths.downloads.join("more.txt").exists());
         assert!(app.update_settings(&[("nomad_files_dir", "/no/such/place/at/all")]).is_err());
+        // A file kept on disk as it came: copied there from disk, the spooled one removed.
+        let spooled = dir.join("spooled-big.bin");
+        std::fs::write(&spooled, b"big file").unwrap();
+        app.navigate(Location { node, path: "/file/big.bin".into(), fields: BTreeMap::new() });
+        let (id, _) = fetched(&mut net).unwrap();
+        let file = crate::nomad::DownloadedFile::new(spooled.clone(), 8);
+        app.on_fetched(id, Ok(FetchedContent { data: Vec::new(), metadata: None, file: Some(file) }));
+        assert_eq!(std::fs::read(chosen.join("big.bin")).unwrap(), b"big file");
+        assert!(!spooled.exists());
         // A page that didn't come: said; one superseded: dropped.
         app.navigate(Location { node, path: "/page/gone.mu".into(), fields: BTreeMap::new() });
         let (id, _) = fetched(&mut net).unwrap();
-        app.on_fetched(id + 100, Ok(FetchedContent { data: b"late".to_vec(), metadata: None }));
+        app.on_fetched(id + 100, Ok(FetchedContent { data: b"late".to_vec(), metadata: None, file: None }));
         app.on_fetched(id, Err("no path".into()));
         assert_eq!(app.browser.tab.error.as_deref(), Some("no path"));
         // A page with a picture: fetched, kept, and asked for once.
         app.navigate(Location { node, path: "/page/pic.mu".into(), fields: BTreeMap::new() });
         let (id, _) = fetched(&mut net).unwrap();
-        app.on_fetched(id, Ok(FetchedContent { data: b"`(pic`:/media/a.png)".to_vec(), metadata: None }));
+        app.on_fetched(id, Ok(FetchedContent { data: b"`(pic`:/media/a.png)".to_vec(), metadata: None, file: None }));
         let (image, path) = fetched(&mut net).unwrap();
         assert_eq!(path, "/media/a.png");
-        app.on_fetched(image, Ok(FetchedContent { data: vec![1, 2, 3], metadata: None }));
+        app.on_fetched(image, Ok(FetchedContent { data: vec![1, 2, 3], metadata: None, file: None }));
         app.navigate(Location { node, path: "/page/pic2.mu".into(), fields: BTreeMap::new() });
         let (id, _) = fetched(&mut net).unwrap();
-        app.on_fetched(id, Ok(FetchedContent { data: b"`(pic`:/media/b.png)".to_vec(), metadata: None }));
+        app.on_fetched(id, Ok(FetchedContent { data: b"`(pic`:/media/b.png)".to_vec(), metadata: None, file: None }));
         let (image, _) = fetched(&mut net).unwrap();
         app.on_fetched(image, Err("gone".into()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1612,7 +1626,7 @@ mod tests {
                 })
                 .last()
         };
-        let page = |data: &str| Ok(FetchedContent { data: data.as_bytes().to_vec(), metadata: None });
+        let page = |data: &str| Ok(FetchedContent { data: data.as_bytes().to_vec(), metadata: None, file: None });
         app.navigate(at("/page/index.mu"));
         let (id, _) = fetched(&mut net).unwrap();
         app.on_fetched(id, page("`[About`:/page/about.mu]"));
@@ -1719,7 +1733,7 @@ mod tests {
             .find_map(|c| if let NetCommand::Fetch { id, .. } = c { Some(id) } else { None })
             .unwrap();
         let source = format!("`{{:/page/same.mu}}\n`{{{}:/page/post.mu}}\n`{{:/file/big.bin}}", hex::encode(other));
-        app.on_fetched(id, Ok(FetchedContent { data: source.into_bytes(), metadata: None }));
+        app.on_fetched(id, Ok(FetchedContent { data: source.into_bytes(), metadata: None, file: None }));
         // Only the one on the page's own node was asked for; the others say why.
         let asked: Vec<(Hash, String, bool)> = std::iter::from_fn(|| net.try_recv().ok())
             .filter_map(|c| if let NetCommand::Fetch { node, path, identify, .. } = c { Some((node, path, identify)) } else { None })
@@ -1749,7 +1763,7 @@ mod tests {
             hex::encode(other),
             hex::encode(other)
         );
-        app.on_fetched(id, Ok(FetchedContent { data: source.into_bytes(), metadata: None }));
+        app.on_fetched(id, Ok(FetchedContent { data: source.into_bytes(), metadata: None, file: None }));
         let asked: Vec<(Hash, String, bool)> = std::iter::from_fn(|| net.try_recv().ok())
             .filter_map(|c| if let NetCommand::Fetch { node, path, identify, .. } = c { Some((node, path, identify)) } else { None })
             .filter(|(_, path, _)| path.starts_with("/page/p") || path == "/page/same.mu")
@@ -1774,9 +1788,9 @@ mod tests {
         app.navigate(Location { node: [0xcd; 16], path: "/page/parts.mu".into(), fields: BTreeMap::new() });
         let (id, _) = fetches(&mut net)[0].clone();
         // A page asking for a reload every second.
-        app.on_fetched(id, Ok(FetchedContent { data: b"`{:/page/p.mu`1}".to_vec(), metadata: None }));
+        app.on_fetched(id, Ok(FetchedContent { data: b"`{:/page/p.mu`1}".to_vec(), metadata: None, file: None }));
         let (part, _) = fetches(&mut net)[0].clone();
-        app.on_fetched(part, Ok(FetchedContent { data: b"part".to_vec(), metadata: None }));
+        app.on_fetched(part, Ok(FetchedContent { data: b"part".to_vec(), metadata: None, file: None }));
         app.tab = Tab::Browser;
         app.browser.tab.partials[0].loaded_at = Some(Instant::now() - std::time::Duration::from_secs(2));
         // By default it waits 5 seconds; with the setting at 1, the 1 second it asked for.
@@ -1812,10 +1826,13 @@ mod tests {
         let page = Location { node, path: "/page/parts.mu".into(), fields: BTreeMap::new() };
         app.navigate(page.clone());
         let (id, _) = fetches(&mut net)[0].clone();
-        app.on_fetched(id, Ok(FetchedContent { data: b"top\n`{:/page/p.mu`5}\n`{not an address}\nend".to_vec(), metadata: None }));
+        app.on_fetched(
+            id,
+            Ok(FetchedContent { data: b"top\n`{:/page/p.mu`5}\n`{not an address}\nend".to_vec(), metadata: None, file: None }),
+        );
         let asked = fetches(&mut net);
         let (part, _) = asked.iter().find(|(_, path)| path == "/page/p.mu").cloned().unwrap();
-        app.on_fetched(part, Ok(FetchedContent { data: b"`(pic`:/media/in.png)\nfrom the part".to_vec(), metadata: None }));
+        app.on_fetched(part, Ok(FetchedContent { data: b"`(pic`:/media/in.png)\nfrom the part".to_vec(), metadata: None, file: None }));
         assert!(app.browser.tab.partials[0].content.as_deref() == Some("`(pic`:/media/in.png)\nfrom the part"));
         assert!(app.browser.tab.partials[1].content.as_deref().unwrap().contains("can't read"));
         assert!(fetches(&mut net).iter().any(|(_, path)| path == "/media/in.png"));
@@ -1830,7 +1847,7 @@ mod tests {
         // Opened again: from the cache, no request.
         app.navigate(Location { node, path: "/page/other.mu".into(), fields: BTreeMap::new() });
         let (other, _) = fetches(&mut net)[0].clone();
-        app.on_fetched(other, Ok(FetchedContent { data: b"other".to_vec(), metadata: None }));
+        app.on_fetched(other, Ok(FetchedContent { data: b"other".to_vec(), metadata: None, file: None }));
         app.navigate(page.clone());
         let _ = fetches(&mut net);
         app.navigate(Location { node, path: "/page/other.mu".into(), fields: BTreeMap::new() });

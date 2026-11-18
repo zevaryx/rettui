@@ -106,6 +106,15 @@ rettui keeps its data in `~/.local/share/rettui/`:
   found, and when
 - `map-tiles/`: pictures for the web UI's [map](Messaging#locations-and-the-map),
   kept a month (200 MB at most); deleting it is harmless
+- `downloading/`: NomadNet files on their way, written to disk as they
+  come rather than held in memory: copied to the NomadNet files folder once
+  complete (then removed here), or, for the web UI, sent to the browser
+  from here and removed once another download has come. The copy doesn't
+  replace a file already there. On drives without hard links (FAT, as on
+  many USB drives) rettui checks that the name is free and then renames,
+  so a file made with that name in the moment between the two would be
+  replaced. Anything left from a run that stopped part-way is removed a
+  day later
 - `node/`: your node's `pages/` (with pictures added in the editor in `pages/images/`) and `files/`
 - `propagation/`: messages your [propagation node](Hosting-a-Node#propagation-node)
   keeps for others, one file each, encrypted for their recipients

@@ -854,15 +854,10 @@ async fn download_made_backup(State(state): State<WebState>, Path(id): Path<Stri
 /// A file's contents as a response body, read as it's sent; the file is
 /// deleted once it's sent (or the download stops).
 async fn send_then_delete(path: PathBuf) -> std::io::Result<axum::body::Body> {
-    use tokio::io::AsyncReadExt;
-    struct Sending {
-        file: Option<tokio::fs::File>,
-        path: PathBuf,
-    }
-    impl Drop for Sending {
+    struct Delete(PathBuf);
+    impl Drop for Delete {
         fn drop(&mut self) {
-            self.file = None;
-            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(&self.0);
         }
     }
     let file = match tokio::fs::File::open(&path).await {
@@ -872,7 +867,24 @@ async fn send_then_delete(path: PathBuf) -> std::io::Result<axum::body::Body> {
             return Err(e);
         }
     };
-    let sending = Sending { file: Some(file), path };
+    Ok(stream_file(file, Delete(path)))
+}
+
+/// An open file as a response body, read in chunks as it's sent. `keep` is
+/// held until then (and dropped after the file is closed).
+fn stream_file<K: Send + 'static>(file: tokio::fs::File, keep: K) -> axum::body::Body {
+    use tokio::io::AsyncReadExt;
+    struct Sending<K> {
+        file: Option<tokio::fs::File>,
+        _keep: K,
+    }
+    impl<K> Drop for Sending<K> {
+        fn drop(&mut self) {
+            // Closed first: an open file can't be removed on Windows.
+            self.file = None;
+        }
+    }
+    let sending = Sending { file: Some(file), _keep: keep };
     let chunks = futures_util::stream::unfold(sending, |mut sending| async move {
         let mut chunk = vec![0; 64 * 1024];
         let read = sending.file.as_mut()?.read(&mut chunk).await;
@@ -889,7 +901,7 @@ async fn send_then_delete(path: PathBuf) -> std::io::Result<axum::body::Body> {
             }
         }
     });
-    Ok(axum::body::Body::from_stream(chunks))
+    axum::body::Body::from_stream(chunks)
 }
 
 #[derive(Deserialize)]
@@ -1846,26 +1858,46 @@ fn file_name(name: &str) -> String {
 }
 
 fn file_response(data: Vec<u8>, name: &str, inline: bool) -> Response {
+    (file_headers(&data, name, inline), data).into_response()
+}
+
+/// The headers a file is sent with, from its first bytes (`head`).
+fn file_headers(head: &[u8], name: &str, inline: bool) -> [(header::HeaderName, String); 3] {
     // Voice messages (Opus in an Ogg file, or Codec2 decoded to WAV) play
     // in the page.
-    let content_type = if data.starts_with(b"OggS") {
+    let content_type = if head.starts_with(b"OggS") {
         "audio/ogg"
-    } else if crate::lxmf::voice::is_wav(&data) {
+    } else if crate::lxmf::voice::is_wav(head) {
         "audio/wav"
     } else {
-        image::guess_format(&data).map(|f| f.to_mime_type()).unwrap_or("application/octet-stream")
+        image::guess_format(head).map(|f| f.to_mime_type()).unwrap_or("application/octet-stream")
     };
     let shown = content_type.starts_with("image/") || content_type.starts_with("audio/");
     let disposition = format!("{}; filename=\"{}\"", if inline && shown { "inline" } else { "attachment" }, file_name(name));
-    (
-        [
-            (header::CONTENT_TYPE, content_type.to_string()),
-            (header::CONTENT_DISPOSITION, disposition),
-            (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
-        ],
-        data,
-    )
-        .into_response()
+    [
+        (header::CONTENT_TYPE, content_type.to_string()),
+        (header::CONTENT_DISPOSITION, disposition),
+        (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
+    ]
+}
+
+/// What a file is told apart by (see [`file_headers`]): enough for every
+/// kind `image` knows, Ogg and WAV.
+const FILE_HEAD: usize = 64;
+
+/// A downloaded file kept on disk, sent as it is read: never all of it in
+/// memory. It stays on disk while it is being sent.
+async fn downloaded_file_response(file: crate::nomad::DownloadedFile, name: &str) -> Result<Response, ApiError> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let unreadable = |e: std::io::Error| bad(format!("Couldn't read the downloaded file: {e}"));
+    let mut opened = tokio::fs::File::open(file.path()).await.map_err(unreadable)?;
+    let mut head = Vec::with_capacity(FILE_HEAD);
+    (&mut opened).take(FILE_HEAD as u64).read_to_end(&mut head).await.map_err(unreadable)?;
+    opened.seek(std::io::SeekFrom::Start(0)).await.map_err(unreadable)?;
+    let length = file.size();
+    let mut response = (file_headers(&head, name, false), stream_file(opened, file)).into_response();
+    response.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+    Ok(response)
 }
 
 /// A conversation's messages in the archive (see `store::read_archive`),
@@ -2379,32 +2411,49 @@ async fn download(State(state): State<WebState>, Query(query): Query<DownloadQue
     // it is, once to save it): the second is answered from the first, not
     // fetched over the network again.
     let kept = {
-        let mut last = LAST_DOWNLOAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        match last.take() {
-            Some((kept_url, at, data, name)) if kept_url == url && at.elapsed() < SAME_DOWNLOAD => {
-                *last = Some((kept_url, at, data.clone(), name.clone()));
-                Some((data, name))
-            }
+        let last = LAST_DOWNLOAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match last.as_ref() {
+            Some((kept_url, at, body, name)) if *kept_url == url && at.elapsed() < SAME_DOWNLOAD => Some((body.clone(), name.clone())),
             _ => None,
         }
     };
-    if let Some((data, name)) = kept {
-        return Ok(if query.prepare { axum::Json(json!({ "name": name })).into_response() } else { file_response(data, &name, false) });
-    }
-    let fetched = state.fetch(location, false).await?;
-    let name = crate::nomad::request::reply_file_name(fetched.metadata.as_deref()).unwrap_or(fallback);
-    *LAST_DOWNLOAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-        Some((url, std::time::Instant::now(), fetched.data.clone(), name.clone()));
+    let (body, name) = match kept {
+        Some(kept) => kept,
+        None => {
+            // The one kept before stays until this one has come (a failed
+            // download leaves it), then this one takes its place.
+            let fetched = state.fetch(location, false).await?;
+            let name = crate::nomad::request::reply_file_name(fetched.metadata.as_deref()).unwrap_or(fallback);
+            let body = match fetched.file {
+                Some(file) => SentBody::File(file),
+                None => SentBody::Bytes(fetched.data),
+            };
+            *LAST_DOWNLOAD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some((url, std::time::Instant::now(), body.clone(), name.clone()));
+            (body, name)
+        }
+    };
     if query.prepare {
         return Ok(axum::Json(json!({ "name": name })).into_response());
     }
-    Ok(file_response(fetched.data, &name, false))
+    match body {
+        SentBody::Bytes(data) => Ok(file_response(data, &name, false)),
+        SentBody::File(file) => downloaded_file_response(file, &name).await,
+    }
 }
 
 /// The last file sent for download, for a second request for it (see
-/// `download`): its address, when, its bytes and its name.
+/// `download`): its address, when, what it is and its name.
 static LAST_DOWNLOAD: std::sync::Mutex<Option<SentFile>> = std::sync::Mutex::new(None);
-type SentFile = (String, std::time::Instant, Vec<u8>, String);
+type SentFile = (String, std::time::Instant, SentBody, String);
+
+/// A file for download: in memory (small, or from this client's own node),
+/// or kept on disk as it came.
+#[derive(Clone)]
+enum SentBody {
+    Bytes(Vec<u8>),
+    File(crate::nomad::DownloadedFile),
+}
 const SAME_DOWNLOAD: std::time::Duration = std::time::Duration::from_secs(120);
 
 async fn saved(State(state): State<WebState>) -> ApiResult {

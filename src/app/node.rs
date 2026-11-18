@@ -978,7 +978,7 @@ impl App {
             };
             return self.net.send(command).is_err().then(|| Err("The network task isn't running, so the script can't run".to_string()));
         }
-        Some(store.serve(&location.path).map(|data| crate::nomad::FetchedContent { data, metadata: None }))
+        Some(store.serve(&location.path).map(|data| crate::nomad::FetchedContent { data, metadata: None, file: None }))
     }
 }
 

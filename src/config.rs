@@ -406,6 +406,8 @@ pub struct Paths {
     pub store: PathBuf,
     pub log: PathBuf,
     pub downloads: PathBuf,
+    /// Files being downloaded, until they are saved or sent on to a browser.
+    pub downloading: PathBuf,
     /// Peers heard and the keys they announced (see [`crate::db`]).
     pub db: PathBuf,
     /// Stamp tickets given to contacts and received from them.
@@ -480,6 +482,7 @@ impl Paths {
             store: base.join("store.json.gz"),
             log: root.join("rettui.log"),
             downloads: base.join("downloads"),
+            downloading: root.join("downloading"),
             db: crate::db::path(&base),
             tickets: base.join("tickets.json"),
             ratchets: base.join("ratchets"),
