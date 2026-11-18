@@ -50,9 +50,11 @@ impl Traffic {
                 }
             }
         }
-        // Those gone are forgotten.
-        self.history.retain(|name, _| interfaces.iter().any(|i| &i.name == name));
         self.counters = interfaces.iter().map(|i| (i.name.clone(), (i.rx_bytes, i.tx_bytes))).collect();
+        // Those gone are forgotten (looked up by name: with thousands of
+        // interfaces, comparing each history with each interface is too slow).
+        let counters = &self.counters;
+        self.history.retain(|name, _| counters.contains_key(name));
         self.rx_total = rx;
         self.tx_total = tx;
         self.last = Some((now, rx, tx));

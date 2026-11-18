@@ -1020,11 +1020,18 @@ impl App {
     /// Interfaces going offline or coming online get a line in the log (why
     /// one dropped is usually the line before, from the interface itself).
     fn log_interface_changes(&mut self, interfaces: &[crate::net::InterfaceInfo]) {
+        // By name, the first of a name as before: thousands of interfaces
+        // (a flood of AutoInterface peers) must not cost a comparison of each
+        // with each.
+        let mut before: std::collections::HashMap<&str, bool> = std::collections::HashMap::with_capacity(self.interfaces.len());
+        for i in &self.interfaces {
+            before.entry(i.name.as_str()).or_insert(i.online);
+        }
         let changes: Vec<String> = interfaces
             .iter()
             .filter_map(|now| {
-                let before = self.interfaces.iter().find(|i| i.name == now.name)?;
-                match (before.online, now.online) {
+                let before = *before.get(now.name.as_str())?;
+                match (before, now.online) {
                     (true, false) => Some(format!("Interface {} went offline", now.name)),
                     (false, true) => Some(format!("Interface {} is online", now.name)),
                     _ => None,

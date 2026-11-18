@@ -613,3 +613,49 @@ fn a_contact_card_every_button_and_ping_answers() {
     assert_eq!(ping_label(&PingState::Waiting), "waiting for an answer…");
     tui.app.reapply_blocks();
 }
+
+fn interface(name: &str, online: bool) -> crate::net::InterfaceInfo {
+    crate::net::InterfaceInfo { name: name.into(), online, ..Default::default() }
+}
+
+#[test]
+fn interface_changes_are_logged_by_name() {
+    let dir = std::env::temp_dir().join(format!("rettui-iface-changes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+    app.interfaces = vec![interface("A", true), interface("B", false), interface("C", true), interface("C", false)];
+    app.log.clear();
+    // Of two with a name, the first is the one compared with, as before.
+    app.log_interface_changes(&[
+        interface("A", false),
+        interface("B", true),
+        interface("C", false),
+        interface("New", false),
+        interface("New", true),
+    ]);
+    let lines: Vec<&str> = app.log.iter().map(|l| l.split_once("  ").map_or(l.as_str(), |(_, rest)| rest)).collect();
+    assert_eq!(lines, ["Interface A went offline", "Interface B is online", "Interface C went offline"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn thousands_of_interfaces_are_handled_in_linear_time() {
+    // A flood of AutoInterface peers: each interface looked up among the
+    // others by comparing names took seconds an update.
+    const N: usize = 40_000;
+    let dir = std::env::temp_dir().join(format!("rettui-iface-many-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = crate::app::test_app(&dir, crate::config::Settings::default(), crate::store::Store::default());
+    let all: Vec<_> = (0..N).map(|i| interface(&format!("Auto peer fe80::{i:x}%wlan0"), true)).collect();
+    let start = std::time::Instant::now();
+    let mut traffic = std::mem::take(&mut app.traffic);
+    traffic.update(&all, start);
+    traffic.update(&all, start + std::time::Duration::from_secs(5));
+    app.interfaces = all.clone();
+    app.log_interface_changes(&all);
+    // Half go away: the history and counters follow.
+    traffic.update(&all[..N / 2], start + std::time::Duration::from_secs(10));
+    assert_eq!(traffic.history.len(), N / 2);
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
+    let _ = std::fs::remove_dir_all(&dir);
+}
