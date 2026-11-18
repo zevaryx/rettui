@@ -652,7 +652,7 @@ impl HostedPn {
             .map_err(|e| {
                 if lxmf_core::propagation_store_v2::is_migration_required(&e) {
                     format!(
-                        "The message store {} is from before rettui 2.0 and has to be converted first: stop rettui and run `rettui migrate-propagation` (the old messages are kept apart, not served). See https://github.com/zevaryx/rettui/wiki/Hosting-a-Node#upgrading-the-propagation-node",
+                        "The message store {} is from before rettui 2.0 and has to be converted first: stop rettui and run `rettui migrate-propagation` (the old messages are kept apart, not served). See https://github.com/rettui-dev/rettui/wiki/Hosting-a-Node#upgrading-the-propagation-node",
                         config.dir.display()
                     )
                 } else {

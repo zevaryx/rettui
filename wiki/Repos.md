@@ -1,5 +1,5 @@
 The Repos tab (`0` in the terminal, **Repos** in the web UI) reads and
-writes git repositories hosted on [rngit](https://github.com/zevaryx/rngit-rs)
+writes git repositories hosted on [rngit](https://github.com/rettui-dev/rngit-rs)
 nodes over Reticulum: their branches and tags, releases and the files
 attached to them, and work documents (issues and proposals) with their
 comments. It talks to the node the way the `rngit` command does, so

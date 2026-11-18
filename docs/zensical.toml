@@ -1,4 +1,4 @@
-# The documentation site (https://zevaryx.github.io/rettui/), built with
+# The documentation site (https://docs.rettui.dev/), built with
 # Zensical from the pages in wiki/. docs/build.py writes the pages and this
 # file, with the navigation from wiki/_Sidebar.md, to docs/_build; see
 # docs/README.md.
@@ -6,9 +6,9 @@
 [project]
 site_name = "rettui"
 site_description = "A Reticulum client for the terminal and the browser: LXMF messaging, NomadNet browsing and hosting, and RRC chat"
-site_url = "https://zevaryx.github.io/rettui/"
-repo_url = "https://github.com/zevaryx/rettui"
-repo_name = "zevaryx/rettui"
+site_url = "https://docs.rettui.dev/"
+repo_url = "https://github.com/rettui-dev/rettui"
+repo_name = "rettui-dev/rettui"
 copyright = "rettui is licensed under the Reticulum License"
 docs_dir = "pages"
 site_dir = "site"

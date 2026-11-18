@@ -32,7 +32,7 @@ install -Dm644 "$unpacked/README.md" "$root/usr/share/doc/rettui/README.md"
   cat <<COPYRIGHT
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: rettui
-Source: https://github.com/zevaryx/rettui
+Source: https://github.com/rettui-dev/rettui
 
 Files: *
 License: Reticulum
@@ -45,11 +45,11 @@ cat > "$root/DEBIAN/control" <<CONTROL
 Package: rettui
 Version: $version
 Architecture: $arch
-Maintainer: rettui <https://github.com/zevaryx/rettui/issues>
+Maintainer: rettui <https://github.com/rettui-dev/rettui/issues>
 Depends: libc6 (>= 2.35), libgcc-s1
 Section: net
 Priority: optional
-Homepage: https://github.com/zevaryx/rettui
+Homepage: https://github.com/rettui-dev/rettui
 Installed-Size: $(du -sk "$root/usr" | cut -f1)
 Description: Reticulum client for the terminal and the browser
  LXMF messaging, NomadNet browsing and hosting, and RRC chat over

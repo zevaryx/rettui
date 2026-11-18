@@ -152,6 +152,7 @@ rettui identity export FILE  # save a copy of the identity in use (never over an
 rettui identity import FILE --name NAME  # keep another identity from a file, to switch to
 rettui migrate-propagation   # convert the hosted propagation node's message store after upgrading to 2.0, with rettui stopped (see Hosting a Node)
 rettui address [--link]      # print your LXMF address (--link: as an lxma:// link with your key)
+rettui node [--entry-point PORT] [--listen-ip IP] [--reachable-on HOST] [--name NAME]  # a public node with no UI, as rnsd and lxmd (see Hosting a Node)
 ```
 
 `--data-dir DIR` uses another data directory, and `--rns-config DIR` another
@@ -272,3 +273,11 @@ Things to know:
   says.
 - **Stopping:** `systemctl stop` lets rettui leave its RRC hubs and save
   everything, as Ctrl-C does.
+
+**A public node with no UI:** for a server that only relays and keeps
+messages for others, use [`rettui node`](Hosting-a-Node#a-public-node-with-no-ui)
+in place of `--web` in either unit, for example
+`ExecStart=/usr/local/bin/rettui --data-dir /var/lib/rettui node`. It
+needs no login link, and prints its status to the journal every 10
+minutes. With the system unit, `node` keeps its Reticulum config in
+`/var/lib/rettui/reticulum` too.

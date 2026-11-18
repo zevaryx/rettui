@@ -104,17 +104,30 @@ pub fn load(path: &Path) -> Result<(String, bool), String> {
     }
 }
 
-/// Write the file, keeping the previous version as `config.backup`.
+/// Write the file, keeping the previous version as `config.backup`. A
+/// config can hold IFAC passphrases, so a new file and the backup are
+/// private to this user (0600 on Unix); an existing file keeps the
+/// permissions it has.
 pub fn save(path: &Path, text: &str) -> Result<(), String> {
     let fail = |e: std::io::Error| format!("Could not save {}: {e}", path.display());
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(fail)?;
     }
     if path.is_file() {
-        std::fs::copy(path, path.with_file_name("config.backup")).map_err(fail)?;
+        let before = std::fs::read(path).map_err(fail)?;
+        crate::config::write_private(&path.with_file_name("config.backup"), &before)
+            .map_err(|e| format!("Could not save {}: {e:#}", path.display()))?;
     }
     let temp = path.with_file_name(".config.rettui-tmp");
-    std::fs::write(&temp, text).map_err(fail)?;
+    let _ = std::fs::remove_file(&temp);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&temp).map_err(fail)?;
+    std::io::Write::write_all(&mut file, text.as_bytes()).map_err(fail)?;
+    file.sync_all().map_err(fail)?;
+    drop(file);
     if let Ok(metadata) = std::fs::metadata(path) {
         let _ = std::fs::set_permissions(&temp, metadata.permissions());
     }
@@ -919,6 +932,27 @@ mod tests {
         assert_eq!(config.subsection("interfaces", "Big").unwrap().get("ifac_size"), Some("128"), "more than 64 can only be bits");
         assert!(check(&new).1.error.is_none());
         assert!(migrate_ifac_sizes(&new).is_none(), "the second time changes nothing");
+    }
+
+    /// A config can hold IFAC passphrases: a new one and its backup are
+    /// only this user's, and one the operator opened up keeps its mode.
+    #[cfg(unix)]
+    #[test]
+    fn a_saved_config_and_its_backup_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rettui-config-modes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        save(&path, "[reticulum]\n").unwrap();
+        assert_eq!(mode(&path), 0o600);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save(&path, "[reticulum]\n  enable_transport = Yes\n").unwrap();
+        assert_eq!(mode(&path), 0o644, "the operator's mode stays");
+        assert_eq!(mode(&dir.join("config.backup")), 0o600);
+        assert_eq!(std::fs::read_to_string(dir.join("config.backup")).unwrap(), "[reticulum]\n");
+        assert!(!dir.join(".config.rettui-tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

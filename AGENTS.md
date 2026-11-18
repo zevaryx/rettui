@@ -95,7 +95,7 @@ macOS and Windows:
 ## Dependencies
 
 - `deps/` holds git submodules. Only change one whose remote is a fork
-  under the repository owner's account (`zevaryx`): check `.gitmodules`
+  under the repository owner's account (`rettui-dev`): check `.gitmodules`
   for each submodule's current remote before touching it. Commit a change
   in the fork, then move the submodule pointer in rettui. Leave every
   other submodule as it is, and work around its limits in rettui itself.

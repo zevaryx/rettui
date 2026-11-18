@@ -102,7 +102,8 @@ of the Reticulum instance it uses. Where files are kept is in
   - **Safe edits:** changes are made in place, so comments and layout stay.
     Every change is checked with rsReticulum's own parser before saving, and a
     file Reticulum couldn't load is never saved. The previous version is kept
-    as `config.backup`. Interfaces that will fail to start (a missing port,
+    as `config.backup`, readable by you only (a config can hold IFAC
+    passphrases), as is a config rettui makes. Interfaces that will fail to start (a missing port,
     say) are shown as warnings.
   - **History:** each time rettui saves the file it keeps that version, with
     what was done ("Removed interface Hilltop", "Logging: loglevel = 5",

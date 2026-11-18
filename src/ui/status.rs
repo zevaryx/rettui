@@ -708,7 +708,7 @@ mod tests {
         let version = crate::update::VERSION;
         let shown = screen(&mut app);
         assert!(shown.contains(&format!("rettui>_ {version} ")) && !shown.contains("is out"), "{shown}");
-        let url = "https://github.com/zevaryx/rettui/releases/tag/v99.0.0";
+        let url = "https://github.com/rettui-dev/rettui/releases/tag/v99.0.0";
         let release = crate::update::Release { version: "99.0.0".into(), url: url.into() };
         app.updates.checked = crate::update::Checked { at: crate::app::now() as i64, latest: Some(release) };
         let shown = screen(&mut app);

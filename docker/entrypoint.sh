@@ -1,7 +1,7 @@
 #!/bin/sh
-# Start rettui's web UI as the user and group given by PUID and PGID (GUID is
-# accepted for PGID), so files in the mounted data directory belong to that
-# user on the host.
+# Start rettui's web UI (or, given `node`, a headless node) as the user and
+# group given by PUID and PGID (GUID is accepted for PGID), so files in the
+# mounted data directory belong to that user on the host.
 set -eu
 
 PUID="${PUID:-1000}"
@@ -26,13 +26,20 @@ if [ ! -e "$DATA/settings.json" ]; then
     printf '{\n  "rns_config": "%s/reticulum"\n}\n' "$DATA" > "$DATA/settings.json"
 fi
 
+# `node` runs a headless public node (`rettui node`) instead of the web UI;
+# anything else is passed on to rettui after the web UI's flags.
+#
 # 0.0.0.0 is the container's own address: rettui refuses plain HTTP there
-# unless told it is accepted, so this image always passes --insecure-http: it
-# accepts plain HTTP by itself. That is safe only because compose.yaml
+# unless told it is accepted, so the web UI always gets --insecure-http: this
+# image accepts plain HTTP by itself. That is safe only because compose.yaml
 # publishes the port on 127.0.0.1. Whoever publishes it beyond that
 # (`docker run -p 8740:8740`, a Compose file of their own, `network_mode:
 # host`) must add --https (for example `command: ["--https"]` in compose.yaml).
-set -- /usr/local/bin/rettui --data-dir "$DATA" --web "0.0.0.0:$PORT" --insecure-http "$@"
+if [ "${1:-}" = node ]; then
+    set -- /usr/local/bin/rettui --data-dir "$DATA" "$@"
+else
+    set -- /usr/local/bin/rettui --data-dir "$DATA" --web "0.0.0.0:$PORT" --insecure-http "$@"
+fi
 
 if [ "$(id -u)" = 0 ]; then
     # Hand the data directory to that user, touching only what differs.

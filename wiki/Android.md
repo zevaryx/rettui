@@ -4,7 +4,7 @@ It's an early test version.
 
 ## Getting it
 
-From a [release](https://github.com/zevaryx/rettui/releases) (from v1.10.0
+From a [release](https://github.com/rettui-dev/rettui/releases) (from v1.10.0
 on): download `rettui-<version>-android-arm64-v8a.apk`, copy it to the
 phone and open it. Android asks once to allow installing apps from the app
 you opened it with (Files, a browser). It installs over a test build, and a
@@ -241,7 +241,7 @@ starts from an example, which may not be right where you are.
 - **No terminal UI.**
 - It hasn't been tested on many phones yet. Reports of what does and
   doesn't work are welcome in the
-  [issues](https://github.com/zevaryx/rettui/issues).
+  [issues](https://github.com/rettui-dev/rettui/issues).
 
 ## How it works
 
