@@ -18,7 +18,7 @@
 //!   limits, and culls old messages (after LXMF's 30 days) to stay within its
 //!   storage limit.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -115,8 +115,259 @@ struct Counters {
 /// milliseconds), an honest peer sends only messages whose stamps pass, and
 /// a transfer may hold tens of thousands.
 const MAX_BAD_STAMPS: usize = 16;
+/// Messages with too small a stamp one Link may send over all its
+/// transfers, after which it is closed and what it still has queued is
+/// refused unchecked. A client may send any number of one-message
+/// transfers, each a workblock to check: without this one Link could keep
+/// the node busy for good.
+const MAX_BAD_STAMPS_PER_LINK: usize = 16;
+/// Bad stamps from Links nothing was stored from, within this long, after
+/// which such a Link is closed at its first bad stamp: a flood over many
+/// fresh Links then costs one check per Link, not 16.
+const UNTRUSTED_BAD_LIMIT: usize = 64;
+const UNTRUSTED_BAD_WINDOW: Duration = Duration::from_secs(10);
+/// Transfers waiting to be checked, and their size in all (see [`Intake`]).
+/// There is no smaller limit for one Link: the library proves a packet as
+/// it comes, so an honest client's burst refused here would be lost.
+const MAX_QUEUED: usize = 4096;
+const MAX_QUEUED_BYTES: usize = 4 * SYNC_LIMIT * 1000;
 /// A propagated message's stamp, after the message.
 const STAMP_SIZE: usize = 32;
+
+type LinkId = [u8; 16];
+
+/// What checking one transfer found.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Tally {
+    /// Messages newly stored or delivered here (not copies of ones held).
+    fresh: usize,
+    /// Messages whose stamps were checked and found short, or that weren't
+    /// messages at all.
+    bad: usize,
+}
+
+/// Transfers waiting to be checked, taken in turn from each Link that sent
+/// some (not in the order they came), so one Link's backlog can't keep
+/// others' messages waiting. Links a message was stored from go first, then
+/// new ones, then those that sent bad stamps: a flood over many Links
+/// doesn't hold up a client once one of its messages has passed. It is
+/// bounded; when it is full, room is made at the cost of the Link that
+/// least deserves it (see [`Intake::standing`]). The transfers dropped then
+/// were already proven to their senders by the library (as Python's node
+/// proves them before looking at them), so they are lost without a word;
+/// that happens only while 4,096 transfers or 40 MB wait, which takes a
+/// flood, and Links with bad stamps lose theirs first.
+#[derive(Debug, Default)]
+struct Intake {
+    queues: HashMap<LinkId, VecDeque<Vec<u8>>>,
+    /// Links with something queued, the next to be served first.
+    turns: VecDeque<LinkId>,
+    queued: usize,
+    bytes: usize,
+    /// Bad stamps each Link has sent so far.
+    bad: HashMap<LinkId, usize>,
+    /// Links a message was newly stored from.
+    good: HashSet<LinkId>,
+    /// Links that closed with transfers still queued or being checked:
+    /// those are checked (they were proven to the sender), then the Link is
+    /// forgotten.
+    closing: HashSet<LinkId>,
+    /// The Link whose transfer is being checked.
+    checking: Option<LinkId>,
+    /// When the last bad stamps from Links nothing was stored from came, at
+    /// most [`UNTRUSTED_BAD_LIMIT`] of them.
+    untrusted_bad: VecDeque<std::time::Instant>,
+}
+
+impl Intake {
+    /// Queue a transfer from `link`. False if it was refused: the Link is
+    /// over its budget of bad stamps, or the queue is full of transfers from
+    /// Links no worse than this one. `shed` counts transfers of other Links
+    /// dropped to make room.
+    fn push(&mut self, link: LinkId, data: Vec<u8>, shed: &mut usize) -> bool {
+        if self.over_budget(&link) {
+            return false;
+        }
+        while self.queued > 0 && (self.queued >= MAX_QUEUED || self.bytes + data.len() > MAX_QUEUED_BYTES) {
+            if !self.shed_for(&link) {
+                return false;
+            }
+            *shed += 1;
+        }
+        self.queued += 1;
+        self.bytes += data.len();
+        let queue = self.queues.entry(link).or_default();
+        if queue.is_empty() {
+            self.turns.push_back(link);
+        }
+        queue.push_back(data);
+        true
+    }
+
+    /// How readily a Link's transfers are dropped when the queue is full,
+    /// the greatest first: one that sent bad stamps, then one nothing was
+    /// stored from yet, then the one with most waiting.
+    fn standing(&self, link: &LinkId) -> (bool, bool, usize) {
+        let waiting = self.queues.get(link).map_or(0, VecDeque::len);
+        (self.bad.get(link).is_some_and(|bad| *bad > 0), !self.good.contains(link), waiting)
+    }
+
+    /// Drop the oldest transfer of the Link that least deserves its place,
+    /// if it deserves it less than `link` does. False if there's none.
+    fn shed_for(&mut self, link: &LinkId) -> bool {
+        let own = self.standing(link);
+        let victim = self
+            .queues
+            .iter()
+            .filter(|(other, queue)| *other != link && !queue.is_empty())
+            .map(|(other, _)| (self.standing(other), *other))
+            .filter(|(standing, _)| *standing > own)
+            .max()
+            .map(|(_, other)| other);
+        let Some(victim) = victim else { return false };
+        if let Some(data) = self.queues.get_mut(&victim).and_then(VecDeque::pop_front) {
+            self.queued -= 1;
+            self.bytes -= data.len();
+        }
+        if self.queues.get(&victim).is_some_and(VecDeque::is_empty) {
+            self.queues.remove(&victim);
+            self.turns.retain(|other| *other != victim);
+            self.forget_if_closed(&victim);
+        }
+        true
+    }
+
+    /// Which Links' turns come first: 0 for one a message was stored from
+    /// (and no bad stamp), 1 for one not known yet, 2 for one that sent bad
+    /// stamps.
+    fn rank(&self, link: &LinkId) -> u8 {
+        match (self.bad.get(link).is_some_and(|bad| *bad > 0), self.good.contains(link)) {
+            (true, _) => 2,
+            (false, true) => 0,
+            (false, false) => 1,
+        }
+    }
+
+    /// The next transfer to check: the oldest of the Link whose turn it is,
+    /// among those ranked first.
+    fn next(&mut self) -> Option<(LinkId, Vec<u8>)> {
+        loop {
+            let best = self.turns.iter().map(|link| self.rank(link)).min()?;
+            let at = self.turns.iter().position(|link| self.rank(link) == best)?;
+            let link = self.turns.remove(at)?;
+            let Some(data) = self.queues.get_mut(&link).and_then(VecDeque::pop_front) else {
+                self.queues.remove(&link);
+                continue;
+            };
+            self.queued -= 1;
+            self.bytes -= data.len();
+            if self.queues.get(&link).is_some_and(|queue| !queue.is_empty()) {
+                self.turns.push_back(link);
+            } else {
+                self.queues.remove(&link);
+            }
+            self.checking = Some(link);
+            return Some((link, data));
+        }
+    }
+
+    /// A transfer from `link` was checked, at `now`. True if what it found
+    /// put the Link over its budget: what it has queued is dropped (counted
+    /// in `dropped`), and the caller closes it (unless it has closed).
+    fn judged(&mut self, link: LinkId, tally: Tally, now: std::time::Instant, dropped: &mut usize) -> bool {
+        self.checking = None;
+        let closing = self.closing.contains(&link);
+        if tally.fresh > 0 && !closing {
+            self.good.insert(link);
+        }
+        let mut over = false;
+        if tally.bad > 0 && !self.over_budget(&link) {
+            let trusted = self.good.contains(&link);
+            // Judged by the bad stamps before these.
+            let budget = if trusted || !self.under_pressure(now) { MAX_BAD_STAMPS_PER_LINK } else { 1 };
+            if !trusted {
+                self.note_untrusted_bad(tally.bad, now);
+            }
+            let count = self.bad.entry(link).or_default();
+            *count = count.saturating_add(tally.bad);
+            if *count >= budget {
+                // Over budget from here on, whichever budget it had.
+                *count = (*count).max(MAX_BAD_STAMPS_PER_LINK);
+                if let Some(queue) = self.queues.remove(&link) {
+                    *dropped += queue.len();
+                    self.queued -= queue.len();
+                    self.bytes -= queue.iter().map(Vec::len).sum::<usize>();
+                }
+                self.turns.retain(|other| *other != link);
+                over = true;
+            }
+        }
+        if closing && !self.queues.contains_key(&link) {
+            self.forget_if_closed(&link);
+        }
+        over && !closing
+    }
+
+    fn over_budget(&self, link: &LinkId) -> bool {
+        self.bad.get(link).is_some_and(|bad| *bad >= MAX_BAD_STAMPS_PER_LINK)
+    }
+
+    fn note_untrusted_bad(&mut self, bad: usize, now: std::time::Instant) {
+        for _ in 0..bad.min(UNTRUSTED_BAD_LIMIT) {
+            self.untrusted_bad.push_back(now);
+        }
+        while self.untrusted_bad.len() > UNTRUSTED_BAD_LIMIT {
+            self.untrusted_bad.pop_front();
+        }
+    }
+
+    /// Whether Links nothing was stored from have sent
+    /// [`UNTRUSTED_BAD_LIMIT`] bad stamps in the last
+    /// [`UNTRUSTED_BAD_WINDOW`].
+    fn under_pressure(&self, now: std::time::Instant) -> bool {
+        self.untrusted_bad.len() >= UNTRUSTED_BAD_LIMIT
+            && self.untrusted_bad.front().is_some_and(|first| now.saturating_duration_since(*first) <= UNTRUSTED_BAD_WINDOW)
+    }
+
+    /// The Link closed. What it had queued is still checked (the sender was
+    /// told it arrived), unless it goes over its budget; what is known of it
+    /// goes once nothing of it is left.
+    fn closed(&mut self, link: &LinkId) {
+        self.closing.insert(*link);
+        if !self.queues.contains_key(link) {
+            self.forget_if_closed(link);
+        }
+    }
+
+    /// Forget a closed Link, unless its transfer is being checked (then
+    /// once it has been).
+    fn forget_if_closed(&mut self, link: &LinkId) {
+        if self.checking == Some(*link) {
+            return;
+        }
+        if self.closing.remove(link) {
+            self.bad.remove(link);
+            self.good.remove(link);
+        }
+    }
+}
+
+/// Check a transfer from `link` off the event task, and send what was found
+/// on `judged`; if the check panicked, as if nothing was found, so the event
+/// task never waits on it for good.
+fn check_in_background<F>(link: LinkId, judged: mpsc::UnboundedSender<(LinkId, Tally)>, check: F)
+where
+    F: FnOnce() -> Tally + Send + 'static,
+{
+    let task = tokio::task::spawn_blocking(check);
+    tokio::spawn(async move {
+        let tally = task.await.unwrap_or_else(|e| {
+            tracing::warn!("checking a propagation transfer failed: {e}");
+            Tally::default()
+        });
+        let _ = judged.send((link, tally));
+    });
+}
 
 /// What taking in messages needs, shared by the Link handlers and this
 /// client's own sends to its node.
@@ -139,6 +390,25 @@ impl Ingest {
     /// Take in a transfer of propagated messages (`[timebase, [message,
     /// ...]]`); `several` only from a peer. How many were kept or delivered.
     fn take(&self, data: &[u8], several: bool) -> Result<usize, String> {
+        self.take_tallied(data, several, &mut Tally::default())
+    }
+
+    /// A transfer from a Link, checked: what it held, for the Link's budget
+    /// and standing (see [`Intake::judged`]). One that isn't a transfer, or
+    /// is several messages from a client, counts as a bad stamp.
+    fn judge(&self, data: &[u8], several: bool) -> Tally {
+        let mut tally = Tally::default();
+        if let Err(e) = self.take_tallied(data, several, &mut tally) {
+            tracing::debug!("propagation transfer not taken: {e}");
+            tally.bad += 1;
+        }
+        tally
+    }
+
+    /// [`Self::take`], adding to `tally` the messages newly stored or
+    /// delivered here, and those that weren't messages or whose stamps were
+    /// checked and found short (each such check cost a workblock).
+    fn take_tallied(&self, data: &[u8], several: bool, tally: &mut Tally) -> Result<usize, String> {
         let value = rmpv::decode::read_value(&mut &data[..]).map_err(|e| format!("not a propagation transfer: {e}"))?;
         let messages = match value {
             Value::Array(parts) if parts.len() >= 2 => match parts.into_iter().nth(1) {
@@ -154,7 +424,10 @@ impl Ingest {
         let (mut taken, mut bad) = (0, 0);
         let total = messages.len();
         for (index, message) in messages.into_iter().enumerate() {
-            let Value::Binary(data) = message else { continue };
+            let Value::Binary(data) = message else {
+                tally.bad += 1;
+                continue;
+            };
             if bad >= MAX_BAD_STAMPS {
                 let left = (total - index) as u64;
                 self.counters.rejected.fetch_add(left, Ordering::Relaxed);
@@ -180,6 +453,7 @@ impl Ingest {
             let Some(blob) = blob else {
                 self.counters.rejected.fetch_add(1, Ordering::Relaxed);
                 bad += 1;
+                tally.bad += 1;
                 continue;
             };
             let transient_id = blob.transient_id();
@@ -191,6 +465,7 @@ impl Ingest {
                         full.extend_from_slice(&plaintext);
                         let _ = self.deliver.send(full);
                         self.counters.delivered_here.fetch_add(1, Ordering::Relaxed);
+                        tally.fresh += 1;
                         taken += 1;
                     }
                     Err(e) => tracing::warn!("could not decrypt a propagated message for us: {e}"),
@@ -222,6 +497,7 @@ impl Ingest {
                 Ok(persisted) => {
                     if self.node.lock().unwrap().commit_store_write(persisted) {
                         self.counters.received.fetch_add(1, Ordering::Relaxed);
+                        tally.fresh += 1;
                         taken += 1;
                     }
                 }
@@ -473,13 +749,39 @@ impl HostedPn {
         let (stop, mut stopped) = oneshot::channel::<()>();
         let events = tokio::spawn(async move {
             let events = &mut destination.events;
+            // Transfers are queued as they come and checked one at a time,
+            // off this task, taking turns between Links (see `Intake`).
+            let mut intake = Intake::default();
+            let (judged_tx, mut judged_rx) = mpsc::unbounded_channel::<(LinkId, Tally)>();
+            let mut busy = false;
             loop {
+                if !busy && let Some((link, data)) = intake.next() {
+                    busy = true;
+                    let several = event_peers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&link);
+                    let ingest = event_ingest.clone();
+                    check_in_background(link, judged_tx.clone(), move || ingest.judge(&data, several));
+                }
                 let (data, link) = tokio::select! {
                     _ = &mut stopped => break,
+                    Some((link, tally)) = judged_rx.recv(), if busy => {
+                        busy = false;
+                        let mut dropped = 0;
+                        let over = intake.judged(link, tally, std::time::Instant::now(), &mut dropped);
+                        event_ingest.counters.rejected.fetch_add(dropped as u64, Ordering::Relaxed);
+                        if over {
+                            tracing::debug!("closed a Link to the propagation node: too many messages on it had no valid stamp");
+                            let _ = destination.handle.close_link(link, CloseReason::DestinationClosed, true).await;
+                            // The library says so on `links_closed` too; this
+                            // doesn't depend on it.
+                            intake.closed(&link);
+                        }
+                        continue;
+                    }
                     Some(completion) = events.resource_completions.recv() => (completion.data, completion.link_id),
                     Some((data, link)) = events.link_packets.recv() => (data, link),
                     Some(link) = events.links_closed.recv() => {
-                        event_peers.lock().unwrap().remove(&link);
+                        event_peers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&link);
+                        intake.closed(&link);
                         continue;
                     }
                     // Nothing else is used; taken so nothing waits on it.
@@ -492,11 +794,12 @@ impl HostedPn {
                     Some(_) = events.channel_messages.recv() => continue,
                     else => break,
                 };
-                let several = event_peers.lock().unwrap().contains(&link);
-                let ingest = event_ingest.clone();
-                let taken = tokio::task::spawn_blocking(move || ingest.take(&data, several)).await;
-                if let Ok(Err(e)) = taken {
-                    tracing::debug!("propagation transfer not taken: {e}");
+                let mut shed = 0;
+                let refused = !intake.push(link, data, &mut shed);
+                let turned_away = shed + usize::from(refused);
+                if turned_away > 0 {
+                    event_ingest.counters.rejected.fetch_add(turned_away as u64, Ordering::Relaxed);
+                    tracing::debug!("{turned_away} propagation transfer(s) refused unchecked: too many waiting, or bad stamps before");
                 }
             }
             let _ = destination.close().await;
@@ -605,6 +908,8 @@ mod tests {
     use lxmf_core::message_api::{DeliveryMethod, LxMessage, LxMessageDraft, MessageError};
     use lxmf_core::propagation_send::{AdvertisedNodePolicy, EncryptionBinding, PreparedNode, PropagationEnvelope};
     use lxmf_core::stamper::validate_pn_stamp;
+
+    use std::time::Instant;
 
     use super::*;
 
@@ -796,7 +1101,10 @@ mod tests {
             data[at] ^= 0xff;
             Value::Binary(data)
         };
-        let bads = |n: usize| (0..n).map(|_| bad()).filter(|b| !matches!(b, Value::Binary(d) if validate_pn_stamp(d, 11.0).is_some()));
+        // A flipped stamp still worth the node's minimum by chance (one in
+        // about a thousand) isn't a bad one.
+        let min = ingest.min_stamp;
+        let bads = |n: usize| (0..n).map(|_| bad()).filter(move |b| !matches!(b, Value::Binary(d) if validate_pn_stamp(d, min).is_some()));
         // Past MAX_BAD_STAMPS bad stamps, the rest isn't looked at.
         let mut entries: Vec<Value> = bads(MAX_BAD_STAMPS + 4).take(MAX_BAD_STAMPS).collect();
         entries.push(good.clone());
@@ -813,5 +1121,271 @@ mod tests {
         assert_eq!(ingest.take(&several(vec![good; 40]), true), Ok(40));
         assert!(copies.elapsed() < one_check * 10, "40 copies took {:?}, one check {one_check:?}", copies.elapsed());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_link_that_floods_bad_stamps_is_cut_off_and_others_keep_their_turn() {
+        let (flood, honest, third) = ([1; 16], [2; 16], [3; 16]);
+        let mut intake = Intake::default();
+        let (mut shed, mut dropped) = (0, 0);
+        // One Link sends more than the whole queue holds: the rest is refused.
+        let queued = (0..MAX_QUEUED + 10).filter(|n| intake.push(flood, n.to_le_bytes().to_vec(), &mut shed)).count();
+        assert_eq!((queued, shed), (MAX_QUEUED, 0));
+        // Another Link's transfer still gets in, in the flood's place, and is
+        // checked next, not after the backlog.
+        assert!(intake.push(honest, b"honest".to_vec(), &mut shed));
+        assert_eq!((shed, intake.queued), (1, MAX_QUEUED));
+        assert_eq!(intake.next(), Some((flood, 1usize.to_le_bytes().to_vec())));
+        // Bad stamps add up over a Link's transfers: under the budget it
+        // stays; at it, what it has queued goes and it is closed.
+        assert!(!intake.judged(flood, Tally { fresh: 0, bad: MAX_BAD_STAMPS_PER_LINK - 1 }, Instant::now(), &mut dropped));
+        assert_eq!(intake.next(), Some((honest, b"honest".to_vec())));
+        assert!(!intake.judged(honest, Tally { fresh: 1, bad: 0 }, Instant::now(), &mut dropped));
+        assert_eq!(intake.next().map(|(link, _)| link), Some(flood));
+        assert!(intake.judged(flood, Tally { fresh: 0, bad: 1 }, Instant::now(), &mut dropped));
+        assert_eq!(dropped, MAX_QUEUED - 3);
+        assert!(!intake.push(flood, vec![1], &mut shed), "refused unchecked once over its budget");
+        assert!(!intake.judged(flood, Tally { fresh: 0, bad: 5 }, Instant::now(), &mut dropped), "closed once, not again");
+        assert_eq!(intake.next(), None);
+        assert_eq!((intake.queued, intake.bytes), (0, 0));
+        // Once it has closed, the Link is forgotten.
+        intake.closed(&flood);
+        intake.closed(&honest);
+        assert!(intake.bad.is_empty() && intake.good.is_empty() && intake.closing.is_empty());
+        assert!(intake.queues.is_empty() && intake.turns.is_empty());
+        // Turns go round every Link with something queued.
+        for link in [third, honest, third, honest] {
+            assert!(intake.push(link, link.to_vec(), &mut shed));
+        }
+        let order: Vec<LinkId> = std::iter::from_fn(|| intake.next()).map(|(link, _)| link).collect();
+        assert_eq!(order, vec![third, honest, third, honest]);
+    }
+
+    #[test]
+    fn a_client_whose_message_passed_goes_before_a_flood_over_many_links() {
+        let mut intake = Intake::default();
+        let (mut shed, mut dropped) = (0, 0);
+        let client = [0xcc; 16];
+        // Many Links, each with a few bad stamps waiting; a client with 20.
+        let flood: Vec<LinkId> = (0..200u128).map(u128::to_le_bytes).collect();
+        for link in &flood {
+            for _ in 0..4 {
+                assert!(intake.push(*link, vec![0], &mut shed));
+            }
+        }
+        for n in 0..20u8 {
+            assert!(intake.push(client, vec![n], &mut shed));
+        }
+        // New Links take turns, the client among them...
+        let mut turns = 0;
+        loop {
+            let (link, _) = intake.next().unwrap();
+            turns += 1;
+            if link == client {
+                intake.judged(link, Tally { fresh: 1, bad: 0 }, Instant::now(), &mut dropped);
+                break;
+            }
+            intake.judged(link, Tally { fresh: 0, bad: 1 }, Instant::now(), &mut dropped);
+        }
+        assert_eq!(turns, flood.len() + 1);
+        // ...and once one of its messages passed, its other 19 go before the
+        // Links that sent bad stamps.
+        for n in 1..20u8 {
+            assert_eq!(intake.next(), Some((client, vec![n])));
+            intake.judged(client, Tally { fresh: 1, bad: 0 }, Instant::now(), &mut dropped);
+        }
+        assert_ne!(intake.next().map(|(link, _)| link), Some(client));
+    }
+
+    #[test]
+    fn what_a_closed_link_sent_is_still_checked_then_it_is_forgotten() {
+        let (client, other) = ([1; 16], [2; 16]);
+        let mut intake = Intake::default();
+        let (mut shed, mut dropped) = (0, 0);
+        // A client sends three and goes: all three are still checked (the
+        // library proved them to it as they came).
+        for n in 0..3u8 {
+            assert!(intake.push(client, vec![n], &mut shed));
+        }
+        intake.closed(&client);
+        for n in 0..3u8 {
+            let (link, data) = intake.next().unwrap();
+            assert_eq!((link, data), (client, vec![n]));
+            assert!(!intake.judged(link, Tally { fresh: 1, bad: 0 }, Instant::now(), &mut dropped));
+        }
+        assert_eq!(dropped, 0);
+        assert!(intake.good.is_empty() && intake.bad.is_empty() && intake.closing.is_empty());
+        // Closed while its last one is being checked: forgotten once it is.
+        assert!(intake.push(other, vec![9], &mut shed));
+        let (link, _) = intake.next().unwrap();
+        intake.closed(&link);
+        assert!(intake.closing.contains(&other));
+        assert!(!intake.judged(link, Tally { fresh: 0, bad: 3 }, Instant::now(), &mut dropped));
+        assert!(intake.bad.is_empty() && intake.closing.is_empty());
+    }
+
+    #[test]
+    fn when_the_intake_is_full_links_that_sent_bad_stamps_lose_theirs_first() {
+        let mut intake = Intake::default();
+        let (mut shed, mut dropped) = (0, 0);
+        const EACH: usize = 16;
+        let links: Vec<LinkId> = (0..MAX_QUEUED / EACH).map(|n| (n as u128).to_le_bytes()).collect();
+        for link in &links {
+            for _ in 0..EACH {
+                assert!(intake.push(*link, vec![0; 10], &mut shed));
+            }
+        }
+        assert_eq!((intake.queued, shed), (MAX_QUEUED, 0));
+        // An honest Link (one a message was taken from) gets in, at the cost
+        // of the Link that sent bad stamps, though that one waits no longer.
+        let (bad, honest) = (links[3], links[5]);
+        intake.judged(bad, Tally { fresh: 0, bad: 1 }, Instant::now(), &mut dropped);
+        intake.judged(honest, Tally { fresh: 1, bad: 0 }, Instant::now(), &mut dropped);
+        assert!(intake.push(honest, vec![1], &mut shed));
+        assert_eq!((shed, intake.queues[&bad].len(), intake.queued), (1, EACH - 1, MAX_QUEUED));
+        // The Link with bad stamps can't make room for itself at others' cost.
+        assert!(!intake.push(bad, vec![2], &mut shed));
+        // With no bad stamps anywhere, a Link nothing was taken from yet gives
+        // way before an honest one, even with fewer waiting.
+        let mut mixed = Intake::default();
+        let (unknown, known) = ([0xcc; 16], [0xdd; 16]);
+        assert!(mixed.push(unknown, vec![0], &mut shed) && mixed.push(unknown, vec![0], &mut shed));
+        mixed.judged(known, Tally { fresh: 1, bad: 0 }, Instant::now(), &mut dropped);
+        while mixed.queued < MAX_QUEUED {
+            assert!(mixed.push(known, vec![1], &mut shed));
+        }
+        assert!(mixed.push(known, vec![2], &mut shed));
+        assert_eq!(mixed.queues[&unknown].len(), 1);
+        // Among Links alike, the longest gives way, never one only as long as the sender's own.
+        let mut even = Intake::default();
+        let (a, b) = ([0xaa; 16], [0xbb; 16]);
+        while even.queued < MAX_QUEUED {
+            assert!(even.push(a, vec![0], &mut shed));
+        }
+        assert!(even.push(b, vec![1], &mut shed), "a newcomer gets in");
+        assert_eq!((even.queues[&a].len(), even.queues[&b].len()), (MAX_QUEUED - 1, 1));
+        // Bytes are bounded too: one too big for what's left makes room, and
+        // one bigger than all of it is refused.
+        let mut big = Intake::default();
+        assert!(big.push([1; 16], vec![0; MAX_QUEUED_BYTES / 2], &mut shed));
+        assert!(big.push([1; 16], vec![0; MAX_QUEUED_BYTES / 4], &mut shed));
+        let before = shed;
+        assert!(big.push([2; 16], vec![0; MAX_QUEUED_BYTES / 2], &mut shed));
+        assert_eq!((shed - before, big.queued), (1, 2));
+        assert!(big.bytes <= MAX_QUEUED_BYTES);
+        let mut empty = Intake::default();
+        assert!(empty.push([3; 16], vec![0; MAX_QUEUED_BYTES + 1], &mut shed), "one alone is always taken");
+        assert!(!empty.push([3; 16], vec![0; 1], &mut shed), "nothing to make room with but its own");
+    }
+
+    #[test]
+    fn bad_stamps_and_new_messages_are_counted_for_the_links_budget_and_standing() {
+        let dir = std::env::temp_dir().join(format!("rettui-pn-count-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (ingest, _delivered, _) = ingest(&dir, 13.0);
+        let bob = Identity::new();
+        let bob_hash = Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&bob.hash));
+        let min = ingest.min_stamp;
+        let (short, _) = std::iter::repeat_with(|| stamped(bob_hash, &bob, 0.0)).find(|(_, value)| *value < min).unwrap();
+        assert_eq!(ingest.judge(&short, false), Tally { fresh: 0, bad: 1 });
+        // A new message is fresh; the same again is a copy, taken but not
+        // fresh, so replaying one message earns a Link nothing.
+        let good = transfer(bob_hash, &bob, 13.0);
+        assert_eq!(ingest.judge(&good, false), Tally { fresh: 1, bad: 0 });
+        assert_eq!(ingest.judge(&good, false), Tally { fresh: 0, bad: 0 });
+        assert_eq!(ingest.take(&good, false), Ok(1));
+        // Not a transfer, several from a client, or an entry that isn't a
+        // message: each counts against the budget.
+        assert_eq!(ingest.judge(&[0xc1], false), Tally { fresh: 0, bad: 1 });
+        let entries = |entries: Vec<Value>| encode(&Value::Array(vec![Value::F64(1_800_000_000.), Value::Array(entries)]));
+        assert_eq!(ingest.judge(&entries(vec![Value::Nil, Value::Nil]), false), Tally { fresh: 0, bad: 1 });
+        assert_eq!(ingest.judge(&entries(vec![Value::from(7)]), true), Tally { fresh: 0, bad: 1 });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_copy_earns_no_standing_and_a_closed_link_is_still_held_to_its_budget() {
+        let (link, other) = ([1; 16], [2; 16]);
+        let mut intake = Intake::default();
+        let (mut shed, mut dropped) = (0, 0);
+        // Only a newly stored message makes a Link one that goes first.
+        intake.judged(link, Tally { fresh: 0, bad: 0 }, Instant::now(), &mut dropped);
+        assert_eq!(intake.rank(&link), 1);
+        intake.judged(link, Tally { fresh: 1, bad: 0 }, Instant::now(), &mut dropped);
+        assert_eq!(intake.rank(&link), 0);
+        // A Link queues many and closes: its bad stamps still count, and over
+        // the budget the rest goes unchecked (no second close).
+        for n in 0..100u8 {
+            assert!(intake.push(other, vec![n], &mut shed));
+        }
+        intake.closed(&other);
+        let mut checked = 0;
+        while let Some((from, _)) = intake.next() {
+            assert_eq!(from, other);
+            checked += 1;
+            assert!(!intake.judged(from, Tally { fresh: 0, bad: 1 }, Instant::now(), &mut dropped), "it has closed already");
+        }
+        assert_eq!((checked, dropped), (MAX_BAD_STAMPS_PER_LINK, 100 - MAX_BAD_STAMPS_PER_LINK));
+        assert!(!intake.bad.contains_key(&other) && intake.closing.is_empty(), "forgotten once nothing is left");
+        // Shedding a closed Link's last waiting transfer while another of its
+        // transfers is being checked doesn't forget it before that is judged.
+        let mut full = Intake::default();
+        let (closing, newcomer) = ([3; 16], [4; 16]);
+        assert!(full.push(closing, vec![0], &mut shed));
+        while full.queued < MAX_QUEUED {
+            assert!(full.push(closing, vec![1], &mut shed));
+        }
+        assert_eq!(full.next().map(|(from, _)| from), Some(closing));
+        full.judged(closing, Tally { fresh: 0, bad: 1 }, Instant::now(), &mut dropped);
+        assert_eq!(full.next().map(|(from, _)| from), Some(closing));
+        full.closed(&closing);
+        while full.queues.contains_key(&closing) {
+            assert!(full.push(newcomer, vec![2], &mut shed));
+        }
+        assert!(full.closing.contains(&closing) && full.bad.contains_key(&closing), "still being checked");
+        full.judged(closing, Tally { fresh: 0, bad: 1 }, Instant::now(), &mut dropped);
+        assert!(!full.closing.contains(&closing) && !full.bad.contains_key(&closing));
+    }
+
+    #[test]
+    fn a_flood_over_fresh_links_gets_one_check_per_link() {
+        let mut intake = Intake::default();
+        let (mut shed, mut dropped) = (0, 0);
+        let start = Instant::now();
+        let trusted = [0xaa; 16];
+        intake.judged(trusted, Tally { fresh: 1, bad: 0 }, start, &mut dropped);
+        // Until Links nothing was stored from have sent UNTRUSTED_BAD_LIMIT
+        // bad stamps, each has the whole budget.
+        let fresh = |n: u128| (n + 1000).to_le_bytes();
+        for n in 0..(UNTRUSTED_BAD_LIMIT / 4) as u128 {
+            assert!(!intake.judged(fresh(n), Tally { fresh: 0, bad: 4 }, start, &mut dropped));
+        }
+        assert!(intake.under_pressure(start));
+        // Then a new Link is closed at its first bad stamp, its queue dropped...
+        let next = fresh(9999);
+        for _ in 0..10 {
+            assert!(intake.push(next, vec![0], &mut shed));
+        }
+        intake.next();
+        assert!(intake.judged(next, Tally { fresh: 0, bad: 1 }, start, &mut dropped));
+        assert_eq!(dropped, 9);
+        assert!(!intake.push(next, vec![0], &mut shed));
+        // ...while one a message was stored from keeps its 16.
+        assert!(!intake.judged(trusted, Tally { fresh: 0, bad: MAX_BAD_STAMPS_PER_LINK - 1 }, start, &mut dropped));
+        // Once the window has passed, a new Link has the whole budget again.
+        let later = start + UNTRUSTED_BAD_WINDOW + Duration::from_secs(1);
+        assert!(!intake.under_pressure(later));
+        assert!(!intake.judged(fresh(5000), Tally { fresh: 0, bad: 1 }, later, &mut dropped));
+        assert!(intake.untrusted_bad.len() <= UNTRUSTED_BAD_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn a_check_that_panics_still_frees_the_intake() {
+        let (judged, mut results) = mpsc::unbounded_channel();
+        check_in_background([5; 16], judged.clone(), || panic!("injected: checking failed"));
+        assert_eq!(results.recv().await, Some(([5; 16], Tally::default())));
+        // The next check goes ahead as usual.
+        check_in_background([6; 16], judged, || Tally { fresh: 1, bad: 0 });
+        assert_eq!(results.recv().await, Some(([6; 16], Tally { fresh: 1, bad: 0 })));
     }
 }

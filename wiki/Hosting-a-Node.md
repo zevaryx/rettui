@@ -186,9 +186,25 @@ peer protocol).
   first.
 - **Limits on what it accepts:** a copy of a message it already holds isn't
   checked again, a new message is checked once, outside the node's lock, a
-  transfer with 16 bad stamps is refused, an `/offer` without a valid peering
-  key is turned away before it is noted, and a peer can't ask for more than
-  10,240 KB in one sync.
+  transfer with 16 bad stamps is refused, a Link that has sent 16 messages
+  with bad stamps in all is closed (only 1, while Links nothing was stored
+  from have sent 64 in the last 10 seconds: a flood over many Links), an
+  `/offer` without a valid peering key is turned away before it is noted,
+  and a peer can't ask for more than 10,240 KB in one sync. Transfers wait
+  to be checked in turns, one Link after another, so one sender's backlog
+  can't hold up everyone else's; Links a new message was stored from go
+  first, and Links that sent bad stamps last. At most 4,096 wait (40 MB at
+  most); when that's full, a Link that sent bad stamps loses its oldest
+  first, then one nothing was stored from yet. A message dropped then is
+  lost without the sender knowing (it was told the message arrived, as
+  Python's nodes tell it), which takes a flood. What a client sent just
+  before it went is still checked.
+  While such a flood has used up the shared budget, an honest client that
+  hasn't had a message stored here yet is closed at its first bad message
+  too: one with a stamp made for an older stamp cost, or a link packet
+  that isn't a transfer. It can send again once the flood is over. A Link
+  a new message was stored from keeps its place in front while it sends
+  only copies of messages held: they cost little to check.
 - **Collecting:** a client identifies itself on its Link and asks for its
   messages (`/get`); the node sends them, then deletes the ones it got.
 - **Messages for you:** when the node takes a message addressed to you, it
