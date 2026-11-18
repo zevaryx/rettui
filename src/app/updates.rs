@@ -283,7 +283,7 @@ mod tests {
     use crate::update::{Checked, Release};
 
     fn release(_: bool) -> Result<Release, String> {
-        Ok(Release { version: "99.0.0".into(), url: "https://github.com/zevaryx/rettui/releases/tag/v99.0.0".into() })
+        Ok(Release { version: "99.0.0".into(), url: "https://github.com/rettui-dev/rettui/releases/tag/v99.0.0".into() })
     }
 
     /// Settings with update checks turned on.
@@ -345,7 +345,7 @@ mod tests {
         // The fetch is told whether prereleases count.
         app.updates.fetch = |prereleases| {
             let version = if prereleases { "99.0.0-rc.1" } else { "98.0.0" };
-            Ok(Release { version: version.into(), url: format!("https://github.com/zevaryx/rettui/releases/tag/v{version}") })
+            Ok(Release { version: version.into(), url: format!("https://github.com/rettui-dev/rettui/releases/tag/v{version}") })
         };
         app.on_tick();
         settle(&mut app);
@@ -417,7 +417,7 @@ mod tests {
         // This version, or an older one: nothing to say.
         app.updates.failed = None;
         app.updates.fetch =
-            |_| Ok(Release { version: "0.1.0".into(), url: "https://github.com/zevaryx/rettui/releases/tag/v0.1.0".into() });
+            |_| Ok(Release { version: "0.1.0".into(), url: "https://github.com/rettui-dev/rettui/releases/tag/v0.1.0".into() });
         app.on_tick();
         settle(&mut app);
         assert!(app.update_available().is_none());

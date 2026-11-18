@@ -1064,7 +1064,7 @@ impl Field {
 }
 
 /// Where rettui lives (opened by clicking the version in either UI).
-pub const PROJECT_URL: &str = "https://github.com/zevaryx/rettui";
+pub const PROJECT_URL: &str = "https://github.com/rettui-dev/rettui";
 
 pub const FIELDS: &[Field] = &[
     Field {

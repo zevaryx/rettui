@@ -608,7 +608,7 @@ impl WebState {
 /// Ctrl-C, SIGTERM (what `docker stop` and systemd send), or a stop asked
 /// for from within ([`crate::request_stop`]). Not an `async fn`: the
 /// signals are listened for from the call, not from the first poll.
-fn shutdown_signal() -> impl std::future::Future<Output = ()> {
+pub(crate) fn shutdown_signal() -> impl std::future::Future<Output = ()> {
     let signal = os_signal();
     async move {
         tokio::select! {

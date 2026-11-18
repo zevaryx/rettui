@@ -61,7 +61,7 @@ coming="$(.github/scripts/release-notes.sh "v$version" 2> /dev/null || true)"
   printf 'It may have bugs: back up your data directory first.'
   if [ -n "$released" ]; then
     printf ' What changed since %s: [the commits](https://github.com/%s/compare/%s...%s).' \
-      "$released" "${GITHUB_REPOSITORY:-zevaryx/rettui}" "$released" "$commit"
+      "$released" "${GITHUB_REPOSITORY:-rettui-dev/rettui}" "$released" "$commit"
   fi
   printf '\n\n'
   if [ -n "$coming" ]; then

@@ -236,6 +236,91 @@ can show where they came from, so people who had messages waiting on your
 node must send them again. Start rettui afterwards as usual. A node that
 never hosted a propagation node before needs nothing.
 
+## A public node with no UI
+
+`rettui node` runs a public node on a server, with no terminal UI and no
+web UI, as `rnsd` and `lxmd` do together: a transport node that others
+connect to, and a propagation node.
+
+Use a data directory of its own for the node (`--data-dir`, as below), so
+its identity, settings and Reticulum config are the node's alone.
+
+    rettui --data-dir /var/lib/rettui-node node
+    rettui --data-dir /var/lib/rettui-node node --entry-point 4965 --reachable-on rns.example.org --name "Hilltop"
+
+The first run sets the node up, and prints each change it saves, after the
+file it's in:
+
+- **Reticulum config:** *Transport node* on (`enable_transport = Yes`),
+  and a TCP server interface named `Public entry point`, listening on
+  `0.0.0.0` port 4242 in gateway mode (`mode = gateway`, so it answers path
+  requests for those connecting, as a public node should). If the config
+  has a TCP server already (or a Backbone interface that listens), that one
+  is used instead, and only gets `mode = gateway` if it has no mode.
+- **Settings:** *Host a propagation node* (`pn_enabled`) on, and
+  `rns_config` set to the node's own Reticulum config if it had none (see
+  below).
+
+It only adds what's missing, and never removes or changes a value you set,
+so you can edit the config and settings afterwards, and every later run
+needs no flags. Every run also says, as notes rather than changes, which
+interface is the entry point, and what it left as it was: a TCP server on
+that port that's turned off (`enabled = No`) stays off, and `--listen-ip`
+doesn't move a server that's there. The flags are kept the same way:
+
+| Flag | What it does |
+|------|--------------|
+| `--entry-point PORT` | Others connect on this port: a TCP server on it is added unless one is there. Without it, an existing TCP server is used, else one is added on 4242. |
+| `--listen-ip IP` | The address a new TCP server listens on (default `0.0.0.0`, every address). One already there keeps its own. |
+| `--reachable-on HOST` | The host name or IP address others reach the node at: the TCP server is announced with it, for interface discovery (`discoverable` and `reachable_on`). Letters, digits, `.`, `-`, `_` and `:` only, with `[ ]` around an IPv6 address. |
+| `--no-entry-point` | Adds no TCP server: others connect over the interfaces already in the config. Transport node is still turned on. |
+| `--name NAME` | The name the propagation node announces (`pn_name`; otherwise your display name). |
+| `--no-propagation` | Doesn't turn the propagation node on. One turned on before stays on: set `pn_enabled` to `false` in `settings.json` to stop it. |
+
+Things to know:
+
+- **What's public:** a node announces itself. Its identity, LXMF address
+  and display name are public, and the propagation node announces the
+  display name too, unless `--name` gives it one of its own. The first run
+  says so.
+- **Which Reticulum config:** without `--rns-config`, and with no
+  `rns_config` in `settings.json`, the node uses a config of its own in
+  `reticulum/` in the data directory (made the first time), so setting it up
+  changes no other Reticulum program's config. It saves that as
+  `rns_config`, so `rettui` and `rettui --web` with the same data directory
+  use it too. With `rns_config` or `--rns-config`, it sets up that one
+  (`--rns-config` is used for that run only, not saved). Before changing
+  the file it keeps it as it was, as `config.backup` beside it and as a
+  version in the config's history (see
+  [Settings and Reticulum Config](Settings-and-Reticulum-Config)). A new
+  config and `config.backup` are readable by you only, as a config can hold
+  IFAC passphrases.
+- **What it serves:** the config and settings can't be changed from the
+  network: the node has no login and no web UI, reads no input, and never
+  adds or turns on a pipe interface or anything else that runs a program.
+  But the services already on in the settings are served to everyone who
+  connects: a NomadNet node (and its page scripts, if
+  `node_executable_pages` is on), an RRC hub, rngit repositories, and files
+  received with rncp. Each one that's on is named when the node starts,
+  with the setting that turns it off (in `settings.json`, with rettui
+  stopped).
+- **Hardening:** open only the entry point's port (4242) in the firewall.
+  The propagation node takes messages from anyone with a valid stamp, up to
+  `pn_transfer_kb` each and `pn_storage_mb` in all, so size those for the
+  disk. For a node that isn't public, listen on one address
+  (`--listen-ip`), or give the interface an IFAC network name and
+  passphrase (Settings and Reticulum Config) so only those who know them
+  can connect. In Docker, publish only `-p 4242:4242`.
+- **Its log:** it prints its LXMF address, the propagation node's address
+  and how it is, where it listens and how many interfaces are online when it
+  starts and every 10 minutes, and what rettui's Status log says as it
+  happens (interfaces coming and going, announces). `rettui.log` in the data
+  directory has the rest.
+- **Stopping:** Ctrl-C or SIGTERM (`systemctl stop`, `docker stop`) saves
+  everything and leaves the network cleanly. See
+  [Running as a service](Running#running-as-a-service) for a systemd unit,
+  and [Docker](Docker) for a container.
+
 ## RRC hub
 
 An RRC hub is what people chat on in [RRC](RRC-Chat): rooms, their topics
@@ -310,7 +395,7 @@ and the other RRC clients can join it as they join rrcd.
 
 ## rngit repositories
 
-rettui can serve git repositories to [rngit](https://github.com/zevaryx/rngit-rs)
+rettui can serve git repositories to [rngit](https://github.com/rettui-dev/rngit-rs)
 clients, so people clone them over Reticulum with `git clone rns://<address>/<group>/<name>.git`
 (the stock `rngit` helper, `git-remote-rns` and rettui's [Repos tab](Repos) all
 work), and push to it. Cloning, fetching, pushing, creating repositories and

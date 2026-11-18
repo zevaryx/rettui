@@ -3,7 +3,7 @@ name: Coverage
 # How much of rettui the tests run (cargo-llvm-cov), on every pull request
 # and on pushes to dev and main. Fewer than 85% of lines run fails it. The
 # report is in the run's summary, as lcov.info (for an editor) in its
-# artifacts, and on Codecov (https://app.codecov.io/gh/zevaryx/rettui).
+# artifacts, and on Codecov (https://app.codecov.io/gh/rettui-dev/rettui).
 #
 # Not counted: what only a real desktop, terminal or install can show
 # (desktop notifications, terminal image protocols, replacing the running

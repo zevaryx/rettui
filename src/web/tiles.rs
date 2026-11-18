@@ -22,7 +22,7 @@ const MAX_TILE_BYTES: u64 = 1_000_000;
 const MAX_CACHE_BYTES: u64 = 200_000_000;
 /// The cache is checked against its limit after this many tiles are kept.
 const PRUNE_EVERY: usize = 200;
-const USER_AGENT: &str = concat!("rettui/", env!("CARGO_PKG_VERSION"), " (+https://github.com/zevaryx/rettui)");
+const USER_AGENT: &str = concat!("rettui/", env!("CARGO_PKG_VERSION"), " (+https://github.com/rettui-dev/rettui)");
 
 /// Tiles kept since the cache was last checked against its limit.
 static KEPT: AtomicUsize = AtomicUsize::new(0);

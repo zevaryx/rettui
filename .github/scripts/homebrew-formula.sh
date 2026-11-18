@@ -9,7 +9,7 @@
 set -euo pipefail
 tag="${1:?usage: homebrew-formula.sh <tag> <SHA256SUMS>}"
 sums="${2:?usage: homebrew-formula.sh <tag> <SHA256SUMS>}"
-repo="${GITHUB_REPOSITORY:-zevaryx/rettui}"
+repo="${GITHUB_REPOSITORY:-rettui-dev/rettui}"
 
 sha() {
   local name="rettui-$tag-$1.tar.gz"

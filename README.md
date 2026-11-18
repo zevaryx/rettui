@@ -1,10 +1,10 @@
 # rettui
 
-[![CI](https://github.com/zevaryx/rettui/actions/workflows/ci.yml/badge.svg)](https://github.com/zevaryx/rettui/actions/workflows/ci.yml)
-[![Coverage](https://codecov.io/gh/zevaryx/rettui/branch/dev/graph/badge.svg)](https://app.codecov.io/gh/zevaryx/rettui)
-[![Release](https://github.com/zevaryx/rettui/actions/workflows/release.yml/badge.svg)](https://github.com/zevaryx/rettui/actions/workflows/release.yml)
-[![Latest release](https://img.shields.io/github/v/release/zevaryx/rettui)](https://github.com/zevaryx/rettui/releases/latest)
-[![Docker image](https://img.shields.io/badge/docker-ghcr.io%2Fzevaryx%2Frettui-blue?logo=docker)](https://github.com/zevaryx/rettui/pkgs/container/rettui)
+[![CI](https://github.com/rettui-dev/rettui/actions/workflows/ci.yml/badge.svg)](https://github.com/rettui-dev/rettui/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/rettui-dev/rettui/branch/dev/graph/badge.svg)](https://app.codecov.io/gh/rettui-dev/rettui)
+[![Release](https://github.com/rettui-dev/rettui/actions/workflows/release.yml/badge.svg)](https://github.com/rettui-dev/rettui/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/rettui-dev/rettui)](https://github.com/rettui-dev/rettui/releases/latest)
+[![Docker image](https://img.shields.io/badge/docker-ghcr.io%2Frettui-dev%2Frettui-blue?logo=docker)](https://github.com/rettui-dev/rettui/pkgs/container/rettui)
 [![License: Reticulum License](https://img.shields.io/badge/license-Reticulum%20License-blue.svg)](LICENSE)
 
 A [Reticulum](https://reticulum.network/) client written in Rust, for the terminal
@@ -59,10 +59,10 @@ command line for scripts.
 ## Quick start
 
 Download `rettui` for Linux, Windows or macOS from the
-[releases](https://github.com/zevaryx/rettui/releases) and put it on your
+[releases](https://github.com/rettui-dev/rettui/releases) and put it on your
 `PATH` (or install the release's Debian package:
 `sudo apt install ./rettui_<version>_amd64.deb`; see
-[Installing](https://github.com/zevaryx/rettui/wiki/Installing#packages)
+[Installing](https://github.com/rettui-dev/rettui/wiki/Installing#packages)
 for the AUR and Homebrew), then:
 
 ```sh
@@ -77,7 +77,7 @@ another address.
 With Docker, from a checkout:
 
 ```sh
-git clone --recursive https://github.com/zevaryx/rettui && cd rettui
+git clone --recursive https://github.com/rettui-dev/rettui && cd rettui
 docker compose up -d --build
 docker compose logs rettui    # the login link
 ```
@@ -88,21 +88,21 @@ To build it yourself: `git clone --recursive` this repository, then
 ## Documentation
 
 Everything else is on the documentation site,
-[zevaryx.github.io/rettui](https://zevaryx.github.io/rettui/), and in the
-[wiki](https://github.com/zevaryx/rettui/wiki): both are built from [wiki/](wiki) in this repository.
+[docs.rettui.dev](https://docs.rettui.dev/), and in the
+[wiki](https://github.com/rettui-dev/rettui/wiki): both are built from [wiki/](wiki) in this repository.
 
-- **Getting started:** [Installing](https://github.com/zevaryx/rettui/wiki/Installing) ·
-  [Running](https://github.com/zevaryx/rettui/wiki/Running) · [Using the TUI](https://github.com/zevaryx/rettui/wiki/Using-the-TUI) ·
-  [Web UI](https://github.com/zevaryx/rettui/wiki/Web-UI) · [Docker](https://github.com/zevaryx/rettui/wiki/Docker)
-- **What it does:** [Messaging](https://github.com/zevaryx/rettui/wiki/Messaging) · [Games](https://github.com/zevaryx/rettui/wiki/Games) ·
-  [RRC Chat](https://github.com/zevaryx/rettui/wiki/RRC-Chat) ·
-  [Notifications](https://github.com/zevaryx/rettui/wiki/Notifications) ·
-  [NomadNet Browsing](https://github.com/zevaryx/rettui/wiki/NomadNet-Browsing) ·
-  [Hosting a Node](https://github.com/zevaryx/rettui/wiki/Hosting-a-Node) · [Network](https://github.com/zevaryx/rettui/wiki/Network)
+- **Getting started:** [Installing](https://github.com/rettui-dev/rettui/wiki/Installing) ·
+  [Running](https://github.com/rettui-dev/rettui/wiki/Running) · [Using the TUI](https://github.com/rettui-dev/rettui/wiki/Using-the-TUI) ·
+  [Web UI](https://github.com/rettui-dev/rettui/wiki/Web-UI) · [Docker](https://github.com/rettui-dev/rettui/wiki/Docker)
+- **What it does:** [Messaging](https://github.com/rettui-dev/rettui/wiki/Messaging) · [Games](https://github.com/rettui-dev/rettui/wiki/Games) ·
+  [RRC Chat](https://github.com/rettui-dev/rettui/wiki/RRC-Chat) ·
+  [Notifications](https://github.com/rettui-dev/rettui/wiki/Notifications) ·
+  [NomadNet Browsing](https://github.com/rettui-dev/rettui/wiki/NomadNet-Browsing) ·
+  [Hosting a Node](https://github.com/rettui-dev/rettui/wiki/Hosting-a-Node) · [Network](https://github.com/rettui-dev/rettui/wiki/Network)
 - **Settings and data:**
-  [Settings and Reticulum Config](https://github.com/zevaryx/rettui/wiki/Settings-and-Reticulum-Config) ·
-  [Data and Storage](https://github.com/zevaryx/rettui/wiki/Data-and-Storage)
-- **More:** [Notes](https://github.com/zevaryx/rettui/wiki/Notes) · [Development](https://github.com/zevaryx/rettui/wiki/Development)
+  [Settings and Reticulum Config](https://github.com/rettui-dev/rettui/wiki/Settings-and-Reticulum-Config) ·
+  [Data and Storage](https://github.com/rettui-dev/rettui/wiki/Data-and-Storage)
+- **More:** [Notes](https://github.com/rettui-dev/rettui/wiki/Notes) · [Development](https://github.com/rettui-dev/rettui/wiki/Development)
 
 ## License
 

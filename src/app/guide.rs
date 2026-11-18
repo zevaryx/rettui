@@ -71,9 +71,9 @@ pub const LINKS: &[(&str, &str, Option<&str>)] = &[
     ("Understanding Reticulum", "https://reticulum.network/manual/understanding.html", None),
     ("Entry points on a map: RMAP World", "https://rmap.world", None),
     ("A directory of entry points", "https://directory.rns.recipes", None),
-    ("Using a LoRa radio (RNode)", "https://github.com/zevaryx/rettui/wiki/RNode-Radios", Some(RNODE_NOTE)),
-    ("Words you'll meet", "https://github.com/zevaryx/rettui/wiki/Glossary", Some(GLOSSARY_NOTE)),
-    ("Using rettui", "https://github.com/zevaryx/rettui/wiki", None),
+    ("Using a LoRa radio (RNode)", "https://github.com/rettui-dev/rettui/wiki/RNode-Radios", Some(RNODE_NOTE)),
+    ("Words you'll meet", "https://github.com/rettui-dev/rettui/wiki/Glossary", Some(GLOSSARY_NOTE)),
+    ("Using rettui", "https://github.com/rettui-dev/rettui/wiki", None),
 ];
 /// The glossary: what it is.
 pub const GLOSSARY_NOTE: &str = "Identity, announce, hops, entry point, propagation node and the rest, a line or two each, with where Reticulum's manual explains them.";

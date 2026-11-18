@@ -26,7 +26,7 @@ use super::{Release, VERSION};
 /// none for a build from source.
 const RELEASE_TARGET: Option<&str> = option_env!("RETTUI_RELEASE_TARGET");
 /// Where releases' files are.
-const RELEASES: &str = "https://github.com/zevaryx/rettui/releases/download";
+const RELEASES: &str = "https://github.com/rettui-dev/rettui/releases/download";
 /// The most taken of an archive (they're 10–15 MB), and of a program
 /// unpacked from one.
 const MAX_ARCHIVE: u64 = 200_000_000;
