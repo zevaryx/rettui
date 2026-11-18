@@ -20,6 +20,7 @@ mod highlight;
 mod https;
 mod icons;
 mod identities;
+mod limits;
 mod links;
 #[cfg(test)]
 mod live_tests;
@@ -410,6 +411,8 @@ async fn run(cli: Cli) -> Result<()> {
         web::check_plain_http(address, tls, cli.insecure_http)?;
         web::accept_plain_http(tls || cli.insecure_http);
     }
+    // Before the first socket or file: room for what peers and rettui itself open.
+    let open_files = limits::raise_open_files();
     // What updating on Windows left (the program it replaced).
     update::install::tidy();
     let paths = Paths::new(cli.data_dir.clone())?;
@@ -456,6 +459,9 @@ async fn run(cli: Cli) -> Result<()> {
         .with(net::iface_log::layer())
         .try_init();
 
+    if let Some(limit) = open_files {
+        tracing::debug!(limit, "raised the open-file limit");
+    }
     let identity = config::load_identity(&paths.identity)?;
     settle_name(&mut settings, &paths, &identity);
 
