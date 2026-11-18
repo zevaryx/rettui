@@ -332,6 +332,9 @@ async fn to_https(mut tcp: TcpStream) -> std::io::Result<()> {
 }
 
 /// Where a plain HTTP request should have gone: `https://` its host and path.
+/// A query that holds the login token is dropped, so the redirect (which is
+/// logged and shown by browsers) never repeats it; the login page comes up
+/// instead. By then the token has crossed the network once, in the request.
 fn https_location(request: &str) -> Option<String> {
     let mut lines = request.split("\r\n");
     let path = lines.next()?.split(' ').nth(1).filter(|p| p.starts_with('/'))?;
@@ -340,6 +343,10 @@ fn https_location(request: &str) -> Option<String> {
         name.trim().eq_ignore_ascii_case("host").then(|| value.trim())
     })?;
     let safe = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_graphic());
+    let path = match path.split_once('?') {
+        Some((before, query)) if query.split('&').any(|pair| pair.starts_with("token=")) => before,
+        _ => path,
+    };
     (safe(host) && safe(path)).then(|| format!("https://{host}{path}"))
 }
 
@@ -351,8 +358,12 @@ mod tests {
     fn plain_requests_are_sent_to_https() {
         assert_eq!(
             https_location("GET /?token=abc HTTP/1.1\r\nHost: 192.168.1.5:8740\r\nAccept: */*\r\n\r\n").as_deref(),
-            Some("https://192.168.1.5:8740/?token=abc")
+            Some("https://192.168.1.5:8740/")
         );
+        // Other queries are kept; any query with a token is not.
+        assert_eq!(https_location("GET /api/x?a=1&b=2 HTTP/1.1\r\nHost: h\r\n\r\n").as_deref(), Some("https://h/api/x?a=1&b=2"));
+        assert_eq!(https_location("GET /?a=1&token=abc HTTP/1.1\r\nHost: h\r\n\r\n").as_deref(), Some("https://h/"));
+        assert_eq!(https_location("GET /?token= HTTP/1.1\r\nHost: h\r\n\r\n").as_deref(), Some("https://h/"));
         assert_eq!(https_location("GET / HTTP/1.1\r\n\r\n"), None);
         assert_eq!(https_location("GET / HTTP/1.1\r\nHost: evil\r\n x\r\n\r\n").as_deref(), Some("https://evil/"));
         assert_eq!(https_location("GET / HTTP/1.1\r\nHost: a b\r\n\r\n"), None);

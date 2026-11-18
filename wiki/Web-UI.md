@@ -39,8 +39,13 @@ rettui web UI: http://127.0.0.1:8740/?token=…
   ```
 
 - **Address:** it listens on 127.0.0.1 by default. Pass an address such as
-  `--web 0.0.0.0:8740` to reach it from other devices, and prefer a VPN or SSH
-  tunnel over exposing it. It uses plain HTTP unless started with `--https`.
+  `--web 0.0.0.0:8740 --https` to reach it from other devices, and prefer a
+  VPN or SSH tunnel over exposing it. It uses plain HTTP unless started with
+  `--https`. Over plain HTTP on an address other than 127.0.0.1, the link and
+  the login cross the network unencrypted, and anyone on it can read them. So
+  rettui **refuses to start** there unless you give `--https` (below), or
+  `--insecure-http` to accept that. With `--insecure-http` it starts and
+  prints a line saying the link and login are not encrypted. On 127.0.0.1 neither is needed.
 - **HTTPS:** browsers keep some things for secure pages: notifications,
   background notifications, installing the app, and the camera and
   microphone. A phone on the same network reaching rettui at

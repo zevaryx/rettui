@@ -27,9 +27,25 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   `TCPClientInterface` to a transport node, which the Reticulum section of the
   web UI can do) and restart Reticulum, or use `network_mode: host` (commented out in
   the compose file) instead of `ports:`.
-- **Access:** port 8740 is published on every interface of the host, and the
-  login link is still required. Change it to `"127.0.0.1:8740:8740"` to allow
-  only this machine. `PORT` changes the port inside the container.
+- **Access:** port 8740 is published on `127.0.0.1` only, so only this
+  machine can connect. To reach it from other devices, publish it as
+  `"8740:8740"` in `compose.yaml` and add `command: ["--https"]` to the
+  service. The web UI is plain HTTP otherwise, and the link and the login
+  cross the network unencrypted, where anyone on it can read them (rettui
+  says so in its log). **The image accepts plain HTTP by itself**:
+  its entrypoint always starts rettui with `--insecure-http`, because rettui
+  refuses plain HTTP on the container's own address (`0.0.0.0`) otherwise.
+  That is only safe because `compose.yaml` publishes the port on
+  `127.0.0.1`. If you publish it any wider (`docker run -p 8740:8740`, a
+  Compose file of your own, or `network_mode: host`), add `--https`. The login
+  link is still required either way.
+  `PORT` changes the port inside the container.
+  With `network_mode: host` the web UI is on every interface of the host, so
+  use `--https` with it. Other containers on the same Docker network can
+  reach the port too, in clear text. The container's log says "Plain HTTP on
+  0.0.0.0:…, as --insecure-http allows" even when the port is published on
+  `127.0.0.1` only; it is about the address rettui listens on inside the
+  container.
 - **Transport node:** port 4242 (Reticulum's usual port) is exposed and
   published too, for others to connect to rettui as an entry point.
   Nothing listens on it until the Reticulum config has, under

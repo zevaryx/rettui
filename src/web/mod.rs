@@ -697,6 +697,55 @@ fn started_by_app() -> bool {
     std::env::var_os(PORT_FILE_ENV).is_some()
 }
 
+/// Whether the web UI on `ip` is plain HTTP on an address other than
+/// loopback: the link, the login cookie and everything the page shows then
+/// cross the network, where anyone on it can read them. Loopback never
+/// leaves this computer.
+fn plain_http_beyond_loopback(ip: IpAddr, https: bool) -> bool {
+    !https && !ip.to_canonical().is_loopback()
+}
+
+/// Said at start when it is: the user asked for it with `--insecure-http`,
+/// so one short line, not a warning to learn to ignore.
+fn plain_http_notice(address: SocketAddr) -> String {
+    format!("Plain HTTP on {address}, as --insecure-http allows: the link and login are not encrypted.")
+}
+
+/// Why rettui won't serve the web UI over plain HTTP on this address.
+const PLAIN_HTTP_REFUSED: &str = "the web UI would be served over plain HTTP on an address other devices can reach, so its login link \
+     and cookie would cross the network unencrypted, where anyone on it can read them. Start it with --https (rettui's own \
+     certificate; or --tls-cert and --tls-key), or with --insecure-http to accept that";
+
+/// Whether rettui refuses to serve the web UI on `ip`: over plain HTTP
+/// (`https` false) on an address other than loopback, unless
+/// `insecure_http` (`--insecure-http`) says the user accepts it.
+fn plain_http_refused(ip: IpAddr, https: bool, insecure_http: bool) -> Option<&'static str> {
+    (!insecure_http && plain_http_beyond_loopback(ip, https)).then_some(PLAIN_HTTP_REFUSED)
+}
+
+/// Whether the user accepted serving beyond loopback: TLS is on, or
+/// `--insecure-http` was given. Not set, [`listen`] refuses such an address,
+/// so no way to start the web UI skips the check.
+static PLAIN_HTTP_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set by whatever starts the web UI, from its arguments (see
+/// [`check_plain_http`]). It is set on every start and never cleared in
+/// between, so tests that start the web UI must not depend on its value:
+/// they test [`listen_with`], which takes the decision as an argument.
+pub fn accept_plain_http(accepted: bool) {
+    PLAIN_HTTP_OK.store(accepted, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Stops rettui before it binds `address` (a `--web` value) when
+/// [`plain_http_refused`]. An address that doesn't parse is left to
+/// [`run`], which says so.
+pub fn check_plain_http(address: &str, https: bool, insecure_http: bool) -> Result<()> {
+    match address.parse::<SocketAddr>().ok().and_then(|a| plain_http_refused(a.ip(), https, insecure_http)) {
+        Some(why) => anyhow::bail!("--web {address}: {why}"),
+        None => Ok(()),
+    }
+}
+
 /// The lines printed when the web UI starts, about logging in.
 fn login_notice(scheme: &str, shown: &str, token: &str, by_app: bool) -> String {
     if by_app {
@@ -708,6 +757,67 @@ fn login_notice(scheme: &str, shown: &str, token: &str, by_app: bool) -> String 
 #[cfg(test)]
 mod login_notice_tests {
     use super::*;
+
+    #[test]
+    fn plain_http_beyond_loopback_is_refused_unless_accepted() {
+        // (address, refused with no flag, refused with --https, refused with --insecure-http)
+        let cases = [
+            ("127.0.0.1", false, false, false),
+            ("[::1]", false, false, false),
+            ("[::ffff:127.0.0.1]", false, false, false),
+            ("192.168.1.5", true, false, false),
+            ("[fd00::1]", true, false, false),
+            ("0.0.0.0", true, false, false),
+            ("[::]", true, false, false),
+        ];
+        for (host, refused, tls, insecure) in cases {
+            let ip = format!("{host}:8740").parse::<SocketAddr>().unwrap().ip();
+            assert_eq!(plain_http_refused(ip, false, false).is_some(), refused, "{host}: no flag");
+            assert_eq!(plain_http_refused(ip, true, false).is_some(), tls, "{host}: --https");
+            assert_eq!(plain_http_refused(ip, false, true).is_some(), insecure, "{host}: --insecure-http");
+            assert!(plain_http_refused(ip, true, true).is_none(), "{host}: both");
+        }
+        // What the user is told: why, and both ways forward.
+        let error = check_plain_http("0.0.0.0:8740", false, false).unwrap_err().to_string();
+        assert!(error.starts_with("--web 0.0.0.0:8740: "), "{error}");
+        for needed in ["plain HTTP", "unencrypted", "login link", "--https", "--insecure-http"] {
+            assert!(error.contains(needed), "{needed}: {error}");
+        }
+        assert!(check_plain_http("0.0.0.0:8740", false, true).is_ok() && check_plain_http("0.0.0.0:8740", true, false).is_ok());
+        assert!(check_plain_http("127.0.0.1:8740", false, false).is_ok());
+        // Not an address: left for `run`, which names the form.
+        assert!(check_plain_http("nowhere", false, false).is_ok());
+    }
+
+    #[test]
+    fn plain_http_beyond_loopback_gets_one_short_line() {
+        let beyond = |ip: &str, https| plain_http_beyond_loopback(ip.parse().unwrap(), https);
+        // Loopback never leaves this computer (an IPv4 address in IPv6 form too).
+        for ip in ["127.0.0.1", "127.1.2.3", "::1", "::ffff:127.0.0.1"] {
+            assert!(!beyond(ip, false) && !beyond(ip, true), "{ip}");
+        }
+        // A LAN address, a public one and the wildcards are reachable by others.
+        for ip in ["192.168.1.5", "10.1.2.3", "203.0.113.7", "fd00::1", "0.0.0.0", "::"] {
+            assert!(beyond(ip, false), "{ip}");
+            assert!(!beyond(ip, true), "{ip} with TLS");
+        }
+        let line = plain_http_notice("192.168.1.5:8740".parse().unwrap());
+        assert_eq!(line, "Plain HTTP on 192.168.1.5:8740, as --insecure-http allows: the link and login are not encrypted.");
+        assert!(!line.contains('\n'));
+    }
+
+    /// Whatever starts the web UI goes through `listen`, which refuses
+    /// unless it was told that plain HTTP is accepted (or TLS is on). No
+    /// global is touched here, so other tests cannot disturb it.
+    #[tokio::test]
+    async fn binding_beyond_loopback_is_refused_until_accepted() {
+        let wildcard: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let refused = format!("{:#}", listen_with(wildcard, false, false).await.unwrap_err());
+        assert!(refused.contains("--insecure-http") && refused.contains("--https"), "{refused}");
+        // Loopback is never refused.
+        assert!(listen_with("127.0.0.1:0".parse().unwrap(), false, false).await.is_ok());
+        assert!(listen_with(wildcard, false, true).await.is_ok());
+    }
 
     #[test]
     fn the_app_is_not_given_a_link_with_the_token_to_log() {
@@ -745,6 +855,16 @@ fn port_file() -> Option<std::path::PathBuf> {
 
 /// Listen on `address`; if its port is taken and `any_port`, on a free one.
 async fn listen(address: SocketAddr, any_port: bool) -> Result<tokio::net::TcpListener> {
+    listen_with(address, any_port, PLAIN_HTTP_OK.load(std::sync::atomic::Ordering::SeqCst)).await
+}
+
+/// [`listen`], with whether plain HTTP beyond loopback is `accepted` given.
+/// The one place the web UI binds: refused here, before anything is bound,
+/// unless it is accepted (see [`accept_plain_http`]).
+async fn listen_with(address: SocketAddr, any_port: bool, accepted: bool) -> Result<tokio::net::TcpListener> {
+    if let Some(why) = plain_http_refused(address.ip(), false, accepted) {
+        anyhow::bail!("--web {address}: {why}");
+    }
     match tokio::net::TcpListener::bind(address).await {
         Err(e) if any_port && e.kind() == std::io::ErrorKind::AddrInUse => {
             Ok(tokio::net::TcpListener::bind(SocketAddr::new(address.ip(), 0))
@@ -884,8 +1004,12 @@ pub async fn run(
         println!("Browsers warn about it until a device installs rettui's certificate authority:");
         println!("open {scheme}://{shown}/rettui-ca.crt on it (SHA-256 {fingerprint}).");
     }
-    if !address.ip().is_loopback() {
+    if !address.ip().to_canonical().is_loopback() {
         println!("Listening on {address}: anyone with the link can use this client.");
+        // Here only if accepted (see `listen`).
+        if plain_http_beyond_loopback(address.ip(), served.is_some()) {
+            println!("{}", plain_http_notice(address));
+        }
         // For a phone on the same network: the link at this computer's
         // address, and its QR code to scan rather than type the token.
         if !started_by_app()

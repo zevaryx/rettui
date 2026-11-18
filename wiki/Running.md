@@ -114,6 +114,7 @@ existed don't show them.
 rettui                      # the TUI
 rettui --web [ADDRESS]      # the web UI (default 127.0.0.1:8740)
 rettui --web [ADDRESS] --https                          # over HTTPS, with rettui's own certificate
+rettui --web ADDRESS --insecure-http                    # plain HTTP on an address others can reach (refused without this)
 rettui --web [ADDRESS] --tls-cert FILE --tls-key FILE   # over HTTPS, with yours
 rettui fetch <hash>[:/page/x.mu] [--raw] [--identify] [-o FILE]
 rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]  # address or lxma:// link

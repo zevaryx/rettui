@@ -76,6 +76,15 @@ fn arguments_and_the_address() {
     assert!(!mode.status.success() && said(&mode).contains("unknown delivery mode"), "{}", said(&mode));
     let https = run(&dir, &["--https"]);
     assert!(!https.status.success(), "--https without --web");
+    let insecure = run(&dir, &["--insecure-http"]);
+    assert!(!insecure.status.success(), "--insecure-http without --web");
+    // Plain HTTP on an address others can reach: refused before it binds,
+    // saying why and how to go on.
+    let plain = run(&dir, &["--web", "0.0.0.0:1"]);
+    assert!(!plain.status.success(), "{}", said(&plain));
+    for needed in ["plain HTTP", "unencrypted", "--https", "--insecure-http"] {
+        assert!(said(&plain).contains(needed), "{needed}: {}", said(&plain));
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -303,6 +312,32 @@ fn the_web_ui_from_start_to_stop() {
     assert!(status.success(), "{status:?}");
     let web = Web::start(&dir, &["--web", &format!("127.0.0.1:{port}")]);
     web.wait_for(&format!("?token={token}"));
+    assert!(web.stop().success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_web_ui_over_plain_http_for_other_devices_only_when_accepted() {
+    let dir = folder("insecure-http", "");
+    let port = free_port();
+    // Refused as a usage error: nothing is made, not even the data folder.
+    let refused = run(&dir, &["--web", &format!("0.0.0.0:{port}")]);
+    assert!(!refused.status.success() && said(&refused).contains("--insecure-http"), "{}", said(&refused));
+    let fresh = dir.join("fresh");
+    let unmade = Command::new(env!("CARGO_BIN_EXE_rettui"))
+        .arg("--data-dir")
+        .arg(&fresh)
+        .args(["--web", &format!("0.0.0.0:{port}")])
+        .output()
+        .unwrap();
+    assert!(!unmade.status.success() && said(&unmade).contains("--insecure-http"), "{}", said(&unmade));
+    assert!(!fresh.exists(), "a data folder was made before the refusal");
+    // With the flag: it starts, and says in one line that it is plain HTTP.
+    let web = Web::start(&dir, &["--web", &format!("0.0.0.0:{port}"), "--insecure-http"]);
+    let shown = web.wait_for("Plain HTTP on 0.0.0.0:");
+    assert!(shown.contains("as --insecure-http allows") && shown.contains("not encrypted"), "{shown}");
+    assert!(!shown.contains("Warning:"), "{shown}");
     assert!(web.stop().success());
     let _ = std::fs::remove_dir_all(&dir);
 }

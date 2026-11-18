@@ -88,6 +88,12 @@ struct Cli {
     /// this, or --tls-cert, it's plain HTTP.
     #[arg(long, requires = "web")]
     https: bool,
+    /// Serve the web UI over plain HTTP on an address other devices can
+    /// reach (such as 0.0.0.0). Without this, --https or --tls-cert,
+    /// rettui refuses: the login link and cookie would cross the network
+    /// unencrypted. Not needed on 127.0.0.1.
+    #[arg(long, requires = "web")]
+    insecure_http: bool,
     /// Serve the web UI over HTTPS with this certificate (PEM, with its
     /// chain) instead of rettui's own.
     #[arg(long, value_name = "FILE", requires_all = ["web", "tls_key"])]
@@ -396,6 +402,14 @@ fn start(cli: Cli) -> Result<()> {
 }
 
 async fn run(cli: Cli) -> Result<()> {
+    // A usage error, said before anything is loaded or made: plain HTTP on an
+    // address other devices can reach needs --https or --insecure-http. (The
+    // web UI's own bind checks it again.)
+    if let Some(address) = &cli.web {
+        let tls = cli.https || cli.tls_cert.is_some();
+        web::check_plain_http(address, tls, cli.insecure_http)?;
+        web::accept_plain_http(tls || cli.insecure_http);
+    }
     // What updating on Windows left (the program it replaced).
     update::install::tidy();
     let paths = Paths::new(cli.data_dir.clone())?;
@@ -456,6 +470,7 @@ async fn run(cli: Cli) -> Result<()> {
             (Some(cert), Some(key)) => Some(web::tls::Https::Files { cert, key }),
             _ => cli.https.then_some(web::tls::Https::Own),
         };
+
         let (mut settings, mut paths, mut identity) = (settings, paths, identity);
         set_tray(&settings);
         // Switching identity starts the web UI over as the other one.
