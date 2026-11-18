@@ -1277,7 +1277,7 @@ mod tests {
         // When it arrived: a line said live is stamped on arrival, which can
         // be a millisecond (or a second) after the envelope was made.
         let said = app.channels.hubs[0].buffers["lobby"].iter().find(|l| l.text == "hello there").unwrap().ts;
-        let when = chrono::TimeZone::timestamp_millis_opt(&chrono::Local, said as i64).single().unwrap();
+        let when = jiff::Timestamp::from_millisecond(said as i64).unwrap().to_zoned(jiff::tz::TimeZone::system());
         let line = |app: &mut App| {
             let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
             terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
@@ -1293,7 +1293,7 @@ mod tests {
         // An earlier day's: its date too.
         let earlier = said - 3 * 86_400_000;
         app.channels.hubs[0].buffers.get_mut("lobby").unwrap().iter_mut().filter(|l| l.ts == said).for_each(|l| l.ts = earlier);
-        let when = chrono::TimeZone::timestamp_millis_opt(&chrono::Local, earlier as i64).single().unwrap();
+        let when = jiff::Timestamp::from_millisecond(earlier as i64).unwrap().to_zoned(jiff::tz::TimeZone::system());
         let dated = format!("{} <amy> hello there", crate::clock::dated(&when, true));
         assert!(line(app).contains(&dated), "{}", line(app));
         // D: the time alone.

@@ -148,7 +148,7 @@ impl App {
         let key = hex::encode(to);
         let name = self.store.display_name(&key);
         match &result {
-            Ok(info) => self.notify(format!("Path to {name}: {}", path_label(info, chrono::Utc::now().timestamp()))),
+            Ok(info) => self.notify(format!("Path to {name}: {}", path_label(info, jiff::Timestamp::now().as_second()))),
             Err(e) => self.warn(format!("Path to {name}: {e}")),
         }
         self.path_lookups.insert(key, PathLookup::Done(result));
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(app.path_lookups.get(&key), Some(&PathLookup::Waiting(None)));
         app.on_net(NetEvent::PathProgress { to, text: "path request 2 of 3".into() });
         assert_eq!(lookup_label(&app.path_lookups[&key], 0), "looking for a path: path request 2 of 3…");
-        let now = chrono::Utc::now().timestamp();
+        let now = jiff::Timestamp::now().as_second();
         let info = PathInfo { hops: 3, via: Some([0x0a; 16]), interface: "RMAP World".into(), expires: now + 6 * 86_400 + 60 };
         app.on_net(NetEvent::Path { to, result: Ok(info.clone()) });
         assert_eq!(app.path_lookups[&key], PathLookup::Done(Ok(info.clone())));

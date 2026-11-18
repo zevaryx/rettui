@@ -373,7 +373,7 @@ pub async fn run_with<T: Transport>(
         GitRequest::ReleaseNew { tag, notes, files } => {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
             let released =
-                chrono::DateTime::from_timestamp(now as i64, 0).map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string()).unwrap_or_default();
+                jiff::Timestamp::from_second(now as i64).map(|t| t.strftime("%Y-%m-%dT%H:%M:%SZ").to_string()).unwrap_or_default();
             client.create_release(repo, signer, &tag, None, &notes, &files, &released, now).await.map_err(describe)?;
             GitReply::Done(format!("Published {tag}"))
         }

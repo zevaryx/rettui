@@ -254,7 +254,7 @@ pub async fn path(settings: &Settings, address: &str, drop: bool) -> Result<()> 
     let info = result.map_err(anyhow::Error::msg)?;
     let hops = crate::app::paths::hops_label(info.hops);
     let via = info.via.map(|via| format!(" via {}", hex::encode(via))).unwrap_or_default();
-    let kept = crate::app::paths::kept_label(info.expires, chrono::Utc::now().timestamp());
+    let kept = crate::app::paths::kept_label(info.expires, jiff::Timestamp::now().as_second());
     println!("{}: {hops}{via} on {}, kept for {kept}", hex::encode(to), info.interface);
     Ok(())
 }
@@ -275,7 +275,7 @@ pub async fn path_table(settings: &Settings) -> Result<()> {
         return Ok(());
     }
     paths.sort_by(|(a, a_info), (b, b_info)| (a_info.hops, &a_info.interface, a).cmp(&(b_info.hops, &b_info.interface, b)));
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     println!("{:<32}  {:>4}  {:<32}  {:<8}  Interface", "Address", "Hops", "Via", "Kept for");
     for (hash, info) in paths {
         let via = info.via.map_or_else(|| "-".to_string(), hex::encode);

@@ -28,6 +28,7 @@ Changes since v2.0.0: `rettui node`, a public node with no UI (a transport node 
 - rettui raises its open-file limit at start (up to 16,384, within the system's hard limit), so a hub that allows many connections can use them.
 
 ### Docs and development
+- **Dates and times use `jiff`:** rettui moved from `chrono`, which is no longer maintained, to [jiff](https://crates.io/crates/jiff). Times are shown as before; a time a message gives is read up to the year 9999 (chrono's range was far wider), and one beyond that is left blank, as an unreadable time was already.
 - **rettui now lives in the `rettui-dev` organisation on GitHub:** the repository, its `deps/` submodules (rsReticulum, rsLXMF, lrgp-rs, rngit-rs), the update check, the Homebrew tap (`brew install rettui-dev/rettui/rettui`), the Docker image (`ghcr.io/rettui-dev/rettui`), the documentation site (`docs.rettui.dev`) and the links in the docs now point there. The old addresses redirect for now. See [Development](https://github.com/rettui-dev/rettui/wiki/Development).
 
 ## v2.0.0

@@ -50,7 +50,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// The addresses tried lately, with how the path and the probe went.
 fn draw_recent(frame: &mut Frame, app: &App, area: Rect) {
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     let mut lines = Vec::new();
     for key in &app.tools.history {
         let mut spans =

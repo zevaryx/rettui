@@ -108,7 +108,7 @@ fn chat_lines(
     let seconds = width >= 60;
     let time = crate::clock::local(line.ts as f64 / 1000.0)
         .map(|t| {
-            let today = t.date_naive() == chrono::Local::now().date_naive();
+            let today = t.date() == jiff::Zoned::now().date();
             format!("{} ", if dates && !today { crate::clock::dated(&t, seconds) } else { crate::clock::time(&t, seconds) })
         })
         .unwrap_or_default();

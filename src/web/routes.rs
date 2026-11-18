@@ -1255,7 +1255,7 @@ fn destination(text: &str) -> Result<String, ApiError> {
 fn path_json(lookup: Option<&crate::app::paths::PathLookup>) -> serde_json::Value {
     use crate::app::paths::{PathLookup, lookup_label};
     let Some(lookup) = lookup else { return json!({ "state": "none", "text": "not looked for yet" }) };
-    let text = lookup_label(lookup, chrono::Utc::now().timestamp());
+    let text = lookup_label(lookup, jiff::Timestamp::now().as_second());
     match lookup {
         PathLookup::Waiting(_) => json!({ "state": "waiting", "text": text }),
         PathLookup::Done(Ok(info)) => json!({
@@ -1925,7 +1925,7 @@ async fn export_conversation(State(state): State<WebState>, Path(key): Path<Stri
     let (text, file) = tokio::task::spawn_blocking(move || {
         let archived = crate::store::read_archive(&dir, &key).map_err(|e| format!("Couldn't read the archive: {e}"))?;
         let text = crate::app::forward::transcript(&name, &key, archived.iter().chain(&kept));
-        let stamp = chrono::Local::now().format("%Y-%m-%d");
+        let stamp = jiff::Zoned::now().strftime("%Y-%m-%d");
         Ok::<_, String>((text, format!("{name}-{stamp}.txt")))
     })
     .await

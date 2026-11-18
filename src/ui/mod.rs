@@ -30,7 +30,6 @@ mod tools;
 #[cfg(test)]
 pub(crate) mod tui_tests;
 
-use chrono::Local;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout};
@@ -263,7 +262,7 @@ fn ago_secs(secs: u64) -> String {
 }
 
 fn ago(unix: i64) -> String {
-    let secs = (Local::now().timestamp() - unix).max(0);
+    let secs = (jiff::Timestamp::now().as_second() - unix).max(0);
     match secs {
         0..60 => format!("{secs}s"),
         60..3600 => format!("{}m", secs / 60),

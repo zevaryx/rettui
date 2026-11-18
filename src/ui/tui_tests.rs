@@ -2047,8 +2047,8 @@ fn the_status_tab_in_every_state() {
     let states = [
         (NetState::Starting, SyncState::Idle, NodeStatus::Starting),
         (NetState::Failed("no config".into()), SyncState::Running(std::time::Instant::now()), NodeStatus::Failed("full".into())),
-        (NetState::Online, SyncState::Done(chrono::Local::now(), Ok(2)), NodeStatus::Running),
-        (NetState::Online, SyncState::Done(chrono::Local::now(), Err("no node".into())), NodeStatus::Off),
+        (NetState::Online, SyncState::Done(jiff::Zoned::now(), Ok(2)), NodeStatus::Running),
+        (NetState::Online, SyncState::Done(jiff::Zoned::now(), Err("no node".into())), NodeStatus::Off),
     ];
     for (net, sync, status) in states {
         tui.app.net_state = net;
@@ -2656,7 +2656,7 @@ fn messages_in_a_row_and_chat_times() {
     hub.buffers.get_mut("lobby").unwrap().extend(today);
     let screen = tui.draw();
     let row = screen.lines().find(|r| r.contains("today's")).unwrap();
-    assert!(!row.contains(&crate::clock::day(&chrono::Local::now())), "today's line has no date:\n{screen}");
+    assert!(!row.contains(&crate::clock::day(&jiff::Zoned::now())), "today's line has no date:\n{screen}");
     assert!(screen.contains("2027"), "an earlier day's line keeps its date:\n{screen}");
     let screen = tui.resize(80, 24);
     assert!(!screen.contains("08:00:00"), "no seconds when narrow:\n{screen}");

@@ -116,7 +116,7 @@ impl App {
         let target = self.identity_file().to_path_buf();
         let fail = |e: std::io::Error| format!("Couldn't save the identity: {e}");
         if let Ok(current) = std::fs::read(&target) {
-            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+            let stamp = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S");
             let kept = target.with_file_name(format!("identity.previous-{stamp}"));
             write_private(&kept, &current).map_err(fail)?;
         }

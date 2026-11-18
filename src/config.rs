@@ -619,7 +619,7 @@ impl Settings {
         tracing::warn!("settings.json couldn't be read: {error:#}");
         // What can be read of it, before it goes aside.
         let salvaged = read_limited_text(path, MAX_SALVAGE_BYTES).ok().as_deref().and_then(salvage_settings);
-        let kept = path.with_file_name(format!("{UNREADABLE_PREFIX}{}.json", chrono::Utc::now().timestamp()));
+        let kept = path.with_file_name(format!("{UNREADABLE_PREFIX}{}.json", jiff::Timestamp::now().as_second()));
         let moved = replace(path, &kept);
         let (settings, started) = match salvaged {
             Some(mut found) => {

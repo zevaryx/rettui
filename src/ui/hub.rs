@@ -320,7 +320,7 @@ mod tests {
                 identity: amy.clone(),
                 nick: Some("amy".into()),
                 rooms: vec!["lobby".into()],
-                since: chrono::Utc::now().timestamp() - 120,
+                since: jiff::Timestamp::now().as_second() - 120,
                 links: 1,
                 operator: false,
             }],

@@ -141,7 +141,7 @@ impl App {
         let name = self.store.display_name(key);
         let text = transcript(&name, key, archived.iter().chain(&kept));
         let dir = self.paths.downloads.join("exports");
-        let stamp = chrono::Local::now().format("%Y-%m-%d");
+        let stamp = jiff::Zoned::now().strftime("%Y-%m-%d");
         let file: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
         let path = unique_path(&dir, &format!("{}-{stamp}.txt", file.trim_matches('_').chars().take(40).collect::<String>()));
         std::fs::create_dir_all(&dir)
@@ -155,7 +155,7 @@ impl App {
 /// with when it was written, who by, its text, and what came with it.
 pub fn transcript<'a>(name: &str, key: &str, messages: impl Iterator<Item = &'a Message>) -> String {
     let when = crate::clock::full;
-    let mut out = format!("Conversation with {name} ({key})\nExported by rettui on {}\n", when(chrono::Utc::now().timestamp() as f64));
+    let mut out = format!("Conversation with {name} ({key})\nExported by rettui on {}\n", when(jiff::Timestamp::now().as_second() as f64));
     for message in messages {
         let who = if message.incoming { name } else { "You" };
         let state = match &message.state {

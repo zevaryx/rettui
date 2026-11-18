@@ -92,7 +92,7 @@ pub fn create(base: &Path, out: impl Write, options: Options) -> Result<usize, S
     tar.follow_symlinks(false);
     let manifest = Manifest {
         version: crate::update::VERSION.into(),
-        created: chrono::Utc::now().timestamp(),
+        created: jiff::Timestamp::now().as_second(),
         identity: options.identity,
         files: options.files,
     };
@@ -100,7 +100,7 @@ pub fn create(base: &Path, out: impl Write, options: Options) -> Result<usize, S
     let mut header = tar::Header::new_gnu();
     header.set_size(manifest.len() as u64);
     header.set_mode(0o644);
-    header.set_mtime(chrono::Utc::now().timestamp().max(0) as u64);
+    header.set_mtime(jiff::Timestamp::now().as_second().max(0) as u64);
     header.set_cksum();
     tar.append_data(&mut header, format!("{ROOT}/{MANIFEST}"), manifest.as_slice()).map_err(fail)?;
     let mut count = 0;
@@ -110,8 +110,11 @@ pub fn create(base: &Path, out: impl Write, options: Options) -> Result<usize, S
             // Copied through SQLite, so a backup taken while rettui is
             // saving to it is whole: the file alone may be mid-write.
             if path.is_file() {
-                let copy =
-                    std::env::temp_dir().join(format!("rettui-backup-{}-{}.db", std::process::id(), chrono::Utc::now().timestamp_micros()));
+                let copy = std::env::temp_dir().join(format!(
+                    "rettui-backup-{}-{}.db",
+                    std::process::id(),
+                    jiff::Timestamp::now().as_microsecond()
+                ));
                 let added = crate::db::snapshot(&path, &copy)
                     .map_err(|e| format!("Couldn't copy rettui.db: {e:#}"))
                     .and_then(|()| tar.append_path_with_name(&copy, format!("{ROOT}/{name}")).map_err(fail));
@@ -159,7 +162,7 @@ pub fn write_file(base: &Path, to: &Path, options: Options, key: Option<&sealed:
 
 /// The file a backup made today is saved to, unless another is named.
 pub fn default_name() -> String {
-    format!("rettui-backup-{}.tar.gz", chrono::Local::now().format("%Y-%m-%d"))
+    format!("rettui-backup-{}.tar.gz", jiff::Zoned::now().strftime("%Y-%m-%d"))
 }
 
 fn walk_count(dir: &Path) -> usize {
@@ -462,7 +465,7 @@ pub fn restore_with(
     let current = names.iter().any(|n| n == SETTINGS).then(|| settings_json(&base.join(SETTINGS))).flatten();
     let mut aside = None;
     if !replaced.is_empty() {
-        let folder = base.join(format!("before-restore-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        let folder = base.join(format!("before-restore-{}", jiff::Zoned::now().strftime("%Y%m%d-%H%M%S")));
         std::fs::create_dir_all(&folder).map_err(|e| format!("Couldn't make {}: {e}", folder.display()))?;
         for name in replaced {
             std::fs::rename(base.join(name), folder.join(name)).map_err(|e| format!("Couldn't move {name} aside: {e}"))?;

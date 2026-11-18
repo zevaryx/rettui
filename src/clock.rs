@@ -3,7 +3,8 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use chrono::{DateTime, Datelike, Local, Offset, TimeZone};
+use jiff::tz::TimeZone;
+use jiff::{Timestamp, Zoned};
 
 pub const CLOCKS: &[&str] = &["24-hour", "12-hour"];
 pub const DATE_STYLES: &[&str] = &["month-day", "day-month", "year-month-day"];
@@ -20,76 +21,72 @@ pub fn set(clock: &str, date_style: &str) {
 }
 
 /// A time of day: "14:05" or "2:05 PM", with seconds if asked.
-pub fn time(t: &DateTime<Local>, seconds: bool) -> String {
+pub fn time(t: &Zoned, seconds: bool) -> String {
     time_in(t, seconds, TWELVE_HOUR.load(Ordering::Relaxed))
 }
 
-fn time_in(t: &DateTime<Local>, seconds: bool, twelve_hour: bool) -> String {
+fn time_in(t: &Zoned, seconds: bool, twelve_hour: bool) -> String {
     let format = match (twelve_hour, seconds) {
         (false, false) => "%H:%M",
         (false, true) => "%H:%M:%S",
         (true, false) => "%-I:%M %p",
         (true, true) => "%-I:%M:%S %p",
     };
-    t.format(format).to_string()
+    t.strftime(format).to_string()
 }
 
 /// A day this year: "Oct 07", "07 Oct" or "10-07".
-pub fn day(t: &DateTime<Local>) -> String {
+pub fn day(t: &Zoned) -> String {
     day_in(t, DATE_STYLE.load(Ordering::Relaxed))
 }
 
-fn day_in(t: &DateTime<Local>, style: u8) -> String {
+fn day_in(t: &Zoned, style: u8) -> String {
     let format = match style {
         1 => "%d %b",
         2 => "%m-%d",
         _ => "%b %d",
     };
-    t.format(format).to_string()
+    t.strftime(format).to_string()
 }
 
 /// A day of any year: "Oct 07 2025", "07 Oct 2025" or "2025-10-07".
-pub fn date(t: &DateTime<Local>) -> String {
+pub fn date(t: &Zoned) -> String {
     date_in(t, DATE_STYLE.load(Ordering::Relaxed))
 }
 
-fn date_in(t: &DateTime<Local>, style: u8) -> String {
+fn date_in(t: &Zoned, style: u8) -> String {
     let format = match style {
         1 => "%d %b %Y",
         2 => "%Y-%m-%d",
         _ => "%b %d %Y",
     };
-    t.format(format).to_string()
+    t.strftime(format).to_string()
 }
 
 /// A time with its day before it: "Oct 07 14:05" (the year too, for
 /// another year's), with seconds if asked.
-pub fn dated(t: &DateTime<Local>, seconds: bool) -> String {
-    let day = if t.year() == Local::now().year() { day(t) } else { date(t) };
+pub fn dated(t: &Zoned, seconds: bool) -> String {
+    let day = if t.year() == Zoned::now().year() { day(t) } else { date(t) };
     format!("{day} {}", time(t, seconds))
 }
 
 /// A time as it reads here, if it can be one: see [`in_zone`].
-pub fn local(timestamp: f64) -> Option<DateTime<Local>> {
-    in_zone(&Local, timestamp)
+pub fn local(timestamp: f64) -> Option<Zoned> {
+    in_zone(&TimeZone::system(), timestamp)
 }
 
-/// A time in `zone`, if it can be one there. chrono holds times up to the
-/// year 262142 (and back to 262143 BC), and near either end the time in a
-/// zone ahead of UTC (or behind it) is past that, which panics when it's
-/// read. A message can say any time.
-fn in_zone<Tz: TimeZone>(zone: &Tz, timestamp: f64) -> Option<DateTime<Tz>> {
-    let t = zone.timestamp_opt(timestamp as i64, 0).single()?;
-    t.naive_utc().checked_add_offset(t.offset().fix())?;
-    Some(t)
+/// A time in `zone`, if it can be one there. A time is held up to the year
+/// 9999 (and back to 9999 BC), and a message can say any time.
+fn in_zone(zone: &TimeZone, timestamp: f64) -> Option<Zoned> {
+    Some(Timestamp::from_second(timestamp as i64).ok()?.to_zoned(zone.clone()))
 }
 
 /// When a message was, as lists show it: the time today, else the day (or
 /// the date, another year) and the time.
 pub fn when(timestamp: f64) -> String {
     let Some(t) = local(timestamp) else { return String::new() };
-    let now = Local::now();
-    if t.date_naive() == now.date_naive() {
+    let now = Zoned::now();
+    if t.date() == now.date() {
         time(&t, false)
     } else if t.year() == now.year() {
         format!("{} {}", day(&t), time(&t, false))
@@ -101,8 +98,8 @@ pub fn when(timestamp: f64) -> String {
 /// When, briefly: the time today, the day this year, else the date.
 pub fn short(timestamp: f64) -> String {
     let Some(t) = local(timestamp) else { return String::new() };
-    let now = Local::now();
-    if t.date_naive() == now.date_naive() {
+    let now = Zoned::now();
+    if t.date() == now.date() {
         time(&t, false)
     } else if t.year() == now.year() {
         day(&t)
@@ -124,7 +121,7 @@ mod tests {
     fn twelve_or_twenty_four_hours_and_three_date_orders() {
         // The settings themselves are global (other tests draw times): each
         // way is tried directly.
-        let t = Local.with_ymd_and_hms(2025, 10, 7, 14, 5, 9).unwrap();
+        let t = local_time(2025, 10, 7, 14, 5, 9);
         assert_eq!((time_in(&t, false, false), time_in(&t, true, false)), ("14:05".into(), "14:05:09".into()));
         assert_eq!((time_in(&t, false, true), time_in(&t, true, true)), ("2:05 PM".into(), "2:05:09 PM".into()));
         let styles = |style| (day_in(&t, style), date_in(&t, style));
@@ -134,28 +131,38 @@ mod tests {
         assert_eq!(DATE_STYLES.iter().position(|s| *s == "year-month-day"), Some(2));
     }
 
+    fn local_time(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> Zoned {
+        jiff::civil::date(year, month, day).at(hour, minute, second, 0).to_zoned(TimeZone::system()).unwrap()
+    }
+
     #[test]
-    fn times_past_what_chrono_holds_are_none() {
-        use chrono::{FixedOffset, NaiveDateTime};
-        // The last second chrono holds, in UTC, is past it in a zone ahead
-        // of UTC (the first second, behind it): read there, it panicked.
-        let (last, first) = (NaiveDateTime::MAX.and_utc().timestamp() as f64, NaiveDateTime::MIN.and_utc().timestamp() as f64);
-        let (ahead, behind) = (FixedOffset::east_opt(9 * 3600).unwrap(), FixedOffset::west_opt(5 * 3600).unwrap());
-        assert!(in_zone(&ahead, last).is_none());
-        assert!(in_zone(&behind, first).is_none());
-        assert_eq!(in_zone(&behind, last).map(|t| t.year()), Some(262_142));
-        assert_eq!(in_zone(&ahead, 1_800_000_000.0).map(|t| t.naive_local().to_string()), Some("2027-01-15 17:00:00".into()));
+    fn times_past_what_jiff_holds_are_none() {
+        use jiff::tz::Offset;
+        // The last second held, in UTC, is the last one in a zone behind UTC
+        // too; one more, or one before the first, is none, in any zone.
+        let (last, first) = (Timestamp::MAX.as_second() as f64, Timestamp::MIN.as_second() as f64);
+        let ahead = TimeZone::fixed(Offset::constant(9));
+        let behind = TimeZone::fixed(Offset::constant(-5));
+        assert!(in_zone(&ahead, last + 1.0).is_none());
+        assert!(in_zone(&behind, first - 1.0).is_none());
+        assert_eq!(in_zone(&behind, last).map(|t| t.year()), Some(9999));
+        assert_eq!(in_zone(&ahead, first).map(|t| t.year()), Some(-9999));
+        assert_eq!(
+            in_zone(&ahead, 1_800_000_000.0).map(|t| t.strftime("%Y-%m-%d %H:%M:%S").to_string()),
+            Some("2027-01-15 17:00:00".into())
+        );
         // Here, whatever the zone: past the end shows no time.
         assert_eq!((when(f64::MAX), short(f64::INFINITY), full(-f64::MAX)), (String::new(), String::new(), String::new()));
+        assert!(local(last + 1.0).is_none());
     }
 
     #[test]
     fn times_with_their_day() {
         // Another year's has its year; this year's doesn't.
-        let then = Local.with_ymd_and_hms(2001, 2, 3, 4, 5, 6).unwrap();
+        let then = local_time(2001, 2, 3, 4, 5, 6);
         let stamp = dated(&then, true);
         assert!(stamp.contains("2001") && stamp.ends_with(&time(&then, true)), "{stamp}");
-        let now = Local::now();
+        let now = Zoned::now();
         let stamp = dated(&now, false);
         assert_eq!(stamp, format!("{} {}", day(&now), time(&now, false)));
     }

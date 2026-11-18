@@ -97,7 +97,7 @@ pub(super) fn draw_contact_card(frame: &mut Frame, app: &mut App) {
         lines.push(field("Ping", format!("{}{when}", ping_label(ping))));
     }
     if let Some(lookup) = app.path_lookups.get(&key) {
-        lines.push(field("Path", lookup_label(lookup, chrono::Utc::now().timestamp())));
+        lines.push(field("Path", lookup_label(lookup, jiff::Timestamp::now().as_second())));
     }
     if let Some(probe) = app.probes.get(&key) {
         lines.push(field("Probe", probe_state_label(probe)));

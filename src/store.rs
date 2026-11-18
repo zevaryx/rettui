@@ -665,8 +665,7 @@ pub struct Archived {
 
 /// The archive's file for the month a message was sent (UTC), in `dir`.
 pub fn archive_month(dir: &Path, timestamp: f64) -> PathBuf {
-    let month =
-        chrono::DateTime::from_timestamp(timestamp as i64, 0).map_or_else(|| "0000-00".to_string(), |t| t.format("%Y-%m").to_string());
+    let month = jiff::Timestamp::from_second(timestamp as i64).map_or_else(|_| "0000-00".to_string(), |t| t.strftime("%Y-%m").to_string());
     dir.join(format!("{month}{ARCHIVE_EXTENSION}"))
 }
 
@@ -980,7 +979,7 @@ impl Store {
         let mut store = Self::default();
         let unreadable = format!("Your messages couldn't be read ({error:#}), so rettui started without them");
         if path.exists() {
-            let aside = path.with_file_name(format!("store-unreadable-{}.json.gz", chrono::Utc::now().timestamp()));
+            let aside = path.with_file_name(format!("store-unreadable-{}.json.gz", jiff::Timestamp::now().as_second()));
             store.migration_notes.push(match crate::config::replace(path, &aside) {
                 Ok(()) => format!("{unreadable}. The file is kept as {}", aside.display()),
                 Err(e) => format!("{unreadable}, and it couldn't be moved aside ({e}): copy {} somewhere safe", path.display()),

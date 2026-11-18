@@ -544,7 +544,7 @@ pub struct Notice {
 pub enum SyncState {
     Idle,
     Running(Instant),
-    Done(chrono::DateTime<chrono::Local>, Result<usize, String>),
+    Done(jiff::Zoned, Result<usize, String>),
 }
 
 pub struct App {
@@ -1010,7 +1010,7 @@ impl App {
     }
 
     pub fn log(&mut self, line: impl Into<String>) {
-        let stamp = crate::clock::time(&chrono::Local::now(), true);
+        let stamp = crate::clock::time(&jiff::Zoned::now(), true);
         self.log.push_back(format!("{stamp}  {}", line.into()));
         while self.log.len() > LOG_LINES {
             self.log.pop_front();
@@ -1385,7 +1385,7 @@ impl App {
                         }
                     }
                 }
-                self.sync = SyncState::Done(chrono::Local::now(), result);
+                self.sync = SyncState::Done(jiff::Zoned::now(), result);
             }
             NetEvent::Interfaces(interfaces) => {
                 self.traffic.update(&interfaces, Instant::now());

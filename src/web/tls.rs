@@ -197,7 +197,7 @@ fn own_certificates(dir: &Path, names: &[String]) -> Result<Own> {
     };
     let ca_der = CertificateDer::from_pem_file(&ca_path).context("rettui's certificate authority")?;
 
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     let issued: Option<Issued> = std::fs::read(&issued_path).ok().and_then(|b| serde_json::from_slice(&b).ok());
     let current =
         issued.is_some_and(|i| i.names == names && i.not_after - now > RENEW_DAYS * 86_400) && key_path.exists() && cert_path.exists();
@@ -231,7 +231,7 @@ fn authority_params() -> CertificateParams {
     params.distinguished_name.push(DnType::OrganizationName, "rettui");
     params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
     params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign, KeyUsagePurpose::DigitalSignature];
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     (params.not_before, params.not_after) = (date(now - 86_400), date(now + CA_DAYS * 86_400));
     params
 }
@@ -395,7 +395,7 @@ mod tests {
         // Nearing its end: made again.
         let issued = dir.join("cert.json");
         let mut stale: Issued = serde_json::from_slice(&std::fs::read(&issued).unwrap()).unwrap();
-        stale.not_after = chrono::Utc::now().timestamp() + 86_400;
+        stale.not_after = jiff::Timestamp::now().as_second() + 86_400;
         let names = stale.names.clone();
         std::fs::write(&issued, serde_json::to_vec(&stale).unwrap()).unwrap();
         let renewed = own_certificates(&dir, &names).unwrap();

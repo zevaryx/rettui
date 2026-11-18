@@ -265,9 +265,8 @@ impl App {
 
 /// The minute of the day now, local time.
 fn minute_now() -> u32 {
-    use chrono::Timelike;
-    let now = chrono::Local::now();
-    now.hour() * 60 + now.minute()
+    let now = jiff::Zoned::now();
+    now.hour() as u32 * 60 + now.minute() as u32
 }
 
 /// Quiet hours: from one time of day to another, the end the next day if

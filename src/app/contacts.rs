@@ -120,7 +120,7 @@ impl App {
     pub(super) fn on_pinged(&mut self, to: Hash, result: Result<Ping, String>) {
         let key = hex::encode(to);
         let name = self.store.display_name(&key);
-        let state = PingState::Done { at: chrono::Utc::now().timestamp(), result };
+        let state = PingState::Done { at: jiff::Timestamp::now().as_second(), result };
         let line = format!("Ping {name}: {}", ping_label(&state));
         if matches!(state, PingState::Done { result: Ok(_), .. }) {
             self.notify(line);

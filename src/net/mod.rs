@@ -1080,7 +1080,7 @@ async fn run(
     let soon = |started: Option<tokio::time::Instant>| {
         started.map_or_else(tokio::time::Instant::now, |at| (at + autopn::MIN_GAP).max(tokio::time::Instant::now()))
     };
-    let unix_now = || chrono::Utc::now().timestamp();
+    let unix_now = || jiff::Timestamp::now().as_second();
     // Syncing from the node hosted here: its messages for us were delivered
     // as they came in.
     // Messages being sent, each with the switch that stops it.

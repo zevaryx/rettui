@@ -166,7 +166,7 @@ fn link(text: &str, path: &str, vars: &[(&str, &str)]) -> String {
 
 /// A date, as visitors anywhere read it.
 fn date(seconds: i64) -> String {
-    chrono::DateTime::from_timestamp(seconds, 0).map_or_else(|| "?".into(), |d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+    jiff::Timestamp::from_second(seconds).map_or_else(|_| "?".into(), |d| d.strftime("%Y-%m-%d %H:%M UTC").to_string())
 }
 
 fn short(id: &impl std::fmt::Display) -> String {

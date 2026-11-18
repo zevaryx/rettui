@@ -278,7 +278,7 @@ impl App {
                         kind: crate::net::PeerKind::Propagation,
                         name: Some(name),
                         hops: 0,
-                        last_seen: chrono::Utc::now().timestamp(),
+                        last_seen: jiff::Timestamp::now().as_second(),
                     },
                 );
                 self.peer_changed(hex::encode(hash));
@@ -322,7 +322,7 @@ impl App {
                         kind: crate::net::PeerKind::Nomad,
                         name: Some(name),
                         hops: 0,
-                        last_seen: chrono::Utc::now().timestamp(),
+                        last_seen: jiff::Timestamp::now().as_second(),
                     },
                 );
                 self.peer_changed(hex::encode(hash));

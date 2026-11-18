@@ -242,7 +242,7 @@ pub fn guide_reach(app: &App) -> Value {
 pub fn tools(app: &App) -> Value {
     use crate::app::paths::{lookup_label, probe_state_label};
     use crate::app::reach::Reach;
-    let now = chrono::Utc::now().timestamp();
+    let now = jiff::Timestamp::now().as_second();
     let history: Vec<Value> = app
         .tools
         .history
@@ -1455,12 +1455,12 @@ mod tests {
         let view = state(&app);
         assert_eq!((view["net"]["state"].as_str(), view["sync"]["state"].as_str()), (Some("failed"), Some("running")));
         assert_eq!((view["hosting"]["state"].as_str(), view["hub"]["state"].as_str()), (Some("running"), Some("failed")));
-        app.sync = SyncState::Done(chrono::Local::now(), Ok(3));
+        app.sync = SyncState::Done(jiff::Zoned::now(), Ok(3));
         app.pn.status = NodeStatus::Failed("full".into());
         app.hub.status = NodeStatus::Off;
         let view = state(&app);
         assert_eq!((view["sync"]["count"].as_u64(), view["hub"]["state"].as_str()), (Some(3), Some("off")));
-        app.sync = SyncState::Done(chrono::Local::now(), Err("no node".into()));
+        app.sync = SyncState::Done(jiff::Zoned::now(), Err("no node".into()));
         assert_eq!(state(&app)["sync"]["error"], "no node");
 
         // The node, and the hub hosted here, each way.
