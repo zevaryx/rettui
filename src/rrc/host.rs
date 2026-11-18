@@ -1503,7 +1503,7 @@ fn modes(room: &rsrrcd::Room) -> String {
 /// What a nick looks like: its confusable "skeleton" (Unicode TS #39), as
 /// written and in lower case. Two nicks that share one look alike: `amy`,
 /// `AMY` and `аmy` (with a Cyrillic а), or `rn` and `m`.
-fn looks(nick: &str) -> [String; 2] {
+pub(crate) fn looks(nick: &str) -> [String; 2] {
     let skeleton = |text: &str| unicode_security::skeleton(text).collect::<String>();
     [skeleton(nick), skeleton(&nick.to_lowercase())]
 }

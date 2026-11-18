@@ -163,6 +163,83 @@ struct Replay {
     shown: bool,
 }
 
+/// Digits of an identity shown after a nick that collides with another.
+const TAG_DIGITS: usize = 6;
+
+/// Most nicks kept as the hub gave them, per hub: those of people not in
+/// a room go first, then of those never seen speaking, the newest first. A hub's rooms have a few hundred people
+/// (rettui's own takes 256 links), so this holds several times that, and a
+/// hub that makes up identities can't grow it, nor make the work on each new
+/// nick longer than this allows.
+const MAX_NICKS: usize = 1024;
+/// Most members kept per room: those with no nick go first, then those
+/// never seen speaking, the newest first.
+const MAX_MEMBERS: usize = 1024;
+/// Most identities one message about who came or went is worked out for
+/// (the rest are dropped from that, as the tables are bounded).
+const MAX_PRESENCE_IDS: usize = 32;
+/// Lines of a room looked at when a nick's marking changes (the recent ones).
+const REMARK_LINES: usize = 200;
+
+/// A nick a hub gave someone, cleaned, how it looks (see [`Hub::shown`]), and
+/// its place in the order they were given.
+#[derive(Debug, Clone)]
+struct Said {
+    nick: String,
+    looks: [String; 2],
+    seq: u64,
+    /// Seen speaking (not only named in a list).
+    spoken: bool,
+}
+
+/// Whether two identities are one person: the same, or one is the start
+/// (of at least 6 bytes, as `/who` gives) of the other. Nobody (empty) is no one.
+fn same_identity(a: &[u8], b: &[u8]) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    !short.is_empty() && (short == long || (short.len() >= 6 && short.len() < long.len() && long.starts_with(short)))
+}
+
+/// The TS #39 skeleton of `text`: what it looks like, with look-alike
+/// letters and brackets the same and invisible characters gone.
+fn skeleton(text: &str) -> String {
+    unicode_security::skeleton(text).collect()
+}
+
+/// A nick from a hub, as it may be kept and shown: cleaned (see
+/// [`crate::names::clean`]), and without a trailing tag of the kind
+/// [`Hub::shown`] adds (see [`without_tag`]). Used for every nick that comes
+/// from a hub, wherever it comes in.
+fn incoming_nick(raw: &str) -> Option<String> {
+    without_tag(&crate::names::clean(raw)?)
+}
+
+/// A nick without a trailing group that looks like the tag [`Hub::shown`]
+/// adds (6 hex digits) or `(?)`, so that a hub or a member can't send a nick
+/// that already ends like one, to pass for one that was told apart. Looks
+/// like is by skeleton: look-alike digits and letters (Cyrillic `с`, `е`,
+/// `а`), look-alike brackets and spaces, and invisible characters inside or
+/// after the group count. Repeated while the end looks like one.
+fn without_tag(nick: &str) -> Option<String> {
+    // What hex digits look like (a `1` is skeleton `l`, a `0` is `O`).
+    let hex_looks = skeleton("0123456789abcdefABCDEF");
+    let mut nick = nick;
+    loop {
+        nick = nick.trim_end_matches(|c: char| c.is_whitespace() || skeleton(c.encode_utf8(&mut [0; 4])).is_empty());
+        // The nearest opening bracket (a tag is short).
+        let open = nick.char_indices().rev().take(40).find(|(_, c)| skeleton(c.encode_utf8(&mut [0; 4])) == "(").map(|(at, _)| at);
+        let Some(open) = open else { break };
+        let flat: String = skeleton(&nick[open..]).chars().filter(|c| !c.is_whitespace()).collect();
+        let inside = flat.strip_prefix('(').and_then(|rest| rest.strip_suffix(')'));
+        let is_tag = inside
+            .is_some_and(|inside| inside == "?" || (inside.chars().count() == TAG_DIGITS && inside.chars().all(|c| hex_looks.contains(c))));
+        if !is_tag {
+            break;
+        }
+        nick = &nick[..open];
+    }
+    (!nick.is_empty()).then(|| nick.to_string())
+}
+
 pub struct Hub {
     pub hash: Hash,
     pub aspect: String,
@@ -194,7 +271,13 @@ pub struct Hub {
     pub unread: HashMap<String, usize>,
     pub mentions: HashSet<String>,
     pub members: HashMap<String, BTreeSet<Vec<u8>>>,
+    /// What each person goes by here, as shown (see [`Hub::shown`]).
     pub nicks: HashMap<Vec<u8>, String>,
+    /// The nicks as the hub gave them, cleaned, and how they look.
+    raw_nicks: HashMap<Vec<u8>, Said>,
+    /// Whose nick has each skeleton (either form), to find who it collides with.
+    by_look: HashMap<String, HashSet<Vec<u8>>>,
+    nick_seq: u64,
     pub topics: HashMap<String, String>,
     /// Public rooms from `/list`.
     pub available: Option<Vec<(String, Option<String>)>>,
@@ -250,6 +333,9 @@ impl Hub {
             mentions: HashSet::new(),
             members: HashMap::new(),
             nicks: HashMap::new(),
+            raw_nicks: HashMap::new(),
+            by_look: HashMap::new(),
+            nick_seq: 0,
             topics: HashMap::new(),
             available: None,
             pending_joins: HashSet::new(),
@@ -298,6 +384,217 @@ impl Hub {
     /// Nick for a member: learned nick, else a short hash.
     pub fn name_of(&self, hash: &[u8]) -> String {
         self.nicks.get(hash).cloned().unwrap_or_else(|| hex::encode(hash).chars().take(12).collect())
+    }
+
+    /// Whether `id` is in a room with us (or is us).
+    fn is_here(&self, id: &[u8]) -> bool {
+        self.members.values().any(|room| room.contains(id))
+    }
+
+    /// Whether `nick`, which the hub gives `id`, looks like ours (`mine`, or
+    /// the one the hub gave us) or like another's in a room with us: the
+    /// same TS #39 skeleton as, as written or in lower case, as the hosted
+    /// hub tests it. The same nick of two people is a collision too. An
+    /// empty `id` (nobody is named) is no one of those.
+    fn collides(&self, own: &[u8], mine: Option<&str>, id: &[u8], nick: &str) -> bool {
+        if same_identity(id, own) {
+            return false;
+        }
+        let looks = crate::rrc::host::looks(nick);
+        let ours = match self.raw_nicks.get(own) {
+            Some(said) => said.looks.iter().any(|look| looks.contains(look)),
+            None => mine.is_some_and(|mine| crate::rrc::host::looks(mine).iter().any(|look| looks.contains(look))),
+        };
+        ours || looks.iter().any(|look| {
+            self.by_look
+                .get(look)
+                .is_some_and(|ids| ids.iter().any(|other| !same_identity(other, id) && !same_identity(other, own) && self.is_here(other)))
+        })
+    }
+
+    /// `nick` as shown for `id`, as the hub gave it unless it collides (see
+    /// [`Hub::collides`]): then with the start of the identity after it, as
+    /// `/who` lists people, `саrol (0312f2)`, or `(?)` when the hub names
+    /// nobody. Every party to a collision is marked, the first to speak
+    /// and the last alike.
+    pub fn shown(&self, own: &[u8], mine: Option<&str>, id: &[u8], nick: &str) -> String {
+        if !self.collides(own, mine, id, nick) {
+            return nick.to_string();
+        }
+        if id.is_empty() {
+            format!("{nick} (?)")
+        } else {
+            format!("{nick} ({})", hex::encode(id).chars().take(TAG_DIGITS).collect::<String>())
+        }
+    }
+
+    fn put_raw(&mut self, id: &[u8], said: Said) {
+        self.remove_raw(id);
+        for look in &said.looks {
+            self.by_look.entry(look.clone()).or_default().insert(id.to_vec());
+        }
+        self.raw_nicks.insert(id.to_vec(), said);
+    }
+
+    fn remove_raw(&mut self, id: &[u8]) {
+        let Some(said) = self.raw_nicks.remove(id) else { return };
+        for look in &said.looks {
+            if let Some(ids) = self.by_look.get_mut(look) {
+                ids.remove(id);
+                if ids.is_empty() {
+                    self.by_look.remove(look);
+                }
+            }
+        }
+    }
+
+    /// The hub says `id` goes by `nick` (cleaned): kept as it was said, and
+    /// what is shown is worked out again for those it can change: this
+    /// one, and a few who share a skeleton with the old nick or the new
+    /// (in a group of three or more, each still has another to collide with).
+    pub fn learn_nick(&mut self, own: &[u8], mine: Option<&str>, id: &[u8], nick: String) {
+        if id.is_empty() || self.raw_nicks.get(id).is_some_and(|said| said.nick == nick) && self.nicks.contains_key(id) {
+            return;
+        }
+        let looks = crate::rrc::host::looks(&nick);
+        let mut classes: Vec<String> = looks.to_vec();
+        if let Some(old) = self.raw_nicks.get(id) {
+            classes.extend(old.looks.iter().cloned());
+        }
+        self.nick_seq += 1;
+        let seq = self.nick_seq;
+        let spoken = self.raw_nicks.get(id).is_some_and(|said| said.spoken);
+        self.put_raw(id, Said { nick, looks, seq, spoken });
+        self.refresh_groups(own, mine, &[id.to_vec()], classes, Some(id));
+        self.limit_tables(own);
+    }
+
+    /// `id` was seen speaking: its nick is among those kept longest.
+    pub fn mark_spoken(&mut self, id: &[u8]) {
+        if let Some(said) = self.raw_nicks.get_mut(id) {
+            said.spoken = true;
+        }
+    }
+
+    /// What is shown, worked out again for `ids` and for the few in the
+    /// look groups of their nicks (and of `classes`, those of nicks that
+    /// were replaced) that it can change: in a group of three or more, each
+    /// still has another to collide with. `changed`: the one whose nick
+    /// changed, so its lines keep what was said.
+    fn refresh_groups(&mut self, own: &[u8], mine: Option<&str>, ids: &[Vec<u8>], classes: Vec<String>, changed: Option<&[u8]>) {
+        let ids: Vec<&Vec<u8>> = ids.iter().take(MAX_PRESENCE_IDS).collect();
+        let named: HashSet<&Vec<u8>> = ids.iter().copied().collect();
+        let mut classes: HashSet<String> = classes.into_iter().collect();
+        for id in &ids {
+            if let Some(said) = self.raw_nicks.get(*id) {
+                classes.extend(said.looks.iter().cloned());
+            }
+        }
+        let mut touched: HashSet<Vec<u8>> = ids.iter().map(|id| (*id).clone()).collect();
+        for class in &classes {
+            if let Some(group) = self.by_look.get(class) {
+                touched.extend(group.iter().filter(|other| !named.contains(other) && self.is_here(other)).take(3).cloned());
+            }
+        }
+        for other in touched {
+            self.refresh(own, mine, &other, changed == Some(other.as_slice()));
+        }
+    }
+
+    /// Who is in a room changed for `ids` (joined, left, or listed): what is
+    /// shown is worked out again for them and their look groups only.
+    pub fn members_changed(&mut self, own: &[u8], mine: Option<&str>, ids: &[Vec<u8>]) {
+        self.refresh_groups(own, mine, ids, Vec::new(), None);
+    }
+
+    /// The nick the hub gave us is no longer known (ours was changed).
+    pub fn forget_own_nick(&mut self, own: &[u8]) {
+        self.remove_raw(own);
+    }
+
+    /// What is shown for `id`, worked out again; if only its marking changed
+    /// (not the nick), the recent lines it is on, in the rooms it is in,
+    /// follow.
+    fn refresh(&mut self, own: &[u8], mine: Option<&str>, id: &[u8], nick_changed: bool) {
+        let Some(nick) = self.raw_nicks.get(id).map(|said| said.nick.clone()) else { return };
+        let shown = self.shown(own, mine, id, &nick);
+        let old = self.nicks.insert(id.to_vec(), shown.clone());
+        let Some(old) = old.filter(|old| !nick_changed && *old != shown) else { return };
+        let src = hex::encode(id);
+        for (room, lines) in &mut self.buffers {
+            if !self.members.get(room).is_some_and(|members| members.contains(id)) {
+                continue;
+            }
+            for line in lines.iter_mut().rev().take(REMARK_LINES) {
+                if line.src.as_deref() == Some(src.as_str()) && line.nick.as_deref() == Some(old.as_str()) {
+                    line.nick = Some(shown.clone());
+                }
+            }
+        }
+    }
+
+    /// What is shown for every nick the hub gave, worked out again (when who
+    /// is in the rooms, or our nick, changed).
+    pub fn remark(&mut self, own: &[u8], mine: Option<&str>) {
+        let all: Vec<Vec<u8>> = self.raw_nicks.keys().cloned().collect();
+        for id in all {
+            self.refresh(own, mine, &id, false);
+        }
+    }
+
+    /// Keep the tables a hub fills within bounds ([`MAX_NICKS`],
+    /// [`MAX_MEMBERS`]), dropping a quarter more than is over, so it isn't
+    /// done again at once: nicks of those not in a room first, the oldest
+    /// first; members with the oldest nicks first (those never given one
+    /// before the rest). We are never dropped.
+    pub fn limit_tables(&mut self, own: &[u8]) {
+        if self.raw_nicks.len() > MAX_NICKS {
+            // Dropped first: those not in a room, then those in one who
+            // were never seen speaking, then the rest; the newest first in
+            // each, so a flood of new identities removes itself and not
+            // the long-standing members it would pass for.
+            let mut order: Vec<(u8, std::cmp::Reverse<u64>, Vec<u8>)> = self
+                .raw_nicks
+                .iter()
+                .filter(|(id, _)| !same_identity(id, own))
+                .map(|(id, said)| {
+                    (
+                        if !self.is_here(id) {
+                            0
+                        } else if !said.spoken {
+                            1
+                        } else {
+                            2
+                        },
+                        std::cmp::Reverse(said.seq),
+                        id.clone(),
+                    )
+                })
+                .collect();
+            order.sort();
+            for (_, _, id) in order.into_iter().take(self.raw_nicks.len() - MAX_NICKS * 3 / 4) {
+                self.remove_raw(&id);
+                self.nicks.remove(&id);
+            }
+        }
+        for members in self.members.values_mut() {
+            if members.len() > MAX_MEMBERS {
+                // Those with no nick first, then those never seen speaking,
+                // then the rest, the newest first in each.
+                let mut order: Vec<(u8, std::cmp::Reverse<u64>, Vec<u8>)> = members
+                    .iter()
+                    .filter(|id| !same_identity(id, own))
+                    .map(|id| match self.raw_nicks.get(id) {
+                        None => (0, std::cmp::Reverse(0), id.clone()),
+                        Some(said) => (if said.spoken { 2 } else { 1 }, std::cmp::Reverse(said.seq), id.clone()),
+                    })
+                    .collect();
+                order.sort();
+                for (_, _, id) in order.into_iter().take(members.len() - MAX_MEMBERS * 3 / 4) {
+                    members.remove(&id);
+                }
+            }
+        }
     }
 
     /// What a user goes by here: their nick now, else the one on their
@@ -359,11 +656,19 @@ impl Hub {
         let partial: Vec<Vec<u8>> = members.iter().filter(|m| m.len() < identity.len() && identity.starts_with(m)).cloned().collect();
         for prefix in &partial {
             members.remove(prefix);
+        }
+        let new = members.insert(identity.to_vec()) && partial.is_empty();
+        for prefix in &partial {
             if let Some(nick) = self.nicks.get(prefix).cloned() {
                 self.nicks.entry(identity.to_vec()).or_insert(nick);
             }
+            if let Some(said) = self.raw_nicks.get(prefix).cloned()
+                && !self.raw_nicks.contains_key(identity)
+            {
+                self.put_raw(identity, said);
+            }
         }
-        members.insert(identity.to_vec()) && partial.is_empty()
+        new
     }
 
     /// A room's members as (name, identity), sorted by name. Someone may be
@@ -437,6 +742,7 @@ impl Hub {
             && !self.members.values().any(|members| members.contains(&peer))
         {
             self.nicks.remove(&peer);
+            self.remove_raw(&peer);
         }
         self.history_dirty = true;
     }

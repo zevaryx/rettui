@@ -128,7 +128,23 @@ impl App {
     }
 
     fn on_envelope(&mut self, index: usize, env: Envelope) {
+        self.on_envelope_unbounded(index, env);
         let own = self.identity_hash.to_vec();
+        if let Some(hub) = self.channels.hubs.get_mut(index) {
+            hub.limit_tables(&own);
+        }
+    }
+
+    fn on_envelope_unbounded(&mut self, index: usize, mut env: Envelope) {
+        // A hub chooses every nick it shows us: cleaned as announced names are
+        // (no control, invisible or direction characters, a bounded length),
+        // as the hub hosted here cleans the nicks it accepts. A nick of
+        // nothing else is none.
+        // And without a tag of the kind added to a nick that collides with
+        // another (see `Hub::shown`), so one can't be forged.
+        env.nick = env.nick.take().and_then(|nick| super::incoming_nick(&nick));
+        let own = self.identity_hash.to_vec();
+        let mine = self.effective_nick(index);
         let room = env.room.as_deref().map(rrc::normalize_room).filter(|r| !r.is_empty());
         match env.t {
             t::JOINED => {
@@ -166,8 +182,11 @@ impl App {
                 joined.retain(|h| *h != own);
                 // Hubs name the one who joined.
                 if let ([joiner], Some(nick)) = (joined.as_slice(), &env.nick) {
-                    hub.nicks.insert(joiner.clone(), nick.clone());
+                    hub.learn_nick(&own, mine.as_deref(), joiner, nick.clone());
                 }
+                // Who is here changed: what is told apart, for them and their look groups.
+                let changed: Vec<Vec<u8>> = joined.iter().take(super::MAX_PRESENCE_IDS).cloned().collect();
+                hub.members_changed(&own, mine.as_deref(), &changed);
                 if self_join {
                     if !silent {
                         self.record(index, &room, ChatLine::new(LineKind::System, format!("You joined #{room}")));
@@ -179,6 +198,7 @@ impl App {
                 {
                     // A hub that doesn't list members (rrcd, unless set
                     // to) still names them: ask quietly who it is.
+                    let nick = self.channels.hubs[index].shown(&own, mine.as_deref(), &[], nick);
                     self.record(index, &room, ChatLine::presence(format!("{nick} joined")));
                     let asked = self.channels.hubs[index].who_asked.get(&room).is_some_and(|at| at.elapsed() < WHO_WAIT);
                     if !asked {
@@ -209,7 +229,8 @@ impl App {
                     && let Some(nick) = &env.nick
                 {
                     // No identity, just the nick (rrcd, unless set to).
-                    let named: Vec<Vec<u8>> = members.iter().filter(|m| hub.nicks.get(*m) == Some(nick)).cloned().collect();
+                    let named: Vec<Vec<u8>> =
+                        members.iter().filter(|m| hub.raw_nicks.get(*m).is_some_and(|said| said.nick == *nick)).cloned().collect();
                     if let [one] = named.as_slice() {
                         members.remove(one);
                     }
@@ -220,11 +241,14 @@ impl App {
                     if hashes.len() == 1 { hashes.clone() } else { Vec::new() }
                 };
                 if let ([parter], Some(nick)) = (left.as_slice(), &env.nick) {
-                    hub.nicks.insert(parter.clone(), nick.clone());
+                    hub.learn_nick(&own, mine.as_deref(), parter, nick.clone());
                 }
+                let changed: Vec<Vec<u8>> = left.iter().take(super::MAX_PRESENCE_IDS).cloned().collect();
+                hub.members_changed(&own, mine.as_deref(), &changed);
                 if hashes.is_empty()
                     && let Some(nick) = &env.nick
                 {
+                    let nick = self.channels.hubs[index].shown(&own, mine.as_deref(), &[], nick);
                     self.record(index, &room, ChatLine::presence(format!("{nick} left")));
                 }
                 for parter in left {
@@ -256,7 +280,7 @@ impl App {
                     // asked for: the Go hub keeps nicks unique).
                     hub.sent.remove(pos);
                     if let Some(nick) = &env.nick {
-                        hub.nicks.insert(own.clone(), nick.clone());
+                        hub.learn_nick(&own, mine.as_deref(), &own, nick.clone());
                     }
                     if let Some(line) =
                         hub.buffers.get_mut(&key).and_then(|b| b.iter_mut().rev().find(|l| l.pending.as_ref() == Some(&env.id)))
@@ -279,12 +303,14 @@ impl App {
                     r.header.clone()
                 });
                 if !replayed {
-                    // Who's here now (a replayed sender may have left).
-                    if let Some(nick) = &env.nick {
-                        hub.nicks.insert(env.src.clone(), nick.clone());
-                    }
+                    // Who's here now (a replayed sender may have left): in the
+                    // room before the nick is told apart from the others'.
                     if let Some(room) = &room {
                         hub.add_member(room, &env.src);
+                    }
+                    if let Some(nick) = &env.nick {
+                        hub.learn_nick(&own, mine.as_deref(), &env.src, nick.clone());
+                        hub.mark_spoken(&env.src);
                     }
                 }
                 let Some(text) = env.body_text() else { return };
@@ -294,7 +320,7 @@ impl App {
                 let mut line = ChatLine::new(if env.t == t::ACTION { LineKind::Action } else { LineKind::Msg }, text);
                 line.id = Some(id);
                 line.src = Some(hex::encode(&env.src));
-                line.nick = env.nick.clone();
+                line.nick = env.nick.as_deref().map(|nick| self.channels.hubs[index].shown(&own, mine.as_deref(), &env.src, nick));
                 line.own = is_own;
                 if replayed && env.ts > 0 && env.ts <= rrc::now_ms() {
                     // When it was said, not now.
@@ -313,12 +339,14 @@ impl App {
                     // A private notice from another user.
                     let hub = self.hub_mut(index);
                     if let Some(nick) = &env.nick {
-                        hub.nicks.insert(env.src.clone(), nick.clone());
+                        hub.learn_nick(&own, mine.as_deref(), &env.src, nick.clone());
+                        hub.mark_spoken(&env.src);
                     }
+                    let nick = env.nick.as_deref().map(|nick| self.channels.hubs[index].shown(&own, mine.as_deref(), &env.src, nick));
                     // It goes in the whisper conversation with them.
                     let mut line = ChatLine::new(LineKind::Private, text);
                     line.src = Some(hex::encode(&env.src));
-                    line.nick = env.nick.clone();
+                    line.nick = nick;
                     let key = super::whisper_key(&env.src);
                     let shown = self.channels.active().filter(|(i, _)| *i == index).map(|(_, room)| room);
                     self.hub_mut(index).make_room_for_whisper(&key, shown.as_deref());
@@ -331,7 +359,11 @@ impl App {
                     // (shown as the hub's, it could pass for it).
                     let mut line = ChatLine::new(LineKind::Msg, text);
                     line.src = Some(hex::encode(&env.src));
-                    line.nick = env.nick.clone().or_else(|| self.channels.hubs[index].nicks.get(&env.src).cloned());
+                    let hub = &self.channels.hubs[index];
+                    line.nick = match &env.nick {
+                        Some(nick) => Some(hub.shown(&own, mine.as_deref(), &env.src, nick)),
+                        None => hub.nicks.get(&env.src).cloned(),
+                    };
                     let target = self.room_or_reply(index, room);
                     self.record(index, &target, line);
                     return;
@@ -481,6 +513,7 @@ impl App {
     /// list sent with a `/who` reply.
     fn consume_notice(&mut self, index: usize, text: &str, users: Option<Vec<rrc::WhoEntry>>) -> Option<bool> {
         let now = Instant::now();
+        let (mine, own) = (self.effective_nick(index), self.identity_hash.to_vec());
         let hub = self.hub_mut(index);
         if let Some(rooms) = rrc::parse_room_list(text) {
             hub.available = Some(rooms);
@@ -516,10 +549,11 @@ impl App {
             let entries = users.unwrap_or(entries);
             for entry in entries {
                 let Ok(hash) = hex::decode(&entry.hash_hex) else { continue };
+                let members = hub.members.entry(room.clone()).or_default();
                 let id = members.iter().find(|m| m.len() == 16 && m.starts_with(&hash)).cloned().unwrap_or(hash);
                 members.insert(id.clone());
-                if let Some(nick) = entry.nick {
-                    hub.nicks.insert(id, nick);
+                if let Some(nick) = entry.nick.and_then(|nick| super::incoming_nick(&nick)) {
+                    hub.learn_nick(&own, mine.as_deref(), &id, nick);
                 }
             }
             // A reply too long for one packet may come in parts, each
@@ -706,6 +740,284 @@ mod tests {
         hubs.deliver(env);
         assert!(hubs.hub().members["lobby"].contains(dan.as_slice()));
         assert_eq!(hubs.hub().name_of(&dan), "dan");
+    }
+
+    #[test]
+    fn nicks_a_hub_sends_are_cleaned_before_they_are_kept_or_shown() {
+        let mut hubs = Hubs::connected("hostile-nicks");
+        hubs.join("lobby", &[OWN, AMY, BOB, CAT]);
+        // Zero-width, direction override, terminal escapes, blank fillers,
+        // a fullwidth form, and one far too long.
+        let long = "W".repeat(240);
+        for (from, sent, shown) in [
+            (AMY, "ca\u{200b}rol", Some("carol")),
+            (BOB, "evil\u{202e}gnp.exe", Some("evilgnp.exe")),
+            (CAT, "x\u{1b}[31mred\u{7}", Some("x[31mred")),
+            ([0xd1; 16], "\u{3164}\u{3164}", None),
+            ([0xd2; 16], "\u{ff21}\u{ff2d}\u{ff39}", Some("AMY")),
+            ([0xd3; 16], long.as_str(), Some(&long[..crate::names::MAX_CHARS])),
+        ] {
+            let env = hubs.said("lobby", from, sent, "hi");
+            assert_eq!(env.nick.as_deref(), Some(sent), "the hub sent it as it is");
+            let line = hubs.hub().buffers["lobby"].last().unwrap();
+            assert_eq!(line.nick.as_deref(), shown, "{sent:?}");
+        }
+        // Joins and parts name them the same way.
+        hubs.membership(t::JOINED, "lobby", Some(&[[0xd4; 16]]), Some("ne\u{200b}w\u{202e}"));
+        assert!(hubs.lines("lobby").iter().any(|l| l == "new joined"), "{:?}", hubs.lines("lobby"));
+        // So do the members of a /who reply, with full identities too.
+        let dan = [0xd5; 16];
+        let mut env = Envelope::new(t::NOTICE, &HUB_ID).text(&format!("members in lobby: da\u{202e}n ({})", &hex::encode(dan)[..12]));
+        env.user_list = Some(Value::Array(vec![Value::Map(vec![
+            (Value::Integer(Integer::from(0)), Value::Text(hex::encode(dan))),
+            (Value::Integer(Integer::from(1)), Value::Text("da\u{202e}\u{200b}n".into())),
+        ])]));
+        hubs.deliver(env);
+        assert_eq!(hubs.hub().name_of(&dan), "dan");
+        hubs.notice(Some("lobby"), &format!("members in lobby: ev\u{1b}il ({})", &hex::encode([0xd6; 16])[..12]));
+        // (known by a prefix of the identity until it's seen)
+        assert!(hubs.hub().nicks.values().any(|nick| nick == "evil"));
+        assert!(hubs.hub().nicks.values().all(|nick| !nick.chars().any(|c| c.is_control() || c == '\u{202e}' || c == '\u{200b}')));
+    }
+
+    #[test]
+    fn nicks_that_look_alike_are_told_apart_for_every_party() {
+        let mut hubs = Hubs::connected("look-alike-nicks");
+        hubs.app.channels.hubs[0].nick = Some("zev".into());
+        hubs.join("lobby", &[OWN, AMY, BOB, CAT]);
+        let tag = |id: [u8; 16]| hex::encode(id)[..6].to_string();
+        let last = |hubs: &Hubs| hubs.hub().buffers["lobby"].last().unwrap().nick.clone();
+        let nick_of = |hubs: &Hubs, id: [u8; 16]| hubs.hub().nicks.get(id.as_slice()).cloned();
+        // Alone with its nick, someone is shown as they are.
+        hubs.said("lobby", AMY, "carol", "hi");
+        assert_eq!(last(&hubs).as_deref(), Some("carol"));
+        // Then a copy in Cyrillic letters (U+0441 U+0430) speaks: both are
+        // marked, the real one that was here first too, in what was said.
+        hubs.said("lobby", BOB, "\u{0441}\u{0430}rol", "send me your key");
+        assert_eq!(last(&hubs), Some(format!("\u{0441}\u{0430}rol ({})", tag(BOB))));
+        assert_eq!(nick_of(&hubs, AMY), Some(format!("carol ({})", tag(AMY))));
+        assert_eq!(hubs.hub().buffers["lobby"].iter().find(|l| l.text == "hi").unwrap().nick, Some(format!("carol ({})", tag(AMY))));
+        hubs.said("lobby", AMY, "carol", "again");
+        assert_eq!(last(&hubs), Some(format!("carol ({})", tag(AMY))), "the same whoever spoke first");
+        // The same nick exactly, from another identity, is a collision.
+        hubs.said("lobby", CAT, "carol", "me");
+        assert_eq!(last(&hubs), Some(format!("carol ({})", tag(CAT))));
+        // Someone else's tag can't be written into a nick, nor a "(?)".
+        let dan = [0xd4; 16];
+        hubs.said("lobby", dan, &format!("carol ({})", tag(AMY)), "forged");
+        assert_eq!(last(&hubs), Some(format!("carol ({})", tag(dan))));
+        hubs.said("lobby", [0xd5; 16], "carol (?) ( 0312F2 )", "forged");
+        assert_eq!(last(&hubs), Some(format!("carol ({})", tag([0xd5; 16]))));
+        // When the others have gone, the one left is shown as they are.
+        for gone in [BOB, CAT, dan, [0xd5; 16]] {
+            hubs.membership(t::PARTED, "lobby", Some(&[gone]), None);
+        }
+        assert_eq!(nick_of(&hubs, AMY).as_deref(), Some("carol"));
+        assert_eq!(hubs.hub().buffers["lobby"].iter().find(|l| l.text == "hi").unwrap().nick.as_deref(), Some("carol"));
+        // Ours, with a joiner after it, or one letter in Cyrillic, from
+        // another identity: marked. Ours is not.
+        let eve = [0xe5; 16];
+        let fay = [0xf6; 16];
+        hubs.said("lobby", eve, "zev\u{200d}", "it's me");
+        assert_eq!(last(&hubs), Some(format!("zev ({})", tag(eve))));
+        hubs.said("lobby", fay, "z\u{0435}v", "no, me");
+        assert_eq!(last(&hubs), Some(format!("z\u{0435}v ({})", tag(fay))));
+        // A hub naming nobody: a join with no identity, or no sender.
+        hubs.membership(t::JOINED, "lobby", None, Some("zev"));
+        assert!(hubs.lines("lobby").iter().any(|l| l == "zev (?) joined"), "{:?}", hubs.lines("lobby"));
+        hubs.membership(t::PARTED, "lobby", None, Some("Z\u{0435}V"));
+        assert!(hubs.lines("lobby").iter().any(|l| l == "Z\u{0435}V (?) left"), "{:?}", hubs.lines("lobby"));
+        let mut nameless = Envelope::new(t::MSG, &[]).room("lobby").text("who am I").nick(Some("carol"));
+        nameless.src = Vec::new();
+        hubs.deliver(nameless);
+        assert_eq!(last(&hubs).as_deref(), Some("carol (?)"));
+        // A join that lists everyone, and /who: marked as well.
+        let gus = [0x77; 16];
+        hubs.membership(t::JOINED, "lobby", Some(&[OWN, AMY, gus]), Some("c\u{0430}rol"));
+        assert_eq!(nick_of(&hubs, gus), Some(format!("c\u{0430}rol ({})", tag(gus))));
+        assert!(hubs.lines("lobby").iter().any(|l| *l == format!("c\u{0430}rol ({}) joined", tag(gus))), "{:?}", hubs.lines("lobby"));
+        let hal = [0x88; 16];
+        hubs.notice(Some("lobby"), &format!("members in lobby: ZEV ({})", &hex::encode(hal)[..12]));
+        assert!(hubs.hub().nicks.values().any(|n| *n == format!("ZEV ({})", &hex::encode(hal)[..6])), "{:?}", hubs.hub().nicks);
+        // Nicks that don't collide are left alone: emoji with their joiners,
+        // and one that ends in brackets that are no tag.
+        hubs.said("lobby", [0x31; 16], "\u{1F469}\u{200d}\u{1F469}\u{200d}\u{1F467} fam", "hi");
+        assert_eq!(last(&hubs).as_deref(), Some("\u{1F469}\u{200d}\u{1F469}\u{200d}\u{1F467} fam"));
+        hubs.said("lobby", [0x32; 16], "dave (2)", "hi");
+        assert_eq!(last(&hubs).as_deref(), Some("dave (2)"));
+    }
+
+    #[test]
+    fn a_tag_cannot_be_forged_in_a_nick_on_any_path() {
+        let mut hubs = Hubs::connected("forged-tags");
+        hubs.join("lobby", &[OWN, AMY, BOB]);
+        let tag = hex::encode(AMY)[..6].to_string();
+        hubs.said("lobby", AMY, "carol", "real");
+        for (n, forged) in [
+            format!("carol ({tag})\u{200d}"),
+            format!("carol ({tag}) \u{200b}\u{202e}"),
+            "carol (\u{0441}\u{0430}1\u{0435}f2)".to_string(),
+            format!("carol \u{2768}{tag}\u{2769}"),
+            format!("carol \u{ff08}{tag}\u{ff09}"),
+            format!("carol ( {tag} )"),
+            format!("carol ({tag}) (?)"),
+            "carol (?)".to_string(),
+            "carol(?)\u{2060}".to_string(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let from = [0x40 + n as u8; 16];
+            hubs.said("lobby", from, &forged, "forged");
+            let line = hubs.hub().buffers["lobby"].last().unwrap().nick.clone().unwrap();
+            assert_eq!(line, format!("carol ({})", &hex::encode(from)[..6]), "{forged:?}");
+        }
+        // The same on the /who path.
+        let eve = [0xe5; 16];
+        let mut env = Envelope::new(t::NOTICE, &HUB_ID).text(&format!("members in lobby: carol ({})", &hex::encode(eve)[..12]));
+        env.user_list = Some(Value::Array(vec![Value::Map(vec![
+            (Value::Integer(Integer::from(0)), Value::Text(hex::encode(eve))),
+            (Value::Integer(Integer::from(1)), Value::Text(format!("carol ({tag})\u{200d}"))),
+        ])]));
+        hubs.deliver(env);
+        assert_eq!(hubs.hub().nicks.get(eve.as_slice()), Some(&format!("carol ({})", &hex::encode(eve)[..6])));
+        // Not tags: kept.
+        hubs.said("lobby", [0x70; 16], "dave (2)", "x");
+        assert_eq!(hubs.hub().buffers["lobby"].last().unwrap().nick.as_deref(), Some("dave (2)"));
+        hubs.said("lobby", [0x71; 16], "eve (12345678)", "x");
+        assert_eq!(hubs.hub().buffers["lobby"].last().unwrap().nick.as_deref(), Some("eve (12345678)"));
+    }
+
+    #[test]
+    fn a_hub_rotating_nicks_and_people_cannot_make_the_client_slow_or_grow() {
+        let mut hubs = Hubs::connected("rotating-nicks");
+        hubs.join("lobby", &[OWN, AMY, BOB]);
+        hubs.said("lobby", AMY, "carol", "x");
+        let (own, started) = ([0u8; 16], std::time::Instant::now());
+        let hub = &mut hubs.app.channels.hubs[0];
+        // 10,000 nicks from identities that come and go, many of one look
+        // (two cases of a word, and Cyrillic letters in it) in the room.
+        for n in 0..10_000u32 {
+            let mut id = [0u8; 16];
+            id[..4].copy_from_slice(&(n % 5_000 + 1).to_be_bytes());
+            id[4] = 7;
+            let nick = match n % 3 {
+                0 => format!("carol{}", n % 7),
+                1 => format!("c\u{0430}rol{}", n % 7),
+                _ => format!("CAROL{}", n % 7),
+            };
+            hub.add_member("lobby", &id);
+            hub.learn_nick(&own, Some("zev"), &id, nick);
+            hub.limit_tables(&own);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
+        assert!(
+            hub.raw_nicks.len() <= super::super::MAX_NICKS && hub.nicks.len() <= super::super::MAX_NICKS + 8,
+            "{} nicks",
+            hub.raw_nicks.len()
+        );
+        assert!(hub.members["lobby"].len() <= super::super::MAX_MEMBERS, "{} members", hub.members["lobby"].len());
+        assert!(hub.by_look.values().map(|ids| ids.len()).sum::<usize>() <= 2 * super::super::MAX_NICKS, "the index follows the nicks");
+        // The most recent are kept.
+        let mut last = [0u8; 16];
+        last[..4].copy_from_slice(&5_000u32.to_be_bytes());
+        last[4] = 7;
+        assert!(hub.members["lobby"].contains(last.as_slice()) && hub.raw_nicks.contains_key(last.as_slice()));
+    }
+
+    #[test]
+    fn joins_and_parts_among_many_departed_look_alikes_stay_cheap() {
+        let mut hubs = Hubs::connected("many-departed");
+        hubs.join("lobby", &[OWN, AMY]);
+        hubs.said("lobby", AMY, "carol", "x");
+        let own = [0u8; 16];
+        let id = |n: u32| {
+            let mut id = [0u8; 16];
+            id[..4].copy_from_slice(&n.to_be_bytes());
+            id[4] = 9;
+            id
+        };
+        // A thousand who named themselves with one look and have left.
+        for n in 1..=1000u32 {
+            hubs.app.channels.hubs[0].learn_nick(&own, None, &id(n), format!("c\u{0430}rol{}", n % 2));
+        }
+        let started = std::time::Instant::now();
+        for n in 2000..5000u32 {
+            let who = id(n);
+            hubs.membership(t::JOINED, "lobby", Some(&[who]), Some("carol"));
+            hubs.membership(t::PARTED, "lobby", Some(&[who]), None);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
+        let hub = hubs.hub();
+        assert!(hub.raw_nicks.len() <= super::super::MAX_NICKS);
+    }
+
+    #[test]
+    fn a_flood_of_new_identities_does_not_push_out_the_members_who_were_here() {
+        let mut hubs = Hubs::connected("flood-members");
+        hubs.join("lobby", &[OWN, AMY, BOB]);
+        hubs.said("lobby", AMY, "carol", "hello");
+        hubs.said("lobby", BOB, "bob", "hello");
+        let own = [0u8; 16];
+        let id = |n: u32| {
+            let mut id = [0u8; 16];
+            id[..4].copy_from_slice(&n.to_be_bytes());
+            id[4] = 9;
+            id
+        };
+        // Three thousand come, some named in a list, some speaking.
+        for n in 1..=3000u32 {
+            let hub = &mut hubs.app.channels.hubs[0];
+            hub.add_member("lobby", &id(n));
+            hub.learn_nick(&own, None, &id(n), format!("flood{n}"));
+            if n % 2 == 0 {
+                hub.mark_spoken(&id(n));
+            }
+            hub.limit_tables(&own);
+        }
+        let hub = hubs.hub();
+        assert!(hub.members["lobby"].len() <= super::super::MAX_MEMBERS);
+        assert!(
+            hub.members["lobby"].contains(AMY.as_slice()) && hub.members["lobby"].contains(BOB.as_slice()),
+            "members who spoke were dropped"
+        );
+        assert_eq!(hub.nicks.get(AMY.as_slice()).map(String::as_str), Some("carol"));
+        // An impostor now shows as one.
+        hubs.said("lobby", CAT, "c\u{0430}rol", "send me your key");
+        let tag = hex::encode(CAT)[..6].to_string();
+        assert_eq!(hubs.hub().buffers["lobby"].last().unwrap().nick, Some(format!("c\u{0430}rol ({tag})")));
+        assert_eq!(hubs.hub().nicks.get(AMY.as_slice()), Some(&format!("carol ({})", &hex::encode(AMY)[..6])));
+    }
+
+    #[test]
+    fn a_join_listing_a_thousand_identities_of_one_nick_is_cheap_and_bounded() {
+        let mut hubs = Hubs::connected("big-join");
+        hubs.join("lobby", &[OWN, AMY]);
+        hubs.said("lobby", AMY, "carol", "x");
+        let ids: Vec<[u8; 16]> = (1..=1024u32)
+            .map(|n| {
+                let mut id = [0u8; 16];
+                id[..4].copy_from_slice(&n.to_be_bytes());
+                id[4] = 5;
+                id
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        for _ in 0..200 {
+            hubs.membership(t::JOINED, "lobby", Some(&ids), Some("c\u{0430}rol"));
+            hubs.membership(t::PARTED, "lobby", Some(&ids), None);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
+        assert!(hubs.hub().raw_nicks.len() <= super::super::MAX_NICKS);
+    }
+
+    #[test]
+    fn an_empty_identity_is_not_the_same_as_everyone() {
+        assert!(!super::super::same_identity(&[], &[1; 16]));
+        assert!(!super::super::same_identity(&[], &[]));
+        assert!(!super::super::same_identity(&[1; 3], &[1; 16]), "a prefix this short names nobody");
+        assert!(super::super::same_identity(&[1; 6], &[1; 16]));
+        assert!(!super::super::same_identity(&[1; 16], &[2; 16]));
     }
 
     #[test]

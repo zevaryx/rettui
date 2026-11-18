@@ -176,6 +176,9 @@ impl App {
                 let hub = self.hub_mut(index);
                 hub.nick = Some(nick.clone());
                 hub.nicks.remove(&own);
+                hub.forget_own_nick(&own);
+                let mine = self.effective_nick(index);
+                self.hub_mut(index).remark(&own, mine.as_deref());
                 self.save_hubs();
                 // Every message carries the nick, and hubs take it from
                 // there (as NomadNet does it). A new HELLO would be a new
