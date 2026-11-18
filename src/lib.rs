@@ -443,11 +443,8 @@ async fn run(cli: Cli) -> Result<()> {
     }
     let mut settings = load_settings(&paths, cli.rns_config.clone())?;
 
-    let mut log_options = std::fs::OpenOptions::new();
-    log_options.create(true).append(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut log_options, 0o600);
-    let log_file = log_options.open(&paths.log).with_context(|| format!("opening {}", paths.log.display()))?;
+    // Kept under `logging::LOG_FILE_LIMIT`, with the file before it as `rettui.log.1`.
+    let log_file = logging::CappedLog::open(&paths.log).with_context(|| format!("opening {}", paths.log.display()))?;
     // Everything goes to the log file, at the level set (changed while
     // running); interface trouble also goes to the log on screen.
     let (filter, reload) = tracing_subscriber::reload::Layer::new(logging::starting_filter(&settings.log_level));
@@ -455,7 +452,7 @@ async fn run(cli: Cli) -> Result<()> {
     // Once a process: run again in the same one (as in tests), it logs
     // where the first run did.
     let _ = tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(log_file)).with_ansi(false).with_filter(filter))
+        .with(tracing_subscriber::fmt::layer().with_writer(log_file).with_ansi(false).with_filter(filter))
         .with(net::iface_log::layer())
         .try_init();
 

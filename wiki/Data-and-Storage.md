@@ -94,7 +94,7 @@ rettui keeps its data in `~/.local/share/rettui/`:
   needn't be backed up.
 - `cache/`: cached NomadNet pages and images
 - `rrc/`: RRC chat history, one file per hub (the newest messages of each room and whisper conversation, 500 unless "Chat messages kept", `rrc_messages_kept`, says otherwise)
-- `rettui.log`: logging, as detailed as *Log level* says (Status, `log_level`: error, warn by default, info, debug or trace; it changes at once). `RETTUI_LOG=debug`, set when rettui starts, decides instead
+- `rettui.log`: logging, as detailed as *Log level* says (Status, `log_level`: error, warn by default, info, debug or trace; it changes at once). `RETTUI_LOG=debug`, set when rettui starts, decides instead. It never grows past 8 MiB: a full log becomes `rettui.log.1` (the one before it, replaced), so the two take at most 16 MiB
 - `downloads/`: received attachments (one folder per sender) and NomadNet files (those go in *NomadNet files folder*, Browsing settings, `nomad_files_dir`, instead, if you set one: a USB drive or your Documents folder, say; set in the terminal UI or settings.json, not the web UI)
 - `received/`: files sent to you with [rncp](Network), unless *Received files folder* (`rncp_dir`) says another
 - `repos/`: copies of [rngit repositories](Repos#a-copy-on-this-computer), by
