@@ -22,9 +22,10 @@ use crate::app::notify::{Notification, Response};
 
 /// What the notifications' backend is asked to do.
 pub enum Job {
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     Show(Notification),
     /// Take down the one with this tag ([`crate::app::notify::Target::tag`]), if it's up.
-    #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(any(windows, target_os = "macos", target_os = "android"), allow(dead_code))]
     Withdraw(String),
 }
 
