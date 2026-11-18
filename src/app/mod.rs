@@ -273,6 +273,8 @@ pub enum PromptKind {
     ConfirmRestoreRns(String),
     /// Restart the Reticulum stack.
     ConfirmRestartRns,
+    /// The first-run guide: may the entry points be tried now?
+    ConfirmCheckEntryPoints,
     /// The page editor's formatting that needs an answer (a colour, an
     /// address, a field name).
     Format(format::Action),
@@ -1623,6 +1625,11 @@ impl App {
             PromptKind::ConfirmRestartRns => {
                 if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
                     self.request_rns_restart();
+                }
+            }
+            PromptKind::ConfirmCheckEntryPoints => {
+                if text.eq_ignore_ascii_case("y") || text.eq_ignore_ascii_case("yes") {
+                    self.check_entries_noticed();
                 }
             }
             kind @ (PromptKind::NewInterface

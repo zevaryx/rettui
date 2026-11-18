@@ -96,7 +96,7 @@ fn draw_interfaces(frame: &mut Frame, app: &App, area: Rect) {
             let colour = match check {
                 Reach::Up(_) => Color::Green,
                 Reach::Down(_) => Color::Red,
-                Reach::Checking => dim(),
+                Reach::Checking | Reach::NotChecked => dim(),
             };
             lines.push(Line::styled(format!("     {}", reach_label(*check)), Style::default().fg(colour)));
             if row.entry.as_ref().is_some_and(|e| e.listens) {

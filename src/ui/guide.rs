@@ -34,6 +34,7 @@ fn help(row: Option<GuideRow>, reach: impl Fn(usize) -> Reach) -> String {
                 _ => format!("{}:{}. {}", entry.host, entry.port, guide::CONNECT_HELP),
             }
         }
+        Some(GuideRow::Check) => guide::CHECK_HELP.to_string(),
         Some(GuideRow::Discover) => guide::DISCOVER_HELP.to_string(),
         Some(GuideRow::AutoPropagation) => guide::AUTO_PROPAGATION_HELP.to_string(),
         Some(GuideRow::UpdateCheck) => guide::UPDATE_CHECK_HELP.to_string(),
@@ -109,6 +110,11 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
     } else {
         // Under their regions' headings, each with what trying it found;
         // one that didn't answer is greyed out, and can't be ticked.
+        if view.reach.iter().zip(&view.has_entry_point).any(|(r, has)| !has && *r == Reach::NotChecked) {
+            for line in wrap(&guide::not_checked_note(), inner_width) {
+                body.push(Line::styled(line, Style::default().fg(dim())));
+            }
+        }
         let name_width = ENTRY_POINTS.iter().map(|entry| entry.name.width()).max().unwrap_or(0);
         let mut region = "";
         for (i, entry) in ENTRY_POINTS.iter().enumerate() {
@@ -137,6 +143,11 @@ pub(super) fn draw_guide(frame: &mut Frame, app: &mut App) {
                 body.push(Line::styled(line, Style::default().fg(Color::Yellow)));
             }
         }
+        row_line(
+            &mut body,
+            GuideRow::Check,
+            vec![Span::raw(format!("→ {}", guide::check_label(view.reach.iter().any(|r| *r != Reach::NotChecked))))],
+        );
         let discover = if view.has_discovery {
             "[x] Find entry points near you over time (on already)".to_string()
         } else {
@@ -277,6 +288,27 @@ mod tests {
     use crate::config::Settings;
     use crate::store::Store;
 
+    /// The first-run question on a small terminal: all of it is there, wrapped.
+    #[test]
+    fn the_first_run_question_fits_sixty_by_twenty() {
+        let dir = std::env::temp_dir().join(format!("rettui-guide-60x20-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let settings = Settings { welcomed: false, rns_config: Some(dir.join("rns").display().to_string()), ..Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, Store::default());
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..20).map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>()).collect();
+        // The prompt's own lines, borders and the guide behind it left out.
+        let at = rows.iter().position(|row| row.contains("May rettui connect")).expect("the question is on screen");
+        let words = |row: &str| row.replace(['│', '╭', '╮', '╰', '╯', '─'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
+        let shown = rows[at..].iter().take_while(|row| !row.contains('╰')).map(|row| words(row)).collect::<Vec<_>>().join(" ");
+        // The guide's own text can share a row with the box edge: compare from the question on.
+        assert!(shown.contains(&crate::app::guide::check_question()), "{shown}\n{}", rows.join("\n"));
+        assert!(shown.ends_with("(y/n, Enter = no)") || shown.contains("(y/n, Enter = no)"), "{shown}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn the_guide_fits_a_small_terminal_and_takes_clicks() {
         let dir = std::env::temp_dir().join(format!("rettui-guide-ui-{}", std::process::id()));
@@ -290,6 +322,35 @@ mod tests {
             (0..24).map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n").collect::<String>()
         };
         let apply_at = |app: &crate::app::App| app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Apply).unwrap().0;
+        // As it opens: the question, with the defaults ticked underneath and
+        // nothing tried. Saying no (Esc) leaves it so.
+        let screen = draw(&mut app);
+        assert!(screen.contains("May rettui connect to the 6 public entry points"), "{screen}");
+        assert!(app.prompt.is_some());
+        app.on_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.prompt.is_none() && app.guide.is_some());
+        let screen = draw(&mut app);
+        assert!(screen.contains("[x] RNS Between The Borders   not checked yet"), "{screen}");
+        assert!(screen.contains("[x] RNS Simply Equipped       not checked yet"), "{screen}");
+        assert!(screen.contains("[ ] RNS Beleth                not checked yet"), "{screen}");
+        // One line above the list says nothing was contacted and what the control is called.
+        assert!(screen.contains("Nothing has been contacted yet"), "{screen}");
+        assert!(!screen.contains("checking"), "nothing tried: {screen}");
+        // The Check row, clicked, tries them.
+        let rows = crate::app::guide::Guide::rows(&app.guide_view());
+        app.guide.as_mut().unwrap().row = rows.iter().position(|row| *row == GuideRow::Check).unwrap();
+        assert!(draw(&mut app).contains("→ Allow connections"));
+        let (rect, _) = *app.regions.guide_rows.iter().find(|(_, row)| *row == GuideRow::Check).expect("the Check row is on screen");
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::Checking));
+        // The control read "Allow connections" until then, and now reads as a repeat check.
+        assert!(draw(&mut app).contains("→ Check which can be reached"));
+        app.guide.as_mut().unwrap().row = 0;
         let screen = draw(&mut app);
         // At 80×24 the intro gives way, and the choices scroll.
         assert!(screen.contains("Getting started") && screen.contains("Not connected to anyone yet"), "{screen}");
@@ -364,7 +425,7 @@ mod tests {
         // None answering: said.
         app.entry_reach.set(vec![Reach::Down("no answer"); count]);
         assert!(draw(&mut app).contains("None of the entry points answered"));
-        app.guide.as_mut().unwrap().row = 0;
+        app.guide.as_mut().unwrap().row = rows.iter().position(|row| *row == GuideRow::Discover).unwrap();
         draw(&mut app);
         // Discovery is ticked to start with; a click on its row unticks it.
         assert!(screen.contains("[x] Also find entry points"), "{screen}");

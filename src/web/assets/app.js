@@ -2632,20 +2632,27 @@ function keepFocus(e, box) {
 
 // A yes-or-no question: true when `yes` is pressed, false when it's closed
 // any other way. A question's lines after the first are its details.
-function ask(question, { title = 'Are you sure?', yes = 'OK', no = 'Cancel', danger = false } = {}) {
-  return new Promise((resolve) => {
+// `focusNo` puts the focus on the No button, for a question that opens by
+// itself, so a stray Enter doesn't say yes. The promise has `close()`, for
+// closing the question from outside (as No).
+function ask(question, { title = 'Are you sure?', yes = 'OK', no = 'Cancel', danger = false, focusNo = false } = {}) {
+  let closer = null;
+  const answered = new Promise((resolve) => {
     let answer = false;
-    dialog(title, (close) => {
+    closer = dialog(title, (close) => {
       const button = el('button', { class: danger ? 'danger' : 'primary', text: yes, onclick: () => {
         answer = true;
         close();
       } });
-      requestAnimationFrame(() => button.focus());
+      const refuse = el('button', { text: no, onclick: () => close() });
+      requestAnimationFrame(() => (focusNo ? refuse : button).focus());
       return el('div', { class: 'ask' },
         String(question).split('\n').map((line, i) => el('p', { class: i ? 'dim' : '', text: line })),
-        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), el('button', { text: no, onclick: () => close() }), button));
+        el('div', { class: 'row actions' }, el('span', { class: 'grow' }), refuse, button));
     }, { className: 'ask-dialog', onclose: () => resolve(answer) });
   });
+  answered.close = () => closer?.();
+  return answered;
 }
 
 // One of a few `choices` ({ text, value }), as buttons: its value, or null
@@ -3438,8 +3445,10 @@ async function gettingStarted() {
     const offered = entries.filter((c) => !c.present);
     return offered.length > 0 && offered.every((c) => c.reach.state === 'down');
   };
+  const notChecked = el('p', { class: 'dim help guide-not-checked', text: g.help.not_checked });
   if (!g.external) {
     nodes.push(el('p', { class: 'dim help guide-entries', text: g.help.connect }));
+    nodes.push(notChecked);
     let region = null;
     for (const e of g.entries) {
       if (e.region !== region) {
@@ -3471,20 +3480,55 @@ async function gettingStarted() {
   const updateCheck = option('update_check', 'Check for updates once a day (recommended)', g.help.update_check, { on: g.defaults.update_check });
   options.push(updateCheck);
   nodes.push(updateCheck.node);
-  // The entry points' tries finish over a few seconds.
+  // Nothing is tried until the user asks (it connects to each entry point,
+  // whose operator then sees their address). The tries finish over a few
+  // seconds.
   let open = true;
-  (async () => {
+  let polling = false;
+  const showReaches = (reaches) => {
+    if (!open || !Array.isArray(reaches)) return;
+    entries.forEach((c, i) => reaches[i] && c.show(reaches[i]));
+    noneNote.hidden = !noneAnswered();
+    notChecked.hidden = !entries.some((c) => !c.present && c.reach.state === 'not_checked');
+    // One control: "Allow connections" until a check has started, then a repeat check.
+    checkButton.textContent = entries.some((c) => c.reach.state !== 'not_checked') ? g.help.check_label : g.help.allow_label;
+  };
+  const checkButton = el('button', { text: entries.some((c) => c.reach.state !== 'not_checked') ? g.help.check_label : g.help.allow_label, onclick: () => checkReach() });
+  // Read out by a screen reader without taking the focus.
+  const announce = el('p', { class: 'dim help', role: 'status', 'aria-live': 'polite' });
+  const answers = () => {
+    const tried = entries.filter((c) => !c.present);
+    const up = tried.filter((c) => c.reach.state === 'up').length;
+    return `Checked: ${up} answered, ${tried.length - up} did not`;
+  };
+  const poll = async () => {
+    if (polling) return;
+    polling = true;
     while (open && entries.some((c) => c.reach.state === 'checking')) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      const reaches = open ? await api.get('/guide/reach').catch(() => null) : null;
-      if (!open || !Array.isArray(reaches)) continue;
-      entries.forEach((c, i) => reaches[i] && c.show(reaches[i]));
-      noneNote.hidden = !noneAnswered();
+      showReaches(open ? await api.get('/guide/reach').catch(() => null) : null);
     }
-  })();
+    polling = false;
+    if (open && entries.some((c) => c.reach.state !== 'not_checked')) announce.textContent = answers();
+  };
+  const checkReach = async () => {
+    const result = await attempt(() => api.post('/guide/check'));
+    if (!result) return;
+    if (!result.started) toast(g.help.checked_just_now);
+    else announce.textContent = g.help.checking;
+    showReaches(result.reach);
+    poll();
+  };
+  if (!g.external) {
+    nodes.splice(nodes.indexOf(noneNote), 0, el('div', { class: 'guide-check' },
+      checkButton,
+      el('span', { class: 'dim help', text: g.help.check }), announce));
+  }
   const status = g.interfaces_online === 0 ? ['warn', '○ Not connected to anyone yet']
     : g.heard === 0 ? ['warn', `◌ ${g.interfaces_online} interface(s) online, nobody heard yet`]
       : ['ok', `● Connected: ${g.interfaces_online} interface(s) online, ${g.heard} peers and nodes heard`];
+  // The question the first-run guide asks, while it is up.
+  let question = null;
   const close = dialog('Getting started', (close) => [
     el('p', { class: 'dim', text: g.help.intro }),
     el('p', { class: 'guide-status ' + status[0], text: status[1] }),
@@ -3513,9 +3557,27 @@ async function gettingStarted() {
       } })),
   ], { className: 'guide', onclose: () => {
     open = false;
+    question?.close();
     // Closed without applying: not shown by itself again.
     if (!finished) api.post('/guide/dismiss').catch(() => {});
   } });
+  // The first-run guide has ticked the defaults without trying them: may
+  // rettui now, to move the ticks to the fastest? No leaves them as they are.
+  // Answered once in a browser session, so a reload doesn't ask again.
+  const asked = () => { try { return sessionStorage.getItem('rettui-entry-question'); } catch { return null; } };
+  const remember = (answer) => { try { sessionStorage.setItem('rettui-entry-question', answer); } catch { /* private mode: asked again */ } };
+  if (g.ask_check && !asked()) {
+    const d = g.check_dialog;
+    question = ask(`${d.question}\n${d.detail}`, { title: d.title, yes: 'Yes, check them', no: 'No, not now', focusNo: true });
+    const yes = await question;
+    question = null;
+    if (open) {
+      remember(yes ? 'yes' : 'no');
+      // The question's own focus restore doesn't run while the guide is open.
+      name.focus();
+      if (yes) checkReach();
+    }
+  }
 }
 
 // Your address and public key as a QR code (an lxma:// link), for others

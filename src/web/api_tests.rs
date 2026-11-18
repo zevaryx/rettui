@@ -1461,6 +1461,65 @@ async fn sending_every_way_and_reading_paper() {
     assert_eq!(web.post("/api/paper/read", json!({ "link": "lxm://nonsense" })).await.status, StatusCode::BAD_REQUEST);
 }
 
+/// The guide ticks its defaults but connects to no entry point (which would
+/// tell its operator the user's address) until it is told to.
+#[tokio::test]
+async fn the_guide_tries_no_entry_point_until_told_to() {
+    let web = TestWeb::start("guide-ask");
+    let states =
+        |reach: &serde_json::Value| reach.as_array().unwrap().iter().map(|r| r["state"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let guide = web.get("/api/guide").await.json();
+    let entries = guide["entries"].as_array().unwrap();
+    assert!(!entries.is_empty());
+    // Not checked, as the label says; the first three are ticked.
+    assert!(entries.iter().all(|e| e["reach"]["state"] == "not_checked" && e["reach"]["label"] == "not checked yet"), "{guide}");
+    let ticked: Vec<bool> = entries.iter().map(|e| e["on"].as_bool().unwrap()).collect();
+    assert_eq!(ticked, [true, true, true, false, false, false]);
+    assert!(guide["help"]["check"].as_str().unwrap().contains("IP address") && guide["help"]["check_label"].as_str().is_some());
+    // The control reads "Allow connections" until a check was allowed, then a repeat check.
+    assert_eq!(guide["help"]["allow_label"], "Allow connections");
+    assert_eq!(guide["help"]["check_label"], "Check which can be reached");
+    assert!(guide["help"]["not_checked"].as_str().unwrap().contains("\"Allow connections\""));
+    // The first-run question: the number of entry points, who sees the address, what No does.
+    let d = &guide["check_dialog"];
+    assert_eq!(d["title"], "Check the servers first?");
+    assert!(d["question"].as_str().unwrap().contains(&format!("connect to the {} listed", entries.len())));
+    assert!(d["question"].as_str().unwrap().contains("will see your IP address"));
+    let detail = d["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("nothing is contacted now") && detail.contains("Apply") && detail.contains("\"Allow connections\""),
+        "{detail}"
+    );
+    // Opening it again, and reading the state, tries nothing.
+    web.get("/api/guide").await;
+    assert!(states(&web.get("/api/guide/reach").await.json()).iter().all(|s| s == "not_checked"));
+    assert!(web.with_owner(|o| o.app.guide_view().reach.iter().all(|r| *r == crate::app::reach::Reach::NotChecked)).await);
+    // Asked to, it starts; asked again at once, it says it was a moment ago.
+    let asked = web.post("/api/guide/check", json!({})).await;
+    assert_eq!(asked.status, StatusCode::OK, "{}", asked.text());
+    assert_eq!(asked.json()["started"], true);
+    assert!(states(&asked.json()["reach"]).iter().all(|s| s == "checking"));
+    assert!(web.with_owner(|o| o.app.guide_view().reach.iter().all(|r| *r == crate::app::reach::Reach::Checking)).await);
+    assert_eq!(web.post("/api/guide/check", json!({})).await.json()["started"], false);
+    // Whatever was ticked is still connected to when applied, unchecked.
+    assert_eq!(web.get("/api/guide/reach").await.json().as_array().unwrap().len(), entries.len());
+}
+
+/// The question is for the first-run guide only.
+#[tokio::test]
+async fn the_first_run_guide_asks_before_trying_the_entry_points() {
+    let settings = crate::config::Settings { welcomed: false, ..Default::default() };
+    let web = TestWeb::start_with("guide-first-run", settings, crate::store::Store::default());
+    let guide = web.get("/api/guide").await.json();
+    assert_eq!(guide["ask_check"], true, "a new install asks");
+    assert!(guide["entries"].as_array().unwrap().iter().all(|e| e["reach"]["state"] == "not_checked"));
+    // After an answer (a check), or once it was seen, it doesn't.
+    web.post("/api/guide/check", json!({})).await;
+    assert_eq!(web.get("/api/guide").await.json()["ask_check"], false);
+    web.post("/api/guide/dismiss", json!({})).await;
+    assert_eq!(web.get("/api/guide").await.json()["ask_check"], false);
+}
+
 #[tokio::test]
 async fn the_guide_pages_partials_and_previews() {
     let web = TestWeb::start("guide-pages");

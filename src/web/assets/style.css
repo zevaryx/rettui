@@ -336,6 +336,7 @@ header .avatar.icon { font-size: 17px; }
 .guide .help { font-size: 0.9em; }
 .guide .guide-status.ok { color: var(--green); }
 .guide .guide-status.warn { color: var(--yellow); }
+.guide .guide-check { display: flex; flex-direction: column; align-items: flex-start; gap: 0.2em; margin: 0.4em 0; }
 .guide .guide-warning { margin: 2px 0 8px 28px; }
 .guide .guide-warning[hidden] { display: none; }
 .dialog.path { width: min(560px, 92vw); }

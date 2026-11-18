@@ -1,7 +1,9 @@
-//! Whether the guide's entry points answer. Each is tried when the guide
-//! opens (a TCP connection, closed at once), so one that's down, or
-//! blocked from here, isn't offered. The tries run on threads of their
-//! own, since a name lookup or a connection can take seconds.
+//! Whether the guide's entry points answer. Each is tried when the user
+//! asks the guide to (a TCP connection, closed at once), so one that's down,
+//! or blocked from here, isn't offered. Opening the guide tries nothing: a
+//! connection tells the entry point's operator the user's address. The tries
+//! run on threads of their own, since a name lookup or a connection can take
+//! seconds.
 
 use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -16,6 +18,8 @@ const FRESH: Duration = Duration::from_secs(60);
 /// What trying an entry point found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reach {
+    /// Not tried: the user hasn't asked.
+    NotChecked,
     /// Being tried.
     Checking,
     /// It accepted a connection, this quickly.
@@ -32,6 +36,7 @@ impl Reach {
     /// For a list: "checking…", "up · 120 ms", "down · refused".
     pub fn label(self) -> String {
         match self {
+            Reach::NotChecked => "not checked yet".into(),
             Reach::Checking => "checking…".into(),
             Reach::Up(took) => format!("up · {} ms", took.as_millis()),
             Reach::Down(why) => format!("down · {why}"),
@@ -47,11 +52,12 @@ pub struct Reachability {
 }
 
 impl Reachability {
-    /// Try each of `targets`, unless they were tried a moment ago.
-    pub fn check(&mut self, targets: &[(&'static str, u16)]) {
+    /// Try each of `targets`, unless they were tried a moment ago. Whether
+    /// it started.
+    pub fn check(&mut self, targets: &[(&'static str, u16)]) -> bool {
         let tried = self.results.lock().map(|results| results.len()).unwrap_or(0);
         if tried == targets.len() && self.started.is_some_and(|at| at.elapsed() < FRESH) {
-            return;
+            return false;
         }
         // A new list: tries still running from before fill in the old one.
         let results = Arc::new(Mutex::new(vec![Reach::Checking; targets.len()]));
@@ -59,7 +65,7 @@ impl Reachability {
         self.started = Some(Instant::now());
         // Tests don't reach out to the internet (they set results instead).
         if cfg!(test) {
-            return;
+            return true;
         }
         for (i, &(host, port)) in targets.iter().enumerate() {
             let results = Arc::clone(&results);
@@ -70,12 +76,13 @@ impl Reachability {
                 }
             });
         }
+        true
     }
 
-    /// What's known of each (all "checking" before the first try).
+    /// What's known of each (all "not checked yet" before the first try).
     pub fn get(&self, count: usize) -> Vec<Reach> {
         let results = self.results.lock().map(|results| results.clone()).unwrap_or_default();
-        if results.len() == count { results } else { vec![Reach::Checking; count] }
+        if results.len() == count { results } else { vec![Reach::NotChecked; count] }
     }
 
     #[cfg(test)]
@@ -135,19 +142,20 @@ mod tests {
         assert_eq!(probe("no-such-host.invalid", 4242), Reach::Down("name not found"));
         assert_eq!(Reach::Up(Duration::from_millis(382)).label(), "up · 382 ms");
         assert_eq!(Reach::Down("refused").label(), "down · refused");
+        assert_eq!(Reach::NotChecked.label(), "not checked yet");
     }
 
     #[test]
     fn tries_are_kept_a_minute() {
         let mut reach = Reachability::default();
-        assert_eq!(reach.get(2), [Reach::Checking; 2], "before the first try");
+        assert_eq!(reach.get(2), [Reach::NotChecked; 2], "before the first try");
         reach.set(vec![Reach::Down("refused"), Reach::Checking]);
         // Opening the guide again soon after doesn't try again.
-        reach.check(&[("a.example", 1), ("b.example", 2)]);
+        assert!(!reach.check(&[("a.example", 1), ("b.example", 2)]), "said it did not start");
         assert_eq!(reach.get(2), [Reach::Down("refused"), Reach::Checking]);
         // A while later it does.
         reach.started = Some(Instant::now() - FRESH);
-        reach.check(&[("a.example", 1), ("b.example", 2)]);
+        assert!(reach.check(&[("a.example", 1), ("b.example", 2)]));
         assert_eq!(reach.get(2), [Reach::Checking; 2]);
     }
 }

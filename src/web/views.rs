@@ -180,6 +180,7 @@ pub fn guide(app: &App) -> Value {
     use crate::app::guide;
     let view = app.guide_view();
     let defaults = app.guide_defaults();
+    let dialog = guide::check_dialog();
     json!({
         "name": view.name,
         // Each entry point offered, whether the config has it, whether
@@ -190,6 +191,9 @@ pub fn guide(app: &App) -> Value {
             "reach": reach(view.reach[i]),
         })).collect::<Vec<_>>(),
         "has_discovery": view.has_discovery,
+        "ask_check": app.guide_asks_to_check(),
+        "check_dialog": { "title": dialog.0, "question": dialog.1, "detail": dialog.2 },
+        "entry_count": guide::ENTRY_POINTS.len(),
         "external": view.external,
         "external_note": crate::reticulum::EXTERNAL_NOTE,
         "shared_note": (view.shared_config && !view.external).then_some(guide::SHARED_NOTE),
@@ -207,6 +211,8 @@ pub fn guide(app: &App) -> Value {
             "auto_propagation_warning": guide::AUTO_PROPAGATION_WARNING, "apply": guide::APPLY_HELP,
             "update_check": guide::UPDATE_CHECK_HELP,
             "none_answered": guide::NONE_ANSWERED,
+            "check": guide::CHECK_HELP, "check_label": guide::CHECK_LABEL, "allow_label": guide::ALLOW_LABEL, "checked_just_now": guide::CHECKED_JUST_NOW,
+            "not_checked": guide::not_checked_note(), "checking": guide::checking_note(),
         },
         "links": guide::LINKS.iter().map(|(title, url, note)| json!({ "title": title, "url": url, "note": note })).collect::<Vec<_>>(),
     })
@@ -256,6 +262,7 @@ pub fn tools(app: &App) -> Value {
         .map(|row| {
             let check = row.check.map(|check| {
                 let state = match check {
+                    Reach::NotChecked => "not_checked",
                     Reach::Checking => "checking",
                     Reach::Up(_) => "up",
                     Reach::Down(_) => "down",
@@ -283,6 +290,7 @@ pub fn tools(app: &App) -> Value {
 fn reach(reach: crate::app::reach::Reach) -> Value {
     use crate::app::reach::Reach;
     match reach {
+        Reach::NotChecked => json!({ "state": "not_checked", "label": reach.label() }),
         Reach::Checking => json!({ "state": "checking", "label": reach.label() }),
         Reach::Up(_) => json!({ "state": "up", "label": reach.label() }),
         Reach::Down(why) => json!({ "state": "down", "label": reach.label(), "help": crate::app::guide::down_help(why) }),

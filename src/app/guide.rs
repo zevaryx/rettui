@@ -13,8 +13,10 @@
 //! has, so a fresh install (the Auto interface only, which reaches the
 //! local network) gets the few entry points that answer fastest ticked; a
 //! config with interfaces of its own doesn't, unless asked. Each entry
-//! point is tried as the guide opens (see [`super::reach`]): one that
-//! refuses or doesn't answer can't be ticked.
+//! point is tried only when the user agrees to (see [`super::reach`]; a try
+//! tells its operator the user's address): the first-run guide asks, and
+//! the "Check" row does later. One that refuses or doesn't answer can't be
+//! ticked. Until then the defaults are ticked and none is marked.
 
 use std::time::{Duration, Instant};
 
@@ -84,7 +86,56 @@ pub const NAME_HELP: &str = "The name sent in your announces, so others see who 
 pub const IDENTITY_HELP: &str = "Your identity is the key behind your address. Coming from Sideband, NomadNet or MeshChat? Use its identity file, and contacts reach you here at the address they know. Enter picks the file; it's used from the next start.";
 /// In the web UI, which can't change the identity.
 pub const IDENTITY_WEB_NOTE: &str = "Coming from Sideband, NomadNet or MeshChat? To keep your address, stop this web UI first (two rettuis on one data folder overwrite each other's files), then use that identity file from the terminal UI (i in its Status tab), or copy it over this one:";
-pub const CONNECT_HELP: &str = "A public transport node: your traffic reaches the wider network through it, and its operator sees your IP address. When your config reaches only your local network, the 3 that answer fastest are ticked: discovery needs a connection to hear of others.";
+pub const CONNECT_HELP: &str = "A public transport node: your traffic reaches the wider network through it, and its operator sees your IP address. When your config reaches only your local network, the first 3 in the list are ticked to start with (not the fastest, until you check), and checking which can be reached moves the ticks to the 3 that answer fastest: discovery needs a connection to hear of others.";
+/// The action that tries the entry points.
+pub const CHECK_LABEL: &str = "Check which can be reached";
+/// The same control until a check has been allowed in this guide.
+pub const ALLOW_LABEL: &str = "Allow connections";
+
+/// The control's label: [`ALLOW_LABEL`] until a check was allowed (started),
+/// then [`CHECK_LABEL`] for a repeat check.
+pub fn check_label(allowed: bool) -> &'static str {
+    if allowed { CHECK_LABEL } else { ALLOW_LABEL }
+}
+pub const CHECK_HELP: &str = "Connects to each server listed here to see which answer. Their operators will see your IP address.";
+
+/// Said above the list while any entry point is not checked yet.
+pub fn not_checked_note() -> String {
+    format!("Nothing has been contacted yet. The {FASTEST} ticked are the first in the list; use \"{ALLOW_LABEL}\" to pick the fastest.")
+}
+
+/// Said when a check starts.
+pub fn checking_note() -> String {
+    format!("Checking {} entry points…", ENTRY_POINTS.len())
+}
+
+/// What the first-run guide asks in the terminal UI before trying them.
+pub fn check_question() -> String {
+    format!(
+        "May rettui connect to the {} public entry points listed here (servers run by other people) to see which answer fastest? \
+         Their operators then see your IP address. No: nothing is contacted until you press Apply, which connects to the ticked ones. \
+         (y/n, Enter = no)",
+        ENTRY_POINTS.len()
+    )
+}
+
+/// What the web UI's dialog says: its title, the question, and what No does.
+pub fn check_dialog() -> (&'static str, String, String) {
+    (
+        "Check the servers first?",
+        format!(
+            "rettui reaches the wider network through public servers run by other people (\"entry points\"). May it connect to the {} \
+             listed in this guide now, to see which answer fastest? The people who run them will see your IP address.",
+            ENTRY_POINTS.len()
+        ),
+        format!(
+            "If you say No, nothing is contacted now. The first {FASTEST} stay ticked, and pressing Apply connects to them. You can \
+             allow this later with \"{ALLOW_LABEL}\"."
+        ),
+    )
+}
+/// Said when the check is chosen again while the last one is fresh.
+pub const CHECKED_JUST_NOW: &str = "Checked a moment ago";
 
 /// How many entry points a fresh install is given to start with: the
 /// ones that answer fastest.
@@ -98,7 +149,7 @@ pub fn down_help(why: &str) -> String {
 }
 /// The config is Python Reticulum's.
 pub const SHARED_NOTE: &str = "This Reticulum config is shared with NomadNet, Sideband and rnsd too.";
-pub const DISCOVER_HELP: &str = "Connects to up to 2 entry points others announce, as Reticulum's manual recommends; you'll connect to hosts you didn't choose. It hears of them through a connection you have, so it needs one to start: the entry points ticked here are used until 2 found are up, and again if none is.";
+pub const DISCOVER_HELP: &str = "Connects to up to 2 entry points others announce, as Reticulum's manual recommends; you'll connect to hosts you didn't choose: other nodes pick them, not this list. It hears of them through a connection you have, so it needs one to start: the entry points ticked here are used until 2 found are up, and again if none is.";
 pub const AUTO_PROPAGATION_HELP: &str = "A propagation node keeps messages for you while you're offline, for you to collect. Ticked, rettui picks one: the nearest that answers fastest.";
 
 /// Shown under picking a propagation node automatically while it's ticked
@@ -187,6 +238,9 @@ pub fn picked(view: &GuideView) -> Vec<bool> {
         .filter_map(|(i, reach)| match *reach {
             Reach::Up(took) => Some((i, Some(took))),
             Reach::Checking => Some((i, None)),
+            // Not tried yet: ticked as the defaults, in the list's order,
+            // like those still being tried.
+            Reach::NotChecked => Some((i, None)),
             Reach::Down(_) => None,
         })
         .collect();
@@ -204,6 +258,8 @@ pub enum GuideRow {
     Identity,
     /// One of [`ENTRY_POINTS`].
     Connect(usize),
+    /// Try the entry points.
+    Check,
     Discover,
     AutoPropagation,
     UpdateCheck,
@@ -217,7 +273,7 @@ impl Guide {
         let mut rows = vec![GuideRow::Name, GuideRow::Identity];
         if !view.external {
             rows.extend((0..ENTRY_POINTS.len()).map(GuideRow::Connect));
-            rows.push(GuideRow::Discover);
+            rows.extend([GuideRow::Check, GuideRow::Discover]);
         }
         rows.extend([GuideRow::AutoPropagation, GuideRow::UpdateCheck]);
         rows.extend((0..LINKS.len()).map(GuideRow::Link));
@@ -279,12 +335,33 @@ impl App {
     }
 
     /// Try the entry points, unless they were a moment ago (or another
-    /// program's config has the interfaces).
-    pub fn check_entry_points(&mut self) {
-        if !self.uses_external_shared_instance() {
-            let targets: Vec<(&'static str, u16)> = ENTRY_POINTS.iter().map(|entry| (entry.host, entry.port)).collect();
-            self.entry_reach.check(&targets);
+    /// program's config has the interfaces). Only when the user agreed.
+    /// Whether it started.
+    pub fn check_entry_points(&mut self) -> bool {
+        if self.uses_external_shared_instance() {
+            return false;
         }
+        let targets: Vec<(&'static str, u16)> = ENTRY_POINTS.iter().map(|entry| (entry.host, entry.port)).collect();
+        self.entry_reach.check(&targets)
+    }
+
+    /// The terminal UI's way to try them: says so in the footer, or that it
+    /// was a moment ago.
+    pub(super) fn check_entries_noticed(&mut self) {
+        let note = if self.check_entry_points() { checking_note() } else { CHECKED_JUST_NOW.to_string() };
+        self.confirm(note);
+    }
+
+    /// Whether the guide asks to try the entry points: only the first-run
+    /// guide, which has ticked the defaults without knowing that they answer,
+    /// and only when it shows entry points to move the ticks among (not
+    /// where another program runs the instance, and not for a config with
+    /// interfaces of its own, which gets none ticked) and nothing was tried.
+    /// Opened later (from the Status tab) it doesn't ask: the question was
+    /// answered or ignored, and the Check row is there.
+    pub fn guide_asks_to_check(&self) -> bool {
+        let view = self.guide_view();
+        !self.settings.welcomed && !view.external && !view.has_own_interfaces && view.reach.iter().all(|r| *r == Reach::NotChecked)
     }
 
     /// Apply the choices: the name and settings now, the Reticulum config
@@ -460,8 +537,11 @@ impl App {
     // ---- Terminal UI --------------------------------------------------------
 
     pub fn open_guide(&mut self) {
-        self.check_entry_points();
+        let ask = self.guide_asks_to_check();
         self.guide = Some(Guide { row: 0, choices: self.guide_defaults(), scroll: 0, by_hand: false });
+        if ask {
+            self.open_prompt(PromptKind::ConfirmCheckEntryPoints, &check_question(), "");
+        }
     }
 
     pub(super) fn guide_key(&mut self, key: KeyEvent) {
@@ -510,6 +590,7 @@ impl App {
                     *on = !*on;
                 }
             }
+            GuideRow::Check => self.check_entries_noticed(),
             GuideRow::Discover => choices.discover = !choices.discover,
             GuideRow::AutoPropagation => choices.auto_propagation = !choices.auto_propagation,
             GuideRow::UpdateCheck => choices.update_check = !choices.update_check,
@@ -555,7 +636,8 @@ mod tests {
         assert!(app.guide.is_some(), "shown the first time");
         let view = app.guide_view();
         assert!(view.has_entry_point.iter().all(|has| !has) && !view.has_discovery && !view.external);
-        assert!(view.reach.iter().all(|reach| *reach == Reach::Checking), "tried as it opens");
+        // Opening the guide connects to no one: nothing is marked as tried.
+        assert!(view.reach.iter().all(|reach| *reach == Reach::NotChecked), "not tried as it opens");
         let all = vec![true; ENTRY_POINTS.len()];
         let ticked = |connect: &[bool]| connect.iter().enumerate().filter(|(_, on)| **on).map(|(i, _)| i).collect::<Vec<_>>();
         // A fresh install: discovery, and the 3 entry points that answer
@@ -790,6 +872,186 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A new install: the guide open, its question answered with `answer`
+    /// (None: left as it is).
+    fn fresh(name: &str, answer: Option<&str>) -> (App, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("rettui-guide-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rns_dir = dir.join("rns");
+        std::fs::create_dir_all(&rns_dir).unwrap();
+        std::fs::write(rns_dir.join("config"), "[interfaces]\n  [[Default Interface]]\n    type = AutoInterface\n    enabled = Yes\n")
+            .unwrap();
+        let settings = Settings { welcomed: false, rns_config: Some(rns_dir.display().to_string()), ..Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, Store::default());
+        if let Some(answer) = answer {
+            app.on_paste(answer);
+            app.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
+        }
+        (app, dir)
+    }
+
+    fn ticked(app: &App) -> Vec<usize> {
+        let shown = app.guide.as_ref().unwrap().shown(&app.guide_view()).connect;
+        shown.iter().enumerate().filter(|(_, on)| **on).map(|(i, _)| i).collect()
+    }
+
+    #[test]
+    fn the_first_run_guide_ticks_the_defaults_and_contacts_no_one_until_told_to() {
+        let (app, dir) = fresh("ask", None);
+        // Opened by itself: the default entry points ticked, none tried, and
+        // the question asked.
+        assert!(app.guide.is_some());
+        assert!(matches!(app.prompt.as_ref().map(|p| &p.kind), Some(PromptKind::ConfirmCheckEntryPoints)));
+        let title = &app.prompt.as_ref().unwrap().title;
+        assert!(title.contains("IP address") && title.ends_with("(y/n, Enter = no)"), "{title}");
+        assert!(title.contains("6 public entry points") && title.contains("Apply"), "{title}");
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::NotChecked));
+        assert_eq!(ticked(&app), [0, 1, 2], "the first three, in the list's order");
+        assert_eq!(Reach::NotChecked.label(), "not checked yet");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_esc_and_enter_all_leave_every_entry_not_checked() {
+        for answer in [Some("n"), Some("no"), Some(""), None] {
+            let (mut app, dir) = fresh("nope", answer);
+            if answer.is_none() {
+                app.on_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
+            }
+            assert!(app.prompt.is_none() && app.guide.is_some(), "{answer:?}");
+            assert!(app.guide_view().reach.iter().all(|r| *r == Reach::NotChecked), "{answer:?}: nothing started");
+            assert_eq!(ticked(&app), [0, 1, 2], "{answer:?}");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn an_external_shared_instance_is_not_asked_and_nothing_is_tried() {
+        use crate::net::NetEvent;
+        let dir = std::env::temp_dir().join(format!("rettui-guide-external-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let settings = Settings { welcomed: false, rns_config: Some(dir.join("rns").display().to_string()), ..Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, Store::default());
+        app.on_net(NetEvent::Interfaces(vec![crate::net::InterfaceInfo {
+            name: "Shared Instance[default]".into(),
+            online: true,
+            ..Default::default()
+        }]));
+        app.prompt = None;
+        assert!(app.uses_external_shared_instance() && !app.guide_asks_to_check());
+        app.guide = None;
+        app.open_guide();
+        assert!(app.prompt.is_none());
+        assert!(!app.check_entry_points(), "nothing to try");
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::NotChecked));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn allow_connections_after_a_no_does_what_yes_does() {
+        let (mut app, dir) = fresh("allow", Some("n"));
+        let label = |app: &App| check_label(app.guide_view().reach.iter().any(|r| *r != Reach::NotChecked));
+        // One control, two states: first "Allow connections"...
+        assert_eq!(label(&app), "Allow connections");
+        assert_eq!(check_label(true), "Check which can be reached");
+        // ...pressing it starts the check, as Yes does, and says so.
+        app.guide_activate(GuideRow::Check);
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::Checking));
+        assert_eq!(app.notice.as_ref().map(|n| n.text.as_str()), Some("Checking 6 entry points…"));
+        // ...then it reads as a repeat check, which says so when it is fresh.
+        assert_eq!(label(&app), "Check which can be reached");
+        app.guide_activate(GuideRow::Check);
+        assert_eq!(app.notice.as_ref().map(|n| n.text.as_str()), Some(CHECKED_JUST_NOW));
+        // The ticks move to the fastest as answers come in.
+        let mut reach = vec![Reach::Down("refused"); ENTRY_POINTS.len()];
+        reach[3] = Reach::Up(Duration::from_millis(10));
+        reach[4] = Reach::Up(Duration::from_millis(20));
+        reach[5] = Reach::Up(Duration::from_millis(30));
+        app.entry_reach.set(reach);
+        assert_eq!(ticked(&app), [3, 4, 5]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn saying_no_leaves_the_ticks_tries_nothing_and_does_not_ask_again() {
+        let (mut app, dir) = fresh("no", Some("n"));
+        assert!(app.prompt.is_none() && app.guide.is_some());
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::NotChecked), "nothing tried");
+        assert_eq!(ticked(&app), [0, 1, 2]);
+        // Reopened in the same run (it is first-run still): the answer stands
+        // for this guide, and it asks only when none is tried and the
+        // install is new; the row is there to ask later.
+        app.guide = None;
+        app.finish_guide();
+        app.open_guide();
+        assert!(app.prompt.is_none(), "not asked when opened later");
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::NotChecked));
+        // Choosing the row asks (and again at once says it was a moment ago).
+        app.guide_activate(GuideRow::Check);
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::Checking));
+        app.guide_activate(GuideRow::Check);
+        assert_eq!(app.notice.as_ref().map(|n| n.text.as_str()), Some(CHECKED_JUST_NOW));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn saying_yes_tries_them_and_the_ticks_move_to_the_fastest() {
+        let (mut app, dir) = fresh("yes", Some("y"));
+        assert!(app.prompt.is_none());
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::Checking), "tried now");
+        assert_eq!(ticked(&app), [0, 1, 2]);
+        // As answers arrive (set, since a test makes no connection).
+        let ms = |ms| Reach::Up(Duration::from_millis(ms));
+        let mut reach = vec![Reach::Checking; ENTRY_POINTS.len()];
+        reach[0] = Reach::Down("refused");
+        reach[5] = ms(30);
+        reach[4] = ms(10);
+        app.entry_reach.set(reach.clone());
+        assert_eq!(ticked(&app), [1, 4, 5], "the two that answered, then the first still being tried");
+        reach[1] = ms(500);
+        reach[2] = ms(900);
+        reach[3] = ms(40);
+        app.entry_reach.set(reach);
+        assert_eq!(ticked(&app), [3, 4, 5], "the three fastest");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn applying_connects_to_what_is_ticked_checked_or_not() {
+        let (mut app, dir) = fresh("apply", Some("n"));
+        let choices = app.guide.as_ref().unwrap().shown(&app.guide_view());
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::NotChecked));
+        app.apply_guide(&choices, false).unwrap();
+        let config = std::fs::read_to_string(dir.join("rns").join("config")).unwrap();
+        for entry in &ENTRY_POINTS[..3] {
+            assert!(config.contains(&format!("target_host = {}", entry.host)), "{}: {config}", entry.host);
+        }
+        assert!(!config.contains("rns.beleth.net"), "{config}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_guide_is_not_asked_about_where_it_would_not_apply() {
+        // A config with interfaces of its own: no defaults ticked, nothing
+        // to move among: no question, and nothing tried.
+        let dir = std::env::temp_dir().join(format!("rettui-guide-notask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rns_dir = dir.join("rns");
+        std::fs::create_dir_all(&rns_dir).unwrap();
+        std::fs::write(
+            rns_dir.join("config"),
+            "[interfaces]\n  [[Mine]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = example.org\n    target_port = 4242\n",
+        )
+        .unwrap();
+        let settings = Settings { welcomed: false, rns_config: Some(rns_dir.display().to_string()), ..Settings::default() };
+        let app = crate::app::test_app(&dir, settings, Store::default());
+        assert!(app.guide.is_some() && app.prompt.is_none());
+        assert!(!app.guide_asks_to_check());
+        assert!(ticked(&app).is_empty());
+        assert!(app.guide_view().reach.iter().all(|r| *r == Reach::NotChecked));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn the_guide_in_the_terminal() {
         use crossterm::event::KeyModifiers;
@@ -803,7 +1065,7 @@ mod tests {
         press(&mut app, KeyCode::Char('g'));
         assert!(app.guide.is_some());
         // Down to the propagation node row (past both entry points), and on.
-        let rows = 2 + ENTRY_POINTS.len() + 1;
+        let rows = 2 + ENTRY_POINTS.len() + 2;
         for _ in 0..rows {
             press(&mut app, KeyCode::Down);
         }

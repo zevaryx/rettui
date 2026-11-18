@@ -33,15 +33,32 @@ the web UI's Status page, opens it again):
   | Specialty | Ratspeak & Colorado Mesh | `rns.ratspeak.org:4242` |
 
   Each ticked adds a TCP interface to that entry point to your Reticulum
-  config. rettui tries each as the guide opens (a connection, closed at
-  once) and shows how quickly it answered (`up · 120 ms`); one that
-  refuses, doesn't answer, or whose name isn't found is greyed out and
-  can't be ticked (`down · refused`), and it's tried again when the guide
-  is opened a minute or more later. If none answer, the guide says so:
-  the device may be offline, or a firewall may block them.
+  config. **Opening the guide connects to no one**: the entry points are
+  listed with `not checked yet` beside them, and a line above says nothing
+  has been contacted. On a new install the first three in the list are
+  ticked to start with. The first-run guide **asks** (a dialog in the web UI,
+  a prompt in the terminal UI: `y`, or `n` / Enter for no) whether rettui may
+  connect to the listed entry points now, to see which answer fastest; the
+  people who run them will see your IP address. **Yes** tries each one (a
+  connection, closed at once) and moves the ticks to the fastest as answers
+  arrive. **No** (the default; so is Esc) leaves the ticks as they are and
+  tries nothing, and the question is not asked again; pressing **Apply**
+  then connects to the three ticked. Only the first-run guide asks, and the
+  web UI does not ask again when the page is reloaded in the same browser
+  session. A button (a row in the terminal UI) reads **Allow connections**
+  until a check was allowed, and does what Yes does; after that it reads
+  **Check which can be reached** and repeats the check, saying "Checked a
+  moment ago" if the last one is under a minute old. The answers are shown
+  (`up · 120 ms`); one that refuses, doesn't answer, or whose name isn't found
+  is greyed out and can't be ticked (`down · refused`). If none answer, the
+  guide says so: the device may be offline, or a firewall may block them.
+  **Apply** connects to the ones ticked whether or not they were checked.
+  *Also find entry points near you over time* lets rettui connect to entry
+  points that other nodes announce, so those are chosen by others, not from
+  this list.
 
   When the config has nothing besides the Auto interface (which reaches
-  your local network only), the three that answer fastest are ticked: a
+  your local network only), the three first (and, once you have checked, the three that answer fastest) are ticked: a
   fresh install needs a connection for discovery to hear of others, and
   with a few, one being down doesn't leave you unconnected. While they're
   being tried, the ticks move to the fastest as answers come in; once you

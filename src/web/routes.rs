@@ -141,6 +141,7 @@ pub fn router(state: WebState) -> Router {
         .route("/guide", get(guide).post(apply_guide))
         .route("/guide/dismiss", post(dismiss_guide))
         .route("/guide/reach", get(guide_reach))
+        .route("/guide/check", post(check_guide))
         .route("/identity/backed-up", post(identity_backed_up))
         .route("/first-steps/hide", post(hide_first_steps))
         .route("/channels", get(channels).post(add_hub))
@@ -2087,13 +2088,20 @@ async fn save_settings(State(state): State<WebState>, axum::Json(body): axum::Js
 
 // ---- getting started ----------------------------------------------------------
 
-/// The guide, trying its entry points as it opens.
+/// The guide. It tries no entry point: that is `check_guide`, when asked.
 async fn guide(State(state): State<WebState>) -> ApiResult {
+    Ok(axum::Json(state.read(|o| views::guide(&o.app)).await?))
+}
+
+/// Try the guide's entry points, now the user agreed: this connects to each,
+/// so their operators see the user's address. Whether it started (not if
+/// they were tried a moment ago), and what is known of each.
+async fn check_guide(State(state): State<WebState>) -> ApiResult {
     Ok(axum::Json(
         state
             .write(|o| {
-                o.app.check_entry_points();
-                views::guide(&o.app)
+                let started = o.app.check_entry_points();
+                json!({ "started": started, "reach": views::guide_reach(&o.app) })
             })
             .await?,
     ))
