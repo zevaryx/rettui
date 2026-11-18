@@ -114,12 +114,13 @@ rettui keeps running with the screen off, so it tries to use as little as it
 can then:
 
 - **AutoInterface stays off mobile data.** Before Reticulum starts, rettui
-  adds the phone's mobile data interfaces (`rmnet…`, `ccmni…` and so on) to
-  *Ignored devices* of each AutoInterface that's on. AutoInterface finds no
-  one there, and its messages every few seconds kept the mobile radio from
-  sleeping: on a Pixel, most of the battery rettui used. The change is in
-  the Reticulum config's history, and an AutoInterface limited to chosen
-  *Devices* is left as it is.
+  adds the phone's mobile data interfaces (`rmnet…`, `r_rmnet…`, `ccmni…`,
+  `cc3mni…` and `wwan…`, among others) to *Ignored devices* of each
+  AutoInterface that's on. AutoInterface finds no one there, and its
+  messages every few seconds kept the mobile radio from sleeping: on a
+  Pixel, most of the battery rettui used. The change is in the Reticulum
+  config's history, and an AutoInterface limited to chosen *Devices* is
+  left as it is.
 - **The phone may sleep.** rettui doesn't keep the processor awake, unless
   *Keep the phone awake* (Status, under System) is on. Messages still
   arrive while the phone sleeps, since incoming traffic wakes it; turn the

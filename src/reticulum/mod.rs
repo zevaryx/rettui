@@ -627,25 +627,39 @@ pub fn has_interface_to(text: &str, host: &str) -> bool {
 }
 
 /// Phones' mobile data interfaces, by the names their modems give them
-/// (Qualcomm's `rmnet_data`, Samsung's and Google's `rmnet`, MediaTek's
-/// `ccmni`, Unisoc's `seth_lte`). AutoInterface finds no peers there, but
-/// its multicast every few seconds keeps the mobile radio from sleeping:
-/// most of the battery rettui used on a Pixel. rsReticulum leaves out only
-/// some of them.
+/// (Qualcomm's `rmnet_data`, `rmnet_ipa` and `r_rmnet` ones, Samsung's and
+/// Google's `rmnet`, MediaTek's
+/// `ccmni` and `cc3mni`, Unisoc's `seth_lte`, the generic `wwan`).
+/// AutoInterface finds no peers there, but its multicast every few seconds
+/// keeps the mobile radio from sleeping: most of the battery rettui used on
+/// a Pixel. rsReticulum matches `ignored_devices` by exact name and leaves
+/// out only some of them. The counts are a judgement, not measured:
+/// up to `rmnet_data11`, and only `rmnet_ipa0` exists.
 pub fn mobile_data_devices() -> Vec<String> {
-    [("rmnet", 10), ("rmnet_data", 12), ("ccmni", 10), ("seth_lte", 8)]
-        .iter()
-        .flat_map(|(prefix, count)| (0..*count).map(move |i| format!("{prefix}{i}")))
-        .collect()
+    [
+        ("rmnet", 10),
+        ("rmnet_data", 12),
+        ("ccmni", 10),
+        ("seth_lte", 8),
+        ("r_rmnet_data", 12),
+        ("r_rmnet", 10),
+        ("cc3mni", 8),
+        ("wwan", 4),
+        ("rmnet_ipa", 1),
+    ]
+    .iter()
+    .flat_map(|(prefix, count)| (0..*count).map(move |i| format!("{prefix}{i}")))
+    .collect()
 }
 
 /// Whether `name` is one of the phone's mobile data interfaces: those of
-/// [`mobile_data_devices`] by prefix, and `v4-` ones, which Android adds for
+/// [`mobile_data_devices`] by prefix (`r_rmnet`, not a bare `r_`, which would
+/// catch other names), and `v4-` ones, which Android adds for
 /// IPv4 over a mobile network that has only IPv6.
 #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
 pub fn is_mobile_data_device(name: &str) -> bool {
     let name = name.strip_prefix("v4-").unwrap_or(name);
-    ["rmnet", "ccmni", "seth_lte"].iter().any(|prefix| name.starts_with(prefix))
+    ["rmnet", "r_rmnet", "ccmni", "cc3mni", "wwan", "seth_lte"].iter().any(|prefix| name.starts_with(prefix))
 }
 
 /// The config with every AutoInterface that's on (and not limited to
@@ -1015,6 +1029,20 @@ mod tests {
         for name in ["wlan0", "lo", "eth0", "v4-wlan0", "dummy0"] {
             assert!(!is_mobile_data_device(name), "{name}");
         }
+        for name in ["r_rmnet_data0", "v4-r_rmnet_data0", "r_rmnet0", "cc3mni0", "wwan0", "rmnet_ipa0"] {
+            assert!(is_mobile_data_device(name), "{name}");
+        }
+        for name in ["swlan0", "p2p0", "ap_br_wlan0", "rndis0", "usb0", "wifi-aware0", "aware_data0", "bt-pan", "r_other0", "v4-eth0"] {
+            assert!(!is_mobile_data_device(name), "{name}");
+        }
+        let list = mobile_data_devices();
+        for name in ["r_rmnet_data0", "r_rmnet0", "cc3mni0", "wwan0", "rmnet_ipa0", "seth_lte0"] {
+            assert!(list.iter().any(|d| d == name), "{name}");
+        }
+        for name in ["rev_rmnet0", "sipa_eth0", "rmnet_mhi0", "rmnet_ipa1"] {
+            assert!(!list.iter().any(|d| d == name), "{name}");
+        }
+        assert!(list.iter().all(|d| is_mobile_data_device(d)), "the list and the prefix check agree");
         assert!(has_auto_interface(DEFAULT) && !has_auto_interface(&DEFAULT.replace("enabled = Yes", "enabled = No")));
 
         // The user's own are kept; one limited to chosen devices, one
@@ -1022,7 +1050,8 @@ mod tests {
         let own = format!("{DEFAULT}    ignored_devices = wlan1, rmnet0\n");
         let kept = without_mobile_data(&own).unwrap();
         assert!(kept.contains("ignored_devices = wlan1, rmnet0, rmnet1,"), "{kept}");
-        assert_eq!(kept.matches("rmnet0").count(), 1);
+        let line = kept.lines().find(|l| l.contains("ignored_devices")).unwrap();
+        assert_eq!(line.split([',', '=']).filter(|i| i.trim() == "rmnet0").count(), 1, "{line}");
         for text in [
             format!("{DEFAULT}    devices = wlan0\n"),
             DEFAULT.replace("enabled = Yes", "enabled = No"),
@@ -1030,5 +1059,32 @@ mod tests {
         ] {
             assert_eq!(without_mobile_data(&text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn existing_config_with_the_old_list_gains_the_new_names() {
+        let old: Vec<String> = [("rmnet", 10), ("rmnet_data", 12), ("ccmni", 10), ("seth_lte", 8)]
+            .iter()
+            .flat_map(|(prefix, count)| (0..*count).map(move |i| format!("{prefix}{i}")))
+            .collect();
+        let before = format!("{DEFAULT}    ignored_devices = {}\n", old.join(", "));
+        let after = without_mobile_data(&before).expect("the new names are added on the next start");
+        let (config, check) = check(&after);
+        assert!(check.error.is_none(), "{check:?}");
+        let views = options(config.as_ref(), &Section::Interface("Default Interface".into()));
+        let value = views.iter().find(|v| v.key == "ignored_devices").unwrap().value.clone().unwrap();
+        let ignored: Vec<&str> = value.split(',').map(str::trim).collect();
+        for name in ["r_rmnet_data0", "r_rmnet_data11", "r_rmnet0", "cc3mni0", "wwan0", "rmnet_ipa0"] {
+            assert!(ignored.contains(&name), "{name} in {value}");
+        }
+        assert!(ignored.starts_with(&old.iter().map(String::as_str).collect::<Vec<_>>()), "the old order is kept");
+        let mut unique = ignored.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ignored.len(), "no duplicates: {value}");
+        assert_eq!(ignored.len(), mobile_data_devices().len());
+        assert_eq!(without_mobile_data(&after), None, "once is enough");
+        // A chosen `devices` still turns the addition off.
+        assert_eq!(without_mobile_data(&format!("{before}    devices = wlan0\n")), None);
     }
 }
