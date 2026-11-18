@@ -28,15 +28,15 @@ writes the store and chat history in the background.
 
 ## Releases and CI
 
-The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/main/.github/workflows):
+The workflows are in [.github/workflows](https://github.com/rettui-dev/rettui/tree/main/.github/workflows):
 
-- **CI** ([ci.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/ci.yml)) runs on every pull request:
+- **CI** ([ci.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/ci.yml)) runs on every pull request:
   - a formatting check: run `cargo fmt` before committing (`rustfmt.toml`
     has rettui's style; `cargo fmt --check` says what it would change);
   - Clippy, with warnings as errors (and the desktop app, which needs
     WebKitGTK, checked on Linux);
   - the tests on Linux, Windows and macOS.
-- **Build** ([build.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/build.yml)) builds the binaries
+- **Build** ([build.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/build.yml)) builds the binaries
   for every platform in the [Installing](Installing) table without making a
   release:
   - Run it from *Actions > Build > Run workflow* (tick *Linux only* for
@@ -44,7 +44,7 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   - Download the archives from the run's *Artifacts*.
   - They're named after the version and commit, for example
     `rettui-v1.2.0-a4e545b-x86_64-unknown-linux-gnu.tar.gz`.
-- **Desktop** ([desktop.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/desktop.yml)) builds
+- **Desktop** ([desktop.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/desktop.yml)) builds
   the desktop app (`desktop/`, `rettui-desktop`) for the same platforms as Build:
   - Run it from *Actions > Desktop > Run workflow* (tick *Linux only* for
     just the Linux builds), or push to `feature/desktop`, and download
@@ -89,7 +89,7 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
     replaced whole.
     macOS asks to allow an unsigned app in *System Settings > Privacy &
     Security*, and Windows SmartScreen warns before running it.
-- **Android** ([android.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/android.yml)) builds a test
+- **Android** ([android.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/android.yml)) builds a test
   APK of the [Android app](Android) (`android/`):
   - Run it from *Actions > Android > Run workflow*, or push to
     `feature/android`.
@@ -101,9 +101,9 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
     build, test or release, installs over an earlier one.
   - The Release workflow calls it for a release build (not debuggable,
     so `adb` can't read the app's files), signed with the same key.
-- **Release** ([release.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/release.yml)) runs when a
+- **Release** ([release.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/release.yml)) runs when a
   tag starting with `v` is pushed. Before tagging, add the release to
-  [CHANGELOG.md](https://github.com/zevaryx/rettui/blob/main/CHANGELOG.md) under a `## v1.7.0` heading (a
+  [CHANGELOG.md](https://github.com/rettui-dev/rettui/blob/main/CHANGELOG.md) under a `## v1.7.0` heading (a
   prerelease, `v1.7.0-rc.1`, may have its own, or uses the release's). It:
   1. checks the tag matches the version in `Cargo.toml`, and that
      `CHANGELOG.md` has its section;
@@ -133,7 +133,7 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
   A tag containing a hyphen (`v1.3.0-rc.1`) makes a prerelease. Its image
   gets only the version tag, not `latest`. *Run workflow* on a version tag
   does the same as pushing it.
-- **Prerelease** ([prerelease.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/prerelease.yml))
+- **Prerelease** ([prerelease.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/prerelease.yml))
   makes a development prerelease of `dev`, on command: *Actions >
   Prerelease > Run workflow*, on `dev`. It:
   1. picks the version it leads up to: the one typed in, else
@@ -151,25 +151,25 @@ The workflows are in [.github/workflows](https://github.com/zevaryx/rettui/tree/
 
   Update checks leave prereleases out unless *Include prereleases in
   update checks* is on, so they're mostly for those who download one.
-- **Branch image** ([docker-branch.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/docker-branch.yml))
+- **Branch image** ([docker-branch.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/docker-branch.yml))
   runs on every push to a branch other than `main`. It builds the Linux
   binaries and pushes an image tagged with the branch name: pushing to
-  `dev` gives `ghcr.io/zevaryx/rettui:dev`, and `feature/x` gives
+  `dev` gives `ghcr.io/rettui-dev/rettui:dev`, and `feature/x` gives
   `:feature-x`. A newer push to the same branch cancels an unfinished run.
-- **Wiki** ([wiki.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/wiki.yml))
+- **Wiki** ([wiki.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/wiki.yml))
   copies `wiki/` to this wiki when it changes on `main` or `dev`, or when
   run from *Actions > Wiki > Run workflow*. Edit the pages in `wiki/`, not here: the
   next publish replaces the wiki with them.
-- **Docs** ([docs.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/docs.yml))
-  builds the [documentation site](https://zevaryx.github.io/rettui/) from
+- **Docs** ([docs.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/docs.yml))
+  builds the [documentation site](https://rettui-dev.github.io/rettui/) from
   `wiki/` with Zensical, and publishes it to GitHub Pages from `main`. Pull
   requests that change `wiki/` only build it: a link to a page or heading
   that doesn't exist, or a page left out of `_Sidebar.md`, fails the build.
   `python3 docs/build.py serve` shows it locally (see
-  [docs/README.md](https://github.com/zevaryx/rettui/blob/main/docs/README.md)).
+  [docs/README.md](https://github.com/rettui-dev/rettui/blob/main/docs/README.md)).
 
 Both image workflows push through
-[docker.yml](https://github.com/zevaryx/rettui/blob/main/.github/workflows/docker.yml).
+[docker.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/docker.yml).
 
 To release, bump `version` in `Cargo.toml`, commit, then:
 

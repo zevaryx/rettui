@@ -681,7 +681,7 @@ mod tests {
         for bad in ["demo", "../x", "team/../x", ".hidden/x", "a/b/c", "team/"] {
             assert!(parse_hosted(bad).is_err(), "{bad}");
         }
-        assert_eq!(suggested_name("https://github.com/zevaryx/rettui.git"), "zevaryx/rettui");
+        assert_eq!(suggested_name("https://github.com/rettui-dev/rettui.git"), "rettui-dev/rettui");
         assert_eq!(suggested_name(&format!("rns://{}/public/demo", "ab".repeat(16))), "public/demo");
         assert_eq!(suggested_name("https://example.com/one"), "mirrors/one");
         assert_eq!(suggested_name("https://example.com/a b/.x y"), "a-b/x-y");

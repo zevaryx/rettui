@@ -1,6 +1,6 @@
 ## Release binaries
 
-Each [release](https://github.com/zevaryx/rettui/releases) has a
+Each [release](https://github.com/rettui-dev/rettui/releases) has a
 ready-built `rettui` for:
 
 | System | Archive |
@@ -51,8 +51,8 @@ revisions that build together:
 
 | Submodule | Revision | Why |
 | --- | --- | --- |
-| rsReticulum | `fe7830e` | The [1.5.0 release](https://github.com/ratspeak/rsReticulum/releases/tag/v1.5.0) with two small additions for rettui (a file reply's metadata, and a helper that packs a file name) and SQLite 3.54 (rusqlite 0.42, which fixes RUSTSEC-2026-0459). It's the `rettui-1.5` branch of [zevaryx/rsReticulum](https://github.com/zevaryx/rsReticulum/tree/rettui-1.5). |
-| rsLXMF | `43f85d5` | The 1.5.0 release (it needs rsReticulum 1.5) with rusqlite 0.42 for the same reason: the `rettui-1.5` branch of [zevaryx/rsLXMF](https://github.com/zevaryx/rsLXMF/tree/rettui-1.5) |
+| rsReticulum | `fe7830e` | The [1.5.0 release](https://github.com/ratspeak/rsReticulum/releases/tag/v1.5.0) with two small additions for rettui (a file reply's metadata, and a helper that packs a file name) and SQLite 3.54 (rusqlite 0.42, which fixes RUSTSEC-2026-0459). It's the `rettui-1.5` branch of [rettui-dev/rsReticulum](https://github.com/rettui-dev/rsReticulum/tree/rettui-1.5). |
+| rsLXMF | `43f85d5` | The 1.5.0 release (it needs rsReticulum 1.5) with rusqlite 0.42 for the same reason: the `rettui-1.5` branch of [rettui-dev/rsLXMF](https://github.com/rettui-dev/rsLXMF/tree/rettui-1.5) |
 
 Once ratspeak's rsReticulum and rsLXMF use rusqlite 0.42, point `deps/rsReticulum` and `deps/rsLXMF` back at ratspeak in `.gitmodules` and pin their `main`.
 

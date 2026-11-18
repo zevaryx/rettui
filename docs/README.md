@@ -1,6 +1,6 @@
 # The documentation site
 
-[zevaryx.github.io/rettui](https://zevaryx.github.io/rettui/) is built with
+[rettui-dev.github.io/rettui](https://rettui-dev.github.io/rettui/) is built with
 [Zensical](https://zensical.org/) from the pages in [wiki/](../wiki), which
 stay the one copy: the GitHub wiki is published from them too. Write and
 change pages there.

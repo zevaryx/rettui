@@ -395,7 +395,7 @@ and the other RRC clients can join it as they join rrcd.
 
 ## rngit repositories
 
-rettui can serve git repositories to [rngit](https://github.com/zevaryx/rngit-rs)
+rettui can serve git repositories to [rngit](https://github.com/rettui-dev/rngit-rs)
 clients, so people clone them over Reticulum with `git clone rns://<address>/<group>/<name>.git`
 (the stock `rngit` helper, `git-remote-rns` and rettui's [Repos tab](Repos) all
 work), and push to it. Cloning, fetching, pushing, creating repositories and

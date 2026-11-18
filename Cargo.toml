@@ -228,6 +228,6 @@ opt-level = 3
 
 # rngit-rs takes rsReticulum from git at the commit deps/rsReticulum is on;
 # this makes it use that checkout, so both share one runtime and identity type.
-[patch."https://github.com/zevaryx/rsReticulum"]
+[patch."https://github.com/rettui-dev/rsReticulum"]
 rns-runtime = { path = "deps/rsReticulum/crates/rns-runtime" }
 rns-identity = { path = "deps/rsReticulum/crates/rns-identity" }

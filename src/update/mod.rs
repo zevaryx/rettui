@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 /// This build's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The newest release (GitHub leaves out drafts and prereleases).
-const LATEST: &str = "https://api.github.com/repos/zevaryx/rettui/releases/latest";
+const LATEST: &str = "https://api.github.com/repos/rettui-dev/rettui/releases/latest";
 /// The newest releases and prereleases, newest first (GitHub leaves out
 /// drafts).
-const RECENT: &str = "https://api.github.com/repos/zevaryx/rettui/releases?per_page=30";
+const RECENT: &str = "https://api.github.com/repos/rettui-dev/rettui/releases?per_page=30";
 /// How often it asks, and how soon it asks again after it couldn't.
 pub const EVERY: Duration = Duration::from_secs(24 * 3600);
 pub const RETRY: Duration = Duration::from_secs(3600);
@@ -89,7 +89,7 @@ pub fn is_prerelease(version: &str) -> bool {
 /// What asks GitHub: saying it's rettui and which version, through the
 /// proxy set in the environment if any, trusting what `crate::https` does.
 fn agent(timeout: Duration) -> ureq::Agent {
-    crate::https::agent(timeout).user_agent(&format!("rettui/{VERSION} (+https://github.com/zevaryx/rettui)")).build()
+    crate::https::agent(timeout).user_agent(&format!("rettui/{VERSION} (+https://github.com/rettui-dev/rettui)")).build()
 }
 
 /// The newest release, from GitHub, or with `prereleases` the newest of
@@ -119,10 +119,10 @@ impl Listed {
             return Err(format!("the newest release is called {:?}", self.tag_name));
         }
         // Only GitHub's own pages are linked to.
-        let url = if self.html_url.starts_with("https://github.com/zevaryx/rettui/") {
+        let url = if self.html_url.starts_with("https://github.com/rettui-dev/rettui/") {
             self.html_url
         } else {
-            format!("https://github.com/zevaryx/rettui/releases/tag/{}", self.tag_name)
+            format!("https://github.com/rettui-dev/rettui/releases/tag/{}", self.tag_name)
         };
         Ok(Release { version, url })
     }
@@ -175,16 +175,16 @@ mod tests {
     #[test]
     fn githubs_answer() {
         // As GitHub answered for v1.5.1 (the fields that matter, and some).
-        let body = r#"{"url": "https://api.github.com/repos/zevaryx/rettui/releases/405055621",
-            "html_url": "https://github.com/zevaryx/rettui/releases/tag/v1.5.1", "id": 405055621, "tag_name": "v1.5.1",
+        let body = r#"{"url": "https://api.github.com/repos/rettui-dev/rettui/releases/405055621",
+            "html_url": "https://github.com/rettui-dev/rettui/releases/tag/v1.5.1", "id": 405055621, "tag_name": "v1.5.1",
             "target_commitish": "main", "name": "rettui v1.5.1", "draft": false, "prerelease": false,
             "created_at": "2026-10-06T18:38:15Z", "published_at": "2026-10-06T19:08:15Z"}"#;
         let release = latest_of(body).unwrap();
-        assert_eq!(release, Release { version: "1.5.1".into(), url: "https://github.com/zevaryx/rettui/releases/tag/v1.5.1".into() });
+        assert_eq!(release, Release { version: "1.5.1".into(), url: "https://github.com/rettui-dev/rettui/releases/tag/v1.5.1".into() });
         // A page elsewhere isn't linked to; a tag that isn't a version, or
         // an answer that isn't one, is an error.
-        let elsewhere = body.replace("https://github.com/zevaryx/rettui/releases/tag/v1.5.1", "https://example.com/x");
-        assert_eq!(latest_of(&elsewhere).unwrap().url, "https://github.com/zevaryx/rettui/releases/tag/v1.5.1");
+        let elsewhere = body.replace("https://github.com/rettui-dev/rettui/releases/tag/v1.5.1", "https://example.com/x");
+        assert_eq!(latest_of(&elsewhere).unwrap().url, "https://github.com/rettui-dev/rettui/releases/tag/v1.5.1");
         assert!(latest_of(&body.replace("\"v1.5.1\"", "\"nightly\"")).is_err());
         assert!(latest_of(r#"{"message": "API rate limit exceeded"}"#).is_err());
     }
@@ -196,7 +196,7 @@ mod tests {
                 .iter()
                 .map(|(tag, draft)| {
                     format!(
-                        r#"{{"tag_name": "{tag}", "html_url": "https://github.com/zevaryx/rettui/releases/tag/{tag}", "draft": {draft}}}"#
+                        r#"{{"tag_name": "{tag}", "html_url": "https://github.com/rettui-dev/rettui/releases/tag/{tag}", "draft": {draft}}}"#
                     )
                 })
                 .collect();
@@ -221,7 +221,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("rettui-update-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&path);
         assert_eq!(Checked::load(&path), Checked::default());
-        let release = Release { version: "1.7.0".into(), url: "https://github.com/zevaryx/rettui/releases/tag/v1.7.0".into() };
+        let release = Release { version: "1.7.0".into(), url: "https://github.com/rettui-dev/rettui/releases/tag/v1.7.0".into() };
         let checked = Checked { at: 1_790_000_000, latest: Some(release.clone()) };
         checked.save(&path).unwrap();
         let loaded = Checked::load(&path);

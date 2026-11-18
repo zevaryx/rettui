@@ -1,9 +1,9 @@
 The web UI can run in a container. Each release publishes an image for
-x86-64 and ARM64 to `ghcr.io/zevaryx/rettui`, tagged with the version (`1.2.0`,
+x86-64 and ARM64 to `ghcr.io/rettui-dev/rettui`, tagged with the version (`1.2.0`,
 `1.2`, `1`) and `latest`. To use it, remove `build: .` from
-[compose.yaml](https://github.com/zevaryx/rettui/blob/main/compose.yaml) and set `image: ghcr.io/zevaryx/rettui:latest`,
+[compose.yaml](https://github.com/rettui-dev/rettui/blob/main/compose.yaml) and set `image: ghcr.io/rettui-dev/rettui:latest`,
 then `docker compose up -d`. Every other branch has an image too, named
-after the branch (`ghcr.io/zevaryx/rettui:dev` for `dev`); see
+after the branch (`ghcr.io/rettui-dev/rettui:dev` for `dev`); see
 [Releases and CI](Development#releases-and-ci).
 
 To build the image yourself instead, from a checkout with its submodules:
@@ -14,7 +14,7 @@ docker compose up -d --build
 docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
 ```
 
-- **Data:** [compose.yaml](https://github.com/zevaryx/rettui/blob/main/compose.yaml) keeps everything in `./data`
+- **Data:** [compose.yaml](https://github.com/rettui-dev/rettui/blob/main/compose.yaml) keeps everything in `./data`
   next to it: the identity, settings, messages, cache, and the Reticulum
   config in `./data/reticulum/config`. rettui writes that config the first
   time it starts.

@@ -17,7 +17,7 @@ tag="${1:?usage: aur-pkgbuild.sh <tag> <SHA256SUMS> <out-dir>}"
 sums="${2:?usage: aur-pkgbuild.sh <tag> <SHA256SUMS> <out-dir>}"
 out="${3:?usage: aur-pkgbuild.sh <tag> <SHA256SUMS> <out-dir>}"
 kind="${4:-rettui}"
-repo="${GITHUB_REPOSITORY:-zevaryx/rettui}"
+repo="${GITHUB_REPOSITORY:-rettui-dev/rettui}"
 version="${tag#v}"
 if [[ "$version" == *-* ]]; then
   echo "::error::$tag is a prerelease: the AUR package follows releases only" >&2
