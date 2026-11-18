@@ -57,7 +57,7 @@ it can edit your Reticulum configuration. It is built on:
 - [RRC Chat](RRC-Chat): hubs, rooms, whispers and commands
 - [Notifications](Notifications): desktop and browser notifications, muting
 - [NomadNet Browsing](NomadNet-Browsing): pages, links, forms, images, the cache
-- [Hosting a Node](Hosting-a-Node): your own NomadNet node and its page editor
+- [Hosting a Node](Hosting-a-Node): your own NomadNet node and its page editor, and a public node with no UI (`rettui node`)
 - [Repos](Repos): git repositories on rngit nodes, their releases and work documents
 - [Network](Network): announces heard, interfaces, traffic
 - [RNode Radios](RNode-Radios): flashing a LoRa radio and using it with rettui

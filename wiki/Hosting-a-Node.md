@@ -236,6 +236,62 @@ can show where they came from, so people who had messages waiting on your
 node must send them again. Start rettui afterwards as usual. A node that
 never hosted a propagation node before needs nothing.
 
+## A public node with no UI
+
+`rettui node` runs a public node on a server, with no terminal UI and no
+web UI, as `rnsd` and `lxmd` do together: a transport node that others
+connect to, and a propagation node.
+
+    rettui node                                  # port 4242, with a propagation node
+    rettui node --entry-point 4965 --reachable-on rns.example.org --name "Hilltop"
+
+The first run sets the node up, and prints each change it makes:
+
+- **Reticulum config:** *Transport node* on (`enable_transport = Yes`),
+  and a TCP server interface named `Public entry point`, listening on
+  `0.0.0.0` port 4242 in gateway mode (`mode = gateway`, so it answers path
+  requests for those connecting, as a public node should). If the config
+  has a TCP server already (or a Backbone interface that listens), that one
+  is used instead, and only gets `mode = gateway` if it has no mode.
+- **Settings:** *Host a propagation node* (`pn_enabled`) on.
+
+It only adds what's missing, and never removes or changes a value you set,
+so you can edit the config and settings afterwards, and every later run
+needs no flags. The flags are kept the same way:
+
+| Flag | What it does |
+|------|--------------|
+| `--entry-point PORT` | Others connect on this port: a TCP server on it is added unless one is there. Without it, an existing TCP server is used, else one is added on 4242. |
+| `--listen-ip IP` | The address a new TCP server listens on (default `0.0.0.0`, every address). One already there keeps its own. |
+| `--reachable-on HOST` | The host name or address others reach the node at: the TCP server is announced with it, for interface discovery (`discoverable` and `reachable_on`). |
+| `--no-entry-point` | Adds no TCP server: others connect over the interfaces already in the config. Transport node is still turned on. |
+| `--name NAME` | The name the propagation node announces (`pn_name`; otherwise your display name). |
+| `--no-propagation` | Doesn't turn the propagation node on. One turned on before stays on: set `pn_enabled` to `false` in `settings.json` to stop it. |
+
+Things to know:
+
+- **Which Reticulum config:** without `--rns-config`, and with no
+  `rns_config` in `settings.json`, the node uses its own config in
+  `reticulum/` in the data directory (made the first time), so setting it up
+  changes no other Reticulum program's config. With `rns_config` or
+  `--rns-config`, it sets up that one. The old config is kept as
+  `config.backup`, and in the config's history.
+- **What it runs:** the settings as they are, so a NomadNet node, an RRC
+  hub or an rngit node turned on in the settings is hosted too, and the
+  propagation node's settings above apply. The node never adds or turns on
+  a pipe interface or anything else that runs a program, and has no login
+  or web UI, so nothing that reaches it over the network can change what it
+  runs.
+- **Its log:** it prints its LXMF address, the propagation node's address
+  and how it is, where it listens and how many interfaces are online when it
+  starts and every 10 minutes, and what rettui's Status log says as it
+  happens (interfaces coming and going, announces). `rettui.log` in the data
+  directory has the rest.
+- **Stopping:** Ctrl-C or SIGTERM (`systemctl stop`, `docker stop`) saves
+  everything and leaves the network cleanly. See
+  [Running as a service](Running#running-as-a-service) for a systemd unit,
+  and [Docker](Docker) for a container.
+
 ## RRC hub
 
 An RRC hub is what people chat on in [RRC](RRC-Chat): rooms, their topics

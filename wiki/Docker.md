@@ -48,4 +48,11 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   point** button; restart Reticulum after. To announce it for interface discovery, add
   `discoverable = Yes` and `reachable_on` (the host's public address or
   name). Remove the `"4242:4242"` line from `ports:` if you don't run one.
+- **A node with no web UI:** add `command: node` to the service in the
+  compose file (and remove the `"8740:8740"` line from `ports:`), and the
+  container runs [`rettui node`](Hosting-a-Node#a-public-node-with-no-ui)
+  instead: a transport node on port 4242 and a propagation node, set up the
+  first time it starts. Its flags go after it, for example
+  `command: ["node", "--reachable-on", "rns.example.org"]`. `docker compose
+  logs rettui` shows its status.
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.

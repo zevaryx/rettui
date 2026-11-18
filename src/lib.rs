@@ -30,6 +30,7 @@ mod markdown;
 mod mobile_data;
 mod names;
 mod net;
+mod node;
 mod nomad;
 mod power;
 mod reticulum;
@@ -276,6 +277,16 @@ enum Command {
     /// folder beside the store and are not handed out again: nothing can
     /// show where they came from.
     MigratePropagation,
+    /// Run a public node with no TUI or web UI, as rnsd and lxmd do together.
+    ///
+    /// A transport node with a TCP server interface others connect to (in
+    /// gateway mode, on port 4242 unless given), and a propagation node.
+    /// Only what's missing is added to the Reticulum config and the
+    /// settings, and kept, so the next run needs no flags. It runs until
+    /// SIGINT or SIGTERM, printing its status every 10 minutes. With no
+    /// --rns-config and no rns_config in settings.json, it uses the
+    /// Reticulum config in reticulum/ in the data directory.
+    Node(node::NodeArgs),
     /// Download waiting messages from the propagation node.
     Sync {
         /// Propagation node to use instead of the configured one.
@@ -425,7 +436,12 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Identity { action: IdentityAction::Import { file, name } }) => return cli::import_identity(&paths, file, name),
         _ => {}
     }
-    let mut settings = load_settings(&paths, cli.rns_config.clone())?;
+    // A node keeps a Reticulum config of its own unless told of another.
+    let rns_config = match &cli.command {
+        Some(Command::Node(_)) if cli.rns_config.is_none() => node::own_rns_config(&paths)?,
+        _ => cli.rns_config.clone(),
+    };
+    let mut settings = load_settings(&paths, rns_config)?;
 
     let mut log_options = std::fs::OpenOptions::new();
     log_options.create(true).append(true);
@@ -488,6 +504,7 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Command::Path { address, drop, .. }) => cli::path(&settings, address.as_deref().unwrap_or_default(), drop).await,
         Some(Command::Probe { address, name }) => cli::probe(&settings, &paths, &address, name.as_deref()).await,
         Some(Command::Update { yes }) => cli::update(&settings, yes).await,
+        Some(Command::Node(args)) => node::run(settings, paths, identity, &args).await,
         Some(
             Command::Backup { .. }
             | Command::BackupKey
@@ -739,6 +756,42 @@ mod tests {
         super::settle_name(&mut again, &paths, &identity);
         assert_eq!(super::config::Settings::load(&paths.settings).unwrap().display_name, "Zev");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn node_takes_its_flags_and_refuses_ones_that_disagree() {
+        use clap::Parser;
+        let node = |args: &[&str]| super::Cli::try_parse_from(["rettui", "node"].iter().chain(args)).map(|cli| (cli.command, cli.data_dir));
+        let Ok((Some(super::Command::Node(args)), None)) = node(&[]) else { panic!("no flags is a node") };
+        assert_eq!(args, super::node::NodeArgs::default());
+        let Ok((Some(super::Command::Node(args)), Some(dir))) = node(&[
+            "--entry-point",
+            "4965",
+            "--listen-ip",
+            "::",
+            "--reachable-on",
+            "rns.example.org",
+            "--name",
+            "Hilltop",
+            "--data-dir",
+            "/srv/rettui",
+        ]) else {
+            panic!("every flag")
+        };
+        assert_eq!(dir, std::path::PathBuf::from("/srv/rettui"));
+        assert_eq!(args.entry_point, Some(4965));
+        assert_eq!(args.listen_ip, Some("::".parse().unwrap()));
+        assert_eq!((args.reachable_on.as_deref(), args.name.as_deref()), (Some("rns.example.org"), Some("Hilltop")));
+        for wrong in [
+            &["--entry-point", "0"][..],
+            &["--entry-point", "70000"],
+            &["--listen-ip", "everywhere"],
+            &["--no-entry-point", "--entry-point", "4242"],
+            &["--no-entry-point", "--reachable-on", "x"],
+            &["--no-propagation", "--name", "x"],
+        ] {
+            assert!(node(wrong).is_err(), "{wrong:?}");
+        }
     }
 
     #[test]
