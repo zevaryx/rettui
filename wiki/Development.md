@@ -188,13 +188,13 @@ Actions*), and is skipped with a notice until then. Running it again
 secret.
 
 - **Homebrew:** the tap is a GitHub repository named `homebrew-rettui`
-  (`zevaryx/homebrew-rettui`; another, as `owner/name`, in the
+  (`rettui-dev/homebrew-rettui`; another, as `owner/name`, in the
   repository variable `HOMEBREW_TAP`). The secret
   `HOMEBREW_TAP_DEPLOY_KEY` is the private half of an SSH key whose
   public half is the tap's deploy key, with write access (tap's
   *Settings → Deploy keys*). The job writes the formula to
   `Formula/rettui.rb` (`.github/scripts/publish-homebrew.sh`). Then
-  `brew install zevaryx/rettui/rettui` installs rettui, and
+  `brew install rettui-dev/rettui/rettui` installs rettui, and
   `brew upgrade` the next release.
 - **AUR:** the secret `AUR_SSH_PRIVATE_KEY` is the private half of an SSH
   key whose public half is on the AUR account (*My Account → SSH Public

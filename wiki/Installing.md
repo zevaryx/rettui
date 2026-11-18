@@ -31,7 +31,7 @@ the checksums.
   binary): `yay -S rettui-bin`, or any AUR helper. Each release also has
   its `PKGBUILD`: put it in a folder of its own and run `makepkg -si`
   there.
-- **Homebrew** (macOS and Linux): `brew install zevaryx/rettui/rettui`,
+- **Homebrew** (macOS and Linux): `brew install rettui-dev/rettui/rettui`,
   from rettui's tap.
 
 Installed by a package manager, rettui leaves [updating](#updating) to it.

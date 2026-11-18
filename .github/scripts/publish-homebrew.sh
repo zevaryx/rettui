@@ -5,7 +5,7 @@
 # running it again is harmless. git reaches the tap however it's set up
 # to (in the release workflow, GIT_SSH_COMMAND with the tap's deploy key).
 #
-#   .github/scripts/publish-homebrew.sh v1.7.0 rettui.rb git@github.com:zevaryx/homebrew-rettui.git
+#   .github/scripts/publish-homebrew.sh v1.7.0 rettui.rb git@github.com:rettui-dev/homebrew-rettui.git
 set -euo pipefail
 tag="${1:?usage: publish-homebrew.sh <tag> <formula> <tap-url>}"
 formula="${2:?usage: publish-homebrew.sh <tag> <formula> <tap-url>}"
