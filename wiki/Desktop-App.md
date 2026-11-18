@@ -10,6 +10,13 @@ Closing the window leaves rettui running in the system tray, so messages
 keep arriving (*Keep running when closed* in Settings > System turns that
 off). Links that aren't rettui's open in your browser.
 
+The window talks to rettui over a port on this computer only. rettui takes
+the port itself (the one it used last, or another if a different program
+has it), and the window logs in only after what answers on that port has
+proved it is rettui, so another program on the computer can't be handed
+your login. If it can't prove it, the app says so and doesn't open the
+web UI.
+
 ## Notifications
 
 Notifications are the system's own. On Linux (any desktop with the

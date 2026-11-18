@@ -255,7 +255,14 @@ impl TlsListener {
         let (done, connections) = mpsc::channel(64);
         tokio::spawn(async move {
             loop {
-                let (tcp, peer) = match listener.accept().await {
+                // Stops with the server: the socket may be kept (for the web UI
+                // to start again on) and must not lose connections to a task
+                // that has nobody to give them to.
+                let accepted = tokio::select! {
+                    _ = done.closed() => break,
+                    accepted = listener.accept() => accepted,
+                };
+                let (tcp, peer) = match accepted {
                     Ok(accepted) => accepted,
                     Err(e) => {
                         tracing::debug!("web UI accept: {e}");

@@ -26,6 +26,8 @@ mod tiles;
 pub mod tls;
 mod views;
 
+pub use routes::{hello_matches, hello_nonce};
+
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
@@ -374,6 +376,80 @@ mod listen_tests {
         assert_eq!(listen(free, true).await.unwrap().local_addr().unwrap(), free);
         assert_ne!(listen("127.0.0.1:0".parse().unwrap(), false).await.unwrap().local_addr().unwrap().port(), 0);
     }
+
+    /// What an identity switch does: the web UI ends, and starts again on a copy of the same socket.
+    #[tokio::test]
+    async fn the_port_stays_bound_while_the_web_ui_starts_over() {
+        let bound = bind_with("127.0.0.1:0", None, None).await.unwrap();
+        let address = bound.local_addr().unwrap();
+        // The first run ends: its copy closes.
+        let first = tokio::net::TcpListener::from_std(bound.try_clone().unwrap()).unwrap();
+        drop(first);
+        // Another program can't take the port in between.
+        let error = std::net::TcpListener::bind(address).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        // A page that reconnects meanwhile waits to be served, by the next run.
+        let waiting = tokio::net::TcpStream::connect(address).await.unwrap();
+        let second = tokio::net::TcpListener::from_std(bound.try_clone().unwrap()).unwrap();
+        let (_, from) = second.accept().await.unwrap();
+        assert_eq!(from, waiting.local_addr().unwrap());
+        // An address that is wrong or held is still said so, once, as before.
+        assert!(format!("{:#}", bind_with("nonsense", None, None).await.unwrap_err()).contains("--web expects an address"));
+        assert!(format!("{:#}", bind_with(&address.to_string(), None, None).await.unwrap_err()).contains("could not listen"));
+    }
+
+    /// An app that sets a port file (the desktop app) is told which port it got, and keeps it between starts.
+    #[tokio::test]
+    async fn an_app_keeps_its_port_between_starts() {
+        let dir = std::env::temp_dir().join(format!("rettui-keep-port-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("port");
+        let kept = std::sync::Mutex::new(Vec::new());
+        let holder = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let held = holder.local_addr().unwrap();
+        // The port asked for is held: another one, said in the file.
+        let first = bind_with(&held.to_string(), Some(&file), Some(&kept)).await.unwrap();
+        let got = first.local_addr().unwrap();
+        assert_ne!(got.port(), held.port());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), got.port().to_string());
+        drop(first);
+        std::fs::remove_file(&file).unwrap();
+        // Started again asking for that port (after a restore): the same socket, so no other program had it meanwhile.
+        let again = bind_with(&got.to_string(), Some(&file), Some(&kept)).await.unwrap();
+        assert_eq!(again.local_addr().unwrap(), got);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), got.port().to_string());
+        assert_eq!(std::net::TcpListener::bind(got).unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+        // Another address kept meanwhile (another app in the process, as the tests are) does not let this one go.
+        let other = bind_with("127.0.0.1:0", Some(&file), Some(&kept)).await.unwrap();
+        assert_ne!(other.local_addr().unwrap(), got);
+        let third = bind_with(&got.to_string(), Some(&file), Some(&kept)).await.unwrap();
+        assert_eq!(third.local_addr().unwrap(), got);
+        drop((other, third));
+        assert_eq!(std::net::TcpListener::bind(got).unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+        // Without keeping, the port is let go.
+        drop((again, kept));
+        assert!(std::net::TcpListener::bind(got).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Puts what `set_port_file` set back, however the test ends.
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            *PORT_FILE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            KEPT.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
+    }
+
+    /// The only test that sets the process's port file: the desktop app's
+    /// start is what prints no login link.
+    #[test]
+    fn setting_a_port_file_is_starting_by_an_app() {
+        let _reset = Reset;
+        assert!(!started_by_app());
+        set_port_file(std::env::temp_dir().join("rettui-never-written"));
+        assert!(started_by_app());
+    }
 }
 
 #[cfg(unix)]
@@ -611,9 +687,13 @@ fn reachable_ip(listening: IpAddr) -> Option<IpAddr> {
 /// writes the port it listens on to once it is listening.
 const PORT_FILE_ENV: &str = "RETTUI_PORT_FILE";
 
-/// Whether the Android app started rettui: it logs in with the token file,
-/// and shows what rettui prints as its log, so no login link is printed.
+/// Whether an app started rettui (the Android app, or the desktop app, which
+/// says so with [`set_port_file`]): it logs in with the token file, and shows
+/// what rettui prints as its log, so no login link is printed.
 fn started_by_app() -> bool {
+    if PORT_FILE.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+        return true;
+    }
     std::env::var_os(PORT_FILE_ENV).is_some()
 }
 
@@ -638,6 +718,31 @@ mod login_notice_tests {
     }
 }
 
+/// The same file, for a program that runs rettui in-process (the desktop
+/// app) and would rather not change the environment of a running process.
+static PORT_FILE: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// The socket an app's web UI listens on, kept while rettui is stopped and
+/// started again in the same process (a restore): the port is never free in
+/// between, for another program to take while the app's page still reconnects
+/// to it with its login.
+static KEPT: std::sync::Mutex<Vec<std::net::TcpListener>> = std::sync::Mutex::new(Vec::new());
+
+/// Have the web UI write the port it listens on to `file`, once it is
+/// listening (and take another port if the one asked for is held), as
+/// `RETTUI_PORT_FILE` does for the Android app. Unlike that, the socket is
+/// then kept for as long as the process runs, and a later [`bind`] of the same
+/// address gets it again.
+pub fn set_port_file(file: std::path::PathBuf) {
+    *PORT_FILE.lock().unwrap_or_else(|e| e.into_inner()) = Some(file);
+}
+
+/// Where to write the port: [`set_port_file`]'s file, else the environment's.
+fn port_file() -> Option<std::path::PathBuf> {
+    let set = PORT_FILE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    set.or_else(|| std::env::var_os(PORT_FILE_ENV).map(std::path::PathBuf::from))
+}
+
 /// Listen on `address`; if its port is taken and `any_port`, on a free one.
 async fn listen(address: SocketAddr, any_port: bool) -> Result<tokio::net::TcpListener> {
     match tokio::net::TcpListener::bind(address).await {
@@ -650,27 +755,75 @@ async fn listen(address: SocketAddr, any_port: bool) -> Result<tokio::net::TcpLi
     }
 }
 
-/// The web UI, until it's stopped; or the name of the identity it's
-/// switching to (it's started again as that one).
-pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: &str, https: Option<tls::Https>) -> Result<Option<String>> {
+/// Binds the web UI's address, once: [`run`] is given (a copy of) the socket,
+/// so that it stays bound while the web UI starts over as another identity,
+/// and no other program can take the port in between. If its port is taken
+/// and a port file is set, any free port is taken, and said in the port file.
+pub async fn bind(address: &str) -> Result<std::net::TcpListener> {
+    let keep = PORT_FILE.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+    bind_with(address, port_file().as_deref(), keep.then_some(&KEPT)).await
+}
+
+/// [`bind`] with what it takes from the process (the port file, and where to
+/// keep the socket, if it is to be kept) given.
+async fn bind_with(
+    address: &str,
+    port_file: Option<&std::path::Path>,
+    keep: Option<&std::sync::Mutex<Vec<std::net::TcpListener>>>,
+) -> Result<std::net::TcpListener> {
     let address: SocketAddr = address.parse().with_context(|| format!("--web expects an address like {DEFAULT_ADDRESS}, not {address}"))?;
+    // The Android app asks for the port it had, but another app may be
+    // holding it: then any free one, which it is told of (see below).
+    // One for each address, and none let go for another: a socket that is
+    // replaced frees its port for another program, while a page may still
+    // reconnect to it.
+    let kept = keep.and_then(|kept| {
+        let kept = kept.lock().unwrap_or_else(|e| e.into_inner());
+        kept.iter().find(|l| l.local_addr().is_ok_and(|a| a == address)).and_then(|l| l.try_clone().ok())
+    });
+    let listener = match kept {
+        Some(kept) => kept,
+        None => {
+            let listener = listen(address, port_file.is_some()).await?.into_std().context("could not listen")?;
+            if let Some(keep) = keep
+                && let Ok(copy) = listener.try_clone()
+            {
+                keep.lock().unwrap_or_else(|e| e.into_inner()).push(copy);
+            }
+            listener
+        }
+    };
+    // The port it has (not the one asked for, which may be 0), and only now,
+    // that is bound, said to the app: a port file written before could be
+    // read while another app held the port.
+    if let Some(file) = port_file {
+        let port = listener.local_addr()?.port();
+        crate::config::write_atomic(file, port.to_string().as_bytes()).context("could not write the port file")?;
+    }
+    Ok(listener)
+}
+
+/// The web UI on `listener` (from [`bind`]), until it's stopped; or the name
+/// of the identity it's switching to (it's started again as that one).
+pub async fn run(
+    listener: std::net::TcpListener,
+    settings: Settings,
+    paths: Paths,
+    identity: Identity,
+    https: Option<tls::Https>,
+) -> Result<Option<String>> {
+    let address = listener.local_addr()?;
     let token = load_token(&paths)?;
     // Certificates first: a problem with them stops rettui before it starts.
     let served = match &https {
         Some(how) => Some(tls::prepare(how, &paths.web_tls, address.ip()).context("could not set up HTTPS")?),
         None => None,
     };
-    // The Android app asks for the port it had, but another app may be
-    // holding it: then any free one, which it is told of (see below).
-    let port_file = std::env::var_os(PORT_FILE_ENV).map(std::path::PathBuf::from);
-    let listener = listen(address, port_file.is_some()).await?;
-    // The port it has (not the one asked for, which may be 0), and only now,
-    // that is bound, said to the app: a port file written before could be
-    // read while another app held the port.
-    let address = SocketAddr::new(address.ip(), listener.local_addr()?.port());
-    if let Some(file) = &port_file {
-        crate::config::write_atomic(file, address.port().to_string().as_bytes()).context("could not write the port file")?;
-    }
+    // A copy of the socket: this one closes when the web UI stops, the
+    // caller's stays bound.
+    // (Whether a copy of a socket shares its blocking mode is up to the system.)
+    listener.set_nonblocking(true).context("could not listen")?;
+    let listener = tokio::net::TcpListener::from_std(listener).context("could not listen")?;
 
     let identity_hash = identity.hash;
     let store = Store::load_with_db(&paths.store, &paths.db);
@@ -840,6 +993,9 @@ pub async fn run(settings: Settings, paths: Paths, identity: Identity, address: 
     };
     owner.app.save_if_dirty();
     server.abort();
+    // Until it has ended, so this copy of the socket is closed and takes no
+    // more connections for a web UI that has stopped.
+    let _ = server.await;
     net::shutdown(&net_tx, &mut net_rx, net::Stop::Quit).await;
     owner.app.finish_saves();
     result

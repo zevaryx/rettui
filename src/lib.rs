@@ -44,6 +44,8 @@ mod web;
 
 /// What only the desktop app's own window may do (see its docs).
 pub use web::desktop as manage;
+/// What the desktop app needs to check that what holds the web UI's port is rettui before it sends the login secret there.
+pub use web::{hello_matches, hello_nonce, set_port_file};
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -457,7 +459,9 @@ async fn run(cli: Cli) -> Result<()> {
         let (mut settings, mut paths, mut identity) = (settings, paths, identity);
         set_tray(&settings);
         // Switching identity starts the web UI over as the other one.
-        while web::run(settings, paths, identity, &address, https.clone()).await?.is_some() {
+        // Bound once: the port stays held while it starts over as the other one.
+        let listener = web::bind(&address).await?;
+        while web::run(listener.try_clone()?, settings, paths, identity, https.clone()).await?.is_some() {
             (settings, paths, identity) = switched(&cli.data_dir, cli.rns_config.clone())?;
             set_tray(&settings);
         }

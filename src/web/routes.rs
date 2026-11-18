@@ -575,10 +575,33 @@ async fn face(Path(address): Path<String>) -> Response {
 /// it is talking to. With the port in it, a program that holds another port
 /// can't pass a client's question on to rettui and hand back the answer.
 fn hello_proof(token: &str, port: u16, nonce: &str) -> String {
-    use hmac::{Hmac, Mac};
-    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(token.as_bytes()).expect("HMAC takes a key of any length");
+    use hmac::Mac;
+    hex::encode(hello_mac(token, port, nonce).finalize().into_bytes())
+}
+
+/// The HMAC (SHA-256), keyed by the token, of the nonce and the port that `hello` answers with.
+fn hello_mac(token: &str, port: u16, nonce: &str) -> hmac::Hmac<sha2::Sha256> {
+    use hmac::Mac;
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(token.as_bytes()).expect("HMAC takes a key of any length");
     mac.update(format!("rettui-hello:{port}:{nonce}").as_bytes());
-    hex::encode(mac.finalize().into_bytes())
+    mac
+}
+
+/// A fresh nonce to ask `hello` with: 32 hex digits from the system's random source.
+pub fn hello_nonce() -> String {
+    hex::encode(rand::random::<[u8; 16]>())
+}
+
+/// Whether `said` is what a rettui that holds `token` answers on `port` to
+/// `nonce`. For a program that runs rettui in-process (the desktop app) and
+/// must not send the token to another program that holds the port. The
+/// comparison takes the same time whatever `said` is.
+pub fn hello_matches(token: &str, port: u16, nonce: &str, said: &str) -> bool {
+    use hmac::Mac;
+    let Ok(said) = hex::decode(said.trim()) else {
+        return false;
+    };
+    hello_mac(token, port, nonce).verify_slice(&said).is_ok()
 }
 
 /// Proof that this is rettui, for the Android app to ask before it sends the
@@ -3568,6 +3591,24 @@ mod tests {
         assert!(tokens(&[("authorization", "Basic abc")]).is_empty());
         assert!(tokens(&[("cookie", "rettui_tokenx=abc")]).is_empty());
         assert!(tokens(&[]).is_empty());
+    }
+
+    #[test]
+    fn hello_is_checked_against_the_token_and_the_port() {
+        let nonce = hello_nonce();
+        assert_eq!(nonce.len(), 32);
+        assert!(nonce.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(nonce, hello_nonce());
+        let said = hello_proof("secret", 8741, &nonce);
+        assert!(hello_matches("secret", 8741, &nonce, &said));
+        assert!(hello_matches("secret", 8741, &nonce, &format!(" {said}\r\n")));
+        // Another token, port or nonce, and anything that isn't an answer.
+        assert!(!hello_matches("other", 8741, &nonce, &said));
+        assert!(!hello_matches("secret", 8742, &nonce, &said));
+        assert!(!hello_matches("secret", 8741, &hello_nonce(), &said));
+        for bad in ["", "zz", "00", &said[..said.len() - 2], &format!("{said}00"), "g".repeat(64).as_str()] {
+            assert!(!hello_matches("secret", 8741, &nonce, bad), "{bad}");
+        }
     }
 
     #[test]
