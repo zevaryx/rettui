@@ -438,7 +438,7 @@ async fn run(cli: Cli) -> Result<()> {
     }
     // A node keeps a Reticulum config of its own unless told of another.
     let rns_config = match &cli.command {
-        Some(Command::Node(_)) if cli.rns_config.is_none() => node::own_rns_config(&paths)?,
+        Some(Command::Node(_)) => node::rns_config(&paths, cli.rns_config.clone())?,
         _ => cli.rns_config.clone(),
     };
     let mut settings = load_settings(&paths, rns_config)?;
@@ -789,6 +789,8 @@ mod tests {
             &["--no-entry-point", "--entry-point", "4242"],
             &["--no-entry-point", "--reachable-on", "x"],
             &["--no-propagation", "--name", "x"],
+            &["--reachable-on", "a#b"],
+            &["--reachable-on", "\"quoted\""],
         ] {
             assert!(node(wrong).is_err(), "{wrong:?}");
         }
