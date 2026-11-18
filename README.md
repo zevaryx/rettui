@@ -88,7 +88,7 @@ To build it yourself: `git clone --recursive` this repository, then
 ## Documentation
 
 Everything else is on the documentation site,
-[rettui-dev.github.io/rettui](https://rettui-dev.github.io/rettui/), and in the
+[docs.rettui.dev](https://docs.rettui.dev/), and in the
 [wiki](https://github.com/rettui-dev/rettui/wiki): both are built from [wiki/](wiki) in this repository.
 
 - **Getting started:** [Installing](https://github.com/rettui-dev/rettui/wiki/Installing) ·

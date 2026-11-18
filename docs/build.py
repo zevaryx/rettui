@@ -153,6 +153,7 @@ def write() -> None:
     for page, text in sorted(pages.items()):
         title = "rettui" if page == HOME else titles.get(page, page.replace("-", " "))
         (PAGES / file_of(page)).write_text(convert(page, text, title, pages, problems))
+    (PAGES / "CNAME").write_text("docs.rettui.dev\n")  # the site's own domain, for Pages
     if problems:
         sys.exit("The pages can't be built:\n  " + "\n  ".join(problems))
 

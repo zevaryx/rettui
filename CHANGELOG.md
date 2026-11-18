@@ -13,7 +13,7 @@ Changes since v2.0.0: `rettui node`, a public node with no UI (a transport node 
 - **Reticulum config backups are private:** a Reticulum config can hold IFAC passphrases. The `config.backup` rettui keeps when it changes the file, and a config it makes, are now readable by you only (before, a backup took the config's permissions, and a new config the usual ones for new files). A config you made keeps its own permissions. See [Settings and Reticulum Config](https://github.com/rettui-dev/rettui/wiki/Settings-and-Reticulum-Config).
 
 ### Docs and development
-- **rettui now lives in the `rettui-dev` organisation on GitHub:** the repository, its `deps/` submodules (rsReticulum, rsLXMF, lrgp-rs, rngit-rs), the update check, the Homebrew tap (`brew install rettui-dev/rettui/rettui`), the Docker image (`ghcr.io/rettui-dev/rettui`), the documentation site (`rettui-dev.github.io/rettui`) and the links in the docs now point there. The old addresses redirect for now. See [Development](https://github.com/rettui-dev/rettui/wiki/Development).
+- **rettui now lives in the `rettui-dev` organisation on GitHub:** the repository, its `deps/` submodules (rsReticulum, rsLXMF, lrgp-rs, rngit-rs), the update check, the Homebrew tap (`brew install rettui-dev/rettui/rettui`), the Docker image (`ghcr.io/rettui-dev/rettui`), the documentation site (`docs.rettui.dev`) and the links in the docs now point there. The old addresses redirect for now. See [Development](https://github.com/rettui-dev/rettui/wiki/Development).
 
 ## v2.0.0
 
@@ -406,7 +406,7 @@ Changes since v1.5.1.
 - The `P`/`T` hints were missing while a Network search was active.
 
 ### Docs and development
-- A documentation site, [rettui-dev.github.io/rettui](https://rettui-dev.github.io/rettui), built from `wiki/` with Zensical.
+- A documentation site, [docs.rettui.dev](https://docs.rettui.dev), built from `wiki/` with Zensical.
 - Instructions for running rettui as a systemd service.
 - The code is formatted with rustfmt, and CI checks it.
 - A release's notes are its section of this changelog; tagging fails without one.

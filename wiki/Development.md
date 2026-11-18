@@ -161,7 +161,7 @@ The workflows are in [.github/workflows](https://github.com/rettui-dev/rettui/tr
   run from *Actions > Wiki > Run workflow*. Edit the pages in `wiki/`, not here: the
   next publish replaces the wiki with them.
 - **Docs** ([docs.yml](https://github.com/rettui-dev/rettui/blob/main/.github/workflows/docs.yml))
-  builds the [documentation site](https://rettui-dev.github.io/rettui/) from
+  builds the [documentation site](https://docs.rettui.dev/) from
   `wiki/` with Zensical, and publishes it to GitHub Pages from `main`. Pull
   requests that change `wiki/` only build it: a link to a page or heading
   that doesn't exist, or a page left out of `_Sidebar.md`, fails the build.
