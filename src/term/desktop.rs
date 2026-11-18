@@ -576,7 +576,7 @@ mod platform_tests {
     }
 }
 
-#[cfg(all(test, unix, not(target_os = "macos")))]
+#[cfg(all(test, unix, not(any(target_os = "macos", target_os = "android"))))]
 mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
