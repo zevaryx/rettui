@@ -262,15 +262,24 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 /// Asks for the link, or its token: an app added to a phone's home screen
-/// keeps its own cookies and has no address bar to open the link in.
+/// keeps its own cookies and has no address bar to open the link in. The
+/// token is sent by POST, so it is not put in the address or the history, and
+/// the field is a masked text input rather than a password input, so the
+/// browser doesn't offer to save the token (and then fill it into a page).
 const LOGIN_PAGE: &str = "<!doctype html><meta charset=utf-8><title>rettui</title>\
 <meta name=viewport content=\"width=device-width, initial-scale=1\">\
 <link rel=icon type=image/png href=brand/icon.png><link rel=manifest href=manifest.webmanifest crossorigin=use-credentials>\
 <body style=\"font-family:sans-serif;background:#16161e;color:#ddd;padding:2em;line-height:1.5\">\
 <h1><img src=brand/wordmark.png alt=rettui height=36></h1><p>Open the link that <code>rettui --web</code> printed (it ends in <code>?token=…</code>) to log in.</p>\
-<form method=get action=.><p><label>Or paste its token (after <code>token=</code>):<br>\
-<input name=token type=password autocomplete=current-password required \
-style=\"font:inherit;padding:.4em;width:min(28em,100%);box-sizing:border-box\"></label></p><p><button style=\"font:inherit;padding:.4em 1.2em\">Log in</button></p></form>";
+<form method=post action=.><p><label>Or paste its token (after <code>token=</code>):<br>\
+<input name=token type=text autocomplete=off autocorrect=off spellcheck=false autocapitalize=off data-lpignore=true data-1p-ignore required \
+style=\"font:inherit;padding:.4em;width:min(28em,100%);box-sizing:border-box;-webkit-text-security:disc;text-security:disc\"></label></p><p><button style=\"font:inherit;padding:.4em 1.2em\">Log in</button></p></form>";
+
+/// Answers a login form that did not come from the login page itself.
+const LOGIN_REFUSED: &str = "<!doctype html><meta charset=utf-8><title>rettui</title>\
+<body style=\"font-family:sans-serif;background:#16161e;color:#ddd;padding:2em;line-height:1.5\">\
+<h1>Login refused</h1><p>The login form was refused because the request did not come from this page. \
+Use the login link that <code>rettui --web</code> printed instead (it ends in <code>?token=…</code>).</p>";
 
 /// Served without logging in: the logo and icons, for the login page and an
 /// app added to a home screen; the manifest (browsers fetch it without the
@@ -313,17 +322,62 @@ fn same_origin(request: &Request) -> bool {
     }
 }
 
+/// How much of a login form's body is read: the token is 48 characters.
+const MAX_LOGIN_FORM: usize = 4096;
+
+/// The value of `name` in a form body (`application/x-www-form-urlencoded`),
+/// decoded; None if absent or not UTF-8.
+fn form_value(body: &[u8], name: &str) -> Option<String> {
+    let pair = body.split(|&b| b == b'&').find_map(|pair| pair.strip_prefix(name.as_bytes())?.strip_prefix(b"="))?;
+    let mut out = Vec::with_capacity(pair.len());
+    let mut bytes = pair.iter().copied();
+    while let Some(b) = bytes.next() {
+        match b {
+            b'+' => out.push(b' '),
+            b'%' => {
+                // Two hex digits only: from_str_radix would also take a leading `+`.
+                let digit = |b: u8| char::from(b).to_digit(16);
+                out.push(u8::try_from(digit(bytes.next()?)? * 16 + digit(bytes.next()?)?).ok()?);
+            }
+            _ => out.push(b),
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// A login by the token: the cookie and on to the page, or the login page.
+fn log_in(state: &WebState, token: &str) -> Response {
+    if same(token, &state.token()) {
+        let secure = if state.https { "; Secure" } else { "" };
+        let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}");
+        (StatusCode::SEE_OTHER, [(header::LOCATION, "./".to_string()), (header::SET_COOKIE, cookie)]).into_response()
+    } else {
+        (StatusCode::UNAUTHORIZED, axum::response::Html(LOGIN_PAGE)).into_response()
+    }
+}
+
 async fn auth(State(state): State<WebState>, request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     let query_token = request.uri().query().and_then(|q| q.split('&').find_map(|p| p.strip_prefix("token=")).map(str::to_string));
-    let mut response = if let Some(token) = query_token.filter(|_| path == "/") {
-        if same(&token, &state.token()) {
-            let secure = if state.https { "; Secure" } else { "" };
-            let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}");
-            (StatusCode::SEE_OTHER, [(header::LOCATION, "./".to_string()), (header::SET_COOKIE, cookie)]).into_response()
+    let mut response = if path == "/" && *request.method() == axum::http::Method::POST {
+        // The login form: the token comes in the body, not the address. It
+        // is a request that changes something (it sets the cookie), so it
+        // gets the same cross-origin rule as the others.
+        let current = state.token();
+        if !same_origin(&request) {
+            // A page, so a person who got here (a proxy that rewrites Host, a
+            // privacy setting that sends `Origin: null`) is told what to do.
+            (StatusCode::FORBIDDEN, axum::response::Html(LOGIN_REFUSED)).into_response()
+        } else if presented_tokens(request.headers()).any(|t| same(t, &current)) {
+            // Already logged in (a second tab, a stale form): on to the page.
+            (StatusCode::SEE_OTHER, [(header::LOCATION, "./")]).into_response()
         } else {
-            (StatusCode::UNAUTHORIZED, axum::response::Html(LOGIN_PAGE)).into_response()
+            let body = axum::body::to_bytes(request.into_body(), MAX_LOGIN_FORM).await.unwrap_or_default();
+            let posted = form_value(&body, "token").unwrap_or_default();
+            log_in(&state, posted.trim())
         }
+    } else if let Some(token) = query_token.filter(|_| path == "/") {
+        log_in(&state, &token)
     } else {
         let current = state.token();
         let logged_in = presented_tokens(request.headers()).any(|t| same(t, &current));

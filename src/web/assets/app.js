@@ -158,6 +158,21 @@ const api = {
   delete: (path) => request('DELETE', path),
 };
 
+// Whether the browser filled `input` in itself (a saved login or address).
+// The two selectors are tried one at a time: a browser that doesn't know one
+// throws on it, and a list with an unknown selector matches nothing. This
+// only sees the browser's own autofill, not a password manager extension that
+// sets the value from a script.
+function autofilled(input) {
+  return [':autofill', ':-webkit-autofill'].some((selector) => {
+    try {
+      return input.matches(selector);
+    } catch {
+      return false;
+    }
+  });
+}
+
 function toast(text, error = false) {
   const node = el('div', { class: 'toast' + (error ? ' error' : ''), text, title: 'Tap to dismiss', role: 'status' });
   $('#toasts').append(node);
@@ -3483,7 +3498,8 @@ async function gettingStarted() {
         el('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer', text: '↗ ' + l.title }),
         l.note ? el('span', { class: 'dim help', text: l.note }) : null))),
     el('div', { class: 'row actions' },
-      el('button', { text: 'Not now', onclick: () => close() }),
+      el('button', { text: 'Not now', title: 'You can open this guide again from the Status page.', onclick: () => close() }),
+      el('span', { class: 'dim help', text: 'You can open this guide again from the Status page.' }),
       el('span', { class: 'grow' }),
       el('button', { class: 'primary', text: 'Apply', title: g.help.apply, onclick: async () => {
         const body = { name: name.value, connect: entries.map((o) => o.box.checked && !o.box.disabled) };
@@ -6738,8 +6754,14 @@ app.views.browser = {
     const page = this.page;
     const node = this.content.querySelector(`.m-partial[data-index="${i}"]`);
     if (!node || this.partials.page !== page || this.partials.loading[i]) return;
+    const fields = this.formFields(node.dataset.fields ? node.dataset.fields.split('|') : [], true);
+    if (!fields) {
+      // The masked fields are cleared now, so the next try (a timer tick, or
+      // the link that reloads it) goes through; no message on every tick.
+      node.replaceChildren(el('span', { class: 'error', text: 'Not loaded: your browser filled in a masked field on this page.' }));
+      return;
+    }
     this.partials.loading[i] = true;
-    const fields = this.formFields(node.dataset.fields ? node.dataset.fields.split('|') : []);
     let html;
     try {
       html = (await api.post('/partial', { url: node.dataset.url, page: page.url, fields })).html;
@@ -6780,13 +6802,22 @@ app.views.browser = {
   },
 
   // The page's form values (and variables) a link or partial asks for:
-  // `spec` is names, `*` for all, or `var=value`.
-  formFields(spec) {
+  // `spec` is names, `*` for all, or `var=value`. Only the page's own fields
+  // count (`.m-field`, and the choices inside `.m-choice`). If the browser
+  // filled in a masked field itself (a saved login, say) nothing is sent: the
+  // masked fields are cleared and this returns null, since the page's node
+  // would get the value. This is a backstop: it sees the browser's own
+  // autofill, not an extension that sets a value from a script. A link click
+  // says so in a message; `quiet` (a partial, which may reload on a timer)
+  // leaves that to the caller.
+  formFields(spec, quiet = false) {
     const fields = {};
     const all = spec.includes('*');
-    for (const input of this.content.querySelectorAll('input[name], textarea[name]')) {
+    const filled = [];
+    for (const input of this.content.querySelectorAll('input.m-field[name], textarea.m-field[name], .m-choice input[name]')) {
       const name = input.name;
       if (!all && !spec.includes(name)) continue;
+      if (input.classList.contains('m-masked') && autofilled(input)) filled.push(input);
       const key = 'field_' + name;
       if (input.type === 'checkbox') {
         if (input.checked) fields[key] = fields[key] ? fields[key] + ',' + input.value : input.value;
@@ -6795,6 +6826,11 @@ app.views.browser = {
       } else {
         fields[key] = input.value;
       }
+    }
+    if (filled.length) {
+      for (const input of filled) input.value = '';
+      if (!quiet) toast('Your browser filled in a masked field on this page, so nothing was sent. Type the value yourself and try again.', true);
+      return null;
     }
     for (const item of spec) {
       const eq = item.indexOf('=');
@@ -7004,7 +7040,9 @@ app.views.browser = {
       return;
     }
     const spec = link.dataset.fields ? link.dataset.fields.split('|') : [];
-    const options = spec.length ? { fields: this.formFields(spec) } : {};
+    const fields = spec.length ? this.formFields(spec) : {};
+    if (!fields) return;
+    const options = spec.length ? { fields } : {};
     // Ctrl (⌘) or the middle button: in a new tab.
     const elsewhere = (e.ctrlKey || e.metaKey || e.button === 1) && !/^(lxmf|rrc)/.test(url);
     if (elsewhere) this.newTab(url, options);

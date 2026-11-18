@@ -9,7 +9,9 @@ rettui web UI: http://127.0.0.1:8740/?token=…
 - **Logging in:** the link logs that browser in with a cookie, and stays valid
   across restarts. Keep it private. Anyone with the link can read and send your
   messages as you. The login page also takes the token (the part after
-  `token=`) pasted in.
+  `token=`) pasted in; it sends it in the body of a POST, so the token is not
+  put in the address, and its field is masked without being a password field,
+  so a browser doesn't offer to save the token.
 - **Signing the others out:** if the link got around, or a phone with it
   was lost, **Sign out the others** (Status, *Browsers*) makes a new token.
   Every other browser, and scripts using the old token, must log in again

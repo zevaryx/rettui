@@ -1225,6 +1225,21 @@ pub(crate) mod testing {
             self.send(Method::DELETE, path, None, false).await
         }
 
+        /// A form posted without logging in, as the login page's form does.
+        pub async fn post_form(&self, path: &str, body: &str) -> Answer {
+            self.post_form_with(path, body, &[]).await
+        }
+
+        /// The same, with more request headers.
+        pub async fn post_form_with(&self, path: &str, body: &str, headers: &[(&str, &str)]) -> Answer {
+            let mut request =
+                Request::builder().method(Method::POST).uri(path).header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+            for (name, value) in headers {
+                request = request.header(*name, *value);
+            }
+            self.answer(request.body(Body::from(body.to_string())).unwrap()).await
+        }
+
         /// Raw bytes posted (an upload).
         pub async fn post_bytes(&self, path: &str, content_type: &str, bytes: Vec<u8>) -> Answer {
             let request = Request::builder()

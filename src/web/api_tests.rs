@@ -101,6 +101,74 @@ async fn a_copy_of_the_settings_is_fetched_by_a_random_name_as_a_backup_is() {
 }
 
 #[tokio::test]
+async fn the_login_form_posts_the_token_and_does_not_invite_saving_it() {
+    let web = TestWeb::start("login-form");
+    let page = web.send(Method::GET, "/", None, true).await;
+    assert_eq!(page.status, StatusCode::UNAUTHORIZED);
+    let html = page.text();
+    let form = &html[html.find("<form").expect("a form")..];
+    let form = &form[..form.find("</form>").expect("form ends")];
+    // Posted, so the token is not in the address.
+    assert!(form.contains("method=post"), "{form}");
+    // The token's own input is masked but not a password input, and does not
+    // ask to be remembered (checked on that tag, not anywhere in the form).
+    let input = &form[form.find("<input name=token").expect("the token input")..];
+    let input = &input[..input.find('>').expect("input ends")];
+    for needed in
+        ["type=text", "autocomplete=off", "autocorrect=off", "autocapitalize=off", "spellcheck=false", "-webkit-text-security:disc"]
+    {
+        assert!(input.contains(needed), "{needed}: {input}");
+    }
+    assert!(!input.contains("type=password") && !input.contains("current-password"), "{input}");
+
+    // A POST login sets the cookie and goes on to the page; the cookie works.
+    let login = web.post_form("/", &format!("token={TOKEN}")).await;
+    assert_eq!(login.status, StatusCode::SEE_OTHER);
+    let cookie = login.headers[header::SET_COOKIE].to_str().unwrap().to_string();
+    assert!(cookie.starts_with(&format!("rettui_token={TOKEN};")) && cookie.contains("HttpOnly"), "{cookie}");
+    assert_eq!(login.headers[header::LOCATION], "./");
+    let cookie_header = format!("rettui_token={TOKEN}");
+    assert_eq!(web.send_with(Method::GET, "/api/state", None, true, &[("cookie", &cookie_header)]).await.status, StatusCode::OK);
+    // A pasted token with a space around it (form-encoded) still logs in.
+    assert_eq!(web.post_form("/", &format!("token=%20{TOKEN}+")).await.status, StatusCode::SEE_OTHER);
+    // Wrong, empty, missing, malformed or too long: the login page, no cookie.
+    let long = format!("token={}", "a".repeat(100_000));
+    for body in ["token=nope", "token=", "other=1", "", "token=%zz", "token=%", "token=%ff", long.as_str()] {
+        let refused = web.post_form("/", body).await;
+        assert_eq!(refused.status, StatusCode::UNAUTHORIZED, "{body:.20}");
+        assert!(!refused.headers.contains_key(header::SET_COOKIE), "{body:.20}");
+    }
+    // `%+f` is not a hex escape (from_str_radix would take the plus).
+    let plus = web.post_form("/", &format!("token=%+f{TOKEN}")).await;
+    assert_eq!(plus.status, StatusCode::UNAUTHORIZED);
+    assert!(!plus.headers.contains_key(header::SET_COOKIE));
+    // Already logged in: on to the page, with no new cookie.
+    let again = web.send_with(Method::POST, "/", None, true, &[("cookie", &cookie_header)]).await;
+    assert_eq!(again.status, StatusCode::SEE_OTHER);
+    assert_eq!(again.headers[header::LOCATION], "./");
+    assert!(!again.headers.contains_key(header::SET_COOKIE));
+    // From another site, or a page of another origin: refused, no cookie.
+    for headers in [
+        &[("sec-fetch-site", "cross-site")][..],
+        &[("sec-fetch-site", "same-site")],
+        &[("origin", "http://evil.example"), ("host", "127.0.0.1:8740")],
+        &[("origin", "null"), ("host", "127.0.0.1:8740")],
+    ] {
+        let refused = web.post_form_with("/", &format!("token={TOKEN}"), headers).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{headers:?}");
+        // Said in words, with the way forward (not a bare 403).
+        let text = refused.text();
+        assert!(text.contains("did not come from this page") && text.contains("login link"), "{headers:?}: {text}");
+        assert!(!refused.headers.contains_key(header::SET_COOKIE), "{headers:?}");
+    }
+    // A form from the page itself still logs in.
+    let own = web.post_form_with("/", &format!("token={TOKEN}"), &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!(own.status, StatusCode::SEE_OTHER);
+    // The link still works.
+    assert_eq!(web.send(Method::GET, &format!("/?token={TOKEN}"), None, true).await.status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
 async fn logging_in_and_the_files_every_page_needs() {
     let web = TestWeb::start("login");
     // The link logs in: a cookie, and on to the page.

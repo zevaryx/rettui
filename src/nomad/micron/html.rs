@@ -353,9 +353,14 @@ impl Page {
                 "<textarea class=\"m-field\" name=\"{name}\" cols=\"{}\" rows=\"{}\" style=\"{style}\">{value}</textarea>",
                 field.width, field.rows,
             ),
+            // A masked field is a text input drawn as dots by CSS (`m-masked`),
+            // never `type=password`: this page shares the web UI's origin, and a
+            // password manager fills a password input with what it saved for it,
+            // such as the login token, which a link on the page then sends on.
             FieldKind::Text { masked } => format!(
-                "<input class=\"m-field\" type=\"{}\" name=\"{name}\" size=\"{}\" value=\"{value}\" style=\"{style}\">",
-                if masked { "password" } else { "text" },
+                "<input class=\"m-field{}\" type=\"text\" name=\"{name}\" size=\"{}\" value=\"{value}\" style=\"{style}\" \
+                 autocomplete=\"off\" autocorrect=\"off\" spellcheck=\"false\" autocapitalize=\"off\" data-lpignore=\"true\" data-1p-ignore>",
+                if masked { " m-masked" } else { "" },
                 field.width,
             ),
             FieldKind::Checkbox | FieldKind::Radio => format!(
@@ -512,6 +517,21 @@ mod tests {
     }
 
     #[test]
+    fn a_masked_field_is_not_a_password_input() {
+        let page = parse("Name: `<8|user`>\nSecret: `<!8|pw`x>\n`[Go`:/page/x.mu`*]");
+        let html = page.to_html(|url| url.to_string(), |_| None);
+        assert!(!html.contains("type=\"password\"") && !html.contains("type=password"), "{html}");
+        let masked = html.split("<input").find(|part| part.contains("name=\"pw\"")).expect("the masked field is rendered");
+        assert!(masked.contains("m-masked") && masked.contains("type=\"text\"") && masked.contains("autocomplete=\"off\""), "{masked}");
+        for attribute in ["autocorrect=\"off\"", "autocapitalize=\"off\"", "spellcheck=\"false\""] {
+            assert!(masked.contains(attribute), "{attribute}: {masked}");
+        }
+        // The plain field is not masked, and also asks not to be filled.
+        let plain = html.split("<input").find(|part| part.contains("name=\"user\"")).expect("the plain field is rendered");
+        assert!(!plain.contains("m-masked") && plain.contains("autocomplete=\"off\""), "{plain}");
+    }
+
+    #[test]
     fn tables_folds_fields_and_pictures_not_shown() {
         let source = "`tc20\n| Name | Age |\n| :--- | --: |\n| `!Ann`! | `[3`:/page/a.mu] |\n| Bo |\n`t\n\
                       `+>Open\ninside\n`->>Folded\ndeeper\n<\nafter\n\
@@ -520,7 +540,7 @@ mod tests {
         let html = page.to_html(|url| url.to_string(), |_| None);
         assert!(html.contains("<table class=\"m-table\"") && html.contains("<th") && html.contains("<td"), "{html}");
         assert!(html.contains("m-fold-head") && html.contains("m-fold hidden"), "{html}");
-        assert!(html.contains("<textarea") && html.contains("type=\"password\""), "{html}");
+        assert!(html.contains("<textarea") && html.contains("m-field m-masked"), "{html}");
         assert!(html.contains("[image: A picture]"), "{html}");
         assert!(html.contains("text-align:center") && html.contains("text-align:right"), "{html}");
         // The page's source, coloured.

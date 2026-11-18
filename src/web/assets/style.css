@@ -900,6 +900,10 @@ mark { background: var(--yellow-bg); color: #111; border-radius: 2px; }
 .m-table th, .m-table td { border: 1px solid var(--border); padding: 1px 8px; vertical-align: top; }
 .m-table th { font-weight: 700; }
 textarea.m-field { resize: vertical; vertical-align: top; }
+/* A masked page field is a text input drawn as dots, not a password input, so
+   a password manager doesn't fill it. A browser without text-security shows
+   what is typed. */
+.m-masked { -webkit-text-security: disc; text-security: disc; }
 .m-link:hover { filter: brightness(1.25); }
 /* Pages, addresses and hubs written in chat: links, which long ones may
    break anywhere to fit. */

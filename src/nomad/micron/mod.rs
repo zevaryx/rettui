@@ -1654,7 +1654,8 @@ mod tests {
         assert_eq!(page.request_fields(&["notes".into()])["field_notes"], page.fields[0].value);
         let html = page.to_html(|u| u.to_string(), |_| None);
         assert!(html.contains("<textarea class=\"m-field\" name=\"notes\" cols=\"40\" rows=\"3\""), "{html}");
-        assert!(html.contains("type=\"password\" name=\"secret\""));
+        assert!(html.contains("type=\"text\" name=\"secret\"") && html.contains("m-field m-masked"), "{html}");
+        assert!(!html.contains("type=\"password\""), "{html}");
     }
 
     #[test]
