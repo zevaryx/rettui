@@ -33,7 +33,8 @@ const STATUS_EVERY: Duration = Duration::from_secs(10 * 60);
 
 /// What `rettui node` was asked to set up. Every flag but `--stats-listen`
 /// is kept in the Reticulum config or the settings, so the next run needs
-/// none of them.
+/// none of them. Each of those can also be given as a `RETTUI_NODE_*`
+/// variable (see [`NodeArgs::with_vars`]), which a flag overrides.
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub struct NodeArgs {
     /// The port others connect to. A TCP server interface on it is added
@@ -64,6 +65,111 @@ pub struct NodeArgs {
     /// on every run.
     #[arg(long, value_name = "ADDRESS")]
     pub stats_listen: Option<String>,
+}
+
+/// The variables that stand for the node's flags (not `--stats-listen`, which is for one run).
+const ENV_ENTRY_POINT: &str = "RETTUI_NODE_ENTRY_POINT";
+const ENV_LISTEN_IP: &str = "RETTUI_NODE_LISTEN_IP";
+const ENV_REACHABLE_ON: &str = "RETTUI_NODE_REACHABLE_ON";
+const ENV_NO_ENTRY_POINT: &str = "RETTUI_NODE_NO_ENTRY_POINT";
+const ENV_NAME: &str = "RETTUI_NODE_NAME";
+const ENV_NO_PROPAGATION: &str = "RETTUI_NODE_NO_PROPAGATION";
+
+/// Which flags the command line gave, to say where a conflict came from.
+struct Given {
+    entry_point: bool,
+    listen_ip: bool,
+    reachable_on: bool,
+    name: bool,
+    no_entry_point: bool,
+    no_propagation: bool,
+}
+
+impl NodeArgs {
+    /// These flags, with what the command line left out taken from the
+    /// `RETTUI_NODE_*` environment variables.
+    pub fn with_env(self) -> Result<Self, String> {
+        self.with_vars(|name| std::env::var_os(name))
+    }
+
+    /// Like [`NodeArgs::with_env`], reading variables with `get`. A flag wins
+    /// over its variable; a variable that is empty counts as not set (Docker
+    /// Compose passes those); a bad value is refused with the variable's
+    /// name; and the flags that can't go together can't when they come from
+    /// the environment, or one from each, either.
+    ///
+    /// This isn't clap's own `env`, which takes an empty value as a value,
+    /// only reads `true` and `false` for a switch, and names the flag, not the
+    /// variable, when one is bad.
+    fn with_vars(mut self, get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Result<Self, String> {
+        let var = |name: &str| -> Result<Option<String>, String> {
+            match get(name) {
+                None => Ok(None),
+                Some(value) => match value.into_string() {
+                    Ok(value) if value.is_empty() => Ok(None),
+                    Ok(value) => Ok(Some(value)),
+                    Err(_) => Err(format!("{name} isn't valid text")),
+                },
+            }
+        };
+        // Which of them the command line gave.
+        let flags = Given {
+            entry_point: self.entry_point.is_some(),
+            listen_ip: self.listen_ip.is_some(),
+            reachable_on: self.reachable_on.is_some(),
+            name: self.name.is_some(),
+            no_entry_point: self.no_entry_point,
+            no_propagation: self.no_propagation,
+        };
+        let bad = |name: &str, value: &str, why: &str| format!("{name} is \"{value}\", but {why}");
+        if self.entry_point.is_none() {
+            self.entry_point = var(ENV_ENTRY_POINT)?
+                .map(|value| match value.parse::<u16>() {
+                    Ok(port) if port > 0 => Ok(port),
+                    _ => Err(bad(ENV_ENTRY_POINT, &value, "it takes a port number from 1 to 65535")),
+                })
+                .transpose()?;
+        }
+        if self.listen_ip.is_none() {
+            self.listen_ip = var(ENV_LISTEN_IP)?
+                .map(|value| value.parse::<IpAddr>().map_err(|_| bad(ENV_LISTEN_IP, &value, "it takes an IP address")))
+                .transpose()?;
+        }
+        if self.reachable_on.is_none() {
+            self.reachable_on =
+                var(ENV_REACHABLE_ON)?.map(|value| parse_host(&value).map_err(|why| bad(ENV_REACHABLE_ON, &value, &why))).transpose()?;
+        }
+        if self.name.is_none() {
+            self.name = var(ENV_NAME)?;
+        }
+        for (on, name) in [(&mut self.no_entry_point, ENV_NO_ENTRY_POINT), (&mut self.no_propagation, ENV_NO_PROPAGATION)] {
+            if !*on && let Some(value) = var(name)? {
+                *on = match value.to_ascii_lowercase().as_str() {
+                    "yes" | "true" | "1" => true,
+                    "no" | "false" | "0" => false,
+                    _ => return Err(bad(name, &value, "it takes yes, true or 1, or no, false or 0")),
+                };
+            }
+        }
+        // The command line's clap rules, for what the environment gave too.
+        let origin = |flag: &str, name: &str, from_flag: bool| if from_flag { format!("--{flag}") } else { name.to_string() };
+        let conflict = |a: String, b: String| Err(format!("{a} and {b} can't be used together"));
+        if self.no_entry_point {
+            let a = origin("no-entry-point", ENV_NO_ENTRY_POINT, flags.no_entry_point);
+            let others = [
+                (self.entry_point.is_some(), "entry-point", ENV_ENTRY_POINT, flags.entry_point),
+                (self.listen_ip.is_some(), "listen-ip", ENV_LISTEN_IP, flags.listen_ip),
+                (self.reachable_on.is_some(), "reachable-on", ENV_REACHABLE_ON, flags.reachable_on),
+            ];
+            if let Some((_, flag, name, from_flag)) = others.into_iter().find(|other| other.0) {
+                return conflict(a, origin(flag, name, from_flag));
+            }
+        }
+        if self.no_propagation && self.name.is_some() {
+            return conflict(origin("no-propagation", ENV_NO_PROPAGATION, flags.no_propagation), origin("name", ENV_NAME, flags.name));
+        }
+        Ok(self)
+    }
 }
 
 /// The Reticulum config directory the node uses when neither
@@ -508,6 +614,132 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    /// The node's flags with `vars` as the environment.
+    fn with_vars(args: NodeArgs, vars: &[(&str, &str)]) -> Result<NodeArgs, String> {
+        args.with_vars(|name| vars.iter().find(|(var, _)| *var == name).map(|(_, value)| value.into()))
+    }
+
+    fn env(vars: &[(&str, &str)]) -> Result<NodeArgs, String> {
+        with_vars(NodeArgs::default(), vars)
+    }
+
+    #[test]
+    fn each_variable_sets_its_flag() {
+        assert_eq!(env(&[]).unwrap(), NodeArgs::default());
+        assert_eq!(env(&[(ENV_ENTRY_POINT, "4965")]).unwrap().entry_point, Some(4965));
+        assert_eq!(env(&[(ENV_ENTRY_POINT, "65535")]).unwrap().entry_point, Some(65535));
+        assert_eq!(env(&[(ENV_LISTEN_IP, "::1")]).unwrap().listen_ip, Some("::1".parse().unwrap()));
+        assert_eq!(env(&[(ENV_REACHABLE_ON, "rns.example.org")]).unwrap().reachable_on.as_deref(), Some("rns.example.org"));
+        assert_eq!(env(&[(ENV_NAME, "Hilltop node")]).unwrap().name.as_deref(), Some("Hilltop node"));
+        assert!(env(&[(ENV_NO_ENTRY_POINT, "yes")]).unwrap().no_entry_point);
+        assert!(env(&[(ENV_NO_PROPAGATION, "TRUE")]).unwrap().no_propagation);
+        for on in ["yes", "Yes", "true", "TRUE", "1"] {
+            assert!(env(&[(ENV_NO_PROPAGATION, on)]).unwrap().no_propagation, "{on}");
+        }
+        for off in ["no", "No", "false", "FALSE", "0"] {
+            assert!(!env(&[(ENV_NO_PROPAGATION, off)]).unwrap().no_propagation, "{off}");
+        }
+        // A switch that is off lets the others stand.
+        let args = env(&[(ENV_NO_PROPAGATION, "no"), (ENV_NAME, "x"), (ENV_NO_ENTRY_POINT, "0"), (ENV_ENTRY_POINT, "5")]).unwrap();
+        assert_eq!((args.name.as_deref(), args.entry_point), (Some("x"), Some(5)));
+    }
+
+    #[test]
+    fn a_flag_beats_its_variable() {
+        let flags = NodeArgs {
+            entry_point: Some(1),
+            listen_ip: Some("10.0.0.1".parse().unwrap()),
+            reachable_on: Some("flag.example".into()),
+            name: Some("flag".into()),
+            ..NodeArgs::default()
+        };
+        let vars = [(ENV_ENTRY_POINT, "2"), (ENV_LISTEN_IP, "10.0.0.2"), (ENV_REACHABLE_ON, "env.example"), (ENV_NAME, "env")];
+        assert_eq!(with_vars(flags.clone(), &vars).unwrap(), flags);
+        // Even a bad variable is not looked at when the flag was given.
+        assert_eq!(with_vars(flags.clone(), &[(ENV_ENTRY_POINT, "nope")]).unwrap(), flags);
+        let on = NodeArgs { no_propagation: true, ..NodeArgs::default() };
+        assert_eq!(with_vars(on.clone(), &[(ENV_NO_PROPAGATION, "no")]).unwrap(), on);
+    }
+
+    #[test]
+    fn an_empty_variable_is_not_set() {
+        let vars = [
+            (ENV_ENTRY_POINT, ""),
+            (ENV_LISTEN_IP, ""),
+            (ENV_REACHABLE_ON, ""),
+            (ENV_NO_ENTRY_POINT, ""),
+            (ENV_NAME, ""),
+            (ENV_NO_PROPAGATION, ""),
+        ];
+        assert_eq!(env(&vars).unwrap(), NodeArgs::default());
+        // So an empty one doesn't clash with a set one.
+        assert!(env(&[(ENV_NO_PROPAGATION, "yes"), (ENV_NAME, "")]).unwrap().no_propagation);
+        assert_eq!(env(&[(ENV_NO_ENTRY_POINT, "yes"), (ENV_ENTRY_POINT, ""), (ENV_LISTEN_IP, "")]).unwrap().entry_point, None);
+    }
+
+    #[test]
+    fn a_bad_variable_is_refused_by_name() {
+        for (name, value) in [
+            (ENV_ENTRY_POINT, "0"),
+            (ENV_ENTRY_POINT, "65536"),
+            (ENV_ENTRY_POINT, "-1"),
+            (ENV_ENTRY_POINT, "http"),
+            (ENV_ENTRY_POINT, " 4242"),
+            (ENV_LISTEN_IP, "localhost"),
+            (ENV_LISTEN_IP, "300.1.1.1"),
+            (ENV_REACHABLE_ON, "bad host"),
+            (ENV_REACHABLE_ON, "a#b"),
+            (ENV_REACHABLE_ON, "[::1"),
+            (ENV_NO_ENTRY_POINT, "maybe"),
+            (ENV_NO_PROPAGATION, "on"),
+            (ENV_NO_PROPAGATION, "2"),
+        ] {
+            let error = env(&[(name, value)]).unwrap_err();
+            assert!(error.contains(name) && error.contains(value), "{name}={value}: {error}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_variable_that_is_not_text_is_refused() {
+        use std::os::unix::ffi::OsStringExt;
+        let error =
+            NodeArgs::default().with_vars(|name| (name == ENV_NAME).then(|| std::ffi::OsString::from_vec(vec![0xff, 0xfe]))).unwrap_err();
+        assert!(error.contains(ENV_NAME), "{error}");
+    }
+
+    #[test]
+    fn variables_that_disagree_are_refused() {
+        let error = env(&[(ENV_NO_ENTRY_POINT, "yes"), (ENV_ENTRY_POINT, "4242")]).unwrap_err();
+        assert!(error.contains(ENV_NO_ENTRY_POINT) && error.contains(ENV_ENTRY_POINT), "{error}");
+        assert!(env(&[(ENV_NO_ENTRY_POINT, "1"), (ENV_LISTEN_IP, "0.0.0.0")]).is_err());
+        assert!(env(&[(ENV_NO_ENTRY_POINT, "1"), (ENV_REACHABLE_ON, "a.example")]).is_err());
+        let error = env(&[(ENV_NO_PROPAGATION, "yes"), (ENV_NAME, "Hilltop")]).unwrap_err();
+        assert!(error.contains(ENV_NO_PROPAGATION) && error.contains(ENV_NAME), "{error}");
+        // One from the command line and one from the environment, either way round.
+        let flag = NodeArgs { no_entry_point: true, ..NodeArgs::default() };
+        let error = with_vars(flag, &[(ENV_ENTRY_POINT, "4242")]).unwrap_err();
+        assert!(error.contains("--no-entry-point") && error.contains(ENV_ENTRY_POINT), "{error}");
+        let flag = NodeArgs { entry_point: Some(4242), ..NodeArgs::default() };
+        let error = with_vars(flag, &[(ENV_NO_ENTRY_POINT, "yes")]).unwrap_err();
+        assert!(error.contains(ENV_NO_ENTRY_POINT) && error.contains("--entry-point"), "{error}");
+        let flag = NodeArgs { name: Some("x".into()), ..NodeArgs::default() };
+        assert!(with_vars(flag, &[(ENV_NO_PROPAGATION, "true")]).is_err());
+        let flag = NodeArgs { no_propagation: true, ..NodeArgs::default() };
+        let error = with_vars(flag, &[(ENV_NAME, "x")]).unwrap_err();
+        assert!(error.contains("--no-propagation") && error.contains(ENV_NAME), "{error}");
+        // A switch turned off doesn't clash.
+        assert!(env(&[(ENV_NO_PROPAGATION, "no"), (ENV_NAME, "x")]).is_ok());
+    }
+
+    #[test]
+    fn the_real_environment_is_read() {
+        // What the variables are here is anyone's guess; this only checks the wiring.
+        if let Err(error) = NodeArgs::default().with_env() {
+            assert!(error.contains("RETTUI_NODE_"), "{error}");
+        }
+    }
 
     /// Where a test's node keeps everything.
     fn test_dir(name: &str) -> PathBuf {

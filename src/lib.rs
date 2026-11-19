@@ -301,6 +301,13 @@ enum Command {
     /// SIGINT or SIGTERM, printing its status every 10 minutes. With no
     /// --rns-config and no rns_config in settings.json, it uses the
     /// Reticulum config in reticulum/ in the data directory.
+    ///
+    /// Each flag but --stats-listen can also be set as a variable:
+    /// RETTUI_NODE_ENTRY_POINT, RETTUI_NODE_LISTEN_IP, RETTUI_NODE_REACHABLE_ON,
+    /// RETTUI_NODE_NO_ENTRY_POINT, RETTUI_NODE_NAME and
+    /// RETTUI_NODE_NO_PROPAGATION (switches take yes, true or 1, and no,
+    /// false or 0). A flag wins over its variable, and an empty variable
+    /// counts as not set.
     Node(node::NodeArgs),
     /// Download waiting messages from the propagation node.
     Sync {
@@ -415,7 +422,11 @@ pub(crate) async fn stop_requested() {
     STOP.notified().await;
 }
 
-fn start(cli: Cli) -> Result<()> {
+fn start(mut cli: Cli) -> Result<()> {
+    // A node's flags may come from RETTUI_NODE_* variables too; refused here, before anything is loaded.
+    if let Some(Command::Node(args)) = &mut cli.command {
+        *args = std::mem::take(args).with_env().map_err(anyhow::Error::msg)?;
+    }
     tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(run(cli))
 }
 

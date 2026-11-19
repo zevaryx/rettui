@@ -154,7 +154,7 @@ rettui identity export FILE  # save a copy of the identity in use (never over an
 rettui identity import FILE --name NAME  # keep another identity from a file, to switch to
 rettui migrate-propagation   # convert the hosted propagation node's message store after upgrading to 2.0, with rettui stopped (see Hosting a Node)
 rettui address [--link]      # print your LXMF address (--link: as an lxma:// link with your key)
-rettui node [--entry-point PORT] [--listen-ip IP] [--reachable-on HOST] [--name NAME]  # a public node with no UI, as rnsd and lxmd (see Hosting a Node)
+rettui node [--entry-point PORT] [--listen-ip IP] [--reachable-on HOST] [--name NAME]  # a public node with no UI, as rnsd and lxmd (see Hosting a Node); each flag is also a RETTUI_NODE_* variable
 ```
 
 `--data-dir DIR` uses another data directory, and `--rns-config DIR` another

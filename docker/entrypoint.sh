@@ -47,36 +47,6 @@ fi
 # host`) must add --https (for example `command: ["--https"]` in compose.yaml).
 if [ "${1:-}" = node ]; then
     shift
-    # PN_NAME and NO_PROPAGATION (optional, only for `node`) set the
-    # propagation node's name and turn it off (see wiki/Docker.md). Empty
-    # counts as unset. rettui limits the name's length itself.
-    PN_NAME="${PN_NAME:-}"
-    NO_PROPAGATION="${NO_PROPAGATION:-}"
-    case "$PN_NAME" in
-        *[[:cntrl:]]*)
-            echo "rettui: PN_NAME must not contain control characters or line breaks" >&2
-            exit 1
-            ;;
-    esac
-    case "$NO_PROPAGATION" in
-        '' | [Nn][Oo] | [Ff][Aa][Ll][Ss][Ee] | 0) NO_PROPAGATION= ;;
-        [Yy][Ee][Ss] | [Tt][Rr][Uu][Ee] | 1) NO_PROPAGATION=yes ;;
-        *)
-            echo "rettui: NO_PROPAGATION must be yes, true or 1 (or no, false or 0, for off) (got '$NO_PROPAGATION')" >&2
-            exit 1
-            ;;
-    esac
-    if [ -n "$NO_PROPAGATION" ] && [ -n "$PN_NAME" ]; then
-        echo "rettui: PN_NAME and NO_PROPAGATION conflict: a node with no propagation node has no name to give it" >&2
-        exit 1
-    fi
-    # --name=VALUE is one argument whatever the value holds, even a leading dash.
-    if [ -n "$PN_NAME" ]; then
-        set -- "--name=$PN_NAME" "$@"
-    fi
-    if [ -n "$NO_PROPAGATION" ]; then
-        set -- --no-propagation "$@"
-    fi
     if [ -n "$STATS_LISTEN" ]; then
         set -- --stats-listen "$STATS_LISTEN" "$@"
     fi

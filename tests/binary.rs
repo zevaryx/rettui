@@ -545,3 +545,18 @@ fn propagation_nodes_pass_messages_on_to_their_peers() {
     let _ = std::fs::remove_dir_all(&a);
     let _ = std::fs::remove_dir_all(&b);
 }
+
+#[test]
+fn a_node_refuses_a_bad_variable_before_it_starts() {
+    let dir = folder("node-env", "");
+    for (name, value) in [("RETTUI_NODE_ENTRY_POINT", "http"), ("RETTUI_NODE_NO_PROPAGATION", "maybe")] {
+        let output = rettui(&dir).arg("node").env(name, value).output().unwrap();
+        assert!(!output.status.success() && said(&output).contains(name), "{name}: {}", said(&output));
+    }
+    // A flag and a variable that can't go together.
+    let output = rettui(&dir).args(["node", "--no-entry-point"]).env("RETTUI_NODE_LISTEN_IP", "127.0.0.1").output().unwrap();
+    assert!(!output.status.success() && said(&output).contains("RETTUI_NODE_LISTEN_IP"), "{}", said(&output));
+    // Nothing was set up.
+    assert!(!dir.join("data/reticulum").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -71,17 +71,22 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   first time it starts. Its flags go after it, for example
   `command: ["node", "--reachable-on", "rns.example.org"]`. `docker compose
   logs rettui` shows its status.
-- **The propagation node (only with `command: node`):** set `PN_NAME` to the
-  name the propagation node announces (the same as `--name`), and
-  `NO_PROPAGATION` to `yes`, `true` or `1` to not turn it on (the same as
-  `--no-propagation`; `no`, `false` and `0` mean the same as leaving it
-  out). Empty counts as not set, and the container refuses to start on any
-  other `NO_PROPAGATION` value, on a `PN_NAME` with a line break or other
-  control character, or when both are set, since a node with no propagation
-  node has no name to give it. The web UI ignores both. Like the flags,
-  `NO_PROPAGATION` doesn't turn off a propagation node that an earlier
-  start turned on; see
-  [Hosting a Node](Hosting-a-Node#a-public-node-with-no-ui).
+- **The node's flags as variables (only with `command: node`):** every flag
+  of `rettui node` but `--stats-listen` can be set as an environment
+  variable instead, in `environment:` or an `env_file`: `RETTUI_NODE_ENTRY_POINT`,
+  `RETTUI_NODE_LISTEN_IP`, `RETTUI_NODE_REACHABLE_ON`, `RETTUI_NODE_NAME`,
+  `RETTUI_NODE_NO_ENTRY_POINT` and `RETTUI_NODE_NO_PROPAGATION` (the last two
+  take `yes`, `true` or `1` to turn them on, and `no`, `false` or `0` for
+  off, in any case). A flag after `node` wins over its variable, and a
+  variable that is empty (`RETTUI_NODE_NAME: ""`) counts as not set. The
+  container refuses to start, naming the variable, on a value the flag
+  wouldn't take, or on two that can't go together (`NO_ENTRY_POINT` with
+  `ENTRY_POINT`, `LISTEN_IP` or `REACHABLE_ON`; `NO_PROPAGATION` with `NAME`).
+  They are kept like the flags, so the next start needs none of them, and,
+  like the flags, `RETTUI_NODE_NO_PROPAGATION` doesn't turn off a propagation
+  node that an earlier start turned on. The web UI ignores them. See
+  [Hosting a Node](Hosting-a-Node#a-public-node-with-no-ui) for what each
+  does.
 - **Stats page:** set `STATS_LISTEN` (for example `0.0.0.0:8741`) to also serve
   a read-only JSON summary of the node, totals only, at `/stats.json` on that
   port; it is off otherwise. It has no login, so publish it only to a reverse

@@ -25,10 +25,15 @@ services:
       # it only to a reverse proxy, as in "127.0.0.1:8741:8741" under ports:
       # below. See wiki/Docker.md.
       # STATS_LISTEN: "0.0.0.0:8741"
-      # Optional, only with `command: node` (the web UI ignores them): the name
-      # the propagation node announces, or yes to not turn it on. Not both.
-      # PN_NAME: "Hilltop"
-      # NO_PROPAGATION: "yes"
+      # Optional, only with `command: node` (the web UI ignores them): the
+      # node's flags as variables (an empty one counts as not set). See
+      # wiki/Docker.md.
+      # RETTUI_NODE_ENTRY_POINT: "4242"
+      # RETTUI_NODE_LISTEN_IP: "0.0.0.0"
+      # RETTUI_NODE_REACHABLE_ON: "rns.example.org"
+      # RETTUI_NODE_NAME: "Hilltop"
+      # RETTUI_NODE_NO_PROPAGATION: "yes"   # not with a NAME
+      # RETTUI_NODE_NO_ENTRY_POINT: "yes"   # not with ENTRY_POINT, LISTEN_IP or REACHABLE_ON
     volumes:
       - ./data:/data
     ports:

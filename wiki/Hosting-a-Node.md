@@ -282,17 +282,28 @@ so you can edit the config and settings afterwards, and every later run
 needs no flags. Every run also says, as notes rather than changes, which
 interface is the entry point, and what it left as it was: a TCP server on
 that port that's turned off (`enabled = No`) stays off, and `--listen-ip`
-doesn't move a server that's there. The flags are kept the same way (all but `--stats-listen`, which is for one run):
+doesn't move a server that's there. The flags are kept the same way (all but `--stats-listen`, which is for one run).
+Each can also be given as an environment variable, for a systemd unit
+(`Environment=` or `EnvironmentFile=`), a Docker Compose file or a shell, so
+a node can be set up with no command line. A flag given on the command line
+wins over its variable. An empty variable counts as not set, as Compose
+passes one when you write `NAME: ""`. A value the flag wouldn't take, or two
+that can't go together (`--no-entry-point` with `--entry-point`,
+`--listen-ip` or `--reachable-on`, `--no-propagation` with `--name`, whether
+from flags, variables or one of each), stops the node with a message that
+names the variable. Switches take `yes`, `true` or `1` for on, and `no`,
+`false` or `0` for off, in any case. What a variable sets is kept the same
+way as its flag.
 
-| Flag | What it does |
-|------|--------------|
-| `--entry-point PORT` | Others connect on this port: a TCP server on it is added unless one is there. Without it, an existing TCP server is used, else one is added on 4242. |
-| `--listen-ip IP` | The address a new TCP server listens on (default `0.0.0.0`, every address). One already there keeps its own. |
-| `--reachable-on HOST` | The host name or IP address others reach the node at: the TCP server is announced with it, for interface discovery (`discoverable` and `reachable_on`). Letters, digits, `.`, `-`, `_` and `:` only, with `[ ]` around an IPv6 address. |
-| `--no-entry-point` | Adds no TCP server: others connect over the interfaces already in the config. Transport node is still turned on. |
-| `--name NAME` | The name the propagation node announces (`pn_name`; otherwise your display name). In Docker: `PN_NAME`. |
-| `--no-propagation` | Doesn't turn the propagation node on. One turned on before stays on: set `pn_enabled` to `false` in `settings.json` to stop it. Can't be used with `--name`. In Docker: `NO_PROPAGATION=yes`. |
-| `--stats-listen ADDRESS` | Serves a read-only stats page on this address, such as `127.0.0.1:8741` (see below). Off unless given, and not saved: give it on every run. |
+| Flag | Environment variable | What it does |
+|------|----------------------|--------------|
+| `--entry-point PORT` | `RETTUI_NODE_ENTRY_POINT` | Others connect on this port: a TCP server on it is added unless one is there. Without it, an existing TCP server is used, else one is added on 4242. |
+| `--listen-ip IP` | `RETTUI_NODE_LISTEN_IP` | The address a new TCP server listens on (default `0.0.0.0`, every address). One already there keeps its own. |
+| `--reachable-on HOST` | `RETTUI_NODE_REACHABLE_ON` | The host name or IP address others reach the node at: the TCP server is announced with it, for interface discovery (`discoverable` and `reachable_on`). Letters, digits, `.`, `-`, `_` and `:` only, with `[ ]` around an IPv6 address. |
+| `--no-entry-point` | `RETTUI_NODE_NO_ENTRY_POINT` | Adds no TCP server: others connect over the interfaces already in the config. Transport node is still turned on. |
+| `--name NAME` | `RETTUI_NODE_NAME` | The name the propagation node announces (`pn_name`; otherwise your display name). |
+| `--no-propagation` | `RETTUI_NODE_NO_PROPAGATION` | Doesn't turn the propagation node on. One turned on before stays on: set `pn_enabled` to `false` in `settings.json` to stop it. Can't be used with `--name`. |
+| `--stats-listen ADDRESS` | none (`STATS_LISTEN` in Docker) | Serves a read-only stats page on this address, such as `127.0.0.1:8741` (see below). Off unless given, and not saved: give it on every run. |
 
 Things to know:
 
