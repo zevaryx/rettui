@@ -413,7 +413,10 @@ is a total: no peer or sender is named.
   given on Windows: `null`). Walking the directory is done in the background,
   at most once a minute, so these may be up to a minute old. If it can't be
   read, or has more than 500000 entries or takes more than 10 seconds, the
-  field is `null`.
+  field is `null`. After a failed measurement it waits twice as long before
+  trying again, up to an hour.
+
+`propagation` and `disk` (the storage numbers and the free space on the disk) are public to anyone who can reach a listener that isn't firewalled or restricted by a proxy; if that bothers you, keep the listener private, or ask for the free-space numbers to be given only to requests with the token.
 
 `interfaces.clients` adds up the clients connected to the node's server
 interfaces (`null` when none report any). The other fields, and how the

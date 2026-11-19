@@ -157,6 +157,10 @@ const DISK_EVERY: Duration = Duration::from_secs(60);
 /// takes, before it gives up (the size is then null).
 const DISK_MAX_ENTRIES: usize = 500_000;
 const DISK_MAX_TIME: Duration = Duration::from_secs(10);
+/// The deepest folder walked into (each level holds a directory handle open
+/// while the walk is below it), and the longest wait after failed measurements.
+const DISK_MAX_DEPTH: usize = 64;
+const DISK_BACKOFF_MAX: Duration = Duration::from_secs(3600);
 
 /// What a measurement of the disk found. A field is `None` if it could not be found.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -173,7 +177,15 @@ struct DiskState {
     last_started: Option<Instant>,
     running: bool,
     runs: u64,
+    /// Measurements in a row that found no size.
+    failures: u32,
     usage: Option<Usage>,
+}
+
+/// The wait before the next measurement: `every`, doubled for each failure in a row, up to an hour.
+fn wait_after(every: Duration, failures: u32) -> Duration {
+    let longest = every.max(DISK_BACKOFF_MAX);
+    every.saturating_mul(1u32.checked_shl(failures).unwrap_or(u32::MAX)).min(longest)
 }
 
 /// The disk measurements, made in the background at most once a minute, so
@@ -200,7 +212,7 @@ impl Disk {
     /// interval. Without a Tokio runtime nothing is measured.
     pub fn current(&self, dir: &Path) -> Option<Usage> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let due = state.last_started.is_none_or(|at| at.elapsed() >= self.every);
+        let due = state.last_started.is_none_or(|at| at.elapsed() >= wait_after(self.every, state.failures));
         if due
             && !state.running
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
@@ -212,6 +224,7 @@ impl Disk {
             runtime.spawn_blocking(move || {
                 let usage = measure(&dir);
                 let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                state.failures = if usage.data_bytes.is_some() { 0 } else { state.failures.saturating_add(1) };
                 state.usage = Some(usage);
                 state.running = false;
             });
@@ -226,14 +239,15 @@ pub fn measure(dir: &Path) -> Usage {
         Some((total, free)) => (Some(total), Some(free)),
         None => (None, None),
     };
-    Usage { data_bytes: directory_size(dir, DISK_MAX_ENTRIES, DISK_MAX_TIME), fs_total_bytes, fs_free_bytes }
+    Usage { data_bytes: directory_size(dir, DISK_MAX_ENTRIES, DISK_MAX_TIME, DISK_MAX_DEPTH), fs_total_bytes, fs_free_bytes }
 }
 
 /// Bytes in the files under `dir`, not following links. None if `dir` can't
 /// be read, or there are more than `max_entries` entries or it takes longer
-/// than `max_time` (a partial sum would mislead). A folder that can't be read
+/// than `max_time`, or folders are nested deeper than [`DISK_MAX_DEPTH`] (a
+/// partial sum would mislead). Hard links count once for each name. A folder that can't be read
 /// further down, or a file that goes away meanwhile, counts as empty.
-fn directory_size(dir: &Path, max_entries: usize, max_time: Duration) -> Option<u64> {
+fn directory_size(dir: &Path, max_entries: usize, max_time: Duration, max_depth: usize) -> Option<u64> {
     let started = Instant::now();
     let mut pending = vec![std::fs::read_dir(dir).ok()?];
     let (mut total, mut seen) = (0u64, 0usize);
@@ -249,6 +263,9 @@ fn directory_size(dir: &Path, max_entries: usize, max_time: Duration) -> Option<
         let Ok(entry) = entry else { continue };
         let Ok(kind) = entry.file_type() else { continue };
         if kind.is_dir() {
+            if pending.len() >= max_depth {
+                return None;
+            }
             if let Ok(inner) = std::fs::read_dir(entry.path()) {
                 pending.push(inner);
             }
@@ -259,7 +276,8 @@ fn directory_size(dir: &Path, max_entries: usize, max_time: Duration) -> Option<
     Some(total)
 }
 
-/// The total and the free bytes of the file system that holds `dir`.
+/// The total and the free bytes of the file system that holds `dir`: the one
+/// `dir` is on, not those mounted below it, and shared by every folder on it.
 #[cfg(unix)]
 fn filesystem(dir: &Path) -> Option<(u64, u64)> {
     use std::os::unix::ffi::OsStrExt;
@@ -276,6 +294,8 @@ fn filesystem(dir: &Path) -> Option<(u64, u64)> {
     // The field types differ between systems.
     #[allow(clippy::unnecessary_cast)]
     let (unit, blocks, free) = (stat.f_frsize as u64, stat.f_blocks as u64, stat.f_bavail as u64);
+    // Some systems leave the fragment size 0: the block size is then the unit.
+    let unit = if unit == 0 { stat.f_bsize as u64 } else { unit };
     Some((blocks.saturating_mul(unit), free.saturating_mul(unit)))
 }
 
@@ -772,24 +792,75 @@ mod tests {
     fn the_size_of_a_directory_adds_up_its_files() {
         let dir = scratch("size");
         let limits = (DISK_MAX_ENTRIES, DISK_MAX_TIME);
-        assert_eq!(directory_size(&dir, limits.0, limits.1), Some(0));
+        assert_eq!(directory_size(&dir, limits.0, limits.1, DISK_MAX_DEPTH), Some(0));
         std::fs::write(dir.join("a"), [0u8; 100]).unwrap();
         std::fs::create_dir_all(dir.join("x/y")).unwrap();
         std::fs::write(dir.join("x/b"), [0u8; 1000]).unwrap();
         std::fs::write(dir.join("x/y/c"), [0u8; 20]).unwrap();
-        assert_eq!(directory_size(&dir, limits.0, limits.1), Some(1120));
+        assert_eq!(directory_size(&dir, limits.0, limits.1, DISK_MAX_DEPTH), Some(1120));
         // A link is not followed.
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&dir, dir.join("x/loop")).unwrap();
-            assert_eq!(directory_size(&dir, limits.0, limits.1), Some(1120));
+            assert_eq!(directory_size(&dir, limits.0, limits.1, DISK_MAX_DEPTH), Some(1120));
         }
         // Too many entries, or too long: no number rather than a partial one.
-        assert_eq!(directory_size(&dir, 2, limits.1), None);
-        assert_eq!(directory_size(&dir, limits.0, Duration::ZERO), None);
+        assert_eq!(directory_size(&dir, 2, limits.1, DISK_MAX_DEPTH), None);
+        assert_eq!(directory_size(&dir, limits.0, Duration::ZERO, DISK_MAX_DEPTH), None);
         // A directory that is not there, or a file.
-        assert_eq!(directory_size(&dir.join("missing"), limits.0, limits.1), None);
-        assert_eq!(directory_size(&dir.join("a"), limits.0, limits.1), None);
+        assert_eq!(directory_size(&dir.join("missing"), limits.0, limits.1, DISK_MAX_DEPTH), None);
+        assert_eq!(directory_size(&dir.join("a"), limits.0, limits.1, DISK_MAX_DEPTH), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn folders_nested_too_deep_are_not_walked() {
+        let dir = scratch("deep");
+        let mut path = dir.clone();
+        for _ in 0..70 {
+            path.push("d");
+        }
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("f"), [0u8; 1]).unwrap();
+        assert_eq!(directory_size(&dir, DISK_MAX_ENTRIES, DISK_MAX_TIME, DISK_MAX_DEPTH), None);
+        assert_eq!(directory_size(&dir, DISK_MAX_ENTRIES, DISK_MAX_TIME, 100), Some(1));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_wait_doubles_with_each_failure_up_to_an_hour() {
+        let every = Duration::from_secs(60);
+        let waits: Vec<u64> = (0..8).map(|n| wait_after(every, n).as_secs()).collect();
+        assert_eq!(waits, [60, 120, 240, 480, 960, 1920, 3600, 3600]);
+        assert_eq!(wait_after(every, 500), DISK_BACKOFF_MAX, "no overflow");
+        assert_eq!(wait_after(Duration::ZERO, 3), Duration::ZERO);
+        assert_eq!(wait_after(Duration::from_secs(7200), 3), Duration::from_secs(7200), "never below the interval");
+    }
+
+    #[tokio::test]
+    async fn failed_measurements_are_tried_less_often_and_a_success_resets_it() {
+        let dir = scratch("backoff");
+        let gone = dir.join("missing");
+        let disk = Disk::new(Duration::from_secs(1));
+        let failures = |disk: &Disk| disk.state.lock().unwrap().failures;
+        measured(&disk, &gone).await;
+        assert_eq!(failures(&disk), 1);
+        // The wait is now 2 s: asking again soon doesn't measure again.
+        for _ in 0..30 {
+            disk.current(&dir);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(runs(&disk), 1);
+        // Once it is over, and the folder is there, a measurement works and resets the count.
+        disk.state.lock().unwrap().last_started = None;
+        for _ in 0..500 {
+            disk.current(&dir);
+            if failures(&disk) == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(failures(&disk), 0);
         let _ = std::fs::remove_dir_all(dir);
     }
 
