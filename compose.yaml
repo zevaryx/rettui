@@ -20,6 +20,11 @@ services:
       # (see `id -u` and `id -g`).
       PUID: "1000"
       PGID: "1000"
+      # Optional: serve a read-only JSON summary of this node (counts only,
+      # no login) at /stats.json on this address, for a status page. Publish
+      # it only to a reverse proxy, as in "127.0.0.1:8741:8741" under ports:
+      # below. See wiki/Docker.md.
+      # STATS_LISTEN: "0.0.0.0:8741"
     volumes:
       - ./data:/data
     ports:
@@ -29,6 +34,8 @@ services:
       # and add `command: ["--https"]` to this service (see wiki/Docker.md):
       # the image itself accepts plain HTTP.
       - "127.0.0.1:8740:8740"
+      # The stats page (STATS_LISTEN above), for a reverse proxy on this machine.
+      # - "127.0.0.1:8741:8741"
       # A transport node others connect to: needs, in
       # ./data/reticulum/config, `enable_transport = Yes` under [reticulum]
       # and a TCPServerInterface with listen_ip = 0.0.0.0 and

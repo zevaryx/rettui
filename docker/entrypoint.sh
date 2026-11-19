@@ -18,6 +18,16 @@ for value in "$PUID" "$PGID" "$PORT"; do
     esac
 done
 
+# STATS_LISTEN (optional) is an address like 0.0.0.0:8741 for the read-only
+# stats page (see wiki/Docker.md). Only characters an address has are allowed.
+STATS_LISTEN="${STATS_LISTEN:-}"
+case "$STATS_LISTEN" in
+    *[!0-9a-fA-F.:\[\]]*)
+        echo "rettui: STATS_LISTEN must be an address like 0.0.0.0:8741 (got '$STATS_LISTEN')" >&2
+        exit 1
+        ;;
+esac
+
 mkdir -p "$DATA/reticulum"
 # First start: keep the Reticulum config in the data directory too. To use
 # another, change rns_config in settings.json while rettui is stopped (the web
@@ -36,8 +46,15 @@ fi
 # (`docker run -p 8740:8740`, a Compose file of their own, `network_mode:
 # host`) must add --https (for example `command: ["--https"]` in compose.yaml).
 if [ "${1:-}" = node ]; then
-    set -- /usr/local/bin/rettui --data-dir "$DATA" "$@"
+    shift
+    if [ -n "$STATS_LISTEN" ]; then
+        set -- --stats-listen "$STATS_LISTEN" "$@"
+    fi
+    set -- /usr/local/bin/rettui --data-dir "$DATA" node "$@"
 else
+    if [ -n "$STATS_LISTEN" ]; then
+        set -- --stats-listen "$STATS_LISTEN" "$@"
+    fi
     set -- /usr/local/bin/rettui --data-dir "$DATA" --web "0.0.0.0:$PORT" --insecure-http "$@"
 fi
 
