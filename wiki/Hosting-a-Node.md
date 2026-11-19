@@ -290,8 +290,8 @@ doesn't move a server that's there. The flags are kept the same way (all but `--
 | `--listen-ip IP` | The address a new TCP server listens on (default `0.0.0.0`, every address). One already there keeps its own. |
 | `--reachable-on HOST` | The host name or IP address others reach the node at: the TCP server is announced with it, for interface discovery (`discoverable` and `reachable_on`). Letters, digits, `.`, `-`, `_` and `:` only, with `[ ]` around an IPv6 address. |
 | `--no-entry-point` | Adds no TCP server: others connect over the interfaces already in the config. Transport node is still turned on. |
-| `--name NAME` | The name the propagation node announces (`pn_name`; otherwise your display name). |
-| `--no-propagation` | Doesn't turn the propagation node on. One turned on before stays on: set `pn_enabled` to `false` in `settings.json` to stop it. |
+| `--name NAME` | The name the propagation node announces (`pn_name`; otherwise your display name). In Docker: `PN_NAME`. |
+| `--no-propagation` | Doesn't turn the propagation node on. One turned on before stays on: set `pn_enabled` to `false` in `settings.json` to stop it. Can't be used with `--name`. In Docker: `NO_PROPAGATION=yes`. |
 | `--stats-listen ADDRESS` | Serves a read-only stats page on this address, such as `127.0.0.1:8741` (see below). Off unless given, and not saved: give it on every run. |
 
 Things to know:

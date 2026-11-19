@@ -71,6 +71,17 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   first time it starts. Its flags go after it, for example
   `command: ["node", "--reachable-on", "rns.example.org"]`. `docker compose
   logs rettui` shows its status.
+- **The propagation node (only with `command: node`):** set `PN_NAME` to the
+  name the propagation node announces (the same as `--name`), and
+  `NO_PROPAGATION` to `yes`, `true` or `1` to not turn it on (the same as
+  `--no-propagation`; `no`, `false` and `0` mean the same as leaving it
+  out). Empty counts as not set, and the container refuses to start on any
+  other `NO_PROPAGATION` value, on a `PN_NAME` with a line break or other
+  control character, or when both are set, since a node with no propagation
+  node has no name to give it. The web UI ignores both. Like the flags,
+  `NO_PROPAGATION` doesn't turn off a propagation node that an earlier
+  start turned on; see
+  [Hosting a Node](Hosting-a-Node#a-public-node-with-no-ui).
 - **Stats page:** set `STATS_LISTEN` (for example `0.0.0.0:8741`) to also serve
   a read-only JSON summary of the node, totals only, at `/stats.json` on that
   port; it is off otherwise. It has no login, so publish it only to a reverse

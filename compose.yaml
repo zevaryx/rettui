@@ -25,6 +25,10 @@ services:
       # it only to a reverse proxy, as in "127.0.0.1:8741:8741" under ports:
       # below. See wiki/Docker.md.
       # STATS_LISTEN: "0.0.0.0:8741"
+      # Optional, only with `command: node` (the web UI ignores them): the name
+      # the propagation node announces, or yes to not turn it on. Not both.
+      # PN_NAME: "Hilltop"
+      # NO_PROPAGATION: "yes"
     volumes:
       - ./data:/data
     ports:
