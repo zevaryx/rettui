@@ -36,6 +36,7 @@ mod nomad;
 mod power;
 mod reticulum;
 mod rrc;
+mod stats;
 mod store;
 mod term;
 #[cfg(windows)]
@@ -801,11 +802,14 @@ mod tests {
             "rns.example.org",
             "--name",
             "Hilltop",
+            "--stats-listen",
+            "127.0.0.1:8741",
             "--data-dir",
             "/srv/rettui",
         ]) else {
             panic!("every flag")
         };
+        assert_eq!(args.stats_listen.as_deref(), Some("127.0.0.1:8741"));
         assert_eq!(dir, std::path::PathBuf::from("/srv/rettui"));
         assert_eq!(args.entry_point, Some(4965));
         assert_eq!(args.listen_ip, Some("::".parse().unwrap()));

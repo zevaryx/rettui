@@ -31,8 +31,9 @@ const INTERFACE_NAME: &str = "Public entry point";
 /// How often the status line is printed while it runs.
 const STATUS_EVERY: Duration = Duration::from_secs(10 * 60);
 
-/// What `rettui node` was asked to set up. Every flag is kept in the
-/// Reticulum config or the settings, so the next run needs none of them.
+/// What `rettui node` was asked to set up. Every flag but `--stats-listen`
+/// is kept in the Reticulum config or the settings, so the next run needs
+/// none of them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub struct NodeArgs {
     /// The port others connect to. A TCP server interface on it is added
@@ -57,6 +58,12 @@ pub struct NodeArgs {
     /// switch it off with pn_enabled in settings.json).
     #[arg(long, conflicts_with = "name")]
     pub no_propagation: bool,
+    /// Also serve a read-only JSON summary of this node (counts only, no
+    /// login) at /stats.json on this address, for a status page. Put it
+    /// behind a reverse proxy; don't expose it directly. Not saved: give it
+    /// on every run.
+    #[arg(long, value_name = "ADDRESS")]
+    pub stats_listen: Option<String>,
 }
 
 /// The Reticulum config directory the node uses when neither
@@ -353,23 +360,36 @@ pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args:
     for line in exposed_services(&settings) {
         println!("{line}");
     }
-    serve(settings, paths, identity, stop, STATUS_EVERY, |_| {}).await
+    serve(settings, paths, identity, stop, STATUS_EVERY, args.stats_listen.as_deref(), |_| {}).await
 }
 
 /// The node, until `stop`: what the web UI runs, without its HTTP server.
 /// The status line is printed at the start, then every `every`. `stopping`
-/// is given the app once it's stopped, before it saves (for tests).
+/// is given the app once it's stopped, before it saves (for tests). With
+/// `stats` (an address), the stats page is served there (see [`crate::stats`]).
 pub(crate) async fn serve(
     settings: Settings,
     paths: Paths,
     identity: Identity,
     stop: impl std::future::Future<Output = ()>,
     every: Duration,
+    stats: Option<&str>,
     stopping: impl FnOnce(&mut App),
 ) -> Result<()> {
     let rns_path = reticulum::config_path(settings.rns_config.as_deref());
     let listening =
         std::fs::read_to_string(&rns_path).ok().and_then(|text| Config::parse(&text).ok()).map(|c| listening(&c)).unwrap_or_default();
+    // Before anything starts, so a bad or taken address stops rettui.
+    let started = std::time::Instant::now();
+    let (stats_tx, stats_rx) = crate::stats::channel(String::new());
+    let stats_server = match stats {
+        Some(address) => {
+            let (bound, task) = crate::stats::serve(address, stats_rx).await?;
+            println!("Stats (counts only, no login) at http://{bound}/stats.json");
+            Some(task)
+        }
+        None => None,
+    };
     let identity_hash = identity.hash;
     let store = Store::load_with_db(&paths.store, &paths.db);
     store.sync_blocked();
@@ -383,6 +403,7 @@ pub(crate) async fn serve(
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let mut save = tokio::time::interval(Duration::from_secs(10));
     let mut status = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+    let mut stats_tick = tokio::time::interval(Duration::from_secs(1));
     tokio::pin!(stop);
     let mut decoded = app.take_decoded();
     loop {
@@ -396,7 +417,16 @@ pub(crate) async fn serve(
             _ = save.tick() => app.save_if_dirty(),
             () = app.save_timer() => app.save_when_due(),
             _ = status.tick() => println!("{}", status_line(&app, &identity, &listening)),
+            _ = stats_tick.tick(), if stats_server.is_some() => {
+                stats_tx.send_replace(crate::stats::snapshot(&app, started));
+            }
             () = &mut stop => break,
+        }
+        if stats_server.as_ref().is_some_and(|task| task.is_finished()) {
+            app.save_if_dirty();
+            net::shutdown(&net_tx, &mut net_rx, net::Stop::Quit).await;
+            app.finish_saves();
+            return Err(anyhow!("the stats server stopped"));
         }
         print_log(&mut app);
         // Nobody is there to be shown these. Switching identity and quitting
@@ -412,6 +442,9 @@ pub(crate) async fn serve(
             (net_tx, net_rx) = net::spawn(crate::net_options(&app.settings, &app.paths, identity.clone(), app.store.blocked.clone()));
             app.set_network(net_tx.clone());
         }
+    }
+    if let Some(task) = &stats_server {
+        task.abort();
     }
     println!("rettui node stopping: saving, and leaving the network");
     stopping(&mut app);
@@ -758,9 +791,39 @@ mod tests {
         assert_eq!(listening(&parsed(&text)), vec!["A on 127.0.0.1:1".to_string()]);
     }
 
+    /// The body of `/stats.json` on `port`, if it answers 200.
+    fn get_stats(port: u16) -> Option<String> {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+        stream.write_all(b"GET /stats.json HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").ok()?;
+        let mut text = String::new();
+        stream.read_to_string(&mut text).ok()?;
+        let (head, body) = text.split_once("\r\n\r\n")?;
+        head.starts_with("HTTP/1.1 200").then(|| body.to_string())
+    }
+
     /// The node runs, as `rettui node` runs it, until stopped from within:
     /// its entry point takes connections, its propagation node starts, and
     /// it stops cleanly, saving what changed on the way out.
+    /// A stats address that can't be used stops the node before it starts.
+    #[test]
+    fn a_bad_stats_address_stops_the_node() {
+        let dir = test_dir("bad-stats");
+        let paths = Paths::new(Some(dir.join("data"))).unwrap();
+        let identity = crate::config::load_identity(&paths.identity).unwrap();
+        let result = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(serve(
+            Settings::default(),
+            paths,
+            identity,
+            std::future::pending::<()>(),
+            Duration::from_secs(60),
+            Some("not an address"),
+            |_| {},
+        ));
+        assert!(format!("{:#}", result.unwrap_err()).contains("--stats-listen expects"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_node_listens_hosts_and_stops_when_asked() {
         let dir = test_dir("serve");
@@ -778,6 +841,8 @@ mod tests {
             settings.rns_config = Some(root.join("rns").display().to_string());
             let identity = crate::config::load_identity(&paths.identity).unwrap();
             prepare(&mut settings, &paths, &args).unwrap();
+            let stats_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let stats_address = format!("127.0.0.1:{stats_port}");
             let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
             let stop = async move {
                 let _ = stop_rx.await;
@@ -789,12 +854,14 @@ mod tests {
             };
             let (propagation, store) = (paths.propagation.clone(), paths.store.clone());
             let running = std::thread::spawn(move || {
+                let stats_address = stats_address;
                 tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(serve(
                     settings,
                     paths,
                     identity,
                     stop,
                     Duration::from_millis(200),
+                    Some(stats_address.as_str()),
                     stopping,
                 ))
             });
@@ -809,8 +876,28 @@ mod tests {
                 }
                 std::thread::sleep(Duration::from_millis(50));
             };
+            // The stats page, from the node's own app: the snapshot is made
+            // about once a second, so the first answer may be "starting".
+            let mut stats = None;
+            while started && std::time::Instant::now() < until {
+                // The interfaces are known once the network says so.
+                if let Some(text) = get_stats(stats_port) {
+                    let total = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|j| j["interfaces"]["total"].as_u64());
+                    stats = Some(text);
+                    if total.is_some_and(|n| n >= 1) {
+                        break;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
             stop_tx.send(()).unwrap();
             running.join().unwrap().unwrap();
+            if started {
+                let json: serde_json::Value = serde_json::from_str(&stats.expect("the stats page didn't answer")).unwrap();
+                assert_eq!(json["version"], 1);
+                assert!(json["interfaces"]["total"].as_u64().unwrap() >= 1, "{json}");
+                assert!(json["peers_heard"]["total"].is_u64() && json["announces_last_minute"].is_u64(), "{json}");
+            }
             if !started {
                 continue;
             }

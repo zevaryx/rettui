@@ -1,6 +1,6 @@
 //! The opt-in public stats endpoint (`--stats-listen`): a read-only JSON
-//! summary of this node, with counts only. It reads a snapshot the web UI's
-//! owner loop publishes about once a second, so it never touches the app and
+//! summary of this node, with counts only. It reads a snapshot the owner loop
+//! (the web UI's, or `rettui node`'s) publishes about once a second, so it never touches the app and
 //! a slow or hostile visitor can't hold the owner up.
 
 use std::net::SocketAddr;

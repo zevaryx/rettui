@@ -22,7 +22,6 @@ pub mod desktop;
 pub mod mbtiles;
 mod push;
 mod routes;
-mod stats;
 mod tiles;
 pub mod tls;
 mod views;
@@ -936,7 +935,7 @@ async fn bind_with(
 /// of the identity it's switching to (it's started again as that one).
 ///
 /// With `stats` (an address), a read-only JSON summary of counts is served
-/// there too (see [`stats`]).
+/// there too (see [`crate::stats`]).
 pub async fn run(
     listener: std::net::TcpListener,
     settings: Settings,
@@ -960,10 +959,10 @@ pub async fn run(
 
     // Before anything starts, so a bad or taken address stops rettui.
     let started = std::time::Instant::now();
-    let (stats_tx, stats_rx) = stats::channel(String::new());
+    let (stats_tx, stats_rx) = crate::stats::channel(String::new());
     let stats_server = match stats {
         Some(stats_address) => {
-            let (bound, task) = stats::serve(stats_address, stats_rx).await?;
+            let (bound, task) = crate::stats::serve(stats_address, stats_rx).await?;
             println!("Stats (counts only, no login) at http://{bound}/stats.json");
             Some(task)
         }
@@ -1091,7 +1090,7 @@ pub async fn run(
             }
             _ = save.tick() => owner.app.save_if_dirty(),
             _ = stats_tick.tick(), if stats_server.is_some() => {
-                stats_tx.send_replace(stats::snapshot(&owner.app, started));
+                stats_tx.send_replace(crate::stats::snapshot(&owner.app, started));
             }
             () = owner.app.save_timer() => owner.app.save_when_due(),
             () = &mut shutdown => break Ok(None),
