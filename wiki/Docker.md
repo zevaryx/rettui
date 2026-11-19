@@ -95,10 +95,10 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   [Running](Running#the-stats-endpoint) for the JSON and an nginx example.
   To let a website that has a secret also read every peer heard, set
   `STATS_TOKEN_FILE` to the path of a file in the container that holds it
-  (a Docker secret, such as `/run/secrets/stats_token`, or a mounted file),
-  or set `RETTUI_STATS_TOKEN` to the secret in `environment:` (it is read by
-  rettui itself, and a file is safer because `docker inspect` shows the
-  environment). Not both. The token is 16 to 256 printable characters with no
+  (a Docker secret, such as `/run/secrets/stats_token`, is the better way),
+  or set `RETTUI_STATS_TOKEN` to the secret in `environment:` (read by
+  rettui itself, but `docker inspect` and `/proc` show the environment, and
+  programs rettui starts inherit it). Not both. The token is 16 to 256 printable characters with no
   spaces, and the container stops, with the reason, if it isn't. It needs
   `STATS_LISTEN`. See [Hosting a Node](Hosting-a-Node#the-peer-list-for-whoever-has-the-token).
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.

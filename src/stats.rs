@@ -109,7 +109,24 @@ impl Token {
 /// trimmed) or the `RETTUI_STATS_TOKEN` variable. None if neither is given;
 /// an error if both are, or if the token is not acceptable.
 pub fn load_token(file: Option<&Path>) -> Result<Option<Token>> {
+    if let Some(path) = file.filter(|path| readable_by_others(path)) {
+        eprintln!("warning: the stats token file {} can be read by other users; make it readable by you only (chmod 600)", path.display());
+    }
     token_from(file, std::env::var_os(TOKEN_VAR))
+}
+
+/// Whether `path` can be read by its group or by everyone (Unix only).
+fn readable_by_others(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o044 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 fn token_from(file: Option<&Path>, var: Option<OsString>) -> Result<Option<Token>> {
@@ -213,9 +230,20 @@ fn peer_list(app: &App) -> (Vec<Value>, bool) {
     (peers, truncated)
 }
 
-/// A name as listed: no control characters, at most [`NAME_MAX`] characters, and null if nothing is left.
+/// Characters that draw nothing or change how text is drawn (general
+/// categories Cf, Zl and Zp): bidi overrides and isolates, zero-width
+/// characters, joiners, the line and paragraph separators. Control characters
+/// (Cc) are `char::is_control`.
+fn is_invisible(c: char) -> bool {
+    matches!(u32::from(c),
+        0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E | 0x200B..=0x200F | 0x2028..=0x202E
+        | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
+        | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+/// A name as listed: no control or invisible characters, at most [`NAME_MAX`] characters, and null if nothing is left.
 fn clean_name(name: Option<&str>) -> Option<String> {
-    let name: String = name?.chars().filter(|c| !c.is_control()).take(NAME_MAX).collect();
+    let name: String = name?.chars().filter(|c| !c.is_control() && !is_invisible(*c)).take(NAME_MAX).collect();
     let name = name.trim();
     (!name.is_empty()).then(|| name.to_string())
 }
@@ -236,12 +264,13 @@ fn is_authorised(token: &Token, headers: &HeaderMap) -> bool {
 fn router(snapshot: Snapshot, token: Option<Token>) -> Router {
     Router::new().fallback(move |method: Method, uri: axum::http::Uri, headers: HeaderMap| {
         let published = snapshot.borrow().clone();
+        let token_set = token.is_some();
         let authorised = token.as_ref().is_some_and(|token| is_authorised(token, &headers));
-        async move { answer(&method, uri.path(), &published, authorised) }
+        async move { answer(&method, uri.path(), &published, authorised, token_set) }
     })
 }
 
-fn answer(method: &Method, path: &str, published: &Published, authorised: bool) -> Response {
+fn answer(method: &Method, path: &str, published: &Published, authorised: bool, token_set: bool) -> Response {
     if path != "/" && path != "/stats.json" {
         return (StatusCode::NOT_FOUND, "not found\n").into_response();
     }
@@ -265,9 +294,12 @@ fn answer(method: &Method, path: &str, published: &Published, authorised: bool) 
     if full.is_some() {
         // The same URL answers differently by header: no shared cache may keep this one.
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
-        headers.insert(header::VARY, HeaderValue::from_static("Authorization, X-Stats-Token"));
     } else {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    if token_set {
+        // Both answers: a cache that did keep the public one must still ask again when a token is sent.
+        headers.insert(header::VARY, HeaderValue::from_static("Authorization, X-Stats-Token"));
     }
     if method == Method::HEAD {
         headers.insert(header::CONTENT_LENGTH, HeaderValue::from(body.len()));
@@ -400,6 +432,7 @@ mod tests {
             let headers = response.headers();
             assert_eq!(headers[header::CONTENT_TYPE], "application/json");
             assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+            assert!(headers.get(header::VARY).is_none(), "a node with no token answers as before");
             assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
             let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
             let json: Value = serde_json::from_slice(&body).unwrap();
@@ -599,12 +632,12 @@ mod tests {
     }
 
     /// What a visitor without the token gets: the same as a node with no token.
-    async fn assert_public(router: &Router, path: &str, headers: &[(&str, &str)]) {
+    async fn assert_public(router: &Router, path: &str, headers: &[(&str, &str)], vary: bool) {
         let response = ask_with(router, "GET", path, headers).await;
         assert_eq!(response.status(), StatusCode::OK, "no 401: a wrong token must look like none");
         let (head, json) = json_of(response).await;
         assert_eq!(head[header::CACHE_CONTROL], "no-store");
-        assert!(head.get(header::VARY).is_none());
+        assert_eq!(head.get(header::VARY).is_some(), vary, "Vary is sent when a token is set, on both answers");
         assert!(json.get("peers").is_none() && json.get("authorised").is_none() && json.get("peers_truncated").is_none(), "{json}");
         assert_eq!(json.as_object().unwrap().len(), 7);
         assert!(!json.to_string().contains("Secret Name"));
@@ -613,22 +646,22 @@ mod tests {
     #[tokio::test]
     async fn a_missing_wrong_or_misplaced_token_gets_the_public_answer() {
         let (router, dir) = locked("public");
-        assert_public(&router, "/stats.json", &[]).await;
-        assert_public(&router, "/stats.json", &[("authorization", "Bearer wrong-token-of-the-right-length")]).await;
-        assert_public(&router, "/stats.json", &[("x-stats-token", "wrong-token-of-the-right-length")]).await;
-        assert_public(&router, "/stats.json", &[("x-stats-token", "")]).await;
+        assert_public(&router, "/stats.json", &[], true).await;
+        assert_public(&router, "/stats.json", &[("authorization", "Bearer wrong-token-of-the-right-length")], true).await;
+        assert_public(&router, "/stats.json", &[("x-stats-token", "wrong-token-of-the-right-length")], true).await;
+        assert_public(&router, "/stats.json", &[("x-stats-token", "")], true).await;
         // Not the Bearer scheme, or the token cut short or with more on it.
         let basic = format!("Basic {SECRET}");
         let bare = SECRET.to_string();
         let more = format!("Bearer {SECRET}x");
         let tokens = format!("Bearer {SECRET} {SECRET}");
         for value in [&basic, &bare, &more, &tokens, &"Bearer".to_string(), &"B".to_string(), &"é".to_string()] {
-            assert_public(&router, "/stats.json", &[("authorization", value)]).await;
+            assert_public(&router, "/stats.json", &[("authorization", value)], true).await;
         }
         // In the URL it would end up in proxy logs, so it is not read from there.
         for path in [format!("/stats.json?token={SECRET}"), format!("/?token={SECRET}&x=1"), format!("/stats.json?x-stats-token={SECRET}")]
         {
-            assert_public(&router, &path, &[]).await;
+            assert_public(&router, &path, &[], true).await;
         }
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -641,7 +674,7 @@ mod tests {
         let router = router(rx, None);
         let bearer = format!("Bearer {SECRET}");
         for headers in [vec![("authorization", bearer.as_str())], vec![("x-stats-token", SECRET)], vec![("x-stats-token", "")]] {
-            assert_public(&router, "/stats.json", &headers).await;
+            assert_public(&router, "/stats.json", &headers, false).await;
         }
         let (_tx, rx) = channel(snapshot(&app, Instant::now(), false));
         assert!(rx.borrow().authorised.is_none(), "no list is built without a token");
@@ -739,6 +772,33 @@ mod tests {
             assert_eq!(text.contains("\"peers\":["), listed, "{text}");
         }
         task.abort();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn invisible_and_direction_characters_are_dropped_from_names() {
+        // Right-to-left override, zero-width space, line separator, paragraph separator, isolates, BOM, soft hyphen, tag characters.
+        let name = Some("a\u{202E}b\u{200B}c\u{2028}d\u{2029}e\u{2066}f\u{2069}g\u{FEFF}h\u{AD}i\u{E0041}j");
+        assert_eq!(clean_name(name).as_deref(), Some("abcdefghij"));
+        assert_eq!(clean_name(Some("\u{202E}\u{200B}\u{2028}")), None);
+        // Ordinary text in other scripts, and emoji with a joiner's neighbours, is kept.
+        assert_eq!(clean_name(Some("Zoë 日本 ✓")).as_deref(), Some("Zoë 日本 ✓"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_token_file_others_can_read_is_noticed() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rettui-stats-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("token");
+        std::fs::write(&file, SECRET).unwrap();
+        for (mode, shared) in [(0o600, false), (0o400, false), (0o640, true), (0o604, true), (0o644, true)] {
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert_eq!(readable_by_others(&file), shared, "{mode:o}");
+        }
+        assert!(!readable_by_others(&dir.join("missing")));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

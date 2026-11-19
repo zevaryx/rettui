@@ -402,7 +402,11 @@ of several nodes exactly, without counting one twice when two nodes heard it,
 including nodes behind a proxy. Everyone else still gets the totals above.
 
 Put the token in a file, or in the `RETTUI_STATS_TOKEN` variable (the flag
-takes a path, never the secret, so it doesn't show in `ps`), not both:
+takes a path, never the secret, so it doesn't show in `ps`), not both. Prefer
+the file (in Docker, a Docker secret): the environment is visible in
+`/proc` and `docker inspect`, and programs rettui starts inherit it. Use a
+random token, as made below, not a word. On Linux and macOS the node warns at
+start if the file can be read by other users.
 
     head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > /etc/rettui-stats-token
     chmod 600 /etc/rettui-stats-token
@@ -435,9 +439,13 @@ The token is compared in constant time and never logged.
 - `type` is `lxmf`, `nomad` or `propagation`. `name` is what the peer
   announced, with control characters removed and cut to 64 characters, or
   `null`.
-- The list is sorted by address and has at most 20000 peers. If the node
-  heard more, `"peers_truncated": true` is added, and `peers_heard` still
-  counts them all.
+- The list is sorted by address and has at most 20000 peers. Above that,
+  the list keeps the lowest addresses and is flagged `"peers_truncated": true`;
+  `peers_heard` still counts them all.
+- `name` is text the peer chose, so treat it as untrusted: escape it wherever
+  you show it. Control characters, invisible characters (zero-width, bidi
+  overrides and isolates, line and paragraph separators) are removed, but
+  it can still hold `<`, quotes and anything else.
 - The answer has `Cache-Control: private, no-store` and `Vary: Authorization,
   X-Stats-Token`, so a cache doesn't keep it or give it to someone without the token.
 
@@ -452,7 +460,28 @@ Security notes:
 - **Keep the stats behind HTTPS if the token crosses a network.** The
   listener itself has no TLS: with a token, a reverse proxy that serves HTTPS
   is needed (or bind the listener to `127.0.0.1` and ask from the same machine).
-  In nginx, pass the headers on (they are by default) and don't log them.
+  In nginx, pass the headers on (they are by default), don't log them, and
+  limit how often a client may ask, so the token can't be guessed quickly:
+
+  ```nginx
+  limit_req_zone $binary_remote_addr zone=rettui_stats:1m rate=2r/s;
+
+  location = /stats.json {
+      limit_req zone=rettui_stats burst=10 nodelay;
+      proxy_pass http://127.0.0.1:8741/stats.json;
+      proxy_read_timeout 5s;
+      limit_except GET HEAD { deny all; }
+  }
+  ```
+
+  A random token (the `head -c 32 /dev/urandom` command above) makes guessing
+  hopeless; the limit is a second layer. If only your website's server needs the
+  peer list, a third is to serve it on a separate address that only that
+  server may reach (`allow` its address, `deny all`), and to have the public
+  location drop the headers (`proxy_set_header X-Stats-Token "";` and
+  `proxy_set_header Authorization "";`).
+- A node with a token sends `Vary: Authorization, X-Stats-Token` on both
+  answers, public and listed.
 
 ## RRC hub
 
