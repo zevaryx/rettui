@@ -368,7 +368,10 @@ It can't change anything. The numbers are updated every second.
   "generated_at": 1763528000,
   "uptime_seconds": 12345,
   "interfaces": {
-    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456
+    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456, "announce_queue": 5
+  },
+  "announce_queue": {
+    "queued": 5, "limit": 12288, "full": false, "interface_limit": 4096, "fullest": 4, "interfaces_full": 0
   },
   "peers_heard": { "total": 100, "lxmf": 60, "nomad": 30, "propagation": 10 },
   "announces_last_minute": 12,
@@ -420,6 +423,25 @@ is a total: no peer or sender is named.
   trying again, up to an hour.
 
 Everyone who can reach the listener sees `propagation` and `disk.data_bytes` (counts and sizes of what the node keeps, with no addresses); the size and free space of the disk (`disk.fs_total_bytes`, `disk.fs_free_bytes`) tell what kind of host this is, so only a request with the token gets them, and a node with no token never shows them. If even the rest bothers you, keep the listener private (bind it to `127.0.0.1` or restrict it in the proxy).
+
+`announce_queue` is how many announces are waiting to go out on the node's
+interfaces, which a status page can watch to see that the queue doesn't stay
+full. Reticulum keeps up to 4096 waiting per interface, and drops new
+announces for an interface whose queue is at that. It is public, as it is only
+counts. All the numbers are added up over the interfaces that report a queue,
+with none of their names:
+
+- `queued` is the announces waiting, over all of them (`interfaces.announce_queue`
+  is the same number), and `limit` is what they can hold: `interface_limit`
+  times the interfaces that report a queue.
+- `full` is `true` when at least one interface's queue is at its limit, and
+  `interfaces_full` is how many are. `fullest` is the longest queue of any
+  one interface. Alert on `full` staying `true` (or `fullest` staying at
+  `interface_limit`), not on `queued` against `limit`, which stays low while
+  one interface is stuck.
+- If no interface reports a queue (none are up yet), `queued`, `limit`,
+  `full`, `fullest` and `interfaces_full` are `null` and `interface_limit` is
+  still there.
 
 `interfaces.clients` adds up the clients connected to the node's server
 interfaces (`null` when none report any). The other fields, and how the

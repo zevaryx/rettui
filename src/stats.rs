@@ -26,6 +26,7 @@ use tokio::sync::watch;
 use crate::app::App;
 use crate::app::node::NodeStatus;
 use crate::net::PeerKind;
+use rns_transport::constants::MAX_QUEUED_ANNOUNCES;
 
 /// The variable that holds the token (a flag value would show in `ps`).
 pub const TOKEN_VAR: &str = "RETTUI_STATS_TOKEN";
@@ -336,6 +337,39 @@ fn propagation_object(app: &App) -> Option<Value> {
     }))
 }
 
+/// The `announce_queue` object: announces waiting to go out, summed over the
+/// interfaces that report a queue, and what Reticulum keeps at most per
+/// interface (`interface_limit`; a queue at it drops new announces). `limit`
+/// is that times the interfaces that report, `full` whether any one is at it,
+/// and `fullest` the longest queue of one interface, so a status page can tell
+/// one busy interface from many. All null if no interface reports a queue.
+/// Counts only, no names. Also the sum alone, for the `interfaces` object.
+fn announce_queue_object(interfaces: &[crate::net::InterfaceInfo]) -> (Option<u64>, Value) {
+    let per_interface = MAX_QUEUED_ANNOUNCES as u64;
+    let (mut reporting, mut queued, mut fullest, mut full) = (0u64, 0u64, 0u64, 0u64);
+    for length in interfaces.iter().filter_map(|i| i.announce_queue) {
+        reporting += 1;
+        queued = queued.saturating_add(length);
+        fullest = fullest.max(length);
+        full += u64::from(length >= per_interface);
+    }
+    if reporting == 0 {
+        let object = json!({
+            "queued": null, "limit": null, "full": null, "interface_limit": per_interface, "fullest": null, "interfaces_full": null,
+        });
+        return (None, object);
+    }
+    let object = json!({
+        "queued": queued,
+        "limit": reporting.saturating_mul(per_interface),
+        "full": full > 0,
+        "interface_limit": per_interface,
+        "fullest": fullest,
+        "interfaces_full": full,
+    });
+    (Some(queued), object)
+}
+
 /// The JSON for `app`, as of now. Totals only: no addresses, hashes, or names
 /// of peers, interfaces or clients, and no row per interface or client. With
 /// `with_peers` (a token is set), the authorised answer is made too. `disk`
@@ -361,6 +395,7 @@ pub fn snapshot(app: &App, started: Instant, with_peers: bool, disk: &Disk) -> A
             PeerKind::Propagation => propagation += 1,
         }
     }
+    let (queued, announce_queue) = announce_queue_object(&app.interfaces);
     let mut json = json!({
         "version": 1,
         "rettui_version": env!("CARGO_PKG_VERSION"),
@@ -372,7 +407,9 @@ pub fn snapshot(app: &App, started: Instant, with_peers: bool, disk: &Disk) -> A
             "clients": clients,
             "rx_bytes": rx,
             "tx_bytes": tx,
+            "announce_queue": queued,
         },
+        "announce_queue": announce_queue,
         "peers_heard": { "total": lxmf + nomad + propagation, "lxmf": lxmf, "nomad": nomad, "propagation": propagation },
         "announces_last_minute": app.announce_log.last_minute(),
     });
@@ -636,14 +673,14 @@ mod tests {
         assert_eq!(json["interfaces"]["tx_bytes"], 22);
         let interfaces = json["interfaces"].as_object().unwrap();
         let keys: Vec<_> = interfaces.keys().map(String::as_str).collect();
-        assert_eq!(keys, ["clients", "online", "rx_bytes", "total", "tx_bytes"], "no per-interface rows");
+        assert_eq!(keys, ["announce_queue", "clients", "online", "rx_bytes", "total", "tx_bytes"], "no per-interface rows");
         assert_eq!(json["peers_heard"], json!({ "total": 4, "lxmf": 2, "nomad": 1, "propagation": 1 }));
         assert_eq!(json["announces_last_minute"], 0);
         let text = json.to_string();
         assert!(!text.contains("Secret Name") && !text.contains("0000000000000000000000000000000"), "{text}");
         assert!(!text.contains("Public entry point") && !text.contains("Uplink") && !text.contains("Second server"), "{text}");
         let keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
-        assert_eq!(keys.len(), 7, "{keys:?}");
+        assert_eq!(keys.len(), 8, "{keys:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -657,6 +694,35 @@ mod tests {
         assert_eq!(json["interfaces"]["online"], 40);
         assert!(json["interfaces"].get("list").is_none(), "{json}");
         assert!(!json.to_string().contains("i39"), "{json}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_announce_queue_is_summed_with_its_limit_and_no_names() {
+        let (mut app, dir) = app("queue");
+        // No interface reports a queue: everything is null, the limit per interface is still known.
+        let json: Value = serde_json::from_str(&snapshot(&app, Instant::now(), false, &Disk::default()).public).unwrap();
+        assert_eq!(json["interfaces"]["announce_queue"], Value::Null);
+        assert_eq!(
+            json["announce_queue"],
+            json!({ "queued": null, "limit": null, "full": null, "interface_limit": 4096, "fullest": null, "interfaces_full": null })
+        );
+        let queue = |n: Option<u64>| InterfaceInfo { announce_queue: n, ..Default::default() };
+        app.interfaces = vec![queue(Some(10)), queue(None), queue(Some(5))];
+        let json: Value = serde_json::from_str(&snapshot(&app, Instant::now(), false, &Disk::default()).public).unwrap();
+        assert_eq!(json["interfaces"]["announce_queue"], 15);
+        assert_eq!(
+            json["announce_queue"],
+            json!({ "queued": 15, "limit": 8192, "full": false, "interface_limit": 4096, "fullest": 10, "interfaces_full": 0 })
+        );
+        // One at the limit is full, and a longer count than the limit still is.
+        app.interfaces = vec![queue(Some(4096)), queue(Some(u64::MAX)), queue(Some(3))];
+        let json: Value =
+            serde_json::from_str(snapshot(&app, Instant::now(), true, &Disk::default()).authorised.as_deref().unwrap()).unwrap();
+        assert_eq!(json["announce_queue"]["queued"], u64::MAX, "the sum saturates");
+        assert_eq!(json["announce_queue"]["limit"], 3 * 4096);
+        assert_eq!(json["announce_queue"]["full"], true);
+        assert_eq!(json["announce_queue"]["interfaces_full"], 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -951,7 +1017,7 @@ mod tests {
         assert_eq!(keys, ["data_bytes"], "the file system's size is not public");
         assert!(!snapshot(&app, Instant::now(), true, &disk).public.contains("fs_"));
         assert_eq!(value["version"], 1);
-        assert_eq!(value.as_object().unwrap().len(), 8);
+        assert_eq!(value.as_object().unwrap().len(), 9);
         // On failure the fields are null.
         let failed = Disk::default();
         let gone = dir.join("missing");
@@ -1207,7 +1273,7 @@ mod tests {
         assert_eq!(head[header::CACHE_CONTROL], "no-store");
         assert_eq!(head.get(header::VARY).is_some(), vary, "Vary is sent when a token is set, on both answers");
         assert!(json.get("peers").is_none() && json.get("authorised").is_none() && json.get("peers_truncated").is_none(), "{json}");
-        assert_eq!(json.as_object().unwrap().len(), 7);
+        assert_eq!(json.as_object().unwrap().len(), 8);
         assert!(!json.to_string().contains("Secret Name"));
     }
 

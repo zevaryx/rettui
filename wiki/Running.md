@@ -202,7 +202,10 @@ curl http://127.0.0.1:8741/stats.json
   "generated_at": 1763528000,
   "uptime_seconds": 12345,
   "interfaces": {
-    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456
+    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456, "announce_queue": 5
+  },
+  "announce_queue": {
+    "queued": 5, "limit": 12288, "full": false, "interface_limit": 4096, "fullest": 4, "interfaces_full": 0
   },
   "peers_heard": { "total": 100, "lxmf": 60, "nomad": 30, "propagation": 10 },
   "announces_last_minute": 12,
