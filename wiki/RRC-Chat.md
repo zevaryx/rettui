@@ -88,6 +88,19 @@ host. rettui works with each of them, as they differ (see
   a message, so it isn't wrapped: every space is kept, its lines stay lined
   up under each other, and what doesn't fit is cut off at the edge of the
   chat (widen the window, or hide the members list, to see more).
+- **Writing in colour:** the message box formats what you write, as the page
+  editor does, with NomadNet's `¦` tags so other clients draw it. Select text
+  (in the terminal UI with `Shift`+arrows, in the web UI with the mouse or
+  keys) and press `Alt+B` bold, `Alt+I` italic, `Alt+U` underline, `Alt+F`
+  text colour, `Alt+G` background colour or `Alt+N` to remove formatting;
+  with nothing selected the keys put in a pair of tags and leave the cursor
+  between them. The web UI also takes `Ctrl+B`, `Ctrl+I` and `Ctrl+U`, has
+  the same actions as buttons beside the box (behind **Aa** on a phone), and
+  shows them in a small bar over selected text. The colour picker has
+  default swatches and a hex field: 3 digits (`f80`) or 6 (`00aaff`), with
+  or without `#`. Three digits are written `¦Ff80`, six `¦FT00aaff`, and
+  `¦B` / `¦BT` for backgrounds. In the terminal UI, pick a swatch with the
+  arrow keys and `Enter` or a click.
 - **Emoji:** `Ctrl-E` (or the 🙂 button) and `:name` work in the channel
   input as they do for messages (see [Emoji](Messaging#emoji)).
 - **Mentions and unread:** `@yournick` mentions are highlighted (just the
