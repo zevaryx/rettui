@@ -104,7 +104,7 @@ struct Cli {
     /// The private key (PEM) of --tls-cert.
     #[arg(long, value_name = "FILE", requires_all = ["web", "tls_cert"])]
     tls_key: Option<PathBuf>,
-    /// Also serve a read-only JSON summary of this node (counts only, no
+    /// Also serve a read-only JSON summary of this node (totals only, no
     /// login) at /stats.json on this address, for a status page. Put it
     /// behind a reverse proxy; don't expose it directly.
     #[arg(long, value_name = "ADDRESS", requires = "web")]

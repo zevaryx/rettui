@@ -342,8 +342,9 @@ Things to know:
 
 With `--stats-listen ADDRESS` the node also serves a read-only summary of
 itself at `/stats.json` on that address, with no login. It is off unless you
-give it, and it has counts only: no addresses, no peers' names, no clients'
-addresses. It can't change anything. The numbers are updated every second.
+give it, and it publishes totals only: no addresses, no names of peers or
+interfaces, no clients' addresses, and no row for each interface or client.
+It can't change anything. The numbers are updated every second.
 
     rettui --data-dir /var/lib/rettui-node node --stats-listen 127.0.0.1:8741
     curl http://127.0.0.1:8741/stats.json
@@ -355,8 +356,7 @@ addresses. It can't change anything. The numbers are updated every second.
   "generated_at": 1763528000,
   "uptime_seconds": 12345,
   "interfaces": {
-    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456,
-    "list": [{ "name": "Public entry point", "online": true, "clients": 17, "rx_bytes": 1, "tx_bytes": 2 }]
+    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456
   },
   "peers_heard": { "total": 100, "lxmf": 60, "nomad": 30, "propagation": 10 },
   "announces_last_minute": 12

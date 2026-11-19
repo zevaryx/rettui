@@ -58,7 +58,7 @@ pub struct NodeArgs {
     /// switch it off with pn_enabled in settings.json).
     #[arg(long, conflicts_with = "name")]
     pub no_propagation: bool,
-    /// Also serve a read-only JSON summary of this node (counts only, no
+    /// Also serve a read-only JSON summary of this node (totals only, no
     /// login) at /stats.json on this address, for a status page. Put it
     /// behind a reverse proxy; don't expose it directly. Not saved: give it
     /// on every run.
@@ -385,7 +385,7 @@ pub(crate) async fn serve(
     let stats_server = match stats {
         Some(address) => {
             let (bound, task) = crate::stats::serve(address, stats_rx).await?;
-            println!("Stats (counts only, no login) at http://{bound}/stats.json");
+            println!("Stats (totals only, no login) at http://{bound}/stats.json");
             Some(task)
         }
         None => None,
@@ -896,6 +896,7 @@ mod tests {
                 let json: serde_json::Value = serde_json::from_str(&stats.expect("the stats page didn't answer")).unwrap();
                 assert_eq!(json["version"], 1);
                 assert!(json["interfaces"]["total"].as_u64().unwrap() >= 1, "{json}");
+                assert!(json["interfaces"].get("list").is_none(), "{json}");
                 assert!(json["peers_heard"]["total"].is_u64() && json["announces_last_minute"].is_u64(), "{json}");
             }
             if !started {

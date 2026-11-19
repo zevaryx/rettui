@@ -963,7 +963,7 @@ pub async fn run(
     let stats_server = match stats {
         Some(stats_address) => {
             let (bound, task) = crate::stats::serve(stats_address, stats_rx).await?;
-            println!("Stats (counts only, no login) at http://{bound}/stats.json");
+            println!("Stats (totals only, no login) at http://{bound}/stats.json");
             Some(task)
         }
         None => None,

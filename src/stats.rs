@@ -1,5 +1,5 @@
 //! The opt-in public stats endpoint (`--stats-listen`): a read-only JSON
-//! summary of this node, with counts only. It reads a snapshot the owner loop
+//! summary of this node, with totals only. It reads a snapshot the owner loop
 //! (the web UI's, or `rettui node`'s) publishes about once a second, so it never touches the app and
 //! a slow or hostile visitor can't hold the owner up.
 
@@ -10,20 +10,17 @@ use anyhow::{Context, Result};
 use axum::Router;
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::watch;
 
 use crate::app::App;
 use crate::net::PeerKind;
 
-/// The most interfaces listed (the totals still count them all).
-const MAX_LISTED: usize = 32;
-
 /// What the endpoint answers with: the JSON, as published last.
 pub type Snapshot = watch::Receiver<String>;
 
-/// The JSON for `app`, as of now. Counts only: no addresses, hashes, names
-/// of peers or clients.
+/// The JSON for `app`, as of now. Totals only: no addresses, hashes, or names
+/// of peers, interfaces or clients, and no row per interface or client.
 pub fn snapshot(app: &App, started: Instant) -> String {
     let generated_at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let online = app.interfaces.iter().filter(|i| i.online).count();
@@ -44,12 +41,6 @@ pub fn snapshot(app: &App, started: Instant) -> String {
             PeerKind::Propagation => propagation += 1,
         }
     }
-    let list: Vec<Value> = app
-        .interfaces
-        .iter()
-        .take(MAX_LISTED)
-        .map(|i| json!({ "name": i.name, "online": i.online, "clients": i.clients, "rx_bytes": i.rx_bytes, "tx_bytes": i.tx_bytes }))
-        .collect();
     json!({
         "version": 1,
         "rettui_version": env!("CARGO_PKG_VERSION"),
@@ -61,7 +52,6 @@ pub fn snapshot(app: &App, started: Instant) -> String {
             "clients": clients,
             "rx_bytes": rx,
             "tx_bytes": tx,
-            "list": list,
         },
         "peers_heard": { "total": lxmf + nomad + propagation, "lxmf": lxmf, "nomad": nomad, "propagation": propagation },
         "announces_last_minute": app.announce_log.last_minute(),
@@ -126,6 +116,7 @@ pub fn channel(initial: String) -> (watch::Sender<String>, Snapshot) {
 mod tests {
     use axum::body::Body;
     use axum::http::Request;
+    use serde_json::Value;
     use tower::ServiceExt;
 
     use super::*;
@@ -172,27 +163,29 @@ mod tests {
         assert_eq!(json["interfaces"]["clients"], 7);
         assert_eq!(json["interfaces"]["rx_bytes"], 11);
         assert_eq!(json["interfaces"]["tx_bytes"], 22);
-        let list = json["interfaces"]["list"].as_array().unwrap();
-        assert_eq!(list.len(), 3);
-        assert_eq!(list[0], json!({ "name": "Public entry point", "online": true, "clients": 3, "rx_bytes": 10, "tx_bytes": 20 }));
-        assert_eq!(list[1]["clients"], Value::Null);
+        let interfaces = json["interfaces"].as_object().unwrap();
+        let keys: Vec<_> = interfaces.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["clients", "online", "rx_bytes", "total", "tx_bytes"], "no per-interface rows");
         assert_eq!(json["peers_heard"], json!({ "total": 4, "lxmf": 2, "nomad": 1, "propagation": 1 }));
         assert_eq!(json["announces_last_minute"], 0);
         let text = json.to_string();
         assert!(!text.contains("Secret Name") && !text.contains("0000000000000000000000000000000"), "{text}");
+        assert!(!text.contains("Public entry point") && !text.contains("Uplink") && !text.contains("Second server"), "{text}");
         let keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
         assert_eq!(keys.len(), 7, "{keys:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn no_interface_reports_clients_as_null_and_the_list_is_capped() {
-        let (mut app, dir) = app("capped");
+    fn no_interface_reports_clients_as_null_and_no_list_is_published() {
+        let (mut app, dir) = app("no-clients");
         app.interfaces = (0..40).map(|i| InterfaceInfo { name: format!("i{i}"), online: true, ..Default::default() }).collect();
         let json: Value = serde_json::from_str(&snapshot(&app, Instant::now())).unwrap();
         assert_eq!(json["interfaces"]["clients"], Value::Null);
         assert_eq!(json["interfaces"]["total"], 40);
-        assert_eq!(json["interfaces"]["list"].as_array().unwrap().len(), MAX_LISTED);
+        assert_eq!(json["interfaces"]["online"], 40);
+        assert!(json["interfaces"].get("list").is_none(), "{json}");
+        assert!(!json.to_string().contains("i39"), "{json}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -184,9 +184,9 @@ if the output is a terminal wide enough to show it.
 
 A public node can show a few numbers on a status page. `--stats-listen
 ADDRESS` (with `--web`, or after `rettui node`) serves a read-only summary at
-`/stats.json` on its own address, with no login. It is off unless you give it, and it has counts
-only: no addresses, no peers' names, no clients' addresses. It can't change
-anything and has no way into the web UI.
+`/stats.json` on its own address, with no login. It is off unless you give it, and it publishes
+totals only: no addresses, no names of peers or interfaces, no clients' addresses, and no row for
+each interface or client. It can't change anything and has no way into the web UI.
 
 ```sh
 rettui --web 127.0.0.1:8740 --stats-listen 127.0.0.1:8741
@@ -201,8 +201,7 @@ curl http://127.0.0.1:8741/stats.json
   "generated_at": 1763528000,
   "uptime_seconds": 12345,
   "interfaces": {
-    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456,
-    "list": [{ "name": "Public entry point", "online": true, "clients": 17, "rx_bytes": 1, "tx_bytes": 2 }]
+    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456
   },
   "peers_heard": { "total": 100, "lxmf": 60, "nomad": 30, "propagation": 10 },
   "announces_last_minute": 12
@@ -213,8 +212,8 @@ curl http://127.0.0.1:8741/stats.json
   `uptime_seconds` counts from when rettui started.
 - `interfaces.clients` adds up the clients connected to the node's server
   interfaces, and is `null` when none report any (so does an interface's
-  own `clients` when it is not a server). `list` has the first 32
-  interfaces, named as in the Reticulum config; the totals count them all.
+  own `clients` when it is not a server). Interfaces are counted, not
+  listed, so their names and each client's details stay private.
 - Only `GET` and `HEAD` for `/` and `/stats.json` are answered (others get
   405 or 404), and the reply is marked `Cache-Control: no-store`. In the
   first moments after start, before there are numbers, it answers 503.
