@@ -379,9 +379,12 @@ It can't change anything. The numbers are updated every second.
     "messages_received": 900, "messages_served": 700, "messages_offered_to_peers": 1500,
     "messages_sent_to_peers": 800, "messages_received_from_peers": 400, "unhandled_messages": 35
   },
-  "disk": { "data_bytes": 52000000, "fs_total_bytes": 50000000000, "fs_free_bytes": 31000000000 }
+  "disk": { "data_bytes": 52000000 }
 }
 ```
+
+A request with the stats token (below) gets the same, and `disk` also has
+`"fs_total_bytes": 50000000000, "fs_free_bytes": 31000000000`.
 
 `propagation` is there only while the node's propagation node runs, and `disk`
 once the first measurement is done (a second or so after start). New keys may
@@ -408,15 +411,15 @@ is a total: no peer or sender is named.
   worked out when a peer is next due, so it can be a little old.
 - `disk.data_bytes` is the size of the files in the whole data directory (the
   messages, the stores, the log and every identity's folder), without
-  following links. `fs_total_bytes` and `fs_free_bytes` are the size of the
-  file system that holds it and what is free there for an ordinary user (not
-  given on Windows: `null`). Walking the directory is done in the background,
+  following links. `fs_total_bytes` and `fs_free_bytes`, only in the answer for
+  a request with the token, are the size of the file system that holds it and
+  what is free there for an ordinary user (not given on Windows: `null`). Walking the directory is done in the background,
   at most once a minute, so these may be up to a minute old. If it can't be
   read, or has more than 500000 entries or takes more than 10 seconds, the
   field is `null`. After a failed measurement it waits twice as long before
   trying again, up to an hour.
 
-`propagation` and `disk` (the storage numbers and the free space on the disk) are public to anyone who can reach a listener that isn't firewalled or restricted by a proxy; if that bothers you, keep the listener private, or ask for the free-space numbers to be given only to requests with the token.
+Everyone who can reach the listener sees `propagation` and `disk.data_bytes` (counts and sizes of what the node keeps, with no addresses); the size and free space of the disk (`disk.fs_total_bytes`, `disk.fs_free_bytes`) tell what kind of host this is, so only a request with the token gets them, and a node with no token never shows them. If even the rest bothers you, keep the listener private (bind it to `127.0.0.1` or restrict it in the proxy).
 
 `interfaces.clients` adds up the clients connected to the node's server
 interfaces (`null` when none report any). The other fields, and how the

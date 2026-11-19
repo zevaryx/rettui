@@ -339,7 +339,8 @@ fn propagation_object(app: &App) -> Option<Value> {
 /// The JSON for `app`, as of now. Totals only: no addresses, hashes, or names
 /// of peers, interfaces or clients, and no row per interface or client. With
 /// `with_peers` (a token is set), the authorised answer is made too. `disk`
-/// supplies the disk object once it has a first measurement.
+/// supplies the disk object once it has a first measurement; only the authorised
+/// answer has the file system's size and free space.
 pub fn snapshot(app: &App, started: Instant, with_peers: bool, disk: &Disk) -> Arc<Published> {
     let generated_at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let online = app.interfaces.iter().filter(|i| i.online).count();
@@ -375,21 +376,25 @@ pub fn snapshot(app: &App, started: Instant, with_peers: bool, disk: &Disk) -> A
         "peers_heard": { "total": lxmf + nomad + propagation, "lxmf": lxmf, "nomad": nomad, "propagation": propagation },
         "announces_last_minute": app.announce_log.last_minute(),
     });
+    let usage = disk.current(&app.paths.root);
     if let Some(map) = json.as_object_mut() {
         if let Some(pn) = propagation_object(app) {
             map.insert("propagation".into(), pn);
         }
-        if let Some(usage) = disk.current(&app.paths.root) {
-            map.insert(
-                "disk".into(),
-                json!({ "data_bytes": usage.data_bytes, "fs_total_bytes": usage.fs_total_bytes, "fs_free_bytes": usage.fs_free_bytes }),
-            );
+        // The size of the file system says what kind of host this is: only with the token.
+        if let Some(usage) = usage {
+            map.insert("disk".into(), json!({ "data_bytes": usage.data_bytes }));
         }
     }
     let public = json.to_string();
     let authorised = with_peers.then(|| {
         let (peers, truncated) = peer_list(app);
         if let Some(map) = json.as_object_mut() {
+            if let Some(usage) = usage {
+                let full =
+                    json!({ "data_bytes": usage.data_bytes, "fs_total_bytes": usage.fs_total_bytes, "fs_free_bytes": usage.fs_free_bytes });
+                map.insert("disk".into(), full);
+            }
             map.insert("authorised".into(), Value::Bool(true));
             map.insert("peers".into(), Value::Array(peers));
             if let Some((list, cut)) = propagation_peers(app) {
@@ -943,7 +948,8 @@ mod tests {
         assert_eq!(value["disk"]["data_bytes"], usage.data_bytes.unwrap());
         assert!(value["disk"]["data_bytes"].as_u64().unwrap() >= 77);
         let keys: Vec<_> = value["disk"].as_object().unwrap().keys().map(String::as_str).collect();
-        assert_eq!(keys, ["data_bytes", "fs_free_bytes", "fs_total_bytes"]);
+        assert_eq!(keys, ["data_bytes"], "the file system's size is not public");
+        assert!(!snapshot(&app, Instant::now(), true, &disk).public.contains("fs_"));
         assert_eq!(value["version"], 1);
         assert_eq!(value.as_object().unwrap().len(), 8);
         // On failure the fields are null.
@@ -955,7 +961,12 @@ mod tests {
         // The authorised answer has it too.
         let both = snapshot(&app, Instant::now(), true, &disk);
         let authorised: Value = serde_json::from_str(both.authorised.as_deref().unwrap()).unwrap();
-        assert!(authorised["disk"].is_object());
+        let keys: Vec<_> = authorised["disk"].as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["data_bytes", "fs_free_bytes", "fs_total_bytes"]);
+        assert_eq!(authorised["disk"]["data_bytes"], usage.data_bytes.unwrap());
+        // A node with no token never makes the authorised answer, so never shows them.
+        let open = snapshot(&app, Instant::now(), false, &disk);
+        assert!(open.authorised.is_none() && !open.public.contains("fs_"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -969,6 +980,7 @@ mod tests {
         let (_, json) = json_of(ask(&router(rx, None), "GET", "/stats.json").await).await;
         assert_eq!(json["propagation"]["stored_messages"], 1);
         assert!(json["disk"]["data_bytes"].is_u64());
+        assert!(json["disk"].get("fs_total_bytes").is_none() && json["disk"].get("fs_free_bytes").is_none());
         assert_eq!(json["interfaces"]["clients"], 7);
         let _ = std::fs::remove_dir_all(dir);
     }

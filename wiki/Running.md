@@ -213,13 +213,13 @@ curl http://127.0.0.1:8741/stats.json
     "messages_received": 900, "messages_served": 700, "messages_offered_to_peers": 1500,
     "messages_sent_to_peers": 800, "messages_received_from_peers": 400, "unhandled_messages": 35
   },
-  "disk": { "data_bytes": 52000000, "fs_total_bytes": 50000000000, "fs_free_bytes": 31000000000 }
+  "disk": { "data_bytes": 52000000 }
 }
 ```
 
 `propagation` (the propagation node's stored messages, limit, peers and
 message counts) is there only while that node runs, and `disk` (the size of
-the data directory and of its file system, measured in the background at most
+the data directory, and for a request with the token also the size and free space of its file system, measured in the background at most
 once a minute) once measured. Both are totals with no addresses; see the
 [field notes](Hosting-a-Node#a-stats-page-for-a-status-page).
 
