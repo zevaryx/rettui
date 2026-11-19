@@ -2641,7 +2641,8 @@ fn chat_formatting_in_the_channel_input() {
     assert_eq!(sent, format!("{BAR}Ff00red{BAR}f text"));
     let micron = crate::nomad::micron::chat::parse(&sent).unwrap();
     assert_eq!(micron.text, "red text");
-    assert!(micron.colour);
+    // A coloured sentence is text, not art, so it wraps.
+    assert!(!micron.colour);
     assert_eq!(micron.spans[0].0..micron.spans[0].1, 0..3);
     assert_eq!(micron.spans[0].2.fg, Some(ratatui::style::Color::Rgb(0xff, 0, 0)));
     let screen = tui.draw();
