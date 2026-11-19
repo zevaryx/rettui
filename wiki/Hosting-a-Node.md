@@ -282,7 +282,7 @@ so you can edit the config and settings afterwards, and every later run
 needs no flags. Every run also says, as notes rather than changes, which
 interface is the entry point, and what it left as it was: a TCP server on
 that port that's turned off (`enabled = No`) stays off, and `--listen-ip`
-doesn't move a server that's there. The flags are kept the same way:
+doesn't move a server that's there. The flags are kept the same way (all but `--stats-listen`, which is for one run):
 
 | Flag | What it does |
 |------|--------------|
@@ -292,6 +292,7 @@ doesn't move a server that's there. The flags are kept the same way:
 | `--no-entry-point` | Adds no TCP server: others connect over the interfaces already in the config. Transport node is still turned on. |
 | `--name NAME` | The name the propagation node announces (`pn_name`; otherwise your display name). |
 | `--no-propagation` | Doesn't turn the propagation node on. One turned on before stays on: set `pn_enabled` to `false` in `settings.json` to stop it. |
+| `--stats-listen ADDRESS` | Serves a read-only stats page on this address, such as `127.0.0.1:8741` (see below). Off unless given, and not saved: give it on every run. |
 
 Things to know:
 
@@ -336,6 +337,49 @@ Things to know:
   everything and leaves the network cleanly. See
   [Running as a service](Running#running-as-a-service) for a systemd unit,
   and [Docker](Docker) for a container.
+
+### A stats page for a status page
+
+With `--stats-listen ADDRESS` the node also serves a read-only summary of
+itself at `/stats.json` on that address, with no login. It is off unless you
+give it, and it has counts only: no addresses, no peers' names, no clients'
+addresses. It can't change anything. The numbers are updated every second.
+
+    rettui --data-dir /var/lib/rettui-node node --stats-listen 127.0.0.1:8741
+    curl http://127.0.0.1:8741/stats.json
+
+```json
+{
+  "version": 1,
+  "rettui_version": "2.1.0",
+  "generated_at": 1763528000,
+  "uptime_seconds": 12345,
+  "interfaces": {
+    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456,
+    "list": [{ "name": "Public entry point", "online": true, "clients": 17, "rx_bytes": 1, "tx_bytes": 2 }]
+  },
+  "peers_heard": { "total": 100, "lxmf": 60, "nomad": 30, "propagation": 10 },
+  "announces_last_minute": 12
+}
+```
+
+`interfaces.clients` adds up the clients connected to the node's server
+interfaces (`null` when none report any). The other fields, and how the
+listener answers, are in [Running](Running#the-stats-endpoint). The
+listener has no TLS and no limits on who asks, so bind it to `127.0.0.1` or
+a private address and let a reverse proxy publish it. With nginx, on the
+host that serves `https://node.example/`:
+
+```nginx
+location = /stats.json {
+    proxy_pass http://127.0.0.1:8741/stats.json;
+    proxy_read_timeout 5s;
+    limit_except GET HEAD { deny all; }
+}
+```
+
+In Docker, set `STATS_LISTEN` (see [Docker](Docker)). An address that can't
+be opened (the port is taken, say) stops the node at start, with the reason.
 
 ## RRC hub
 

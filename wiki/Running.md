@@ -134,6 +134,7 @@ rettui --web [ADDRESS] --https                          # over HTTPS, with rettu
 rettui --web ADDRESS --insecure-http                    # plain HTTP on an address others can reach (refused without this)
 rettui --web [ADDRESS] --tls-cert FILE --tls-key FILE   # over HTTPS, with yours
 rettui --web [ADDRESS] --stats-listen ADDRESS           # also a read-only stats page (see below)
+rettui node --stats-listen ADDRESS                      # the same, for a node with no UI
 rettui fetch <hash>[:/page/x.mu] [--raw] [--identify] [-o FILE]
 rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]  # address or lxma:// link
 rettui listen [--seconds N]  # announce, then print incoming messages
@@ -182,20 +183,21 @@ if the output is a terminal wide enough to show it.
 ## The stats endpoint
 
 A public node can show a few numbers on a status page. `--stats-listen
-ADDRESS` (with `--web`) serves a read-only summary at `/stats.json` on its
-own address, with no login. It is off unless you give it, and it has counts
+ADDRESS` (with `--web`, or after `rettui node`) serves a read-only summary at
+`/stats.json` on its own address, with no login. It is off unless you give it, and it has counts
 only: no addresses, no peers' names, no clients' addresses. It can't change
 anything and has no way into the web UI.
 
 ```sh
 rettui --web 127.0.0.1:8740 --stats-listen 127.0.0.1:8741
+rettui node --stats-listen 127.0.0.1:8741    # or, on a node with no UI
 curl http://127.0.0.1:8741/stats.json
 ```
 
 ```json
 {
   "version": 1,
-  "rettui_version": "2.0.0",
+  "rettui_version": "2.1.0",
   "generated_at": 1763528000,
   "uptime_seconds": 12345,
   "interfaces": {
@@ -217,7 +219,8 @@ curl http://127.0.0.1:8741/stats.json
   405 or 404), and the reply is marked `Cache-Control: no-store`. In the
   first moments after start, before there are numbers, it answers 503.
 - A listener that can't be opened (the port is taken, say) stops rettui
-  at start, with the reason.
+  at start, with the reason. It is not saved in the settings: give it on
+  every run.
 
 The listener has no TLS, no limits on who asks and no timeouts of its own, so
 bind it to `127.0.0.1` or a private address and let a reverse proxy
