@@ -28,6 +28,22 @@ case "$STATS_LISTEN" in
         ;;
 esac
 
+# STATS_TOKEN_FILE (optional) is the path of a file in the container with the
+# stats token (see wiki/Docker.md); it needs STATS_LISTEN. RETTUI_STATS_TOKEN
+# in the container's environment works too, and is read by rettui itself.
+# Only characters a path has are allowed.
+STATS_TOKEN_FILE="${STATS_TOKEN_FILE:-}"
+case "$STATS_TOKEN_FILE" in
+    *[!0-9a-zA-Z._/@+=,:-]*)
+        echo "rettui: STATS_TOKEN_FILE must be a path such as /run/secrets/stats_token (got '$STATS_TOKEN_FILE')" >&2
+        exit 1
+        ;;
+esac
+if [ -n "$STATS_TOKEN_FILE" ] && [ -z "$STATS_LISTEN" ]; then
+    echo "rettui: STATS_TOKEN_FILE needs STATS_LISTEN" >&2
+    exit 1
+fi
+
 mkdir -p "$DATA/reticulum"
 # First start: keep the Reticulum config in the data directory too. To use
 # another, change rns_config in settings.json while rettui is stopped (the web
@@ -50,10 +66,16 @@ if [ "${1:-}" = node ]; then
     if [ -n "$STATS_LISTEN" ]; then
         set -- --stats-listen "$STATS_LISTEN" "$@"
     fi
+    if [ -n "$STATS_TOKEN_FILE" ]; then
+        set -- --stats-token-file "$STATS_TOKEN_FILE" "$@"
+    fi
     set -- /usr/local/bin/rettui --data-dir "$DATA" node "$@"
 else
     if [ -n "$STATS_LISTEN" ]; then
         set -- --stats-listen "$STATS_LISTEN" "$@"
+    fi
+    if [ -n "$STATS_TOKEN_FILE" ]; then
+        set -- --stats-token-file "$STATS_TOKEN_FILE" "$@"
     fi
     set -- /usr/local/bin/rettui --data-dir "$DATA" --web "0.0.0.0:$PORT" --insecure-http "$@"
 fi
