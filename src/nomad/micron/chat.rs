@@ -27,9 +27,10 @@ pub struct Formatted {
     /// Byte ranges of `text` and their styles, in order, where they differ
     /// from the default.
     pub spans: Vec<(usize, usize, Style)>,
-    /// Whether it sets a colour. Coloured messages are often art (block
-    /// pictures, letters drawn in characters), which wrapping would break, so
-    /// they are drawn line for line.
+    /// Whether it is art: a colour is set and the text looks drawn (block or
+    /// box characters, a background colour, runs of spaces), not written.
+    /// Art would break if wrapped, so it is drawn line for line; coloured
+    /// sentences wrap like any message, so they read on a phone.
     pub colour: bool,
 }
 
@@ -89,7 +90,7 @@ pub fn parse(message: &str) -> Option<Formatted> {
     let mut text = String::with_capacity(message.len());
     let mut spans: Vec<(usize, usize, Style)> = Vec::new();
     let mut format = Format::default();
-    let (mut tagged, mut colour) = (false, false);
+    let (mut tagged, mut colour, mut shaded) = (false, false, false);
     let mut rest = message;
     while let Some(at) = rest.find(TAG) {
         let (before, after) = (&rest[..at], &rest[at + TAG.len_utf8()..]);
@@ -104,6 +105,9 @@ pub fn parse(message: &str) -> Option<Formatted> {
             Tag::Colour { background, code } => {
                 let color = super::parse_color(&after[len - code..len]);
                 colour |= color.is_some();
+                if background && color.is_some() {
+                    shaded = true;
+                }
                 if background {
                     format.bg = color;
                 } else {
@@ -126,7 +130,14 @@ pub fn parse(message: &str) -> Option<Formatted> {
         rest = &after[len..];
     }
     push(&mut text, &mut spans, rest, format.style());
+    let colour = colour && (shaded || looks_drawn(&text));
     tagged.then_some(Formatted { text, spans, colour })
+}
+
+/// Whether text looks drawn, not written: block, box-drawing or braille
+/// characters, or spaces in runs (padding and lettering).
+fn looks_drawn(text: &str) -> bool {
+    text.contains("  ") || text.chars().any(|c| matches!(c, '\u{2500}'..='\u{259f}' | '\u{2800}'..='\u{28ff}'))
 }
 
 /// Add `piece` in `style` to the text, joining the span before it when the
@@ -178,6 +189,10 @@ mod tests {
         let f = parse("¦c¦<¦>¦{¦l¦r¦a¦=mid ¦F00f¦!x¦`y").unwrap();
         assert_eq!(f.text, "mid xy");
         assert_eq!(f.spans, vec![(4, 5, Style::default().fg(Color::Rgb(0, 0, 255)).add_modifier(Modifier::BOLD))]);
+        // Coloured words are written, not drawn: they wrap.
+        assert!(!parse("¦F0f0hello there¦f").unwrap().colour);
+        assert!(parse("¦F0f0▀▄¦f").unwrap().colour);
+        assert!(parse("¦F0f0a  b¦f").unwrap().colour);
         // Formatting alone (no colour) is not art.
         assert!(!parse("¦!loud¦!").unwrap().colour);
         // Two bars are no tag: both shown, and the one after a tag is read.

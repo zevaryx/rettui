@@ -83,9 +83,10 @@ host. rettui works with each of them, as they differ (see
   `¦F0f0green¦f`, `¦Bfa0on orange¦b`, `¦FT86efac` for 24-bit colour, `¦!bold¦!`,
   `¦*italic¦*`, `¦_underline¦_`, and `` ¦` `` back to plain. Only those are read:
   a message without a `¦` tag shows as written, backticks and all, and
-  alignment, links and fields in Micron are left out. A message with
-  colours is often a picture or lettering drawn in characters, sent a line
-  a message, so it isn't wrapped: every space is kept, its lines stay lined
+  alignment, links and fields in Micron are left out. A message that
+  looks drawn (block or box characters, a background colour or runs of
+  spaces) is often a picture or lettering sent a line a message, so it isn't
+  wrapped; coloured words wrap like any message: every space is kept, its lines stay lined
   up under each other, and what doesn't fit is cut off at the edge of the
   chat (widen the window, or hide the members list, to see more).
 - **Writing in colour:** the message box formats what you write, as the page
