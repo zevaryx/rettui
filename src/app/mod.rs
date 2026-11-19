@@ -20,6 +20,7 @@ mod backup;
 mod browser;
 pub mod channels;
 pub mod collector;
+pub mod colour;
 pub mod contacts;
 pub mod emoji;
 pub(crate) mod files;
@@ -455,6 +456,11 @@ pub struct Regions {
     /// The emoji picker (or the `:name` list) and what's in it.
     pub emoji_popup: Rect,
     pub emoji_hits: Vec<(Rect, emoji::EmojiHit)>,
+    /// The colour picker, its swatches, and the formatting bar's buttons
+    /// (shown while text is selected in the channel input).
+    pub colour_popup: Rect,
+    pub colour_hits: Vec<(Rect, colour::ColourHit)>,
+    pub format_bar: Vec<(Rect, format::Action)>,
     /// Hub tab: its panes' tabs, and the list.
     pub hub_panes: Vec<(Rect, hub::HubPane)>,
     pub hub_list: Rect,
@@ -679,6 +685,8 @@ pub struct App {
     pub map: Option<map::MapView>,
     /// The emoji picker, over the input being written in.
     pub emoji: Option<emoji::EmojiPicker>,
+    /// The colour picker for the channel input's formatting.
+    pub colour: Option<colour::ColourPicker>,
     /// The `:name` list while typing one.
     pub shortcode: emoji::Shortcode,
     pub message_scroll: usize,
@@ -920,6 +928,7 @@ impl App {
             forward: None,
             map: None,
             emoji: None,
+            colour: None,
             shortcode: emoji::Shortcode::default(),
             message_scroll: 0,
             attachments: Vec::new(),
@@ -1216,7 +1225,10 @@ impl App {
     /// Text pasted from the terminal (bracketed paste) or the clipboard,
     /// inserted into whatever is being edited.
     pub fn on_paste(&mut self, text: &str) {
-        if let Some(picker) = &mut self.emoji {
+        if let Some(picker) = &mut self.colour {
+            picker.hex.insert_str(text);
+            picker.error = None;
+        } else if let Some(picker) = &mut self.emoji {
             picker.search.insert_str(text);
             (picker.pick, picker.top) = (0, 0);
         } else if let Some(prompt) = &mut self.prompt {

@@ -1,8 +1,14 @@
 //! The page editor's formatting actions (its ribbon and Alt-key shortcuts):
 //! Micron markup put around the selection, on the selected lines, or at the
-//! cursor. The web UI's editor has the same actions and keys.
+//! cursor. The web UI's editor has the same actions and keys. The same
+//! helpers, with the chat's tag character, format what's written in a room.
 
+use crate::nomad::micron::chat::TAG as CHAT_TAG;
+use crate::term::input::TextInput;
 use crate::term::textarea::TextArea;
+
+/// Micron's tag character in a page.
+const PAGE_TAG: char = '`';
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -134,16 +140,47 @@ impl Action {
     }
 }
 
+/// The actions a chat message can have: text styles and colours.
+pub const CHAT_ACTIONS: [Action; 6] =
+    [Action::Bold, Action::Italic, Action::Underline, Action::Foreground, Action::Background, Action::Normal];
+
 /// Apply an action to the editor; `answer` is the reply to its question.
 pub fn apply(area: &mut TextArea, action: Action, answer: &str) -> Result<(), String> {
+    apply_with(area, action, answer, PAGE_TAG)
+}
+
+/// Apply a chat action to what's being written in a room: the markup goes
+/// around the selection, or in at the cursor.
+pub fn apply_chat(input: &mut TextInput, action: Action, answer: &str) -> Result<(), String> {
+    if !CHAT_ACTIONS.contains(&action) {
+        return Err(format!("{} is not for chat messages", action.label()));
+    }
+    // The input is one line: edit it as a one-line text area, then take
+    // the result back.
+    let mut area = TextArea::new(input.text());
+    let cursor = input.cursor();
+    match input.selection() {
+        Some((start, end)) if input.cursor() == end => area.select((0, start), (0, end)),
+        Some((start, end)) => area.select((0, end), (0, start)),
+        None => area.set_cursor(0, cursor),
+    }
+    apply_with(&mut area, action, answer, CHAT_TAG)?;
+    let (_, col) = area.cursor();
+    let anchor = area.selection().map(|(start, end)| if col == end.1 { start.1 } else { end.1 });
+    input.set(&area.text(), col, anchor);
+    Ok(())
+}
+
+/// `apply` with the character that starts Micron's tags.
+fn apply_with(area: &mut TextArea, action: Action, answer: &str, tag: char) -> Result<(), String> {
     let answer = answer.trim();
     match action {
-        Action::Bold => toggle(area, "`!"),
-        Action::Italic => toggle(area, "`*"),
-        Action::Underline => toggle(area, "`_"),
-        Action::Normal => normal(area),
-        Action::Foreground => wrap(area, &format!("`F{}", color(answer)?), "`f"),
-        Action::Background => wrap(area, &format!("`B{}", color(answer)?), "`b"),
+        Action::Bold => toggle(area, &format!("{tag}!")),
+        Action::Italic => toggle(area, &format!("{tag}*")),
+        Action::Underline => toggle(area, &format!("{tag}_")),
+        Action::Normal => normal(area, tag),
+        Action::Foreground => wrap(area, &format!("{tag}F{}", color(answer)?), &format!("{tag}f")),
+        Action::Background => wrap(area, &format!("{tag}B{}", color(answer)?), &format!("{tag}b")),
         Action::Left => align(area, 'a'),
         Action::Center => align(area, 'c'),
         Action::Right => align(area, 'r'),
@@ -217,7 +254,7 @@ fn field_name(name: &str) -> Result<String, String> {
 }
 
 /// `f80` or `#f80` as Micron's `f80`; six digits as `T00aaff`.
-fn color(text: &str) -> Result<String, String> {
+pub fn color(text: &str) -> Result<String, String> {
     let hex = text.trim_start_matches('#').to_ascii_lowercase();
     match hex.len() {
         3 | 6 if hex.chars().all(|c| c.is_ascii_hexdigit()) => Ok(if hex.len() == 6 { format!("T{hex}") } else { hex }),
@@ -277,15 +314,21 @@ fn toggle(area: &mut TextArea, tag: &str) {
     wrap(area, tag, tag);
 }
 
-/// Formatting tags in some Micron text: `!`, `*`, `_`, colours and resets.
-fn strip_formatting(text: &str) -> String {
+/// Formatting tags (starting with `tag`) in some Micron text: `!`, `*`,
+/// `_`, colours and resets.
+fn strip_formatting(text: &str, tag: char) -> String {
     let chars: Vec<char> = text.chars().collect();
     let hex = |from: usize, n: usize| chars.get(from..from + n).is_some_and(|s| s.iter().all(char::is_ascii_hexdigit));
     let mut out = String::new();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '`' {
+        if chars[i] == tag {
             match chars.get(i + 1) {
+                // The pair NomadNet writes for both defaults.
+                Some('f') if chars.get(i + 2) == Some(&'`') && chars.get(i + 3) == Some(&'b') => {
+                    i += 4;
+                    continue;
+                }
                 Some('!' | '*' | '_' | 'f' | 'b' | '`') => {
                     i += 2;
                     continue;
@@ -307,15 +350,15 @@ fn strip_formatting(text: &str) -> String {
     out
 }
 
-fn normal(area: &mut TextArea) {
+fn normal(area: &mut TextArea, tag: char) {
     match area.selection() {
         Some((start, _)) => {
-            let plain = strip_formatting(&area.selected_text());
+            let plain = strip_formatting(&area.selected_text(), tag);
             area.replace_selection(&plain);
             area.select(start, area.cursor());
         }
         // A reset: formatting and alignment back to the page's defaults.
-        None => area.replace_selection("``"),
+        None => area.replace_selection(&format!("{tag}`")),
     }
 }
 
@@ -545,5 +588,64 @@ mod tests {
             assert!(action.label().to_ascii_lowercase().contains(action.key()), "{action:?}");
             assert!(action.short().to_ascii_lowercase().contains(action.key()), "{action:?}");
         }
+    }
+
+    fn input(text: &str, from: usize, to: usize) -> TextInput {
+        let mut input = TextInput::with_text(text);
+        input.set(text, to, Some(from));
+        input
+    }
+
+    #[test]
+    fn chat_formatting_wraps_toggles_and_strips_with_the_chat_tag() {
+        let mut line = input("say hello there", 4, 9);
+        apply_chat(&mut line, Action::Bold, "").unwrap();
+        assert_eq!(line.text(), "say \u{a6}!hello\u{a6}! there");
+        assert_eq!(line.selection(), Some((6, 11)));
+        apply_chat(&mut line, Action::Bold, "").unwrap();
+        assert_eq!(line.text(), "say hello there");
+        assert_eq!(line.selection(), Some((4, 9)));
+        apply_chat(&mut line, Action::Italic, "").unwrap();
+        apply_chat(&mut line, Action::Underline, "").unwrap();
+        assert_eq!(line.text(), "say \u{a6}*\u{a6}_hello\u{a6}_\u{a6}* there");
+        // Backwards selections work the same.
+        let mut line = input("abc", 3, 0);
+        apply_chat(&mut line, Action::Bold, "").unwrap();
+        assert_eq!(line.text(), "\u{a6}!abc\u{a6}!");
+        assert_eq!((line.cursor(), line.selection()), (5, Some((2, 5))));
+        // Nothing selected: a pair with the cursor between.
+        let mut line = TextInput::with_text("ab");
+        line.set("ab", 1, None);
+        apply_chat(&mut line, Action::Underline, "").unwrap();
+        assert_eq!((line.text(), line.cursor()), ("a\u{a6}_\u{a6}_b", 3));
+        // The page's tag is not the chat's.
+        let mut line = input("`!x`!", 0, 5);
+        apply_chat(&mut line, Action::Normal, "").unwrap();
+        assert_eq!(line.text(), "`!x`!");
+    }
+
+    #[test]
+    fn chat_colours_and_normal() {
+        let mut line = input("red text", 0, 3);
+        apply_chat(&mut line, Action::Foreground, "#F00").unwrap();
+        assert_eq!(line.text(), "\u{a6}Ff00red\u{a6}f text");
+        let mut line = input("sea", 0, 3);
+        apply_chat(&mut line, Action::Background, "#003366").unwrap();
+        assert_eq!(line.text(), "\u{a6}BT003366sea\u{a6}b");
+        for bad in ["", "red", "12", "1234", "#12345g", "f8"] {
+            assert!(apply_chat(&mut line, Action::Foreground, bad).is_err(), "{bad}");
+        }
+        assert_eq!(line.text(), "\u{a6}BT003366sea\u{a6}b");
+        let all = "\u{a6}!\u{a6}Ff00bold\u{a6}f\u{a6}! \u{a6}B123back\u{a6}f`b \u{a6}b\u{a6}`";
+        let mut line = input(all, 0, all.chars().count());
+        apply_chat(&mut line, Action::Normal, "").unwrap();
+        assert_eq!(line.text(), "bold back ");
+        // Nothing selected: a reset goes in.
+        let mut line = TextInput::with_text("a");
+        apply_chat(&mut line, Action::Normal, "").unwrap();
+        assert_eq!(line.text(), "a\u{a6}`");
+        // Only text formatting is for chat.
+        assert!(apply_chat(&mut line, Action::Link, "x").is_err());
+        assert!(apply_chat(&mut line, Action::Center, "").is_err());
     }
 }

@@ -300,7 +300,7 @@ fn heading_style(level: usize) -> Style {
 
 /// Parse a Micron colour: three hex digits (`f80`), grayscale (`g50`), or
 /// 24-bit (`T86efac`; bare six digits in `#!fg=` page directives).
-fn parse_color(code: &str) -> Option<Color> {
+pub(crate) fn parse_color(code: &str) -> Option<Color> {
     let hex = code.strip_prefix('T').unwrap_or(code);
     if hex.len() == 6 {
         let v = u32::from_str_radix(hex, 16).ok()?;

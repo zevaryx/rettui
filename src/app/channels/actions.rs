@@ -284,6 +284,10 @@ impl App {
         if self.channels.menu.is_some() || self.channels.picker.is_some() {
             return self.click_user_menu(at);
         }
+        let button = self.regions.format_bar.iter().find(|(rect, _)| rect.contains(at)).map(|(_, action)| *action);
+        if let Some(action) = button {
+            return self.click_format_bar(action);
+        }
         let mention = self.regions.channel_mentions.iter().find(|(rect, _)| rect.contains(at)).map(|(_, name)| name.clone());
         if let Some(name) = mention {
             if let Some((start, _)) = self.mention_matches() {

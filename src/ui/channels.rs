@@ -295,6 +295,9 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let [history_area, input_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(chat_area);
     app.regions.channel_rooms.clear();
+    app.regions.format_bar.clear();
+    app.regions.colour_hits.clear();
+    app.regions.colour_popup = Rect::default();
     let Some((index, room)) = active else {
         frame.render_widget(block("", false), chat_area);
         app.regions.channel_history = Rect::default();
@@ -498,7 +501,7 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
     app.regions.channel_input = input_area;
     let cursor = app.channels.input.cursor_column();
     let offset = cursor.saturating_sub(input_inner.width.saturating_sub(1) as usize);
-    frame.render_widget(Paragraph::new(app.channels.input.text()).scroll((0, offset as u16)).block(input_block), input_area);
+    frame.render_widget(Paragraph::new(input_line(&app.channels.input)).scroll((0, offset as u16)).block(input_block), input_area);
     if app.channels.typing {
         frame.set_cursor_position(Position::new(input_inner.x + (cursor - offset) as u16, input_inner.y));
     }
@@ -532,9 +535,25 @@ pub(super) fn draw_channels(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
     }
+    super::colour::draw_format_bar(frame, app, input_area, chat_area);
     draw_mentions(frame, app, input_inner, offset, chat_area);
     super::emoji::draw_emoji(frame, app, input_inner, offset, chat_area);
+    super::colour::draw_colour(frame, app, input_inner, chat_area);
     draw_popup(frame, app, area);
+}
+
+/// The input's text, with what's selected in it shown so.
+fn input_line(input: &crate::term::input::TextInput) -> Line<'static> {
+    let text = input.text();
+    let Some((start, end)) = input.selection() else { return Line::raw(text.to_string()) };
+    let mut chars = text.char_indices().map(|(i, _)| i).chain(std::iter::once(text.len()));
+    let from = chars.by_ref().nth(start).unwrap_or(text.len());
+    let to = if end > start { chars.nth(end - start - 1).unwrap_or(text.len()) } else { from };
+    Line::from(vec![
+        Span::raw(text[..from].to_string()),
+        Span::styled(text[from..to].to_string(), Style::default().add_modifier(ratatui::style::Modifier::REVERSED)),
+        Span::raw(text[to..].to_string()),
+    ])
 }
 
 /// While typing `@name`: who it could be, in a box just above the input

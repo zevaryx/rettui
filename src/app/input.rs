@@ -50,6 +50,13 @@ impl App {
             }
             return;
         }
+        if self.colour.is_some() {
+            match key.code {
+                KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
+                _ => self.colour_key(key),
+            }
+            return;
+        }
         if self.emoji.is_some() {
             match key.code {
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
@@ -99,7 +106,7 @@ impl App {
             return;
         }
         if self.channels.typing && self.tab == Tab::Channels {
-            if self.shortcode_key(key) || self.mention_key(key) {
+            if self.chat_format_key(key) || self.shortcode_key(key) || self.mention_key(key) {
                 return;
             }
             match key.code {
@@ -110,7 +117,7 @@ impl App {
                 KeyCode::Char('v') if ctrl => self.paste_from_clipboard(),
                 KeyCode::Char('e') if ctrl => self.open_emoji_picker(),
                 _ => {
-                    self.channels.input.handle(key);
+                    self.channels.input.handle_selecting(key);
                     self.mention_typed();
                     self.shortcode_typed(key.code == KeyCode::Char(':'));
                 }
@@ -384,6 +391,18 @@ impl App {
         if self.contact_card.is_some() && self.tab == Tab::Messages {
             if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
                 self.click_contact_card(at);
+            }
+            return;
+        }
+        // The colour picker takes clicks over it; a click elsewhere closes it.
+        if self.colour.is_some() {
+            if let MouseEventKind::Down(button) = mouse.kind {
+                let hit = self.regions.colour_hits.iter().find(|(rect, _)| rect.contains(at)).map(|(_, hit)| *hit);
+                match (button, hit) {
+                    (MouseButton::Left, Some(hit)) => self.click_colour(hit),
+                    _ if self.regions.colour_popup.contains(at) => {}
+                    _ => self.colour = None,
+                }
             }
             return;
         }

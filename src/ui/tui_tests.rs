@@ -2514,6 +2514,156 @@ fn micron_art_in_a_room_keeps_its_shape() {
     assert!(!rows[bold].contains('\u{a6}') && !rows[bold + 1].contains("<carol>") && rows[bold + 1].contains("like any"), "{screen}");
 }
 
+/// Writing in a room with styles and colours: the Alt keys, the bar shown
+/// over a selection, and the colour picker with its swatches and hex line.
+#[test]
+fn chat_formatting_in_the_channel_input() {
+    use crate::app::colour::{ColourHit, SWATCHES};
+    use crate::app::format::Action;
+    const BAR: char = '\u{a6}';
+    let mut tui = Tui::new("chat-format");
+    with_hilltop(&mut tui);
+    let select = |tui: &mut Tui, home: usize, count: usize| {
+        tui.key(KeyCode::Home);
+        for _ in 0..home {
+            tui.key(KeyCode::Right);
+        }
+        for _ in 0..count {
+            tui.app.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        }
+        tui.draw()
+    };
+    let text = |tui: &Tui| tui.app.channels.input.text().to_string();
+    tui.key(KeyCode::Enter).keys("say hello there");
+
+    // Nothing selected: no bar; Alt+B puts a pair in and typing goes between.
+    let screen = tui.draw();
+    assert!(tui.app.regions.format_bar.is_empty(), "{screen}");
+    tui.alt('b').keys("x");
+    assert_eq!(text(&tui), format!("say hello there{BAR}!x{BAR}!"));
+    tui.alt('n');
+    assert_eq!(text(&tui), format!("say hello there{BAR}!x{BAR}`{BAR}!"));
+
+    // Selected: the bar shows with its keys; Alt+B wraps, again unwraps.
+    tui.input_to("say hello there");
+    let screen = select(&mut tui, 4, 5);
+    assert_eq!(tui.app.channels.input.selection(), Some((4, 9)));
+    let row = tui.app.regions.format_bar[0].0.y as usize;
+    let bar = screen.lines().nth(row).unwrap();
+    for key in ["B Alt+B", "I Alt+I", "U Alt+U", "Fg Alt+F", "Bg Alt+G", "N Alt+N"] {
+        assert!(bar.contains(key), "{key}: {bar}");
+    }
+    let actions: Vec<Action> = tui.app.regions.format_bar.iter().map(|(_, a)| *a).collect();
+    assert_eq!(actions, crate::app::format::CHAT_ACTIONS);
+    tui.alt('b');
+    assert_eq!(text(&tui), format!("say {BAR}!hello{BAR}! there"));
+    assert_eq!(tui.app.channels.input.selection(), Some((6, 11)));
+    tui.alt('b');
+    assert_eq!(text(&tui), "say hello there");
+    // The bar's button does it as well.
+    let (button, _) = *tui.app.regions.format_bar.iter().find(|(_, a)| *a == Action::Italic).unwrap();
+    tui.click_in(button);
+    assert_eq!(text(&tui), format!("say {BAR}*hello{BAR}* there"));
+    tui.alt('i');
+    assert_eq!(text(&tui), "say hello there");
+
+    // Alt+F opens the picker, keeping the selection; a click on a swatch
+    // puts its colour on.
+    tui.alt('f');
+    let screen = tui.draw();
+    assert!(tui.app.colour.is_some() && screen.contains("Text colour") && screen.contains("3 or 6 digits"), "{screen}");
+    assert_eq!(tui.app.channels.input.selection(), Some((4, 9)));
+    assert_eq!(tui.app.regions.colour_hits.len(), SWATCHES.len());
+    let (swatch, _) = *tui.app.regions.colour_hits.iter().find(|(_, h)| *h == ColourHit::Swatch(0)).unwrap();
+    let cell = &tui.buffer()[(swatch.x, swatch.y)];
+    assert_eq!(cell.bg, ratatui::style::Color::Rgb(0xff, 0, 0));
+    tui.click_in(swatch);
+    assert!(tui.app.colour.is_none());
+    assert_eq!(text(&tui), format!("say {BAR}Ff00hello{BAR}f there"));
+    assert_eq!(tui.app.channels.input.selection(), Some((9, 14)));
+
+    // A background by arrows and Enter (Right, Down: the ninth swatch).
+    tui.alt('g').key(KeyCode::Right).key(KeyCode::Down).key(KeyCode::Enter);
+    assert_eq!(text(&tui), format!("say {BAR}Ff00{BAR}B{}hello{BAR}b{BAR}f there", SWATCHES[8]));
+
+    // Normal strips the tags in what's selected: all of it.
+    tui.key(KeyCode::Home).app_shift(KeyCode::End);
+    tui.alt('n');
+    assert_eq!(text(&tui), "say hello there");
+    select(&mut tui, 4, 5);
+    tui.alt('f').keys("12");
+    tui.key(KeyCode::Enter);
+    let screen = tui.draw();
+    assert!(tui.app.colour.is_some() && screen.contains("is not a colour"), "{screen}");
+    assert_eq!(text(&tui), "say hello there");
+    tui.key(KeyCode::Backspace).key(KeyCode::Backspace).keys("#00aaff").key(KeyCode::Enter);
+    assert!(tui.app.colour.is_none());
+    assert_eq!(text(&tui), format!("say {BAR}FT00aaffhello{BAR}f there"));
+    tui.alt('g').keys("zzz").key(KeyCode::Enter);
+    assert!(tui.app.colour.is_some() && tui.app.colour.as_ref().unwrap().error.is_some());
+    // Esc cancels, leaving the text and the selection.
+    tui.key(KeyCode::Esc);
+    assert!(tui.app.colour.is_none() && tui.app.channels.typing);
+    assert_eq!(text(&tui), format!("say {BAR}FT00aaffhello{BAR}f there"));
+    assert!(tui.app.channels.input.selection().is_some());
+    // A click away from the picker closes it too.
+    tui.alt('f').click(0, 0);
+    assert!(tui.app.colour.is_none());
+
+    // Pasting fills the colour line; the selection shows reversed.
+    select(&mut tui, 4, 5);
+    let input = tui.app.regions.channel_input;
+    let shown = &tui.buffer()[(input.x + 1 + 4, input.y + 1)];
+    assert_eq!(shown.symbol(), "\u{a6}");
+    assert!(shown.modifier.contains(ratatui::style::Modifier::REVERSED));
+    tui.alt('g');
+    tui.app.on_paste("#f80");
+    tui.key(KeyCode::Enter);
+    assert!(text(&tui).contains(&format!("{BAR}Bf80")), "{}", text(&tui));
+    // On a small terminal the picker may not fit, and still answers keys.
+    tui.alt('f');
+    tui.resize(60, 14);
+    tui.key(KeyCode::Esc);
+    assert!(tui.app.colour.is_none());
+    tui.resize(140, 40);
+
+    // Other Alt keys are not taken, and Ctrl+E still opens the emoji picker.
+    tui.alt('z');
+    tui.ctrl('e');
+    assert!(tui.app.emoji.is_some());
+    tui.key(KeyCode::Esc);
+
+    // What is sent reads back as the text, with its colour.
+    tui.input_to("red text");
+    select(&mut tui, 0, 3);
+    tui.alt('f').keys("f00").key(KeyCode::Enter).key(KeyCode::Enter);
+    let sent = tui.app.channels.hubs[0].buffers["lobby"].last().unwrap().text.clone();
+    assert_eq!(sent, format!("{BAR}Ff00red{BAR}f text"));
+    let micron = crate::nomad::micron::chat::parse(&sent).unwrap();
+    assert_eq!(micron.text, "red text");
+    assert!(micron.colour);
+    assert_eq!(micron.spans[0].0..micron.spans[0].1, 0..3);
+    assert_eq!(micron.spans[0].2.fg, Some(ratatui::style::Color::Rgb(0xff, 0, 0)));
+    let screen = tui.draw();
+    assert!(screen.contains("red text") && !screen.contains(BAR), "{screen}");
+}
+
+impl Tui {
+    /// A key with Shift held, then the screen drawn.
+    fn app_shift(&mut self, code: KeyCode) -> &mut Self {
+        self.app.on_key(KeyEvent::new(code, KeyModifiers::SHIFT));
+        self.draw();
+        self
+    }
+
+    /// The channel input's text replaced with `text`, cursor at its end.
+    fn input_to(&mut self, text: &str) -> &mut Self {
+        self.app.channels.input = crate::term::input::TextInput::with_text(text);
+        self.draw();
+        self
+    }
+}
+
 /// Every tab reads in each theme: nothing pale on a light terminal's
 /// background, and only the 16 colours every terminal has in the basic one.
 #[test]

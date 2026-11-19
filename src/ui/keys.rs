@@ -163,6 +163,9 @@ pub fn keys(app: &App) -> Keys {
         return typing("Getting started", &[("Enter", "change"), ("↑↓", "choose"), ("y", "copy link"), ("Esc", "close")]);
     }
     match app.tab {
+        _ if app.colour.is_some() => {
+            typing("Colour", &[("Enter", "apply"), ("arrows", "choose"), ("type", "hex colour"), ("click", "choose"), ("Esc", "cancel")])
+        }
         Tab::Channels if app.channels.typing && app.mention_matches().is_some() => {
             typing("Mentioning", &[("Tab/Enter", "mention"), ("↑↓", "choose"), ("Esc", "close")])
         }
@@ -177,6 +180,10 @@ pub fn keys(app: &App) -> Keys {
                 ("Esc", "done"),
                 ("@", "mention"),
                 ("^E", "emoji"),
+                ("⇧←→", "select"),
+                ("Alt+B/I/U", "bold/italic/underline"),
+                ("Alt+F/G", "colour"),
+                ("Alt+N", "normal"),
                 ("/help", "commands"),
                 ("^V", "paste"),
                 ("PgUp/Dn", "scroll"),

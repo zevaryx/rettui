@@ -8,6 +8,7 @@ mod archive;
 mod browser;
 mod channels;
 mod chrome;
+mod colour;
 mod contact;
 mod editor;
 mod emoji;
