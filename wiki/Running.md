@@ -133,6 +133,7 @@ rettui --web [ADDRESS]      # the web UI (default 127.0.0.1:8740)
 rettui --web [ADDRESS] --https                          # over HTTPS, with rettui's own certificate
 rettui --web ADDRESS --insecure-http                    # plain HTTP on an address others can reach (refused without this)
 rettui --web [ADDRESS] --tls-cert FILE --tls-key FILE   # over HTTPS, with yours
+rettui --web [ADDRESS] --stats-listen ADDRESS           # also a read-only stats page (see below)
 rettui fetch <hash>[:/page/x.mu] [--raw] [--identify] [-o FILE]
 rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]  # address or lxma:// link
 rettui listen [--seconds N]  # announce, then print incoming messages
@@ -177,6 +178,58 @@ UI). See [Data and Storage](Data-and-Storage#several-identities).
 `send --mode paper` writes a [paper message](Messaging#paper-messages)
 instead of sending it. It prints the `lxm://` link, and before it the QR code
 if the output is a terminal wide enough to show it.
+
+## The stats endpoint
+
+A public node can show a few numbers on a status page. `--stats-listen
+ADDRESS` (with `--web`) serves a read-only summary at `/stats.json` on its
+own address, with no login. It is off unless you give it, and it has counts
+only: no addresses, no peers' names, no clients' addresses. It can't change
+anything and has no way into the web UI.
+
+```sh
+rettui --web 127.0.0.1:8740 --stats-listen 127.0.0.1:8741
+curl http://127.0.0.1:8741/stats.json
+```
+
+```json
+{
+  "version": 1,
+  "rettui_version": "2.0.0",
+  "generated_at": 1763528000,
+  "uptime_seconds": 12345,
+  "interfaces": {
+    "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456,
+    "list": [{ "name": "Public entry point", "online": true, "clients": 17, "rx_bytes": 1, "tx_bytes": 2 }]
+  },
+  "peers_heard": { "total": 100, "lxmf": 60, "nomad": 30, "propagation": 10 },
+  "announces_last_minute": 12
+}
+```
+
+- `generated_at` is unix seconds, and the numbers are updated every second.
+  `uptime_seconds` counts from when rettui started.
+- `interfaces.clients` adds up the clients connected to the node's server
+  interfaces, and is `null` when none report any (so does an interface's
+  own `clients` when it is not a server). `list` has the first 32
+  interfaces, named as in the Reticulum config; the totals count them all.
+- Only `GET` and `HEAD` for `/` and `/stats.json` are answered (others get
+  405 or 404), and the reply is marked `Cache-Control: no-store`. In the
+  first moments after start, before there are numbers, it answers 503.
+- A listener that can't be opened (the port is taken, say) stops rettui
+  at start, with the reason.
+
+The listener has no TLS, no limits on who asks and no timeouts of its own, so
+bind it to `127.0.0.1` or a private address and let a reverse proxy
+publish it. With nginx, on the host that serves `https://node.example/`:
+
+```nginx
+location = /stats.json {
+    proxy_pass http://127.0.0.1:8741/stats.json;
+    proxy_read_timeout 5s;
+    limit_except GET HEAD { deny all; }
+}
+```
 
 ## Which Reticulum config
 

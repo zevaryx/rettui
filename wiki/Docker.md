@@ -71,4 +71,9 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   first time it starts. Its flags go after it, for example
   `command: ["node", "--reachable-on", "rns.example.org"]`. `docker compose
   logs rettui` shows its status.
+- **Stats page:** set `STATS_LISTEN` (for example `0.0.0.0:8741`) to also serve
+  a read-only JSON summary of the node, counts only, at `/stats.json` on that
+  port; it is off otherwise. It has no login, so publish it only to a reverse
+  proxy (`"127.0.0.1:8741:8741"` under `ports:`) and not to the internet. See
+  [Running](Running#the-stats-endpoint) for the JSON and an nginx example.
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.
