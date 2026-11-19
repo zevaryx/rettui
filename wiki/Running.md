@@ -135,6 +135,7 @@ rettui --web ADDRESS --insecure-http                    # plain HTTP on an addre
 rettui --web [ADDRESS] --tls-cert FILE --tls-key FILE   # over HTTPS, with yours
 rettui --web [ADDRESS] --stats-listen ADDRESS           # also a read-only stats page (see below)
 rettui node --stats-listen ADDRESS                      # the same, for a node with no UI
+rettui node --stats-listen ADDRESS --stats-token-file PATH   # and a peer list for whoever has the token (or RETTUI_STATS_TOKEN)
 rettui fetch <hash>[:/page/x.mu] [--raw] [--identify] [-o FILE]
 rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]  # address or lxma:// link
 rettui listen [--seconds N]  # announce, then print incoming messages
@@ -220,6 +221,13 @@ curl http://127.0.0.1:8741/stats.json
 - A listener that can't be opened (the port is taken, say) stops rettui
   at start, with the reason. It is not saved in the settings: give it on
   every run.
+- With `--stats-token-file PATH` (or the variable `RETTUI_STATS_TOKEN`; not
+  both), a request that has the token in `Authorization: Bearer TOKEN` or
+  `X-Stats-Token: TOKEN` also gets `"authorised": true` and a `peers` list
+  with every peer's address, type and name. A token in the URL is not read,
+  because URLs end up in logs, and a wrong or missing token gets the totals
+  above, with status 200. See [Hosting a Node](Hosting-a-Node#the-peer-list-for-whoever-has-the-token)
+  for the details and what to keep in mind: treat the token as a secret.
 
 The listener has no TLS, no limits on who asks and no timeouts of its own, so
 bind it to `127.0.0.1` or a private address and let a reverse proxy

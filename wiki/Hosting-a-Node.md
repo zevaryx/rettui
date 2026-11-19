@@ -282,7 +282,7 @@ so you can edit the config and settings afterwards, and every later run
 needs no flags. Every run also says, as notes rather than changes, which
 interface is the entry point, and what it left as it was: a TCP server on
 that port that's turned off (`enabled = No`) stays off, and `--listen-ip`
-doesn't move a server that's there. The flags are kept the same way (all but `--stats-listen`, which is for one run).
+doesn't move a server that's there. The flags are kept the same way (all but `--stats-listen` and `--stats-token-file`, which are for one run).
 Each can also be given as an environment variable, for a systemd unit
 (`Environment=` or `EnvironmentFile=`), a Docker Compose file or a shell, so
 a node can be set up with no command line. A flag given on the command line
@@ -304,6 +304,7 @@ way as its flag.
 | `--name NAME` | `RETTUI_NODE_NAME` | The name the propagation node announces (`pn_name`; otherwise your display name). |
 | `--no-propagation` | `RETTUI_NODE_NO_PROPAGATION` | Doesn't turn the propagation node on. One turned on before stays on: set `pn_enabled` to `false` in `settings.json` to stop it. Can't be used with `--name`. |
 | `--stats-listen ADDRESS` | none (`STATS_LISTEN` in Docker) | Serves a read-only stats page on this address, such as `127.0.0.1:8741` (see below). Off unless given, and not saved: give it on every run. |
+| `--stats-token-file PATH` | `RETTUI_STATS_TOKEN` is the secret itself (`STATS_TOKEN_FILE` is the file, in Docker) | A secret that lets a request for the stats also list every peer heard (see below). Needs `--stats-listen`. Off unless given, and not saved. |
 
 Things to know:
 
@@ -391,6 +392,67 @@ location = /stats.json {
 
 In Docker, set `STATS_LISTEN` (see [Docker](Docker)). An address that can't
 be opened (the port is taken, say) stops the node at start, with the reason.
+
+#### The peer list, for whoever has the token
+
+The stats page lists no peers unless you set a token. With one, a request that
+presents it gets the same JSON plus every peer the node has heard: its
+address, its type and its name. A website can use this to count the peers
+of several nodes exactly, without counting one twice when two nodes heard it,
+including nodes behind a proxy. Everyone else still gets the totals above.
+
+Put the token in a file, or in the `RETTUI_STATS_TOKEN` variable (the flag
+takes a path, never the secret, so it doesn't show in `ps`), not both:
+
+    head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > /etc/rettui-stats-token
+    chmod 600 /etc/rettui-stats-token
+    rettui node --stats-listen 127.0.0.1:8741 --stats-token-file /etc/rettui-stats-token
+    curl -H "Authorization: Bearer $(cat /etc/rettui-stats-token)" http://127.0.0.1:8741/stats.json
+
+A token is 16 to 256 printable ASCII characters with no spaces (the file's
+contents are trimmed). One that isn't, or both a file and the variable,
+stops the node at start, with the reason. It is not saved in the settings.
+
+A request presents it as `Authorization: Bearer TOKEN` or as `X-Stats-Token:
+TOKEN`. A `?token=` in the URL is **not** read: URLs are written to proxy and
+server logs and browser history, and headers are not. A request with a wrong
+token, or none, gets the totals with status 200 (not 401), so nobody can tell
+a wrong guess from no token, and a node with no token ignores the headers.
+The token is compared in constant time and never logged.
+
+```json
+{
+  "version": 1,
+  "authorised": true,
+  "peers": [
+    { "address": "00112233445566778899aabbccddeeff", "type": "lxmf", "name": "Amy" },
+    { "address": "ffeeddccbbaa99887766554433221100", "type": "propagation", "name": null }
+  ],
+  "...": "and the rest of the totals above"
+}
+```
+
+- `type` is `lxmf`, `nomad` or `propagation`. `name` is what the peer
+  announced, with control characters removed and cut to 64 characters, or
+  `null`.
+- The list is sorted by address and has at most 20000 peers. If the node
+  heard more, `"peers_truncated": true` is added, and `peers_heard` still
+  counts them all.
+- The answer has `Cache-Control: private, no-store` and `Vary: Authorization,
+  X-Stats-Token`, so a cache doesn't keep it or give it to someone without the token.
+
+Security notes:
+
+- **Treat the token as a secret.** Whoever has it can read every address and
+  name the node has heard, which is more than the node announces about
+  itself. It can't change anything or reach the web UI. To change the token,
+  change the file or variable and restart the node.
+- **The list is every peer the node has heard**, not only the ones that
+  talk to this node. Give the token only to a website you run.
+- **Keep the stats behind HTTPS if the token crosses a network.** The
+  listener itself has no TLS: with a token, a reverse proxy that serves HTTPS
+  is needed (or bind the listener to `127.0.0.1` and ask from the same machine).
+  In nginx, pass the headers on (they are by default) and don't log them.
 
 ## RRC hub
 

@@ -934,7 +934,7 @@ async fn bind_with(
 /// The web UI on `listener` (from [`bind`]), until it's stopped; or the name
 /// of the identity it's switching to (it's started again as that one).
 ///
-/// With `stats` (an address), a read-only JSON summary of counts is served
+/// With `stats` (an address, and perhaps a token), a read-only JSON summary of counts is served
 /// there too (see [`crate::stats`]).
 pub async fn run(
     listener: std::net::TcpListener,
@@ -942,7 +942,7 @@ pub async fn run(
     paths: Paths,
     identity: Identity,
     https: Option<tls::Https>,
-    stats: Option<&str>,
+    stats: Option<crate::stats::Listen<'_>>,
 ) -> Result<Option<String>> {
     let address = listener.local_addr()?;
     let token = load_token(&paths)?;
@@ -959,11 +959,12 @@ pub async fn run(
 
     // Before anything starts, so a bad or taken address stops rettui.
     let started = std::time::Instant::now();
-    let (stats_tx, stats_rx) = crate::stats::channel(String::new());
+    let (stats_tx, stats_rx) = crate::stats::channel(Default::default());
+    let with_peers = stats.as_ref().is_some_and(|listen| listen.token.is_some());
     let stats_server = match stats {
-        Some(stats_address) => {
-            let (bound, task) = crate::stats::serve(stats_address, stats_rx).await?;
-            println!("Stats (totals only, no login) at http://{bound}/stats.json");
+        Some(listen) => {
+            let (bound, task) = crate::stats::serve(listen.address, listen.token, stats_rx).await?;
+            println!("{}", crate::stats::started_line(bound, with_peers));
             Some(task)
         }
         None => None,
@@ -1090,7 +1091,7 @@ pub async fn run(
             }
             _ = save.tick() => owner.app.save_if_dirty(),
             _ = stats_tick.tick(), if stats_server.is_some() => {
-                stats_tx.send_replace(crate::stats::snapshot(&owner.app, started));
+                stats_tx.send_replace(crate::stats::snapshot(&owner.app, started, with_peers));
             }
             () = owner.app.save_timer() => owner.app.save_when_due(),
             () = &mut shutdown => break Ok(None),

@@ -109,6 +109,11 @@ struct Cli {
     /// behind a reverse proxy; don't expose it directly.
     #[arg(long, value_name = "ADDRESS", requires = "web")]
     stats_listen: Option<String>,
+    /// A file with a secret (16 to 256 printable characters, no spaces) that
+    /// lets a request for the stats that presents it also list every peer
+    /// heard. The variable RETTUI_STATS_TOKEN does the same; not both. Not saved.
+    #[arg(long, value_name = "PATH", requires = "stats_listen")]
+    stats_token_file: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -302,7 +307,7 @@ enum Command {
     /// --rns-config and no rns_config in settings.json, it uses the
     /// Reticulum config in reticulum/ in the data directory.
     ///
-    /// Each flag but --stats-listen can also be set as a variable:
+    /// Each flag but --stats-listen and --stats-token-file can also be set as a variable:
     /// RETTUI_NODE_ENTRY_POINT, RETTUI_NODE_LISTEN_IP, RETTUI_NODE_REACHABLE_ON,
     /// RETTUI_NODE_NO_ENTRY_POINT, RETTUI_NODE_NAME and
     /// RETTUI_NODE_NO_PROPAGATION (switches take yes, true or 1, and no,
@@ -507,12 +512,18 @@ async fn run(cli: Cli) -> Result<()> {
             _ => cli.https.then_some(web::tls::Https::Own),
         };
 
+        // Before anything starts: a bad token stops rettui.
+        let stats_token = match &cli.stats_listen {
+            Some(_) => stats::load_token(cli.stats_token_file.as_deref())?,
+            None => None,
+        };
         let (mut settings, mut paths, mut identity) = (settings, paths, identity);
         set_tray(&settings);
         // Switching identity starts the web UI over as the other one.
         // Bound once: the port stays held while it starts over as the other one.
         let listener = web::bind(&address).await?;
-        while web::run(listener.try_clone()?, settings, paths, identity, https.clone(), cli.stats_listen.as_deref()).await?.is_some() {
+        let stats = || cli.stats_listen.as_deref().map(|address| stats::Listen { address, token: stats_token.clone() });
+        while web::run(listener.try_clone()?, settings, paths, identity, https.clone(), stats()).await?.is_some() {
             (settings, paths, identity) = switched(&cli.data_dir, cli.rns_config.clone())?;
             set_tray(&settings);
         }
@@ -815,12 +826,15 @@ mod tests {
             "Hilltop",
             "--stats-listen",
             "127.0.0.1:8741",
+            "--stats-token-file",
+            "/run/secrets/stats",
             "--data-dir",
             "/srv/rettui",
         ]) else {
             panic!("every flag")
         };
         assert_eq!(args.stats_listen.as_deref(), Some("127.0.0.1:8741"));
+        assert_eq!(args.stats_token_file, Some(std::path::PathBuf::from("/run/secrets/stats")));
         assert_eq!(dir, std::path::PathBuf::from("/srv/rettui"));
         assert_eq!(args.entry_point, Some(4965));
         assert_eq!(args.listen_ip, Some("::".parse().unwrap()));
@@ -834,6 +848,7 @@ mod tests {
             &["--no-propagation", "--name", "x"],
             &["--reachable-on", "a#b"],
             &["--reachable-on", "\"quoted\""],
+            &["--stats-token-file", "/x"],
         ] {
             assert!(node(wrong).is_err(), "{wrong:?}");
         }
@@ -874,6 +889,26 @@ mod tests {
         // The stats endpoint is part of the web UI's run: alone, it's refused.
         let error = super::run_with(["rettui", "--stats-listen", "127.0.0.1:8741"]).unwrap_err();
         assert!(error.to_string().contains("--web"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bad_stats_token_stops_the_web_ui_before_it_starts() {
+        let dir = std::env::temp_dir().join(format!("rettui-web-bad-token-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (file, data) = (dir.join("token"), dir.join("data").display().to_string());
+        std::fs::write(&file, "short\n").unwrap();
+        let file = file.display().to_string();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let web = format!("127.0.0.1:{port}");
+        let error =
+            super::run_with(["rettui", "--data-dir", &data, "--web", &web, "--stats-listen", "127.0.0.1:0", "--stats-token-file", &file])
+                .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("--stats-token-file") && message.contains("at least 16") && !message.contains("short\n"), "{message}");
+        // The token file needs the stats address.
+        assert!(super::run_with(["rettui", "--web", &web, "--stats-token-file", &file]).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
