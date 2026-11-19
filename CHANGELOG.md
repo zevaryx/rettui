@@ -38,6 +38,7 @@ Changes since v2.0.0: formatting tools for RRC messages (buttons, keys, a pop-up
 ### Docs and development
 - **Dates and times use `jiff`:** rettui moved from `chrono`, which is no longer maintained, to [jiff](https://crates.io/crates/jiff). Times are shown as before; a time a message gives is read up to the year 9999 (chrono's range was far wider), and one beyond that is left blank, as an unreadable time was already.
 - **rettui now lives in the `rettui-dev` organisation on GitHub:** the repository, its `deps/` submodules (rsReticulum, rsLXMF, lrgp-rs, rngit-rs), the update check, the Homebrew tap (`brew install rettui-dev/rettui/rettui`), the Docker image (`ghcr.io/rettui-dev/rettui`), the documentation site (`docs.rettui.dev`) and the links in the docs now point there. The old addresses redirect for now. See [Development](https://github.com/rettui-dev/rettui/wiki/Development).
+- **Weekly advisory check:** a scheduled run (7 AM Mountain time every Sunday) checks the dependencies against the RustSec advisory database and fails when it finds a new advisory, so one is noticed even when no pull request is open. See [Development](https://github.com/rettui-dev/rettui/wiki/Development).
 
 ## v2.0.0
 

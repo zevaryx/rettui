@@ -1,0 +1,42 @@
+name: Advisories
+
+# A weekly check of the dependencies against the RustSec advisory database.
+# CI does this on every pull request but lets it fail softly, so a new
+# advisory doesn't block unrelated work. This run fails when one is found, so
+# GitHub tells the repository's watchers about it.
+on:
+  schedule:
+    # 7 AM Mountain time every Sunday. GitHub cron times are UTC and don't
+    # follow daylight saving time, so it fires at both 13:00 (MDT) and 14:00
+    # (MST) UTC, and the first step lets only the one that is 7 AM in Denver run.
+    - cron: "0 13 * * 0"
+    - cron: "0 14 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny-advisories:
+    name: Cargo Deny Advisories
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only run at 7 AM Mountain time
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$(TZ=America/Denver date +%H)" = "07" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Not 7 AM in Denver yet or any more; skipping."
+          fi
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - if: steps.gate.outputs.run == 'true'
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          log-level: warn
+          arguments: --all-features
+          command: check advisories
