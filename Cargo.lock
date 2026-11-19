@@ -6533,7 +6533,7 @@ dependencies = [
 
 [[package]]
 name = "rngit"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ed25519-dalek",
  "flate2",
