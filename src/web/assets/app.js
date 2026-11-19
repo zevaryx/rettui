@@ -5330,6 +5330,28 @@ app.views.games = {
 
 // ---- Channels ---------------------------------------------------------------
 
+// Chat Micron is written with ¦ where pages have a backtick. The formatting
+// buttons: action, label, accessible name and tooltip.
+const CHAT_TAG = '¦';
+const CHAT_FORMATS = [
+  ['bold', 'B', 'Bold', 'Bold (Alt+B, Ctrl+B)'],
+  ['italic', 'I', 'Italic', 'Italic (Alt+I, Ctrl+I)'],
+  ['underline', 'U', 'Underline', 'Underline (Alt+U, Ctrl+U)'],
+  ['fg', 'Fg', 'Text colour', 'Text colour (Alt+F)'],
+  ['bg', 'Bg', 'Background colour', 'Background colour (Alt+G)'],
+  ['normal', 'N', 'Normal', 'Remove formatting from the selection, or reset it here (Alt+N)'],
+];
+
+// The action a key in the message box asks for, by the key's place (so it
+// works with any layout): Alt+B/I/U/F/G/N, and Ctrl or Cmd with B/I/U.
+function chatFormatKey(e) {
+  if (!e.code.startsWith('Key')) return null;
+  const key = e.code.slice(3).toLowerCase();
+  if (e.altKey && !e.ctrlKey && !e.metaKey) return { b: 'bold', i: 'italic', u: 'underline', f: 'fg', g: 'bg', n: 'normal' }[key] || null;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) return { b: 'bold', i: 'italic', u: 'underline' }[key] || null;
+  return null;
+}
+
 app.views.channels = {
   panes: true,
   draftStore: 'rettui.drafts.channels',
@@ -5349,6 +5371,12 @@ app.views.channels = {
       enterkeyhint: 'send',
       onkeydown: (e) => {
         if (this.emojiList.key(e) || this.mentionKey(e)) return;
+        const action = e.isComposing ? null : chatFormatKey(e);
+        if (action) {
+          e.preventDefault();
+          this.format(action, this.input);
+          return;
+        }
         if (emojiKey(e)) {
           e.preventDefault();
           emojiPicker.toggle(this.input, this.emojiButton);
@@ -5360,17 +5388,43 @@ app.views.channels = {
         keepDrafts(this);
       },
       // The cursor moved: the name being typed may have changed.
-      onkeyup: (e) => ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key) && this.updateMentions(),
+      onkeyup: (e) => {
+        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) this.updateMentions();
+        this.updateFormatPop();
+      },
       onclick: () => this.updateMentions(),
-      onblur: () => this.hideMentions(),
+      onblur: () => {
+        this.hideMentions();
+        this.hideFormatPop();
+      },
+      // A selection shows the formatting pop-up over the box.
+      onselect: () => this.updateFormatPop(),
+      onmouseup: () => this.updateFormatPop(),
+      onselectionchange: () => this.updateFormatPop(),
     });
+    if (!this.selectionListener) {
+      this.selectionListener = () => document.activeElement === this.input && this.updateFormatPop();
+      document.addEventListener('selectionchange', this.selectionListener);
+    }
     // Who `@` can mention, narrowed as the name is typed; `:name` emoji,
     // and the picker's button.
     this.mentionList = el('div', { class: 'mention-list hidden', role: 'listbox' });
     this.emojiList = shortcodes(this.input);
     this.emojiButton = emojiButton(this.input);
-    this.inputBar = el('div', { class: 'chat-input' }, this.mentionList, this.emojiList.list, this.input, this.emojiButton,
-      el('button', { class: 'primary', text: 'Send', onclick: () => this.send() }));
+    // Formatting: buttons beside the box (on a phone, behind "Aa"), and a
+    // pop-up over a selection. Pressing them keeps the selection in the box.
+    this.formatToggle = el('button', {
+      class: 'fmt-toggle', type: 'button', text: 'Aa', title: 'Formatting', 'aria-label': 'Formatting', 'aria-expanded': 'false',
+      onmousedown: (e) => e.preventDefault(),
+      onclick: () => {
+        const open = this.inputBar.classList.toggle('fmt-open');
+        this.formatToggle.setAttribute('aria-expanded', String(open));
+      },
+    });
+    this.formatGroup = el('div', { class: 'fmt-group', role: 'group', 'aria-label': 'Formatting' }, this.formatButtons());
+    this.formatPop = el('div', { class: 'fmt-pop hidden', role: 'toolbar', 'aria-label': 'Format the selection' }, this.formatButtons());
+    this.inputBar = el('div', { class: 'chat-input' }, this.mentionList, this.emojiList.list, this.formatPop, this.formatToggle,
+      this.formatGroup, this.input, this.emojiButton, el('button', { class: 'primary', text: 'Send', onclick: () => this.send() }));
     this.members = el('div', { class: 'scroll' });
     this.membersPanel = el('section', { class: 'panel members' }, el('header', { text: 'Members' }), this.members);
     // Searching what was said, as Messages searches messages.
@@ -5570,6 +5624,7 @@ app.views.channels = {
     draftSwitch(this, hash + '/' + room);
     setPane(this, 'detail');
     this.hideMentions();
+    this.hideFormatPop();
     for (const item of this.list.children) item.classList.toggle('selected', item.dataset.key === hash + '/' + room);
     const cached = this.cache.get(hash + '/' + room);
     if (cached && this.hubs?.some((h) => h.hash === hash)) this.renderRoom(hash, room, cached);
@@ -5901,6 +5956,64 @@ app.views.channels = {
   },
 
   // Put `@name ` in place of what was typed after the `@`.
+  // The formatting buttons (as the page editor's ribbon, in chat tags).
+  formatButtons() {
+    return CHAT_FORMATS.map(([action, label, name, title]) => el('button', {
+      class: 'fmt fmt-' + action, type: 'button', text: label, title, 'aria-label': name,
+      // Keep the selection in the box while clicking.
+      onmousedown: (e) => e.preventDefault(),
+      onclick: (e) => this.format(action, e.currentTarget),
+    }));
+  },
+
+  // Put a format in the box; colours pick from a palette first. The change
+  // goes through the browser's editing (so undo works and `input` fires, which
+  // keeps the draft and the mentions up to date).
+  format(action, from) {
+    if (action === 'fg' || action === 'bg') {
+      // The buttons may be hidden (a phone shows them on demand): then the box.
+      const anchor = from.getClientRects().length ? from : this.input;
+      this.hideFormatPop();
+      return openColourPalette({
+        title: action === 'fg' ? 'Text colour' : 'Background colour',
+        anchor,
+        above: true,
+        focus: this.input,
+        onPick: (code) => {
+          micron.format(this.input, action, CHAT_TAG, code);
+          this.input.focus();
+        },
+      });
+    }
+    micron.format(this.input, action, CHAT_TAG);
+    this.updateFormatPop();
+  },
+
+  // Show the pop-up above the selected text, or hide it when nothing is selected.
+  updateFormatPop() {
+    const { input, formatPop: pop } = this;
+    if (!input.isConnected || document.activeElement !== input || input.selectionStart === input.selectionEnd || !this.selected) {
+      return this.hideFormatPop();
+    }
+    pop.classList.remove('hidden');
+    // The input has no way to ask where its text is: measure it with the
+    // same font, less what is scrolled out of view.
+    const style = getComputedStyle(input);
+    const canvas = (this.measure ||= document.createElement('canvas').getContext('2d'));
+    canvas.font = style.font;
+    const box = input.getBoundingClientRect();
+    const edge = box.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth) - input.scrollLeft;
+    const from = edge + canvas.measureText(input.value.slice(0, input.selectionStart)).width;
+    const to = edge + canvas.measureText(input.value.slice(0, input.selectionEnd)).width;
+    const middle = Math.max(box.left, Math.min(box.right, (from + to) / 2));
+    pop.style.left = Math.max(8, Math.min(middle - pop.offsetWidth / 2, window.innerWidth - pop.offsetWidth - 8)) + 'px';
+    pop.style.top = Math.max(8, box.top - pop.offsetHeight - 6) + 'px';
+  },
+
+  hideFormatPop() {
+    this.formatPop?.classList.add('hidden');
+  },
+
   pickMention(user) {
     const query = this.mentionQuery();
     if (!query) return this.hideMentions();
@@ -6030,6 +6143,7 @@ app.views.channels = {
   putDraft(draft) {
     this.input.value = draft?.text || '';
     this.hideMentions();
+    this.hideFormatPop();
   },
 
   joinDrafts(first, second) {
@@ -6045,6 +6159,7 @@ app.views.channels = {
     // typed meanwhile is kept.
     this.input.value = '';
     this.hideMentions();
+    this.hideFormatPop();
     keepDrafts(this, true);
     // Put it back to try again or edit, in the room it was for.
     const restore = () => draftRestore(this, hub + '/' + room, { text });
@@ -7154,6 +7269,77 @@ const MICRON_RIBBON = [
 const MICRON_KEYS = Object.fromEntries(MICRON_RIBBON.flat().map(([id, , key]) => [key, id]));
 const MICRON_COLOURS = ['f00', 'f80', 'ff0', '8f0', '0f0', '0fc', '0af', '00f', '80f', 'f0f', 'fff', 'aaa', '555', '000'];
 
+// The colour picker for the page editor and the chat box: swatches, a hex
+// field, and the browser's own colour chooser for any other colour. It sits
+// below `anchor` (above it with `above`), calls `onPick(text)` with the
+// colour as typed, and on Esc gives the focus back to `focus`.
+let colourPalette = null;
+
+function closeColourPalette() {
+  colourPalette?.close();
+}
+
+function openColourPalette({ title, anchor, above = false, focus, onPick }) {
+  closeColourPalette();
+  const close = () => {
+    menu.remove();
+    document.removeEventListener('mousedown', closer);
+    if (colourPalette?.close === close) colourPalette = null;
+  };
+  const pick = (code) => {
+    close();
+    onPick(code);
+  };
+  const preview = el('span', { class: 'swatch preview', title: 'The colour as it will be' });
+  const native = el('input', {
+    type: 'color', value: '#ff8800', title: 'Choose any colour', 'aria-label': 'Choose any colour',
+    oninput: () => showCode(native.value.slice(1)),
+  });
+  const hex = el('input', {
+    type: 'text', placeholder: 'or hex: f80, 00aaff', maxlength: 7, class: 'mono', 'aria-label': 'Colour as hex',
+    oninput: () => showCode(hex.value, true),
+    onkeydown: (e) => {
+      // Not also typed into the box, which has the focus next.
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        pick(hex.value);
+      }
+    },
+  });
+  // Show a colour in the preview and the chooser (and the hex field, unless it is what's being typed in).
+  function showCode(text, typed = false) {
+    const code = micron.colour(text);
+    preview.style.background = code ? micron.css(code) : '';
+    if (!typed) hex.value = text;
+    if (code) native.value = '#' + (code.startsWith('T') ? code.slice(1) : [...code].map((c) => c + c).join(''));
+  }
+  const menu = el('div', {
+    class: 'user-menu palette', role: 'dialog', 'aria-label': title,
+    onkeydown: (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+        focus?.focus();
+      }
+    },
+  },
+  el('div', { class: 'menu-title', text: title }),
+  el('div', { class: 'swatches' }, MICRON_COLOURS.map((code) => el('button', {
+    class: 'swatch', type: 'button', title: code, 'aria-label': code, style: `background:#${code}`, onclick: () => pick(code),
+  }))),
+  el('div', { class: 'row' }, preview, hex, native, el('button', { text: 'Apply', onclick: () => pick(hex.value) })));
+  const closer = (e) => {
+    if (!menu.contains(e.target)) close();
+  };
+  document.body.append(menu);
+  const rect = anchor.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+  menu.style.top = (above ? Math.max(8, rect.top - menu.offsetHeight - 4) : rect.bottom + 4) + 'px';
+  colourPalette = { close };
+  setTimeout(() => menu.isConnected && document.addEventListener('mousedown', closer));
+  hex.focus();
+}
+
 const micron = {
   // Replace a range of the text box, keeping the browser's undo.
   replace(t, start, end, text) {
@@ -7192,8 +7378,39 @@ const micron = {
     }
   },
 
-  strip(text) {
-    return text.replace(/`(?:[!*_fb`]|[FB]T[0-9a-fA-F]{6}|[FB][0-9a-fA-F]{3})/g, '');
+  // The formatting tags `tag` starts (a backtick in pages, ¦ in chat; both
+  // reset with a backtick after the tag).
+  strip(text, tag = '`') {
+    return text.replace(new RegExp(`[${tag}](?:[!*_fb\`]|[FB]T[0-9a-fA-F]{6}|[FB][0-9a-fA-F]{3})`, 'g'), '');
+  },
+
+  // A colour code as CSS, for a preview.
+  css(code) {
+    return '#' + code.replace(/^T/, '');
+  },
+
+  // The actions that write inline tags, in a page (tag ` ) or in chat (tag ¦):
+  // bold, italic, underline, normal, and colours (`answer` is the colour typed).
+  format(t, action, tag = '`', answer = '') {
+    const { selectionStart: start, selectionEnd: end, value } = t;
+    const selected = value.slice(start, end);
+    switch (action) {
+      case 'bold': return this.toggle(t, tag + '!');
+      case 'italic': return this.toggle(t, tag + '*');
+      case 'underline': return this.toggle(t, tag + '_');
+      case 'normal': {
+        if (!selected) return this.replace(t, start, end, tag + '`');
+        const plain = this.strip(selected, tag);
+        this.replace(t, start, end, plain);
+        return t.setSelectionRange(start, start + plain.length);
+      }
+      case 'fg':
+      case 'bg': {
+        const code = this.colour(answer);
+        if (!code) return toast(`"${answer}" is not a colour: use 3 or 6 hex digits, like f80`, true);
+        return action === 'fg' ? this.wrap(t, tag + 'F' + code, tag + 'f') : this.wrap(t, tag + 'B' + code, tag + 'b');
+      }
+    }
   },
 
   colour(text) {
@@ -7272,19 +7489,13 @@ const micron = {
       return reply;
     } });
     switch (action) {
-      case 'bold': return this.toggle(t, '`!');
-      case 'italic': return this.toggle(t, '`*');
-      case 'underline': return this.toggle(t, '`_');
+      case 'bold':
+      case 'italic':
+      case 'underline':
       case 'normal':
-        if (!selected) return this.replace(t, start, end, '``');
-        this.replace(t, start, end, this.strip(selected));
-        return t.setSelectionRange(start, start + this.strip(selected).length);
       case 'fg':
-      case 'bg': {
-        const code = this.colour(answer || '');
-        if (!code) return toast(`"${answer}" is not a colour: use 3 or 6 hex digits, like f80`, true);
-        return action === 'fg' ? this.wrap(t, '`F' + code, '`f') : this.wrap(t, '`B' + code, '`b');
-      }
+      case 'bg':
+        return this.format(t, action, '`', answer || '');
       case 'left': return this.align(t, 'a');
       case 'center': return this.align(t, 'c');
       case 'right': return this.align(t, 'r');
@@ -7441,50 +7652,12 @@ app.views.node = {
   },
 
   palette(action, from) {
-    this.closePalette();
-    const pick = (code) => {
-      this.closePalette();
-      micron.run(this.text, action, code);
-    };
-    const hex = el('input', {
-      type: 'text', placeholder: 'or hex: f80, 00aaff', maxlength: 7, class: 'mono',
-      onkeydown: (e) => {
-        if (e.key === 'Enter') {
-          // Not also typed into the editor, which has the focus next.
-          e.preventDefault();
-          pick(hex.value);
-        }
-        if (e.key === 'Escape') {
-          this.closePalette();
-          this.text.focus();
-        }
-      },
+    openColourPalette({
+      title: action === 'fg' ? 'Text colour' : 'Background colour',
+      anchor: from || this.ribbon,
+      focus: this.text,
+      onPick: (code) => micron.run(this.text, action, code),
     });
-    const menu = el('div', { class: 'user-menu palette', role: 'dialog' },
-      el('div', { class: 'menu-title', text: action === 'fg' ? 'Text colour' : 'Background colour' }),
-      el('div', { class: 'swatches' }, MICRON_COLOURS.map((code) => el('button', {
-        class: 'swatch', title: code, style: `background:#${code}`, onclick: () => pick(code),
-      }))),
-      el('div', { class: 'row' }, hex, el('button', { text: 'Apply', onclick: () => pick(hex.value) })));
-    document.body.append(menu);
-    const rect = (from || this.ribbon).getBoundingClientRect();
-    menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
-    menu.style.top = rect.bottom + 4 + 'px';
-    this.paletteMenu = menu;
-    this.paletteCloser = (e) => {
-      if (!menu.contains(e.target)) this.closePalette();
-    };
-    setTimeout(() => document.addEventListener('mousedown', this.paletteCloser));
-    hex.focus();
-  },
-
-  closePalette() {
-    this.paletteMenu?.remove();
-    this.paletteMenu = null;
-    if (this.paletteCloser) {
-      document.removeEventListener('mousedown', this.paletteCloser);
-      this.paletteCloser = null;
-    }
   },
 
   async update() {
@@ -10368,7 +10541,9 @@ const KEYS = [
     ['Ctrl+E', 'emoji, in the message box'],
     ['Enter / Shift+Enter', 'send, or a new line, in the message box']]],
   ['Games', [['j / k', 'next or previous game'], ['n', 'new game'], ['f', 'filter: all, active, pending, completed']]],
-  ['Channels', [['/', 'search what was said in every room']]],
+  ['Channels', [['/', 'search what was said in every room'],
+    ['Alt+B / I / U, or Ctrl+B / I / U', 'bold, italic or underline the selection, in the message box'],
+    ['Alt+F / G', 'text or background colour'], ['Alt+N', 'remove the formatting from the selection']]],
   ['Network', [['/', 'search by name or address'], ['a', 'announces as they\'re heard, or the list']]],
   ['Browser', [['f', 'find in the page (Enter next, Shift+Enter previous)'], ['b', 'back'], ['g', 'go to an address'],
     ['/', 'search the nodes and saved pages'], ['T', 'a new tab (Ctrl+click or middle-click a link for one)'], ['W', 'close the tab'],
