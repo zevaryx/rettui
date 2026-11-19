@@ -51,6 +51,13 @@ pub struct PeeringConfig {
     pub static_peers: Vec<Hash>,
 }
 
+/// The most nodes whose distance is remembered.
+const MAX_HEARD: usize = 4096;
+/// The most peers listed one by one in [`PeeringStats::rows`].
+pub const ROWS_MAX: usize = 256;
+/// The longest peer name kept, in bytes (it comes from the network).
+const NAME_MAX: usize = 256;
+
 /// A propagation node's announce, as peering needs it.
 #[derive(Debug, Clone)]
 pub struct HeardNode {
@@ -80,6 +87,8 @@ pub struct Peers {
     config: PeeringConfig,
     /// This node's own address: never its own peer.
     own: Hash,
+    /// How far away each was when last heard announcing.
+    hops: HashMap<Hash, u8>,
 }
 
 impl Peers {
@@ -105,7 +114,7 @@ impl Peers {
                 });
             }
         }
-        Self { peers, identities: HashMap::new(), config, own }
+        Self { peers, identities: HashMap::new(), config, own, hops: HashMap::new() }
     }
 
     /// An announce heard from a propagation node, taken as `lxmd` takes it.
@@ -116,6 +125,9 @@ impl Peers {
         let Some(data) = parse_pn_announce_data(&node.app_data) else { return Change::Unchanged };
         if let Some(identity) = node.identity {
             self.identities.insert(node.hash, identity);
+        }
+        if self.hops.len() < MAX_HEARD || self.hops.contains_key(&node.hash) {
+            self.hops.insert(node.hash, node.hops);
         }
         let is_static = self.config.static_peers.contains(&node.hash);
         let peered = self.peers.contains_key(&node.hash);
@@ -169,6 +181,7 @@ impl Peers {
 
     fn unpeer(&mut self, hash: Hash) -> Change {
         self.peers.remove(&hash);
+        self.hops.remove(&hash);
         Change::Unpeered
     }
 
@@ -176,6 +189,43 @@ impl Peers {
     /// heard this time).
     pub fn know(&mut self, hash: Hash, identity: [u8; 16]) {
         self.identities.entry(hash).or_insert(identity);
+    }
+
+    /// What is known of each peer, and totals over them. `unhandled` counts
+    /// the messages still waiting to be offered to a peer (of those it was
+    /// last found to lack).
+    pub fn summary(&self, unhandled: impl Fn(&HashSet<PropagationTransientId>) -> usize) -> PeeringStats {
+        let secs = |at: f64| (at.is_finite() && at > 0.0).then_some(at as u64);
+        let mut stats = PeeringStats { peered: self.peers.len(), ..PeeringStats::default() };
+        let mut rows = Vec::new();
+        for peer in self.peers.values() {
+            let waiting = unhandled(&peer.unhandled_messages) as u64;
+            stats.alive += usize::from(peer.alive);
+            stats.statics += usize::from(peer.is_static);
+            stats.offered = stats.offered.saturating_add(peer.offered);
+            stats.unhandled = stats.unhandled.saturating_add(waiting);
+            let name = peer.metadata.as_ref().and_then(|m| m.get(&lxmf_core::constants::PN_META_NAME)).map(|bytes| {
+                let end = bytes.len().min(NAME_MAX);
+                String::from_utf8_lossy(&bytes[..end]).into_owned()
+            });
+            rows.push(PeerRow {
+                hash: peer.destination_hash,
+                name,
+                is_static: peer.is_static,
+                alive: peer.alive,
+                state: state_name(peer.state),
+                hops: self.hops.get(&peer.destination_hash).copied(),
+                last_heard: secs(peer.last_heard),
+                last_sync: secs(peer.last_sync),
+                offered: peer.offered,
+                unhandled: waiting,
+                peering_cost: if peer.peering_cost.is_finite() && peer.peering_cost > 0.0 { peer.peering_cost as u64 } else { 0 },
+            });
+        }
+        rows.sort_unstable_by_key(|row| row.hash);
+        rows.truncate(ROWS_MAX);
+        stats.rows = rows;
+        stats
     }
 
     pub fn identity_of(&self, hash: &Hash) -> Option<[u8; 16]> {
@@ -342,10 +392,59 @@ async fn handled(node: &Arc<Mutex<PropagationNode>>, policy: &OutboundOfferPolic
 }
 
 /// What peering has done, for the UIs.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PeeringStats {
     pub peered: usize,
     pub sent: u64,
+    /// Peers that answered when last tried, and those named in the settings.
+    pub alive: usize,
+    pub statics: usize,
+    /// Messages offered to all peers, and waiting to be offered.
+    pub offered: u64,
+    pub unhandled: u64,
+    /// The peers one by one (the first [`ROWS_MAX`] by address).
+    pub rows: Vec<PeerRow>,
+}
+
+/// One peered node, as the stats page shows it to whoever has the token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerRow {
+    pub hash: Hash,
+    /// Its announced name, as sent (not yet cleaned).
+    pub name: Option<String>,
+    pub is_static: bool,
+    pub alive: bool,
+    pub state: &'static str,
+    pub hops: Option<u8>,
+    /// Unix seconds it was last heard announcing, and last synced with.
+    pub last_heard: Option<u64>,
+    pub last_sync: Option<u64>,
+    pub offered: u64,
+    pub unhandled: u64,
+    pub peering_cost: u64,
+}
+
+fn state_name(state: lxmf_core::constants::PeerState) -> &'static str {
+    use lxmf_core::constants::PeerState;
+    match state {
+        PeerState::Idle => "idle",
+        PeerState::LinkEstablishing => "link_establishing",
+        PeerState::LinkReady => "link_ready",
+        PeerState::RequestSent => "request_sent",
+        PeerState::ResponseReceived => "response_received",
+        PeerState::ResourceTransferring => "transferring",
+    }
+}
+
+/// Publish what is known of the peers (keeping the count sent, which is kept here).
+fn publish(stats: &Mutex<PeeringStats>, peers: &Peers, node: &Mutex<PropagationNode>) {
+    let summary = {
+        let node = node.lock().unwrap();
+        peers.summary(|ids| node.unhandled_message_count(ids))
+    };
+    let mut stats = stats.lock().unwrap();
+    let sent = stats.sent;
+    *stats = PeeringStats { sent, ..summary };
 }
 
 /// A finished sync: the peer, how it went, and the peering key made for it
@@ -373,7 +472,7 @@ pub async fn run(
     for peer in peers.peers.values() {
         save(&node, peer);
     }
-    stats.lock().unwrap().peered = peers.peers.len();
+    publish(&stats, &peers, &node);
     let mut timer = tokio::time::interval(SYNC_EVERY);
     let mut syncing: Option<tokio::task::JoinHandle<SyncDone>> = None;
     loop {
@@ -389,7 +488,7 @@ pub async fn run(
                     Change::Unpeered => delete(&node, &heard.hash),
                     Change::Unchanged => {}
                 }
-                stats.lock().unwrap().peered = peers.peers.len();
+                publish(&stats, &peers, &node);
             }
             Some(done) = async { match syncing.as_mut() { Some(task) => Some(task.await), None => None } } => {
                 syncing = None;
@@ -420,12 +519,14 @@ pub async fn run(
                     peer.handled_messages.extend(saved.handled_messages);
                 }
                 save(&node, peer);
+                publish(&stats, &peers, &node);
             }
             _ = timer.tick(), if syncing.is_none() => {
                 let next = {
                     let node = node.lock().unwrap();
                     peers.next(|handled| node.create_offer([0; 16], None).into_iter().filter(|id| !handled.contains(id)).collect())
                 };
+                publish(&stats, &peers, &node);
                 let Some(hash) = next else { continue };
                 let Some(their_identity) = peers.identity_of(&hash) else { continue };
                 let Some(peer) = peers.peers.get_mut(&hash) else { continue };
@@ -597,5 +698,32 @@ mod tests {
         assert!(matches!(answer(Value::from(PeerError::Throttled as u64)), Offered::Refused(why) if why.contains("busy")));
         assert!(matches!(answer(Value::from(0x99)), Offered::Refused(why) if why.contains("153")));
         assert!(matches!(read_offer_response(&[0xc1], &offered), Offered::Refused(_)));
+    }
+
+    #[test]
+    fn the_summary_counts_the_peers_and_lists_them_by_address() {
+        let mut peers =
+            Peers::new(PeeringConfig { autopeer: true, max_depth: 4, max_peers: 10, static_peers: vec![[7; 16]] }, [0; 16], Vec::new());
+        let mut data = PropagationNodeAnnounceData::new(true, 256, 10240, 16.0, 3.0, 5.0);
+        data.metadata.insert(lxmf_core::constants::PN_META_NAME, "Far away".as_bytes().to_vec());
+        data.timebase = 100;
+        let heard =
+            HeardNode { hash: [3; 16], identity: None, hops: 3, path_response: false, app_data: get_propagation_node_app_data(&data) };
+        assert_eq!(peers.heard(&heard), Change::Peered);
+        peers.peers.get_mut(&[3; 16]).unwrap().offered = 4;
+        peers.peers.get_mut(&[3; 16]).unwrap().alive = true;
+        peers.peers.get_mut(&[7; 16]).unwrap().offered = 1;
+        let summary = peers.summary(|_| 2);
+        assert_eq!((summary.peered, summary.alive, summary.statics, summary.offered, summary.unhandled), (2, 1, 1, 5, 4));
+        let rows = &summary.rows;
+        assert_eq!(rows.iter().map(|r| r.hash).collect::<Vec<_>>(), [[3; 16], [7; 16]]);
+        assert_eq!((rows[0].name.as_deref(), rows[0].hops, rows[0].is_static, rows[0].state), (Some("Far away"), Some(3), false, "idle"));
+        assert_eq!((rows[1].name.as_deref(), rows[1].hops, rows[1].is_static, rows[1].last_sync), (None, None, true, None));
+        // Unpeered, it is forgotten.
+        let mut far = heard.clone();
+        far.hops = 9;
+        assert_eq!(peers.heard(&far), Change::Unpeered);
+        assert_eq!(peers.summary(|_| 0).rows.len(), 1);
+        assert!(!peers.hops.contains_key(&[3; 16]));
     }
 }

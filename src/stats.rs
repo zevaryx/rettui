@@ -12,8 +12,8 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::app::App;
+use crate::app::node::NodeStatus;
 use crate::net::PeerKind;
 
 /// The variable that holds the token (a flag value would show in `ps`).
@@ -33,6 +34,8 @@ const TOKEN_MIN: usize = 16;
 const TOKEN_MAX: usize = 256;
 /// The most peers an authorised answer lists.
 pub const PEERS_MAX: usize = 20_000;
+/// The most peered nodes an authorised answer lists.
+pub const PN_PEERS_MAX: usize = crate::lxmf::peering::ROWS_MAX;
 /// The longest name listed, in characters.
 const NAME_MAX: usize = 64;
 /// The header a token can also come in (besides `Authorization: Bearer`).
@@ -148,10 +151,176 @@ fn token_from(file: Option<&Path>, var: Option<OsString>) -> Result<Option<Token
     Token::parse(&text).map(Some).map_err(|reason| anyhow!("{origin}: {reason}"))
 }
 
+/// How often the disk is measured at most.
+const DISK_EVERY: Duration = Duration::from_secs(60);
+/// The most directory entries one measurement visits, and the longest it
+/// takes, before it gives up (the size is then null).
+const DISK_MAX_ENTRIES: usize = 500_000;
+const DISK_MAX_TIME: Duration = Duration::from_secs(10);
+
+/// What a measurement of the disk found. A field is `None` if it could not be found.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Usage {
+    /// Bytes of the files in the data directory (all identities, the message store and the propagation node's messages).
+    pub data_bytes: Option<u64>,
+    /// Size of the file system that holds the data directory, and what is free on it for an ordinary user.
+    pub fs_total_bytes: Option<u64>,
+    pub fs_free_bytes: Option<u64>,
+}
+
+#[derive(Debug, Default)]
+struct DiskState {
+    last_started: Option<Instant>,
+    running: bool,
+    runs: u64,
+    usage: Option<Usage>,
+}
+
+/// The disk measurements, made in the background at most once a minute, so
+/// walking the data directory never holds up the owner loop or a request.
+#[derive(Debug, Clone)]
+pub struct Disk {
+    state: Arc<Mutex<DiskState>>,
+    every: Duration,
+}
+
+impl Default for Disk {
+    fn default() -> Self {
+        Self::new(DISK_EVERY)
+    }
+}
+
+impl Disk {
+    pub fn new(every: Duration) -> Self {
+        Self { state: Arc::default(), every }
+    }
+
+    /// The last measurement of `dir` (none until the first one is done),
+    /// starting a new one on a blocking thread if the last is older than the
+    /// interval. Without a Tokio runtime nothing is measured.
+    pub fn current(&self, dir: &Path) -> Option<Usage> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let due = state.last_started.is_none_or(|at| at.elapsed() >= self.every);
+        if due
+            && !state.running
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            state.running = true;
+            state.last_started = Some(Instant::now());
+            state.runs += 1;
+            let (shared, dir) = (self.state.clone(), dir.to_path_buf());
+            runtime.spawn_blocking(move || {
+                let usage = measure(&dir);
+                let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                state.usage = Some(usage);
+                state.running = false;
+            });
+        }
+        state.usage
+    }
+}
+
+/// The size of the files under `dir` and of the file system they are on.
+pub fn measure(dir: &Path) -> Usage {
+    let (fs_total_bytes, fs_free_bytes) = match filesystem(dir) {
+        Some((total, free)) => (Some(total), Some(free)),
+        None => (None, None),
+    };
+    Usage { data_bytes: directory_size(dir, DISK_MAX_ENTRIES, DISK_MAX_TIME), fs_total_bytes, fs_free_bytes }
+}
+
+/// Bytes in the files under `dir`, not following links. None if `dir` can't
+/// be read, or there are more than `max_entries` entries or it takes longer
+/// than `max_time` (a partial sum would mislead). A folder that can't be read
+/// further down, or a file that goes away meanwhile, counts as empty.
+fn directory_size(dir: &Path, max_entries: usize, max_time: Duration) -> Option<u64> {
+    let started = Instant::now();
+    let mut pending = vec![std::fs::read_dir(dir).ok()?];
+    let (mut total, mut seen) = (0u64, 0usize);
+    while let Some(entries) = pending.last_mut() {
+        let Some(entry) = entries.next() else {
+            pending.pop();
+            continue;
+        };
+        seen += 1;
+        if seen > max_entries || started.elapsed() > max_time {
+            return None;
+        }
+        let Ok(entry) = entry else { continue };
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
+            if let Ok(inner) = std::fs::read_dir(entry.path()) {
+                pending.push(inner);
+            }
+        } else if kind.is_file() {
+            total = total.saturating_add(entry.metadata().map_or(0, |m| m.len()));
+        }
+    }
+    Some(total)
+}
+
+/// The total and the free bytes of the file system that holds `dir`.
+#[cfg(unix)]
+fn filesystem(dir: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
+    // SAFETY: `path` is a NUL-terminated string that outlives the call, and `stat`
+    // is a buffer of the size statvfs fills in; it is read only when the call succeeds.
+    let stat = unsafe {
+        if libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) != 0 {
+            return None;
+        }
+        stat.assume_init()
+    };
+    // The field types differ between systems.
+    #[allow(clippy::unnecessary_cast)]
+    let (unit, blocks, free) = (stat.f_frsize as u64, stat.f_blocks as u64, stat.f_bavail as u64);
+    Some((blocks.saturating_mul(unit), free.saturating_mul(unit)))
+}
+
+/// Not measured on this system.
+#[cfg(not(unix))]
+fn filesystem(_dir: &Path) -> Option<(u64, u64)> {
+    None
+}
+
+/// The `propagation` object: counts of what the propagation node holds and
+/// has done, if it is running. No addresses of peers or senders.
+fn propagation_object(app: &App) -> Option<Value> {
+    if !app.settings.pn_enabled || app.pn.status != NodeStatus::Running {
+        return None;
+    }
+    let stats = app.pn.stats.as_ref()?;
+    let limit = crate::lxmf::pn::PnConfig::from_settings(&app.settings, &app.paths).map(|config| config.storage_bytes);
+    Some(json!({
+        "enabled": true,
+        "stored_messages": stats.messages,
+        "stored_bytes": stats.bytes,
+        "storage_limit_bytes": limit,
+        "peers_connected": stats.peers,
+        "peers_total": stats.peered,
+        "peer_limit": app.settings.pn_max_peers,
+        "static_peers": app.settings.static_peers().len(),
+        "autopeer": app.settings.pn_autopeer,
+        "autopeer_depth": app.settings.pn_autopeer_depth,
+        "peers_alive": stats.peering.alive,
+        "peers_static": stats.peering.statics,
+        "peers_auto": stats.peering.peered.saturating_sub(stats.peering.statics),
+        "messages_received": stats.received,
+        "messages_served": stats.served,
+        "messages_offered_to_peers": stats.peering.offered,
+        "messages_sent_to_peers": stats.sent_to_peers,
+        "messages_received_from_peers": stats.received_from_peers,
+        "unhandled_messages": stats.peering.unhandled,
+    }))
+}
+
 /// The JSON for `app`, as of now. Totals only: no addresses, hashes, or names
 /// of peers, interfaces or clients, and no row per interface or client. With
-/// `with_peers` (a token is set), the authorised answer is made too.
-pub fn snapshot(app: &App, started: Instant, with_peers: bool) -> Arc<Published> {
+/// `with_peers` (a token is set), the authorised answer is made too. `disk`
+/// supplies the disk object once it has a first measurement.
+pub fn snapshot(app: &App, started: Instant, with_peers: bool, disk: &Disk) -> Arc<Published> {
     let generated_at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let online = app.interfaces.iter().filter(|i| i.online).count();
     let mut clients: Option<u64> = None;
@@ -186,12 +355,29 @@ pub fn snapshot(app: &App, started: Instant, with_peers: bool) -> Arc<Published>
         "peers_heard": { "total": lxmf + nomad + propagation, "lxmf": lxmf, "nomad": nomad, "propagation": propagation },
         "announces_last_minute": app.announce_log.last_minute(),
     });
+    if let Some(map) = json.as_object_mut() {
+        if let Some(pn) = propagation_object(app) {
+            map.insert("propagation".into(), pn);
+        }
+        if let Some(usage) = disk.current(&app.paths.root) {
+            map.insert(
+                "disk".into(),
+                json!({ "data_bytes": usage.data_bytes, "fs_total_bytes": usage.fs_total_bytes, "fs_free_bytes": usage.fs_free_bytes }),
+            );
+        }
+    }
     let public = json.to_string();
     let authorised = with_peers.then(|| {
         let (peers, truncated) = peer_list(app);
         if let Some(map) = json.as_object_mut() {
             map.insert("authorised".into(), Value::Bool(true));
             map.insert("peers".into(), Value::Array(peers));
+            if let Some((list, cut)) = propagation_peers(app) {
+                map.insert("propagation_peers".into(), Value::Array(list));
+                if cut {
+                    map.insert("propagation_peers_truncated".into(), Value::Bool(true));
+                }
+            }
             if truncated {
                 map.insert("peers_truncated".into(), Value::Bool(true));
             }
@@ -199,6 +385,37 @@ pub fn snapshot(app: &App, started: Instant, with_peers: bool) -> Arc<Published>
         json.to_string()
     });
     Arc::new(Published { public, authorised })
+}
+
+/// The peered propagation nodes one by one, by address, up to
+/// [`PN_PEERS_MAX`] (what the node keeps); and whether some were left out.
+/// For the authorised answer only. None unless the node runs.
+fn propagation_peers(app: &App) -> Option<(Vec<Value>, bool)> {
+    if !app.settings.pn_enabled || app.pn.status != NodeStatus::Running {
+        return None;
+    }
+    let stats = app.pn.stats.as_ref()?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let ago = |at: Option<u64>| at.map(|at| now.saturating_sub(at));
+    let rows = stats.peering.rows.iter().take(PN_PEERS_MAX);
+    let list = rows
+        .map(|row| {
+            json!({
+                "address": hex::encode(row.hash),
+                "name": clean_name(row.name.as_deref()),
+                "static": row.is_static,
+                "alive": row.alive,
+                "state": row.state,
+                "depth": row.hops,
+                "last_heard_seconds_ago": ago(row.last_heard),
+                "last_sync_seconds_ago": ago(row.last_sync),
+                "messages_offered": row.offered,
+                "unhandled": row.unhandled,
+                "peering_cost": row.peering_cost,
+            })
+        })
+        .collect();
+    Some((list, stats.peering.peered > stats.peering.rows.len().min(PN_PEERS_MAX)))
 }
 
 /// Every peer heard, by address, up to [`PEERS_MAX`]; and whether some were left out.
@@ -344,6 +561,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+    use crate::lxmf::peering::{PeerRow, PeeringStats};
     use crate::net::InterfaceInfo;
     use crate::store::{Peer, Store};
 
@@ -381,7 +599,7 @@ mod tests {
     #[test]
     fn the_snapshot_has_the_counts_and_nothing_else() {
         let (app, dir) = app("snapshot");
-        let json: Value = serde_json::from_str(&snapshot(&app, Instant::now(), false).public).unwrap();
+        let json: Value = serde_json::from_str(&snapshot(&app, Instant::now(), false, &Disk::default()).public).unwrap();
         assert_eq!(json["version"], 1);
         assert_eq!(json["rettui_version"], env!("CARGO_PKG_VERSION"));
         assert!(json["generated_at"].as_u64().unwrap() > 1_700_000_000);
@@ -408,12 +626,279 @@ mod tests {
     fn no_interface_reports_clients_as_null_and_no_list_is_published() {
         let (mut app, dir) = app("no-clients");
         app.interfaces = (0..40).map(|i| InterfaceInfo { name: format!("i{i}"), online: true, ..Default::default() }).collect();
-        let json: Value = serde_json::from_str(&snapshot(&app, Instant::now(), false).public).unwrap();
+        let json: Value = serde_json::from_str(&snapshot(&app, Instant::now(), false, &Disk::default()).public).unwrap();
         assert_eq!(json["interfaces"]["clients"], Value::Null);
         assert_eq!(json["interfaces"]["total"], 40);
         assert_eq!(json["interfaces"]["online"], 40);
         assert!(json["interfaces"].get("list").is_none(), "{json}");
         assert!(!json.to_string().contains("i39"), "{json}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn running_pn(app: &mut App, stats: crate::lxmf::pn::PnStats) {
+        app.settings.pn_enabled = true;
+        app.pn.status = NodeStatus::Running;
+        app.pn.stats = Some(stats);
+    }
+
+    #[test]
+    fn the_propagation_object_is_there_only_while_the_node_runs() {
+        let (mut app, dir) = app("pn");
+        let json = |app: &App| serde_json::from_str::<Value>(&snapshot(app, Instant::now(), true, &Disk::default()).public).unwrap();
+        assert!(json(&app).get("propagation").is_none(), "off");
+        app.settings.pn_enabled = true;
+        app.pn.status = NodeStatus::Starting;
+        assert!(json(&app).get("propagation").is_none(), "starting");
+        app.pn.status = NodeStatus::Running;
+        assert!(json(&app).get("propagation").is_none(), "running, but no numbers yet");
+        app.settings.pn_storage_mb = 50;
+        app.settings.pn_max_peers = 7;
+        app.settings.pn_autopeer = true;
+        app.settings.pn_autopeer_depth = 4;
+        let id = "00112233445566778899aabbccddeeff";
+        app.settings.pn_static_peers = Some(format!("{id}, not a hash, {}", "ff".repeat(16)));
+        running_pn(
+            &mut app,
+            crate::lxmf::pn::PnStats {
+                messages: 3,
+                bytes: 1234,
+                received: 9,
+                served: 4,
+                peers: 2,
+                peered: 5,
+                sent_to_peers: 6,
+                received_from_peers: 2,
+                peering: PeeringStats { peered: 5, alive: 3, statics: 2, offered: 11, unhandled: 8, ..Default::default() },
+                ..Default::default()
+            },
+        );
+        let json = json(&app);
+        assert_eq!(
+            json["propagation"],
+            json!({
+                "enabled": true, "stored_messages": 3, "stored_bytes": 1234, "storage_limit_bytes": 50_000_000,
+                "peers_connected": 2, "peers_total": 5, "peer_limit": 7, "static_peers": 2, "autopeer": true,
+                "autopeer_depth": 4, "peers_alive": 3, "peers_static": 2, "peers_auto": 3,
+                "messages_received": 9, "messages_served": 4, "messages_offered_to_peers": 11, "messages_sent_to_peers": 6,
+                "messages_received_from_peers": 2, "unhandled_messages": 8
+            })
+        );
+        assert!(!json.to_string().contains(id), "no peer is named");
+        // The existing keys are as before.
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["peers_heard"]["total"], 4);
+        app.pn.status = NodeStatus::Failed("no".into());
+        assert!(
+            serde_json::from_str::<Value>(&snapshot(&app, Instant::now(), false, &Disk::default()).public)
+                .unwrap()
+                .get("propagation")
+                .is_none()
+        );
+        app.pn.status = NodeStatus::Running;
+        app.settings.pn_enabled = false;
+        assert!(
+            serde_json::from_str::<Value>(&snapshot(&app, Instant::now(), false, &Disk::default()).public)
+                .unwrap()
+                .get("propagation")
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn row(n: u8, name: Option<&str>) -> PeerRow {
+        PeerRow {
+            hash: [n; 16],
+            name: name.map(String::from),
+            is_static: n == 1,
+            alive: true,
+            state: "idle",
+            hops: Some(2),
+            last_heard: Some(1_000),
+            last_sync: None,
+            offered: 5,
+            unhandled: 3,
+            peering_cost: 18,
+        }
+    }
+
+    #[test]
+    fn the_peered_nodes_are_listed_only_in_the_authorised_answer() {
+        let (mut app, dir) = app("pn-peers");
+        let rows = vec![row(1, Some("Node \u{202E}One\u{7}")), row(2, None)];
+        running_pn(
+            &mut app,
+            crate::lxmf::pn::PnStats { peered: 2, peering: PeeringStats { peered: 2, rows, ..Default::default() }, ..Default::default() },
+        );
+        let published = snapshot(&app, Instant::now(), true, &Disk::default());
+        let public: Value = serde_json::from_str(&published.public).unwrap();
+        assert!(public.get("propagation_peers").is_none() && !published.public.contains(&hex::encode([1u8; 16])), "{public}");
+        let full: Value = serde_json::from_str(published.authorised.as_deref().unwrap()).unwrap();
+        let list = full["propagation_peers"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["address"], hex::encode([1u8; 16]));
+        assert_eq!(list[0]["name"], "Node One");
+        assert_eq!(list[0]["static"], true);
+        assert_eq!(list[0]["state"], "idle");
+        assert_eq!(list[0]["depth"], 2);
+        assert!(list[0]["last_heard_seconds_ago"].as_u64().unwrap() > 1_000_000);
+        assert_eq!(list[0]["last_sync_seconds_ago"], Value::Null);
+        assert_eq!(list[1]["name"], Value::Null);
+        assert_eq!(
+            (list[0]["messages_offered"].as_u64(), list[0]["unhandled"].as_u64(), list[0]["peering_cost"].as_u64()),
+            (Some(5), Some(3), Some(18))
+        );
+        assert!(full.get("propagation_peers_truncated").is_none());
+        // More peered than listed: it says so.
+        app.pn.stats.as_mut().unwrap().peering.peered = 300;
+        let full: Value =
+            serde_json::from_str(snapshot(&app, Instant::now(), true, &Disk::default()).authorised.as_deref().unwrap()).unwrap();
+        assert_eq!(full["propagation_peers_truncated"], true);
+        // No node running: no list, and no key.
+        app.pn.status = NodeStatus::Off;
+        let full: Value =
+            serde_json::from_str(snapshot(&app, Instant::now(), true, &Disk::default()).authorised.as_deref().unwrap()).unwrap();
+        assert!(full.get("propagation_peers").is_none() && full.get("propagation").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rettui-stats-disk-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_size_of_a_directory_adds_up_its_files() {
+        let dir = scratch("size");
+        let limits = (DISK_MAX_ENTRIES, DISK_MAX_TIME);
+        assert_eq!(directory_size(&dir, limits.0, limits.1), Some(0));
+        std::fs::write(dir.join("a"), [0u8; 100]).unwrap();
+        std::fs::create_dir_all(dir.join("x/y")).unwrap();
+        std::fs::write(dir.join("x/b"), [0u8; 1000]).unwrap();
+        std::fs::write(dir.join("x/y/c"), [0u8; 20]).unwrap();
+        assert_eq!(directory_size(&dir, limits.0, limits.1), Some(1120));
+        // A link is not followed.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&dir, dir.join("x/loop")).unwrap();
+            assert_eq!(directory_size(&dir, limits.0, limits.1), Some(1120));
+        }
+        // Too many entries, or too long: no number rather than a partial one.
+        assert_eq!(directory_size(&dir, 2, limits.1), None);
+        assert_eq!(directory_size(&dir, limits.0, Duration::ZERO), None);
+        // A directory that is not there, or a file.
+        assert_eq!(directory_size(&dir.join("missing"), limits.0, limits.1), None);
+        assert_eq!(directory_size(&dir.join("a"), limits.0, limits.1), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_measurement_has_the_size_and_the_file_system() {
+        let dir = scratch("measure");
+        std::fs::write(dir.join("a"), [0u8; 4321]).unwrap();
+        let usage = measure(&dir);
+        assert_eq!(usage.data_bytes, Some(4321));
+        if cfg!(unix) {
+            let (total, free) = (usage.fs_total_bytes.unwrap(), usage.fs_free_bytes.unwrap());
+            assert!(total > 0 && free <= total, "{usage:?}");
+        } else {
+            assert_eq!((usage.fs_total_bytes, usage.fs_free_bytes), (None, None));
+        }
+        // A directory that is not there: everything is null.
+        let gone = measure(&dir.join("missing"));
+        assert_eq!(gone, Usage::default());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    async fn measured(disk: &Disk, dir: &Path) -> Usage {
+        for _ in 0..500 {
+            if let Some(usage) = disk.current(dir) {
+                return usage;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no measurement");
+    }
+
+    fn runs(disk: &Disk) -> u64 {
+        disk.state.lock().unwrap().runs
+    }
+
+    #[tokio::test]
+    async fn the_disk_is_measured_in_the_background_and_at_most_once_per_interval() {
+        let dir = scratch("throttle");
+        std::fs::write(dir.join("a"), [0u8; 10]).unwrap();
+        let disk = Disk::default();
+        assert_eq!(disk.current(&dir), None, "the first call only starts the measurement");
+        assert_eq!(measured(&disk, &dir).await.data_bytes, Some(10));
+        std::fs::write(dir.join("b"), [0u8; 5]).unwrap();
+        for _ in 0..20 {
+            assert_eq!(disk.current(&dir).unwrap().data_bytes, Some(10), "the last one is kept for a minute");
+        }
+        assert_eq!(runs(&disk), 1);
+        // With no wait between, it measures again, and the new size shows.
+        let eager = Disk::new(Duration::ZERO);
+        measured(&eager, &dir).await;
+        for _ in 0..500 {
+            if eager.current(&dir).and_then(|u| u.data_bytes) == Some(15) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(eager.current(&dir).unwrap().data_bytes, Some(15));
+        assert!(runs(&eager) >= 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn without_a_runtime_nothing_is_measured() {
+        let dir = scratch("no-runtime");
+        let disk = Disk::default();
+        assert_eq!(disk.current(&dir), None);
+        assert_eq!(runs(&disk), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_disk_object_is_added_once_measured_and_is_null_on_failure() {
+        let (app, dir) = app("disk");
+        let disk = Disk::default();
+        let json = |disk: &Disk| serde_json::from_str::<Value>(&snapshot(&app, Instant::now(), true, disk).public).unwrap();
+        assert!(json(&disk).get("disk").is_none(), "before the first measurement");
+        std::fs::write(dir.join("f"), [0u8; 77]).unwrap();
+        let usage = measured(&disk, &app.paths.root).await;
+        let value = json(&disk);
+        assert_eq!(value["disk"]["data_bytes"], usage.data_bytes.unwrap());
+        assert!(value["disk"]["data_bytes"].as_u64().unwrap() >= 77);
+        let keys: Vec<_> = value["disk"].as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["data_bytes", "fs_free_bytes", "fs_total_bytes"]);
+        assert_eq!(value["version"], 1);
+        assert_eq!(value.as_object().unwrap().len(), 8);
+        // On failure the fields are null.
+        let failed = Disk::default();
+        let gone = dir.join("missing");
+        measured(&failed, &gone).await;
+        let text = serde_json::to_value(failed.current(&gone).map(|u| json!({ "d": u.data_bytes, "t": u.fs_total_bytes }))).unwrap();
+        assert_eq!(text, json!({ "d": null, "t": null }));
+        // The authorised answer has it too.
+        let both = snapshot(&app, Instant::now(), true, &disk);
+        let authorised: Value = serde_json::from_str(both.authorised.as_deref().unwrap()).unwrap();
+        assert!(authorised["disk"].is_object());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_new_keys_reach_a_visitor_over_the_router() {
+        let (mut app, dir) = app("router-new");
+        running_pn(&mut app, crate::lxmf::pn::PnStats { messages: 1, ..Default::default() });
+        let disk = Disk::default();
+        measured(&disk, &app.paths.root).await;
+        let (_tx, rx) = channel(snapshot(&app, Instant::now(), false, &disk));
+        let (_, json) = json_of(ask(&router(rx, None), "GET", "/stats.json").await).await;
+        assert_eq!(json["propagation"]["stored_messages"], 1);
+        assert!(json["disk"]["data_bytes"].is_u64());
+        assert_eq!(json["interfaces"]["clients"], 7);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -424,7 +909,7 @@ mod tests {
     #[tokio::test]
     async fn the_router_answers_get_and_head_and_refuses_the_rest() {
         let (app, dir) = app("router");
-        let (_tx, rx) = channel(snapshot(&app, Instant::now(), false));
+        let (_tx, rx) = channel(snapshot(&app, Instant::now(), false, &Disk::default()));
         let router = router(rx, None);
         for path in ["/stats.json", "/"] {
             let response = ask(&router, "GET", path).await;
@@ -494,7 +979,7 @@ mod tests {
     /// A router with a token, over the test app's snapshot (made with the peer list).
     fn locked(name: &str) -> (Router, std::path::PathBuf) {
         let (app, dir) = app(name);
-        let (_tx, rx) = channel(snapshot(&app, Instant::now(), true));
+        let (_tx, rx) = channel(snapshot(&app, Instant::now(), true, &Disk::default()));
         (router(rx, Some(token())), dir)
     }
 
@@ -670,13 +1155,13 @@ mod tests {
     async fn without_a_token_set_the_headers_are_ignored() {
         let (app, dir) = app("no-token");
         // Even a snapshot that has the list (it shouldn't) is not served without a token.
-        let (_tx, rx) = channel(snapshot(&app, Instant::now(), true));
+        let (_tx, rx) = channel(snapshot(&app, Instant::now(), true, &Disk::default()));
         let router = router(rx, None);
         let bearer = format!("Bearer {SECRET}");
         for headers in [vec![("authorization", bearer.as_str())], vec![("x-stats-token", SECRET)], vec![("x-stats-token", "")]] {
             assert_public(&router, "/stats.json", &headers, false).await;
         }
-        let (_tx, rx) = channel(snapshot(&app, Instant::now(), false));
+        let (_tx, rx) = channel(snapshot(&app, Instant::now(), false, &Disk::default()));
         assert!(rx.borrow().authorised.is_none(), "no list is built without a token");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -698,7 +1183,7 @@ mod tests {
     fn the_public_json_is_the_same_with_or_without_a_token() {
         let (app, dir) = app("same-public");
         let started = Instant::now();
-        let (without, with) = (snapshot(&app, started, false), snapshot(&app, started, true));
+        let (without, with) = (snapshot(&app, started, false, &Disk::default()), snapshot(&app, started, true, &Disk::default()));
         let strip = |text: &str| {
             let mut json: Value = serde_json::from_str(text).unwrap();
             json.as_object_mut().unwrap().remove("generated_at");
@@ -722,7 +1207,8 @@ mod tests {
         app.store.peers.insert("short".into(), named(Some("bad")));
         app.store.peers.insert("z".repeat(32), named(Some("bad")));
         app.store.peers.insert(format!("{:032X}", 0xE), named(Some("bad")));
-        let json: Value = serde_json::from_str(&snapshot(&app, Instant::now(), true).authorised.clone().unwrap()).unwrap();
+        let json: Value =
+            serde_json::from_str(&snapshot(&app, Instant::now(), true, &Disk::default()).authorised.clone().unwrap()).unwrap();
         let peers = json["peers"].as_array().unwrap();
         let addresses: Vec<_> = peers.iter().map(|p| p["address"].as_str().unwrap().to_string()).collect();
         assert_eq!(addresses, (0xA..=0xD).map(|n| format!("{n:032x}")).collect::<Vec<_>>());
@@ -739,7 +1225,8 @@ mod tests {
         for n in 0..PEERS_MAX + 5 {
             app.store.peers.insert(format!("{:032x}", n * 3), peer(PeerKind::Lxmf));
         }
-        let json: Value = serde_json::from_str(&snapshot(&app, Instant::now(), true).authorised.clone().unwrap()).unwrap();
+        let json: Value =
+            serde_json::from_str(&snapshot(&app, Instant::now(), true, &Disk::default()).authorised.clone().unwrap()).unwrap();
         let peers = json["peers"].as_array().unwrap();
         assert_eq!(peers.len(), PEERS_MAX);
         assert_eq!(json["peers_truncated"], true);
@@ -750,7 +1237,8 @@ mod tests {
         // Exactly the cap is not truncated.
         app.store.peers.retain(|address, _| address.as_str() < format!("{:032x}", PEERS_MAX * 3).as_str());
         assert_eq!(app.store.peers.len(), PEERS_MAX);
-        let json: Value = serde_json::from_str(&snapshot(&app, Instant::now(), true).authorised.clone().unwrap()).unwrap();
+        let json: Value =
+            serde_json::from_str(&snapshot(&app, Instant::now(), true, &Disk::default()).authorised.clone().unwrap()).unwrap();
         assert!(json.get("peers_truncated").is_none() && json["peers"].as_array().unwrap().len() == PEERS_MAX);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -759,7 +1247,7 @@ mod tests {
     async fn over_tcp_the_token_is_read_from_the_header() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (app, dir) = app("tcp");
-        let (_tx, rx) = channel(snapshot(&app, Instant::now(), true));
+        let (_tx, rx) = channel(snapshot(&app, Instant::now(), true, &Disk::default()));
         let (bound, task) = serve("127.0.0.1:0", Some(token()), rx).await.unwrap();
         for (extra, listed) in
             [("", false), ("X-Stats-Token: nope-nope-nope-nope\r\n", false), (&format!("X-Stats-Token: {SECRET}\r\n"), true)]

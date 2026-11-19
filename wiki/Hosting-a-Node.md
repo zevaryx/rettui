@@ -371,9 +371,49 @@ It can't change anything. The numbers are updated every second.
     "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456
   },
   "peers_heard": { "total": 100, "lxmf": 60, "nomad": 30, "propagation": 10 },
-  "announces_last_minute": 12
+  "announces_last_minute": 12,
+  "propagation": {
+    "enabled": true, "stored_messages": 240, "stored_bytes": 3100000, "storage_limit_bytes": 500000000,
+    "peers_connected": 2, "peers_total": 6, "peers_alive": 5, "peers_static": 2, "peers_auto": 4,
+    "peer_limit": 50, "static_peers": 2, "autopeer": true, "autopeer_depth": 4,
+    "messages_received": 900, "messages_served": 700, "messages_offered_to_peers": 1500,
+    "messages_sent_to_peers": 800, "messages_received_from_peers": 400, "unhandled_messages": 35
+  },
+  "disk": { "data_bytes": 52000000, "fs_total_bytes": 50000000000, "fs_free_bytes": 31000000000 }
 }
 ```
+
+`propagation` is there only while the node's propagation node runs, and `disk`
+once the first measurement is done (a second or so after start). New keys may
+be added in the future, so ignore the ones you don't know. Everything in them
+is a total: no peer or sender is named.
+
+- `stored_messages` and `stored_bytes` are the messages the propagation node
+  holds now and their size (what it keeps for clients and other nodes, not
+  the size on disk). `storage_limit_bytes` is the limit in Settings (*Storage
+  (MB)*), in bytes.
+- `peers_connected` is how many other nodes are connected to it now, sending
+  it messages. `peers_total` is how many it is peered with, as the Status tab's
+  *Peered with* line counts them: `peers_static` named in Settings and
+  `peers_auto` found from announces. `peers_alive` of them answered when last
+  tried. `peer_limit`, `static_peers`, `autopeer` and `autopeer_depth` are the
+  settings (`static_peers` counts the valid addresses).
+- The message counts are since the node started. `messages_received` is every
+  message it took in to keep, `messages_received_from_peers` those that came
+  from other nodes, `messages_served` those it gave out to their recipients,
+  `messages_offered_to_peers` the offers made to peers (a message offered to
+  two peers counts twice, and the count is kept in the peers' saved state, so
+  it can include earlier runs) and `messages_sent_to_peers` those they took.
+  `unhandled_messages` is how many are waiting to be offered to peers; it is
+  worked out when a peer is next due, so it can be a little old.
+- `disk.data_bytes` is the size of the files in the whole data directory (the
+  messages, the stores, the log and every identity's folder), without
+  following links. `fs_total_bytes` and `fs_free_bytes` are the size of the
+  file system that holds it and what is free there for an ordinary user (not
+  given on Windows: `null`). Walking the directory is done in the background,
+  at most once a minute, so these may be up to a minute old. If it can't be
+  read, or has more than 500000 entries or takes more than 10 seconds, the
+  field is `null`.
 
 `interfaces.clients` adds up the clients connected to the node's server
 interfaces (`null` when none report any). The other fields, and how the
@@ -448,6 +488,31 @@ The token is compared in constant time and never logged.
   it can still hold `<`, quotes and anything else.
 - The answer has `Cache-Control: private, no-store` and `Vary: Authorization,
   X-Stats-Token`, so a cache doesn't keep it or give it to someone without the token.
+
+#### The peered nodes, for whoever has the token
+
+A request with the token also gets `propagation_peers`, one entry for each
+node the propagation node is peered with (only while it runs), sorted by
+address, at most 256 (`"propagation_peers_truncated": true` if there are more):
+
+```json
+"propagation_peers": [
+  {
+    "address": "00112233445566778899aabbccddeeff", "name": "Far node", "static": false, "alive": true,
+    "state": "idle", "depth": 3, "last_heard_seconds_ago": 840, "last_sync_seconds_ago": 52,
+    "messages_offered": 120, "unhandled": 4, "peering_cost": 18
+  }
+]
+```
+
+`address` is the node's, `name` what it announced (cleaned like a peer's name
+above; `null` if none), `state` what the node is doing with it (`idle`,
+`link_establishing`, `link_ready`, `request_sent`, `response_received` or
+`transferring`), `depth` how many hops away it was when last heard (`null` if
+not heard since the node started), and the `…_seconds_ago` fields are `null`
+if never. `messages_offered` counts what was offered to it, `unhandled` what
+waits to be offered, and `peering_cost` is the work its peering key costs. The
+public answer never has this list.
 
 Security notes:
 

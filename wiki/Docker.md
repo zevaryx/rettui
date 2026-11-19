@@ -91,7 +91,9 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   a read-only JSON summary of the node, totals only, at `/stats.json` on that
   port; it is off otherwise. It has no login, so publish it only to a reverse
   proxy (`"127.0.0.1:8741:8741"` under `ports:`) and not to the internet. It
-  works the same with `command: node`. See
+  works the same with `command: node`. With the propagation node on, it also
+  gives its stored messages, limit and peer counts, and the size of the data
+  directory and of the volume's file system. See
   [Running](Running#the-stats-endpoint) for the JSON and an nginx example.
   To let a website that has a secret also read every peer heard, set
   `STATS_TOKEN_FILE` to the path of a file in the container that holds it

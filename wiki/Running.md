@@ -205,9 +205,23 @@ curl http://127.0.0.1:8741/stats.json
     "total": 3, "online": 3, "clients": 17, "rx_bytes": 123, "tx_bytes": 456
   },
   "peers_heard": { "total": 100, "lxmf": 60, "nomad": 30, "propagation": 10 },
-  "announces_last_minute": 12
+  "announces_last_minute": 12,
+  "propagation": {
+    "enabled": true, "stored_messages": 240, "stored_bytes": 3100000, "storage_limit_bytes": 500000000,
+    "peers_connected": 2, "peers_total": 6, "peers_alive": 5, "peers_static": 2, "peers_auto": 4,
+    "peer_limit": 50, "static_peers": 2, "autopeer": true, "autopeer_depth": 4,
+    "messages_received": 900, "messages_served": 700, "messages_offered_to_peers": 1500,
+    "messages_sent_to_peers": 800, "messages_received_from_peers": 400, "unhandled_messages": 35
+  },
+  "disk": { "data_bytes": 52000000, "fs_total_bytes": 50000000000, "fs_free_bytes": 31000000000 }
 }
 ```
+
+`propagation` (the propagation node's stored messages, limit, peers and
+message counts) is there only while that node runs, and `disk` (the size of
+the data directory and of its file system, measured in the background at most
+once a minute) once measured. Both are totals with no addresses; see the
+[field notes](Hosting-a-Node#a-stats-page-for-a-status-page).
 
 - `generated_at` is unix seconds, and the numbers are updated every second.
   `uptime_seconds` counts from when rettui started.
@@ -223,8 +237,8 @@ curl http://127.0.0.1:8741/stats.json
   every run.
 - With `--stats-token-file PATH` (or the variable `RETTUI_STATS_TOKEN`; not
   both), a request that has the token in `Authorization: Bearer TOKEN` or
-  `X-Stats-Token: TOKEN` also gets `"authorised": true` and a `peers` list
-  with every peer's address, type and name. A token in the URL is not read,
+  `X-Stats-Token: TOKEN` also gets `"authorised": true`, a `peers` list
+  with every peer's address, type and name, and a `propagation_peers` list of the nodes it is peered with. A token in the URL is not read,
   because URLs end up in logs, and a wrong or missing token gets the totals
   above, with status 200. See [Hosting a Node](Hosting-a-Node#the-peer-list-for-whoever-has-the-token)
   for the details and what to keep in mind: treat the token as a secret.

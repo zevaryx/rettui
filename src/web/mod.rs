@@ -960,6 +960,7 @@ pub async fn run(
     // Before anything starts, so a bad or taken address stops rettui.
     let started = std::time::Instant::now();
     let (stats_tx, stats_rx) = crate::stats::channel(Default::default());
+    let disk = crate::stats::Disk::default();
     let with_peers = stats.as_ref().is_some_and(|listen| listen.token.is_some());
     let stats_server = match stats {
         Some(listen) => {
@@ -1091,7 +1092,7 @@ pub async fn run(
             }
             _ = save.tick() => owner.app.save_if_dirty(),
             _ = stats_tick.tick(), if stats_server.is_some() => {
-                stats_tx.send_replace(crate::stats::snapshot(&owner.app, started, with_peers));
+                stats_tx.send_replace(crate::stats::snapshot(&owner.app, started, with_peers, &disk));
             }
             () = owner.app.save_timer() => owner.app.save_when_due(),
             () = &mut shutdown => break Ok(None),

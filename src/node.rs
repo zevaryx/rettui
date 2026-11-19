@@ -498,6 +498,7 @@ pub(crate) async fn serve(
     // Before anything starts, so a bad or taken address stops rettui.
     let started = std::time::Instant::now();
     let (stats_tx, stats_rx) = crate::stats::channel(Default::default());
+    let disk = crate::stats::Disk::default();
     let with_peers = stats.as_ref().is_some_and(|listen| listen.token.is_some());
     let stats_server = match stats {
         Some(listen) => {
@@ -535,7 +536,7 @@ pub(crate) async fn serve(
             () = app.save_timer() => app.save_when_due(),
             _ = status.tick() => println!("{}", status_line(&app, &identity, &listening)),
             _ = stats_tick.tick(), if stats_server.is_some() => {
-                stats_tx.send_replace(crate::stats::snapshot(&app, started, with_peers));
+                stats_tx.send_replace(crate::stats::snapshot(&app, started, with_peers, &disk));
             }
             () = &mut stop => break,
         }
@@ -1157,9 +1158,12 @@ mod tests {
             while started && std::time::Instant::now() < until {
                 // The interfaces are known once the network says so.
                 if let Some(text) = get_stats(stats_port, None) {
-                    let total = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|j| j["interfaces"]["total"].as_u64());
+                    let json = serde_json::from_str::<serde_json::Value>(&text).ok();
+                    let total = json.as_ref().and_then(|j| j["interfaces"]["total"].as_u64());
+                    // The disk is measured in the background and the node's numbers come a little after it starts.
+                    let complete = json.as_ref().is_some_and(|j| j.get("disk").is_some() && j.get("propagation").is_some());
                     stats = Some(text);
-                    if total.is_some_and(|n| n >= 1) {
+                    if total.is_some_and(|n| n >= 1) && complete {
                         break;
                     }
                 }
@@ -1174,6 +1178,7 @@ mod tests {
                 let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
                 assert_eq!(listed["authorised"], true, "{listed}");
                 assert!(listed["peers"].is_array(), "{listed}");
+                assert!(listed["propagation_peers"].is_array(), "{listed}");
                 let wrong: serde_json::Value = serde_json::from_str(&wrong).unwrap();
                 assert!(wrong.get("peers").is_none() && wrong.get("authorised").is_none(), "{wrong}");
             }
@@ -1183,6 +1188,11 @@ mod tests {
                 assert!(json["interfaces"]["total"].as_u64().unwrap() >= 1, "{json}");
                 assert!(json["interfaces"].get("list").is_none(), "{json}");
                 assert!(json["peers_heard"]["total"].is_u64() && json["announces_last_minute"].is_u64(), "{json}");
+                assert_eq!(json["propagation"]["enabled"], true, "{json}");
+                assert_eq!(json["propagation"]["stored_messages"], 0, "{json}");
+                assert!(json["propagation"]["storage_limit_bytes"].as_u64().unwrap() > 0, "{json}");
+                assert!(json["disk"]["data_bytes"].as_u64().unwrap() > 0, "{json}");
+                assert!(json.get("propagation_peers").is_none(), "no list without the token: {json}");
             }
             if !started {
                 continue;

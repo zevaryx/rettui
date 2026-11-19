@@ -2043,6 +2043,7 @@ fn the_status_tab_in_every_state() {
         peers: 1,
         peered: 3,
         sent_to_peers: 5,
+        ..Default::default()
     };
     let states = [
         (NetState::Starting, SyncState::Idle, NodeStatus::Starting),

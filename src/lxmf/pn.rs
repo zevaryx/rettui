@@ -100,6 +100,11 @@ pub struct PnStats {
     /// Nodes it sends messages on to, and how many it has sent them.
     pub peered: usize,
     pub sent_to_peers: u64,
+    /// Of `received`, taken from other propagation nodes.
+    pub received_from_peers: u64,
+    /// Peering, for the stats page (not sent to the web UI: it names nodes).
+    #[serde(skip)]
+    pub peering: super::peering::PeeringStats,
 }
 
 #[derive(Default)]
@@ -108,6 +113,7 @@ struct Counters {
     delivered_here: AtomicU64,
     served: AtomicU64,
     rejected: AtomicU64,
+    received_from_peers: AtomicU64,
 }
 
 /// Messages with too small a stamp in one transfer, after which the rest
@@ -497,6 +503,9 @@ impl Ingest {
                 Ok(persisted) => {
                     if self.node.lock().unwrap().commit_store_write(persisted) {
                         self.counters.received.fetch_add(1, Ordering::Relaxed);
+                        if several {
+                            self.counters.received_from_peers.fetch_add(1, Ordering::Relaxed);
+                        }
                         tally.fresh += 1;
                         taken += 1;
                     }
@@ -879,10 +888,7 @@ impl HostedPn {
             let node = self.ingest.node.lock().unwrap();
             (node.message_count(), node.total_size())
         };
-        let (peered, sent_to_peers) = {
-            let peering = self.peering.lock().unwrap();
-            (peering.peered, peering.sent)
-        };
+        let peering = self.peering.lock().unwrap().clone();
         let counters = &self.ingest.counters;
         PnStats {
             messages,
@@ -892,8 +898,10 @@ impl HostedPn {
             served: counters.served.load(Ordering::Relaxed),
             rejected: counters.rejected.load(Ordering::Relaxed),
             peers: self.peers.lock().unwrap().len(),
-            peered,
-            sent_to_peers,
+            peered: peering.peered,
+            sent_to_peers: peering.sent,
+            received_from_peers: counters.received_from_peers.load(Ordering::Relaxed),
+            peering,
         }
     }
 
@@ -1113,6 +1121,7 @@ mod tests {
         let mut entries: Vec<Value> = bads(MAX_BAD_STAMPS + 4).take(MAX_BAD_STAMPS - 1).collect();
         entries.push(good.clone());
         assert_eq!(ingest.take(&several(entries), true), Ok(1));
+        assert_eq!(ingest.counters.received_from_peers.load(Ordering::Relaxed), 1, "taken on a peer's Link");
         // Copies of one held already are taken without checking their stamps.
         let once = std::time::Instant::now();
         assert_eq!(ingest.take(&several(vec![bad()]), true), Ok(0));
