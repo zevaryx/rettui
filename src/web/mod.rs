@@ -22,6 +22,7 @@ pub mod desktop;
 pub mod mbtiles;
 mod push;
 mod routes;
+mod stats;
 mod tiles;
 pub mod tls;
 mod views;
@@ -933,12 +934,16 @@ async fn bind_with(
 
 /// The web UI on `listener` (from [`bind`]), until it's stopped; or the name
 /// of the identity it's switching to (it's started again as that one).
+///
+/// With `stats` (an address), a read-only JSON summary of counts is served
+/// there too (see [`stats`]).
 pub async fn run(
     listener: std::net::TcpListener,
     settings: Settings,
     paths: Paths,
     identity: Identity,
     https: Option<tls::Https>,
+    stats: Option<&str>,
 ) -> Result<Option<String>> {
     let address = listener.local_addr()?;
     let token = load_token(&paths)?;
@@ -952,6 +957,18 @@ pub async fn run(
     // (Whether a copy of a socket shares its blocking mode is up to the system.)
     listener.set_nonblocking(true).context("could not listen")?;
     let listener = tokio::net::TcpListener::from_std(listener).context("could not listen")?;
+
+    // Before anything starts, so a bad or taken address stops rettui.
+    let started = std::time::Instant::now();
+    let (stats_tx, stats_rx) = stats::channel(String::new());
+    let stats_server = match stats {
+        Some(stats_address) => {
+            let (bound, task) = stats::serve(stats_address, stats_rx).await?;
+            println!("Stats (counts only, no login) at http://{bound}/stats.json");
+            Some(task)
+        }
+        None => None,
+    };
 
     let identity_hash = identity.hash;
     let store = Store::load_with_db(&paths.store, &paths.db);
@@ -1036,6 +1053,7 @@ pub async fn run(
     };
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let mut save = tokio::time::interval(Duration::from_secs(10));
+    let mut stats_tick = tokio::time::interval(Duration::from_secs(1));
     tokio::pin!(shutdown);
     let mut decoded = owner.app.take_decoded();
     let result = loop {
@@ -1072,6 +1090,9 @@ pub async fn run(
                 }
             }
             _ = save.tick() => owner.app.save_if_dirty(),
+            _ = stats_tick.tick(), if stats_server.is_some() => {
+                stats_tx.send_replace(stats::snapshot(&owner.app, started));
+            }
             () = owner.app.save_timer() => owner.app.save_when_due(),
             () = &mut shutdown => break Ok(None),
         }
@@ -1101,6 +1122,9 @@ pub async fn run(
         if server.is_finished() {
             break Err(anyhow::anyhow!("the web server stopped"));
         }
+        if stats_server.as_ref().is_some_and(|task| task.is_finished()) {
+            break Err(anyhow::anyhow!("the stats server stopped"));
+        }
         if let Some(name) = owner.app.take_switch() {
             // Browsers load again once it's back, as the other identity.
             notify(&changes, Scope::ALL);
@@ -1125,6 +1149,9 @@ pub async fn run(
     };
     owner.app.save_if_dirty();
     server.abort();
+    if let Some(task) = &stats_server {
+        task.abort();
+    }
     // Until it has ended, so this copy of the socket is closed and takes no
     // more connections for a web UI that has stopped.
     let _ = server.await;

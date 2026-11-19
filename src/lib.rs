@@ -103,6 +103,11 @@ struct Cli {
     /// The private key (PEM) of --tls-cert.
     #[arg(long, value_name = "FILE", requires_all = ["web", "tls_cert"])]
     tls_key: Option<PathBuf>,
+    /// Also serve a read-only JSON summary of this node (counts only, no
+    /// login) at /stats.json on this address, for a status page. Put it
+    /// behind a reverse proxy; don't expose it directly.
+    #[arg(long, value_name = "ADDRESS", requires = "web")]
+    stats_listen: Option<String>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -495,7 +500,7 @@ async fn run(cli: Cli) -> Result<()> {
         // Switching identity starts the web UI over as the other one.
         // Bound once: the port stays held while it starts over as the other one.
         let listener = web::bind(&address).await?;
-        while web::run(listener.try_clone()?, settings, paths, identity, https.clone()).await?.is_some() {
+        while web::run(listener.try_clone()?, settings, paths, identity, https.clone(), cli.stats_listen.as_deref()).await?.is_some() {
             (settings, paths, identity) = switched(&cli.data_dir, cli.rns_config.clone())?;
             set_tray(&settings);
         }
@@ -851,6 +856,9 @@ mod tests {
         running.join().unwrap().unwrap();
         // Wrong arguments are an error, not the end of the program.
         assert!(super::run_with(["rettui", "--no-such-flag"]).is_err());
+        // The stats endpoint is part of the web UI's run: alone, it's refused.
+        let error = super::run_with(["rettui", "--stats-listen", "127.0.0.1:8741"]).unwrap_err();
+        assert!(error.to_string().contains("--web"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
