@@ -913,6 +913,23 @@ mod tests {
     }
 
     #[test]
+    fn the_1_5_1_options_are_in_the_editors_and_rsreticulum_accepts_them() {
+        let base =
+            format!("{DEFAULT}  [[Hub]]\n    type = BackboneInterface\n    enabled = Yes\n    listen_on = 0.0.0.0\n    port = 4242\n");
+        let text = set_options(&base, &Section::Interface("Hub".into()), &[("client_limit", "50")]).unwrap();
+        let text = set_options(&text, &Section::Stamps, &[("max_workers", "2"), ("worker_niceness", "10"), ("stamp_prs", "yes")]).unwrap();
+        let text = set_options(&text, &Section::Reticulum, &[("autoconnect_discovered_interfaces_disable_caps", "yes")]).unwrap();
+        let (config, check) = super::check(&text);
+        assert!(check.error.is_none(), "{:?}", check.error);
+        let config = config.unwrap();
+        let stamps = config.section("stamps").unwrap();
+        assert_eq!((stamps.get("max_workers"), stamps.get("worker_niceness")), (Some("2"), Some("10")));
+        assert_eq!(config.subsection("interfaces", "Hub").unwrap().get("client_limit"), Some("50"));
+        assert!(set_options(&text, &Section::Stamps, &[("worker_niceness", "gentle")]).is_err());
+        assert!(set_options(&text, &Section::Interface("Hub".into()), &[("client_limit", "many")]).is_err());
+    }
+
+    #[test]
     fn a_location_command_runs_a_program_so_the_web_ui_cannot_set_it() {
         let text = set_options(DEFAULT, &Section::Interface("Default Interface".into()), &[("location_cmd", "/bin/where")]).unwrap();
         assert!(validate(DEFAULT, &text, true).is_err());

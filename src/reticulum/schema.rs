@@ -200,6 +200,13 @@ pub const RETICULUM: &[Group] = &[
                 "Ignore discovered interfaces with a lower stamp value",
             ),
             opt(
+                "autoconnect_discovered_interfaces_disable_caps",
+                "Allow more than 12",
+                Bool,
+                "No",
+                "Auto-connect is held to 12 discovered interfaces, as in Reticulum 1.6.1; Yes lifts that. More interfaces don't give better connectivity",
+            ),
+            opt(
                 "interface_discovery_sources",
                 "Trusted sources",
                 List,
@@ -266,8 +273,20 @@ pub const STAMPS: &[Group] = &[
     Group {
         title: "What is stamped",
         opts: &[
-            opt("stamp_destinations", "Stamp announces", Bool, "No", "Put a stamp (proof of work) on the announces this node sends"),
-            opt("stamp_prs", "Stamp path requests", Bool, "No", "Put a stamp on the path requests this node sends"),
+            opt(
+                "stamp_destinations",
+                "Stamp announces",
+                Bool,
+                "Yes",
+                "Put a stamp (proof of work) on the announces this node sends. On by default, as in Reticulum 1.6.1; setting it to No does not turn it off",
+            ),
+            opt(
+                "stamp_prs",
+                "Stamp path requests",
+                Bool,
+                "Yes",
+                "Put a stamp on the path requests this node sends. On by default, as in Reticulum 1.6.1; setting it to No does not turn it off",
+            ),
             opt("always_stamp_lrs", "Stamp link requests", Bool, "No", "Put a stamp on every link request, not only when one is asked for"),
             opt(
                 "enforce_stamps",
@@ -288,6 +307,25 @@ pub const STAMPS: &[Group] = &[
             opt("lr_cost", "Link request cost", Float, "", "Work asked of a link request's stamp"),
             opt("lr_stamp_timeout", "Link request wait (s)", Float, "", "How long to wait for a link request's stamp"),
             opt("pr_stamp_timeout", "Path request wait (s)", Float, "", "How long to wait for a path request's stamp"),
+        ],
+    },
+    Group {
+        title: "Making stamps",
+        opts: &[
+            opt(
+                "max_workers",
+                "Most workers",
+                Int,
+                "",
+                "Most processes used to make a stamp at once, at least 1; empty uses the number of CPU cores",
+            ),
+            opt(
+                "worker_niceness",
+                "Worker niceness",
+                Int,
+                "16",
+                "How far stamp work yields to other programs, 0 to 20; higher is gentler on the computer and slower",
+            ),
         ],
     },
 ];
@@ -546,6 +584,13 @@ pub const INTERFACE_TYPES: &[InterfaceType] = &[
             opt("device", "Device", Text, "", "Listen on this network device"),
             opt("connect_timeout", "Connect timeout (s)", Int, "", "Seconds to wait when connecting"),
             opt("max_reconnect_tries", "Reconnect tries", Int, "", "Give up after this many reconnects; empty keeps trying"),
+            opt(
+                "client_limit",
+                "Client limit",
+                Int,
+                "500",
+                "Most clients a listener serves at once; it closes new connections past this (server mode)",
+            ),
         ],
         starter: &[("listen_on", "0.0.0.0"), ("port", "4242")],
     },
