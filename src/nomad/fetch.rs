@@ -132,7 +132,7 @@ pub async fn fetch(
     for attempt in 0..2 {
         let handle = node_link(runtime, links, node, identity.as_ref(), progress).await?;
         let options = request_options(path, spool);
-        match handle.request_with_options(&request.path, rmpv::Value::Binary(request.data.clone()), options).await {
+        match handle.request_with_options(&request.path, request.value(), options).await {
             Ok(response) => {
                 if let Some(spool) = spool {
                     return crate::net::response_file(response, spool).await;

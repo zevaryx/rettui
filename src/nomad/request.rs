@@ -31,6 +31,18 @@ pub struct Request {
     pub data: Vec<u8>,
 }
 
+impl Request {
+    /// The data as the value NomadNet sends: the map itself (not bytes holding
+    /// it), or nothing when there is none. Python nodes, rngit's pages among
+    /// them, take only a map as the form's values.
+    pub fn value(&self) -> Value {
+        if self.data.is_empty() {
+            return Value::Nil;
+        }
+        rmpv::decode::read_value_with_max_depth(&mut &*self.data, MAX_DEPTH).unwrap_or(Value::Nil)
+    }
+}
+
 /// A path with `prefix`, however it was written (`index.mu`, `/index.mu`,
 /// `/page/index.mu`), and checked.
 fn with_prefix(path: &str, prefix: &str) -> Result<String, PathError> {
@@ -162,11 +174,23 @@ mod tests {
         assert!(sent.data.windows(8).any(|w| w == b"\xa7field_q"));
         assert_eq!(decode_fields(&sent.data), form);
 
+        // Sent as the map itself, or as nil when there is nothing to send.
+        assert_eq!(
+            sent.value(),
+            Value::Map(vec![(Value::from("field_q"), Value::from("hello")), (Value::from("var_mode"), Value::from("search"))])
+        );
+        assert_eq!(page("/", &none).unwrap().value(), Value::Nil);
+        assert_eq!(file("/file/a.bin").unwrap().value(), Value::Nil);
+
         // {"path": "images/logo.png", "key": nil}
         let picture = media("images/logo.png");
         assert_eq!(picture.path, "/media");
         assert_eq!(picture.data, b"\x82\xa4path\xafimages/logo.png\xa3key\xc0");
         assert_eq!(decode_media(&picture.data).as_deref(), Some("images/logo.png"));
+        assert_eq!(
+            picture.value(),
+            Value::Map(vec![(Value::from("path"), Value::from("images/logo.png")), (Value::from("key"), Value::Nil)])
+        );
     }
 
     #[test]
