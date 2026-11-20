@@ -1088,6 +1088,69 @@ mod tests {
     }
 
     #[test]
+    fn requests_sent_as_lists_are_read_as_the_node_reads_them() {
+        use super::super::peering::offer_request_value;
+        use lxmf_core::constants::STAMP_WORKBLOCK_EXPAND_ROUNDS_PEERING;
+        // A node hands a handler a list's bytes, whether the sender put a
+        // list on the wire (other LXMF software) or bytes holding one (older rettui).
+        let local = [1; 16];
+        let remote = [2; 16];
+        let id = {
+            let mut id = [0u8; 32];
+            id[..16].copy_from_slice(&local);
+            id[16..].copy_from_slice(&remote);
+            id
+        };
+        let cost = 4.0;
+        let Some((key, _)) = lxmf_core::stamper::generate_stamp(
+            &id,
+            cost,
+            STAMP_WORKBLOCK_EXPAND_ROUNDS_PEERING,
+            &lxmf_core::stamper::StampControl::default(),
+        )
+        .unwrap() else {
+            panic!("no key")
+        };
+        let offer = offer_request_value(&key, &[[7; 32]]);
+        assert_eq!(offer_refusal(&encode(&offer), Some(&remote), false, &local, cost), None);
+
+        // The same for a `/get`: the list of what is wanted, and what is had.
+        let dir = std::env::temp_dir().join(format!("rettui-pn-get-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (ingest, _delivered, _) = ingest(&dir, 13.0);
+        let bob = Identity::new();
+        let bob_hash = Destination::hash_from_name_and_identity(LXMF_ASPECT, Some(&bob.hash));
+        let node = ingest.node.clone();
+        // The node's own offer handler reads the list too (it asks for the one message it hasn't got).
+        let context = OfferRequestContext {
+            peer_hash: remote,
+            identity_known: true,
+            is_throttled: false,
+            access_allowed: true,
+            local_identity_hash: Some(&local),
+            remote_identity_hash: Some(&remote),
+        };
+        let reply = node.lock().unwrap().handle_offer_request(&encode(&offer), context);
+        // (Its cost may be higher than this test's key: what counts is that it isn't "invalid data".)
+        assert!(
+            matches!(rmpv::decode::read_value(&mut reply.as_slice()), Ok(Value::Boolean(_) | Value::Array(_)))
+                || reply == encode(&Value::from(PeerError::InvalidKey as u64)),
+            "{reply:?}"
+        );
+        let get = |value: Value| node.lock().unwrap().handle_get_request(&encode(&value), &bob_hash);
+        let lxmf_core::propagation_node::GetRequestAction::Respond(list) = get(Value::Array(vec![Value::Nil, Value::Nil])) else {
+            panic!()
+        };
+        assert!(matches!(rmpv::decode::read_value(&mut list.as_slice()), Ok(Value::Array(ids)) if ids.is_empty()));
+        let wants = Value::Array(vec![Value::Array(vec![Value::Binary(vec![5; 32])]), Value::Array(Vec::new()), Value::F64(512.0)]);
+        assert!(
+            !matches!(get(wants), lxmf_core::propagation_node::GetRequestAction::Respond(r) if r == [0xc0]),
+            "a three-part list is read"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_peers_transfer_of_bad_stamps_or_copies_costs_little_work() {
         let dir = std::env::temp_dir().join(format!("rettui-pn-bad-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

@@ -92,6 +92,8 @@ pub struct Peers {
     own: Hash,
     /// How far away each was when last heard announcing.
     hops: HashMap<Hash, u8>,
+    /// Why each peer's last sync failed (not saved: it is for the stats page).
+    failures: HashMap<Hash, Failure>,
 }
 
 impl Peers {
@@ -117,7 +119,7 @@ impl Peers {
                 });
             }
         }
-        Self { peers, identities: HashMap::new(), config, own, hops: HashMap::new() }
+        Self { peers, identities: HashMap::new(), config, own, hops: HashMap::new(), failures: HashMap::new() }
     }
 
     /// An announce heard from a propagation node, taken as `lxmd` takes it.
@@ -185,6 +187,7 @@ impl Peers {
     fn unpeer(&mut self, hash: Hash) -> Change {
         self.peers.remove(&hash);
         self.hops.remove(&hash);
+        self.failures.remove(&hash);
         Change::Unpeered
     }
 
@@ -231,6 +234,7 @@ impl Peers {
                 sync_failures: peer.unreachable_count,
                 last_attempt: secs(peer.last_sync_attempt),
                 next_attempt: secs(peer.next_sync_attempt),
+                last_failure: self.failures.get(&peer.destination_hash).map(|why| why.as_str()),
                 peering_cost: if peer.peering_cost.is_finite() && peer.peering_cost > 0.0 { peer.peering_cost as u64 } else { 0 },
             });
         }
@@ -239,6 +243,15 @@ impl Peers {
         rows.truncate(ROWS_MAX);
         stats.rows = rows;
         stats
+    }
+
+    /// Note how a sync with `hash` went: why it failed, or (`None`) that it
+    /// didn't.
+    pub fn synced(&mut self, hash: Hash, failure: Option<Failure>) {
+        match failure {
+            Some(why) => self.failures.insert(hash, why),
+            None => self.failures.remove(&hash),
+        };
     }
 
     pub fn identity_of(&self, hash: &Hash) -> Option<[u8; 16]> {
@@ -296,6 +309,46 @@ fn failed(peer: &mut LxmPeer, now: f64) {
     peer.next_sync_attempt = peer.next_sync_attempt.min(now + BACKOFF_MAX);
 }
 
+/// Why a sync with a peer failed, in a few fixed words. Nothing a peer sent
+/// goes into these: they are published on the stats page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Failure {
+    /// No Link to it could be made.
+    NoLink,
+    /// The Link came up but the offer got no answer.
+    NoAnswer,
+    /// It said it couldn't read the offer.
+    RefusedInvalidData,
+    /// It refused the peering key.
+    BadKey,
+    /// It doesn't let us peer, or couldn't tell who we are.
+    NoAccess,
+    /// It's busy.
+    Busy,
+    /// Something took too long.
+    Timeout,
+    /// It sent an answer, or an error code, not understood.
+    BadAnswer,
+    /// Making the key, or sending the messages, failed here or on the way.
+    Io,
+}
+
+impl Failure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoLink => "no_link",
+            Self::NoAnswer => "no_answer",
+            Self::RefusedInvalidData => "refused_invalid_data",
+            Self::BadKey => "bad_key",
+            Self::NoAccess => "no_access",
+            Self::Busy => "busy",
+            Self::Timeout => "timeout",
+            Self::BadAnswer => "bad_answer",
+            Self::Io => "io",
+        }
+    }
+}
+
 /// What an `/offer` was answered with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Offered {
@@ -303,7 +356,34 @@ pub enum Offered {
     Wants(Vec<PropagationTransientId>),
     /// Its peering key was refused: make a new one.
     BadKey,
-    Refused(String),
+    /// The sync failed, and why (the text is for the log, not the stats).
+    Refused(Failure, String),
+}
+
+impl Offered {
+    /// Why this failed, if it did.
+    pub fn failure(&self) -> Option<Failure> {
+        match self {
+            Self::Wants(_) => None,
+            Self::BadKey => Some(Failure::BadKey),
+            Self::Refused(why, _) => Some(*why),
+        }
+    }
+}
+
+/// How an offer or a `/get` is sent: as the list Python's LXMF reads
+/// (`[peering key, [transient id, ...]]`), not as bytes holding that list,
+/// which it can't read.
+pub fn offer_request_value(key: &[u8], ids: &[PropagationTransientId]) -> Value {
+    Value::Array(vec![Value::Binary(key.to_vec()), Value::Array(ids.iter().map(|id| Value::Binary(id.to_vec())).collect())])
+}
+
+/// A failed request, as a [`Failure`].
+fn request_failure(error: &LinkSessionError) -> Failure {
+    match error {
+        LinkSessionError::Timeout(_) => Failure::Timeout,
+        _ => Failure::NoAnswer,
+    }
 }
 
 /// Read a peer's answer to an offer of `offered`: `true` (all), `false`
@@ -318,14 +398,14 @@ pub fn read_offer_response(data: &[u8], offered: &[PropagationTransientId]) -> O
             Offered::Wants(offered.iter().filter(|id| asked.contains(*id)).copied().collect())
         }
         Ok(Value::Integer(code)) if code.as_u64() == Some(PeerError::InvalidKey as u64) => Offered::BadKey,
-        Ok(Value::Integer(code)) => Offered::Refused(match code.as_u64().and_then(|c| u8::try_from(c).ok()) {
-            Some(0xF0) => "it couldn't tell who we are".into(),
-            Some(0xF1) => "it doesn't let us peer with it".into(),
-            Some(0xF4) => "it couldn't read the offer".into(),
-            Some(0xF6) => "it's busy: trying again later".into(),
-            _ => format!("error {code}"),
-        }),
-        _ => Offered::Refused("an answer it couldn't read".into()),
+        Ok(Value::Integer(code)) => match code.as_u64().and_then(|c| u8::try_from(c).ok()) {
+            Some(0xF0) => Offered::Refused(Failure::NoAccess, "it couldn't tell who we are".into()),
+            Some(0xF1) => Offered::Refused(Failure::NoAccess, "it doesn't let us peer with it".into()),
+            Some(0xF4) => Offered::Refused(Failure::RefusedInvalidData, "it couldn't read the offer".into()),
+            Some(0xF6) => Offered::Refused(Failure::Busy, "it's busy: trying again later".into()),
+            _ => Offered::Refused(Failure::BadAnswer, format!("error {code}")),
+        },
+        _ => Offered::Refused(Failure::BadAnswer, "an answer it couldn't read".into()),
     }
 }
 
@@ -356,12 +436,11 @@ pub async fn sync_peer(
     mut policy: OutboundOfferPolicy,
 ) -> Result<Synced, Offered> {
     within_what_is_taken(&mut policy);
-    let refused = |e: String| Offered::Refused(e);
     let offer = {
         let (node, policy) = (node.clone(), policy.clone());
         tokio::task::spawn_blocking(move || node.lock().unwrap().prepare_sync_offer_with_policy(&policy))
             .await
-            .map_err(|e| refused(e.to_string()))?
+            .map_err(|e| Offered::Refused(Failure::Io, e.to_string()))?
     };
     let offered: Vec<PropagationTransientId> = offer.transient_ids.iter().filter_map(|id| id.as_slice().try_into().ok()).collect();
     if offered.is_empty() {
@@ -372,7 +451,7 @@ pub async fn sync_peer(
     let LinkSession { handle, .. } =
         crate::net::connect(runtime, policy.peer_hash, identity.clone(), crate::net::link_options("rettui.peer", true), &quiet)
             .await
-            .map_err(|e| refused(format!("no Link to it: {e}")))?;
+            .map_err(|e| Offered::Refused(Failure::NoLink, format!("no Link to it: {e}")))?;
     let result = offer_on(&handle, node, &policy, &offer.peering_key, &offered).await;
     handle.close().await;
     node.lock().unwrap().complete_sync(&policy.peer_hash);
@@ -386,12 +465,17 @@ async fn offer_on(
     key: &[u8],
     offered: &[PropagationTransientId],
 ) -> Result<Synced, Offered> {
-    let ids = offered.iter().map(|id| Value::Binary(id.to_vec())).collect();
-    let request = encode(&Value::Array(vec![Value::Binary(key.to_vec()), Value::Array(ids)]));
+    let request = offer_request_value(key, offered);
+    tracing::debug!(
+        "peer sync with {}: offering {} messages, request sent as {}",
+        hex::encode(&policy.peer_hash[..4]),
+        offered.len(),
+        kind_of(&request)
+    );
     let response = handle
-        .request(OFFER_REQUEST_PATH, &request, Some(REQUEST_TIMEOUT))
+        .request_with_options(OFFER_REQUEST_PATH, request, RequestOptions { timeout: Some(REQUEST_TIMEOUT), ..RequestOptions::default() })
         .await
-        .map_err(|e| Offered::Refused(format!("no answer to the offer: {e}")))?;
+        .map_err(|e| Offered::Refused(request_failure(&e), format!("no answer to the offer: {e}")))?;
     let wanted = match read_offer_response(&response.data, offered) {
         Offered::Wants(wanted) => wanted,
         other => return Err(other),
@@ -411,15 +495,24 @@ async fn offer_on(
     let transfer = handle
         .send_resource_bytes(payload, ResourceOptions { auto_compress: true, metadata: None })
         .await
-        .map_err(|e| Offered::Refused(format!("couldn't send the messages: {e}")))?;
+        .map_err(|e| Offered::Refused(Failure::Io, format!("couldn't send the messages: {e}")))?;
     match tokio::time::timeout(TRANSFER_TIMEOUT, transfer.concluded()).await {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => return Err(Offered::Refused(format!("the transfer failed: {e}"))),
-        Err(_) => return Err(Offered::Refused("the transfer timed out".into())),
+        Ok(Err(e)) => return Err(Offered::Refused(Failure::Io, format!("the transfer failed: {e}"))),
+        Err(_) => return Err(Offered::Refused(Failure::Timeout, "the transfer timed out".into())),
     }
     let sent = sent_ids.len();
     handled(node, policy, sent_ids).await;
     Ok(Synced { offered: offered.len(), sent })
+}
+
+/// What a request's data is, for the log.
+fn kind_of(value: &Value) -> &'static str {
+    match value {
+        Value::Array(_) => "list",
+        Value::Binary(_) => "bytes",
+        _ => "other",
+    }
 }
 
 /// Record messages a peer has (or took), so they aren't offered again.
@@ -473,6 +566,8 @@ pub struct PeerRow {
     pub sync_failures: u32,
     pub last_attempt: Option<u64>,
     pub next_attempt: Option<u64>,
+    /// Why the last sync failed, as a short fixed word (none if it didn't).
+    pub last_failure: Option<&'static str>,
     pub peering_cost: u64,
 }
 
@@ -545,6 +640,10 @@ pub async fn run(
             Some(done) = async { match syncing.as_mut() { Some(task) => Some(task.await), None => None } } => {
                 syncing = None;
                 let Ok((hash, result, key)) = done else { continue };
+                if !peers.peers.contains_key(&hash) {
+                    continue;
+                }
+                peers.synced(hash, result.as_ref().err().and_then(Offered::failure));
                 let Some(peer) = peers.peers.get_mut(&hash) else { continue };
                 if key.is_some() {
                     peer.peering_key = key;
@@ -557,6 +656,7 @@ pub async fn run(
                         stats.lock().unwrap().sent += synced.sent as u64;
                     }
                     Err(Offered::BadKey) => {
+                        tracing::debug!("peer sync with {} failed: it refused the peering key", hex::encode(hash));
                         peer.peering_key = None;
                         failed(peer, now());
                     }
@@ -603,7 +703,7 @@ pub async fn run(
                         made.await.ok().flatten()
                     };
                     let Some((stamp, value)) = key else {
-                        return (hash, Err(Offered::Refused("couldn't make a peering key".into())), None);
+                        return (hash, Err(Offered::Refused(Failure::Io, "couldn't make a peering key".into())), None);
                     };
                     policy.peering_key = stamp.to_vec();
                     policy.peering_key_value = Some(value);
@@ -611,7 +711,7 @@ pub async fn run(
                         Ok(result) => result,
                         Err(_) => {
                             node.lock().unwrap().complete_sync(&hash);
-                            Err(Offered::Refused("the sync took too long".into()))
+                            Err(Offered::Refused(Failure::Timeout, "the sync took too long".into()))
                         }
                     };
                     (hash, synced, Some((stamp, value)))
@@ -922,9 +1022,54 @@ mod tests {
         let some = Value::Array(vec![Value::Binary(vec![2; 32]), Value::Binary(vec![8; 32]), Value::Binary(vec![1; 3]), Value::from(4)]);
         assert_eq!(answer(some), Offered::Wants(vec![[2; 32]]));
         assert_eq!(answer(Value::from(PeerError::InvalidKey as u64)), Offered::BadKey);
-        assert!(matches!(answer(Value::from(PeerError::Throttled as u64)), Offered::Refused(why) if why.contains("busy")));
-        assert!(matches!(answer(Value::from(0x99)), Offered::Refused(why) if why.contains("153")));
-        assert!(matches!(read_offer_response(&[0xc1], &offered), Offered::Refused(_)));
+        assert!(matches!(answer(Value::from(PeerError::Throttled as u64)), Offered::Refused(Failure::Busy, why) if why.contains("busy")));
+        assert!(matches!(answer(Value::from(0x99)), Offered::Refused(Failure::BadAnswer, why) if why.contains("153")));
+        assert!(matches!(read_offer_response(&[0xc1], &offered), Offered::Refused(Failure::BadAnswer, _)));
+        assert_eq!(answer(Value::from(0xF4)).failure(), Some(Failure::RefusedInvalidData));
+        assert_eq!(answer(Value::from(0xF0)).failure(), Some(Failure::NoAccess));
+        assert_eq!(answer(Value::from(0xF1)).failure(), Some(Failure::NoAccess));
+        assert_eq!(answer(Value::from(PeerError::InvalidKey as u64)).failure(), Some(Failure::BadKey));
+        assert_eq!(answer(Value::Boolean(true)).failure(), None);
+    }
+
+    #[test]
+    fn an_offer_is_sent_as_a_list_not_as_bytes() {
+        let ids = [[1u8; 32], [2; 32]];
+        let value = offer_request_value(&[9; 32], &ids);
+        assert_eq!(kind_of(&value), "list");
+        let Value::Array(parts) = &value else { panic!("not a list: {value:?}") };
+        assert_eq!(parts[0], Value::Binary(vec![9; 32]));
+        assert_eq!(parts[1], Value::Array(vec![Value::Binary(vec![1; 32]), Value::Binary(vec![2; 32])]));
+        assert_eq!(parts.len(), 2);
+        let empty = offer_request_value(&[], &[]);
+        assert_eq!(empty, Value::Array(vec![Value::Binary(Vec::new()), Value::Array(Vec::new())]));
+    }
+
+    #[test]
+    fn failures_are_noted_per_peer_and_cleared_by_a_success() {
+        let mut peers = Peers::new(PeeringConfig { static_peers: vec![[7; 16]], ..PeeringConfig::default() }, [0; 16], Vec::new());
+        assert_eq!(peers.summary(|_| true).rows[0].last_failure, None);
+        peers.synced([7; 16], Some(Failure::RefusedInvalidData));
+        assert_eq!(peers.summary(|_| true).rows[0].last_failure, Some("refused_invalid_data"));
+        peers.synced([7; 16], Some(Failure::NoLink));
+        assert_eq!(peers.summary(|_| true).rows[0].last_failure, Some("no_link"));
+        peers.synced([7; 16], None);
+        assert_eq!(peers.summary(|_| true).rows[0].last_failure, None);
+        for why in [
+            Failure::NoLink,
+            Failure::NoAnswer,
+            Failure::RefusedInvalidData,
+            Failure::BadKey,
+            Failure::NoAccess,
+            Failure::Busy,
+            Failure::Timeout,
+            Failure::BadAnswer,
+            Failure::Io,
+        ] {
+            assert!(!why.as_str().is_empty() && why.as_str().chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+        }
+        assert_eq!(request_failure(&LinkSessionError::Timeout("a response")), Failure::Timeout);
+        assert_eq!(request_failure(&LinkSessionError::SessionClosed), Failure::NoAnswer);
     }
 
     #[test]

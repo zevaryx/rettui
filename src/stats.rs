@@ -477,6 +477,7 @@ fn propagation_peers(app: &App) -> Option<(Vec<Value>, bool)> {
                 "sync_failures": row.sync_failures,
                 "last_attempt_seconds_ago": ago(row.last_attempt),
                 "next_attempt_in_seconds": row.next_attempt.map(|at| at.saturating_sub(now)),
+                "last_failure": row.last_failure,
                 "peering_cost": row.peering_cost,
             })
         })
@@ -823,6 +824,7 @@ mod tests {
             sync_failures: 2,
             last_attempt: Some(1_500),
             next_attempt: None,
+            last_failure: (n == 1).then_some("refused_invalid_data"),
             peering_cost: 18,
         }
     }
@@ -854,6 +856,8 @@ mod tests {
             (Some(5), Some(3), Some(18))
         );
         assert_eq!(list[0]["sync_failures"], 2);
+        assert_eq!(list[0]["last_failure"], "refused_invalid_data");
+        assert!(list[1]["last_failure"].is_null());
         assert!(list[0]["last_attempt_seconds_ago"].as_u64().unwrap() > 1_000_000);
         assert_eq!(list[0]["next_attempt_in_seconds"], Value::Null);
         assert!(full.get("propagation_peers_truncated").is_none());

@@ -11,9 +11,9 @@ use rmpv::Value;
 use rns_runtime::prelude::*;
 use tokio::sync::mpsc;
 
+use super::bytes_of;
 use super::inbound::deliver_inbound;
 use super::policy::SharedPolicy;
-use super::{bytes_of, encode};
 use crate::net::{Hash, Known, NetEvent, Progress, link_options};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -166,8 +166,9 @@ fn peer_error(code: u64) -> String {
 }
 
 async fn get(handle: &LinkSessionHandle, request: Value) -> Result<Value, String> {
-    let response =
-        handle.request(MESSAGE_GET_PATH, &encode(&request), Some(REQUEST_TIMEOUT)).await.map_err(|e| format!("Request failed: {e}"))?;
+    // Sent as the list itself: a node running Python's LXMF can't read bytes holding it.
+    let options = RequestOptions { timeout: Some(REQUEST_TIMEOUT), ..RequestOptions::default() };
+    let response = handle.request_with_options(MESSAGE_GET_PATH, request, options).await.map_err(|e| format!("Request failed: {e}"))?;
     let value = rmpv::decode::read_value(&mut response.data.as_slice()).unwrap_or(Value::Binary(response.data));
     match value {
         Value::Integer(code) => Err(peer_error(code.as_u64().unwrap_or(0))),

@@ -535,7 +535,7 @@ address, at most 256 (`"propagation_peers_truncated": true` if there are more):
     "address": "00112233445566778899aabbccddeeff", "name": "Far node", "static": false, "alive": true,
     "state": "idle", "depth": 3, "last_heard_seconds_ago": 840, "last_sync_seconds_ago": 52,
     "messages_offered": 120, "unhandled": 4, "sync_failures": 0, "last_attempt_seconds_ago": 52,
-    "next_attempt_in_seconds": null, "peering_cost": 18
+    "next_attempt_in_seconds": null, "last_failure": null, "peering_cost": 18
   }
 ]
 ```
@@ -550,9 +550,17 @@ waits to be offered, `sync_failures` how many syncs with it failed since it was
 last heard announcing, `last_attempt_seconds_ago` when a sync was last tried
 (`null` if never; a failed try counts too, unlike `last_sync_seconds_ago`),
 `next_attempt_in_seconds` how long until it may be tried again (`null` if
-now), and `peering_cost` is the work its peering key costs. Peers are synced
-one at a time, the one tried longest ago first. The
-public answer never has this list.
+now), `last_failure` why the last sync with it failed (`null` if it didn't,
+or the last one worked), and `peering_cost` is the work its peering key costs.
+`last_failure` is one of `no_link` (no Link could be made), `no_answer` (the
+offer got no answer), `refused_invalid_data` (it couldn't read the offer),
+`bad_key` (it refused the peering key), `no_access` (it doesn't let this node
+peer), `busy`, `timeout`, `bad_answer` (an answer rettui couldn't read) or `io`
+(the key or the messages couldn't be made or sent). It is kept in memory only,
+so it is `null` after a restart until the next sync. The log (at debug level)
+has one line for each offer, with the peer, how many messages were offered and
+how the request was sent. Peers are synced one at a time, the one tried longest
+ago first. The public answer never has this list.
 
 Security notes:
 

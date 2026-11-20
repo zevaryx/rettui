@@ -242,7 +242,7 @@ once a minute) once measured. Both are totals with no addresses; see the
 - With `--stats-token-file PATH` (or the variable `RETTUI_STATS_TOKEN`; not
   both), a request that has the token in `Authorization: Bearer TOKEN` or
   `X-Stats-Token: TOKEN` also gets `"authorised": true`, a `peers` list
-  with every peer's address, type and name, and a `propagation_peers` list of the nodes it is peered with. A token in the URL is not read,
+  with every peer's address, type and name, and a `propagation_peers` list of the nodes it is peered with (each with `last_failure`, why its last sync failed, if it did). A token in the URL is not read,
   because URLs end up in logs, and a wrong or missing token gets the totals
   above, with status 200. See [Hosting a Node](Hosting-a-Node#the-peer-list-for-whoever-has-the-token)
   for the details and what to keep in mind: treat the token as a secret.
