@@ -1,6 +1,7 @@
 //! How much goes to `rettui.log`: the `log_level` setting, changed while
 //! rettui runs (unless `RETTUI_LOG` was set when it started, which wins).
 
+use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -16,7 +17,16 @@ static RELOAD: OnceLock<Reload> = OnceLock::new();
 
 /// The filter the log starts with: `RETTUI_LOG`'s, or the setting's.
 pub fn starting_filter(level: &str) -> tracing_subscriber::EnvFilter {
-    tracing_subscriber::EnvFilter::try_from_env("RETTUI_LOG").unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level))
+    tracing_subscriber::EnvFilter::try_from_env("RETTUI_LOG").unwrap_or_else(|_| filter(level))
+}
+
+/// The filter for the *Log level* setting. At `debug` and `trace`, ureq (the
+/// HTTP client) stays at `info`: at `debug` it writes every URL it fetches,
+/// query and all, which can hold a key (a map tile service's, say). It logs
+/// nothing at `info` but errors. `RETTUI_LOG` is left as it is given.
+pub fn filter(level: &str) -> tracing_subscriber::EnvFilter {
+    let quiet = ["off", "error", "warn"].iter().any(|quiet| level.trim().eq_ignore_ascii_case(quiet));
+    if quiet { tracing_subscriber::EnvFilter::new(level) } else { tracing_subscriber::EnvFilter::new(format!("{level},ureq=info")) }
 }
 
 /// Whether `RETTUI_LOG` decides it instead of the setting.
@@ -125,12 +135,36 @@ impl Capped {
     }
 }
 
-/// One write to the capped log.
+/// `event` with each line break inside it written as the two characters `\n`
+/// (or `\r`), so text in a message (from a peer, say) can't start a line of
+/// its own and pass for an entry, with a time and level of its choosing. The
+/// break that ends the event stays.
+fn one_line(event: &[u8]) -> Cow<'_, [u8]> {
+    let body = event.strip_suffix(b"\n").unwrap_or(event);
+    if !body.iter().any(|b| matches!(b, b'\n' | b'\r')) {
+        return Cow::Borrowed(event);
+    }
+    let mut out = Vec::with_capacity(event.len() + 16);
+    for &byte in body {
+        match byte {
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            _ => out.push(byte),
+        }
+    }
+    if body.len() < event.len() {
+        out.push(b'\n');
+    }
+    Cow::Owned(out)
+}
+
+/// One write to the capped log. `tracing_subscriber` writes each event whole,
+/// in one call, so a call is one event.
 pub struct CappedWriter<'a>(&'a CappedLog);
 
 impl Write for CappedWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.inner.lock().unwrap_or_else(|e| e.into_inner()).write_line(buf);
+        self.0.inner.lock().unwrap_or_else(|e| e.into_inner()).write_line(&one_line(buf));
         Ok(buf.len())
     }
 
@@ -150,6 +184,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CappedLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_subscriber::Layer as _;
     use tracing_subscriber::layer::SubscriberExt as _;
 
     fn folder(name: &str) -> PathBuf {
@@ -279,6 +314,52 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.lines().all(|l| l.contains("header parse failed")), "whole lines only");
         assert!(text.contains("interface_id=19999"), "the newest event is kept");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_line_break_inside_an_event_is_written_escaped() {
+        assert_eq!(&*one_line(b"plain\n"), b"plain\n");
+        assert_eq!(&*one_line(b"no end"), b"no end");
+        assert_eq!(&*one_line(b""), b"");
+        assert_eq!(&*one_line(b"\n"), b"\n");
+        assert_eq!(&*one_line(b"a\nb\r\nc\n"), b"a\\nb\\r\\nc\n");
+        assert_eq!(&*one_line(b"a\rb"), b"a\\rb");
+        assert_eq!(&*one_line(b"\n\n"), b"\\n\n");
+        let dir = folder("one-line");
+        let path = dir.join("rettui.log");
+        let log = CappedLog::open_with_limit(&path, 1000).unwrap();
+        let subscriber = tracing_subscriber::registry().with(tracing_subscriber::fmt::layer().with_writer(log).with_ansi(false));
+        tracing::subscriber::with_default(subscriber, || {
+            let peer = "hi\n2025-01-31T12:34:56Z  INFO forged: injected\rover";
+            tracing::debug!("a peer said {peer}");
+            tracing::info!("after");
+        });
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(text.lines().next().unwrap().contains(r"a peer said hi\n2025-01-31T12:34:56Z  INFO forged: injected\rover"), "{text}");
+        assert!(!text.contains('\r'));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ureq_stays_at_info_however_detailed_the_log() {
+        let dir = folder("ureq");
+        for (level, ureq_debug, ours) in [("debug", false, true), ("TRACE", false, true), ("info", false, false), ("warn", false, false)] {
+            let path = dir.join(format!("{level}.log"));
+            let log = CappedLog::open_with_limit(&path, 100_000).unwrap();
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_subscriber::fmt::layer().with_writer(log).with_ansi(false).with_filter(filter(level)));
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::debug!(target: "ureq::unit", "sending request GET https://tiles.example/1.png?apikey=K");
+                tracing::debug!(target: "rettui::net", "ours");
+                tracing::error!(target: "ureq::rtls", "loading native certificates");
+            });
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            assert_eq!(text.contains("apikey"), ureq_debug, "{level}: {text}");
+            assert_eq!(text.contains("ours"), ours, "{level}: {text}");
+            assert!(text.contains("native certificates"), "{level}: errors still show: {text}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

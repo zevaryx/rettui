@@ -136,6 +136,7 @@ rettui --web [ADDRESS] --tls-cert FILE --tls-key FILE   # over HTTPS, with yours
 rettui --web [ADDRESS] --stats-listen ADDRESS           # also a read-only stats page (see below)
 rettui node --stats-listen ADDRESS                      # the same, for a node with no UI
 rettui node --stats-listen ADDRESS --stats-token-file PATH   # and a peer list for whoever has the token (or RETTUI_STATS_TOKEN)
+rettui node --stats-listen ADDRESS --stats-token-file PATH --stats-logs   # and the end of the log at /logs, for the token
 rettui fetch <hash>[:/page/x.mu] [--raw] [--identify] [-o FILE]
 rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]  # address or lxma:// link
 rettui listen [--seconds N]  # announce, then print incoming messages
@@ -246,6 +247,12 @@ once a minute) once measured. Both are totals with no addresses; see the
   because URLs end up in logs, and a wrong or missing token gets the totals
   above, with status 200. See [Hosting a Node](Hosting-a-Node#the-peer-list-for-whoever-has-the-token)
   for the details and what to keep in mind: treat the token as a secret.
+- With the token and `--stats-logs` (also on `rettui --web`), `GET /logs?lines=N&level=LEVEL`
+  also gives the end of `rettui.log` as JSON, read-only (up to `debug`; `trace` is not served).
+  Without `--stats-logs`, without the token, or on a node with no token set, it is a 404, like any other path.
+  Known secrets are taken out, but not every one in what libraries and peers log can be, so
+  give `--stats-logs` only to someone you trust with the token. See
+  [Hosting a Node](Hosting-a-Node#the-end-of-the-log-for-whoever-has-the-token).
 
 The listener has no TLS, no limits on who asks and no timeouts of its own, so
 bind it to `127.0.0.1` or a private address and let a reverse proxy

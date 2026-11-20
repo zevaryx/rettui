@@ -661,7 +661,11 @@ fn load_token(paths: &Paths) -> Result<String> {
     if let Ok(token) = std::fs::read_to_string(&paths.web_token)
         && token.trim().len() >= 32
     {
-        return Ok(token.trim().to_string());
+        let token = token.trim();
+        if token.len() > crate::stats::TOKEN_MAX {
+            anyhow::bail!("the web login token in {} is longer than {} characters", paths.web_token.display(), crate::stats::TOKEN_MAX);
+        }
+        return Ok(token.to_string());
     }
     let token = hex::encode(rand::random::<[u8; 24]>());
     crate::config::write_private(&paths.web_token, token.as_bytes())?;
@@ -765,6 +769,20 @@ fn login_notice(scheme: &str, shown: &str, token: &str, by_app: bool) -> String 
 #[cfg(test)]
 mod login_notice_tests {
     use super::*;
+
+    #[test]
+    fn a_login_token_that_is_too_long_is_refused() {
+        let dir = std::env::temp_dir().join(format!("rettui-load-token-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = Paths::new(Some(dir.clone())).unwrap();
+        let ok = "a".repeat(crate::stats::TOKEN_MAX);
+        std::fs::write(&paths.web_token, &ok).unwrap();
+        assert_eq!(load_token(&paths).unwrap(), ok);
+        std::fs::write(&paths.web_token, "a".repeat(crate::stats::TOKEN_MAX + 1)).unwrap();
+        let error = load_token(&paths).unwrap_err().to_string();
+        assert!(error.contains("longer than 256 characters"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn plain_http_beyond_loopback_is_refused_unless_accepted() {
@@ -962,10 +980,17 @@ pub async fn run(
     let (stats_tx, stats_rx) = crate::stats::channel(Default::default());
     let disk = crate::stats::Disk::default();
     let with_peers = stats.as_ref().is_some_and(|listen| listen.token.is_some());
+    let with_logs = with_peers && stats.as_ref().is_some_and(|listen| listen.logs);
     let stats_server = match stats {
         Some(listen) => {
-            let (bound, task) = crate::stats::serve(listen.address, listen.token, stats_rx).await?;
-            println!("{}", crate::stats::started_line(bound, with_peers));
+            let (bound, task) = crate::stats::serve(
+                listen.address,
+                listen.token,
+                stats_rx,
+                with_logs.then(|| crate::stats::LogFiles { log: paths.log.clone(), web_token: Some(paths.web_token.clone()) }),
+            )
+            .await?;
+            println!("{}", crate::stats::started_line(bound, with_peers, with_logs));
             Some(task)
         }
         None => None,

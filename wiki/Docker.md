@@ -100,7 +100,10 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   (a Docker secret, such as `/run/secrets/stats_token`, is the better way),
   or set `RETTUI_STATS_TOKEN` to the secret in `environment:` (read by
   rettui itself, but `docker inspect` and `/proc` show the environment, and
-  programs rettui starts inherit it). Not both. The token is 16 to 256 printable characters with no
-  spaces, and the container stops, with the reason, if it isn't. It needs
+  programs rettui starts inherit it). Not both. The token is 16 to 256 printable ASCII characters except
+  spaces, quotes and backslash, and the container stops, with the reason, if it isn't. It needs
   `STATS_LISTEN`. See [Hosting a Node](Hosting-a-Node#the-peer-list-for-whoever-has-the-token).
+  To let the token also read the end of the log (`/logs`, with secrets redacted), set `STATS_LOGS=1`.
+  It is off by default, needs `STATS_LISTEN` and a token, and should only go with a token you trust with
+  the log. See [Hosting a Node](Hosting-a-Node#the-end-of-the-log-for-whoever-has-the-token).
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.

@@ -109,11 +109,16 @@ struct Cli {
     /// behind a reverse proxy; don't expose it directly.
     #[arg(long, value_name = "ADDRESS", requires = "web")]
     stats_listen: Option<String>,
-    /// A file with a secret (16 to 256 printable characters, no spaces) that
-    /// lets a request for the stats that presents it also list every peer
+    /// A file with a secret (16 to 256 printable ASCII characters except
+    /// spaces, quotes and backslash) that lets a request for the stats that presents it also list every peer
     /// heard. The variable RETTUI_STATS_TOKEN does the same; not both. Not saved.
     #[arg(long, value_name = "PATH", requires = "stats_listen")]
     stats_token_file: Option<PathBuf>,
+    /// Also let the stats token read the end of the log at /logs. Off unless
+    /// given, because the log can hold more than you want a status page to see.
+    /// Not saved.
+    #[arg(long, requires = "stats_listen")]
+    stats_logs: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -489,7 +494,7 @@ async fn run(cli: Cli) -> Result<()> {
     // Everything goes to the log file, at the level set (changed while
     // running); interface trouble also goes to the log on screen.
     let (filter, reload) = tracing_subscriber::reload::Layer::new(logging::starting_filter(&settings.log_level));
-    logging::set_reloader(move |level| reload.reload(tracing_subscriber::EnvFilter::new(level)).map_err(|e| e.to_string()));
+    logging::set_reloader(move |level| reload.reload(logging::filter(level)).map_err(|e| e.to_string()));
     // Once a process: run again in the same one (as in tests), it logs
     // where the first run did.
     let _ = tracing_subscriber::registry()
@@ -522,7 +527,8 @@ async fn run(cli: Cli) -> Result<()> {
         // Switching identity starts the web UI over as the other one.
         // Bound once: the port stays held while it starts over as the other one.
         let listener = web::bind(&address).await?;
-        let stats = || cli.stats_listen.as_deref().map(|address| stats::Listen { address, token: stats_token.clone() });
+        let stats =
+            || cli.stats_listen.as_deref().map(|address| stats::Listen { address, token: stats_token.clone(), logs: cli.stats_logs });
         while web::run(listener.try_clone()?, settings, paths, identity, https.clone(), stats()).await?.is_some() {
             (settings, paths, identity) = switched(&cli.data_dir, cli.rns_config.clone())?;
             set_tray(&settings);
@@ -828,6 +834,7 @@ mod tests {
             "127.0.0.1:8741",
             "--stats-token-file",
             "/run/secrets/stats",
+            "--stats-logs",
             "--data-dir",
             "/srv/rettui",
         ]) else {
@@ -835,6 +842,7 @@ mod tests {
         };
         assert_eq!(args.stats_listen.as_deref(), Some("127.0.0.1:8741"));
         assert_eq!(args.stats_token_file, Some(std::path::PathBuf::from("/run/secrets/stats")));
+        assert!(args.stats_logs);
         assert_eq!(dir, std::path::PathBuf::from("/srv/rettui"));
         assert_eq!(args.entry_point, Some(4965));
         assert_eq!(args.listen_ip, Some("::".parse().unwrap()));
@@ -849,6 +857,7 @@ mod tests {
             &["--reachable-on", "a#b"],
             &["--reachable-on", "\"quoted\""],
             &["--stats-token-file", "/x"],
+            &["--stats-logs"],
         ] {
             assert!(node(wrong).is_err(), "{wrong:?}");
         }

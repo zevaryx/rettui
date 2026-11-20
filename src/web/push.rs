@@ -82,6 +82,12 @@ fn push_service(endpoint: &str) -> Option<String> {
     PUSH_SERVICES.iter().any(|service| host == *service || host.ends_with(&format!(".{service}"))).then(|| format!("https://{host}"))
 }
 
+/// Only the host of an endpoint, for the log: the rest of it is the browser's private address at the push service.
+fn host_of(endpoint: &str) -> String {
+    let rest = endpoint.split_once("://").map_or(endpoint, |(_, rest)| rest);
+    rest.split(['/', '?', '#']).next().unwrap_or_default().chars().take(100).collect()
+}
+
 /// `payload` encrypted for one browser (RFC 8291, `aes128gcm`), from the
 /// sender key pair `ours` and `salt` (new for each message).
 fn encrypt(payload: &[u8], theirs: &[u8], auth: &[u8], ours: &SecretKey, salt: &[u8; 16]) -> Result<Vec<u8>, String> {
@@ -289,11 +295,11 @@ impl Sender {
                         .send("A browser's background notifications ended (its subscription expired); turn them on again there".into());
                 }
                 Err(Failure::Refused(e)) => {
-                    tracing::warn!("push refused: {e}");
+                    tracing::warn!("push refused by {}: {e}", host_of(&push.subscription.endpoint));
                     let _ = self.report.send(format!("A push service refused a notification: {e}"));
                 }
                 Err(Failure::Unreachable(e)) => {
-                    tracing::warn!("push failed: {e}");
+                    tracing::warn!("push to {} failed: {e}", host_of(&push.subscription.endpoint));
                     if !unreachable {
                         unreachable = true;
                         let _ = self.report.send(format!("Could not reach a push service for background notifications: {e}"));
@@ -326,7 +332,8 @@ impl Sender {
                 let text = response.into_string().unwrap_or_default();
                 Err(Failure::Refused(format!("{code} {}", text.chars().take(200).collect::<String>())))
             }
-            Err(e) => Err(Failure::Unreachable(e.to_string())),
+            // The error's text carries the whole endpoint, which is the browser's private address.
+            Err(e) => Err(Failure::Unreachable(e.to_string().replace(&subscription.endpoint, &host_of(&subscription.endpoint)))),
         }
     }
 }
@@ -346,6 +353,15 @@ mod tests {
 
     fn b64(text: &str) -> Vec<u8> {
         B64.decode(text).unwrap()
+    }
+
+    #[test]
+    fn only_the_host_of_an_endpoint_is_logged() {
+        assert_eq!(host_of("https://fcm.googleapis.com/fcm/send/secret-id?x=1#y"), "fcm.googleapis.com");
+        assert_eq!(host_of("https://updates.push.services.mozilla.com"), "updates.push.services.mozilla.com");
+        assert_eq!(host_of("no-scheme/secret"), "no-scheme");
+        assert_eq!(host_of(""), "");
+        assert!(host_of(&format!("https://{}/x", "h".repeat(500))).len() <= 100);
     }
 
     /// RFC 8291, section 5: the worked example, byte for byte.

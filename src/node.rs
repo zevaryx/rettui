@@ -65,11 +65,16 @@ pub struct NodeArgs {
     /// on every run.
     #[arg(long, value_name = "ADDRESS")]
     pub stats_listen: Option<String>,
-    /// A file with a secret (16 to 256 printable characters, no spaces) that
-    /// lets a request for the stats that presents it also list every peer
+    /// A file with a secret (16 to 256 printable ASCII characters except
+    /// spaces, quotes and backslash) that lets a request for the stats that presents it also list every peer
     /// heard. The variable RETTUI_STATS_TOKEN does the same; not both. Not saved.
     #[arg(long, value_name = "PATH", requires = "stats_listen")]
     pub stats_token_file: Option<std::path::PathBuf>,
+    /// Also let the stats token read the end of the log at /logs. Off unless
+    /// given, because the log can hold more than you want a status page to see.
+    /// Not saved.
+    #[arg(long, requires = "stats_listen")]
+    pub stats_logs: bool,
 }
 
 /// The variables that stand for the node's flags (not `--stats-listen`, which is for one run).
@@ -458,7 +463,11 @@ pub fn rns_config(paths: &Paths, given: Option<String>) -> Result<Option<String>
 pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args: &NodeArgs) -> Result<()> {
     // Before anything starts: a bad token stops the node.
     let stats = match args.stats_listen.as_deref() {
-        Some(address) => Some(crate::stats::Listen { address, token: crate::stats::load_token(args.stats_token_file.as_deref())? }),
+        Some(address) => Some(crate::stats::Listen {
+            address,
+            token: crate::stats::load_token(args.stats_token_file.as_deref())?,
+            logs: args.stats_logs,
+        }),
         None => None,
     };
     // Listened for from now, so a stop while it starts is a clean one.
@@ -500,10 +509,17 @@ pub(crate) async fn serve(
     let (stats_tx, stats_rx) = crate::stats::channel(Default::default());
     let disk = crate::stats::Disk::default();
     let with_peers = stats.as_ref().is_some_and(|listen| listen.token.is_some());
+    let with_logs = with_peers && stats.as_ref().is_some_and(|listen| listen.logs);
     let stats_server = match stats {
         Some(listen) => {
-            let (bound, task) = crate::stats::serve(listen.address, listen.token, stats_rx).await?;
-            println!("{}", crate::stats::started_line(bound, with_peers));
+            let (bound, task) = crate::stats::serve(
+                listen.address,
+                listen.token,
+                stats_rx,
+                with_logs.then(|| crate::stats::LogFiles { log: paths.log.clone(), web_token: Some(paths.web_token.clone()) }),
+            )
+            .await?;
+            println!("{}", crate::stats::started_line(bound, with_peers, with_logs));
             Some(task)
         }
         None => None,
@@ -1064,7 +1080,7 @@ mod tests {
             identity,
             std::future::pending::<()>(),
             Duration::from_secs(60),
-            Some(crate::stats::Listen { address: "not an address", token: None }),
+            Some(crate::stats::Listen { address: "not an address", token: None, logs: false }),
             |_| {},
         ));
         assert!(format!("{:#}", result.unwrap_err()).contains("--stats-listen expects"));
@@ -1137,6 +1153,7 @@ mod tests {
                     Some(crate::stats::Listen {
                         address: stats_address.as_str(),
                         token: Some(crate::stats::Token::parse(STATS_SECRET).unwrap()),
+                        logs: true,
                     }),
                     stopping,
                 ))

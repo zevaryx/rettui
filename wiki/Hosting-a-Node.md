@@ -305,6 +305,7 @@ way as its flag.
 | `--no-propagation` | `RETTUI_NODE_NO_PROPAGATION` | Doesn't turn the propagation node on. One turned on before stays on: set `pn_enabled` to `false` in `settings.json` to stop it. Can't be used with `--name`. |
 | `--stats-listen ADDRESS` | none (`STATS_LISTEN` in Docker) | Serves a read-only stats page on this address, such as `127.0.0.1:8741` (see below). Off unless given, and not saved: give it on every run. |
 | `--stats-token-file PATH` | `RETTUI_STATS_TOKEN` is the secret itself (`STATS_TOKEN_FILE` is the file, in Docker) | A secret that lets a request for the stats also list every peer heard (see below). Needs `--stats-listen`. Off unless given, and not saved. |
+| `--stats-logs` | none | Lets a request with the stats token also read the end of the log at `/logs` (see below). Needs `--stats-listen`. Off unless given, and not saved: without it `/logs` is a 404, token or not. |
 
 Things to know:
 
@@ -487,8 +488,8 @@ start if the file can be read by other users.
     rettui node --stats-listen 127.0.0.1:8741 --stats-token-file /etc/rettui-stats-token
     curl -H "Authorization: Bearer $(cat /etc/rettui-stats-token)" http://127.0.0.1:8741/stats.json
 
-A token is 16 to 256 printable ASCII characters with no spaces (the file's
-contents are trimmed). One that isn't, or both a file and the variable,
+A token is 16 to 256 printable ASCII characters except spaces, quotes (`"`
+and `'`) and backslash (the file's contents are trimmed). One that isn't, or both a file and the variable,
 stops the node at start, with the reason. It is not saved in the settings.
 
 A request presents it as `Authorization: Bearer TOKEN` or as `X-Stats-Token:
@@ -522,6 +523,72 @@ The token is compared in constant time and never logged.
   it can still hold `<`, quotes and anything else.
 - The answer has `Cache-Control: private, no-store` and `Vary: Authorization,
   X-Stats-Token`, so a cache doesn't keep it or give it to someone without the token.
+
+#### The end of the log, for whoever has the token
+
+With a token set and `--stats-logs` given, `GET /logs` gives the end of
+`rettui.log` (the newest lines of the current file, not `rettui.log.1`), so a
+status page can show what the node has been doing. It is off unless you give
+`--stats-logs`, because a log can hold more than you want anyone with the stats
+token to see (anyone who learns the token would read it). It is read-only and
+token-only: without `--stats-logs`, and for a request with no token, a wrong
+one, or a node with no token set at all, the answer is 404, as for any path
+that doesn't exist, so it can't be found by probing. The token goes in a header as
+above, never in the URL (`?token=` is ignored, and gets the 404). Only `GET`
+and `HEAD` are answered.
+
+    curl -H "X-Stats-Token: $(cat /etc/rettui-stats-token)" "http://127.0.0.1:8741/logs?lines=50&level=warn"
+
+- `lines` is how many, from 1 to 500 (default 200). `level` is `error`, `warn`,
+  `info` (the default) or `debug`: that level and the more severe
+  ones. `trace` is never served and gets 400. What you get is also limited by
+  what the node logs (*Log level* in Settings, or `RETTUI_LOG`). A bad value
+  gets 400 with a short message. One read runs at a time: a request that comes
+  while another is being answered gets 503 with `Retry-After: 2`.
+- The answer is oldest first:
+
+```json
+{
+  "level": "info",
+  "truncated": false,
+  "lines": [
+    { "time": "2025-01-31T12:34:56.123456Z", "level": "warn", "text": "rettui::net: peer unreachable" },
+    { "time": null, "level": null, "text": "a second line of the same message" }
+  ]
+}
+```
+
+- `level` in a line is that line's own level. A line that doesn't start with a
+  time and a level (the second line of a message, say) has `null` for both,
+  and is shown when the line before it is. At the start of what was read,
+  before any line with a level, such lines are left out.
+- Only the last 1 MiB of the file is read. Each line is cut to 1000
+  characters and the whole answer to about 256 KiB, keeping the newest lines.
+  `truncated` is `true` when a line was cut, when lines were left out for size,
+  or when the part read held fewer lines than asked for but the file has more.
+  A missing log is an empty list, not an error.
+- Before it is sent, rettui takes out of each line, replacing it with `[redacted]`:
+  - the stats token, and under `rettui --web` the web UI's login token;
+  - the query of every URL and request path (`https://host/x?key=...` and
+    `GET /x?key=... HTTP/1.1` become `https://host/x?[redacted]` and
+    `GET /x?[redacted] HTTP/1.1`), and a `user:password@` before a host;
+  - everything after the first `authorization`, `token`, `cookie`, `api-key`,
+    `api_key`, `apikey`, `secret`, `password`, `passwd` or `bearer` in the line
+    (in any case, also when written with invisible characters or
+    `%`-encoded), so `Authorization: Bearer ...`, `Cookie: ...` and `token=...`
+    lose their values however they are printed. This takes more than needed at
+    times (`no token given` becomes `no token [redacted]`).
+
+  The home directory of the user running the node becomes `~`. Line breaks
+  inside one log entry are written as `\n`, so text from a peer can't add a
+  line that passes for an entry of its own. The newest line, if rettui is
+  still writing it, is treated as cut.
+- This catches the secrets rettui knows of and the usual ways of writing one,
+  but not every secret in text that libraries and peers put in the log (a key
+  printed with no name before it, say). Give `--stats-logs` only to someone you
+  trust with the token, and keep the log to trusted viewers. `text` comes from
+  the log, which holds what peers sent: escape it wherever you show it.
+- The answer has `Cache-Control: no-store`.
 
 #### The peered nodes, for whoever has the token
 

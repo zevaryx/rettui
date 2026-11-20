@@ -44,6 +44,23 @@ if [ -n "$STATS_TOKEN_FILE" ] && [ -z "$STATS_LISTEN" ]; then
     exit 1
 fi
 
+# STATS_LOGS (optional) is 1 to let the stats token also read the end of the
+# log (--stats-logs, see wiki/Docker.md); it needs STATS_LISTEN and a token.
+# Off unless it is exactly 1.
+STATS_LOGS="${STATS_LOGS:-}"
+case "$STATS_LOGS" in
+    "" | 0) STATS_LOGS="" ;;
+    1) ;;
+    *)
+        echo "rettui: STATS_LOGS must be 1 or empty (got '$STATS_LOGS')" >&2
+        exit 1
+        ;;
+esac
+if [ -n "$STATS_LOGS" ] && [ -z "$STATS_LISTEN" ]; then
+    echo "rettui: STATS_LOGS needs STATS_LISTEN" >&2
+    exit 1
+fi
+
 mkdir -p "$DATA/reticulum"
 # First start: keep the Reticulum config in the data directory too. To use
 # another, change rns_config in settings.json while rettui is stopped (the web
@@ -69,6 +86,9 @@ if [ "${1:-}" = node ]; then
     if [ -n "$STATS_TOKEN_FILE" ]; then
         set -- --stats-token-file "$STATS_TOKEN_FILE" "$@"
     fi
+    if [ -n "$STATS_LOGS" ]; then
+        set -- --stats-logs "$@"
+    fi
     set -- /usr/local/bin/rettui --data-dir "$DATA" node "$@"
 else
     if [ -n "$STATS_LISTEN" ]; then
@@ -76,6 +96,9 @@ else
     fi
     if [ -n "$STATS_TOKEN_FILE" ]; then
         set -- --stats-token-file "$STATS_TOKEN_FILE" "$@"
+    fi
+    if [ -n "$STATS_LOGS" ]; then
+        set -- --stats-logs "$@"
     fi
     set -- /usr/local/bin/rettui --data-dir "$DATA" --web "0.0.0.0:$PORT" --insecure-http "$@"
 fi

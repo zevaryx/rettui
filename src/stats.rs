@@ -6,12 +6,15 @@
 //! With a token (`RETTUI_STATS_TOKEN` or `--stats-token-file`), a request
 //! that presents it in a header also gets every peer heard, so a website can
 //! count peers exactly across nodes. Without the token the answer is the same
-//! as ever.
+//! as ever. With the token and `--stats-logs`, `/logs` also gives the end of
+//! `rettui.log` (see [`logs`]); otherwise that path is a 404, like any other.
+
+mod logs;
 
 use std::ffi::OsString;
 use std::io::Read;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -32,7 +35,7 @@ use rns_transport::constants::MAX_QUEUED_ANNOUNCES;
 pub const TOKEN_VAR: &str = "RETTUI_STATS_TOKEN";
 /// The shortest and longest token accepted.
 const TOKEN_MIN: usize = 16;
-const TOKEN_MAX: usize = 256;
+pub(crate) const TOKEN_MAX: usize = 256;
 /// The most peers an authorised answer lists.
 pub const PEERS_MAX: usize = 20_000;
 /// The most peered nodes an authorised answer lists.
@@ -59,6 +62,22 @@ pub type Snapshot = watch::Receiver<Arc<Published>>;
 pub struct Listen<'a> {
     pub address: &'a str,
     pub token: Option<Token>,
+    /// `--stats-logs`: serve `/logs` to a request with the token.
+    pub logs: bool,
+}
+
+/// What `/logs` reads: `rettui.log`, and under `rettui --web` the web UI's
+/// login token file, whose token is taken out of the lines too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogFiles {
+    pub log: PathBuf,
+    pub web_token: Option<PathBuf>,
+}
+
+impl From<PathBuf> for LogFiles {
+    fn from(log: PathBuf) -> Self {
+        Self { log, web_token: None }
+    }
 }
 
 /// The secret that unlocks the peer list. Only its SHA-256 is kept, so the
@@ -66,6 +85,8 @@ pub struct Listen<'a> {
 #[derive(Clone)]
 pub struct Token {
     digest: [u8; 32],
+    /// The text itself, only to take it out of what `/logs` sends.
+    secret: Arc<str>,
 }
 
 impl std::fmt::Debug for Token {
@@ -88,7 +109,8 @@ fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
 }
 
 impl Token {
-    /// A token from `text`: 16 to 256 printable ASCII characters, no spaces.
+    /// A token from `text`: 16 to 256 printable ASCII characters, with no spaces, quotes or backslashes
+    /// (which a debug print would write differently, so it couldn't be found in the log to take out).
     /// The error never repeats the text.
     pub fn parse(text: &str) -> Result<Self, String> {
         if text.len() < TOKEN_MIN {
@@ -97,10 +119,15 @@ impl Token {
         if text.len() > TOKEN_MAX {
             return Err(format!("the stats token must be at most {TOKEN_MAX} characters"));
         }
-        if !text.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err("the stats token must be printable ASCII with no spaces".into());
+        if !text.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'"' | b'\'' | b'\\')) {
+            return Err("the stats token must be printable ASCII with no spaces, quotes or backslashes".into());
         }
-        Ok(Self { digest: digest(text) })
+        Ok(Self { digest: digest(text), secret: text.into() })
+    }
+
+    /// The token's text, for redaction. Never to be logged or sent.
+    fn secret(&self) -> &str {
+        &self.secret
     }
 
     /// Whether `presented` is the token.
@@ -544,14 +571,80 @@ fn is_authorised(token: &Token, headers: &HeaderMap) -> bool {
     bearer.chain(custom).any(|presented| token.matches(presented))
 }
 
-/// Answer `GET` and `HEAD` for `/` and `/stats.json` from the snapshot.
-fn router(snapshot: Snapshot, token: Option<Token>) -> Router {
+/// Answer `GET` and `HEAD` for `/` and `/stats.json` from the snapshot, and,
+/// with the token, for `/logs` from the log file at `log`.
+fn router(snapshot: Snapshot, token: Option<Token>, log: Option<LogFiles>) -> Router {
+    let enabled = log.is_some();
+    let (log, web_token) = log.map_or((None, None), |files| (Some(files.log), files.web_token));
+    let source = Arc::new(logs::Source::new(log, token.as_ref().map_or("", Token::secret), web_token));
+    let busy = Arc::new(tokio::sync::Semaphore::new(1));
     Router::new().fallback(move |method: Method, uri: axum::http::Uri, headers: HeaderMap| {
         let published = snapshot.borrow().clone();
         let token_set = token.is_some();
         let authorised = token.as_ref().is_some_and(|token| is_authorised(token, &headers));
-        async move { answer(&method, uri.path(), &published, authorised, token_set) }
+        let (source, busy) = (source.clone(), busy.clone());
+        async move {
+            // Not asked for on this node: a path like any other.
+            if enabled && uri.path() == "/logs" {
+                return answer_logs(&method, uri.query(), authorised, &source, &busy).await;
+            }
+            answer(&method, uri.path(), &published, authorised, token_set)
+        }
     })
+}
+
+/// The `/logs` answer. Without the token (or with none set) it is the 404 of
+/// any other path, whatever the method or query, so it can't be probed for.
+async fn answer_logs(
+    method: &Method,
+    query: Option<&str>,
+    authorised: bool,
+    source: &Arc<logs::Source>,
+    busy: &Arc<tokio::sync::Semaphore>,
+) -> Response {
+    if !authorised {
+        return (StatusCode::NOT_FOUND, "not found\n").into_response();
+    }
+    if method != Method::GET && method != Method::HEAD {
+        let mut response = (StatusCode::METHOD_NOT_ALLOWED, "only GET and HEAD\n").into_response();
+        response.headers_mut().insert(header::ALLOW, HeaderValue::from_static("GET, HEAD"));
+        return response;
+    }
+    let mut response = match logs::Query::parse(query) {
+        Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+        Ok(query) => {
+            // One read at a time: a flood of requests can't pile up reads of a megabyte each.
+            let Ok(permit) = busy.clone().try_acquire_owned() else {
+                let mut response = (StatusCode::SERVICE_UNAVAILABLE, "busy, try again\n").into_response();
+                response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
+                response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                return response;
+            };
+            // The file is read on a blocking thread, so the snapshot and other visitors never wait for the disk.
+            let source = source.clone();
+            let read = tokio::task::spawn_blocking(move || {
+                let body = source.answer(query);
+                drop(permit);
+                body
+            })
+            .await;
+            match read {
+                Ok(body) if method == Method::HEAD => {
+                    let mut response = Response::new(axum::body::Body::empty());
+                    response.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(body.len()));
+                    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                    response
+                }
+                Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+                Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "could not read the log\n").into_response(),
+            }
+        }
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(header::VARY, HeaderValue::from_static("Authorization, X-Stats-Token"));
+    response
 }
 
 fn answer(method: &Method, path: &str, published: &Published, authorised: bool, token_set: bool) -> Response {
@@ -592,8 +685,12 @@ fn answer(method: &Method, path: &str, published: &Published, authorised: bool, 
 }
 
 /// What is printed when the stats page is up.
-pub fn started_line(bound: SocketAddr, with_peers: bool) -> String {
-    if with_peers {
+pub fn started_line(bound: SocketAddr, with_peers: bool, logs: bool) -> String {
+    if with_peers && logs {
+        format!(
+            "Stats at http://{bound}/stats.json (totals for everyone; a request with the stats token also gets every peer heard, and the end of the log at /logs)"
+        )
+    } else if with_peers {
         format!("Stats at http://{bound}/stats.json (totals for everyone; a request with the stats token also gets every peer heard)")
     } else {
         format!("Stats (totals only, no login) at http://{bound}/stats.json")
@@ -603,12 +700,19 @@ pub fn started_line(bound: SocketAddr, with_peers: bool) -> String {
 /// Listen on `address`, and serve until the task is stopped. Fails now if
 /// the address can't be used, so rettui doesn't start without what was asked.
 /// With a `token`, a request that presents it also gets the peer list.
-pub async fn serve(address: &str, token: Option<Token>, snapshot: Snapshot) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+/// `log` is `rettui.log`, which `/logs` reads the end of (only with the token);
+/// None leaves `/logs` off, as a 404.
+pub async fn serve(
+    address: &str,
+    token: Option<Token>,
+    snapshot: Snapshot,
+    log: Option<LogFiles>,
+) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let address: SocketAddr =
         address.parse().with_context(|| format!("--stats-listen expects an address like 127.0.0.1:8741, not {address}"))?;
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("could not listen for stats on {address}"))?;
     let bound = listener.local_addr()?;
-    let app = router(snapshot, token);
+    let app = router(snapshot, token, log);
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -1065,7 +1169,7 @@ mod tests {
         let disk = Disk::default();
         measured(&disk, &app.paths.root).await;
         let (_tx, rx) = channel(snapshot(&app, Instant::now(), false, &disk));
-        let (_, json) = json_of(ask(&router(rx, None), "GET", "/stats.json").await).await;
+        let (_, json) = json_of(ask(&router(rx, None, None), "GET", "/stats.json").await).await;
         assert_eq!(json["propagation"]["stored_messages"], 1);
         assert!(json["disk"]["data_bytes"].is_u64());
         assert!(json["disk"].get("fs_total_bytes").is_none() && json["disk"].get("fs_free_bytes").is_none());
@@ -1081,7 +1185,7 @@ mod tests {
     async fn the_router_answers_get_and_head_and_refuses_the_rest() {
         let (app, dir) = app("router");
         let (_tx, rx) = channel(snapshot(&app, Instant::now(), false, &Disk::default()));
-        let router = router(rx, None);
+        let router = router(rx, None, None);
         for path in ["/stats.json", "/"] {
             let response = ask(&router, "GET", path).await;
             assert_eq!(response.status(), StatusCode::OK);
@@ -1110,13 +1214,13 @@ mod tests {
     #[tokio::test]
     async fn before_the_first_snapshot_it_says_it_is_starting() {
         let (_tx, rx) = channel(Arc::default());
-        assert_eq!(ask(&router(rx, None), "GET", "/stats.json").await.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(ask(&router(rx, None, None), "GET", "/stats.json").await.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
     async fn a_new_snapshot_is_what_the_next_visitor_gets() {
         let (tx, rx) = channel(published("{\"a\":1}"));
-        let router = router(rx, None);
+        let router = router(rx, None, None);
         tx.send_replace(published("{\"a\":2}"));
         let body = axum::body::to_bytes(ask(&router, "GET", "/").await.into_body(), 1024).await.unwrap();
         assert_eq!(&body[..], b"{\"a\":2}");
@@ -1125,13 +1229,13 @@ mod tests {
     #[tokio::test]
     async fn serving_fails_on_a_bad_or_taken_address_and_answers_over_tcp() {
         let (_tx, rx) = channel(published("{}"));
-        let error = serve("not an address", None, rx.clone()).await.unwrap_err();
+        let error = serve("not an address", None, rx.clone(), None).await.unwrap_err();
         assert!(format!("{error:#}").contains("--stats-listen expects"), "{error:#}");
         let holder = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let taken = holder.local_addr().unwrap().to_string();
-        let error = serve(&taken, None, rx.clone()).await.unwrap_err();
+        let error = serve(&taken, None, rx.clone(), None).await.unwrap_err();
         assert!(format!("{error:#}").contains("could not listen for stats"), "{error:#}");
-        let (bound, task) = serve("127.0.0.1:0", None, rx).await.unwrap();
+        let (bound, task) = serve("127.0.0.1:0", None, rx, None).await.unwrap();
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tokio::net::TcpStream::connect(bound).await.unwrap();
         stream.write_all(b"GET /stats.json HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
@@ -1151,7 +1255,7 @@ mod tests {
     fn locked(name: &str) -> (Router, std::path::PathBuf) {
         let (app, dir) = app(name);
         let (_tx, rx) = channel(snapshot(&app, Instant::now(), true, &Disk::default()));
-        (router(rx, Some(token())), dir)
+        (router(rx, Some(token()), None), dir)
     }
 
     async fn ask_with(router: &Router, method: &str, path: &str, headers: &[(&str, &str)]) -> Response {
@@ -1169,10 +1273,10 @@ mod tests {
     }
 
     #[test]
-    fn a_token_must_be_16_to_256_printable_characters_without_spaces() {
+    fn a_token_must_be_16_to_256_printable_characters_without_spaces_quotes_or_backslashes() {
         assert!(Token::parse(&"a".repeat(16)).is_ok());
         assert!(Token::parse(&"a".repeat(256)).is_ok());
-        assert!(Token::parse("~!@#$%^&*()_+-=[]{}|;:,.<>?/").is_ok());
+        assert!(Token::parse("~!@#$%^&*()_+-=[]{}|;:,.<>?/`").is_ok());
         for (bad, reason) in [
             ("", "at least 16"),
             ("short", "at least 16"),
@@ -1183,6 +1287,9 @@ mod tests {
             ("line\nbreak-in-the-token", "no spaces"),
             ("non-ascii-token-\u{e9}\u{e9}\u{e9}", "printable ASCII"),
             ("control\u{7}character-token", "printable ASCII"),
+            ("a-token-with-a-\"-in-it", "no spaces, quotes or backslashes"),
+            ("a-token-with-a-'-in-it", "no spaces, quotes or backslashes"),
+            ("a-token-with-a-\\-in-it", "no spaces, quotes or backslashes"),
         ] {
             let error = Token::parse(bad).err().unwrap_or_else(|| panic!("{bad:?} was accepted"));
             assert!(error.contains(reason), "{bad:?}: {error}");
@@ -1327,7 +1434,7 @@ mod tests {
         let (app, dir) = app("no-token");
         // Even a snapshot that has the list (it shouldn't) is not served without a token.
         let (_tx, rx) = channel(snapshot(&app, Instant::now(), true, &Disk::default()));
-        let router = router(rx, None);
+        let router = router(rx, None, None);
         let bearer = format!("Bearer {SECRET}");
         for headers in [vec![("authorization", bearer.as_str())], vec![("x-stats-token", SECRET)], vec![("x-stats-token", "")]] {
             assert_public(&router, "/stats.json", &headers, false).await;
@@ -1335,6 +1442,219 @@ mod tests {
         let (_tx, rx) = channel(snapshot(&app, Instant::now(), false, &Disk::default()));
         assert!(rx.borrow().authorised.is_none(), "no list is built without a token");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A router with a token and a log file holding `content`.
+    fn with_log(name: &str, content: &[u8]) -> (Router, std::path::PathBuf) {
+        let dir = scratch(&format!("logs-{name}"));
+        let path = dir.join("rettui.log");
+        std::fs::write(&path, content).unwrap();
+        let (_tx, rx) = channel(published("{}"));
+        (router(rx, Some(token()), Some(path.into())), dir)
+    }
+
+    const LOG: &str = "2025-01-31T12:34:56.000001Z  INFO rettui: one\n2025-01-31T12:34:57.000001Z  WARN rettui: two\n2025-01-31T12:34:58.000001Z DEBUG rettui: three\n";
+
+    #[tokio::test]
+    async fn logs_are_a_404_without_the_right_token() {
+        let (locked, dir) = with_log("404", LOG.as_bytes());
+        let query = format!("/logs?token={SECRET}");
+        for (path, headers) in [
+            ("/logs", vec![]),
+            ("/logs", vec![("x-stats-token", "wrong-token-of-length")]),
+            ("/logs", vec![("authorization", "Bearer wrong-token-of-length")]),
+            (query.as_str(), vec![]),
+            (query.as_str(), vec![("x-stats-token", "wrong-token-of-length")]),
+            ("/logs?lines=0", vec![]),
+            ("/logs?level=bogus", vec![]),
+        ] {
+            let response = ask_with(&locked, "GET", path, &headers).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path} {headers:?}");
+            let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+            assert_eq!(&body[..], b"not found\n");
+        }
+        assert_eq!(
+            ask_with(&locked, "POST", "/logs", &[]).await.status(),
+            StatusCode::NOT_FOUND,
+            "no hint of the path for a method either"
+        );
+        // No token set on the node: the right-looking header opens nothing.
+        let (_tx, rx) = channel(published("{}"));
+        let open = router(rx, None, Some(std::path::PathBuf::from("/nonexistent").into()));
+        for headers in [vec![], vec![("x-stats-token", SECRET)], vec![("authorization", "Bearer correct-horse-battery-staple")]] {
+            assert_eq!(ask_with(&open, "GET", "/logs", &headers).await.status(), StatusCode::NOT_FOUND, "{headers:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn logs_are_a_404_unless_the_node_was_asked_to_serve_them() {
+        let (_tx, rx) = channel(published("{}"));
+        let off = router(rx, Some(token()), None);
+        for headers in [vec![("x-stats-token", SECRET)], vec![("authorization", "Bearer correct-horse-battery-staple")]] {
+            for method in ["GET", "HEAD", "POST"] {
+                for path in ["/logs", "/logs?level=debug&lines=3", "/logs?level=trace"] {
+                    let response = ask_with(&off, method, path, &headers).await;
+                    assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+                    if method == "GET" {
+                        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+                        assert_eq!(&body[..], b"not found\n");
+                    }
+                }
+            }
+        }
+        // The message says nothing of the log, with or without the flag.
+        assert!(!started_line("127.0.0.1:1".parse().unwrap(), true, false).contains("/logs"));
+        assert!(started_line("127.0.0.1:1".parse().unwrap(), true, true).contains("/logs"));
+        assert!(!started_line("127.0.0.1:1".parse().unwrap(), false, false).contains("/logs"));
+    }
+
+    #[tokio::test]
+    async fn a_second_read_while_one_is_going_gets_a_503() {
+        let source = Arc::new(logs::Source::new(None, SECRET, None));
+        let busy = Arc::new(tokio::sync::Semaphore::new(1));
+        let held = busy.clone().try_acquire_owned().unwrap();
+        let response = answer_logs(&Method::GET, None, true, &source, &busy).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "2");
+        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).starts_with("busy"));
+        // Not for a visitor without the token, which stays a 404.
+        assert_eq!(answer_logs(&Method::GET, None, false, &source, &busy).await.status(), StatusCode::NOT_FOUND);
+        // When the read is over, the next one is served.
+        drop(held);
+        assert_eq!(answer_logs(&Method::GET, None, true, &source, &busy).await.status(), StatusCode::OK);
+        assert_eq!(busy.available_permits(), 1, "the permit comes back");
+    }
+
+    #[tokio::test]
+    async fn logs_come_with_either_header_and_the_right_headers() {
+        let (locked, dir) = with_log("ok", LOG.as_bytes());
+        for headers in [[("x-stats-token", SECRET)], [("authorization", "Bearer correct-horse-battery-staple")]] {
+            let response = ask_with(&locked, "GET", "/logs", &headers).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let (headers, json) = json_of(response).await;
+            assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+            assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+            assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+            assert_eq!(json["level"], "info");
+            assert_eq!(json["truncated"], false);
+            let lines = json["lines"].as_array().unwrap();
+            assert_eq!(lines.len(), 2);
+            assert_eq!(lines[0], json!({ "time": "2025-01-31T12:34:56.000001Z", "level": "info", "text": "rettui: one" }));
+            assert_eq!(lines[1]["level"], "warn");
+        }
+        let dir_ = dir;
+        let headers = [("x-stats-token", SECRET)];
+        let (_, json) = json_of(ask_with(&locked, "GET", "/logs?level=debug&lines=2", &headers).await).await;
+        assert_eq!(json["level"], "debug");
+        let texts: Vec<_> = json["lines"].as_array().unwrap().iter().map(|l| l["text"].as_str().unwrap().to_string()).collect();
+        assert_eq!(texts, ["rettui: two", "rettui: three"]);
+        // The token in the query is no help, and does no harm when the header is there too.
+        let (_, json) = json_of(ask_with(&locked, "GET", &format!("/logs?token={SECRET}&lines=1"), &headers).await).await;
+        assert_eq!(json["lines"].as_array().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(dir_);
+    }
+
+    #[tokio::test]
+    async fn logs_refuse_bad_values_and_other_methods_only_with_the_token() {
+        let (locked, dir) = with_log("bad", LOG.as_bytes());
+        let headers = [("x-stats-token", SECRET)];
+        for (path, message) in [
+            ("/logs?lines=0", "lines must"),
+            ("/logs?lines=501", "lines must"),
+            ("/logs?lines=abc", "lines must"),
+            ("/logs?level=fatal", "level must"),
+            ("/logs?level=", "level must"),
+            ("/logs?level=trace", "trace is not served"),
+            ("/logs?lines=5&level=TRACE", "trace is not served"),
+        ] {
+            let response = ask_with(&locked, "GET", path, &headers).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+            assert!(String::from_utf8_lossy(&body).starts_with(message), "{path}");
+        }
+        for method in ["POST", "PUT", "DELETE"] {
+            let response = ask_with(&locked, method, "/logs", &headers).await;
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED, "{method}");
+            assert_eq!(response.headers()[header::ALLOW], "GET, HEAD");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn logs_answer_head_with_a_length_and_no_body() {
+        let (locked, dir) = with_log("head", LOG.as_bytes());
+        let headers = [("x-stats-token", SECRET)];
+        let get = ask_with(&locked, "GET", "/logs", &headers).await;
+        let length = axum::body::to_bytes(get.into_body(), 1 << 20).await.unwrap().len();
+        let head = ask_with(&locked, "HEAD", "/logs", &headers).await;
+        assert_eq!(head.status(), StatusCode::OK);
+        assert_eq!(head.headers()[header::CONTENT_LENGTH], length.to_string().as_str());
+        assert_eq!(head.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(axum::body::to_bytes(head.into_body(), 1 << 20).await.unwrap().is_empty());
+        assert_eq!(ask_with(&locked, "HEAD", "/logs", &[]).await.status(), StatusCode::NOT_FOUND);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn logs_never_show_the_token_or_the_home_directory() {
+        let home = directories::BaseDirs::new().unwrap().home_dir().to_string_lossy().into_owned();
+        let log = format!(
+            "2025-01-31T12:34:56Z  INFO rettui: got {SECRET} from a client\n2025-01-31T12:34:57Z  WARN rettui: request headers {{\"x-stats-token\": \"{SECRET}\", \"authorization\": \"Bearer abcdefgh\"}}\n2025-01-31T12:34:58Z ERROR rettui: failed to open {home}/rettui/store\n"
+        );
+        let (locked, dir) = with_log("redact", log.as_bytes());
+        let response = ask_with(&locked, "GET", "/logs", &[("x-stats-token", SECRET)]).await;
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        for leaked in [SECRET, "abcdefgh"] {
+            assert!(!text.contains(leaked), "{text}");
+        }
+        if home.len() > 1 {
+            assert!(!text.contains(&home) && text.contains("~/rettui/store"), "{text}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn logs_with_no_file_or_a_garbage_file_are_still_an_answer() {
+        let headers = [("x-stats-token", SECRET)];
+        let (_tx, rx) = channel(published("{}"));
+        let gone = router(rx, Some(token()), Some(std::env::temp_dir().join("rettui-stats-no-such-log-file").into()));
+        let (_, json) = json_of(ask_with(&gone, "GET", "/logs", &headers).await).await;
+        assert_eq!(json, json!({ "level": "info", "truncated": false, "lines": [] }));
+        let (garbage, dir) = with_log("garbage", &[0xff, 0xfe, b'\n', 0, 0, b'\n', 0xc3]);
+        let response = ask_with(&garbage, "GET", "/logs?level=debug", &headers).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let (_, json) = json_of(response).await;
+        assert_eq!(json["lines"], json!([]), "nothing before a line that parses");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn logs_are_read_over_tcp_too() {
+        let (_tx, rx) = channel(published("{}"));
+        let dir = scratch("logs-tcp");
+        std::fs::write(dir.join("rettui.log"), LOG).unwrap();
+        let (bound, task) = serve("127.0.0.1:0", Some(token()), rx, Some(dir.join("rettui.log").into())).await.unwrap();
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(bound).await.unwrap();
+        stream
+            .write_all(format!("GET /logs?lines=1 HTTP/1.1\r\nHost: x\r\nx-stats-token: {SECRET}\r\nConnection: close\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut text = String::new();
+        stream.read_to_string(&mut text).await.unwrap();
+        assert!(text.starts_with("HTTP/1.1 200") && text.contains("rettui: two"), "{text}");
+        task.abort();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_token_keeps_its_text_out_of_debug() {
+        assert_eq!(format!("{:?}", token()), "Token(..)");
+        assert_eq!(token().secret(), SECRET);
     }
 
     #[tokio::test]
@@ -1345,7 +1665,7 @@ mod tests {
         let response = ask_with(&locked_router, "POST", "/stats.json", &headers).await;
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
         let (_tx, rx) = channel(Arc::default());
-        let response = ask_with(&router(rx, Some(token())), "GET", "/", &headers).await;
+        let response = ask_with(&router(rx, Some(token()), None), "GET", "/", &headers).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1419,7 +1739,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (app, dir) = app("tcp");
         let (_tx, rx) = channel(snapshot(&app, Instant::now(), true, &Disk::default()));
-        let (bound, task) = serve("127.0.0.1:0", Some(token()), rx).await.unwrap();
+        let (bound, task) = serve("127.0.0.1:0", Some(token()), rx, None).await.unwrap();
         for (extra, listed) in
             [("", false), ("X-Stats-Token: nope-nope-nope-nope\r\n", false), (&format!("X-Stats-Token: {SECRET}\r\n"), true)]
         {
