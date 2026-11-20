@@ -1774,6 +1774,9 @@ const MAX_RRC_MESSAGES_KEPT: u64 = 100_000;
 /// Largest storage limit, in megabytes (a petabyte, so bytes can't overflow).
 const MAX_STORAGE_MB: u64 = 1_000_000_000;
 
+/// The longest hub greeting, in bytes.
+const MAX_GREETING_BYTES: usize = 4096;
+
 pub fn field(key: &str) -> Option<&'static Field> {
     FIELDS.iter().find(|f| f.key == key)
 }
@@ -2126,7 +2129,13 @@ impl Settings {
                 }
                 self.hub_name = optional(value);
             }
-            "hub_greeting" => self.hub_greeting = optional(value),
+            "hub_greeting" => {
+                // Sent to everyone who joins: a few lines, not a file.
+                if optional(value).is_some_and(|g| g.len() > MAX_GREETING_BYTES) {
+                    return Err(fail(format!("at most {MAX_GREETING_BYTES} bytes")));
+                }
+                self.hub_greeting = optional(value);
+            }
             "hub_announce_interval_mins" => {
                 self.hub_announce_interval_mins = number(value, MAX_MINUTES).map_err(fail)?;
             }

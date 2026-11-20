@@ -282,7 +282,7 @@ so you can edit the config and settings afterwards, and every later run
 needs no flags. Every run also says, as notes rather than changes, which
 interface is the entry point, and what it left as it was: a TCP server on
 that port that's turned off (`enabled = No`) stays off, and `--listen-ip`
-doesn't move a server that's there. The flags are kept the same way (all but `--stats-listen` and `--stats-token-file`, which are for one run).
+doesn't move a server that's there. The flags are kept the same way (all but the `--stats-…` and `--manage-…` ones, which are for one run).
 Each can also be given as an environment variable, for a systemd unit
 (`Environment=` or `EnvironmentFile=`), a Docker Compose file or a shell, so
 a node can be set up with no command line. A flag given on the command line
@@ -306,6 +306,8 @@ way as its flag.
 | `--stats-listen ADDRESS` | none (`STATS_LISTEN` in Docker) | Serves a read-only stats page on this address, such as `127.0.0.1:8741` (see below). Off unless given, and not saved: give it on every run. |
 | `--stats-token-file PATH` | `RETTUI_STATS_TOKEN` is the secret itself (`STATS_TOKEN_FILE` is the file, in Docker) | A secret that lets a request for the stats also list every peer heard (see below). Needs `--stats-listen`. Off unless given, and not saved. |
 | `--stats-logs` | none | Lets a request with the stats token also read the end of the log at `/logs` (see below). Needs `--stats-listen`. Off unless given, and not saved: without it `/logs` is a 404, token or not. |
+| `--manage-listen ADDRESS` | none (`MANAGE_LISTEN` in Docker) | Lets a website you run change a few settings and restart Reticulum, with signed requests to this address (see [Remote management](#remote-management)). Needs `--manage-secret-file`. Off unless given, and not saved. |
+| `--manage-secret-file PATH` | none (`MANAGE_SECRET_FILE` in Docker) | The file with the secret those requests are signed with. Needs `--manage-listen`. There is no variable for the secret itself. |
 
 Things to know:
 
@@ -328,6 +330,9 @@ Things to know:
 - **What it serves:** the config and settings can't be changed from the
   network: the node has no login and no web UI, reads no input, and never
   adds or turns on a pipe interface or anything else that runs a program.
+  The one exception is [remote management](#remote-management), off unless
+  you turn it on, which can change a few settings and turn services off,
+  never on.
   But the services already on in the settings are served to everyone who
   connects: a NomadNet node (and its page scripts, if
   `node_executable_pages` is on), an RRC hub, rngit repositories, and files
@@ -663,6 +668,141 @@ Security notes:
 - A node with a token sends `Vary: Authorization, X-Stats-Token` on both
   answers, public and listed.
 
+### Remote management
+
+With `--manage-listen ADDRESS` and `--manage-secret-file PATH`, a website you
+run (the rettui website's *Manage* page) can look after the node: see its
+state, change a few settings, restart Reticulum, roll a settings change back,
+and read what was done. It is off unless you give both flags, and they are
+not saved: give them on every run. The node itself has no page for it, and
+the terminal and web UIs have no part in it.
+
+**Setting it up:**
+
+1. Make a secret for this node only (each node needs its own), readable by
+   the node's user only:
+
+       head -c 48 /dev/urandom | base64 | tr -d '/+=\n' > /etc/rettui-manage-secret
+       chmod 600 /etc/rettui-manage-secret
+
+   A secret is 32 to 256 printable ASCII characters, with no spaces, quotes
+   (`"` and `'`) or backslash; the file's contents are trimmed. One that
+   isn't stops the node at start, with the reason, which never repeats the
+   secret. On Linux and macOS the node warns if others can read the file.
+   There is no environment variable for it: programs the node starts (a pipe
+   interface) inherit the environment. It must not be the stats token: a node
+   given the same text for both stops at start, as whoever has the stats
+   token could otherwise manage the node.
+2. Start the node with a private address the website can reach:
+
+       rettui --data-dir /var/lib/rettui-node node --manage-listen 10.200.0.2:8750 --manage-secret-file /etc/rettui-manage-secret
+
+   It prints `Remote management at http://10.200.0.2:8750/manage/v1/` when
+   it's up.
+3. Give the same secret, and the address as `manage_url`, to the website
+   (see its README), and restart it.
+
+**Which addresses:** a loopback address, a private one (`10.x`, `172.16.x` to
+`172.31.x`, `192.168.x`, `100.64.x` to `100.127.x`, `fc00::/7`) or a link-local
+IPv6 one (`fe80::/10`). `0.0.0.0` and `::` (every address, as Docker needs)
+are allowed, with a warning. Any other address is refused at start
+("refuses a public address"): put the node behind a private network
+(WireGuard, Tailscale) instead. An address that can't be used stops the node
+at start, as a stats address does.
+
+Whatever the address, firewall the port so only the website can connect.
+Anyone else who can reach it can't change anything, but can take the
+listener's connection places (at most 4 from one address, 32 in all) and
+keep the website out for as long as they keep connecting. A reverse proxy in
+front of it is only safe if it lets only the website through (an IP
+allow-list, or client certificates) and passes each request's path and query
+on exactly as sent, since they are signed: a proxy open to anyone gives
+everyone a way in to those places, and one that rewrites the path makes every
+request fail its signature.
+
+**What it can do:**
+
+- Read the node's version, the network's state (starting, running or
+  failed, its interfaces, and whether it uses another program's shared
+  instance) and the managed settings, with their labels and help.
+- Change these settings: display name, announce interval, the propagation
+  node's name, stamp cost, storage, transfer limit, auto-peering, peer depth
+  and limit, and static peers, the NomadNet node's name and announce
+  interval, the RRC hub's name, greeting and announce interval, the rngit
+  host's name, and the log level. They are checked as the settings editors
+  check them, saved in `settings.json`, and apply at once.
+- Turn the propagation node, the NomadNet node, the RRC hub, the rngit host
+  and its pages **off**. Only the terminal (or `settings.json`) turns them
+  on: a service turned on from afar could expose data.
+- Restart Reticulum, at most once every 5 minutes. The node says when it is
+  back: `up` when the network runs and every interface that was online
+  before is again, or `unhealthy` (with the interfaces that aren't) after 90
+  seconds. With another program's shared instance, a restart only
+  reconnects to it.
+- Roll a settings change back, by putting the values it changed back, as
+  long as nothing changed them since. A rollback goes through the same
+  checks, so rolling back "turn the hub off" is refused: turn it on in the
+  terminal.
+
+**What it can't do:** run programs or choose what runs, change the Reticulum
+config or its interfaces, change folders, paths, commands, the rngit access
+rule or anything the web UI may not change, read, export or delete identity
+keys, read messages, or reach the web UI. A request may change at most 32
+settings, with values of at most 4096 bytes, in a body of at most 16 KiB.
+
+**How requests are checked:** each request is signed with the secret
+(HMAC-SHA256 over its time, a one-time nonce, the method, the path and query,
+the website's user and the body), and so is each answer, so neither can be
+forged; the secret itself never crosses the network. A request must be
+within 5 minutes of the node's clock (a node whose clock is off says so, but
+only to whoever has the secret), and each nonce works once: the node
+remembers it for as long as its request's time is accepted, so a request
+sent again is refused while the node runs. After a restart, a request signed
+before the node started is refused (`before_start`, said only to whoever has
+the secret), as its nonce may have been used before. What signing can't
+stop: someone on the path between the website and the node who holds a
+request back and delivers it later, once, within those 5 minutes. That is
+why the link must be private (a private network, or TLS). At most 10
+changes a minute are taken. After 20 requests with a bad signature in a
+minute, requests without a valid signature are refused for a minute (and the
+refusals still count, so a flood keeps it going); requests the website signs
+are still answered. The listener closes every connection after one answer,
+holds at most 32 at once, at most 4 from one address, and closes any after
+15 seconds, so a client that sends slowly can't hold it; a refused
+connection is logged once a minute at most. It has no TLS: keep it on a
+private network, or behind a proxy that adds TLS and lets only the website
+through (see above).
+
+**The audit log:** every change, restart, rollback and refusal, and each burst
+of bad signatures, is kept in `manage/audit.jsonl` in the data directory
+(readable by the node's user only): when, which website user, what changed
+from what to what, and how it ended. Bursts of bad signatures in a row share
+one entry for up to an hour, with a `count` of the bad signatures since its
+time. It keeps the last 2000 entries (fewer if they come to more than 2 MiB);
+when it is full, the oldest refusals go first, so the changes a rollback
+needs stay. The node's own log has a line for each too, with control
+characters in anything a request sent written out (`\u{1b}`), so it can't
+break the log's lines. The secret is never written to it, to the log, or to
+an answer.
+
+**Threat model:**
+
+| Who | What they could do | What limits it |
+|-----|--------------------|----------------|
+| Someone who can reach the port without the secret | Nothing but be refused; while they keep connecting, take the listener's connection places and keep the website out (4 per address, 32 in all) | Firewall the port to the website only; a proxy in front lets only the website through |
+| Someone with this node's secret | Change the settings above and restart Reticulum on this node; no programs, keys or Reticulum config | Change the secret; the audit log; the rate limits |
+| Whoever controls the website | The same, on every node it manages | The short list above; a secret per node; remove the flags on a node to turn it off |
+| Someone who records the traffic | Read the settings as they pass (no TLS) | A private network or TLS proxy; the secret is never sent |
+| Someone on the path who can hold traffic back | Deliver a request the website sent, once, up to 5 minutes late (a replay is refused) | A private network or TLS proxy |
+
+**Lockout recovery:** the listener runs beside Reticulum, not over it, so a
+Reticulum restart that goes wrong doesn't cut it off. If the website can't
+manage the node (a lost secret, a port someone else keeps busy, a clock
+that's off), SSH in: correct the clock, firewall the port, write a new secret
+to the file and restart the node (and give the website the same one), or stop
+the node and change `settings.json` by hand. To turn remote management off,
+start the node without the two flags (in Docker, without `MANAGE_LISTEN`).
+
 ## RRC hub
 
 An RRC hub is what people chat on in [RRC](RRC-Chat): rooms, their topics
@@ -676,7 +816,7 @@ and the other RRC clients can join it as they join rrcd.
   then every `hub_announce_interval_mins` (360 by default; 0 announces only
   when it starts), or when you press `a`. Its name is `hub_name`, or your
   display name; `hub_greeting` is sent to everyone who connects (`\n`
-  starts a new line). Changing these applies to the hub as it runs: nobody
+  starts a new line; at most 4096 bytes). Changing these applies to the hub as it runs: nobody
   is disconnected.
 - **Its own identity:** the hub has an identity of its own, made the first
   time it starts (`rrc-hub-identity` in the data directory), so its address

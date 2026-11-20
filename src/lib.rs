@@ -33,7 +33,11 @@ mod names;
 mod net;
 mod node;
 mod nomad;
+// Remote management of `rettui node` (src/manage/). Not `manage`, which is
+// the desktop app's name for what only its own window may do (below).
 mod power;
+#[path = "manage/mod.rs"]
+mod remote_manage;
 mod reticulum;
 mod rrc;
 mod stats;
@@ -835,6 +839,10 @@ mod tests {
             "--stats-token-file",
             "/run/secrets/stats",
             "--stats-logs",
+            "--manage-listen",
+            "10.200.0.2:8750",
+            "--manage-secret-file",
+            "/run/secrets/manage",
             "--data-dir",
             "/srv/rettui",
         ]) else {
@@ -843,6 +851,8 @@ mod tests {
         assert_eq!(args.stats_listen.as_deref(), Some("127.0.0.1:8741"));
         assert_eq!(args.stats_token_file, Some(std::path::PathBuf::from("/run/secrets/stats")));
         assert!(args.stats_logs);
+        assert_eq!(args.manage_listen.as_deref(), Some("10.200.0.2:8750"));
+        assert_eq!(args.manage_secret_file, Some(std::path::PathBuf::from("/run/secrets/manage")));
         assert_eq!(dir, std::path::PathBuf::from("/srv/rettui"));
         assert_eq!(args.entry_point, Some(4965));
         assert_eq!(args.listen_ip, Some("::".parse().unwrap()));
@@ -857,6 +867,8 @@ mod tests {
             &["--reachable-on", "a#b"],
             &["--reachable-on", "\"quoted\""],
             &["--stats-token-file", "/x"],
+            &["--manage-listen", "127.0.0.1:8750"],
+            &["--manage-secret-file", "/x"],
             &["--stats-logs"],
         ] {
             assert!(node(wrong).is_err(), "{wrong:?}");

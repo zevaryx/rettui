@@ -147,7 +147,7 @@ pub fn load_token(file: Option<&Path>) -> Result<Option<Token>> {
 }
 
 /// Whether `path` can be read by its group or by everyone (Unix only).
-fn readable_by_others(path: &Path) -> bool {
+pub(crate) fn readable_by_others(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -545,7 +545,7 @@ fn peer_list(app: &App) -> (Vec<Value>, bool) {
 /// categories Cf, Zl and Zp): bidi overrides and isolates, zero-width
 /// characters, joiners, the line and paragraph separators. Control characters
 /// (Cc) are `char::is_control`.
-fn is_invisible(c: char) -> bool {
+pub(crate) fn is_invisible(c: char) -> bool {
     matches!(u32::from(c),
         0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E | 0x200B..=0x200F | 0x2028..=0x202E
         | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F

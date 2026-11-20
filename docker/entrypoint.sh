@@ -61,6 +61,37 @@ if [ -n "$STATS_LOGS" ] && [ -z "$STATS_LISTEN" ]; then
     exit 1
 fi
 
+# MANAGE_LISTEN and MANAGE_SECRET_FILE (optional, `node` only) turn on remote
+# management (see wiki/Docker.md): an address like 0.0.0.0:8750, and the path
+# of a file in the container with the manage secret. Each needs the other.
+# Only characters an address or a path has are allowed.
+MANAGE_LISTEN="${MANAGE_LISTEN:-}"
+case "$MANAGE_LISTEN" in
+    *[!0-9a-fA-F.:\[\]]*)
+        echo "rettui: MANAGE_LISTEN must be an address like 0.0.0.0:8750 (got '$MANAGE_LISTEN')" >&2
+        exit 1
+        ;;
+esac
+MANAGE_SECRET_FILE="${MANAGE_SECRET_FILE:-}"
+case "$MANAGE_SECRET_FILE" in
+    *[!0-9a-zA-Z._/@+=,:-]*)
+        echo "rettui: MANAGE_SECRET_FILE must be a path such as /run/secrets/manage_secret (got '$MANAGE_SECRET_FILE')" >&2
+        exit 1
+        ;;
+esac
+if [ -n "$MANAGE_SECRET_FILE" ] && [ -z "$MANAGE_LISTEN" ]; then
+    echo "rettui: MANAGE_SECRET_FILE needs MANAGE_LISTEN" >&2
+    exit 1
+fi
+if [ -n "$MANAGE_LISTEN" ] && [ -z "$MANAGE_SECRET_FILE" ]; then
+    echo "rettui: MANAGE_LISTEN needs MANAGE_SECRET_FILE" >&2
+    exit 1
+fi
+if [ -n "$MANAGE_LISTEN" ] && [ "${1:-}" != node ]; then
+    echo "rettui: MANAGE_LISTEN only works with the node command" >&2
+    exit 1
+fi
+
 mkdir -p "$DATA/reticulum"
 # First start: keep the Reticulum config in the data directory too. To use
 # another, change rns_config in settings.json while rettui is stopped (the web
@@ -88,6 +119,9 @@ if [ "${1:-}" = node ]; then
     fi
     if [ -n "$STATS_LOGS" ]; then
         set -- --stats-logs "$@"
+    fi
+    if [ -n "$MANAGE_LISTEN" ]; then
+        set -- --manage-listen "$MANAGE_LISTEN" --manage-secret-file "$MANAGE_SECRET_FILE" "$@"
     fi
     set -- /usr/local/bin/rettui --data-dir "$DATA" node "$@"
 else

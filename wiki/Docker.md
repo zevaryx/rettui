@@ -106,4 +106,15 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   To let the token also read the end of the log (`/logs`, with secrets redacted), set `STATS_LOGS=1`.
   It is off by default, needs `STATS_LISTEN` and a token, and should only go with a token you trust with
   the log. See [Hosting a Node](Hosting-a-Node#the-end-of-the-log-for-whoever-has-the-token).
+- **Remote management (only with `command: node`):** set `MANAGE_LISTEN`
+  (for example `0.0.0.0:8750`) and `MANAGE_SECRET_FILE` (the path of a file in
+  the container with the manage secret, such as a Docker secret at
+  `/run/secrets/manage_secret`) to let a website you run change a few
+  settings and restart Reticulum, with signed requests. Each needs the
+  other, and the container refuses to start without `command: node` ("only
+  works with the node command"). Publish the port only to the network the
+  website is on (for example `"10.200.0.2:8750:8750"` under `ports:`), never
+  to the internet: the node warns that `0.0.0.0` is every address in the
+  container. There is no variable for the secret itself. See
+  [Hosting a Node](Hosting-a-Node#remote-management).
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.

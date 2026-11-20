@@ -6,13 +6,17 @@
 //! config and the settings (never removing or changing what's there, beyond
 //! turning on what a node is), so a later run with no flags is the same node.
 //! Then it runs as the web UI does, without the HTTP server, until SIGINT
-//! or SIGTERM, and saves everything on the way out. Nothing it listens on
-//! can change what it runs: it has no login and reads no input.
+//! or SIGTERM, and saves everything on the way out. It has no login and
+//! reads no input. The one thing it listens on that can change anything is
+//! remote management, off unless `--manage-listen` and
+//! `--manage-secret-file` are both given: signed requests only, for a few
+//! settings and a Reticulum restart, and never what it runs (see
+//! [`crate::remote_manage`]).
 
 use std::net::IpAddr;
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use rns_identity::identity::Identity;
 use rns_runtime::config::{Config, ConfigSection};
 
@@ -31,8 +35,8 @@ const INTERFACE_NAME: &str = "Public entry point";
 /// How often the status line is printed while it runs.
 const STATUS_EVERY: Duration = Duration::from_secs(10 * 60);
 
-/// What `rettui node` was asked to set up. Every flag but `--stats-listen`
-/// is kept in the Reticulum config or the settings, so the next run needs
+/// What `rettui node` was asked to set up. Every flag but the stats and
+/// manage ones is kept in the Reticulum config or the settings, so the next run needs
 /// none of them. Each of those can also be given as a `RETTUI_NODE_*`
 /// variable (see [`NodeArgs::with_vars`]), which a flag overrides.
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
@@ -75,6 +79,16 @@ pub struct NodeArgs {
     /// Not saved.
     #[arg(long, requires = "stats_listen")]
     pub stats_logs: bool,
+    /// Let a website that holds the manage secret change a few settings and
+    /// restart Reticulum, with signed requests to this address (a loopback
+    /// or private one; 0.0.0.0 with a warning). Not saved: give it on every run.
+    #[arg(long, value_name = "ADDRESS", requires = "manage_secret_file")]
+    pub manage_listen: Option<String>,
+    /// A file with the manage secret (32 to 256 printable ASCII characters
+    /// except spaces, quotes and backslash), shared with the website only.
+    /// Not saved.
+    #[arg(long, value_name = "PATH", requires = "manage_listen")]
+    pub manage_secret_file: Option<std::path::PathBuf>,
 }
 
 /// The variables that stand for the node's flags (not `--stats-listen`, which is for one run).
@@ -470,6 +484,17 @@ pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args:
         }),
         None => None,
     };
+    let manage = match (&args.manage_listen, &args.manage_secret_file) {
+        (Some(address), Some(file)) => {
+            // A public address stops the node here too, before it is set up.
+            if let Ok(address) = address.parse() {
+                crate::remote_manage::check_bind(&address)?;
+            }
+            Some(crate::remote_manage::Listen { address: address.clone(), secret: crate::remote_manage::load_secret(file)? })
+        }
+        _ => None,
+    };
+    check_secrets_differ(stats.as_ref(), manage.as_ref())?;
     // Listened for from now, so a stop while it starts is a clean one.
     let stop = crate::web::shutdown_signal();
     let prepared = prepare(&mut settings, &paths, args)?;
@@ -485,22 +510,46 @@ pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args:
     for line in exposed_services(&settings) {
         println!("{line}");
     }
-    serve(settings, paths, identity, stop, STATUS_EVERY, stats, |_| {}).await
+    serve(settings, paths, identity, stop, STATUS_EVERY, Listeners { stats, manage }, |_| {}).await
+}
+
+/// Refuse a manage secret that is the stats token too. The stats token is
+/// sent with every stats request and may sit in a proxy's config, so it
+/// mustn't also sign management requests. The error never repeats either.
+fn check_secrets_differ(stats: Option<&crate::stats::Listen<'_>>, manage: Option<&crate::remote_manage::Listen>) -> Result<()> {
+    if let (Some(token), Some(manage)) = (stats.and_then(|s| s.token.as_ref()), manage)
+        && manage.secret.is_token(token)
+    {
+        bail!(
+            "--manage-secret-file holds the same text as the stats token: use a different secret for each, so whoever has the stats token can't manage the node"
+        );
+    }
+    Ok(())
+}
+
+/// What the node listens on besides Reticulum: the stats page and remote
+/// management, each if asked for.
+#[derive(Debug, Default)]
+pub(crate) struct Listeners<'a> {
+    pub stats: Option<crate::stats::Listen<'a>>,
+    pub manage: Option<crate::remote_manage::Listen>,
 }
 
 /// The node, until `stop`: what the web UI runs, without its HTTP server.
 /// The status line is printed at the start, then every `every`. `stopping`
 /// is given the app once it's stopped, before it saves (for tests). With
-/// `stats` (an address, and perhaps a token), the stats page is served there (see [`crate::stats`]).
+/// `stats` (an address, and perhaps a token), the stats page is served there (see [`crate::stats`]),
+/// and with `manage` remote management (see [`crate::remote_manage`]), whose jobs run here.
 pub(crate) async fn serve(
     settings: Settings,
     paths: Paths,
     identity: Identity,
     stop: impl std::future::Future<Output = ()>,
     every: Duration,
-    stats: Option<crate::stats::Listen<'_>>,
+    listeners: Listeners<'_>,
     stopping: impl FnOnce(&mut App),
 ) -> Result<()> {
+    let Listeners { stats, manage } = listeners;
     let rns_path = reticulum::config_path(settings.rns_config.as_deref());
     let listening =
         std::fs::read_to_string(&rns_path).ok().and_then(|text| Config::parse(&text).ok()).map(|c| listening(&c)).unwrap_or_default();
@@ -523,6 +572,14 @@ pub(crate) async fn serve(
             Some(task)
         }
         None => None,
+    };
+    let (manage_server, mut manage_jobs, mut owner) = match manage {
+        Some(listen) => {
+            let (bound, task, jobs) = crate::remote_manage::serve(listen).await?;
+            println!("{}", crate::remote_manage::started_line(bound));
+            (Some(task), Some(jobs), Some(crate::remote_manage::Owner::new(&paths)))
+        }
+        None => (None, None, None),
     };
     let identity_hash = identity.hash;
     let store = Store::load_with_db(&paths.store, &paths.db);
@@ -547,7 +604,17 @@ pub(crate) async fn serve(
                 net::drain_burst(&mut net_rx, |event| app.on_net(event));
             }
             Some(image) = decoded.recv() => app.on_decoded(image),
-            _ = tick.tick() => app.on_tick(),
+            _ = tick.tick() => {
+                app.on_tick();
+                if let Some(owner) = &mut owner {
+                    owner.on_tick(&app);
+                }
+            }
+            Some(job) = crate::remote_manage::next_job(&mut manage_jobs) => {
+                if let Some(owner) = &mut owner {
+                    owner.run(&mut app, job);
+                }
+            }
             _ = save.tick() => app.save_if_dirty(),
             () = app.save_timer() => app.save_when_due(),
             _ = status.tick() => println!("{}", status_line(&app, &identity, &listening)),
@@ -556,11 +623,18 @@ pub(crate) async fn serve(
             }
             () = &mut stop => break,
         }
-        if stats_server.as_ref().is_some_and(|task| task.is_finished()) {
+        let stopped = if stats_server.as_ref().is_some_and(|task| task.is_finished()) {
+            Some("the stats server stopped")
+        } else if manage_server.as_ref().is_some_and(|task| task.is_finished()) {
+            Some("the remote management listener stopped")
+        } else {
+            None
+        };
+        if let Some(stopped) = stopped {
             app.save_if_dirty();
             net::shutdown(&net_tx, &mut net_rx, net::Stop::Quit).await;
             app.finish_saves();
-            return Err(anyhow!("the stats server stopped"));
+            return Err(anyhow!(stopped));
         }
         print_log(&mut app);
         // Nobody is there to be shown these. Switching identity and quitting
@@ -577,7 +651,7 @@ pub(crate) async fn serve(
             app.set_network(net_tx.clone());
         }
     }
-    if let Some(task) = &stats_server {
+    for task in stats_server.iter().chain(&manage_server) {
         task.abort();
     }
     println!("rettui node stopping: saving, and leaving the network");
@@ -1080,7 +1154,7 @@ mod tests {
             identity,
             std::future::pending::<()>(),
             Duration::from_secs(60),
-            Some(crate::stats::Listen { address: "not an address", token: None, logs: false }),
+            Listeners { stats: Some(crate::stats::Listen { address: "not an address", token: None, logs: false }), manage: None },
             |_| {},
         ));
         assert!(format!("{:#}", result.unwrap_err()).contains("--stats-listen expects"));
@@ -1111,6 +1185,167 @@ mod tests {
         assert!(message.contains("could not read the stats token file"), "{message}");
         assert!(!paths.settings.exists(), "the node changed its settings before refusing the token");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A manage secret that can't be used stops the node before it changes anything.
+    #[test]
+    fn a_bad_manage_secret_stops_the_node_before_it_starts() {
+        let dir = test_dir("bad-manage");
+        let paths = Paths::new(Some(dir.join("data"))).unwrap();
+        let identity = crate::config::load_identity(&paths.identity).unwrap();
+        let file = dir.join("secret");
+        std::fs::write(&file, "too short to be a secret\n").unwrap();
+        let args = NodeArgs { manage_listen: Some("127.0.0.1:0".into()), manage_secret_file: Some(file.clone()), ..NodeArgs::default() };
+        let run = |args: NodeArgs| {
+            let (paths, identity) = (paths.clone(), identity.clone());
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move { run(Settings::default(), paths, identity, &args).await })
+        };
+        let message = format!("{:#}", run(args.clone()).unwrap_err());
+        assert!(message.contains("--manage-secret-file") && message.contains("at least 32") && !message.contains("too short"), "{message}");
+        // A public address is refused too, before anything is set up.
+        std::fs::write(&file, "a-manage-secret-long-enough-0123456789").unwrap();
+        let public = NodeArgs { manage_listen: Some("8.8.8.8:8750".into()), ..args.clone() };
+        assert!(format!("{:#}", run(public).unwrap_err()).contains("refuses a public address"));
+        // The stats token can't be the manage secret too; the error doesn't repeat either.
+        let token = dir.join("token");
+        std::fs::write(&token, "a-manage-secret-long-enough-0123456789\n").unwrap();
+        let shared = NodeArgs { stats_listen: Some("127.0.0.1:0".into()), stats_token_file: Some(token.clone()), ..args.clone() };
+        let message = format!("{:#}", run(shared).unwrap_err());
+        assert!(message.contains("same text as the stats token") && !message.contains("long-enough"), "{message}");
+        assert!(!paths.settings.exists(), "the node changed its settings before refusing");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Only the same text in both is refused; either alone, or two different ones, are fine.
+    #[test]
+    fn the_manage_secret_and_the_stats_token_must_differ() {
+        let stats = |token: &str| crate::stats::Listen {
+            address: "127.0.0.1:0",
+            token: Some(crate::stats::Token::parse(token).unwrap()),
+            logs: false,
+        };
+        let manage = |secret: &str| crate::remote_manage::Listen {
+            address: "127.0.0.1:0".into(),
+            secret: crate::remote_manage::Secret::parse(secret).unwrap(),
+        };
+        let same = check_secrets_differ(Some(&stats(MANAGE_SECRET)), Some(&manage(MANAGE_SECRET))).unwrap_err().to_string();
+        assert!(same.contains("same text as the stats token") && !same.contains(MANAGE_SECRET), "{same}");
+        assert!(check_secrets_differ(Some(&stats("another-stats-token-0123456789abcdef")), Some(&manage(MANAGE_SECRET))).is_ok());
+        // A token that is the start of the secret is another text.
+        assert!(check_secrets_differ(Some(&stats(&MANAGE_SECRET[..20])), Some(&manage(MANAGE_SECRET))).is_ok());
+        assert!(check_secrets_differ(Some(&stats(MANAGE_SECRET)), None).is_ok());
+        assert!(check_secrets_differ(None, Some(&manage(MANAGE_SECRET))).is_ok());
+        let untokened = crate::stats::Listen { address: "127.0.0.1:0", token: None, logs: false };
+        assert!(check_secrets_differ(Some(&untokened), Some(&manage(MANAGE_SECRET))).is_ok());
+    }
+
+    const MANAGE_SECRET: &str = "node-test-manage-secret-0123456789abcdef";
+
+    /// A signed request to the node's management listener on `port`: the
+    /// status, and the body if the answer is signed for it.
+    fn manage(port: u16, method: &str, target: &str, body: &str) -> Option<(u16, serde_json::Value)> {
+        use crate::remote_manage::wire;
+        use std::io::{Read, Write};
+        let secret = crate::remote_manage::Secret::parse(MANAGE_SECRET).unwrap();
+        let nonce = hex::encode(rand::random::<[u8; 16]>());
+        let ts = crate::remote_manage::unix_now().to_string();
+        let signature = wire::sign(&secret, &wire::canonical(&ts, &nonce, method, target, "alice", body.as_bytes()));
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+        let request = format!(
+            "{method} {target} HTTP/1.1\r\nHost: x\r\nX-Rettui-Timestamp: {ts}\r\nX-Rettui-Nonce: {nonce}\r\nX-Rettui-Actor: alice\r\n\
+             X-Rettui-Signature: v1={signature}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).ok()?;
+        // The node closes the connection after each answer.
+        let mut text = String::new();
+        stream.read_to_string(&mut text).ok()?;
+        let (head, body) = text.split_once("\r\n\r\n")?;
+        let status: u16 = head.split(' ').nth(1)?.parse().ok()?;
+        let signed = head.lines().find_map(|line| line.strip_prefix("x-rettui-signature: "))?;
+        if signed != wire::response_signature(&secret, &nonce, status, body.as_bytes()) {
+            return None;
+        }
+        Some((status, serde_json::from_str(body).ok()?))
+    }
+
+    /// Remote management through the node as `rettui node` runs it: the
+    /// state, a settings change that the node applies and saves, and the
+    /// audit log, each answer signed.
+    #[test]
+    fn the_node_is_managed_with_signed_requests() {
+        let dir = test_dir("manage");
+        for attempt in 0..3 {
+            let root = dir.join(attempt.to_string());
+            std::fs::create_dir_all(root.join("rns")).unwrap();
+            std::fs::write(root.join("rns/config"), "[reticulum]\n  share_instance = No\n\n[interfaces]\n").unwrap();
+            let paths = Paths::new(Some(root.join("data"))).unwrap();
+            let settings = Settings {
+                update_check: false,
+                welcomed: true,
+                rns_config: Some(root.join("rns").display().to_string()),
+                ..Settings::default()
+            };
+            settings.save(&paths.settings).unwrap();
+            let identity = crate::config::load_identity(&paths.identity).unwrap();
+            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let listen = crate::remote_manage::Listen {
+                address: format!("127.0.0.1:{port}"),
+                secret: crate::remote_manage::Secret::parse(MANAGE_SECRET).unwrap(),
+            };
+            let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+            let settings_file = paths.settings.clone();
+            let running = std::thread::spawn(move || {
+                tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(serve(
+                    settings,
+                    paths,
+                    identity,
+                    async move {
+                        let _ = stop_rx.await;
+                    },
+                    Duration::from_secs(60),
+                    Listeners { stats: None, manage: Some(listen) },
+                    |_| {},
+                ))
+            });
+            let until = std::time::Instant::now() + Duration::from_secs(20);
+            let mut state = None;
+            while std::time::Instant::now() < until && !running.is_finished() {
+                // A request signed in the second the listener started is refused (`before_start`): sign another.
+                if let Some(answer) = manage(port, "GET", "/manage/v1/state", "").filter(|(_, json)| json["error"] != "before_start") {
+                    state = Some(answer);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let Some((status, state)) = state else {
+                let _ = stop_tx.send(());
+                let _ = running.join();
+                continue;
+            };
+            assert_eq!(status, 200, "{state}");
+            assert_eq!(state["version"], crate::VERSION);
+            let revision = state["settings_revision"].as_str().unwrap();
+            let body = serde_json::json!({ "revision": revision, "changes": { "pn_name": "Managed" } }).to_string();
+            let (status, changed) = manage(port, "POST", "/manage/v1/settings", &body).expect("the change wasn't answered");
+            assert_eq!(status, 200, "{changed}");
+            assert_eq!(changed["applied"][0]["to"], "Managed");
+            let (status, audit) = manage(port, "GET", "/manage/v1/audit?limit=5", "").expect("the audit log wasn't answered");
+            assert_eq!(status, 200);
+            assert_eq!(audit["entries"][0]["id"], changed["id"]);
+            stop_tx.send(()).unwrap();
+            running.join().unwrap().unwrap();
+            assert_eq!(Settings::load(&settings_file).unwrap().pn_name.as_deref(), Some("Managed"));
+            let saved = std::fs::read_to_string(root.join("data/manage/audit.jsonl")).unwrap();
+            assert!(saved.contains("\"actor\":\"alice\"") && !saved.contains(MANAGE_SECRET), "{saved}");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        panic!("the node didn't start on any of three ports");
     }
 
     #[test]
@@ -1150,11 +1385,14 @@ mod tests {
                     identity,
                     stop,
                     Duration::from_millis(200),
-                    Some(crate::stats::Listen {
-                        address: stats_address.as_str(),
-                        token: Some(crate::stats::Token::parse(STATS_SECRET).unwrap()),
-                        logs: true,
-                    }),
+                    Listeners {
+                        stats: Some(crate::stats::Listen {
+                            address: stats_address.as_str(),
+                            token: Some(crate::stats::Token::parse(STATS_SECRET).unwrap()),
+                            logs: true,
+                        }),
+                        manage: None,
+                    },
                     stopping,
                 ))
             });
