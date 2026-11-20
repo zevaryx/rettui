@@ -214,7 +214,8 @@ curl http://127.0.0.1:8741/stats.json
     "peers_connected": 2, "peers_total": 6, "peers_alive": 5, "peers_static": 2, "peers_auto": 4,
     "peer_limit": 50, "static_peers": 2, "autopeer": true, "autopeer_depth": 4,
     "messages_received": 900, "messages_served": 700, "messages_offered_to_peers": 1500,
-    "messages_sent_to_peers": 800, "messages_received_from_peers": 400, "unhandled_messages": 35
+    "messages_sent_to_peers": 800, "messages_received_from_peers": 400, "unhandled_messages": 35,
+    "unhandled_distinct": 20
   },
   "disk": { "data_bytes": 52000000 }
 }

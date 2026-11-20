@@ -380,7 +380,8 @@ It can't change anything. The numbers are updated every second.
     "peers_connected": 2, "peers_total": 6, "peers_alive": 5, "peers_static": 2, "peers_auto": 4,
     "peer_limit": 50, "static_peers": 2, "autopeer": true, "autopeer_depth": 4,
     "messages_received": 900, "messages_served": 700, "messages_offered_to_peers": 1500,
-    "messages_sent_to_peers": 800, "messages_received_from_peers": 400, "unhandled_messages": 35
+    "messages_sent_to_peers": 800, "messages_received_from_peers": 400, "unhandled_messages": 35,
+    "unhandled_distinct": 20
   },
   "disk": { "data_bytes": 52000000 }
 }
@@ -410,8 +411,13 @@ is a total: no peer or sender is named.
   `messages_offered_to_peers` the offers made to peers (a message offered to
   two peers counts twice, and the count is kept in the peers' saved state, so
   it can include earlier runs) and `messages_sent_to_peers` those they took.
-  `unhandled_messages` is how many are waiting to be offered to peers; it is
-  worked out when a peer is next due, so it can be a little old.
+  `unhandled_messages` is how many are waiting to be offered to peers, added
+  up over the peers: a message waiting for 20 peers counts 20, so it can be far
+  more than `stored_messages`. `unhandled_distinct` counts each such message
+  once, so it never exceeds `stored_messages`. A message a peer will not take
+  (its stamp is below the peer's lowest accepted cost) is not counted as
+  waiting for that peer, until the peer announces a lower cost. Both are worked
+  out when a peer is next due, so they can be a little old.
 - `disk.data_bytes` is the size of the files in the whole data directory (the
   messages, the stores, the log and every identity's folder), without
   following links. `fs_total_bytes` and `fs_free_bytes`, only in the answer for
@@ -528,7 +534,8 @@ address, at most 256 (`"propagation_peers_truncated": true` if there are more):
   {
     "address": "00112233445566778899aabbccddeeff", "name": "Far node", "static": false, "alive": true,
     "state": "idle", "depth": 3, "last_heard_seconds_ago": 840, "last_sync_seconds_ago": 52,
-    "messages_offered": 120, "unhandled": 4, "peering_cost": 18
+    "messages_offered": 120, "unhandled": 4, "sync_failures": 0, "last_attempt_seconds_ago": 52,
+    "next_attempt_in_seconds": null, "peering_cost": 18
   }
 ]
 ```
@@ -539,7 +546,12 @@ above; `null` if none), `state` what the node is doing with it (`idle`,
 `transferring`), `depth` how many hops away it was when last heard (`null` if
 not heard since the node started), and the `…_seconds_ago` fields are `null`
 if never. `messages_offered` counts what was offered to it, `unhandled` what
-waits to be offered, and `peering_cost` is the work its peering key costs. The
+waits to be offered, `sync_failures` how many syncs with it failed since it was
+last heard announcing, `last_attempt_seconds_ago` when a sync was last tried
+(`null` if never; a failed try counts too, unlike `last_sync_seconds_ago`),
+`next_attempt_in_seconds` how long until it may be tried again (`null` if
+now), and `peering_cost` is the work its peering key costs. Peers are synced
+one at a time, the one tried longest ago first. The
 public answer never has this list.
 
 Security notes:

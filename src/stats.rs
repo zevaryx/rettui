@@ -334,6 +334,7 @@ fn propagation_object(app: &App) -> Option<Value> {
         "messages_sent_to_peers": stats.sent_to_peers,
         "messages_received_from_peers": stats.received_from_peers,
         "unhandled_messages": stats.peering.unhandled,
+        "unhandled_distinct": stats.peering.unhandled_distinct,
     }))
 }
 
@@ -473,6 +474,9 @@ fn propagation_peers(app: &App) -> Option<(Vec<Value>, bool)> {
                 "last_sync_seconds_ago": ago(row.last_sync),
                 "messages_offered": row.offered,
                 "unhandled": row.unhandled,
+                "sync_failures": row.sync_failures,
+                "last_attempt_seconds_ago": ago(row.last_attempt),
+                "next_attempt_in_seconds": row.next_attempt.map(|at| at.saturating_sub(now)),
                 "peering_cost": row.peering_cost,
             })
         })
@@ -759,7 +763,15 @@ mod tests {
                 peered: 5,
                 sent_to_peers: 6,
                 received_from_peers: 2,
-                peering: PeeringStats { peered: 5, alive: 3, statics: 2, offered: 11, unhandled: 8, ..Default::default() },
+                peering: PeeringStats {
+                    peered: 5,
+                    alive: 3,
+                    statics: 2,
+                    offered: 11,
+                    unhandled: 8,
+                    unhandled_distinct: 3,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         );
@@ -771,7 +783,7 @@ mod tests {
                 "peers_connected": 2, "peers_total": 5, "peer_limit": 7, "static_peers": 2, "autopeer": true,
                 "autopeer_depth": 4, "peers_alive": 3, "peers_static": 2, "peers_auto": 3,
                 "messages_received": 9, "messages_served": 4, "messages_offered_to_peers": 11, "messages_sent_to_peers": 6,
-                "messages_received_from_peers": 2, "unhandled_messages": 8
+                "messages_received_from_peers": 2, "unhandled_messages": 8, "unhandled_distinct": 3
             })
         );
         assert!(!json.to_string().contains(id), "no peer is named");
@@ -808,6 +820,9 @@ mod tests {
             last_sync: None,
             offered: 5,
             unhandled: 3,
+            sync_failures: 2,
+            last_attempt: Some(1_500),
+            next_attempt: None,
             peering_cost: 18,
         }
     }
@@ -838,6 +853,9 @@ mod tests {
             (list[0]["messages_offered"].as_u64(), list[0]["unhandled"].as_u64(), list[0]["peering_cost"].as_u64()),
             (Some(5), Some(3), Some(18))
         );
+        assert_eq!(list[0]["sync_failures"], 2);
+        assert!(list[0]["last_attempt_seconds_ago"].as_u64().unwrap() > 1_000_000);
+        assert_eq!(list[0]["next_attempt_in_seconds"], Value::Null);
         assert!(full.get("propagation_peers_truncated").is_none());
         // More peered than listed: it says so.
         app.pn.stats.as_mut().unwrap().peering.peered = 300;

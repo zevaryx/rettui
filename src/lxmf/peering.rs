@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use lxmf_core::constants::{MAX_PEERING_COST, OFFER_REQUEST_PATH, PeerError};
 use lxmf_core::handlers::parse_pn_announce_data;
-use lxmf_core::peer::{LxmPeer, OutboundOfferPolicy, select_sync_peer};
+use lxmf_core::peer::{LxmPeer, OutboundOfferPolicy};
 use lxmf_core::propagation_node::{PropagationNode, read_planned_messages};
 use lxmf_core::stamper::StampControl;
 use lxmf_core::types::PropagationTransientId;
@@ -35,6 +35,9 @@ use crate::net::Hash;
 
 /// How often a peer is picked to sync with (as often as `lxmd`).
 const SYNC_EVERY: Duration = Duration::from_secs(24);
+/// The longest a whole sync may take (a path, a Link, an offer and the
+/// transfer), so a peer that stalls can't hold up the others for long.
+const SYNC_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// The longest an offer, or the transfer after it, is waited for.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
@@ -191,15 +194,21 @@ impl Peers {
         self.identities.entry(hash).or_insert(identity);
     }
 
-    /// What is known of each peer, and totals over them. `unhandled` counts
-    /// the messages still waiting to be offered to a peer (of those it was
-    /// last found to lack).
-    pub fn summary(&self, unhandled: impl Fn(&HashSet<PropagationTransientId>) -> usize) -> PeeringStats {
+    /// What is known of each peer, and totals over them. `live` says whether
+    /// a message is still stored. `unhandled` adds up, over the peers, the
+    /// stored messages each is still to be offered (one waiting for 20 peers
+    /// counts 20); `unhandled_distinct` counts each such message once.
+    pub fn summary(&self, live: impl Fn(&PropagationTransientId) -> bool) -> PeeringStats {
         let secs = |at: f64| (at.is_finite() && at > 0.0).then_some(at as u64);
         let mut stats = PeeringStats { peered: self.peers.len(), ..PeeringStats::default() };
         let mut rows = Vec::new();
+        let mut distinct: HashSet<&PropagationTransientId> = HashSet::new();
         for peer in self.peers.values() {
-            let waiting = unhandled(&peer.unhandled_messages) as u64;
+            let mut waiting = 0u64;
+            for id in peer.unhandled_messages.iter().filter(|id| live(id)) {
+                waiting += 1;
+                distinct.insert(id);
+            }
             stats.alive += usize::from(peer.alive);
             stats.statics += usize::from(peer.is_static);
             stats.offered = stats.offered.saturating_add(peer.offered);
@@ -219,9 +228,13 @@ impl Peers {
                 last_sync: secs(peer.last_sync),
                 offered: peer.offered,
                 unhandled: waiting,
+                sync_failures: peer.unreachable_count,
+                last_attempt: secs(peer.last_sync_attempt),
+                next_attempt: secs(peer.next_sync_attempt),
                 peering_cost: if peer.peering_cost.is_finite() && peer.peering_cost > 0.0 { peer.peering_cost as u64 } else { 0 },
             });
         }
+        stats.unhandled_distinct = distinct.len() as u64;
         rows.sort_unstable_by_key(|row| row.hash);
         rows.truncate(ROWS_MAX);
         stats.rows = rows;
@@ -234,9 +247,14 @@ impl Peers {
 
     /// The peer to sync with next, if one has messages it hasn't had and
     /// is ready: its costs and identity known, its backoff over.
-    /// `unhandled` gives the messages a peer hasn't had, from the ones it has.
-    pub fn next(&mut self, unhandled: impl Fn(&HashSet<PropagationTransientId>) -> HashSet<PropagationTransientId>) -> Option<Hash> {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    /// `unhandled` gives the messages a peer hasn't had, from the ones it has
+    /// and the least stamp cost it takes. Messages below that cost are left
+    /// out: the peer will refuse them, so they are not waiting. This is worked
+    /// out afresh each time (from the store and the peer's announced cost),
+    /// so a peer that lowers its cost is offered them again, and a message
+    /// that leaves the store is forgotten, with nothing more to keep or save.
+    pub fn next(&mut self, unhandled: impl Fn(&HashSet<PropagationTransientId>, f64) -> HashSet<PropagationTransientId>) -> Option<Hash> {
+        let now = now();
         let ready: Vec<Hash> = self
             .peers
             .values()
@@ -245,12 +263,37 @@ impl Peers {
             .collect();
         for hash in &ready {
             if let Some(peer) = self.peers.get_mut(hash) {
-                peer.unhandled_messages = unhandled(&peer.handled_messages);
+                peer.unhandled_messages = unhandled(&peer.handled_messages, peer.minimum_accepted_stamp_cost());
             }
         }
-        let candidates: Vec<&LxmPeer> = ready.iter().filter_map(|h| self.peers.get(h)).collect();
-        select_sync_peer(&candidates, now).map(|i| candidates[i].destination_hash)
+        // The one tried longest ago goes first (one never tried before any
+        // other), so every peer is synced in turn. rsLXMF's own pick chooses
+        // among the fastest peers, and rettui doesn't measure speeds, so it
+        // would always choose the same two.
+        ready
+            .iter()
+            .filter_map(|h| self.peers.get(h))
+            .filter(|p| p.state == lxmf_core::constants::PeerState::Idle && !p.unhandled_messages.is_empty())
+            .min_by(|a, b| a.last_sync_attempt.total_cmp(&b.last_sync_attempt).then(a.destination_hash.cmp(&b.destination_hash)))
+            .map(|p| p.destination_hash)
     }
+}
+
+/// The longest a peer is left alone after failed syncs. Each attempt adds
+/// 12 minutes to its backoff, and only a success or a newer announce resets it,
+/// so a peer that was down for a while would otherwise wait hours after it is back.
+const BACKOFF_MAX: f64 = 3600.0;
+
+fn now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// A sync with `peer` failed at `now`: it is tried again later, but not
+/// later than [`BACKOFF_MAX`] from now.
+fn failed(peer: &mut LxmPeer, now: f64) {
+    peer.sync_failed();
+    peer.sync_backoff = peer.sync_backoff.min(BACKOFF_MAX);
+    peer.next_sync_attempt = peer.next_sync_attempt.min(now + BACKOFF_MAX);
 }
 
 /// What an `/offer` was answered with.
@@ -401,7 +444,11 @@ pub struct PeeringStats {
     pub statics: usize,
     /// Messages offered to all peers, and waiting to be offered.
     pub offered: u64,
+    /// Stored messages waiting to be offered, added up over the peers: one
+    /// waiting for 20 peers counts 20.
     pub unhandled: u64,
+    /// The same, each message counted once.
+    pub unhandled_distinct: u64,
     /// The peers one by one (the first [`ROWS_MAX`] by address).
     pub rows: Vec<PeerRow>,
 }
@@ -421,6 +468,11 @@ pub struct PeerRow {
     pub last_sync: Option<u64>,
     pub offered: u64,
     pub unhandled: u64,
+    /// Syncs that failed since it was last heard, and Unix seconds of the last
+    /// attempt and of the earliest next one (none if never, or due now).
+    pub sync_failures: u32,
+    pub last_attempt: Option<u64>,
+    pub next_attempt: Option<u64>,
     pub peering_cost: u64,
 }
 
@@ -440,7 +492,7 @@ fn state_name(state: lxmf_core::constants::PeerState) -> &'static str {
 fn publish(stats: &Mutex<PeeringStats>, peers: &Peers, node: &Mutex<PropagationNode>) {
     let summary = {
         let node = node.lock().unwrap();
-        peers.summary(|ids| node.unhandled_message_count(ids))
+        peers.summary(|id| node.contains(id))
     };
     let mut stats = stats.lock().unwrap();
     let sent = stats.sent;
@@ -506,11 +558,11 @@ pub async fn run(
                     }
                     Err(Offered::BadKey) => {
                         peer.peering_key = None;
-                        peer.sync_failed();
+                        failed(peer, now());
                     }
                     Err(why) => {
                         tracing::debug!("peer sync with {} failed: {why:?}", hex::encode(hash));
-                        peer.sync_failed();
+                        failed(peer, now());
                     }
                 }
                 // What it has now was saved to its file as the sync went.
@@ -524,7 +576,9 @@ pub async fn run(
             _ = timer.tick(), if syncing.is_none() => {
                 let next = {
                     let node = node.lock().unwrap();
-                    peers.next(|handled| node.create_offer([0; 16], None).into_iter().filter(|id| !handled.contains(id)).collect())
+                    peers.next(|handled, least| {
+                        node.create_offer([0; 16], Some(least)).into_iter().filter(|id| !handled.contains(id)).collect()
+                    })
                 };
                 publish(&stats, &peers, &node);
                 let Some(hash) = next else { continue };
@@ -553,7 +607,14 @@ pub async fn run(
                     };
                     policy.peering_key = stamp.to_vec();
                     policy.peering_key_value = Some(value);
-                    (hash, sync_peer(&runtime, &identity, &node, policy).await, Some((stamp, value)))
+                    let synced = match tokio::time::timeout(SYNC_TIMEOUT, sync_peer(&runtime, &identity, &node, policy)).await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            node.lock().unwrap().complete_sync(&hash);
+                            Err(Offered::Refused("the sync took too long".into()))
+                        }
+                    };
+                    (hash, synced, Some((stamp, value)))
                 }));
             }
         }
@@ -668,21 +729,187 @@ mod tests {
     #[test]
     fn the_next_to_sync_has_messages_it_hasnt_had() {
         let mut peers = Peers::new(PeeringConfig { static_peers: Vec::new(), ..config() }, [0; 16], Vec::new());
-        assert_eq!(peers.next(|_| some(3)), None);
+        assert_eq!(peers.next(|_, _| some(3)), None);
         peers.heard(&node(1, 1, announce(true, 18.0, 1)));
-        assert_eq!(peers.next(|_| some(0)), None, "nothing to send");
-        assert_eq!(peers.next(|_| some(3)), Some([1; 16]));
+        assert_eq!(peers.next(|_, _| some(0)), None, "nothing to send");
+        assert_eq!(peers.next(|_, _| some(3)), Some([1; 16]));
         // Not while its backoff lasts.
         peers.peers.get_mut(&[1; 16]).unwrap().begin_sync();
         peers.peers.get_mut(&[1; 16]).unwrap().state = lxmf_core::constants::PeerState::Idle;
-        assert_eq!(peers.next(|_| some(3)), None);
+        assert_eq!(peers.next(|_, _| some(3)), None);
         // Nor without knowing who it is.
         let mut unknown = node(2, 1, announce(true, 18.0, 1));
         unknown.identity = None;
         peers.heard(&unknown);
-        assert_eq!(peers.next(|_| some(3)), None);
+        assert_eq!(peers.next(|_, _| some(3)), None);
         peers.know([2; 16], [7; 16]);
-        assert_eq!(peers.next(|_| some(3)), Some([2; 16]));
+        assert_eq!(peers.next(|_, _| some(3)), Some([2; 16]));
+    }
+
+    /// A store of messages 0, 1 and 2, with stamp values 20, 20 and 5.
+    fn stamped(handled: &HashSet<PropagationTransientId>, least: f64) -> HashSet<PropagationTransientId> {
+        [([0; 32], 20.0), ([1; 32], 20.0), ([2; 32], 5.0)]
+            .into_iter()
+            .filter(|(id, value)| *value >= least && !handled.contains(id))
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    fn with_peer(cost: f64, timebase: i64) -> Peers {
+        let mut peers = Peers::new(PeeringConfig { static_peers: Vec::new(), ..config() }, [0; 16], Vec::new());
+        peers.heard(&node(1, 1, announce(true, cost, timebase)));
+        peers
+    }
+
+    #[test]
+    fn a_message_dropped_for_a_low_stamp_does_not_come_back_as_unhandled() {
+        // The peer takes stamps from 13 up (announced 16, less 3): message 2 is below.
+        let mut peers = with_peer(18.0, 1);
+        assert_eq!(peers.next(stamped), Some([1; 16]));
+        assert_eq!(peers.peers[&[1; 16]].unhandled_messages, some(2));
+        // A sync: 0 and 1 are taken.
+        let peer = peers.peers.get_mut(&[1; 16]).unwrap();
+        peer.handled_messages.extend([[0; 32], [1; 32]]);
+        peer.sync_complete();
+        // The next tick rebuilds the set; the refused message stays out of it.
+        assert_eq!(peers.next(stamped), None);
+        assert_eq!(peers.summary(|_| true).unhandled, 0);
+    }
+
+    #[test]
+    fn a_message_below_the_stamp_cost_is_offered_again_if_the_cost_falls() {
+        let mut peers = with_peer(18.0, 1);
+        peers.next(stamped);
+        assert!(!peers.peers[&[1; 16]].unhandled_messages.contains(&[2; 32]));
+        // The peer announces a lower cost (stamp 6, flexibility 3: takes 3 up).
+        let mut data = PropagationNodeAnnounceData::new(true, 256, 10240, 6.0, 3.0, 18.0);
+        data.timebase = 2;
+        let heard = node(1, 1, get_propagation_node_app_data(&data));
+        assert_eq!(peers.heard(&heard), Change::Updated);
+        peers.next(stamped);
+        assert_eq!(peers.peers[&[1; 16]].unhandled_messages, some(3));
+        // And a higher cost again takes it out.
+        data.timebase = 3;
+        data.stamp_cost = 16.0;
+        peers.heard(&node(1, 1, get_propagation_node_app_data(&data)));
+        peers.next(stamped);
+        assert_eq!(peers.peers[&[1; 16]].unhandled_messages, some(2));
+    }
+
+    #[test]
+    fn a_message_that_leaves_the_store_is_no_longer_waiting() {
+        let mut peers = with_peer(18.0, 1);
+        peers.next(stamped);
+        assert_eq!(peers.summary(|_| true).unhandled, 2);
+        assert_eq!(peers.summary(|id| id != &[0; 32]).unhandled, 1, "message 0 was removed from the store");
+        // And the next tick's set is built from what is stored.
+        let gone = |handled: &HashSet<PropagationTransientId>, least: f64| {
+            let mut ids = stamped(handled, least);
+            ids.remove(&[0; 32]);
+            ids
+        };
+        peers.next(gone);
+        assert_eq!(peers.peers[&[1; 16]].unhandled_messages, HashSet::from([[1; 32]]));
+    }
+
+    #[test]
+    fn a_peer_saved_before_this_change_loads() {
+        // Nothing is saved for what a peer refuses, so an older peer file is read as it was.
+        let mut saved = LxmPeer::from_announce([1; 16], 1.0, Some(256.0), Some(10240.0), Some(16.0), Some(3.0), Some(18.0));
+        saved.autopeered = true;
+        saved.handled_messages.insert([0; 32]);
+        let bytes = saved.to_bytes_with_handled();
+        let loaded = LxmPeer::from_bytes_with_handled(&bytes).expect("a saved peer file is read");
+        let mut peers = Peers::new(config(), [0; 16], vec![loaded]);
+        peers.know([1; 16], [5; 16]);
+        assert_eq!(peers.next(stamped), Some([1; 16]));
+        assert_eq!(peers.peers[&[1; 16]].unhandled_messages, HashSet::from([[1; 32]]));
+    }
+
+    #[test]
+    fn distinct_messages_are_counted_once_however_many_peers_wait_for_them() {
+        let mut peers = Peers::new(PeeringConfig { max_peers: 10, static_peers: Vec::new(), ..config() }, [0; 16], Vec::new());
+        for n in 1..=3 {
+            peers.heard(&node(n, 1, announce(true, 18.0, 1)));
+        }
+        // Peers 1 and 2 wait for messages 0 and 1; peer 3 for 1 and 2; 5 is not stored.
+        let set = |ids: &[u8]| ids.iter().map(|i| [*i; 32]).collect::<HashSet<_>>();
+        peers.peers.get_mut(&[1; 16]).unwrap().unhandled_messages = set(&[0, 1]);
+        peers.peers.get_mut(&[2; 16]).unwrap().unhandled_messages = set(&[0, 1]);
+        peers.peers.get_mut(&[3; 16]).unwrap().unhandled_messages = set(&[1, 2, 5]);
+        let stats = peers.summary(|id| id[0] < 5);
+        assert_eq!((stats.unhandled, stats.unhandled_distinct), (6, 3));
+        assert_eq!(stats.rows.iter().map(|r| r.unhandled).collect::<Vec<_>>(), [2, 2, 2]);
+        assert_eq!(peers.summary(|_| false).unhandled_distinct, 0);
+        assert_eq!(Peers::default().summary(|_| true), PeeringStats::default());
+    }
+
+    #[test]
+    fn every_peer_is_synced_in_turn_and_those_never_synced_go_first() {
+        let mut peers = Peers::new(PeeringConfig { max_peers: 10, static_peers: Vec::new(), ..config() }, [0; 16], Vec::new());
+        for n in 1..=6 {
+            peers.heard(&node(n, 1, announce(true, 18.0, 1)));
+        }
+        // Peer 3 was synced a while ago; the rest never were.
+        peers.peers.get_mut(&[3; 16]).unwrap().last_sync_attempt = 1_000.0;
+        let mut order = Vec::new();
+        for _ in 0..6 {
+            let hash = peers.next(stamped).expect("a peer is waiting");
+            let peer = peers.peers.get_mut(&hash).unwrap();
+            peer.begin_sync();
+            // Each is synced (taking what it was offered, but not everything).
+            peer.sync_complete();
+            order.push(hash[0]);
+        }
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, [1, 2, 3, 4, 5, 6], "each once, none starved: {order:?}");
+        assert_eq!(order[5], 3, "the one synced before comes last: {order:?}");
+        // And round again: the first synced is first.
+        assert_eq!(peers.next(stamped), Some([order[0]; 16]));
+    }
+
+    #[test]
+    fn a_peer_still_syncing_or_in_backoff_does_not_hold_the_others_back() {
+        let mut peers = Peers::new(PeeringConfig { max_peers: 10, static_peers: Vec::new(), ..config() }, [0; 16], Vec::new());
+        for n in 1..=3 {
+            peers.heard(&node(n, 1, announce(true, 18.0, 1)));
+        }
+        peers.peers.get_mut(&[1; 16]).unwrap().begin_sync(); // stuck establishing a Link
+        let slow = peers.peers.get_mut(&[2; 16]).unwrap();
+        slow.begin_sync();
+        failed(slow, now());
+        slow.state = lxmf_core::constants::PeerState::Idle; // failed, in backoff
+        for _ in 0..5 {
+            assert_eq!(peers.next(stamped), Some([3; 16]));
+        }
+    }
+
+    #[test]
+    fn failed_syncs_back_off_for_a_bounded_time_and_a_success_resets_it() {
+        let mut peers = with_peer(18.0, 1);
+        let peer = peers.peers.get_mut(&[1; 16]).unwrap();
+        let start = now();
+        for tries in 1..=20 {
+            peer.begin_sync();
+            failed(peer, now());
+            assert_eq!(peer.unreachable_count, tries);
+            assert!(peer.sync_backoff <= BACKOFF_MAX, "{}", peer.sync_backoff);
+            assert!(peer.next_sync_attempt <= now() + BACKOFF_MAX + 1.0);
+        }
+        assert!(peer.next_sync_attempt > start + 60.0, "still waits");
+        peer.begin_sync();
+        peer.sync_complete();
+        assert_eq!((peer.sync_backoff, peer.next_sync_attempt), (0.0, 0.0));
+        // A peer failing does not hold back the others: they are chosen while its backoff lasts.
+        peers.heard(&node(2, 1, announce(true, 18.0, 1)));
+        let failing = peers.peers.get_mut(&[1; 16]).unwrap();
+        failing.begin_sync();
+        failed(failing, now());
+        failing.state = lxmf_core::constants::PeerState::Idle;
+        for _ in 0..10 {
+            assert_eq!(peers.next(stamped), Some([2; 16]));
+        }
     }
 
     #[test]
@@ -713,7 +940,10 @@ mod tests {
         peers.peers.get_mut(&[3; 16]).unwrap().offered = 4;
         peers.peers.get_mut(&[3; 16]).unwrap().alive = true;
         peers.peers.get_mut(&[7; 16]).unwrap().offered = 1;
-        let summary = peers.summary(|_| 2);
+        for hash in [[3; 16], [7; 16]] {
+            peers.peers.get_mut(&hash).unwrap().unhandled_messages = some(2);
+        }
+        let summary = peers.summary(|_| true);
         assert_eq!((summary.peered, summary.alive, summary.statics, summary.offered, summary.unhandled), (2, 1, 1, 5, 4));
         let rows = &summary.rows;
         assert_eq!(rows.iter().map(|r| r.hash).collect::<Vec<_>>(), [[3; 16], [7; 16]]);
@@ -723,7 +953,7 @@ mod tests {
         let mut far = heard.clone();
         far.hops = 9;
         assert_eq!(peers.heard(&far), Change::Unpeered);
-        assert_eq!(peers.summary(|_| 0).rows.len(), 1);
+        assert_eq!(peers.summary(|_| false).rows.len(), 1);
         assert!(!peers.hops.contains_key(&[3; 16]));
     }
 }
