@@ -4610,7 +4610,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "lxmf-core"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -5363,7 +5363,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -6533,7 +6533,7 @@ dependencies = [
 
 [[package]]
 name = "rngit"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ed25519-dalek",
  "flate2",
@@ -6553,7 +6553,7 @@ dependencies = [
 
 [[package]]
 name = "rns-crypto"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "aes",
  "cbc",
@@ -6571,7 +6571,7 @@ dependencies = [
 
 [[package]]
 name = "rns-identity"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "hex",
  "libc",
@@ -6591,7 +6591,7 @@ dependencies = [
 
 [[package]]
 name = "rns-interface"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "bluer",
  "btleplug",
@@ -6624,7 +6624,7 @@ dependencies = [
 
 [[package]]
 name = "rns-link"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "hex",
  "libc",
@@ -6641,7 +6641,7 @@ dependencies = [
 
 [[package]]
 name = "rns-protocol"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "bzip2",
  "hex",
@@ -6658,7 +6658,7 @@ dependencies = [
 
 [[package]]
 name = "rns-runtime"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "bytes",
  "hex",
@@ -6686,7 +6686,7 @@ dependencies = [
 
 [[package]]
 name = "rns-transport"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "bytes",
  "hex",
@@ -6706,7 +6706,7 @@ dependencies = [
 
 [[package]]
 name = "rns-wire"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "rns-crypto",
  "sha2 0.10.9",
@@ -8149,7 +8149,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",

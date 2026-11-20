@@ -100,7 +100,7 @@ macOS and Windows:
   in the fork, then move the submodule pointer in rettui. Leave every
   other submodule as it is, and work around its limits in rettui itself.
 - `deps/rsReticulum` is pinned on purpose, to the fork's `rettui-1.5`
-  branch: rsReticulum 1.5.0 with rettui's patches and rusqlite 0.42. Never
+  branch: rsReticulum 1.5.1 with rettui's patches and rusqlite 0.42. Never
   change it or move its submodule pointer, even though it's a fork, unless
   asked to, or upstream has rusqlite 0.42 and no patch of ours is left.
   `deps/rsLXMF` is the same, on the fork's `rettui-1.5` branch (rusqlite
