@@ -206,6 +206,41 @@ pub fn restore(history: &History, pending: &Pending, reason: &str) -> Result<(),
     Ok(())
 }
 
+/// The id the audit log and `/state` give a change whose file couldn't be read.
+const UNKNOWN_ID: &str = "0000000000000000";
+
+/// What the start found out about the last change, for `/state` until the
+/// next change ends (`manage/start-result.json`).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StartResult {
+    pub id: String,
+    /// `rolled_back` or `left`.
+    pub outcome: String,
+    pub at: u64,
+    pub message: String,
+}
+
+fn start_result_path(paths: &Paths) -> PathBuf {
+    paths.root.join("manage").join("start-result.json")
+}
+
+fn save_start_result(paths: &Paths, result: &StartResult) {
+    let written = serde_json::to_vec(result)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| crate::config::write_private(&start_result_path(paths), &bytes).map_err(|e| e.to_string()));
+    if let Err(e) = written {
+        tracing::warn!("Remote management: couldn't save what the start found: {e}");
+    }
+}
+
+/// What the start found out, once: the file is removed as it is read.
+pub fn take_start_result(paths: &Paths) -> Option<StartResult> {
+    let path = start_result_path(paths);
+    let bytes = crate::config::read_limited(&path, MAX_FILE).ok()?;
+    let _ = std::fs::remove_file(&path);
+    serde_json::from_slice(&bytes).ok()
+}
+
 /// At the start, before Reticulum: what to do with a change left pending by
 /// the last run (it was never confirmed, so it isn't kept). The config is put
 /// back if it is as the change left it; anything else is left as it is and
@@ -221,9 +256,33 @@ pub fn recover(paths: &Paths, rns_config: Option<&str>) -> Vec<String> {
                 Ok(()) => format!("moved it to {}", aside.display()),
                 Err(e) => format!("and it couldn't be moved aside: {e}"),
             };
+            // What the change was can't be known, and it was never confirmed: the config may
+            // still hold it. So the next change waits, as after a rollback, and the website is told.
+            super::recent::ChangeLimits::hold_saved(paths, super::owner::HOLD_AFTER_ROLLBACK);
+            let message = format!(
+                "The file of a Reticulum change left by the last run couldn't be read, so that change, if it was never confirmed, may still be in the Reticulum config: check the config against its history. The next change waits {} minutes",
+                super::owner::HOLD_AFTER_ROLLBACK.as_secs() / 60
+            );
+            let mut audit = Audit::load(paths.root.join("manage").join("audit.jsonl"));
+            let record = Record {
+                id: UNKNOWN_ID,
+                actor: "node",
+                op: "auto_rollback",
+                changes: Vec::new(),
+                outcome: Outcome::Failed,
+                error: Some(&message),
+            };
+            if let Err(e) = audit.record(record, unix_now()) {
+                tracing::warn!("Remote management: {e}");
+            }
+            save_start_result(
+                paths,
+                &StartResult { id: UNKNOWN_ID.into(), outcome: "left".into(), at: unix_now(), message: message.clone() },
+            );
             let line = format!(
-                "warning: remote management: {} was left by the last run, but {why}; {moved}. The Reticulum config was left as it is: check it against its history",
-                path(paths).display()
+                "warning: remote management: {} was left by the last run, but {why}; {moved}. A change that was never confirmed may still be in the Reticulum config: check it against its history. The next change waits {} minutes",
+                path(paths).display(),
+                super::owner::HOLD_AFTER_ROLLBACK.as_secs() / 60
             );
             tracing::warn!("{line}");
             return vec![line];
@@ -231,6 +290,7 @@ pub fn recover(paths: &Paths, rns_config: Option<&str>) -> Vec<String> {
     };
     let mut said = Vec::new();
     let mut keep = false;
+    let mut hold = false;
     if pending.state == State::Committed {
         if let Err(e) = remove(paths) {
             said.push(format!("warning: remote management: {e}"));
@@ -259,7 +319,18 @@ pub fn recover(paths: &Paths, rns_config: Option<&str>) -> Vec<String> {
             let reason = format!("The node stopped while the change was {}", pending.state.words());
             match restore(&History::new(paths.reticulum_history.clone()), &pending, &reason) {
                 Ok(()) => {
+                    // The next change waits, as after one the node put back while it ran.
+                    hold = true;
                     record("auto_rollback", Outcome::RolledBack, &reason);
+                    save_start_result(
+                        paths,
+                        &StartResult {
+                            id: pending.id.clone(),
+                            outcome: "rolled_back".into(),
+                            at: unix_now(),
+                            message: "The node stopped before the change was confirmed: the Reticulum config was put back as it was".into(),
+                        },
+                    );
                     format!(
                         "Remote management: change {} wasn't confirmed before the node stopped: put the Reticulum config back as it was",
                         pending.id
@@ -268,6 +339,7 @@ pub fn recover(paths: &Paths, rns_config: Option<&str>) -> Vec<String> {
                 Err(RestoreError::Write(e)) => {
                     // Kept, as being rolled back, for the next try.
                     keep = true;
+                    hold = true;
                     let rolling = Pending { state: State::RollingBack, ..pending.clone() };
                     if let Err(e) = save(paths, &rolling) {
                         tracing::warn!("Remote management: {e}");
@@ -298,6 +370,7 @@ pub fn recover(paths: &Paths, rns_config: Option<&str>) -> Vec<String> {
                 format!("Remote management: change {} wasn't saved before the node stopped: nothing to put back", pending.id)
             } else {
                 let reason = format!("The node stopped while the change was {}; the old config was back already", pending.state.words());
+                hold = true;
                 record("auto_rollback", Outcome::RolledBack, &reason);
                 format!("Remote management: change {} wasn't confirmed; the Reticulum config was back as it was already", pending.id)
             }
@@ -315,6 +388,9 @@ pub fn recover(paths: &Paths, rns_config: Option<&str>) -> Vec<String> {
     };
     tracing::warn!("{line}");
     said.push(line);
+    if hold {
+        super::recent::ChangeLimits::hold_saved(paths, super::owner::HOLD_AFTER_ROLLBACK);
+    }
     if !keep && let Err(e) = remove(paths) {
         said.push(format!("warning: remote management: {e}"));
     }
@@ -323,6 +399,8 @@ pub fn recover(paths: &Paths, rns_config: Option<&str>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     const BEFORE: &str = "[reticulum]\n  enable_transport = no\n";
@@ -446,6 +524,11 @@ mod tests {
             assert!(audit[0].2.contains(&format!("while the change was {}", state.words())), "{audit:?}");
             assert_eq!(load(&node.paths), Ok(None));
             assert!(node.history().list(&node.config)[0].what.starts_with("Rolled back remote change 0123456789abcdef"));
+            // The next change waits, as after a rollback the running node made.
+            let limits =
+                super::super::recent::ChangeLimits::load(&node.paths, Duration::from_secs(3600), super::super::owner::HOLD_AFTER_ROLLBACK);
+            let left = limits.held_until.expect("held").saturating_duration_since(std::time::Instant::now());
+            assert!(left > Duration::from_secs(850), "{state:?}: {left:?}");
             // Once only.
             assert!(node.recover().is_empty());
         }

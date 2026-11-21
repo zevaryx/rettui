@@ -7,16 +7,32 @@
 //! the request came in on (rsReticulum's transport hands the request to the
 //! destination, which announces as a path response; transport mode doesn't
 //! matter). The test passes when an announce for that address, signed by the
-//! node's identity, comes back as a path response made after the probe
-//! began: a port that only accepts connections, a Reticulum that drops what
-//! comes in on it, or an old announce played back, doesn't pass.
+//! node's identity, comes back on the same connection as a path response made
+//! at or after the second the request was sent, and read after it: a port that
+//! only accepts connections, a Reticulum that drops what comes in on it, or an
+//! old announce played back, doesn't pass.
+//!
+//! What this does not prove: Reticulum's path response carries no id of the
+//! request, and the mark that makes it a path response isn't covered by the
+//! announce's signature. So something other than Reticulum on the dialled
+//! address (a local process, or a wrong `listen_ip`) that can get a fresh
+//! announce of the node's address from another interface after the request
+//! came in, and passes it on, still passes. The check shows that the node's
+//! identity announced its address just now and that whatever listens there
+//! speaks Reticulum's framing (and IFAC); it does not show that Reticulum's own
+//! listener answered. A false pass only moves a change to probation, where the
+//! website's own probe and its confirm still decide.
 //!
 //! An interface that can't be dialled (a radio, a serial line, an
 //! AutoInterface, a client, a listener bound to a device or given by a
 //! host name rather than an IP address, one that sends nothing, a Backbone
 //! listener that counts connections as flapping for over two minutes, or
 //! one whose path request stamps cost too much to make) only has to be online, and whether anything was heard
-//! on it since the restart is said, for information.
+//! on it since the restart is said, for information. So is a Backbone
+//! listener that refuses or closes every connection of the probe at once
+//! without a word, as one does that has blocked this address as flapping
+//! (any local program can cause that): it is checked online only, and the
+//! audit log says "loopback refused; checked online only".
 //!
 //! The probes run in a thread of their own, so the owner loop never waits on
 //! the network; the owner reads their results on its ticks.
@@ -48,9 +64,9 @@ const STAMP_WITHIN: Duration = Duration::from_secs(5);
 /// A Backbone listener that counts a connection as flapping for longer than
 /// this is only checked to be online: the probe would have to stay that long.
 const MAX_HOLD: Duration = Duration::from_secs(120);
-/// How far an answer's announce time may be before the probe began (clock
-/// steps within a second, rounding).
-const ANNOUNCE_SLACK: u64 = 2;
+/// How many connections a Backbone listener may refuse, one after the other,
+/// before the probe takes it as having blocked this address.
+const MAX_REFUSED: usize = 5;
 /// The most connections one probe opens: a Backbone listener blocks an
 /// address that connects and leaves too often.
 const MAX_CONNECTIONS: usize = 3;
@@ -111,6 +127,20 @@ pub struct Check {
     pub interface: String,
     pub kind: Kind,
     pub seen: Seen,
+    /// Why it is checked as it is, when that isn't the usual way.
+    pub note: Option<&'static str>,
+}
+
+/// Said of a Backbone listener whose connections were all refused.
+const LOOPBACK_REFUSED: &str = "loopback refused; checked online only";
+
+/// How a probe ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probed {
+    Passed,
+    Failed,
+    /// A Backbone listener refused or closed every connection without a word.
+    Refused,
 }
 
 /// An interface's IFAC: its key and the length of its tags.
@@ -132,6 +162,9 @@ pub struct Dial {
     /// How long a connection stays open at least, so a Backbone listener
     /// doesn't count it as flapping and block loopback.
     hold: Duration,
+    /// Whether it is a Backbone listener, which blocks an address that
+    /// connects and leaves too often.
+    backbone: bool,
 }
 
 impl std::fmt::Debug for Dial {
@@ -143,6 +176,7 @@ impl std::fmt::Debug for Dial {
             .field("ifac", &self.ifac.as_ref().map(|ifac| ifac.size))
             .field("stamp_cost", &self.stamp_cost)
             .field("hold", &self.hold)
+            .field("backbone", &self.backbone)
             .finish()
     }
 }
@@ -168,7 +202,7 @@ pub enum Prober {
 pub struct Run {
     checks: Vec<Check>,
     dials: HashMap<usize, Dial>,
-    results: Option<mpsc::Receiver<(usize, bool)>>,
+    results: Option<mpsc::Receiver<(usize, Probed)>>,
     started: bool,
 }
 
@@ -183,7 +217,7 @@ impl Run {
             if let Some(dial) = dial {
                 run.dials.insert(index, dial);
             }
-            run.checks.push(Check { interface: name.clone(), kind, seen: Seen::Waiting });
+            run.checks.push(Check { interface: name.clone(), kind, seen: Seen::Waiting, note: None });
         }
         run
     }
@@ -237,7 +271,6 @@ impl Run {
         if dials.is_empty() {
             return;
         }
-        let started = unix_now();
         let (tx, rx) = mpsc::channel();
         self.results = Some(rx);
         let spawned = std::thread::Builder::new().name("rettui-self-test".into()).spawn(move || {
@@ -246,7 +279,7 @@ impl Run {
                 Err(e) => {
                     tracing::warn!("Remote management: the self-test couldn't start: {e}");
                     for (index, _) in dials {
-                        let _ = tx.send((index, false));
+                        let _ = tx.send((index, Probed::Failed));
                     }
                     return;
                 }
@@ -256,8 +289,8 @@ impl Run {
                 for (index, dial) in dials {
                     let tx = tx.clone();
                     probes.spawn(async move {
-                        probe(&dial, destination, started, within, attempt, |passed| {
-                            let _ = tx.send((index, passed));
+                        probe(&dial, destination, within, attempt, |probed| {
+                            let _ = tx.send((index, probed));
                         })
                         .await
                     });
@@ -278,9 +311,18 @@ impl Run {
     /// checked to be online have heard.
     pub fn poll(&mut self, interfaces: &[InterfaceInfo]) {
         if let Some(results) = &self.results {
-            while let Ok((index, passed)) = results.try_recv() {
+            while let Ok((index, probed)) = results.try_recv() {
                 if let Some(check) = self.checks.get_mut(index) {
-                    check.seen = if passed { Seen::Passed } else { Seen::Failed };
+                    match probed {
+                        Probed::Passed => check.seen = Seen::Passed,
+                        Probed::Failed => check.seen = Seen::Failed,
+                        // Only has to be online, as a listener that can't be dialled.
+                        Probed::Refused => {
+                            check.kind = Kind::Online;
+                            check.seen = Seen::Waiting;
+                            check.note = Some(LOOPBACK_REFUSED);
+                        }
+                    }
                 }
             }
             // A probe thread that ended without saying (it can't) failed.
@@ -330,7 +372,14 @@ impl Run {
             self.checks
                 .iter()
                 .take(MAX_CHECKS)
-                .map(|c| json!({ "interface": cut(&c.interface, MAX_PROBLEM), "kind": c.kind.as_str(), "result": c.seen.as_str() }))
+                .map(|c| {
+                    let mut check =
+                        json!({ "interface": cut(&c.interface, MAX_PROBLEM), "kind": c.kind.as_str(), "result": c.seen.as_str() });
+                    if let (Some(note), Some(map)) = (c.note, check.as_object_mut()) {
+                        map.insert("note".into(), json!(note));
+                    }
+                    check
+                })
                 .collect(),
         )
     }
@@ -344,7 +393,10 @@ impl Run {
             .checks
             .iter()
             .take(MAX_CHECKS)
-            .map(|c| format!("{} {} {}", cut(&c.interface, MAX_PROBLEM), c.kind.as_str(), c.seen.as_str()))
+            .map(|c| match c.note {
+                Some(note) => format!("{} {} {} ({note})", cut(&c.interface, MAX_PROBLEM), c.kind.as_str(), c.seen.as_str()),
+                None => format!("{} {} {}", cut(&c.interface, MAX_PROBLEM), c.kind.as_str(), c.seen.as_str()),
+            })
             .collect();
         Some(said.join("; "))
     }
@@ -372,10 +424,10 @@ fn reachable(listen: &str) -> Option<IpAddr> {
 fn dial_of(config: &Config, name: &str) -> Option<Dial> {
     let section = config.subsection("interfaces", name)?;
     let interface = interface_factory::synthesize_interface(name, section).ok()?;
-    let (host, port, kiss, hold) = match &interface {
+    let (host, port, kiss, hold, backbone) = match &interface {
         // Bound to a device, it listens on whatever address the device has.
         InterfaceConfig::TcpServer(server) if server.device.is_none() => {
-            (server.listen_ip.as_deref()?, server.listen_port, server.kiss_framing, Duration::ZERO)
+            (server.listen_ip.as_deref()?, server.listen_port, server.kiss_framing, Duration::ZERO, false)
         }
         InterfaceConfig::Backbone(backbone) if backbone.target_host.is_none() && backbone.device.is_none() => {
             let hold = match backbone.block_fast_flapping {
@@ -383,7 +435,7 @@ fn dial_of(config: &Config, name: &str) -> Option<Dial> {
                 true => backbone.fast_flapping_threshold + Duration::from_secs(1),
                 false => Duration::ZERO,
             };
-            (backbone.listen_on.as_deref()?, backbone.port, false, hold)
+            (backbone.listen_on.as_deref()?, backbone.port, false, hold, true)
         }
         _ => return None,
     };
@@ -407,7 +459,7 @@ fn dial_of(config: &Config, name: &str) -> Option<Dial> {
         Some(cost) if cost > MAX_STAMP_COST => return None,
         cost => cost,
     };
-    Some(Dial { address: SocketAddr::new(reachable(host)?, port), kiss, ifac, stamp_cost, hold })
+    Some(Dial { address: SocketAddr::new(reachable(host)?, port), kiss, ifac, stamp_cost, hold, backbone })
 }
 
 /// The cost of the stamp a path request needs on an interface: `None`
@@ -464,11 +516,11 @@ fn path_request(destination: [u8; 16], stamp_cost: Option<f64>, stamp_by: Instan
 }
 
 /// Whether the packet `raw` (IFAC removed) is a path response announcing
-/// `destination`, made at or after `started` (unix seconds, the time an
-/// announce carries in the last 5 bytes of its random hash), that its
-/// signature and its address bear out. An older announce, played back by
-/// something else on the port, isn't an answer.
-fn announces(raw: &[u8], destination: &[u8; 16], started: u64) -> bool {
+/// `destination`, made at or after `sent` (unix seconds: the second the
+/// request went out, and the time an announce carries in the last 5 bytes of
+/// its random hash), that its signature and its address bear out. An older
+/// announce, played back by something else on the port, isn't an answer.
+fn announces(raw: &[u8], destination: &[u8; 16], sent: u64) -> bool {
     let Ok(packet) = rns_wire::packet::Packet::from_raw(raw) else { return false };
     let header = &packet.header;
     if header.flags.packet_type != rns_wire::flags::PacketType::Announce
@@ -480,7 +532,7 @@ fn announces(raw: &[u8], destination: &[u8; 16], started: u64) -> bool {
     let Ok(announce) = rns_identity::announce::AnnounceData::unpack(packet.data(), header.flags.context_flag) else { return false };
     let mut time = [0u8; 8];
     time[3..].copy_from_slice(&announce.random_hash[5..10]);
-    u64::from_be_bytes(time) >= started.saturating_sub(ANNOUNCE_SLACK) && announce.validate(destination).is_ok()
+    u64::from_be_bytes(time) >= sent && announce.validate(destination).is_ok()
 }
 
 /// Frames in the interface's framing, taken from a stream of bytes.
@@ -514,16 +566,20 @@ impl Deframer {
 }
 
 /// Dial `dial` and ask for a path to `destination` until an announce of it
-/// comes back (`report(true)`) or `within` is over (`report(false)`), with a
-/// new request every `attempt` and at most [`MAX_CONNECTIONS`] connections.
+/// comes back (`Probed::Passed`) or `within` is over (`Probed::Failed`), with
+/// a new request every `attempt` and at most [`MAX_CONNECTIONS`] connections.
 /// The last connection is then held open for `dial.hold`, from when it was
-/// made, before it is closed. `started` is when the test began (unix
-/// seconds): an announce made before it doesn't count.
-pub async fn probe(dial: &Dial, destination: [u8; 16], started: u64, within: Duration, attempt: Duration, report: impl FnOnce(bool)) {
+/// made, before it is closed. An answer counts only on the connection its
+/// request went out on, and only if the announce was made at or after the
+/// second that request was sent; what the listener sent before the request
+/// is thrown away. A Backbone listener that refuses or closes every
+/// connection without a word ends it as `Probed::Refused`.
+pub async fn probe(dial: &Dial, destination: [u8; 16], within: Duration, attempt: Duration, report: impl FnOnce(Probed)) {
     let until = tokio::time::Instant::now() + within;
     let mut held: Option<(TcpStream, tokio::time::Instant)> = None;
     let mut passed = false;
     let mut connections = 0;
+    let (mut refused, mut closed_empty, mut other) = (0usize, 0usize, false);
     'connections: while connections < MAX_CONNECTIONS {
         let left = until.saturating_duration_since(tokio::time::Instant::now());
         if left.is_zero() {
@@ -531,6 +587,10 @@ pub async fn probe(dial: &Dial, destination: [u8; 16], started: u64, within: Dur
         }
         // Refused (not listening yet, or not at all): tried again until the time is up.
         let Some(mut stream) = connect(dial, left.min(attempt)).await else {
+            refused += 1;
+            if dial.backbone && refused >= MAX_REFUSED {
+                break;
+            }
             tokio::time::sleep(left.min(Duration::from_secs(1))).await;
             continue;
         };
@@ -539,9 +599,20 @@ pub async fn probe(dial: &Dial, destination: [u8; 16], started: u64, within: Dur
         let mut deframer = Deframer::new(dial.kiss);
         let mut read = 0usize;
         let mut buffer = vec![0u8; 16 * 1024];
+        // Whatever is already waiting was sent before any request of ours: not an answer.
+        while let Ok(n @ 1..) = stream.try_read(&mut buffer) {
+            read += n;
+            let _ = deframer.feed(&buffer[..n]);
+            if read > MAX_READ {
+                break;
+            }
+        }
+        // The second the first request of this connection went out.
+        let mut sent: Option<u64> = None;
         loop {
             let now = tokio::time::Instant::now();
             if now >= until {
+                other = true;
                 held = Some((stream, opened));
                 break 'connections;
             }
@@ -549,25 +620,37 @@ pub async fn probe(dial: &Dial, destination: [u8; 16], started: u64, within: Dur
             // No stamp in time: no request this round, but the connection
             // is still read (an answer to an earlier one counts) and the
             // next round tries again.
-            if let Some(request) = framed_request(dial, destination, now.into_std() + STAMP_WITHIN.min(until - now)).await
-                && stream.write_all(&request).await.is_err()
-            {
-                break;
+            if let Some(request) = framed_request(dial, destination, now.into_std() + STAMP_WITHIN.min(until - now)).await {
+                let at = unix_now();
+                if stream.write_all(&request).await.is_err() {
+                    closed_empty += usize::from(read == 0);
+                    break;
+                }
+                sent.get_or_insert(at);
             }
             let closed = loop {
                 let bytes = match tokio::time::timeout_at(answer_by, stream.read(&mut buffer)).await {
-                    Err(_) => break false,
+                    Err(_) => {
+                        other = true;
+                        break false;
+                    }
                     Ok(Ok(0) | Err(_)) => break true,
                     Ok(Ok(n)) => n,
                 };
                 read += bytes;
+                other = true;
                 if read > MAX_READ {
                     break true;
                 }
+                let Some(sent) = sent else {
+                    // Nothing asked yet on this connection: nothing to answer.
+                    let _ = deframer.feed(&buffer[..bytes]);
+                    continue;
+                };
                 let found = deframer.feed(&buffer[..bytes]).into_iter().any(|frame| match &dial.ifac {
                     Some(ifac) => rns_transport::ifac::ifac_verify(&frame, &ifac.key, ifac.size)
-                        .is_some_and(|raw| announces(&raw, &destination, started)),
-                    None => !rns_transport::ifac::has_ifac_flag(&frame) && announces(&frame, &destination, started),
+                        .is_some_and(|raw| announces(&raw, &destination, sent)),
+                    None => !rns_transport::ifac::has_ifac_flag(&frame) && announces(&frame, &destination, sent),
                 });
                 if found {
                     passed = true;
@@ -576,11 +659,21 @@ pub async fn probe(dial: &Dial, destination: [u8; 16], started: u64, within: Dur
                 }
             };
             if closed {
+                if read == 0 {
+                    closed_empty += 1;
+                }
                 break;
             }
         }
     }
-    report(passed);
+    let probed = if passed {
+        Probed::Passed
+    } else if dial.backbone && !other && closed_empty == connections && connections + refused > 0 {
+        Probed::Refused
+    } else {
+        Probed::Failed
+    };
+    report(probed);
     if let Some((stream, opened)) = held {
         if let Some(until) = opened.checked_add(dial.hold) {
             tokio::time::sleep_until(until).await;
@@ -652,13 +745,17 @@ mod tests {
         (handle, destination, hash)
     }
 
-    async fn probed(dial: &Dial, destination: [u8; 16], within: Duration) -> bool {
+    async fn probed_as(dial: &Dial, destination: [u8; 16], within: Duration) -> Probed {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        probe(dial, destination, unix_now(), within, Duration::from_secs(2), |passed| {
-            let _ = tx.send(passed);
+        probe(dial, destination, within, Duration::from_secs(2), |probed| {
+            let _ = tx.send(probed);
         })
         .await;
         rx.await.unwrap()
+    }
+
+    async fn probed(dial: &Dial, destination: [u8; 16], within: Duration) -> bool {
+        probed_as(dial, destination, within).await == Probed::Passed
     }
 
     fn dial(config: &str, name: &str) -> Option<Dial> {
@@ -853,13 +950,13 @@ mod tests {
         };
         let raw = packet(destination, path_response, &announce);
         assert!(announces(&raw, &destination, started));
-        // Made within the slack before the probe began, it still counts.
-        assert!(announces(&raw, &destination, started + ANNOUNCE_SLACK));
+        // Made before the request was sent (a start-up announce with its
+        // context byte flipped, or one heard earlier), it doesn't count.
+        assert!(!announces(&raw, &destination, started + 1));
         // An older one, played back (a validly signed announce of the
         // node, heard before), isn't an answer.
         let old = rns_identity::announce::AnnounceData::create_at(&identity, "rettui.selftest", None, None, started - 600).unwrap();
         assert!(!announces(&packet(destination, path_response, &old), &destination, started));
-        assert!(!announces(&raw, &destination, started + ANNOUNCE_SLACK + 1));
         // Nor an announce that isn't a path response.
         assert!(!announces(&packet(destination, rns_wire::context::PacketContext::None, &announce), &destination, started));
         // Another address, a broken signature, junk and nothing are no answer.
@@ -876,6 +973,132 @@ mod tests {
         assert!(deframer.feed(&[0x7e; 1000]).is_empty());
         let mut kiss = Deframer::new(true);
         assert_eq!(kiss.feed(&rns_interface::tcp::frame_for_tcp(&raw, true)), std::slice::from_ref(&raw));
+    }
+
+    /// A framed path response announcing `identity`'s address, made at `time`.
+    fn framed_path_response(identity: &Identity, time: u64) -> Vec<u8> {
+        let destination = Destination::hash_from_name_and_identity("rettui.selftest", Some(&identity.hash));
+        let announce = rns_identity::announce::AnnounceData::create_at(identity, "rettui.selftest", None, None, time).unwrap();
+        let header = rns_wire::header::PacketHeader {
+            flags: rns_wire::flags::PacketFlags {
+                header_type: rns_wire::flags::HeaderType::Header1,
+                context_flag: false,
+                transport_type: rns_wire::flags::TransportType::Broadcast,
+                destination_type: rns_wire::flags::DestinationType::Single,
+                packet_type: rns_wire::flags::PacketType::Announce,
+            },
+            hops: 0,
+            transport_id: None,
+            destination_hash: destination,
+            context: rns_wire::context::PacketContext::PathResponse,
+        };
+        let mut raw = header.pack();
+        raw.extend_from_slice(&announce.pack());
+        rns_interface::tcp::frame_for_tcp(&raw, false)
+    }
+
+    /// A listener that answers the first bytes it gets with `answer(now)`, as
+    /// a program that isn't Reticulum would, and keeps the connection open.
+    async fn fake_listener(answer: impl Fn(u64) -> Vec<u8> + Send + 'static) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut kept = Vec::new();
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buffer = [0u8; 4096];
+                if matches!(socket.read(&mut buffer).await, Ok(n) if n > 0) {
+                    let _ = socket.write_all(&answer(unix_now())).await;
+                }
+                kept.push(socket);
+            }
+        });
+        address
+    }
+
+    /// What a listener that isn't Reticulum can and can't make the test say.
+    #[test]
+    fn an_announce_made_before_the_request_is_no_answer() {
+        let identity = Identity::new();
+        let destination = Destination::hash_from_name_and_identity("rettui.selftest", Some(&identity.hash));
+        let plain = |address| Dial { address, kiss: false, ifac: None, stamp_cost: None, hold: Duration::ZERO, backbone: false };
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            // An announce of the node heard earlier (its start-up announce with
+            // the context byte flipped to a path response) and passed on.
+            let old = identity.clone();
+            let flipped = fake_listener(move |now| framed_path_response(&old, now - 5)).await;
+            assert!(!probed(&plain(flipped), destination, Duration::from_secs(4)).await);
+            // Made in the same second as the request, or later, it counts: what
+            // the check can't tell is who made it (see the module's notes).
+            let fresh = identity.clone();
+            let relayed = fake_listener(move |now| framed_path_response(&fresh, now)).await;
+            assert!(probed(&plain(relayed), destination, Duration::from_secs(10)).await);
+        });
+    }
+
+    /// A Backbone listener that has blocked this address closes every
+    /// connection at once: that is only checked online. One that is silent,
+    /// or isn't a Backbone listener, still fails.
+    #[test]
+    fn a_backbone_listener_that_refuses_every_connection_is_only_checked_online() {
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let dial = |address, backbone| Dial { address, kiss: false, ifac: None, stamp_cost: None, hold: Duration::ZERO, backbone };
+            let closing = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let closing_at = closing.local_addr().unwrap();
+            tokio::spawn(async move {
+                while let Ok((socket, _)) = closing.accept().await {
+                    drop(socket);
+                }
+            });
+            assert_eq!(probed_as(&dial(closing_at, true), [9; 16], Duration::from_secs(10)).await, Probed::Refused);
+            assert_eq!(
+                probed_as(&dial(closing_at, false), [9; 16], Duration::from_secs(10)).await,
+                Probed::Failed,
+                "only a Backbone listener"
+            );
+            // Connections refused outright, every time.
+            let gone = SocketAddr::from(([127, 0, 0, 1], free_port()));
+            assert_eq!(probed_as(&dial(gone, true), [9; 16], Duration::from_secs(20)).await, Probed::Refused);
+            assert_eq!(probed_as(&dial(gone, false), [9; 16], Duration::from_secs(2)).await, Probed::Failed);
+            // One that takes the connection and says nothing isn't "refused".
+            let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let silent_at = silent.local_addr().unwrap();
+            tokio::spawn(async move {
+                let mut kept = Vec::new();
+                while let Ok((socket, _)) = silent.accept().await {
+                    kept.push(socket);
+                }
+            });
+            assert_eq!(probed_as(&dial(silent_at, true), [9; 16], Duration::from_secs(3)).await, Probed::Failed);
+            // One that sends junk and closes isn't either.
+            let junk = fake_listener(|_| vec![0x7e, 1, 2, 3, 0x7e]).await;
+            assert_eq!(probed_as(&dial(junk, true), [9; 16], Duration::from_secs(3)).await, Probed::Failed);
+        });
+    }
+
+    #[test]
+    fn a_refused_check_falls_back_to_the_online_check_and_says_so() {
+        let config =
+            "[interfaces]\n  [[Spine]]\n    type = BackboneInterface\n    enabled = yes\n    listen_on = 127.0.0.1\n    port = 4965\n";
+        let mut run = Run::plan(config, &names(&["Spine"]));
+        assert_eq!(run.checks[0].kind, Kind::SelfTest);
+        let (tx, rx) = mpsc::channel();
+        run.results = Some(rx);
+        tx.send((0, Probed::Refused)).unwrap();
+        // Not online: still waiting, then failed once the run ends (it must be online).
+        run.poll(&[]);
+        assert_eq!((run.checks[0].kind, run.checks[0].seen), (Kind::Online, Seen::Waiting));
+        assert!(run.failed().is_none() && run.waiting().next().is_none());
+        let mut closed = Run { checks: run.checks.clone(), ..Run::default() };
+        closed.close();
+        assert_eq!(closed.checks[0].seen, Seen::Failed, "a listener that isn't online isn't passed");
+        // Online: said as such, with why.
+        let spine = InterfaceInfo { name: "Spine".into(), online: true, ..Default::default() };
+        run.poll(std::slice::from_ref(&spine));
+        assert_eq!(run.checks[0].seen, Seen::NoTraffic);
+        assert_eq!(run.summary().as_deref(), Some("Spine online no_traffic (loopback refused; checked online only)"));
+        assert_eq!(run.to_json()[0]["note"], "loopback refused; checked online only");
     }
 
     #[test]

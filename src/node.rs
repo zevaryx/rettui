@@ -102,6 +102,15 @@ pub struct NodeArgs {
     /// the other keys, need no flag). Off unless given. Not saved.
     #[arg(long, requires = "manage_listen")]
     pub manage_allow_enable: bool,
+    /// How many Reticulum config changes from the website are made in
+    /// `--manage-reticulum-hours` hours at most (1 to 100; 4 if not given).
+    /// A node setting only: the website can't raise it. Not saved.
+    #[arg(long, value_name = "N", requires = "manage_listen", value_parser = clap::value_parser!(u32).range(1..=100))]
+    pub manage_reticulum_changes: Option<u32>,
+    /// The hours in which at most `--manage-reticulum-changes` Reticulum config
+    /// changes are made (1 to 168; 1 if not given). Not saved.
+    #[arg(long, value_name = "H", requires = "manage_listen", value_parser = clap::value_parser!(u32).range(1..=168))]
+    pub manage_reticulum_hours: Option<u32>,
 }
 
 /// The variables that stand for the node's flags (not `--stats-listen`, which is for one run).
@@ -508,6 +517,8 @@ pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args:
                 secret: crate::remote_manage::load_secret(file)?,
                 allow: args.manage_allow.clone(),
                 allow_enable: args.manage_allow_enable,
+                reticulum_changes: args.manage_reticulum_changes.map_or(crate::remote_manage::APPLIES_PER_HOUR, |n| n as usize),
+                reticulum_hours: args.manage_reticulum_hours.map_or(1, u64::from),
             })
         }
         _ => None,
@@ -629,6 +640,7 @@ pub(crate) async fn serve(
     let (manage_server, mut manage_jobs, mut owner) = match manage {
         Some(listen) => {
             let (allow, allow_enable) = (listen.allow.clone(), listen.allow_enable);
+            let (changes, hours) = (listen.reticulum_changes, listen.reticulum_hours);
             let (bound, task, jobs) = crate::remote_manage::serve(listen, &paths).await?;
             println!("{}", crate::remote_manage::started_line(bound, &allow));
             if allow_enable {
@@ -636,7 +648,7 @@ pub(crate) async fn serve(
                     "warning: remote management may turn interfaces and transport on (--manage-allow-enable): whoever holds the manage secret can open this node to others"
                 );
             }
-            let owner = crate::remote_manage::Owner::new(&paths).allow_enable(allow_enable);
+            let owner = crate::remote_manage::Owner::configured(&paths, changes, hours).allow_enable(allow_enable);
             #[cfg(test)]
             let owner = match tuning {
                 Some((timing, prober)) => owner.tuned(timing, prober),
@@ -1315,6 +1327,8 @@ mod tests {
             secret: crate::remote_manage::Secret::parse(secret).unwrap(),
             allow: vec![],
             allow_enable: false,
+            reticulum_changes: 4,
+            reticulum_hours: 1,
         };
         let same = check_secrets_differ(Some(&stats(MANAGE_SECRET)), Some(&manage(MANAGE_SECRET))).unwrap_err().to_string();
         assert!(same.contains("same text as the stats token") && !same.contains(MANAGE_SECRET), "{same}");
@@ -1382,6 +1396,8 @@ mod tests {
                 secret: crate::remote_manage::Secret::parse(MANAGE_SECRET).unwrap(),
                 allow: vec![crate::remote_manage::Network::parse("127.0.0.0/8").unwrap()],
                 allow_enable: false,
+                reticulum_changes: 4,
+                reticulum_hours: 1,
             };
             let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
             let settings_file = paths.settings.clone();
@@ -1472,6 +1488,8 @@ mod tests {
                 secret: crate::remote_manage::Secret::parse(MANAGE_SECRET).unwrap(),
                 allow: vec![],
                 allow_enable: true,
+                reticulum_changes: 4,
+                reticulum_hours: 1,
             };
             let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
             let running = std::thread::spawn(move || {

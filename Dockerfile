@@ -8,7 +8,10 @@
 # built, at dist/rettui-<arch> (amd64, arm64), so nothing is compiled under
 # emulation.
 
-FROM rust:1-slim-bookworm AS build
+# Both base images are pinned by digest (the multi-arch index), so every build starts from the same
+# image. Dependabot proposes newer ones (.github/dependabot.yml); to move by hand,
+# `docker buildx imagetools inspect <image:tag>` gives the digest.
+FROM rust:1.100.0-slim-bookworm@sha256:7c7d4eb4d05b7781187a327809466cfddf29753f6defdc3d19a0e291951b7a37 AS build
 WORKDIR /src
 # The Reticulum and LXMF libraries are git submodules in deps/;
 # Codec2 is vendored in vendor/.
@@ -25,7 +28,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo build --release --locked \
     && cp target/release/rettui /rettui
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-20261104-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS runtime
 # Python, for script pages such as `#!/usr/bin/env python3` (opt-in: "Run
 # page scripts"); scripts only find programs in /usr/bin and /bin.
 RUN apt-get update \

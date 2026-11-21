@@ -310,6 +310,8 @@ way as its flag.
 | `--manage-secret-file PATH` | none (`MANAGE_SECRET_FILE` in Docker) | The file with the secret those requests are signed with, readable by you only. Needs `--manage-listen`. There is no variable for the secret itself. |
 | `--manage-allow ADDRESS` | none (`MANAGE_ALLOW` in Docker, separated by commas) | Takes management connections only from this address or network (such as `10.200.0.1` or `10.200.0.0/24`): the website's. Give it once for each. Needs `--manage-listen`. Not saved. |
 | `--manage-allow-enable` | none (`MANAGE_ALLOW_ENABLE=yes` in Docker) | Lets a Reticulum config change from the website turn interfaces and Transport **on**, which opens the node to others (see [Reticulum config changes on probation](#reticulum-config-changes-on-probation)). Without it, only turning them off and the other keys are allowed. Needs `--manage-listen`. Off unless given, and not saved. |
+| `--manage-reticulum-changes N` | none (`MANAGE_RETICULUM_CHANGES` in Docker) | At most this many Reticulum config changes from the website are made in `--manage-reticulum-hours` hours (1 to 100, default 4). Only the node's owner sets it: the website can't raise it. Needs `--manage-listen`. Not saved. |
+| `--manage-reticulum-hours H` | none (`MANAGE_RETICULUM_HOURS` in Docker) | The hours that count for `--manage-reticulum-changes` (1 to 168, default 1). Needs `--manage-listen`. Not saved. |
 
 Things to know:
 
@@ -317,6 +319,13 @@ Things to know:
   and display name are public, and the propagation node announces the
   display name too, unless `--name` gives it one of its own. The first run
   says so.
+- **One rettui for each data directory:** a node, `rettui` and `rettui --web`
+  can't run at the same time on one data directory (nor can a command that
+  writes there, such as `restore` or `send`): the second says that
+  another rettui is using it, and stops (the data directory holds a
+  `rettui.lock` file for this). Give the second its own with `--data-dir`.
+  A node restarted by a service manager waits for nothing: the lock is
+  freed when the first one ends, however it ends.
 - **Which Reticulum config:** without `--rns-config`, and with no
   `rns_config` in `settings.json`, the node uses a config of its own in
   `reticulum/` in the data directory (made the first time), so setting it up
@@ -783,7 +792,10 @@ path makes every request fail its signature.
   `settings.json`) can set, as they could leak more or lose data: the log
   level `trace` (remotely, `debug` at most), 0 propagation peers, less than
   32 MB of propagation storage, and a cut to less than half the storage
-  there is (500 MB can go to 250 MB remotely; make a bigger cut in the
+  the most it was in the last 24 hours (500 MB can go to 250 MB remotely,
+  but not on to 125 MB, and a few small cuts in a row can't add up to a
+  big one; the sizes are kept in `manage/storage-history.json`, so a
+  restart doesn't forget them; make a bigger cut in the
   terminal, and note that rolling back a big raise is such a cut). These
   are refused with `not_allowed`.
 - Turn the propagation node, the NomadNet node, the RRC hub, the rngit host
@@ -860,8 +872,13 @@ node come back with it:
    does for every problem the node reports. It can't be done while
    another program's shared instance is used (`shared_instance`), while
    Reticulum isn't running (`busy`), within 5 minutes of a restart from
-   afar, more than 4 times an hour, or for 15 minutes after a change was
-   rolled back by itself (`rate_limited`, with `retry_after` in seconds).
+   afar, more than 4 times an hour (or as many as `--manage-reticulum-changes`
+   in `--manage-reticulum-hours`), or for 15 minutes after a change was
+   rolled back by itself, including one put back at the start after the node
+   stopped (`rate_limited`, with `retry_after` in seconds). These counts are
+   kept in `manage/limits.json`, so stopping and starting the node doesn't
+   reset them. A file that can't be read is set aside as
+   `limits.json.unreadable-…`, and the next change waits 15 minutes.
 3. The old text is kept in the config history (Reticulum tab, `H`) and the
    new one saved, with the change on probation in `manage/pending.json`
    (readable by the node's user only; it holds checksums of the file before
@@ -897,9 +914,21 @@ framing (HDLC, or KISS with `kiss_framing`) and its IFAC (`network_name`,
 a stamp not found in time means no request that round, not a failure). It asks for a path
 to the node's own LXMF address. Reticulum answers that at once, on the
 interface the request came in on, with an announce of the address signed by
-the node's identity: the test passes when that announce arrives and its
-signature checks out. The announce must be a path response made after the test began, so an
-old announce played back doesn't count. A listener given by a host name
+the node's identity: the test passes when that announce arrives on the same
+connection after the request and its signature checks out. The announce must
+be a path response made at or after the second the request was sent, so an
+old announce played back doesn't count.
+
+What this does and doesn't prove: Reticulum's path response doesn't say
+which request it answers, and the mark that makes it a path response isn't
+covered by the announce's signature. So the test shows that the node's
+identity announced its address just now and that something on that address
+speaks Reticulum's framing (and IFAC). It doesn't show that Reticulum's own
+listener answered: a program that isn't Reticulum on the dialled address (a
+local process, or a wrong `listen_ip`) that gets a fresh announce of the
+node's address from another interface after the request and passes it on
+would pass too. Such a pass only moves the change to probation, where the
+website's own check and its confirm still decide. A listener given by a host name
 rather than an IP address isn't looked up: it only has to be online. A
 request goes again every 10 seconds, within the 90
 seconds Reticulum has to come back. If one interface doesn't answer in
@@ -933,7 +962,12 @@ change: ...", "Checks after the rollback: ..."). A Backbone listener blocks
 an address that connects and leaves within its `fast_flapping_threshold`
 too often, so the test stays connected at least that long, and opens 3
 connections at most; a Backbone listener whose threshold is over 2 minutes
-is only checked to be online. Even so, several rolled-back changes in a row
+is only checked to be online. A Backbone listener that refuses or closes
+every connection of the test at once, as one does that has blocked
+`127.0.0.1` as flapping (any program on this computer can cause that), is
+only checked to be online too: the check then reads `online` with a `note`
+of "loopback refused; checked online only" (also in the audit log's checks),
+and the interface still has to be online. Even so, several rolled-back changes in a row
 (each Reticulum restart and test counts) can make a Backbone listener block
 `127.0.0.1` for its `fast_flapping_block_time` (12 hours by default), which
 also blocks anything else on this computer that connects to it; restarting
@@ -945,7 +979,14 @@ terminal or web UI on the same data directory), before Reticulum starts, it
 puts the old text back if the file is still as the change left it, with or
 without the `--manage-…` flags, and says so in its output, on the Status
 tab and in the audit log. A file changed since is left alone. A website restart while a change is
-on probation means nobody confirms it, so the node rolls it back.
+on probation means nobody confirms it, so the node rolls it back. What the
+start did is in `/state` as `reticulum_result` (`rolled_back`), once. If
+`manage/pending.json` can't be read (a damaged file), the node can't put
+anything back: it moves the file aside as `pending.json.unreadable-…`, says
+loudly that an unconfirmed change may still be in the Reticulum config (check
+it against its history), makes the next change wait 15 minutes, adds an
+`auto_rollback` entry (`failed`) to the audit log, and shows `reticulum_result`
+with the outcome `left` in `/state`.
 
 **Putting a config back by hand:** every version the node saved is in the
 config history (`reticulum-history/` in the data directory, readable by the
@@ -980,8 +1021,11 @@ changes a minute are taken; a change the node turns away before anything
 changed (another change pending, a restart running, a rate limit) or a
 request it can't read doesn't count (up to 60 a minute), so another website
 user can't use up the limit with them. A confirm has a limit of its own, 6 a
-minute, and a refused one doesn't count either, so nobody can keep a change
-from being confirmed (which would roll it back). After 20 requests with a bad signature in a
+minute, and a refused one doesn't count either: it is given back whoever
+sends it (another user's confirm, or one for no pending change), and counted
+against that user alone, who is turned away after 60 refused confirms a
+minute, so nobody else can keep a change from being confirmed (which would
+roll it back). After 20 requests with a bad signature in a
 minute, requests without a valid signature are refused for a minute (and the
 refusals still count, so a flood keeps it going); requests the website signs
 are still answered. The lockout is logged and added to the audit log when it

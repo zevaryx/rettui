@@ -90,7 +90,7 @@ pub const MAX_REMOTE_LOG_LEVEL: &str = "debug";
 
 /// Why a value the setting itself takes is still refused remotely (only
 /// the terminal may set it), if it is.
-fn remote_limit(key: &str, before: &Settings, after: &Settings) -> Option<String> {
+fn remote_limit(key: &str, storage_reference: u64, after: &Settings) -> Option<String> {
     match key {
         "log_level" if after.log_level == "trace" => Some(format!(
             "Log level can be set to {MAX_REMOTE_LOG_LEVEL} at most remotely: trace can record peer addresses and message details, so set it in the terminal"
@@ -102,11 +102,11 @@ fn remote_limit(key: &str, before: &Settings, after: &Settings) -> Option<String
         "pn_storage_mb" if after.pn_storage_mb < MIN_REMOTE_STORAGE_MB => Some(format!(
             "Propagation storage can be set to {MIN_REMOTE_STORAGE_MB} MB at least remotely: less can make the node drop messages it holds, so set it in the terminal"
         )),
-        // A big cut can drop much of what is stored, which a rollback doesn't bring back.
-        "pn_storage_mb" if after.pn_storage_mb.saturating_mul(2) < before.pn_storage_mb => Some(format!(
-            "Propagation storage can be cut to half of what it is at most remotely (from {} MB to {} MB): a bigger cut can make the node drop messages it holds, so make it in the terminal",
-            before.pn_storage_mb,
-            before.pn_storage_mb.div_ceil(2)
+        // A big cut can drop much of what is stored, which a rollback doesn't bring back. Held to the
+        // most it was in the last 24 hours, so a few small cuts in a row can't add up to a big one.
+        "pn_storage_mb" if after.pn_storage_mb.saturating_mul(2) < storage_reference => Some(format!(
+            "Propagation storage can be cut to half of the most it was in the last 24 hours at most remotely (from {storage_reference} MB to {} MB): a bigger cut can make the node drop messages it holds, so make it in the terminal",
+            storage_reference.div_ceil(2)
         )),
         _ => None,
     }
@@ -129,7 +129,15 @@ pub enum Refusal {
 /// [`MIN_REMOTE_STORAGE_MB`] and no less than half the storage there is, at
 /// least one propagation peer). The managed
 /// settings that would change, with their old and new values.
+#[cfg(test)]
 pub fn check(before: &Settings, changes: &[(&str, &str)]) -> Result<Vec<Change>, Refusal> {
+    check_against(before, changes, before.pn_storage_mb)
+}
+
+/// [`check`], with `storage_reference` the most the propagation storage was
+/// in the last 24 hours (at least what it is now), which a cut is held to.
+pub fn check_against(before: &Settings, changes: &[(&str, &str)], storage_reference: u64) -> Result<Vec<Change>, Refusal> {
+    let storage_reference = storage_reference.max(before.pn_storage_mb);
     let mut after = before.clone();
     for (key, value) in changes {
         if access(key).is_none() {
@@ -154,7 +162,7 @@ pub fn check(before: &Settings, changes: &[(&str, &str)]) -> Result<Vec<Change>,
                 message: format!("{label} can only be turned on in the terminal: a service turned on remotely could expose data"),
             });
         }
-        if let Some(message) = remote_limit(key, before, &after) {
+        if let Some(message) = remote_limit(key, storage_reference, &after) {
             return Err(Refusal::NotAllowed { key: key.to_string(), message });
         }
         applied.push(Change { path: Vec::new(), key: key.to_string(), from, to });
@@ -317,6 +325,13 @@ mod tests {
         let odd = Settings { pn_storage_mb: 41, ..Settings::default() };
         assert!(check(&odd, &[("pn_storage_mb", "21")]).is_err(), "under 32 all the same");
         assert_eq!(check(&Settings { pn_storage_mb: 63, ..Settings::default() }, &[("pn_storage_mb", "32")]).unwrap()[0].to, "32");
+        // Held to the most in the last 24 hours: small cuts in a row don't add up.
+        let (first, after_it) =
+            (Settings { pn_storage_mb: 1000, ..Settings::default() }, Settings { pn_storage_mb: 500, ..Settings::default() });
+        assert_eq!(check_against(&first, &[("pn_storage_mb", "500")], 1000).unwrap()[0].to, "500");
+        let Err(Refusal::NotAllowed { message, .. }) = check_against(&after_it, &[("pn_storage_mb", "250")], 1000) else { panic!() };
+        assert!(message.contains("last 24 hours") && message.contains("from 1000 MB to 500 MB"), "{message}");
+        assert_eq!(check_against(&after_it, &[("pn_storage_mb", "250")], 500).unwrap()[0].to, "250", "a day later");
         // Up to the limits is fine.
         assert_eq!(check(&before, &[("log_level", "debug")]).unwrap()[0].to, "debug");
         assert_eq!(check(&before, &[("pn_max_peers", "1")]).unwrap()[0].to, "1");

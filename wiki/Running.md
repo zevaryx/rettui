@@ -164,6 +164,12 @@ rettui node [--entry-point PORT] [--listen-ip IP] [--reachable-on HOST] [--name 
 `--data-dir DIR` uses another data directory, and `--rns-config DIR` another
 Reticulum config.
 
+Only one rettui (the TUI, `--web`, `node`, or a command that writes there, such as `restore` or `send`) can use a data directory at a
+time: the data directory holds a `rettui.lock` file for it, and a second
+rettui says that another one is using the directory and stops. Give it its
+own with `--data-dir`. On a file system that can't lock files (some network
+or FUSE mounts), rettui says so in its log and runs without the lock.
+
 `--manage-listen ADDRESS` with `--manage-secret-file PATH` (both or neither,
 `rettui node` only, not saved) lets a website you run manage the node: read
 its state, change a short list of settings, turn services off (never on),

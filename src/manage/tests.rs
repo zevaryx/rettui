@@ -111,8 +111,9 @@ enum Owners {
     Node(Box<(App, Owner)>),
     /// A stand-in that answers 200 with the op it was given, and keeps them.
     Echo(Vec<Op>),
-    /// A stand-in for a node with a change on probation: every write but a
-    /// confirm is refused as `pending`, and a confirm is taken.
+    /// A stand-in for a node with a change on probation made by alice: every
+    /// write but a confirm is refused as `pending`, a confirm of alice's is
+    /// taken, and another user's is refused.
     Pending(Vec<Op>),
 }
 
@@ -185,6 +186,9 @@ impl Harness {
             Owners::Pending(ops) => {
                 ops.push(job.op.clone());
                 let reply = match job.op {
+                    Op::Confirm { .. } if job.actor != "alice" => {
+                        Reply::error(StatusCode::FORBIDDEN, "not_allowed", "Only whoever made a change can confirm it")
+                    }
                     Op::Confirm { .. } | Op::State | Op::Audit { .. } => Reply::new(StatusCode::OK, json!({})),
                     _ => Reply::error(StatusCode::CONFLICT, "pending", "Another Reticulum config change is still being tested"),
                 };
@@ -871,6 +875,44 @@ async fn writes_the_node_turns_away_cant_starve_a_confirm() {
     assert_eq!(h.send(&Signing::post("/manage/v1/confirm", &json!({ "id": "0123456789abcdef" }))).await.status, StatusCode::OK);
 }
 
+/// Refused writes use up only the writes' refunds: a flood of them can't
+/// make the maker's confirm count against the limit.
+#[tokio::test]
+async fn refused_writes_dont_use_up_the_confirms_refunds() {
+    let mut h = harness_with("starve-kinds", Limits::default(), false);
+    h.owners = Owners::Pending(Vec::new());
+    for n in 0..60 {
+        assert_eq!(h.send(&Signing::post("/manage/v1/restart", &json!({}))).await.code(), "pending", "{n}");
+    }
+    // The writes' refunds are used up now; confirms that never reach the node are still given back.
+    for n in 0..10 {
+        assert_eq!(h.send(&Signing::new("POST", "/manage/v1/confirm", "{}")).await.code(), "bad_request", "{n}");
+    }
+    assert_eq!(h.send(&Signing::post("/manage/v1/confirm", &json!({ "id": "0123456789abcdef" }))).await.status, StatusCode::OK);
+}
+
+/// Another user's confirms of a change (wrong actor) are refused, and
+/// given back to the limit: however many are sent, the maker's still goes
+/// through. Past 60 a minute they are turned away for that user alone.
+#[tokio::test]
+async fn another_users_refused_confirms_cant_use_up_the_makers() {
+    let mut h = harness_with("foreign-confirms", Limits::default(), false);
+    h.owners = Owners::Pending(Vec::new());
+    let confirm = json!({ "id": "0123456789abcdef" });
+    let mallory = |body: &Value| Signing { actor: "mallory", ..Signing::post("/manage/v1/confirm", body) };
+    for n in 0..66 {
+        let answer = h.send(&mallory(&confirm)).await;
+        let expected = if n < 60 { "not_allowed" } else { "rate_limited" };
+        assert_eq!(answer.code(), expected, "{n}");
+    }
+    // The maker's confirm still goes through, and so do others'.
+    assert_eq!(h.send(&Signing::post("/manage/v1/confirm", &confirm)).await.status, StatusCode::OK);
+    let other = h.send(&Signing { actor: "bob", ..Signing::post("/manage/v1/confirm", &confirm) }).await;
+    assert_eq!(other.code(), "not_allowed");
+    // The turned-away ones never reached the node.
+    assert_eq!(h.ops().len(), 60 + 1 + 1);
+}
+
 #[test]
 fn only_refusals_before_anything_changed_are_given_back() {
     let reply = |status, code: &str| Reply::error(status, code, "x");
@@ -1128,7 +1170,7 @@ async fn serving_refuses_bad_and_public_addresses() {
 }
 
 fn listen_on(address: &str, allow: Vec<Network>) -> Listen {
-    Listen { address: address.into(), secret: secret(), allow, allow_enable: false }
+    Listen { address: address.into(), secret: secret(), allow, allow_enable: false, reticulum_changes: 4, reticulum_hours: 1 }
 }
 
 #[test]

@@ -20,6 +20,7 @@ mod highlight;
 mod https;
 mod icons;
 mod identities;
+mod instance_lock;
 mod limits;
 mod links;
 #[cfg(test)]
@@ -458,6 +459,11 @@ async fn run(cli: Cli) -> Result<()> {
     // What updating on Windows left (the program it replaced).
     update::install::tidy();
     let paths = Paths::new(cli.data_dir.clone())?;
+    // Held until this returns: a second rettui in the same data directory would
+    // put back a Reticulum change the first still has on probation, and the
+    // commands that write there would race with a running one. (Reading ones,
+    // such as a backup, don't need it.)
+    let _instance = if uses_data_directory(&cli) { Some(instance_lock::InstanceLock::take(&paths.root)?) } else { None };
     // Before anything is loaded (and, in a new data directory, made).
     match &cli.command {
         Some(Command::Backup { file, with_files, without_identity, passphrase, key, no_passphrase }) => {
@@ -585,6 +591,26 @@ async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Whether this run writes to the data directory, or runs there as a node or a
+/// UI does: it then needs the directory to itself.
+fn uses_data_directory(cli: &Cli) -> bool {
+    cli.web.is_some()
+        || match &cli.command {
+            None => true,
+            Some(command) => matches!(
+                command,
+                Command::Node(_)
+                    | Command::Restore { .. }
+                    | Command::Settings { action: SettingsAction::Import { .. } }
+                    | Command::Identity { action: IdentityAction::Import { .. } }
+                    | Command::MigratePropagation
+                    | Command::Send { .. }
+                    | Command::Listen { .. }
+                    | Command::Sync { .. }
+            ),
+        }
 }
 
 /// The settings in `paths` (with the Reticulum config given on the command
@@ -888,9 +914,54 @@ mod tests {
             &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-allow", "website.example"],
             &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-allow", "10.0.0.0/33"],
             &["--stats-logs"],
+            &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-reticulum-changes", "0"],
+            &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-reticulum-changes", "101"],
+            &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-reticulum-hours", "0"],
+            &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-reticulum-hours", "169"],
+            &["--manage-reticulum-changes", "5"],
         ] {
             assert!(node(wrong).is_err(), "{wrong:?}");
         }
+        let manage = ["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x"];
+        let given = |extra: &[&str]| match node(&[&manage[..], extra].concat()) {
+            Ok((Some(super::Command::Node(args)), _)) => args,
+            _ => panic!("{extra:?}: not a node"),
+        };
+        assert_eq!((given(&[]).manage_reticulum_changes, given(&[]).manage_reticulum_hours), (None, None));
+        let args = given(&["--manage-reticulum-changes", "100", "--manage-reticulum-hours", "168"]);
+        assert_eq!((args.manage_reticulum_changes, args.manage_reticulum_hours), (Some(100), Some(168)));
+    }
+
+    #[test]
+    fn a_second_rettui_on_the_same_data_directory_is_turned_away() {
+        use clap::Parser;
+        let dir = std::env::temp_dir().join(format!("rettui-second-instance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let data = dir.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let held = super::instance_lock::InstanceLock::take(&data).unwrap();
+        let args = ["rettui", "--data-dir", &data.display().to_string()];
+        for extra in [
+            &["--web", "127.0.0.1:0"][..],
+            &["node"],
+            &[],
+            &["restore", "/nowhere.tar.gz"],
+            &["settings", "import", "/nowhere.json"],
+            &["identity", "import", "/nowhere", "--name", "x"],
+            &["migrate-propagation"],
+            &["sync"],
+        ] {
+            let said = super::run_with(args.iter().chain(extra)).unwrap_err().to_string();
+            assert!(said.contains("Another rettui is using the data directory"), "{extra:?}: {said}");
+        }
+        // Commands that only read don't need the directory to themselves.
+        let cli = |extra: &[&str]| super::Cli::try_parse_from(args.iter().chain(extra)).unwrap();
+        assert!(!super::uses_data_directory(&cli(&["backup", "/x.tar.gz"])));
+        assert!(!super::uses_data_directory(&cli(&["address"])));
+        assert!(!super::uses_data_directory(&cli(&["ping", "aa"])));
+        assert!(!super::uses_data_directory(&cli(&["probe", "aa"])));
+        drop(held);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

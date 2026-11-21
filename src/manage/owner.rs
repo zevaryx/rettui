@@ -20,7 +20,7 @@
 //! Nothing Reticulum or the system says goes into an answer or the audit
 //! log: they get a fixed sentence, and the node's log the detail.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 use super::audit::{Audit, Change, Outcome, Record};
 use super::fields::{self, MANAGE_FIELDS, Refusal};
 use super::pending::{self, Pending, RestoreError, State};
+use super::recent::{ChangeLimits, Moment, StorageHistory};
 use super::rnsedit::{self, RnsChange, RnsRefusal};
 use super::selftest::{self, Prober, Run};
 use super::{Job, Op, Reply, unix_now};
@@ -185,21 +186,32 @@ struct ChangeResult {
 pub struct Owner {
     audit: Audit,
     restart: Option<Restart>,
-    /// When Reticulum was last restarted from afar (unix seconds, and the
-    /// same moment for measuring): a restart, a config change or a rollback.
-    restarted: Option<(u64, Instant)>,
     pending: Option<Live>,
     result: Option<ChangeResult>,
     timing: Timing,
     /// Whether a config change may turn interfaces or transport on
     /// (`--manage-allow-enable`).
     allow_enable: bool,
-    /// When the config changes in the last `apply_window` were applied.
-    applies: VecDeque<Instant>,
-    /// No config change until then (one was put back by itself).
-    held_until: Option<Instant>,
+    /// What the Reticulum change limits have counted (kept in `manage/limits.json`):
+    /// when the config changes in the last `apply_window` were applied, the
+    /// hold after a rollback, and when Reticulum was last restarted from afar
+    /// (a restart, a config change or a rollback).
+    limits: ChangeLimits,
+    /// The most the propagation storage was in the last 24 hours (kept in
+    /// `manage/storage-history.json`).
+    storage: StorageHistory,
     /// Where the self-test of a change dials.
     prober: Prober,
+}
+
+/// `span` in words: whole hours as hours, else minutes.
+fn span(span: Duration) -> String {
+    let (hours, minutes) = (span.as_secs() / 3600, span.as_secs() / 60);
+    match (span.as_secs() % 3600, hours) {
+        (0, 1) => "1 hour".to_string(),
+        (0, hours) if hours > 1 => format!("{hours} hours"),
+        _ => format!("{minutes} minutes"),
+    }
 }
 
 /// A new change id: 16 hex characters.
@@ -229,16 +241,29 @@ fn printable(text: &str) -> String {
 impl Owner {
     /// The owner of the node at `paths`, with its audit log (in the data
     /// directory, `manage/audit.jsonl`).
+    #[cfg(test)]
     pub fn new(paths: &Paths) -> Self {
         Self::with_timing(paths, Timing::default())
+    }
+
+    /// The owner of the node at `paths`, with at most `changes` Reticulum
+    /// config changes in `hours` hours (`--manage-reticulum-changes` and
+    /// `--manage-reticulum-hours`), counting those saved by an earlier run.
+    pub fn configured(paths: &Paths, changes: usize, hours: u64) -> Self {
+        let timing = Timing { applies: changes, apply_window: Duration::from_secs(hours.saturating_mul(3600)), ..Timing::default() };
+        Self::with_timing(paths, timing)
     }
 
     pub(super) fn with_timing(paths: &Paths, timing: Timing) -> Self {
         // A change the start couldn't put back (its old text couldn't be
         // written) is tried again from here.
+        let mut limits = ChangeLimits::load(paths, timing.apply_window, timing.hold_after_rollback);
         let pending = match pending::load(paths) {
             Ok(Some(record)) if record.state == State::RollingBack => {
                 tracing::warn!("Remote management: change {} is still to be rolled back: trying again", record.id);
+                // A change being put back holds the next one, as one put back by itself does.
+                limits.held_until = Some(Instant::now() + timing.hold_after_rollback);
+                limits.save(paths);
                 let mut live = Live::new(record);
                 live.reason = "The node stopped before the change was confirmed".into();
                 live.problems = vec![RestoreError::Write(String::new()).message().to_string()];
@@ -250,13 +275,18 @@ impl Owner {
         Self {
             audit: Audit::load(paths.root.join("manage").join("audit.jsonl")),
             restart: None,
-            restarted: None,
             pending,
-            result: None,
+            // What the start found out about a change the last run left (said once).
+            result: pending::take_start_result(paths).map(|found| ChangeResult {
+                id: found.id,
+                outcome: if found.outcome == "rolled_back" { "rolled_back" } else { "left" },
+                at: found.at,
+                message: cut(&found.message, MAX_MESSAGE),
+            }),
             timing,
             allow_enable: false,
-            applies: VecDeque::new(),
-            held_until: None,
+            limits,
+            storage: StorageHistory::load(paths),
             prober: Prober::default(),
         }
     }
@@ -360,15 +390,17 @@ impl Owner {
         self.restarting() || self.pending.as_ref().is_some_and(|live| matches!(live.record.state, State::Restarting | State::RollingBack))
     }
 
-    /// When the next restart may be asked for (unix seconds), if not now.
-    fn restart_allowed_at(&self) -> Option<u64> {
-        let (started, since) = self.restarted?;
-        (since.elapsed() < self.timing.restart_every).then(|| started + self.timing.restart_every.as_secs())
+    /// How many seconds until the next restart may be asked for, if not now
+    /// (measured on the monotonic clock, so a clock set back can't stretch it).
+    fn restart_wait(&self) -> Option<u64> {
+        let left = self.timing.restart_every.checked_sub(self.limits.restarted?.elapsed())?;
+        Some((left.as_secs() + u64::from(left.subsec_nanos() > 0)).max(1))
     }
 
     /// Mark a restart of Reticulum from afar now.
-    fn mark_restart(&mut self) {
-        self.restarted = Some((unix_now(), Instant::now()));
+    fn mark_restart(&mut self, app: &App) {
+        self.limits.restarted = Some(Moment::now());
+        self.limits.save(&app.paths);
     }
 
     /// Add `record` to the audit log and the node's log (where what the
@@ -489,7 +521,7 @@ impl Owner {
                 },
                 "reticulum": reticulum,
                 "restart": restart,
-                "restart_allowed_at": self.restart_allowed_at(),
+                "restart_allowed_at": self.restart_wait().map(|wait| unix_now() + wait),
                 "pending": pending,
                 "reticulum_result": result,
                 "reticulum_enable_allowed": self.allow_enable,
@@ -515,6 +547,11 @@ impl Owner {
         let id = new_id();
         match app.update_settings_from_web(changes) {
             Ok(notes) => {
+                for change in applied.iter().filter(|c| c.key == "pn_storage_mb") {
+                    if let (Ok(from), Ok(to)) = (change.from.parse(), change.to.parse()) {
+                        self.storage.changed(&app.paths, from, to);
+                    }
+                }
                 let revision = fields::revision(&app.settings_file);
                 let body = json!({ "id": id, "applied": applied, "notes": notes, "settings_revision": revision });
                 self.record(app, Record { id: &id, actor, op, changes: applied, outcome: Outcome::Ok, error: None });
@@ -556,7 +593,7 @@ impl Owner {
         if self.busy() {
             return self.refuse(app, actor, "settings", asked, StatusCode::CONFLICT, "busy", self.busy_message(), Outcome::Refused);
         }
-        match fields::check(&before, changes) {
+        match fields::check_against(&before, changes, self.storage.reference(before.pn_storage_mb)) {
             Ok(applied) => self.apply(app, actor, "settings", applied, changes),
             Err(refusal) => self.refusal(app, actor, "settings", asked, refusal),
         }
@@ -589,7 +626,7 @@ impl Owner {
         }
         // Through the same list as any change, so a service that change
         // turned off isn't turned back on.
-        match fields::check(&before, &inverse) {
+        match fields::check_against(&before, &inverse, self.storage.reference(before.pn_storage_mb)) {
             Ok(applied) => {
                 let mut reply = self.apply(app, actor, "rollback", applied, &inverse);
                 // The rollback's answer has no notes (they were the change's).
@@ -610,8 +647,7 @@ impl Owner {
             let message = "Reticulum is restarting already";
             return self.refuse(app, actor, "restart", vec![], StatusCode::CONFLICT, "restarting", message, Outcome::Refused);
         }
-        if let Some(at) = self.restart_allowed_at() {
-            let wait = at.saturating_sub(unix_now()).max(1);
+        if let Some(wait) = self.restart_wait() {
             let message = format!(
                 "Reticulum can be restarted once every {} minutes: try again in {wait} seconds",
                 self.timing.restart_every.as_secs() / 60
@@ -623,7 +659,7 @@ impl Owner {
         let id = new_id();
         let before = app.interfaces.iter().filter(|i| i.online).map(|i| i.name.clone()).collect();
         app.request_rns_restart();
-        self.mark_restart();
+        self.mark_restart(app);
         self.restart = Some(Restart {
             id: id.clone(),
             actor: actor.to_string(),
@@ -705,8 +741,7 @@ impl Owner {
             let message = "This node uses another program's shared instance (such as rnsd), whose interfaces aren't in this config";
             return refuse(self, app, StatusCode::CONFLICT, "shared_instance", message, asked);
         }
-        if let Some(at) = self.restart_allowed_at() {
-            let wait = at.saturating_sub(unix_now()).max(1);
+        if let Some(wait) = self.restart_wait() {
             let message = format!(
                 "Reticulum can be restarted once every {} minutes, and a change restarts it: try again in {wait} seconds",
                 self.timing.restart_every.as_secs() / 60
@@ -795,8 +830,9 @@ impl Owner {
         }
         app.rns_reload();
         app.request_rns_restart();
-        self.mark_restart();
-        self.applies.push_back(Instant::now());
+        self.mark_restart(app);
+        self.limits.applies.push_back(Moment::now());
+        self.limits.save(&app.paths);
         // Turning things on from afar opens the node to others: said loudly.
         if !planned.turned_on.is_empty() {
             let said = format!(
@@ -829,11 +865,11 @@ impl Owner {
     fn apply_wait(&mut self) -> Option<(u64, String)> {
         let now = Instant::now();
         let window = self.timing.apply_window;
-        while self.applies.front().is_some_and(|at| now.duration_since(*at) >= window) {
-            self.applies.pop_front();
+        while self.limits.applies.front().is_some_and(|at| at.elapsed() >= window) {
+            self.limits.applies.pop_front();
         }
         let seconds = |wait: Duration| wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
-        if let Some(until) = self.held_until.filter(|until| *until > now) {
+        if let Some(until) = self.limits.held_until.filter(|until| *until > now) {
             let wait = seconds(until - now).max(1);
             let message = format!(
                 "A change was rolled back by itself a short while ago, so the next one waits {} minutes after it: try again in {wait} seconds",
@@ -841,13 +877,13 @@ impl Owner {
             );
             return Some((wait, message));
         }
-        if self.applies.len() >= self.timing.applies {
-            let oldest = *self.applies.front()?;
-            let wait = seconds((oldest + window).saturating_duration_since(now)).max(1);
+        if self.limits.applies.len() >= self.timing.applies {
+            let oldest = self.limits.applies.front()?;
+            let wait = seconds(window.saturating_sub(oldest.elapsed())).max(1);
             let message = format!(
-                "At most {} Reticulum config changes are made in {} minutes: try again in {wait} seconds",
+                "At most {} Reticulum config changes are made in {}: try again in {wait} seconds",
                 self.timing.applies,
-                window.as_secs() / 60
+                span(window)
             );
             return Some((wait, message));
         }
@@ -874,6 +910,15 @@ impl Owner {
         }
         if owner != actor {
             return refused(self, app, StatusCode::FORBIDDEN, "not_allowed", "Only whoever made a change can confirm it");
+        }
+        // Another rettui (or a person) may have changed the file since: what is on disk is
+        // then not the change being kept, so say so instead of recording it as kept.
+        let on_disk = self.pending.as_ref().and_then(|live| pending::config_sha256(&live.record.config));
+        if self.pending.as_ref().is_some_and(|live| on_disk.as_deref() != Some(live.record.after_sha256.as_str())) {
+            let message =
+                "The Reticulum config isn't as the change left it any more (it was changed on this computer), so the change was not kept";
+            self.finish_as(app, "confirm", Outcome::Failed, "left", message);
+            return Reply::error(StatusCode::CONFLICT, "config_changed", message);
         }
         let Some(mut live) = self.pending.take() else { return Reply::error(StatusCode::CONFLICT, "not_pending", "Nothing is pending") };
         live.record.state = State::Committed;
@@ -1056,7 +1101,8 @@ impl Owner {
         if let Err(e) = pending::save(&app.paths, &live.record) {
             app.log(e);
         }
-        self.held_until = Some(Instant::now() + self.timing.hold_after_rollback);
+        self.limits.held_until = Some(Instant::now() + self.timing.hold_after_rollback);
+        self.limits.save(&app.paths);
         self.try_restore(app);
     }
 
@@ -1090,7 +1136,7 @@ impl Owner {
                 }
                 app.rns_reload();
                 app.request_rns_restart();
-                self.mark_restart();
+                self.mark_restart(app);
             }
             Err(RestoreError::Write(e)) => {
                 live.problems = vec![RestoreError::Write(String::new()).message().to_string()];
@@ -2089,6 +2135,25 @@ mod tests {
     }
 
     #[test]
+    fn a_confirm_is_not_kept_when_the_config_is_not_as_the_change_left_it() {
+        let mut node = Node::with_rns("rns-confirm-changed", RNS);
+        let id = node.reach_probation(300);
+        // Something else wrote the file (another rettui, or a person) meanwhile.
+        let config = node.app.rns_path();
+        std::fs::write(&config, RNS).unwrap();
+        let reply = node.ask(Op::Confirm { id: id.clone() });
+        assert_eq!((reply.status, reply.body["error"].as_str()), (StatusCode::CONFLICT, Some("config_changed")));
+        assert_eq!(node.config_text(), RNS, "left as it is");
+        assert!(node.pending_file().is_none());
+        let state = node.state();
+        assert_eq!(state["pending"], Value::Null);
+        assert_ne!(state["reticulum_result"]["outcome"], "committed");
+        assert_eq!(state["reticulum_result"]["id"], json!(id));
+        let audit = node.audit();
+        assert_eq!((audit[0]["op"].as_str(), audit[0]["result"].as_str()), (Some("confirm"), Some("failed")));
+    }
+
+    #[test]
     fn turning_things_on_needs_the_flag_and_is_said_loudly() {
         let mut node = Node::with_rns("rns-enable", RNS);
         node.owner.allow_enable = false;
@@ -2219,6 +2284,43 @@ mod tests {
     }
 
     #[test]
+    fn a_pending_file_that_cant_be_read_holds_the_next_change_and_is_said() {
+        let mut node = Node::with_rns("rns-unreadable-pending", RNS);
+        node.reach_probation(300);
+        // The node stops (here: the owner is dropped) and the file is damaged.
+        std::fs::write(pending::path(&node.app.paths), b"{ \"v\": 1, ").unwrap();
+        std::fs::remove_file(limits_file(&node)).ok();
+        let said = pending::recover(&node.app.paths, node.app.settings.rns_config.as_deref());
+        assert!(said[0].contains("may still be in the Reticulum config"), "{said:?}");
+        node.owner = Owner::with_timing(&node.app.paths, Timing { hold_after_rollback: HOLD_AFTER_ROLLBACK, ..Timing::default() });
+        // Held, as after a rollback.
+        let held = node.owner.apply_wait().expect("held");
+        assert!((800..=900).contains(&held.0), "{held:?}");
+        // Said in /state, in plain words, and kept in the audit log.
+        let state = node.state();
+        assert_eq!(state["reticulum_result"]["outcome"], "left");
+        assert_eq!(state["reticulum_result"]["id"], "0000000000000000");
+        assert!(state["reticulum_result"]["message"].as_str().unwrap().contains("couldn't be read"));
+        let audit = node.audit();
+        assert_eq!((audit[0]["op"].as_str(), audit[0]["result"].as_str()), (Some("auto_rollback"), Some("failed")));
+        // Said once.
+        node.owner = Owner::with_timing(&node.app.paths, Timing::default());
+        assert_eq!(node.state()["reticulum_result"], Value::Null);
+    }
+
+    #[test]
+    fn a_rollback_at_the_start_is_in_state_once() {
+        let mut node = Node::with_rns("rns-start-result", RNS);
+        let id = node.reach_probation(300);
+        let said = pending::recover(&node.app.paths, node.app.settings.rns_config.as_deref());
+        assert!(said[0].contains("put the Reticulum config back"), "{said:?}");
+        node.owner = Owner::with_timing(&node.app.paths, Timing::default());
+        let result = node.state()["reticulum_result"].clone();
+        assert_eq!((result["id"].as_str(), result["outcome"].as_str()), (Some(id.as_str()), Some("rolled_back")));
+        assert_eq!(Owner::with_timing(&node.app.paths, Timing::default()).result, None);
+    }
+
+    #[test]
     fn a_rollback_left_by_the_start_is_taken_up() {
         let mut node = Node::with_rns("rns-adopt", RNS);
         node.reach_probation(300);
@@ -2238,5 +2340,165 @@ mod tests {
         node.reach_probation(300);
         node.owner = Owner::with_timing(&node.app.paths, node.owner.timing);
         assert_eq!(node.state()["pending"], Value::Null);
+    }
+    /// Change the interface's mode, through the restart, and keep it.
+    fn keep_mode(node: &mut Node, mode: &str) {
+        let reply = node.apply(300, &[(&["interfaces", HILL], "mode", mode)]);
+        assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.body);
+        node.restarted(&[HILL]);
+        node.tick();
+        let id = reply.body["id"].as_str().unwrap().to_string();
+        assert_eq!(node.ask(Op::Confirm { id }).status, StatusCode::OK);
+    }
+
+    fn limits_file(node: &Node) -> std::path::PathBuf {
+        node.app.paths.root.join("manage").join("limits.json")
+    }
+
+    /// A new run of the owner on the same data directory, as after a restart.
+    fn restarted_owner(node: &Node, timing: Timing) -> Owner {
+        Owner::with_timing(&node.app.paths, timing)
+    }
+
+    #[test]
+    fn the_restart_wait_is_measured_on_the_monotonic_clock() {
+        let mut node = Node::with_rns("rns-restart-wait", RNS);
+        // The wall-clock time saved with the restart is nonsense; only the moment counts.
+        node.owner.limits.restarted = Some(Moment::now());
+        let reply = node.ask(Op::Restart);
+        assert_eq!((reply.status, reply.body["error"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")));
+        let wait = reply.body["retry_after"].as_u64().unwrap();
+        assert!((290..=300).contains(&wait), "{wait}");
+        node.owner.limits.restarted = Some(Moment::ago(Duration::from_secs(299)));
+        let wait = node.ask(Op::Restart).body["retry_after"].as_u64().unwrap();
+        assert_eq!(wait, 1);
+    }
+
+    #[test]
+    fn a_restart_and_the_applied_changes_are_remembered_by_the_next_run() {
+        let mut node = Node::with_rns("rns-limits-saved", RNS);
+        node.owner.timing.restart_every = Duration::ZERO;
+        for mode in ["full", "boundary"] {
+            keep_mode(&mut node, mode);
+        }
+        assert!(limits_file(&node).exists());
+        let next = restarted_owner(&node, Timing::default());
+        assert_eq!(next.limits.applies.len(), 2);
+        assert!(next.limits.restarted.is_some());
+        // A restart asked for was remembered the same way.
+        let mut node = Node::with_rns("rns-restart-saved", RNS);
+        assert_eq!(node.ask(Op::Restart).status, StatusCode::ACCEPTED);
+        node.owner = restarted_owner(&node, Timing::default());
+        let again = node.ask(Op::Restart);
+        assert_eq!((again.status, again.body["error"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")));
+    }
+
+    #[test]
+    fn a_node_that_stopped_and_started_again_still_holds_the_cap() {
+        let mut node = Node::with_rns("rns-cap-saved", RNS);
+        node.owner.timing.restart_every = Duration::ZERO;
+        node.owner.timing.applies = 2;
+        for mode in ["full", "boundary"] {
+            keep_mode(&mut node, mode);
+        }
+        let mut fresh = restarted_owner(&node, Timing { restart_every: Duration::ZERO, applies: 2, ..Timing::default() });
+        fresh.prober = Prober::Fixed(HashMap::from([(HILL.to_string(), true)]));
+        node.owner = fresh;
+        let third = node.apply(300, &[(&["interfaces", HILL], "mode", "gateway")]);
+        assert_eq!((third.status, third.body["error"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")), "{}", third.body);
+        assert!(third.body["message"].as_str().unwrap().contains("At most 2"));
+    }
+
+    #[test]
+    fn the_hold_after_a_rollback_outlives_the_run() {
+        let mut node = Node::with_rns("rns-hold-saved", RNS);
+        node.owner.timing.restart_every = Duration::ZERO;
+        node.owner.timing.hold_after_rollback = HOLD_AFTER_ROLLBACK;
+        let id = node.reach_probation(0);
+        node.tick();
+        node.restarted(&[HILL]);
+        node.tick();
+        assert_rolled_back(&mut node, &id, "No confirm by the deadline");
+        let next = restarted_owner(&node, Timing { hold_after_rollback: HOLD_AFTER_ROLLBACK, ..Timing::default() });
+        let left = next.limits.held_until.expect("held").saturating_duration_since(Instant::now());
+        assert!((800..=900).contains(&left.as_secs()), "{left:?}");
+    }
+
+    #[test]
+    fn a_change_still_being_rolled_back_at_the_start_holds_the_next_one() {
+        let mut node = Node::with_rns("rns-hold-rolling", RNS);
+        node.reach_probation(0);
+        let blocker = node.app.rns_path().with_file_name(".config.rettui-tmp");
+        std::fs::create_dir_all(blocker.join("x")).unwrap();
+        node.tick();
+        assert_eq!(node.pending_file().unwrap().state, State::RollingBack);
+        // Nothing saved about a hold: only the record says it.
+        std::fs::remove_file(limits_file(&node)).unwrap();
+        let next = restarted_owner(&node, Timing { hold_after_rollback: HOLD_AFTER_ROLLBACK, ..Timing::default() });
+        let left = next.limits.held_until.expect("held").saturating_duration_since(Instant::now());
+        assert!((800..=900).contains(&left.as_secs()), "{left:?}");
+    }
+
+    #[test]
+    fn the_cap_can_be_set_for_the_node_and_is_not_a_setting() {
+        let node = Node::with_rns("rns-cap-set", RNS);
+        let owner = Owner::configured(&node.app.paths, 9, 24);
+        assert_eq!((owner.timing.applies, owner.timing.apply_window), (9, Duration::from_secs(24 * 3600)));
+        // Nothing the website can set reaches it.
+        assert!(fields::check(&Settings::default(), &[("reticulum_changes", "100")]).is_err());
+    }
+
+    #[test]
+    fn a_long_window_keeps_its_changes_when_a_rollback_is_taken_up_at_the_start() {
+        let mut node = Node::with_rns("rns-long-window", RNS);
+        node.reach_probation(300);
+        // Applied 3 hours ago: counted in a 168-hour window, not in the default hour.
+        node.owner.limits.applies = vec![Moment::ago(Duration::from_secs(3 * 3600))].into();
+        node.owner.limits.save(&node.app.paths);
+        let mut record = node.pending_file().unwrap();
+        record.state = State::RollingBack;
+        pending::save(&node.app.paths, &record).unwrap();
+        let owner = Owner::configured(&node.app.paths, 4, 168);
+        assert_eq!(owner.limits.applies.len(), 1);
+        assert!(owner.limits.held_until.is_some(), "and the rollback holds the next change");
+        // What was saved when the hold was, too.
+        assert_eq!(ChangeLimits::load(&node.app.paths, Duration::from_secs(168 * 3600), HOLD_AFTER_ROLLBACK).applies.len(), 1);
+    }
+
+    #[test]
+    fn the_window_is_said_in_hours_when_it_is_whole_hours() {
+        assert_eq!(span(Duration::from_secs(3600)), "1 hour");
+        assert_eq!(span(Duration::from_secs(2 * 3600)), "2 hours");
+        assert_eq!(span(Duration::from_secs(168 * 3600)), "168 hours");
+        assert_eq!(span(Duration::from_secs(90 * 60)), "90 minutes");
+        let mut node = Node::with_rns("rns-window-words", RNS);
+        node.owner.timing.restart_every = Duration::ZERO;
+        node.owner.timing.applies = 1;
+        node.owner.timing.apply_window = Duration::from_secs(2 * 3600);
+        keep_mode(&mut node, "full");
+        let limited = node.apply(300, &[(&["interfaces", HILL], "mode", "boundary")]);
+        assert!(
+            limited.body["message"].as_str().unwrap().contains("At most 1 Reticulum config changes are made in 2 hours"),
+            "{}",
+            limited.body
+        );
+        assert!((7000..=7200).contains(&limited.body["retry_after"].as_u64().unwrap()));
+    }
+
+    #[test]
+    fn storage_cuts_are_held_to_the_most_of_the_last_day() {
+        let mut node = Node::new("storage-cuts", Settings { pn_storage_mb: 1000, ..Settings::default() });
+        let cut = |node: &mut Node, to: &str| node.change(&[("pn_storage_mb", to)]);
+        assert_eq!(cut(&mut node, "500").status, StatusCode::OK);
+        // Half of what it is now, but not of the day's most (1000).
+        let second = cut(&mut node, "250");
+        assert_eq!((second.status, second.body["error"].as_str()), (StatusCode::FORBIDDEN, Some("not_allowed")), "{}", second.body);
+        assert!(second.body["message"].as_str().unwrap().contains("last 24 hours"));
+        // A restart of the node doesn't reset it.
+        node.owner = Owner::with_timing(&node.app.paths, Timing::default());
+        assert_eq!(cut(&mut node, "250").status, StatusCode::FORBIDDEN);
+        // A day later the first value no longer counts.
+        node.owner.storage = StorageHistory::with(vec![(Duration::from_secs(25 * 3600), 1000)]);
+        assert_eq!(cut(&mut node, "250").status, StatusCode::OK);
     }
 }

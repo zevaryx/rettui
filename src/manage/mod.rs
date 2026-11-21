@@ -40,6 +40,7 @@ mod audit;
 pub mod fields;
 mod owner;
 pub(crate) mod pending;
+mod recent;
 mod rnsedit;
 pub(crate) mod selftest;
 pub(crate) mod wire;
@@ -67,9 +68,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use zeroize::Zeroizing;
 
-pub use owner::Owner;
 #[cfg(test)]
 pub(crate) use owner::Timing;
+pub use owner::{APPLIES_PER_HOUR, Owner};
 pub use pending::recover;
 pub use rnsedit::{MAX_RNS_CHANGES, RnsChange};
 pub use wire::Secret;
@@ -98,6 +99,10 @@ pub struct Listen {
     pub secret: Secret,
     pub allow: Vec<Network>,
     pub allow_enable: bool,
+    /// At most this many Reticulum config changes in `reticulum_hours` hours
+    /// (`--manage-reticulum-changes`, `--manage-reticulum-hours`).
+    pub reticulum_changes: usize,
+    pub reticulum_hours: u64,
 }
 
 /// An address or a network a connection may come from (`--manage-allow`):
@@ -357,7 +362,13 @@ struct Guard {
     nonce_expiry: BTreeSet<(u64, String)>,
     writes: VecDeque<Instant>,
     confirms: VecDeque<Instant>,
-    refunds: VecDeque<Instant>,
+    /// Refunds given, counted apart for writes and confirms, so refused
+    /// writes can't use up the confirms' refunds.
+    write_refunds: VecDeque<Instant>,
+    /// The confirms each actor had refused in the last minute. Their tokens
+    /// are always given back, so another user's wrong confirms never use up
+    /// the maker's; they are limited for that actor alone instead.
+    refused_confirms: HashMap<String, VecDeque<Instant>>,
     failures: VecDeque<Instant>,
     locked_until: Option<Instant>,
     /// Bad signatures since the last report (log line and audit entry), and
@@ -488,21 +499,60 @@ impl Guard {
     }
 
     /// Give back the write (or confirm) counted at `at`, which was refused
-    /// before anything changed: at most `refunds_per_minute` a minute, so
-    /// refusals (which are still audited) can't come at any rate.
-    fn refund(&mut self, (kind, at): Counted, now: Instant, limits: &Limits) {
-        forget_older(&mut self.refunds, now, MINUTE);
-        if self.refunds.len() >= limits.refunds_per_minute {
-            return;
+    /// before anything changed. A write: at most `refunds_per_minute` a
+    /// minute, so refusals (which are still audited) can't come at any rate.
+    /// A confirm of `actor`: always, but counted against that actor's refused
+    /// confirms (see [`Guard::confirm_blocked`]), so one user's wrong confirms
+    /// can't use up what another needs.
+    fn refund(&mut self, (kind, at): Counted, actor: &str, now: Instant, limits: &Limits) {
+        match kind {
+            Limited::Write => {
+                forget_older(&mut self.write_refunds, now, MINUTE);
+                if self.write_refunds.len() >= limits.refunds_per_minute {
+                    return;
+                }
+                if let Some(index) = self.writes.iter().position(|taken| *taken == at) {
+                    self.writes.remove(index);
+                    self.write_refunds.push_back(now);
+                }
+            }
+            Limited::Confirm => {
+                if let Some(index) = self.confirms.iter().position(|taken| *taken == at) {
+                    self.confirms.remove(index);
+                    let key = self.refused_key(actor, now);
+                    self.refused_confirms.entry(key).or_default().push_back(now);
+                }
+            }
         }
-        let taken = match kind {
-            Limited::Write => &mut self.writes,
-            Limited::Confirm => &mut self.confirms,
-        };
-        if let Some(index) = taken.iter().position(|taken| *taken == at) {
-            taken.remove(index);
-            self.refunds.push_back(now);
+    }
+
+    /// The most actors whose refused confirms are tracked; the rest share one.
+    const MAX_ACTORS: usize = 256;
+
+    fn refused_key(&mut self, actor: &str, now: Instant) -> String {
+        if !self.refused_confirms.contains_key(actor) && self.refused_confirms.len() >= Self::MAX_ACTORS {
+            self.refused_confirms.retain(|_, refused| {
+                forget_older(refused, now, MINUTE);
+                !refused.is_empty()
+            });
+            if self.refused_confirms.len() >= Self::MAX_ACTORS {
+                return String::new();
+            }
         }
+        actor.to_string()
+    }
+
+    /// How long `actor` has to wait to send another confirm, if the node
+    /// has refused `refunds_per_minute` of theirs in the last minute. It is
+    /// decided before a token is taken, so it takes nothing from others.
+    fn confirm_blocked(&mut self, actor: &str, now: Instant, limits: &Limits) -> Option<Duration> {
+        let key = if self.refused_confirms.contains_key(actor) { actor } else { "" };
+        let refused = self.refused_confirms.get_mut(key)?;
+        forget_older(refused, now, MINUTE);
+        if refused.len() >= limits.refunds_per_minute {
+            return refused.front().map(|first| MINUTE.saturating_sub(now.saturating_duration_since(*first)));
+        }
+        None
     }
 }
 
@@ -1016,6 +1066,16 @@ fn admit(
             )));
         }
     }
+    if limited == Some(Limited::Confirm)
+        && let Some(wait) = guard.confirm_blocked(&signed.actor, now, limits)
+    {
+        let message = "This user's confirms were refused too often in the last minute: try again shortly";
+        return Err(Box::new(answer(
+            signer,
+            StatusCode::TOO_MANY_REQUESTS,
+            &json!({ "error": "rate_limited", "message": message, "retry_after": seconds(wait) }),
+        )));
+    }
     if let Some(kind) = limited
         && let Some(wait) = guard.write(kind, now, limits)
     {
@@ -1087,7 +1147,7 @@ async fn handle(shared: Arc<Shared>, request: Request) -> Response {
     // fill it with requests the node turns away.
     let refund = || {
         if let Some(counted) = counted {
-            shared.guard.lock().unwrap_or_else(PoisonError::into_inner).refund(counted, Instant::now(), &limits);
+            shared.guard.lock().unwrap_or_else(PoisonError::into_inner).refund(counted, &signed.actor, Instant::now(), &limits);
         }
     };
     let op = match parse_op(route, parts.uri.query(), &parts.headers, &body) {

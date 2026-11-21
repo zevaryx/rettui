@@ -139,4 +139,9 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   `--manage-allow-enable`, and needs `MANAGE_LISTEN`): turning them on opens
   the node to others. See [Reticulum config changes on
   probation](Hosting-a-Node#reticulum-config-changes-on-probation).
+
+  `MANAGE_RETICULUM_CHANGES` (1 to 100, default 4) and `MANAGE_RETICULUM_HOURS`
+  (1 to 168, default 1) set how many Reticulum config changes the website may
+  make in that many hours (`--manage-reticulum-changes` and
+  `--manage-reticulum-hours`; both need `MANAGE_LISTEN`).
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.

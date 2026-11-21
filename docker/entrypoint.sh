@@ -124,6 +124,32 @@ if [ -n "$MANAGE_ALLOW_ENABLE" ] && [ -z "$MANAGE_LISTEN" ]; then
     echo "rettui: MANAGE_ALLOW_ENABLE needs MANAGE_LISTEN" >&2
     exit 1
 fi
+# MANAGE_RETICULUM_CHANGES (1 to 100) and MANAGE_RETICULUM_HOURS (1 to 168), both
+# optional and needing MANAGE_LISTEN, are how many Reticulum config changes the
+# website may make in that many hours (--manage-reticulum-changes and
+# --manage-reticulum-hours, 4 and 1 if empty).
+MANAGE_RETICULUM_CHANGES="${MANAGE_RETICULUM_CHANGES:-}"
+MANAGE_RETICULUM_HOURS="${MANAGE_RETICULUM_HOURS:-}"
+for pair in "MANAGE_RETICULUM_CHANGES:100" "MANAGE_RETICULUM_HOURS:168"; do
+    name="${pair%%:*}"
+    max="${pair##*:}"
+    eval "value=\$$name"
+    case "$value" in
+        "") continue ;;
+        *[!0-9]* | 0*)
+            echo "rettui: $name must be a number from 1 to $max (got '$value')" >&2
+            exit 1
+            ;;
+    esac
+    if [ "$value" -gt "$max" ]; then
+        echo "rettui: $name must be a number from 1 to $max (got '$value')" >&2
+        exit 1
+    fi
+    if [ -z "$MANAGE_LISTEN" ]; then
+        echo "rettui: $name needs MANAGE_LISTEN" >&2
+        exit 1
+    fi
+done
 
 mkdir -p "$DATA/reticulum"
 # First start: keep the Reticulum config in the data directory too. To use
@@ -165,6 +191,12 @@ if [ "${1:-}" = node ]; then
     fi
     if [ -n "$MANAGE_ALLOW_ENABLE" ]; then
         set -- --manage-allow-enable "$@"
+    fi
+    if [ -n "$MANAGE_RETICULUM_CHANGES" ]; then
+        set -- --manage-reticulum-changes "$MANAGE_RETICULUM_CHANGES" "$@"
+    fi
+    if [ -n "$MANAGE_RETICULUM_HOURS" ]; then
+        set -- --manage-reticulum-hours "$MANAGE_RETICULUM_HOURS" "$@"
     fi
     if [ -n "$MANAGE_LISTEN" ]; then
         set -- --manage-listen "$MANAGE_LISTEN" --manage-secret-file "$MANAGE_SECRET_FILE" "$@"
