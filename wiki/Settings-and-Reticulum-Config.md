@@ -53,8 +53,10 @@ of the Reticulum instance it uses. Where files are kept is in
     and adds `ifac_size_unit = bits` beside it (Python ignores that line), and
     keeps the old file as `config.backup`. A size that already has
     `ifac_size_unit` is left alone.
-  - **What runs programs:** a pipe interface's command and an interface's
-    `location_cmd` run programs, so the web UI can't set or turn them on.
+  - **What runs programs:** a pipe interface's command, an interface's
+    `location_cmd`, and a `reachable_on` (or `discovery_reachable_on`) that
+    isn't a host name or IP address (Python Reticulum runs a path there to
+    learn the address) run programs, so the web UI can't set or turn them on.
   - **Entry point:** *Transport node* on its own opens no port, so nobody
     can connect to the node. *Entry point* (the `E` key in the terminal UI)
     turns Transport node on and adds a TCP server interface listening on

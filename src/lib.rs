@@ -678,6 +678,9 @@ fn android_start(settings: &Settings, paths: &Paths) -> Vec<String> {
 /// The terminal UI, until it quits; or the name of the identity it's
 /// switching to.
 async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::identity::Identity) -> Result<Option<String>> {
+    // Before Reticulum starts: a config change from afar that a node run
+    // left unconfirmed is put back (said on the Status tab).
+    let recovered = remote_manage::recover(&paths, settings.rns_config.as_deref());
     let identity_hash = identity.hash;
     let store = Store::load_with_db(&paths.store, &paths.db);
     store.sync_blocked();
@@ -693,6 +696,9 @@ async fn run_tui(settings: Settings, paths: Paths, identity: rns_identity::ident
     // reading stdin (it would swallow the terminal's replies).
     let graphics = term::images::Graphics::detect();
     let mut app = App::new(settings, paths, store, net_tx.clone(), Some(graphics), identity_hash);
+    for line in recovered {
+        app.log(line);
+    }
     app.in_terminal = true;
     app.open_newest_conversation();
     // Focus reports (where the terminal sends them) tell notifications
@@ -847,6 +853,7 @@ mod tests {
             "10.200.0.1",
             "--manage-allow",
             "fd00::/64",
+            "--manage-allow-enable",
             "--data-dir",
             "/srv/rettui",
         ]) else {
@@ -859,6 +866,7 @@ mod tests {
         assert_eq!(args.manage_secret_file, Some(std::path::PathBuf::from("/run/secrets/manage")));
         let allowed: Vec<String> = args.manage_allow.iter().map(ToString::to_string).collect();
         assert_eq!(allowed, ["10.200.0.1/32", "fd00::/64"]);
+        assert!(args.manage_allow_enable);
         assert_eq!(dir, std::path::PathBuf::from("/srv/rettui"));
         assert_eq!(args.entry_point, Some(4965));
         assert_eq!(args.listen_ip, Some("::".parse().unwrap()));
@@ -876,6 +884,7 @@ mod tests {
             &["--manage-listen", "127.0.0.1:8750"],
             &["--manage-secret-file", "/x"],
             &["--manage-allow", "10.0.0.1"],
+            &["--manage-allow-enable"],
             &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-allow", "website.example"],
             &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-allow", "10.0.0.0/33"],
             &["--stats-logs"],

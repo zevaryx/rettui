@@ -30,9 +30,13 @@ const AUTH_FAILURES: &str = "auth_failures";
 const MAX_PAGE_VALUE: usize = 200;
 
 /// One setting changed: its key, and its value before and after, as the
-/// settings editors show them.
+/// settings editors show them. A Reticulum config change has the section
+/// it is in too (`["interfaces", "Name"]`), and its old value only if the
+/// redacted view would show it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Change {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
     pub key: String,
     pub from: String,
     pub to: String,
@@ -48,7 +52,8 @@ pub struct Entry {
     pub id: String,
     /// The website's user, or `-` for what nobody asked for (failed signatures).
     pub actor: String,
-    /// `settings`, `restart`, `rollback` or `auth_failures`.
+    /// `settings`, `restart`, `rollback`, `reticulum`, `confirm`,
+    /// `auto_rollback` or `auth_failures`.
     pub op: String,
     #[serde(default)]
     pub changes: Vec<Change>,
@@ -60,6 +65,10 @@ pub struct Entry {
     /// from `time` on, while no other entry came between.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count: Option<u64>,
+    /// What a Reticulum config change turned on, a sentence each (such as
+    /// what it opens to others).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// How an operation ended.
@@ -68,6 +77,8 @@ pub enum Outcome {
     Ok,
     Refused,
     Failed,
+    /// A Reticulum config change that wasn't confirmed in time, put back.
+    RolledBack,
 }
 
 impl Outcome {
@@ -76,6 +87,7 @@ impl Outcome {
             Outcome::Ok => "ok",
             Outcome::Refused => "refused",
             Outcome::Failed => "failed",
+            Outcome::RolledBack => "rolled_back",
         }
     }
 }
@@ -159,6 +171,12 @@ impl Audit {
     /// Add an entry and save the log. The entry is kept even if saving fails
     /// (the error says why), as what it records has happened.
     pub fn record(&mut self, record: Record<'_>, now: u64) -> Result<&Entry, String> {
+        self.record_noted(record, Vec::new(), now)
+    }
+
+    /// [`Audit::record`], with `notes` on what it turned on (at most 8, each
+    /// cut to the length of an error).
+    pub fn record_noted(&mut self, record: Record<'_>, notes: Vec<String>, now: u64) -> Result<&Entry, String> {
         let mut changes = record.changes;
         if record.outcome != Outcome::Ok {
             for change in &mut changes {
@@ -176,6 +194,7 @@ impl Audit {
             result: record.outcome.as_str().to_string(),
             error: record.error.map(|e| cut(e, MAX_ERROR)),
             count: None,
+            notes: notes.iter().take(8).map(|note| cut(note, MAX_ERROR)).collect(),
         };
         self.add(entry)
     }
@@ -220,6 +239,7 @@ impl Audit {
             result: Outcome::Refused.as_str().to_string(),
             error: Some(auth_failures_text(count)),
             count: Some(count),
+            notes: Vec::new(),
         };
         self.add(entry)
     }
@@ -347,7 +367,7 @@ mod tests {
     }
 
     fn change(key: &str, from: &str, to: &str) -> Change {
-        Change { key: key.into(), from: from.into(), to: to.into() }
+        Change { path: vec![], key: key.into(), from: from.into(), to: to.into() }
     }
 
     #[test]
@@ -584,6 +604,33 @@ mod tests {
         let path = dir.join("huge.jsonl");
         std::fs::write(&path, "x".repeat(10_000)).unwrap();
         assert!(Audit::with_limits(path, 10, 1000).entries.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reticulum_change_keeps_its_path_and_older_lines_still_read() {
+        let dir = test_dir("path");
+        let path = dir.join("audit.jsonl");
+        let mut audit = Audit::load(path.clone());
+        let hill = Change { path: vec!["interfaces".into(), "Hill".into()], key: "enabled".into(), from: "yes".into(), to: "no".into() };
+        audit.record(Record { op: "reticulum", ..record("r", Outcome::Ok, vec![hill.clone()]) }, 1).unwrap();
+        let rolled = Record {
+            op: "auto_rollback",
+            error: Some("No confirm by the deadline"),
+            ..record("r", Outcome::RolledBack, vec![hill.clone()])
+        };
+        audit.record(rolled, 2).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#""path":["interfaces","Hill"]"#), "{text}");
+        assert!(text.contains(r#""result":"rolled_back""#), "{text}");
+        // A settings change has no path in its line, and a line without one reads.
+        audit.record(record("s", Outcome::Ok, vec![change("pn_name", "", "x")]), 3).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().lines().last().unwrap().contains("path"));
+        let read = Audit::load(path);
+        assert_eq!(read.page(None, 10).0[2].changes[0], hill);
+        assert!(read.page(None, 10).0[0].changes[0].path.is_empty());
+        // A Reticulum change isn't a settings change a rollback can undo.
+        assert!(read.applied_change("r").is_none() && read.has("r"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

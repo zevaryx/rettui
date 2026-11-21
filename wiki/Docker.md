@@ -110,7 +110,8 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   (for example `0.0.0.0:8750`) and `MANAGE_SECRET_FILE` (the path of a file in
   the container with the manage secret, such as a Docker secret at
   `/run/secrets/manage_secret`) to let a website you run change a few
-  settings and restart Reticulum, with signed requests. Each needs the
+  settings and a few keys of the Reticulum config (on probation), and
+  restart Reticulum, with signed requests. Each needs the
   other, and the container refuses to start without `command: node` ("only
   works with the node command"). The secret file must be readable by the
   container's user only (`chmod 600` on the host, owned by `PUID`): one its
@@ -132,4 +133,10 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   that `0.0.0.0` is every address in the container. Only digits, letters
   a to f, `.`, `:`, `/` and `,` are taken in `MANAGE_ALLOW`. See
   [Hosting a Node](Hosting-a-Node#remote-management).
+
+  A Reticulum config change from the website may turn interfaces and
+  Transport off, but not on, unless `MANAGE_ALLOW_ENABLE` is `yes` (it becomes
+  `--manage-allow-enable`, and needs `MANAGE_LISTEN`): turning them on opens
+  the node to others. See [Reticulum config changes on
+  probation](Hosting-a-Node#reticulum-config-changes-on-probation).
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.

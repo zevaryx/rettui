@@ -137,7 +137,8 @@ rettui --web [ADDRESS] --stats-listen ADDRESS           # also a read-only stats
 rettui node --stats-listen ADDRESS                      # the same, for a node with no UI
 rettui node --stats-listen ADDRESS --stats-token-file PATH   # and a peer list for whoever has the token (or RETTUI_STATS_TOKEN)
 rettui node --stats-listen ADDRESS --stats-token-file PATH --stats-logs   # and the end of the log at /logs, for the token
-rettui node --manage-listen ADDRESS --manage-secret-file PATH --manage-allow WEBSITE   # let your website change a few settings and restart Reticulum, with signed requests (see Hosting a Node)
+rettui node --manage-listen ADDRESS --manage-secret-file PATH --manage-allow WEBSITE   # let your website change a few settings and Reticulum keys (on probation) and restart Reticulum, with signed requests (see Hosting a Node)
+rettui node --manage-listen ADDRESS --manage-secret-file PATH --manage-allow WEBSITE --manage-allow-enable   # the same, and let it turn interfaces and Transport on
 rettui fetch <hash>[:/page/x.mu] [--raw] [--identify] [-o FILE]
 rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]  # address or lxma:// link
 rettui listen [--seconds N]  # announce, then print incoming messages
@@ -166,6 +167,9 @@ Reticulum config.
 `--manage-listen ADDRESS` with `--manage-secret-file PATH` (both or neither,
 `rettui node` only, not saved) lets a website you run manage the node: read
 its state, change a short list of settings, turn services off (never on),
+change a few keys of the Reticulum config (on probation: put back by the
+node unless the website confirms them; turning an interface or Transport
+on also needs `--manage-allow-enable`, as it opens the node to others),
 restart Reticulum and roll a settings change back, each request signed with
 the secret in the file, which must not be the stats token and must be
 readable by you only (on Linux and macOS a file its group or others can read

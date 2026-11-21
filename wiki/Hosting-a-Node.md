@@ -306,9 +306,10 @@ way as its flag.
 | `--stats-listen ADDRESS` | none (`STATS_LISTEN` in Docker) | Serves a read-only stats page on this address, such as `127.0.0.1:8741` (see below). Off unless given, and not saved: give it on every run. |
 | `--stats-token-file PATH` | `RETTUI_STATS_TOKEN` is the secret itself (`STATS_TOKEN_FILE` is the file, in Docker) | A secret that lets a request for the stats also list every peer heard (see below). Needs `--stats-listen`. Off unless given, and not saved. |
 | `--stats-logs` | none | Lets a request with the stats token also read the end of the log at `/logs` (see below). Needs `--stats-listen`. Off unless given, and not saved: without it `/logs` is a 404, token or not. |
-| `--manage-listen ADDRESS` | none (`MANAGE_LISTEN` in Docker) | Lets a website you run change a few settings and restart Reticulum, with signed requests to this address (see [Remote management](#remote-management)). Needs `--manage-secret-file`. Off unless given, and not saved. |
+| `--manage-listen ADDRESS` | none (`MANAGE_LISTEN` in Docker) | Lets a website you run change a few settings and a few keys of the Reticulum config (on probation), and restart Reticulum, with signed requests to this address (see [Remote management](#remote-management)). Needs `--manage-secret-file`. Off unless given, and not saved. |
 | `--manage-secret-file PATH` | none (`MANAGE_SECRET_FILE` in Docker) | The file with the secret those requests are signed with, readable by you only. Needs `--manage-listen`. There is no variable for the secret itself. |
 | `--manage-allow ADDRESS` | none (`MANAGE_ALLOW` in Docker, separated by commas) | Takes management connections only from this address or network (such as `10.200.0.1` or `10.200.0.0/24`): the website's. Give it once for each. Needs `--manage-listen`. Not saved. |
+| `--manage-allow-enable` | none (`MANAGE_ALLOW_ENABLE=yes` in Docker) | Lets a Reticulum config change from the website turn interfaces and Transport **on**, which opens the node to others (see [Reticulum config changes on probation](#reticulum-config-changes-on-probation)). Without it, only turning them off and the other keys are allowed. Needs `--manage-listen`. Off unless given, and not saved. |
 
 Things to know:
 
@@ -673,8 +674,9 @@ Security notes:
 
 With `--manage-listen ADDRESS` and `--manage-secret-file PATH`, a website you
 run (the rettui website's *Manage* page) can look after the node: see its
-state, change a few settings, restart Reticulum, roll a settings change back,
-and read what was done. It is off unless you give both flags, and they are
+state, change a few settings, change a few keys of the Reticulum config on
+probation, restart Reticulum, roll a settings change back, and read what was
+done. It is off unless you give both flags, and they are
 not saved: give them on every run. The node itself has no page for it, and
 the terminal and web UIs have no part in it.
 
@@ -755,15 +757,19 @@ path makes every request fail its signature.
   keys, passwords, tokens, device paths, commands) shows only whether it is
   set, and its value never leaves the node. An interface with a
   `command` or `location_cmd`, a `type` that contains "pipe" (any case, or
-  over several lines), or no readable `type`, shows only its `type` and
+  over several lines), a `reachable_on` or `discovery_reachable_on` that
+  isn't a host name or IP address (Python Reticulum runs such a value as a
+  program), or no readable `type`, shows only its `type` and
   `enabled`, not even the names of its other keys, however long its section
   is. The config is read as untrusted text:
   at most 1 MiB, 128 sections, 64 keys a section, about 24 KiB of view and
   values of 256 bytes are shown (`truncated` says if something was left out,
   or a line was over 2048 bytes, or a multi-line value never ended), and control
   characters are written out as `\u{..}`. If the file can't be read, the
-  state has `"reticulum": null`. It is read-only: the config can't be
-  changed from afar.
+  state has `"reticulum": null`. `editable` lists the sections a change can
+  go to, and `reticulum_enable_allowed` says whether a change may turn
+  things on (see [Reticulum config changes on
+  probation](#reticulum-config-changes-on-probation)).
 - Change these settings: display name, announce interval, the propagation
   node's name, stamp cost, storage, transfer limit, auto-peering, peer depth
   and limit, and static peers, the NomadNet node's name and announce
@@ -792,12 +798,106 @@ path makes every request fail its signature.
   long as nothing changed them since. A rollback goes through the same
   checks, so rolling back "turn the hub off" is refused: turn it on in the
   terminal.
+- Change a few keys of the Reticulum config: Transport node on or off, and
+  an interface's `enabled`, mode, announce cap, bitrate and ingress control.
+  Turning Transport or an interface **on** opens the node to others, so it
+  needs `--manage-allow-enable` on the node. Each change is tested first and put back by the node itself unless the
+  website confirms it (see [Reticulum config changes on
+  probation](#reticulum-config-changes-on-probation)).
 
-**What it can't do:** run programs or choose what runs, change the Reticulum
-config or its interfaces (it can only read the redacted view above), change folders, paths, commands, the rngit access
+**What it can't do:** run programs or choose what runs, change any other key
+of the Reticulum config, add, rename or remove interfaces, change an
+interface that runs a program (a pipe, one with `location_cmd`, or one
+whose `reachable_on` isn't an address) or has no `type`, turn things on
+without `--manage-allow-enable`, change folders, paths, commands, the rngit access
 rule or anything the web UI may not change, read, export or delete identity
 keys, read messages, or reach the web UI. A request may change at most 32
-settings, with values of at most 4096 bytes, in a body of at most 16 KiB.
+settings, with values of at most 4096 bytes, or 16 keys of the Reticulum
+config, with values of at most 32 bytes, in a body of at most 16 KiB.
+
+#### Reticulum config changes on probation
+
+A change to the Reticulum config from afar could cut the node off from the
+website that made it, so it is only kept once the website has seen the
+node come back with it:
+
+1. The website sends up to 16 changes with the config's revision (from the
+   state) and how long to test them for (`confirm_seconds`, 60 to 900; the
+   website's `manage_confirm_seconds`, 300 by default). Only these can
+   change: `enable_transport` in `[reticulum]` (yes or no), and in an
+   interface's own section `enabled` (yes or no; `interface_enabled` is
+   changed if that is the name the file uses), `mode` (full, gateway,
+   access_point, roaming or boundary; or `interface_mode`), `announce_cap`
+   (a percentage over 0 and at most 100, with at most two decimals),
+   `bitrate` (5 to 10000000000 bits a second) and `ingress_control` (yes or
+   no). Turning an interface or Transport **on** is refused (`not_allowed`)
+   unless the node runs with `--manage-allow-enable` (`MANAGE_ALLOW_ENABLE=yes`
+   in Docker); turning them off, and the other keys, need nothing. With the
+   flag, the answer's `notes` say what a change opens ("Hilltop TCP: This
+   opens 0.0.0.0:4242 to anyone who can reach it", "This interface announces
+   its address", "This node will relay traffic for others"), quoting only
+   values of the shape the redacted view shows; the node's log has a
+   `warning:` line for it, and its audit entry has the same `notes`.
+2. The node changes those lines in place and nothing else: comments, other
+   keys, secrets and the order of the file stay byte for byte as they were.
+   The changed line may lose odd spacing around `=` and quotes around the
+   old value; a switch keeps the file's style (`Yes`, `true`, `ON`...). A
+   key that isn't there yet is added to its section. Anything that could be
+   read two ways is refused (`ambiguous`), not guessed at: a section given
+   twice, or spelled another way (`[[Hilltop]]` and `[[hilltop]]`), a key
+   given twice, in another case, or under both of its names, a value over
+   several lines, a triple-quoted value that never ends, a file over 1 MiB,
+   a file with characters Python Reticulum reads as line breaks and
+   rsReticulum doesn't (vertical tab, form feed, U+001C to U+001E, U+0085,
+   U+2028, U+2029),
+   a file that isn't plain UTF-8 or mixes line endings, a line starting
+   with `[` that isn't a plain section header (`[[Shell # pipe]]`, `[[A]] x`,
+   `[[A]`, `[]`, `[x] = 1`), a config that is a symbolic link, and a change
+   that Reticulum's own parser would read as anything but the keys asked
+   for. A config Reticulum wouldn't load is refused (`invalid_value`, "Reticulum
+   couldn't load the config with this change (see the node's log)"): what
+   Reticulum said, which can quote the file, stays in the node's log, as it
+   does for every problem the node reports. It can't be done while
+   another program's shared instance is used (`shared_instance`), while
+   Reticulum isn't running (`busy`), within 5 minutes of a restart from
+   afar, more than 4 times an hour, or for 15 minutes after a change was
+   rolled back by itself (`rate_limited`, with `retry_after` in seconds).
+3. The old text is kept in the config history (Reticulum tab, `H`) and the
+   new one saved, with the change on probation in `manage/pending.json`
+   (readable by the node's user only; it holds checksums of the file before
+   and after, not its text). Reticulum restarts with it.
+4. Once Reticulum runs again with every interface that was online before
+   (but those the change turns off), the change is on probation until
+   `confirm_seconds` later. The website checks it can still reach the node
+   and then confirms the change, as the website user who made it: then it is
+   kept. Settings can change meanwhile; another Reticulum change or a restart
+   waits (`pending`).
+5. If Reticulum isn't back within 90 seconds, fails, or the change isn't
+   confirmed in time, the node puts the old text back by itself and restarts
+   Reticulum with it (this restart isn't held back by the 5-minute limit,
+   but a new change after it is). If the file was changed on this computer
+   meanwhile, it is left as it is and the audit log says so. If the old text
+   can't be written (a full disk, a folder it can't write to), the node
+   says so once in its log and tries again every half second, and at the
+   next start; only a change whose old text is nowhere to be found is given
+   up (`rollback_failed`, said loudly in the log).
+
+**If the node stops during the test** (a crash, a reboot, `systemctl stop`),
+the change isn't kept: at the next start of rettui (as a node, or the
+terminal or web UI on the same data directory), before Reticulum starts, it
+puts the old text back if the file is still as the change left it, with or
+without the `--manage-…` flags, and says so in its output, on the Status
+tab and in the audit log. A file changed since is left alone. A website restart while a change is
+on probation means nobody confirms it, so the node rolls it back.
+
+**Putting a config back by hand:** every version the node saved is in the
+config history (`reticulum-history/` in the data directory, readable by the
+node's user only (copies an older version left readable by others are made
+private when rettui starts), with `index.json` saying what each was: "Remote change
+<id> by <user>, on probation: ...", "Rolled back remote change <id>: ..."),
+and the file before the last save is `config.backup` beside the config. With
+the node stopped, copy the version you want over the config, or put it back
+from the Reticulum tab's history in the terminal UI.
 
 **How requests are checked:** each request is signed with the secret
 (HMAC-SHA256 over its time, a one-time nonce, the method, the path and query,
@@ -819,7 +919,12 @@ the answer the first one got. What signing can't
 stop: someone on the path between the website and the node who holds a
 request back and delivers it later, once, within those 5 minutes. That is
 why the link must be private (a private network, or TLS). At most 10
-changes a minute are taken. After 20 requests with a bad signature in a
+changes a minute are taken; a change the node turns away before anything
+changed (another change pending, a restart running, a rate limit) or a
+request it can't read doesn't count (up to 60 a minute), so another website
+user can't use up the limit with them. A confirm has a limit of its own, 6 a
+minute, and a refused one doesn't count either, so nobody can keep a change
+from being confirmed (which would roll it back). After 20 requests with a bad signature in a
 minute, requests without a valid signature are refused for a minute (and the
 refusals still count, so a flood keeps it going); requests the website signs
 are still answered. The lockout is logged and added to the audit log when it
@@ -836,7 +941,11 @@ adds TLS and lets only the website through (see above).
 **The audit log:** every change, restart, rollback and refusal, and each burst
 of bad signatures, is kept in `manage/audit.jsonl` in the data directory
 (readable by the node's user only): when, which website user, what changed
-from what to what, and how it ended. Bursts of bad signatures in a row share
+from what to what, and how it ended. A Reticulum config change is
+`reticulum`, with the section of each key (`path`) and its old value only if
+the redacted view would show it (else `(hidden)`); its `confirm` and its
+`auto_rollback` (`rolled_back`, or `failed` with the reason) have the same id,
+and one that turned something on has `notes` saying what it opened. Bursts of bad signatures in a row share
 one entry for up to an hour, with a `count` of the bad signatures since its
 time: all of them, including those that come after the lockout is first
 reported (added when the next report is due, or within seconds of the
@@ -854,7 +963,7 @@ an answer.
 | Who | What they could do | What limits it |
 |-----|--------------------|----------------|
 | Someone who can reach the port without the secret | Nothing but be refused; while they keep connecting, take the listener's connection places and keep the website out (4 per address, 32 in all, each for 5 seconds until its request is in) | `--manage-allow` with the website's address, or a firewall: required; a proxy in front lets only the website through |
-| Someone with this node's secret | Change the settings above and restart Reticulum on this node; no programs, keys or Reticulum config | Change the secret; the audit log; the rate limits |
+| Someone with this node's secret | Change the settings and the few Reticulum keys above and restart Reticulum on this node; with `--manage-allow-enable`, also turn on an interface that is off (a TCP server then opens its port) or Transport; no programs, keys or other Reticulum keys | Leave `--manage-allow-enable` off; change the secret; the audit log; the rate limits; a change that cuts the website off is rolled back |
 | Whoever controls the website | The same, on every node it manages | The short list above; a secret per node; remove the flags on a node to turn it off |
 | Someone who records the traffic | Read the settings as they pass (no TLS) | A private network or TLS proxy; the secret is never sent |
 | Someone on the path who can hold traffic back | Deliver a request the website sent, once, up to 5 minutes late (a replay is refused) | A private network or TLS proxy |
@@ -864,7 +973,8 @@ Reticulum restart that goes wrong doesn't cut it off. If the website can't
 manage the node (a lost secret, a port someone else keeps busy, a clock
 that's off), SSH in: correct the clock, firewall the port, write a new secret
 to the file and restart the node (and give the website the same one), or stop
-the node and change `settings.json` by hand. To turn remote management off,
+the node and change `settings.json` by hand, or put the Reticulum config
+back from its history (see above). To turn remote management off,
 start the node without the `--manage-…` flags (in Docker, without
 `MANAGE_LISTEN`).
 

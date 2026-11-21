@@ -508,15 +508,19 @@ fn encode(view: &OptionView, value: &str, existing: Option<&str>) -> Result<Opti
     Ok(Some(text))
 }
 
-/// Commands of the pipe interfaces and location commands (programs Reticulum runs), with how
-/// many interfaces that are on run each.
+/// Why [`validate`] refuses a change, with `restricted`, that runs a program.
+pub const RUNS_PROGRAMS: &str = "Pipe interface commands, location commands and a reachable_on that isn't an address run programs, so they can only be changed or turned on from the terminal";
+
+/// Commands of the pipe interfaces, location commands and `reachable_on`
+/// programs (programs Reticulum runs), with how many interfaces that are on
+/// run each.
 fn pipe_commands(config: Option<&Config>) -> BTreeMap<String, usize> {
     let mut commands = BTreeMap::new();
     let Some(config) = config else { return commands };
     for (_, section) in config.subsections("interfaces") {
         // On only if it says so, as Reticulum reads it.
         let on = usize::from(section.interface_enabled());
-        if section.get("type") == Some("PipeInterface")
+        if section.get("type").is_some_and(|kind| kind.eq_ignore_ascii_case("PipeInterface"))
             && let Some(command) = section.get("command")
         {
             *commands.entry(command.to_string()).or_default() += on;
@@ -525,13 +529,24 @@ fn pipe_commands(config: Option<&Config>) -> BTreeMap<String, usize> {
         if let Some(command) = section.get("location_cmd") {
             *commands.entry(format!("location_cmd: {command}")).or_default() += on;
         }
+        // A `reachable_on` that isn't an address may name a program that
+        // gives one (Python Reticulum runs it; rsReticulum only announces an
+        // address, but the same file may go to either).
+        for key in redact::REACHABLE {
+            if let Some(value) = section.values.get(*key)
+                && reachable_runs(value)
+            {
+                *commands.entry(format!("{key}: {value:?}")).or_default() += on;
+            }
+        }
     }
     commands
 }
 
 /// Check an edited config before saving: it must load, and with
 /// `restricted` (the web UI) it may not add or change programs that
-/// Reticulum runs (pipe interface commands), nor run them more: turning
+/// Reticulum runs (pipe interface commands, location commands, a
+/// `reachable_on` that names one), nor run them more: turning
 /// an interface that runs one on, or copying it, starts the program too.
 pub fn validate(before: &str, after: &str, restricted: bool) -> Result<Check, String> {
     let (config, check) = check(after);
@@ -542,13 +557,19 @@ pub fn validate(before: &str, after: &str, restricted: bool) -> Result<Check, St
         let had = pipe_commands(check_config(before).as_ref());
         let runs_more = pipe_commands(config.as_ref()).into_iter().any(|(command, on)| had.get(&command).is_none_or(|was| on > *was));
         if runs_more {
-            return Err(
-                "Pipe interface commands and location commands run programs, so they can only be changed or turned on from the terminal"
-                    .into(),
-            );
+            return Err(RUNS_PROGRAMS.into());
         }
     }
     Ok(check)
+}
+
+/// Whether a `reachable_on` value may name a program: anything but a host
+/// name or an IP address.
+pub(crate) fn reachable_runs(value: &ConfigValue) -> bool {
+    match value {
+        ConfigValue::Scalar(text) => !text.trim().is_empty() && !redact::host_shaped(text.trim()),
+        ConfigValue::List(_) => true,
+    }
 }
 
 fn check_config(text: &str) -> Option<Config> {
@@ -919,6 +940,26 @@ mod tests {
         assert!(validate(DEFAULT, &text, true).is_err());
         assert!(validate(DEFAULT, &text, false).is_ok());
         assert!(validate(&text, &text, true).is_ok(), "one already there is left alone");
+    }
+
+    #[test]
+    fn a_reachable_on_that_isnt_an_address_counts_as_a_program() {
+        let server = "[reticulum]\n[interfaces]\n  [[S]]\n    type = TCPServerInterface\n    listen_port = 4242\n";
+        for value in ["/usr/local/bin/where", "~/where.sh", "./where"] {
+            for key in redact::REACHABLE {
+                let off = format!("{server}    enabled = no\n    {key} = {value}\n");
+                let on = off.replace("enabled = no", "enabled = yes");
+                assert_eq!(validate(&off, &on, true).err().as_deref(), Some(RUNS_PROGRAMS), "{key} = {value}");
+                assert!(validate(&off, &on, false).is_ok());
+                assert!(validate(&on, &off, true).is_ok(), "turning it off is fine");
+                // Setting one on an interface that is on.
+                let plain = format!("{server}    enabled = yes\n");
+                assert!(validate(&plain, &on, true).is_err());
+            }
+        }
+        // A host name or an address runs nothing.
+        let off = format!("{server}    enabled = no\n    reachable_on = node.example.org\n");
+        assert!(validate(&off, &off.replace("enabled = no", "enabled = yes"), true).is_ok());
     }
 
     #[test]

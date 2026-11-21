@@ -111,6 +111,9 @@ enum Owners {
     Node(Box<(App, Owner)>),
     /// A stand-in that answers 200 with the op it was given, and keeps them.
     Echo(Vec<Op>),
+    /// A stand-in for a node with a change on probation: every write but a
+    /// confirm is refused as `pending`, and a confirm is taken.
+    Pending(Vec<Op>),
 }
 
 struct Harness {
@@ -179,6 +182,14 @@ impl Harness {
                 ops.push(job.op.clone());
                 let _ = job.reply.send(Reply::new(StatusCode::OK, json!({ "op": format!("{:?}", job.op), "actor": job.actor })));
             }
+            Owners::Pending(ops) => {
+                ops.push(job.op.clone());
+                let reply = match job.op {
+                    Op::Confirm { .. } | Op::State | Op::Audit { .. } => Reply::new(StatusCode::OK, json!({})),
+                    _ => Reply::error(StatusCode::CONFLICT, "pending", "Another Reticulum config change is still being tested"),
+                };
+                let _ = job.reply.send(reply);
+            }
         }
     }
 
@@ -216,13 +227,13 @@ impl Harness {
     fn app(&mut self) -> &mut App {
         match &mut self.owners {
             Owners::Node(node) => &mut node.0,
-            Owners::Echo(_) => panic!("no node"),
+            Owners::Echo(_) | Owners::Pending(_) => panic!("no node"),
         }
     }
 
     fn ops(&self) -> &[Op] {
         match &self.owners {
-            Owners::Echo(ops) => ops,
+            Owners::Echo(ops) | Owners::Pending(ops) => ops,
             Owners::Node(..) => panic!("a real node"),
         }
     }
@@ -471,11 +482,11 @@ fn a_lockout_turns_away_unsigned_requests_only() {
         let signing = Signing::get("/manage/v1/state");
         wire::Signed::parse(signing.request().headers())
     };
-    assert_eq!(admit(&shared, None, false).unwrap_err().status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(admit(&shared, None, false).unwrap_err().status(), StatusCode::UNAUTHORIZED, "the one that starts it");
-    assert_eq!(admit(&shared, None, false).unwrap_err().status(), StatusCode::TOO_MANY_REQUESTS);
-    assert!(admit(&shared, signed(), false).is_ok());
-    assert!(admit(&shared, signed(), true).is_ok());
+    assert_eq!(admit(&shared, None, None).unwrap_err().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(admit(&shared, None, None).unwrap_err().status(), StatusCode::UNAUTHORIZED, "the one that starts it");
+    assert_eq!(admit(&shared, None, None).unwrap_err().status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(admit(&shared, signed(), None).is_ok());
+    assert!(admit(&shared, signed(), Some(Limited::Write)).is_ok());
 }
 
 #[test]
@@ -674,6 +685,222 @@ async fn a_setting_name_that_cant_be_one_is_a_bad_request() {
     assert_eq!(h.ops().len(), 1);
 }
 
+/// A `/reticulum` body with `changes`.
+fn rns_body(confirm_seconds: Value, changes: Value) -> Value {
+    json!({ "revision": "0".repeat(32), "confirm_seconds": confirm_seconds, "changes": changes })
+}
+
+#[tokio::test]
+async fn a_reticulum_change_is_read_with_its_paths_keys_and_values() {
+    let mut h = harness_with("rns-parse", Limits { writes_per_minute: 1000, ..Limits::default() }, false);
+    let hill = json!({ "path": ["interfaces", "Hilltop TCP"], "key": "enabled", "value": "no" });
+    let body = rns_body(json!(300), json!([hill, { "path": ["reticulum"], "key": "enable_transport", "value": "yes" }]));
+    let signing = Signing::post("/manage/v1/reticulum", &body);
+    let answer = h.send(&signing).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert!(answer.signed_for(&signing.nonce));
+    let change = |path: &[&str], key: &str, value: &str| RnsChange {
+        path: path.iter().map(|s| s.to_string()).collect(),
+        key: key.into(),
+        value: value.into(),
+    };
+    assert_eq!(
+        h.ops()[0],
+        Op::Reticulum {
+            revision: "0".repeat(32),
+            confirm_seconds: 300,
+            changes: vec![change(&["interfaces", "Hilltop TCP"], "enabled", "no"), change(&["reticulum"], "enable_transport", "yes")],
+        }
+    );
+    // The edges that are fine: 60 and 900 seconds, 16 changes, 64-byte names, 32-byte keys and values.
+    let name = "n".repeat(64);
+    let sixteen: Vec<Value> = (0..16).map(|i| json!({ "path": ["interfaces", format!("I{i}")], "key": "mode", "value": "full" })).collect();
+    for body in [
+        rns_body(json!(60), json!([hill])),
+        rns_body(json!(900), json!([hill])),
+        rns_body(json!(300), json!(sixteen)),
+        rns_body(json!(300), json!([{ "path": ["interfaces", name], "key": "k".repeat(32), "value": "v".repeat(32) }])),
+        rns_body(json!(300), json!([{ "path": ["interfaces", "Ünïcode (LoRa) / 868"], "key": "a_b", "value": "x" }])),
+        // The same key in two sections, and two keys in one.
+        rns_body(json!(300), json!([hill, { "path": ["interfaces", "Other"], "key": "enabled", "value": "no" }])),
+        rns_body(json!(300), json!([hill, { "path": ["interfaces", "Hilltop TCP"], "key": "mode", "value": "full" }])),
+    ] {
+        assert_eq!(h.send(&Signing::post("/manage/v1/reticulum", &body)).await.status, StatusCode::OK, "{body}");
+    }
+    assert_eq!(h.ops().len(), 8);
+}
+
+#[tokio::test]
+async fn a_reticulum_change_of_the_wrong_shape_is_a_bad_request() {
+    let mut h = harness_with("rns-shapes", Limits { writes_per_minute: 1000, ..Limits::default() }, false);
+    let hill = json!({ "path": ["interfaces", "Hilltop TCP"], "key": "enabled", "value": "no" });
+    let with_path = |path: Value| rns_body(json!(300), json!([{ "path": path, "key": "enabled", "value": "no" }]));
+    let with_key = |key: &str| rns_body(json!(300), json!([{ "path": ["reticulum"], "key": key, "value": "no" }]));
+    let with_value = |value: &str| rns_body(json!(300), json!([{ "path": ["reticulum"], "key": "enable_transport", "value": value }]));
+    let seventeen: Vec<Value> =
+        (0..17).map(|i| json!({ "path": ["interfaces", format!("I{i}")], "key": "mode", "value": "full" })).collect();
+    let mut bodies = vec![
+        // Not the shape at all.
+        "not json".to_string(),
+        "{}".to_string(),
+        "[]".to_string(),
+        json!({ "revision": "0".repeat(32), "changes": [hill] }).to_string(),
+        json!({ "confirm_seconds": 300, "changes": [hill] }).to_string(),
+        json!({ "revision": "0".repeat(32), "confirm_seconds": 300 }).to_string(),
+        json!({ "revision": "0".repeat(32), "confirm_seconds": 300, "changes": [hill], "extra": 1 }).to_string(),
+        json!({ "revision": "0".repeat(32), "confirm_seconds": 300, "changes": [{ "path": ["reticulum"], "key": "k", "value": "v", "more": 1 }] }).to_string(),
+        json!({ "revision": "0".repeat(32), "confirm_seconds": 300, "changes": [{ "path": ["reticulum"], "key": "k" }] }).to_string(),
+        json!({ "revision": "0".repeat(32), "confirm_seconds": 300, "changes": { "enabled": "no" } }).to_string(),
+        json!({ "revision": "0".repeat(32), "confirm_seconds": 300, "changes": [{ "path": "reticulum", "key": "k", "value": "v" }] }).to_string(),
+        json!({ "revision": "0".repeat(32), "confirm_seconds": 300, "changes": [{ "path": ["reticulum"], "key": "k", "value": 1 }] }).to_string(),
+        // The revision.
+        json!({ "revision": "A".repeat(32), "confirm_seconds": 300, "changes": [hill] }).to_string(),
+        json!({ "revision": "0".repeat(31), "confirm_seconds": 300, "changes": [hill] }).to_string(),
+        // The time.
+        rns_body(json!(59), json!([hill])).to_string(),
+        rns_body(json!(901), json!([hill])).to_string(),
+        rns_body(json!(0), json!([hill])).to_string(),
+        rns_body(json!(-300), json!([hill])).to_string(),
+        rns_body(json!(300.0), json!([hill])).to_string(),
+        rns_body(json!(300.5), json!([hill])).to_string(),
+        rns_body(json!("300"), json!([hill])).to_string(),
+        rns_body(json!(u64::MAX), json!([hill])).to_string(),
+        // How many.
+        rns_body(json!(300), json!([])).to_string(),
+        rns_body(json!(300), json!(seventeen)).to_string(),
+        rns_body(json!(300), json!([hill, hill])).to_string(),
+        // The paths.
+        with_path(json!([])).to_string(),
+        with_path(json!(["logging"])).to_string(),
+        with_path(json!(["Reticulum"])).to_string(),
+        with_path(json!(["interfaces"])).to_string(),
+        with_path(json!(["interfaces", "A", "B"])).to_string(),
+        with_path(json!(["reticulum", "A"])).to_string(),
+        with_path(json!(["Interfaces", "A"])).to_string(),
+        with_path(json!(["interfaces", ""])).to_string(),
+        with_path(json!(["interfaces", " A"])).to_string(),
+        with_path(json!(["interfaces", "A "])).to_string(),
+        with_path(json!(["interfaces", "n".repeat(65)])).to_string(),
+        with_path(json!(["interfaces", 5])).to_string(),
+        // Keys and values.
+        with_key("").to_string(),
+        with_key(&"k".repeat(33)).to_string(),
+        with_key("Enabled").to_string(),
+        with_key("enabled1").to_string(),
+        with_key("en-abled").to_string(),
+        with_key("en abled").to_string(),
+        with_key("enabled\n").to_string(),
+        with_value("").to_string(),
+        with_value(&"v".repeat(33)).to_string(),
+        with_value(&"é".repeat(17)).to_string(),
+    ];
+    for bad in ["a[b", "a]b", "a#b", "a\"b", "a'b", "a\nb", "a\u{1b}[31m", "a\u{200b}", "a\u{202e}b", "a\tb", "a\0b"] {
+        bodies.push(with_path(json!(["interfaces", bad])).to_string());
+    }
+    for body in &bodies {
+        let answer = h.send(&Signing::new("POST", "/manage/v1/reticulum", body)).await;
+        assert_eq!((answer.status, answer.code()), (StatusCode::BAD_REQUEST, "bad_request"), "{body}");
+        assert!(!answer.json["message"].as_str().unwrap().is_empty());
+        assert!(answer.json.get("path").is_none(), "nothing sent is echoed");
+    }
+    assert!(h.ops().is_empty());
+}
+
+#[tokio::test]
+async fn a_confirm_takes_an_id_only_and_has_a_limit_of_its_own() {
+    let mut h = harness_with("confirm", Limits { writes_per_minute: 1000, ..Limits::default() }, false);
+    for body in ["{}", r#"{"id":"0123"}"#, r#"{"id":"0123456789ABCDEF"}"#, r#"{"id":"0123456789abcdef","x":1}"#, r#"{"id":5}"#, "[]"] {
+        let answer = h.send(&Signing::new("POST", "/manage/v1/confirm", body)).await;
+        assert_eq!(answer.code(), "bad_request", "{body}");
+    }
+    let answer = h.send(&Signing::post("/manage/v1/confirm", &json!({ "id": "0123456789abcdef" }))).await;
+    assert_eq!(answer.status, StatusCode::OK);
+    assert_eq!(h.ops(), [Op::Confirm { id: "0123456789abcdef".into() }]);
+    // A change counts against the write limit (two a minute here), a
+    // confirm against its own (six a minute), so writes can't crowd it out.
+    let mut h = harness_with("confirm-limit", Limits { writes_per_minute: 2, ..Limits::default() }, false);
+    let body = rns_body(json!(300), json!([{ "path": ["reticulum"], "key": "enable_transport", "value": "yes" }]));
+    let confirm = json!({ "id": "0123456789abcdef" });
+    for _ in 0..2 {
+        assert_eq!(h.send(&Signing::post("/manage/v1/reticulum", &body)).await.status, StatusCode::OK);
+    }
+    assert_eq!(h.send(&Signing::post("/manage/v1/reticulum", &body)).await.code(), "rate_limited");
+    for n in 0..6 {
+        assert_eq!(h.send(&Signing::post("/manage/v1/confirm", &confirm)).await.status, StatusCode::OK, "{n}");
+    }
+    let limited = h.send(&Signing::post("/manage/v1/confirm", &confirm)).await;
+    assert_eq!(limited.code(), "rate_limited");
+    assert!(limited.json["message"].as_str().unwrap().contains("6 confirms"));
+    assert_eq!(h.send(&Signing::get("/manage/v1/state")).await.status, StatusCode::OK, "a read isn't a write");
+    assert_eq!(h.ops().len(), 9);
+}
+
+/// The pentest's: another website user sends writes the node turns away
+/// (`pending`) while a change is on probation, to use up the write limit
+/// so its maker's confirm is refused and the change rolls back. Refused
+/// writes are given back, and a confirm has a limit of its own.
+#[tokio::test]
+async fn writes_the_node_turns_away_cant_starve_a_confirm() {
+    let mut h = harness_with("starve", Limits::default(), false);
+    h.owners = Owners::Pending(Vec::new());
+    for n in 0..30 {
+        let answer = h.send(&Signing::post("/manage/v1/restart", &json!({}))).await;
+        assert_eq!((answer.status, answer.code()), (StatusCode::CONFLICT, "pending"), "{n}");
+    }
+    let confirm = h.send(&Signing::post("/manage/v1/confirm", &json!({ "id": "0123456789abcdef" }))).await;
+    assert_eq!(confirm.status, StatusCode::OK, "{confirm:?}");
+    // Requests that never reach the node are given back too.
+    for _ in 0..12 {
+        assert_eq!(h.send(&Signing::new("POST", "/manage/v1/restart", "[]")).await.code(), "bad_request");
+    }
+    assert_eq!(h.send(&Signing::post("/manage/v1/restart", &json!({}))).await.code(), "pending");
+    // Only so many a minute are given back: refusals are still audited.
+    let mut h = harness_with("starve-capped", Limits { writes_per_minute: 2, refunds_per_minute: 3, ..Limits::default() }, false);
+    h.owners = Owners::Pending(Vec::new());
+    for n in 0..5 {
+        assert_eq!(h.send(&Signing::post("/manage/v1/restart", &json!({}))).await.code(), "pending", "{n}");
+    }
+    assert_eq!(h.send(&Signing::post("/manage/v1/restart", &json!({}))).await.code(), "rate_limited");
+    // The confirm still goes through.
+    assert_eq!(h.send(&Signing::post("/manage/v1/confirm", &json!({ "id": "0123456789abcdef" }))).await.status, StatusCode::OK);
+    // Confirms that never reach the node (or that it refuses) don't use up the maker's either.
+    let mut h = harness_with("starve-confirms", Limits::default(), false);
+    for _ in 0..20 {
+        assert_eq!(h.send(&Signing::new("POST", "/manage/v1/confirm", "{}")).await.code(), "bad_request");
+    }
+    assert_eq!(h.send(&Signing::post("/manage/v1/confirm", &json!({ "id": "0123456789abcdef" }))).await.status, StatusCode::OK);
+}
+
+#[test]
+fn only_refusals_before_anything_changed_are_given_back() {
+    let reply = |status, code: &str| Reply::error(status, code, "x");
+    for (status, code) in [
+        (StatusCode::CONFLICT, "pending"),
+        (StatusCode::CONFLICT, "restarting"),
+        (StatusCode::CONFLICT, "busy"),
+        (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
+    ] {
+        assert!(changed_nothing(Limited::Write, &reply(status, code)), "{code}");
+    }
+    for (status, code) in [
+        (StatusCode::CONFLICT, "stale_revision"),
+        (StatusCode::CONFLICT, "ambiguous"),
+        (StatusCode::FORBIDDEN, "not_allowed"),
+        (StatusCode::INTERNAL_SERVER_ERROR, "failed"),
+        (StatusCode::CONFLICT, "shared_instance"),
+    ] {
+        assert!(!changed_nothing(Limited::Write, &reply(status, code)), "{code}");
+    }
+    assert!(!changed_nothing(Limited::Write, &Reply::new(StatusCode::ACCEPTED, json!({ "id": "x" }))));
+    // A confirm refused for any reason changed nothing; one that kept a change did.
+    for (status, code) in
+        [(StatusCode::CONFLICT, "not_pending"), (StatusCode::FORBIDDEN, "not_allowed"), (StatusCode::INTERNAL_SERVER_ERROR, "failed")]
+    {
+        assert!(changed_nothing(Limited::Confirm, &reply(status, code)), "{code}");
+    }
+    assert!(!changed_nothing(Limited::Confirm, &Reply::new(StatusCode::OK, json!({ "state": "committed" }))));
+}
+
 #[test]
 fn connections_are_counted_per_address_and_given_back() {
     let peers = Arc::new(Peers::default());
@@ -750,7 +977,7 @@ async fn one_address_can_hold_only_a_few_connections() {
 async fn other_paths_and_methods_are_404_and_405() {
     let mut h = echo("paths");
     for target in
-        ["/", "/manage/v1", "/manage/v1/state/", "/manage/v2/state", "//manage/v1/state", "/manage/v1/confirm", "/manage/v1/reticulum"]
+        ["/", "/manage/v1", "/manage/v1/state/", "/manage/v2/state", "//manage/v1/state", "/manage/v1/confirm/", "/manage/v1/reticulum/x"]
     {
         let answer = h.call(HttpRequest::builder().uri(target).body(Body::empty()).unwrap()).await;
         assert_eq!(answer.status, StatusCode::NOT_FOUND, "{target}");
@@ -758,8 +985,10 @@ async fn other_paths_and_methods_are_404_and_405() {
     }
     let answer = h.send(&Signing::new("POST", "/manage/v1/state", "{}")).await;
     assert_eq!((answer.status, answer.headers[header::ALLOW].to_str().unwrap()), (StatusCode::METHOD_NOT_ALLOWED, "GET"));
-    let answer = h.send(&Signing::get("/manage/v1/settings")).await;
-    assert_eq!((answer.status, answer.headers[header::ALLOW].to_str().unwrap()), (StatusCode::METHOD_NOT_ALLOWED, "POST"));
+    for target in ["/manage/v1/settings", "/manage/v1/reticulum", "/manage/v1/confirm"] {
+        let answer = h.send(&Signing::get(target)).await;
+        assert_eq!((answer.status, answer.headers[header::ALLOW].to_str().unwrap()), (StatusCode::METHOD_NOT_ALLOWED, "POST"), "{target}");
+    }
     assert!(h.ops().is_empty());
 }
 
@@ -899,7 +1128,7 @@ async fn serving_refuses_bad_and_public_addresses() {
 }
 
 fn listen_on(address: &str, allow: Vec<Network>) -> Listen {
-    Listen { address: address.into(), secret: secret(), allow }
+    Listen { address: address.into(), secret: secret(), allow, allow_enable: false }
 }
 
 #[test]
@@ -1331,7 +1560,7 @@ async fn bad_signatures_owed_when_a_flood_stops_are_reported_with_their_real_cou
     let (jobs, mut received) = mpsc::channel(limits.queue);
     let shared = Shared::new(secret(), jobs, limits, started(), None);
     for _ in 0..10 {
-        let _ = admit(&shared, None, false);
+        let _ = admit(&shared, None, None);
     }
     let first = received.try_recv().expect("the lockout is reported when it starts");
     assert_eq!(first.op, Op::AuthFailures { count: 3 });

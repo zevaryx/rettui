@@ -10,8 +10,11 @@
 //! reads no input. The one thing it listens on that can change anything is
 //! remote management, off unless `--manage-listen` and
 //! `--manage-secret-file` are both given: signed requests only, for a few
-//! settings and a Reticulum restart, and never what it runs (see
-//! [`crate::remote_manage`]).
+//! settings, a few keys of the Reticulum config (on probation, put back by
+//! the node unless the website confirms them) and a Reticulum restart, and
+//! never what it runs (see [`crate::remote_manage`]). A config change the
+//! last run left unconfirmed is put back at the start, before Reticulum
+//! starts, with or without remote management.
 
 use std::net::IpAddr;
 use std::time::Duration;
@@ -94,6 +97,11 @@ pub struct NodeArgs {
     /// other is closed before anything is read. Not saved.
     #[arg(long, value_name = "ADDRESS", requires = "manage_listen", value_parser = crate::remote_manage::Network::parse)]
     pub manage_allow: Vec<crate::remote_manage::Network>,
+    /// Let a Reticulum config change from the website turn interfaces and
+    /// transport on, which opens the node to others (turning them off, and
+    /// the other keys, need no flag). Off unless given. Not saved.
+    #[arg(long, requires = "manage_listen")]
+    pub manage_allow_enable: bool,
 }
 
 /// The variables that stand for the node's flags (not `--stats-listen`, which is for one run).
@@ -499,6 +507,7 @@ pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args:
                 address: address.clone(),
                 secret: crate::remote_manage::load_secret(file)?,
                 allow: args.manage_allow.clone(),
+                allow_enable: args.manage_allow_enable,
             })
         }
         _ => None,
@@ -506,6 +515,11 @@ pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args:
     check_secrets_differ(stats.as_ref(), manage.as_ref())?;
     // Listened for from now, so a stop while it starts is a clean one.
     let stop = crate::web::shutdown_signal();
+    // A Reticulum config change from afar that the last run didn't see
+    // confirmed is put back before anything reads the config.
+    for line in crate::remote_manage::recover(&paths, settings.rns_config.as_deref()) {
+        println!("{line}");
+    }
     let prepared = prepare(&mut settings, &paths, args)?;
     for change in &prepared.changes {
         println!("{change}");
@@ -519,7 +533,7 @@ pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args:
     for line in exposed_services(&settings) {
         println!("{line}");
     }
-    serve(settings, paths, identity, stop, STATUS_EVERY, Listeners { stats, manage }, |_| {}).await
+    serve(settings, paths, identity, stop, STATUS_EVERY, Listeners { stats, manage, recovered: true }, |_| {}).await
 }
 
 /// Refuse a manage secret that is the stats token too. The stats token is
@@ -537,11 +551,14 @@ fn check_secrets_differ(stats: Option<&crate::stats::Listen<'_>>, manage: Option
 }
 
 /// What the node listens on besides Reticulum: the stats page and remote
-/// management, each if asked for.
+/// management, each if asked for. `recovered` says that a change from afar
+/// left by the last run was dealt with already (see
+/// [`crate::remote_manage::recover`]), so it isn't done twice.
 #[derive(Debug, Default)]
 pub(crate) struct Listeners<'a> {
     pub stats: Option<crate::stats::Listen<'a>>,
     pub manage: Option<crate::remote_manage::Listen>,
+    pub recovered: bool,
 }
 
 /// The node, until `stop`: what the web UI runs, without its HTTP server.
@@ -558,7 +575,14 @@ pub(crate) async fn serve(
     listeners: Listeners<'_>,
     stopping: impl FnOnce(&mut App),
 ) -> Result<()> {
-    let Listeners { stats, manage } = listeners;
+    let Listeners { stats, manage, recovered } = listeners;
+    // Before Reticulum starts: a config change from afar left unconfirmed
+    // by the last run is put back (whether or not management is on now).
+    if !recovered {
+        for line in crate::remote_manage::recover(&paths, settings.rns_config.as_deref()) {
+            println!("{line}");
+        }
+    }
     let rns_path = reticulum::config_path(settings.rns_config.as_deref());
     let listening =
         std::fs::read_to_string(&rns_path).ok().and_then(|text| Config::parse(&text).ok()).map(|c| listening(&c)).unwrap_or_default();
@@ -584,10 +608,15 @@ pub(crate) async fn serve(
     };
     let (manage_server, mut manage_jobs, mut owner) = match manage {
         Some(listen) => {
-            let allow = listen.allow.clone();
+            let (allow, allow_enable) = (listen.allow.clone(), listen.allow_enable);
             let (bound, task, jobs) = crate::remote_manage::serve(listen, &paths).await?;
             println!("{}", crate::remote_manage::started_line(bound, &allow));
-            (Some(task), Some(jobs), Some(crate::remote_manage::Owner::new(&paths)))
+            if allow_enable {
+                println!(
+                    "warning: remote management may turn interfaces and transport on (--manage-allow-enable): whoever holds the manage secret can open this node to others"
+                );
+            }
+            (Some(task), Some(jobs), Some(crate::remote_manage::Owner::new(&paths).allow_enable(allow_enable)))
         }
         None => (None, None, None),
     };
@@ -617,7 +646,7 @@ pub(crate) async fn serve(
             _ = tick.tick() => {
                 app.on_tick();
                 if let Some(owner) = &mut owner {
-                    owner.on_tick(&app);
+                    owner.on_tick(&mut app);
                 }
             }
             Some(job) = crate::remote_manage::next_job(&mut manage_jobs) => {
@@ -1164,7 +1193,11 @@ mod tests {
             identity,
             std::future::pending::<()>(),
             Duration::from_secs(60),
-            Listeners { stats: Some(crate::stats::Listen { address: "not an address", token: None, logs: false }), manage: None },
+            Listeners {
+                stats: Some(crate::stats::Listen { address: "not an address", token: None, logs: false }),
+                manage: None,
+                recovered: false,
+            },
             |_| {},
         ));
         assert!(format!("{:#}", result.unwrap_err()).contains("--stats-listen expects"));
@@ -1252,6 +1285,7 @@ mod tests {
             address: "127.0.0.1:0".into(),
             secret: crate::remote_manage::Secret::parse(secret).unwrap(),
             allow: vec![],
+            allow_enable: false,
         };
         let same = check_secrets_differ(Some(&stats(MANAGE_SECRET)), Some(&manage(MANAGE_SECRET))).unwrap_err().to_string();
         assert!(same.contains("same text as the stats token") && !same.contains(MANAGE_SECRET), "{same}");
@@ -1318,6 +1352,7 @@ mod tests {
                 address: format!("127.0.0.1:{port}"),
                 secret: crate::remote_manage::Secret::parse(MANAGE_SECRET).unwrap(),
                 allow: vec![crate::remote_manage::Network::parse("127.0.0.0/8").unwrap()],
+                allow_enable: false,
             };
             let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
             let settings_file = paths.settings.clone();
@@ -1330,7 +1365,7 @@ mod tests {
                         let _ = stop_rx.await;
                     },
                     Duration::from_secs(60),
-                    Listeners { stats: None, manage: Some(listen) },
+                    Listeners { stats: None, manage: Some(listen), recovered: false },
                     |_| {},
                 ))
             });
@@ -1367,6 +1402,191 @@ mod tests {
             // The time of the last request is kept for the next run.
             let mark: u64 = std::fs::read_to_string(root.join("data/manage/last-request")).unwrap().trim().parse().unwrap();
             assert!(mark.abs_diff(crate::remote_manage::unix_now()) < 60, "{mark}");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        panic!("the node didn't start on any of three ports");
+    }
+
+    /// A node serving remote management in a thread of its own, until stopped.
+    struct Managed {
+        stop: tokio::sync::oneshot::Sender<()>,
+        running: std::thread::JoinHandle<Result<()>>,
+        port: u16,
+    }
+
+    impl Managed {
+        /// Start the node whose data directory is `root/data` and whose
+        /// Reticulum config directory is `root/rns`, and wait until its
+        /// listener answers: `None` if it doesn't (a port taken meanwhile).
+        fn start(root: &std::path::Path) -> Option<Self> {
+            let paths = Paths::new(Some(root.join("data"))).unwrap();
+            let settings = Settings {
+                update_check: false,
+                welcomed: true,
+                rns_config: Some(root.join("rns").display().to_string()),
+                ..Settings::default()
+            };
+            settings.save(&paths.settings).unwrap();
+            let identity = crate::config::load_identity(&paths.identity).unwrap();
+            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let listen = crate::remote_manage::Listen {
+                address: format!("127.0.0.1:{port}"),
+                secret: crate::remote_manage::Secret::parse(MANAGE_SECRET).unwrap(),
+                allow: vec![],
+                allow_enable: true,
+            };
+            let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
+            let running = std::thread::spawn(move || {
+                tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(serve(
+                    settings,
+                    paths,
+                    identity,
+                    async move {
+                        let _ = stop_rx.await;
+                    },
+                    Duration::from_secs(60),
+                    Listeners { stats: None, manage: Some(listen), recovered: false },
+                    |_| {},
+                ))
+            });
+            let node = Self { stop, running, port };
+            if node.state_when(|_| true).is_some() {
+                return Some(node);
+            }
+            let _ = node.stop.send(());
+            let _ = node.running.join();
+            None
+        }
+
+        /// The state, once `ready` says it is what's waited for (within 30 seconds).
+        fn state_when(&self, ready: impl Fn(&serde_json::Value) -> bool) -> Option<serde_json::Value> {
+            let until = std::time::Instant::now() + Duration::from_secs(30);
+            while std::time::Instant::now() < until && !self.running.is_finished() {
+                // A request signed in the second the listener started is refused (`before_start`): sign another.
+                if let Some((200, state)) = manage(self.port, "GET", "/manage/v1/state", "")
+                    && ready(&state)
+                {
+                    return Some(state);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            None
+        }
+
+        fn post(&self, target: &str, body: &serde_json::Value) -> (u16, serde_json::Value) {
+            manage(self.port, "POST", target, &body.to_string()).expect("the node didn't answer")
+        }
+
+        fn stop(self) {
+            self.stop.send(()).unwrap();
+            self.running.join().unwrap().unwrap();
+        }
+    }
+
+    /// The Reticulum config of the tests below: a TCP server on `port`, named as an operator would.
+    fn hilltop(port: u16) -> String {
+        format!(
+            "# A node's config\n[reticulum]\n  share_instance = No\n  enable_transport = No   # for now\n\n[interfaces]\n  # The way in\n  [[Hilltop TCP]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {port}\n"
+        )
+    }
+
+    fn online(state: &serde_json::Value) -> bool {
+        state["network"]["state"] == "running" && state["network"]["interfaces_online"].as_u64().is_some_and(|n| n >= 1)
+    }
+
+    /// A Reticulum config change through the node: tested once Reticulum is
+    /// back, then kept when the website confirms it. Reticulum's interface
+    /// names are the config's section names, which the health check needs.
+    #[test]
+    fn a_reticulum_change_through_the_node_is_tested_and_kept() {
+        let dir = test_dir("manage-rns");
+        for attempt in 0..3 {
+            let root = dir.join(attempt.to_string());
+            let rns_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            std::fs::create_dir_all(root.join("rns")).unwrap();
+            std::fs::write(root.join("rns/config"), hilltop(rns_port)).unwrap();
+            let Some(node) = Managed::start(&root) else { continue };
+            let Some(state) = node.state_when(online) else {
+                node.stop();
+                continue;
+            };
+            assert_eq!(state["reticulum"]["editable"], serde_json::json!([["reticulum"], ["interfaces", "Hilltop TCP"]]), "{state}");
+            let body = serde_json::json!({
+                "revision": state["reticulum"]["revision"],
+                "confirm_seconds": 60,
+                "changes": [{ "path": ["reticulum"], "key": "enable_transport", "value": "yes" }],
+            });
+            let (status, applied) = node.post("/manage/v1/reticulum", &body);
+            assert_eq!(status, 202, "{applied}");
+            let id = applied["id"].as_str().unwrap().to_string();
+            let probation = node.state_when(|s| s["pending"]["state"] == "probation").expect("the change never reached probation");
+            assert_eq!(probation["pending"]["id"], applied["id"]);
+            // The interface that was online had to be back, by its section's name.
+            let pending = crate::remote_manage::pending::load(&Paths::new(Some(root.join("data"))).unwrap()).unwrap().unwrap();
+            assert_eq!(pending.required, ["Hilltop TCP"], "InterfaceInfo.name isn't the section's name");
+            let (status, kept) = node.post("/manage/v1/confirm", &serde_json::json!({ "id": id }));
+            assert_eq!((status, kept["state"].as_str()), (200, Some("committed")), "{kept}");
+            let state = node.state_when(|_| true).unwrap();
+            assert_eq!(
+                (state["pending"].clone(), state["reticulum_result"]["outcome"].clone()),
+                (serde_json::Value::Null, "committed".into())
+            );
+            node.stop();
+            let text = std::fs::read_to_string(root.join("rns/config")).unwrap();
+            assert_eq!(text, hilltop(rns_port).replace("enable_transport = No   # for now", "enable_transport = Yes # for now"));
+            assert!(!root.join("data/manage/pending.json").exists());
+            let audit = std::fs::read_to_string(root.join("data/manage/audit.jsonl")).unwrap();
+            assert!(audit.contains(&format!("\"id\":\"{id}\",\"actor\":\"alice\",\"op\":\"confirm\"")), "{audit}");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        panic!("the node didn't start on any of three ports");
+    }
+
+    /// A node stopped while a change is on probation puts the old config
+    /// back when it starts again, before Reticulum reads it: the interface
+    /// the change turned off listens again.
+    #[test]
+    fn a_node_stopped_during_probation_starts_again_with_the_old_config() {
+        let dir = test_dir("manage-rns-stop");
+        for attempt in 0..3 {
+            let root = dir.join(attempt.to_string());
+            let rns_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let before = hilltop(rns_port);
+            std::fs::create_dir_all(root.join("rns")).unwrap();
+            std::fs::write(root.join("rns/config"), &before).unwrap();
+            let Some(node) = Managed::start(&root) else { continue };
+            let Some(state) = node.state_when(online) else {
+                node.stop();
+                continue;
+            };
+            let body = serde_json::json!({
+                "revision": state["reticulum"]["revision"],
+                "confirm_seconds": 900,
+                "changes": [{ "path": ["interfaces", "Hilltop TCP"], "key": "enabled", "value": "no" }],
+            });
+            let (status, applied) = node.post("/manage/v1/reticulum", &body);
+            assert_eq!(status, 202, "{applied}");
+            let id = applied["id"].as_str().unwrap().to_string();
+            node.state_when(|s| s["pending"]["state"] == "probation").expect("the change never reached probation");
+            assert!(std::net::TcpStream::connect(("127.0.0.1", rns_port)).is_err(), "the interface is off on probation");
+            node.stop();
+            let after = std::fs::read_to_string(root.join("rns/config")).unwrap();
+            assert_eq!(after, before.replace("    enabled = Yes\n", "    enabled = No\n"));
+            assert!(root.join("data/manage/pending.json").exists(), "left pending by the stop");
+
+            // The next start puts the old bytes back first, and Reticulum starts with them.
+            let Some(again) = Managed::start(&root) else { panic!("the node didn't start again") };
+            assert_eq!(std::fs::read_to_string(root.join("rns/config")).unwrap(), before);
+            assert!(!root.join("data/manage/pending.json").exists());
+            again.state_when(online).expect("the interface didn't come back");
+            assert!(std::net::TcpStream::connect(("127.0.0.1", rns_port)).is_ok(), "Reticulum read the old config");
+            again.stop();
+            let audit = std::fs::read_to_string(root.join("data/manage/audit.jsonl")).unwrap();
+            let line = audit.lines().last().unwrap();
+            assert!(line.contains(&format!("\"id\":\"{id}\"")) && line.contains("\"op\":\"auto_rollback\""), "{audit}");
+            assert!(line.contains("\"result\":\"rolled_back\"") && line.contains("while the change was on probation"), "{line}");
             let _ = std::fs::remove_dir_all(&dir);
             return;
         }
@@ -1417,6 +1637,7 @@ mod tests {
                             logs: true,
                         }),
                         manage: None,
+                        recovered: false,
                     },
                     stopping,
                 ))

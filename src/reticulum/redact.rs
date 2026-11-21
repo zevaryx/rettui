@@ -6,8 +6,10 @@
 //! an allowed key shows its value only if it has the shape that key's values
 //! have ([`Shape`]: a host or address, a port, yes or no, a plain word, a
 //! number), so a secret written into one (`target_host = user:secret@host`)
-//! stays hidden. A pipe interface, or any interface with `location_cmd`,
-//! shows only `type` and `enabled`: not even the names of its other keys.
+//! stays hidden. A pipe interface, or any interface with `location_cmd` or a
+//! `reachable_on` that isn't a host name or an address (Python Reticulum
+//! runs such a value as a program), shows only `type` and `enabled`: not even
+//! the names of its other keys.
 //!
 //! The text is untrusted: it is read with a size cap, parsed without
 //! panicking, and the number of sections and keys and the length of names and
@@ -81,6 +83,16 @@ fn host_name(value: &str) -> bool {
         })
 }
 
+/// The keys Reticulum runs as a program when the value isn't an address
+/// (an executable path gives the address on its output).
+pub const REACHABLE: &[&str] = &["reachable_on", "discovery_reachable_on"];
+
+/// Whether `value` (unquoted) is a host name or an IP address, so a
+/// `reachable_on` with it names a host and not a program.
+pub fn host_shaped(value: &str) -> bool {
+    has_shape(value, Shape::Host)
+}
+
 /// Whether `value` has `shape`.
 fn has_shape(value: &str, shape: Shape) -> bool {
     match shape {
@@ -129,11 +141,15 @@ pub struct Key {
     pub set: bool,
 }
 
-/// One section, by its path (`["interfaces", "Name"]`).
+/// One section, by its path (`["interfaces", "Name"]`). `restricted` is an
+/// interface that runs a program or has no `type`, so only its `type` and
+/// `enabled` are listed (and nothing in it can be changed from afar); it
+/// isn't part of the revision, which the keys listed already change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
     pub path: Vec<String>,
     pub keys: Vec<Key>,
+    pub restricted: bool,
 }
 
 /// The redacted config: sections and keys sorted, so the same config always
@@ -151,7 +167,7 @@ struct Raw {
     /// Key to (its text if it may be shown, whether it has a value).
     keys: BTreeMap<String, (Option<String>, bool)>,
     /// Some key says this runs a program (`command`, `location_cmd`, a pipe
-    /// `type`). Decided as each key is read, before any cap, and never
+    /// `type`, a `reachable_on` that isn't a host). Decided as each key is read, before any cap, and never
     /// undone by a later key or a section of the same name.
     restricted: bool,
     /// A `type` with a value was read.
@@ -208,6 +224,15 @@ fn header(line: &str) -> Option<(usize, String)> {
     Some((depth, unquote(&line[depth..line.len() - depth])))
 }
 
+/// A line starting with `[` (comment and spaces taken off) as the view reads
+/// it: the depth and name of the section it starts, or `None` if the view
+/// takes it for no header (and then lists no keys until the next one).
+pub fn header_of(line: &str) -> Option<(usize, String)> {
+    let (depth, name) = header(line)?;
+    let name = clean(name.trim(), MAX_NAME);
+    (depth <= MAX_DEPTH && !name.is_empty()).then_some((depth, name))
+}
+
 /// Read `text` and redact it.
 pub fn redact(text: &str) -> View {
     let mut raw: BTreeMap<Vec<String>, Raw> = BTreeMap::new();
@@ -236,9 +261,8 @@ pub fn redact(text: &str) -> View {
         }
         if line.starts_with('[') {
             current = None;
-            let Some((depth, name)) = header(line) else { continue };
-            let name = clean(name.trim(), MAX_NAME);
-            if depth > MAX_DEPTH || depth > stack.len() + 1 || name.is_empty() {
+            let Some((depth, name)) = header_of(line) else { continue };
+            if depth > stack.len() + 1 {
                 continue;
             }
             stack.truncate(depth - 1);
@@ -291,6 +315,7 @@ pub fn redact(text: &str) -> View {
         let name = key.to_ascii_lowercase();
         if matches!(name.as_str(), "location_cmd" | "command")
             || (name == "type" && (multiline || value_text.to_ascii_lowercase().contains("pipe")))
+            || (REACHABLE.contains(&name.as_str()) && (multiline || !value_text.is_empty() && !host_shaped(&value_text)))
         {
             section.restricted = true;
         }
@@ -302,13 +327,7 @@ pub fn redact(text: &str) -> View {
             truncated = true;
             continue;
         }
-        // `reachable_on` may also name a program, which the shape keeps out.
-        let may_show = SHOWN.contains(&key.as_str())
-            && !multiline
-            && !value_text.is_empty()
-            && balanced(value)
-            && shape(&key).is_some_and(|shape| has_shape(&value_text, shape));
-        let text = may_show.then(|| head(&value_text, MAX_VALUE * 2).to_string());
+        let text = if multiline { None } else { shown_value(&key, value) };
         section.keys.insert(key, (text, set));
     }
     let mut sections: Vec<Section> = raw.into_iter().map(|(path, section)| shown(path, section)).collect();
@@ -358,9 +377,26 @@ fn shown(path: Vec<String>, section: Raw) -> Section {
         .keys
         .into_iter()
         .filter(|(key, _)| !restricted || PIPE_SHOWN.contains(&key.as_str()))
-        .map(|(key, (text, set))| Key { value: text.map(|t| clean(&t, MAX_VALUE)), key, set })
+        .map(|(key, (text, set))| Key { value: text, key, set })
         .collect();
-    Section { path, keys }
+    Section { path, keys, restricted }
+}
+
+/// What the view shows for `key` with the raw value `raw` (as written, before
+/// unquoting, without a comment): its value, if `key` is in [`SHOWN`] and the
+/// value has the shape of that key's values, else `None`. A triple-quoted
+/// value is never shown (the caller says so, as only it sees the lines).
+pub fn shown_value(key: &str, raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let value = unquote(raw);
+    // `reachable_on` may also name a program, which the shape keeps out.
+    let may_show = SHOWN.contains(&key)
+        && !raw.starts_with("\"\"\"")
+        && !raw.starts_with("'''")
+        && !value.is_empty()
+        && balanced(raw)
+        && shape(key).is_some_and(|shape| has_shape(&value, shape));
+    may_show.then(|| clean(head(&value, MAX_VALUE * 2), MAX_VALUE))
 }
 
 impl View {
@@ -384,8 +420,10 @@ impl View {
         hex::encode(&hash.finalize()[..16])
     }
 
-    /// The `reticulum` object of the management state.
-    pub fn to_json(&self, shared_instance: bool) -> Value {
+    /// The `reticulum` object of the management state, with the sections
+    /// that can be changed from afar (`editable`, which isn't part of the
+    /// revision).
+    pub fn to_json_with(&self, shared_instance: bool, editable: &[Vec<String>]) -> Value {
         let sections: Vec<Value> = self
             .sections
             .iter()
@@ -399,23 +437,31 @@ impl View {
             "shared_instance": shared_instance,
             "truncated": self.truncated,
             "sections": sections,
+            "editable": editable,
         })
     }
 }
 
-/// The redacted view of the file at `path` as JSON, or `null` if it can't be
-/// read (no reason is given: it could name a path).
-pub fn view_of_file(path: &Path, shared_instance: bool) -> Value {
-    let Ok(file) = std::fs::File::open(path) else { return Value::Null };
+/// The first 1 MiB of the file at `path` as text (bytes that aren't UTF-8
+/// as U+FFFD), and whether there was more; `None` if it can't be read.
+pub fn read_capped(path: &Path) -> Option<(String, bool)> {
+    let file = std::fs::File::open(path).ok()?;
     let mut bytes = Vec::new();
-    if file.take(MAX_FILE + 1).read_to_end(&mut bytes).is_err() {
-        return Value::Null;
-    }
+    file.take(MAX_FILE + 1).read_to_end(&mut bytes).ok()?;
     let over = bytes.len() as u64 > MAX_FILE;
     bytes.truncate(MAX_FILE as usize);
-    let mut view = redact(&String::from_utf8_lossy(&bytes));
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    };
+    Some((text, over))
+}
+
+/// The redacted view of `text` (the start of a file that went on if `over`).
+pub fn view_of(text: &str, over: bool) -> View {
+    let mut view = redact(text);
     view.truncated |= over;
-    view.to_json(shared_instance)
+    view
 }
 
 #[cfg(test)]
@@ -514,7 +560,7 @@ fake = line
     #[test]
     fn only_allow_listed_keys_show_a_value() {
         let view = redact(CONFIG);
-        let json = view.to_json(false).to_string();
+        let json = view.to_json_with(false, &[]).to_string();
         assert_no_secret(&json);
         for section in &view.sections {
             for k in &section.keys {
@@ -548,7 +594,7 @@ fake = line
             let names: Vec<&str> = section.keys.iter().map(|k| k.key.as_str()).collect();
             assert_eq!(names, ["enabled", "type"], "{name}");
         }
-        let json = view.to_json(false).to_string();
+        let json = view.to_json_with(false, &[]).to_string();
         for hidden in ["command", "respawn_delay", "location_cmd", "leak.example.org"] {
             assert!(!json.contains(hidden), "{hidden} in {json}");
         }
@@ -566,7 +612,7 @@ fake = line
     fn subsections_of_an_interface_are_not_listed() {
         let view = redact("[interfaces]\n[[A]]\n type = X\n[[[inner]]]\n secret_key = 1\n");
         assert!(view.sections.iter().all(|s| s.path.len() <= 2));
-        assert!(!view.to_json(false).to_string().contains("secret_key"));
+        assert!(!view.to_json_with(false, &[]).to_string().contains("secret_key"));
     }
 
     #[test]
@@ -617,7 +663,7 @@ fake = line
             let k = key(r, name).unwrap();
             assert_eq!((k.value.as_deref(), k.set), (None, true), "{name}");
         }
-        let json = view.to_json(false).to_string();
+        let json = view.to_json_with(false, &[]).to_string();
         assert!(!json.contains("ok") && !json.contains('\u{1b}') && !json.contains("aaaa"), "{json}");
         let wide = "é".repeat(500);
         let view = redact(&format!("[reticulum]\nlisten_ip = {wide}\n"));
@@ -648,8 +694,8 @@ fake = line
         let view = redact("[interfaces]\n[[B]]\n type = BackboneInterface\n target_host = user:SECRET@host.example\n");
         let b = find(&view, &["interfaces", "B"]).unwrap();
         assert_eq!(key(b, "target_host"), Some(&Key { key: "target_host".into(), value: None, set: true }));
-        assert!(!view.to_json(false).to_string().contains("SECRET"));
-        assert_eq!(view.to_json(false)["sections"][1]["keys"][0], json!({ "key": "target_host", "value": null, "set": true }));
+        assert!(!view.to_json_with(false, &[]).to_string().contains("SECRET"));
+        assert_eq!(view.to_json_with(false, &[])["sections"][1]["keys"][0], json!({ "key": "target_host", "value": null, "set": true }));
         for (name, fine) in [
             ("listen_ip", "0.0.0.0"),
             ("listen_ip", "::"),
@@ -744,10 +790,10 @@ fake = line
         for junk in
             ["", "\0\0\0", "[", "]", "[[", "[[]]", "[[[[[[a]]]]]]", "=", "== =", "[a]]", "[[a]", "\"\"\"", "k = \"\"\"", "\u{feff}[x]"]
         {
-            let _ = redact(junk).to_json(true);
+            let _ = redact(junk).to_json_with(true, &[]);
         }
         let bytes: Vec<u8> = (0..20_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
-        let _ = redact(&String::from_utf8_lossy(&bytes)).to_json(false);
+        let _ = redact(&String::from_utf8_lossy(&bytes)).to_json_with(false, &[]);
         let long_line = format!("[reticulum]\n{} = 1\nlisten_ip = {}\n", "k".repeat(100_000), "é".repeat(100_000));
         let view = redact(&long_line);
         assert!(view.sections[0].keys.iter().all(|k| k.key.len() <= MAX_NAME));
@@ -758,7 +804,7 @@ fake = line
     #[test]
     fn an_unterminated_multiline_value_swallows_the_rest_and_leaks_nothing() {
         let view = redact("[reticulum]\nnotes = '''\npassphrase = hunter2-passphrase\n[interfaces]\n");
-        let json = view.to_json(false).to_string();
+        let json = view.to_json_with(false, &[]).to_string();
         assert_no_secret(&json);
         assert_eq!(view.sections.len(), 1);
     }
@@ -768,6 +814,12 @@ fake = line
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The view of the file at `path` as the management state gives it, or
+    /// `null` if it can't be read.
+    fn view_of_file(path: &Path, shared_instance: bool) -> Value {
+        read_capped(path).map_or(Value::Null, |(text, over)| view_of(&text, over).to_json_with(shared_instance, &[]))
     }
 
     #[test]
@@ -850,7 +902,7 @@ fake = line
             assert_eq!(host(bad), None, "{bad}");
         }
         let view = redact("[reticulum]\nreachable_on = /usr/local/bin/addr.sh\n");
-        assert!(!view.to_json(false).to_string().contains("addr.sh"));
+        assert!(!view.to_json_with(false, &[]).to_string().contains("addr.sh"));
     }
 
     #[test]
@@ -865,7 +917,7 @@ fake = line
         }
         let view = redact(&text);
         assert!(view.truncated);
-        let body = view.to_json(false).to_string();
+        let body = view.to_json_with(false, &[]).to_string();
         assert!(body.len() < 64 * 1024, "{}", body.len());
         assert!(body.len() > 8 * 1024, "something is kept: {}", body.len());
         // What is kept is the start of the sorted view.
@@ -913,7 +965,7 @@ fake = line
 
     #[test]
     fn the_json_has_the_documented_shape() {
-        let shown = redact("[reticulum]\nenable_transport = yes\npassphrase = x\n").to_json(false);
+        let shown = redact("[reticulum]\nenable_transport = yes\npassphrase = x\n").to_json_with(false, &[]);
         assert_eq!(shown["revision"].as_str().unwrap().len(), 32);
         assert_eq!(shown["shared_instance"], false);
         assert_eq!(
@@ -923,5 +975,85 @@ fake = line
                 { "key": "passphrase", "value": null, "set": true },
             ] }])
         );
+        assert_eq!(shown["editable"], json!([]));
+    }
+
+    #[test]
+    fn restricted_interfaces_are_marked_and_the_mark_isnt_hashed() {
+        let view = redact(CONFIG);
+        for (name, restricted) in [("Public TCP", false), ("Radio", false), ("Backbone", false), ("Shell", true), ("Sneaky", true)] {
+            assert_eq!(find(&view, &["interfaces", name]).unwrap().restricted, restricted, "{name}");
+        }
+        assert!(!find(&view, &["reticulum"]).unwrap().restricted);
+        let untyped = redact("[interfaces]\n[[A]]\nenabled = yes\n");
+        assert!(untyped.sections[1].restricted);
+        let mut unmarked = untyped.clone();
+        unmarked.sections[1].restricted = false;
+        assert_eq!(unmarked.revision(), untyped.revision());
+    }
+
+    #[test]
+    fn shown_value_is_what_the_view_shows() {
+        assert_eq!(shown_value("enabled", "Yes").as_deref(), Some("Yes"));
+        assert_eq!(shown_value("enabled", " 'no' ").as_deref(), Some("no"));
+        assert_eq!(shown_value("bitrate", "62500").as_deref(), Some("62500"));
+        for (key, raw) in [
+            ("passphrase", "x"),
+            ("enabled", ""),
+            ("enabled", "maybe"),
+            ("enabled", "'yes"),
+            ("mode", "\"\"\"full\"\"\""),
+            ("mode", "'''full'''"),
+            ("target_host", "user:secret@host"),
+        ] {
+            assert_eq!(shown_value(key, raw), None, "{key} = {raw}");
+        }
+    }
+
+    #[test]
+    fn a_file_is_read_capped() {
+        let dir = temp("capped");
+        assert_eq!(read_capped(&dir.join("missing")), None);
+        std::fs::write(dir.join("small"), "[reticulum]\n").unwrap();
+        assert_eq!(read_capped(&dir.join("small")), Some(("[reticulum]\n".to_string(), false)));
+        std::fs::write(dir.join("big"), "x".repeat(MAX_FILE as usize + 10)).unwrap();
+        let (text, over) = read_capped(&dir.join("big")).unwrap();
+        assert_eq!((text.len(), over), (MAX_FILE as usize, true));
+        assert!(view_of(&text, over).truncated);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reachable_on_that_isnt_a_host_restricts_its_interface() {
+        for value in ["/usr/local/bin/where-am-i", "~/where.sh", "'./where'", "a b", "host:4242", "'''x'''", "\"\"\"\nx\n\"\"\""] {
+            for key in REACHABLE {
+                let text =
+                    format!("[interfaces]\n[[S]]\n type = TCPServerInterface\n enabled = no\n listen_port = 4242\n {key} = {value}\n");
+                let view = redact(&text);
+                let s = find(&view, &["interfaces", "S"]).unwrap();
+                assert!(s.restricted, "{key} = {value}");
+                let names: Vec<&str> = s.keys.iter().map(|k| k.key.as_str()).collect();
+                assert_eq!(names, ["enabled", "type"], "{key} = {value}");
+            }
+        }
+        // A host name, an address or nothing is fine.
+        for value in ["node.example.org", "203.0.113.7", "[2001:db8::1]", "2001:db8::1", "''", ""] {
+            let text = format!("[interfaces]\n[[S]]\n type = TCPServerInterface\n reachable_on = {value}\n");
+            assert!(!find(&redact(&text), &["interfaces", "S"]).unwrap().restricted, "{value}");
+        }
+        // In any case of the key.
+        let view = redact("[interfaces]\n[[S]]\n type = TCPServerInterface\n Reachable_On = /bin/x\n");
+        assert!(find(&view, &["interfaces", "S"]).unwrap().restricted);
+        assert!(host_shaped("node.example.org") && !host_shaped("/bin/x"));
+    }
+
+    #[test]
+    fn headers_are_read_as_the_editor_reads_them() {
+        assert_eq!(header_of("[[A]]"), Some((2, "A".into())));
+        assert_eq!(header_of("[[ 'A ' ]]"), Some((2, "A".into())));
+        assert_eq!(header_of("[[\u{1b}]]"), Some((2, "\\u{1b}".into())));
+        for bad in ["[]", "[[A]", "[[A]] x", "[x] = 1", "[[[[[deep]]]]]", "[[ ]]"] {
+            assert_eq!(header_of(bad), None, "{bad:?}");
+        }
     }
 }

@@ -157,7 +157,7 @@ pub fn check(before: &Settings, changes: &[(&str, &str)]) -> Result<Vec<Change>,
         if let Some(message) = remote_limit(key, before, &after) {
             return Err(Refusal::NotAllowed { key: key.to_string(), message });
         }
-        applied.push(Change { key: key.to_string(), from, to });
+        applied.push(Change { path: Vec::new(), key: key.to_string(), from, to });
     }
     if applied.is_empty() {
         return Err(Refusal::NoChange);

@@ -8,8 +8,14 @@
 //! It can read the node's state, change the settings in
 //! [`fields::MANAGE_FIELDS`] (names, limits and intervals; services can be
 //! turned off but not on), restart Reticulum, roll a settings change back,
-//! and read its own audit log. It can't run programs, read or change keys,
-//! or change the Reticulum config. Requests are checked in this order:
+//! and read its own audit log. It can change a few keys of the Reticulum
+//! config too ([`rnsedit`]: Transport node, and an interface's `enabled`,
+//! mode, announce cap, bitrate and ingress control), on probation: the
+//! website must confirm the change (`/confirm`) once Reticulum is back with
+//! it, or the node puts the old text back by itself, as it does at the next
+//! start if it stopped meanwhile (see [`pending`]). It can't run programs,
+//! read or change keys, or change any other part of the Reticulum config,
+//! nor an interface that runs a program. Requests are checked in this order:
 //! method and path, size, the signing headers' form, the signature (and,
 //! for a request without a valid one, the lockout after a burst of them),
 //! the time, the nonce, the rate limits, and room in the job queue. Every
@@ -32,6 +38,8 @@
 mod audit;
 pub mod fields;
 mod owner;
+pub(crate) mod pending;
+mod rnsedit;
 pub(crate) mod wire;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -58,6 +66,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use zeroize::Zeroizing;
 
 pub use owner::Owner;
+pub use pending::recover;
+pub use rnsedit::{MAX_RNS_CHANGES, RnsChange};
 pub use wire::Secret;
 
 /// The largest body taken, the most changes in one request, and the
@@ -75,13 +85,15 @@ const NONCE_MARGIN: u64 = 5;
 /// accepted (unix seconds).
 const MARK_FILE: &str = "last-request";
 
-/// Where to listen, the secret requests are signed with, and the addresses
-/// a connection may come from (any if empty).
+/// Where to listen, the secret requests are signed with, the addresses a
+/// connection may come from (any if empty), and whether a Reticulum config
+/// change may turn interfaces or transport on (`--manage-allow-enable`).
 #[derive(Debug, Clone)]
 pub struct Listen {
     pub address: String,
     pub secret: Secret,
     pub allow: Vec<Network>,
+    pub allow_enable: bool,
 }
 
 /// An address or a network a connection may come from (`--manage-allow`):
@@ -157,6 +169,16 @@ pub enum Op {
     Audit {
         before: Option<u64>,
         limit: usize,
+    },
+    /// Change the Reticulum config, on probation for `confirm_seconds`.
+    Reticulum {
+        revision: String,
+        confirm_seconds: u64,
+        changes: Vec<RnsChange>,
+    },
+    /// Keep the Reticulum config change `id`, which is on probation.
+    Confirm {
+        id: String,
     },
     /// Not a request: the listener saw a burst of bad signatures (for the audit log).
     AuthFailures {
@@ -273,6 +295,13 @@ struct Limits {
     nonce_max: usize,
     /// Writes taken in a minute.
     writes_per_minute: usize,
+    /// Confirms taken in a minute, counted apart from the writes, so others'
+    /// writes can't keep a change from being confirmed.
+    confirms_per_minute: usize,
+    /// Writes refused before anything changed (another change pending, a
+    /// restart running, the Reticulum limits) given back to the write limit
+    /// in a minute, at most.
+    refunds_per_minute: usize,
     /// Bad signatures in a minute before requests without a valid one are
     /// refused, and for how long.
     failures: usize,
@@ -298,6 +327,8 @@ impl Default for Limits {
         Self {
             nonce_max: 10_000,
             writes_per_minute: 10,
+            confirms_per_minute: 6,
+            refunds_per_minute: 60,
             failures: 20,
             lockout: Duration::from_secs(60),
             queue: 8,
@@ -321,6 +352,8 @@ struct Guard {
     /// The same nonces, soonest forgotten first.
     nonce_expiry: BTreeSet<(u64, String)>,
     writes: VecDeque<Instant>,
+    confirms: VecDeque<Instant>,
+    refunds: VecDeque<Instant>,
     failures: VecDeque<Instant>,
     locked_until: Option<Instant>,
     /// Bad signatures since the last report (log line and audit entry), and
@@ -435,14 +468,37 @@ impl Guard {
         Nonce::Fresh
     }
 
-    /// Count a write; how long to wait if there have been too many.
-    fn write(&mut self, now: Instant, limits: &Limits) -> Option<Duration> {
-        forget_older(&mut self.writes, now, MINUTE);
-        if self.writes.len() >= limits.writes_per_minute {
-            return self.writes.front().map(|first| MINUTE.saturating_sub(now.saturating_duration_since(*first)));
+    /// Count a write (or a confirm) at `now`; how long to wait if there
+    /// have been too many.
+    fn write(&mut self, kind: Limited, now: Instant, limits: &Limits) -> Option<Duration> {
+        let (taken, max) = match kind {
+            Limited::Write => (&mut self.writes, limits.writes_per_minute),
+            Limited::Confirm => (&mut self.confirms, limits.confirms_per_minute),
+        };
+        forget_older(taken, now, MINUTE);
+        if taken.len() >= max {
+            return taken.front().map(|first| MINUTE.saturating_sub(now.saturating_duration_since(*first)));
         }
-        self.writes.push_back(now);
+        taken.push_back(now);
         None
+    }
+
+    /// Give back the write (or confirm) counted at `at`, which was refused
+    /// before anything changed: at most `refunds_per_minute` a minute, so
+    /// refusals (which are still audited) can't come at any rate.
+    fn refund(&mut self, (kind, at): Counted, now: Instant, limits: &Limits) {
+        forget_older(&mut self.refunds, now, MINUTE);
+        if self.refunds.len() >= limits.refunds_per_minute {
+            return;
+        }
+        let taken = match kind {
+            Limited::Write => &mut self.writes,
+            Limited::Confirm => &mut self.confirms,
+        };
+        if let Some(index) = taken.iter().position(|taken| *taken == at) {
+            taken.remove(index);
+            self.refunds.push_back(now);
+        }
     }
 }
 
@@ -576,6 +632,8 @@ enum Route {
     Restart,
     Rollback,
     Audit,
+    Reticulum,
+    Confirm,
 }
 
 impl Route {
@@ -586,6 +644,8 @@ impl Route {
             "/manage/v1/restart" => Route::Restart,
             "/manage/v1/rollback" => Route::Rollback,
             "/manage/v1/audit" => Route::Audit,
+            "/manage/v1/reticulum" => Route::Reticulum,
+            "/manage/v1/confirm" => Route::Confirm,
             _ => return None,
         })
     }
@@ -593,8 +653,45 @@ impl Route {
     fn method(self) -> Method {
         match self {
             Route::State | Route::Audit => Method::GET,
-            Route::Settings | Route::Restart | Route::Rollback => Method::POST,
+            Route::Settings | Route::Restart | Route::Rollback | Route::Reticulum | Route::Confirm => Method::POST,
         }
+    }
+
+    /// The limit it counts against: confirms have their own (one is bound
+    /// to its change and its maker), reads none.
+    fn limited(self) -> Option<Limited> {
+        match self {
+            Route::State | Route::Audit => None,
+            Route::Confirm => Some(Limited::Confirm),
+            Route::Settings | Route::Restart | Route::Rollback | Route::Reticulum => Some(Limited::Write),
+        }
+    }
+}
+
+/// The rate limits a request counts against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Limited {
+    Write,
+    Confirm,
+}
+
+/// A request counted against a limit, and when.
+type Counted = (Limited, Instant);
+
+/// Whether the owner's answer refused a write before anything changed, so
+/// it is given back to its limit: another change is pending, a restart or a
+/// change is running, or a Reticulum limit holds it back; for a confirm, any
+/// refusal (another user's, or one for no pending change, can't use up the
+/// confirms its maker needs).
+fn changed_nothing(kind: Limited, reply: &Reply) -> bool {
+    let code = reply.body.get("error").and_then(Value::as_str);
+    if kind == Limited::Confirm {
+        return !reply.status.is_success();
+    }
+    match reply.status {
+        StatusCode::CONFLICT => matches!(code, Some("pending" | "restarting" | "busy")),
+        StatusCode::TOO_MANY_REQUESTS => code == Some("rate_limited"),
+        _ => false,
     }
 }
 
@@ -658,6 +755,74 @@ struct SettingsBody {
 #[serde(deny_unknown_fields)]
 struct RollbackBody {
     id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReticulumBody {
+    revision: String,
+    confirm_seconds: u64,
+    changes: Vec<RnsChangeBody>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RnsChangeBody {
+    path: Vec<String>,
+    key: String,
+    value: String,
+}
+
+/// The shortest and longest probation a change may ask for, in seconds.
+pub const CONFIRM_SECONDS: std::ops::RangeInclusive<u64> = 60..=900;
+/// The longest value in a Reticulum config change.
+const MAX_RNS_VALUE: usize = 32;
+
+/// Whether `key` can be a Reticulum config key in a request: 1 to 32
+/// lowercase letters or `_`.
+fn rns_key(key: &str) -> bool {
+    (1..=32).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+}
+
+/// `/reticulum`'s body, checked for its shape (what may change, and to
+/// what, is the owner loop's to check).
+fn reticulum_op(body: &[u8]) -> Result<Op, &'static str> {
+    let parsed: ReticulumBody = serde_json::from_slice(body).map_err(|_| {
+        "the body must be {\"revision\": \"<32 hex>\", \"confirm_seconds\": <60 to 900>, \"changes\": [{\"path\": [..], \"key\": \"..\", \"value\": \"..\"}]}"
+    })?;
+    if !lower_hex(&parsed.revision, 32) {
+        return Err("revision must be 32 lowercase hex characters, as reticulum.revision in /state gives it");
+    }
+    if !CONFIRM_SECONDS.contains(&parsed.confirm_seconds) {
+        return Err("confirm_seconds must be from 60 to 900");
+    }
+    if parsed.changes.is_empty() || parsed.changes.len() > MAX_RNS_CHANGES {
+        return Err("from 1 to 16 changes at once");
+    }
+    let mut changes: Vec<RnsChange> = Vec::with_capacity(parsed.changes.len());
+    for change in parsed.changes {
+        let path_ok = match change.path.as_slice() {
+            [section] => section == "reticulum",
+            [section, name] => section == "interfaces" && rnsedit::interface_name_ok(name),
+            _ => false,
+        };
+        if !path_ok {
+            return Err(
+                "a path is [\"reticulum\"] or [\"interfaces\", \"<name>\"], a name being 1 to 64 bytes with no spaces around it, no control characters and none of [ ] # \" '",
+            );
+        }
+        if !rns_key(&change.key) {
+            return Err("a key is 1 to 32 lowercase letters or _");
+        }
+        if change.value.is_empty() || change.value.len() > MAX_RNS_VALUE {
+            return Err("a value is 1 to 32 bytes");
+        }
+        if changes.iter().any(|c| c.path == change.path && c.key == change.key) {
+            return Err("the same key of the same section is given twice");
+        }
+        changes.push(RnsChange { path: change.path, key: change.key, value: change.value });
+    }
+    Ok(Op::Reticulum { revision: parsed.revision, confirm_seconds: parsed.confirm_seconds, changes })
 }
 
 fn lower_hex(text: &str, len: usize) -> bool {
@@ -750,21 +915,27 @@ fn parse_op(route: Route, query: Option<&str>, headers: &HeaderMap, body: &[u8])
             }
             Ok(Op::Restart)
         }
-        Route::Rollback => {
+        Route::Rollback | Route::Confirm => {
             let parsed: RollbackBody = serde_json::from_slice(body).map_err(|_| "the body must be {\"id\": \"<16 hex>\"}")?;
             if !lower_hex(&parsed.id, 16) {
                 return Err("id must be 16 lowercase hex characters, as a change's id");
             }
-            Ok(Op::Rollback { id: parsed.id })
+            Ok(if route == Route::Confirm { Op::Confirm { id: parsed.id } } else { Op::Rollback { id: parsed.id } })
         }
+        Route::Reticulum => reticulum_op(body),
         Route::State | Route::Audit => Err("not a write"),
     }
 }
 
 /// Steps 4 to 7 for a request whose signature checked out as `signed`
 /// (None if it didn't): the signature (with the lockout after a burst of bad
-/// ones), the time, the nonce and, for a write, the rate limit.
-fn admit(shared: &Shared, signed: Option<wire::Signed>, write: bool) -> Result<wire::Signed, Box<Response>> {
+/// ones), the time, the nonce and, for a write, the rate limit; with it, when
+/// a write was counted (to give it back if it changes nothing).
+fn admit(
+    shared: &Shared,
+    signed: Option<wire::Signed>,
+    limited: Option<Limited>,
+) -> Result<(wire::Signed, Option<Counted>), Box<Response>> {
     let now = Instant::now();
     let limits = &shared.limits;
     let mut guard = shared.guard.lock().unwrap_or_else(PoisonError::into_inner);
@@ -841,8 +1012,13 @@ fn admit(shared: &Shared, signed: Option<wire::Signed>, write: bool) -> Result<w
             )));
         }
     }
-    if write && let Some(wait) = guard.write(now, limits) {
-        let message = "At most 10 changes a minute: try again shortly";
+    if let Some(kind) = limited
+        && let Some(wait) = guard.write(kind, now, limits)
+    {
+        let message = match kind {
+            Limited::Write => format!("At most {} changes a minute: try again shortly", limits.writes_per_minute),
+            Limited::Confirm => format!("At most {} confirms a minute: try again shortly", limits.confirms_per_minute),
+        };
         return Err(Box::new(answer(
             signer,
             StatusCode::TOO_MANY_REQUESTS,
@@ -850,7 +1026,7 @@ fn admit(shared: &Shared, signed: Option<wire::Signed>, write: bool) -> Result<w
         )));
     }
     drop(guard);
-    Ok(signed)
+    Ok((signed, limited.map(|kind| (kind, now))))
 }
 
 /// When a connection's request must be in by, and the flag that says it is
@@ -896,23 +1072,39 @@ async fn handle(shared: Arc<Shared>, request: Request) -> Response {
     }
     let target = parts.uri.path_and_query().map_or_else(|| parts.uri.path(), |pq| pq.as_str());
     let signed = wire::Signed::parse(&parts.headers).filter(|s| s.verify(&shared.secret, parts.method.as_str(), target, &body));
-    let signed = match admit(&shared, signed, route == Route::Settings || route == Route::Restart || route == Route::Rollback) {
-        Ok(signed) => signed,
+    let (signed, counted) = match admit(&shared, signed, route.limited()) {
+        Ok(admitted) => admitted,
         Err(refused) => return *refused,
     };
     shared.keep_mark(signed.timestamp).await;
     let signer = Some((&shared.secret, signed.nonce.as_str()));
     let limits = shared.limits;
+    // A write that changed nothing goes back to the limit, so others can't
+    // fill it with requests the node turns away.
+    let refund = || {
+        if let Some(counted) = counted {
+            shared.guard.lock().unwrap_or_else(PoisonError::into_inner).refund(counted, Instant::now(), &limits);
+        }
+    };
     let op = match parse_op(route, parts.uri.query(), &parts.headers, &body) {
         Ok(op) => op,
-        Err(message) => return error(signer, StatusCode::BAD_REQUEST, "bad_request", message),
+        Err(message) => {
+            refund();
+            return error(signer, StatusCode::BAD_REQUEST, "bad_request", message);
+        }
     };
     let (reply, answered) = oneshot::channel();
     if shared.jobs.try_send(Job { actor: signed.actor.clone(), op, reply }).is_err() {
+        refund();
         return error(signer, StatusCode::SERVICE_UNAVAILABLE, "queue_full", "The node has too many requests waiting: try again shortly");
     }
     match tokio::time::timeout(limits.answer_within, answered).await {
-        Ok(Ok(reply)) => answer(signer, reply.status, &reply.body),
+        Ok(Ok(reply)) => {
+            if counted.is_some_and(|(kind, _)| changed_nothing(kind, &reply)) {
+                refund();
+            }
+            answer(signer, reply.status, &reply.body)
+        }
         _ => error(
             signer,
             StatusCode::GATEWAY_TIMEOUT,

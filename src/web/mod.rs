@@ -996,11 +996,17 @@ pub async fn run(
         None => None,
     };
 
+    // Before Reticulum starts: a config change from afar that a node run
+    // left unconfirmed is put back (said on the Status tab).
+    let recovered = crate::remote_manage::recover(&paths, settings.rns_config.as_deref());
     let identity_hash = identity.hash;
     let store = Store::load_with_db(&paths.store, &paths.db);
     store.sync_blocked();
     let (mut net_tx, mut net_rx) = net::spawn(crate::net_options(&settings, &paths, identity.clone(), store.blocked.clone()));
     let mut app = App::new(settings, paths.clone(), store, net_tx.clone(), None, identity_hash);
+    for line in recovered {
+        app.log(line);
+    }
     // No tab is "on screen" in the web UI: unread counts are cleared by
     // browsers when they show a conversation or room.
     app.tab = Tab::Status;

@@ -3,10 +3,13 @@
 //! and the file before rettui first changed it (or as another program left
 //! it), so any of them can be compared with another and put back.
 //!
-//! Each version is a copy of the whole file (`<id>.config`, a few KB);
+//! Each version is a copy of the whole file (`<id>.config`, a few KB,
+//! readable by this user only, as the file can hold IFAC passphrases);
 //! `index.json` lists them, with the config file they're of (rettui can be
 //! pointed at another Reticulum config directory) and what was done. The
-//! newest [`KEPT`] of each file are kept.
+//! newest [`KEPT`] of each file are kept. The folder and every file in it are
+//! readable by this user only (copies older versions left readable by others
+//! are made so the first time the history is opened in a run).
 
 use std::path::{Path, PathBuf};
 
@@ -35,6 +38,7 @@ pub struct History {
 
 impl History {
     pub fn new(dir: PathBuf) -> Self {
+        make_private(&dir);
         Self { dir }
     }
 
@@ -44,7 +48,7 @@ impl History {
 
     fn write_index(&self, versions: &[Version]) -> Result<(), String> {
         let json = serde_json::to_vec_pretty(versions).map_err(|e| e.to_string())?;
-        crate::config::write_atomic(&self.dir.join(INDEX), &json).map_err(|e| format!("Couldn't save the config history: {e}"))
+        crate::config::write_private(&self.dir.join(INDEX), &json).map_err(|e| format!("Couldn't save the config history: {e:#}"))
     }
 
     /// The versions of `config`, newest first.
@@ -64,23 +68,28 @@ impl History {
     }
 
     /// Keep `text` as a version of `config`, unless it's the newest kept
-    /// already. Older ones beyond [`KEPT`] go.
-    pub fn record(&self, config: &Path, text: &str, what: &str, time: f64) -> Result<(), String> {
+    /// already. Older ones beyond [`KEPT`] go. The version's id (the newest
+    /// one's if it was kept already). A copy is readable by this user only,
+    /// as the config can hold IFAC passphrases.
+    pub fn record(&self, config: &Path, text: &str, what: &str, time: f64) -> Result<String, String> {
         let newest = self.list(config).into_iter().next();
-        if newest.is_some_and(|v| self.text(&v.id).is_ok_and(|kept| kept == text)) {
-            return Ok(());
+        if let Some(newest) = newest.filter(|v| self.text(&v.id).is_ok_and(|kept| kept == text)) {
+            return Ok(newest.id);
         }
-        std::fs::create_dir_all(&self.dir).map_err(|e| format!("Couldn't make {}: {e}", self.dir.display()))?;
+        if !self.dir.is_dir() {
+            std::fs::create_dir_all(&self.dir).map_err(|e| format!("Couldn't make {}: {e}", self.dir.display()))?;
+            set_mode(&self.dir, 0o700);
+        }
         let mut id = format!("{}", (time * 1000.0) as u64);
         let mut n = 1;
         while self.dir.join(format!("{id}.config")).exists() {
             id = format!("{}-{n}", (time * 1000.0) as u64);
             n += 1;
         }
-        crate::config::write_atomic(&self.dir.join(format!("{id}.config")), text.as_bytes())
-            .map_err(|e| format!("Couldn't keep this version of the config: {e}"))?;
+        crate::config::write_private(&self.dir.join(format!("{id}.config")), text.as_bytes())
+            .map_err(|e| format!("Couldn't keep this version of the config: {e:#}"))?;
         let mut index = self.index();
-        index.push(Version { id, time, config: config.to_path_buf(), what: what.to_string() });
+        index.push(Version { id: id.clone(), time, config: config.to_path_buf(), what: what.to_string() });
         // The oldest of this file's beyond what's kept.
         let mut mine: Vec<&Version> = index.iter().filter(|v| v.config == config).collect();
         mine.sort_by(|a, b| b.time.total_cmp(&a.time).then_with(|| b.id.cmp(&a.id)));
@@ -89,17 +98,59 @@ impl History {
             let _ = std::fs::remove_file(self.dir.join(format!("{id}.config")));
         }
         index.retain(|v| !gone.contains(&v.id));
-        self.write_index(&index)
+        self.write_index(&index)?;
+        Ok(id)
     }
 
     /// Before rettui saves `config`: the file as it is now (`current`, if
     /// it exists) is kept first if it isn't the newest version here, as it
     /// was before rettui first changed it, or as another program left it.
-    pub fn before_saving(&self, config: &Path, current: Option<&str>, time: f64) -> Result<(), String> {
-        let Some(current) = current else { return Ok(()) };
+    /// The id of the version that holds `current`, if given.
+    pub fn before_saving(&self, config: &Path, current: Option<&str>, time: f64) -> Result<Option<String>, String> {
+        let Some(current) = current else { return Ok(None) };
         let what = if self.list(config).is_empty() { "As it was before rettui changed it" } else { "Changed outside rettui" };
-        self.record(config, current, what, time)
+        self.record(config, current, what, time).map(Some)
     }
+}
+
+/// Make the history folder readable by this user only, and the copies and
+/// index in it (older versions wrote them readable by others, and they can
+/// hold IFAC passphrases). Once a run for each folder; links are left alone.
+fn make_private(dir: &Path) {
+    #[cfg(unix)]
+    {
+        static DONE: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+        let Ok(mut done) = DONE.lock() else { return };
+        if !done.insert(dir.to_path_buf()) || !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+            return;
+        }
+        set_mode(dir, 0o700);
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ours = path.extension().is_some_and(|e| e == "config") || path.file_name().is_some_and(|n| n == INDEX);
+            if ours && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                set_mode(&path, 0o600);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// Set `path`'s permissions to `mode` on Unix, if they are anything else.
+fn set_mode(path: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let wrong =
+            std::fs::symlink_metadata(path).is_ok_and(|meta| !meta.file_type().is_symlink() && meta.permissions().mode() & 0o777 != mode);
+        if wrong && let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)) {
+            tracing::warn!("Couldn't make {} private: {e}", path.display());
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
 }
 
 /// A line of a comparison of two versions.
@@ -264,5 +315,60 @@ mod tests {
         assert_eq!(diff("a\nb\nc", "a\nb\nC", 0), [DiffLine::Skipped(2), DiffLine::Removed("c".into()), DiffLine::Added("C".into())]);
         let long = "x\n".repeat(LONGEST_COMPARED + 1);
         assert_eq!(counts(&diff(&long, "y", 3)), (1, LONGEST_COMPARED + 1));
+    }
+
+    #[test]
+    fn a_version_has_an_id_and_is_readable_by_this_user_only() {
+        let dir = dir("ids");
+        let history = History::new(dir.clone());
+        let config = Path::new("/a/config");
+        assert_eq!(history.before_saving(config, None, 1.0), Ok(None));
+        let first = history.before_saving(config, Some("one"), 1.0).unwrap().unwrap();
+        assert_eq!(history.text(&first).unwrap(), "one");
+        let second = history.record(config, "two", "Set x", 2.0).unwrap();
+        assert_ne!(first, second);
+        // The newest already: its id, and nothing new kept.
+        assert_eq!(history.record(config, "two", "Again", 3.0).unwrap(), second);
+        assert_eq!(history.before_saving(config, Some("two"), 4.0).unwrap(), Some(second.clone()));
+        assert_eq!(history.list(config).len(), 2);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for id in [&first, &second] {
+                let mode = std::fs::metadata(dir.join(format!("{id}.config"))).unwrap().permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "{id}");
+            }
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!((mode(&dir), mode(&dir.join(INDEX))), (0o700, 0o600));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Copies an older version left readable by others are made private
+    /// when the history is opened; other files and links are left alone.
+    #[cfg(unix)]
+    #[test]
+    fn copies_left_readable_by_others_are_made_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = dir("tighten");
+        std::fs::create_dir_all(&dir).unwrap();
+        let open = std::fs::Permissions::from_mode(0o644);
+        for name in ["1.config", INDEX, "notes.txt"] {
+            std::fs::write(dir.join(name), "x").unwrap();
+            std::fs::set_permissions(dir.join(name), open.clone()).unwrap();
+        }
+        let outside = dir.with_extension("outside");
+        std::fs::write(&outside, "x").unwrap();
+        std::fs::set_permissions(&outside, open.clone()).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("2.config")).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let history = History::new(dir.clone());
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!((mode(&dir.join("1.config")), mode(&dir.join(INDEX))), (0o600, 0o600));
+        assert_eq!((mode(&dir.join("notes.txt")), mode(&outside)), (0o644, 0o644));
+        assert_eq!(history.text("1").unwrap(), "x");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(outside);
     }
 }

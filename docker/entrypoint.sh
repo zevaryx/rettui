@@ -107,6 +107,23 @@ if [ -n "$MANAGE_ALLOW" ] && [ -z "$MANAGE_LISTEN" ]; then
     echo "rettui: MANAGE_ALLOW needs MANAGE_LISTEN" >&2
     exit 1
 fi
+# MANAGE_ALLOW_ENABLE (optional, needs MANAGE_LISTEN) is yes to let a
+# Reticulum config change from the website turn interfaces and transport on
+# (--manage-allow-enable, see wiki/Hosting-a-Node.md), which opens the node
+# to others. Turning them off needs nothing.
+MANAGE_ALLOW_ENABLE="${MANAGE_ALLOW_ENABLE:-}"
+case "$MANAGE_ALLOW_ENABLE" in
+    "" | no) MANAGE_ALLOW_ENABLE="" ;;
+    yes) ;;
+    *)
+        echo "rettui: MANAGE_ALLOW_ENABLE must be yes, no or empty (got '$MANAGE_ALLOW_ENABLE')" >&2
+        exit 1
+        ;;
+esac
+if [ -n "$MANAGE_ALLOW_ENABLE" ] && [ -z "$MANAGE_LISTEN" ]; then
+    echo "rettui: MANAGE_ALLOW_ENABLE needs MANAGE_LISTEN" >&2
+    exit 1
+fi
 
 mkdir -p "$DATA/reticulum"
 # First start: keep the Reticulum config in the data directory too. To use
@@ -145,6 +162,9 @@ if [ "${1:-}" = node ]; then
             set -- --manage-allow "$network" "$@"
         done
         IFS="$old_ifs"
+    fi
+    if [ -n "$MANAGE_ALLOW_ENABLE" ]; then
+        set -- --manage-allow-enable "$@"
     fi
     if [ -n "$MANAGE_LISTEN" ]; then
         set -- --manage-listen "$MANAGE_LISTEN" --manage-secret-file "$MANAGE_SECRET_FILE" "$@"

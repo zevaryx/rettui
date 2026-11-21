@@ -104,6 +104,21 @@ pub struct Doc {
     trailing_newline: bool,
 }
 
+/// A key line in a section, as [`Doc::key_lines`] finds it: the key as
+/// written, its raw value (before unquoting, without a comment), and whether
+/// the value is a triple-quoted one (perhaps over several lines).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyLine {
+    pub key: String,
+    pub raw: String,
+    pub multiline: bool,
+}
+
+/// A section name compared loosely: ASCII case and spaces ignored.
+fn loose(name: &str) -> String {
+    name.chars().filter(|c| !c.is_whitespace()).map(|c| c.to_ascii_lowercase()).collect()
+}
+
 /// Where a section's lines are: its header, the end of its own keys (before
 /// any subsection), and the end of everything under it.
 struct Span {
@@ -190,6 +205,85 @@ impl Doc {
 
     pub fn has_section(&self, path: &[&str]) -> bool {
         self.find(path).is_some()
+    }
+
+    /// The path of each section header, in file order, as [`Doc::find`]
+    /// follows them (a header deeper than its parent allows has none).
+    fn header_paths(&self) -> Vec<Vec<&str>> {
+        let mut current: Vec<&str> = Vec::new();
+        let mut paths = Vec::new();
+        for i in 0..self.lines.len() {
+            let Some((depth, name)) = self.header(i) else { continue };
+            current.truncate(depth - 1);
+            if current.len() == depth - 1 {
+                current.push(name);
+                paths.push(current.clone());
+            }
+        }
+        paths
+    }
+
+    /// How many sections have the path `path`: exactly, and ignoring ASCII
+    /// case and spaces (so `[[Hilltop]]` and `[[hill top]]` count as two of
+    /// the second kind). ConfigObj merges or refuses such twins, so an edit
+    /// to one of them is ambiguous.
+    pub fn section_count(&self, path: &[&str]) -> (usize, usize) {
+        let wanted: Vec<String> = path.iter().map(|name| loose(name)).collect();
+        self.header_paths().iter().filter(|found| found.len() == path.len()).fold((0, 0), |(exact, near), found| {
+            let same = found.as_slice() == path;
+            let close = found.iter().zip(&wanted).all(|(a, b)| loose(a) == *b);
+            (exact + usize::from(same), near + usize::from(close))
+        })
+    }
+
+    /// The key lines directly in the section at `path` whose key is one of
+    /// `names`, ignoring ASCII case (so a case variant is found too), in
+    /// file order.
+    pub fn key_lines(&self, path: &[&str], names: &[&str]) -> Vec<KeyLine> {
+        let Some(span) = self.find(path) else { return Vec::new() };
+        self.keys(&span)
+            .filter(|(_, key, _)| names.iter().any(|name| key.eq_ignore_ascii_case(name)))
+            .map(|(i, key, last)| {
+                let line = strip_comment(&self.lines[i]);
+                let raw = line.find('=').map_or("", |eq| line[eq + 1..].trim());
+                let multiline = last != i || raw.starts_with("\"\"\"") || raw.starts_with("'''");
+                KeyLine { key: key.to_string(), raw: raw.to_string(), multiline }
+            })
+            .collect()
+    }
+
+    /// Each line outside a multi-line value that starts with `[` once its
+    /// comment and spaces are taken off, with its depth and name if it is
+    /// read as a section header (`[x] = 1` is read as a key, `[[A]] x` as
+    /// nothing).
+    pub fn bracket_lines(&self) -> Vec<(&str, Option<(usize, &str)>)> {
+        let mut found = Vec::new();
+        let mut i = 0;
+        while i < self.lines.len() {
+            let line = strip_comment(&self.lines[i]).trim();
+            if line.starts_with('[') {
+                found.push((line, self.header(i)));
+            }
+            // The lines of a value over several lines are not looked at.
+            i = match &self.kinds[i] {
+                Kind::Key { last, .. } => last + 1,
+                _ => i + 1,
+            };
+        }
+        found
+    }
+
+    /// Whether a triple-quoted value is opened and never closed, so the rest
+    /// of the file is read as part of it.
+    pub fn has_open_value(&self) -> bool {
+        self.kinds.iter().enumerate().any(|(i, kind)| {
+            let Kind::Key { last, .. } = kind else { return false };
+            let line = strip_comment(&self.lines[i]);
+            let value = line.find('=').map_or("", |eq| line[eq + 1..].trim());
+            ["\"\"\"", "'''"].iter().any(|quote| {
+                value.strip_prefix(quote).is_some_and(|rest| !rest.contains(quote) && (*last == i || !self.lines[*last].contains(quote)))
+            })
+        })
     }
 
     /// Which of `keys` is set in the section (the first one found).
@@ -454,5 +548,60 @@ mod tests {
         let mut doc = Doc::new("[a]\nk = \"\"\"one\ntwo\"\"\"\nother = 1\n");
         doc.set(&["a"], "k", &[], Some("single"));
         assert_eq!(doc.text(), "[a]\nk = single\nother = 1\n");
+    }
+
+    #[test]
+    fn sections_are_counted_exactly_and_loosely() {
+        let doc = Doc::new(SAMPLE);
+        assert_eq!(doc.section_count(&["reticulum"]), (1, 1));
+        assert_eq!(doc.section_count(&["interfaces", "Hub"]), (1, 1));
+        assert_eq!(doc.section_count(&["interfaces", "Nowhere"]), (0, 0));
+        assert_eq!(doc.section_count(&["Hub"]), (0, 0), "a subsection isn't a top-level one");
+        let doc = Doc::new("[reticulum]\n[Reticulum]\n[interfaces]\n[[Hill Top]]\n[[hilltop]]\n[[Hill Top]]\n[ logging ]\n");
+        assert_eq!(doc.section_count(&["reticulum"]), (1, 2));
+        assert_eq!(doc.section_count(&["interfaces", "Hill Top"]), (2, 3));
+        assert_eq!(doc.section_count(&["interfaces", "HillTop"]), (0, 3));
+        assert_eq!(doc.section_count(&["logging"]), (1, 1), "spaces inside the brackets are trimmed");
+        // A header too deep for where it is has no path.
+        assert_eq!(Doc::new("[[[deep]]]\n").section_count(&["deep"]), (0, 0));
+    }
+
+    #[test]
+    fn key_lines_are_found_in_any_case_with_their_raw_values() {
+        let doc =
+            Doc::new("[a]\nmode = full # c\nMODE = 'x'\ninterface_mode = \"\"\"one\ntwo\"\"\"\nnotes = '''x'''\n[[b]]\nmode = inner\n");
+        let found = doc.key_lines(&["a"], &["mode", "interface_mode"]);
+        assert_eq!(
+            found,
+            [
+                KeyLine { key: "mode".into(), raw: "full".into(), multiline: false },
+                KeyLine { key: "MODE".into(), raw: "'x'".into(), multiline: false },
+                KeyLine { key: "interface_mode".into(), raw: "\"\"\"one".into(), multiline: true },
+            ]
+        );
+        assert!(doc.key_lines(&["a"], &["notes"])[0].multiline, "triple quotes on one line");
+        assert!(doc.key_lines(&["a"], &["other"]).is_empty());
+        assert!(doc.key_lines(&["none"], &["mode"]).is_empty());
+        assert_eq!(doc.key_lines(&["a", "b"], &["mode"])[0].raw, "inner", "only the section's own keys");
+        assert_eq!(doc.key_lines(&["a"], &["mode"]).len(), 2, "not the subsection's");
+    }
+
+    #[test]
+    fn a_value_that_never_ends_is_found() {
+        assert!(!Doc::new(SAMPLE).has_open_value());
+        assert!(!Doc::new("[a]\nk = '''\nx\n'''\nj = \"\"\"y\"\"\"\n").has_open_value());
+        assert!(Doc::new("[a]\nk = '''\nx\n").has_open_value());
+        assert!(Doc::new("[a]\nk = \"\"\"").has_open_value());
+        assert!(Doc::new("[a]\nk = \"\"\"x\n'''\n").has_open_value(), "the other kind of quote doesn't close it");
+        assert!(!Doc::new("").has_open_value());
+    }
+
+    #[test]
+    fn lines_that_start_with_a_bracket_are_listed() {
+        let doc = Doc::new("[a]  # c\n  [[B c]]\n[x] = 1\n[[A]] x\n[[A]\n[]\nk = '''\n[inside]\n'''\n#[commented]\nplain = [1]\n");
+        assert_eq!(
+            doc.bracket_lines(),
+            [("[a]", Some((1, "a"))), ("[[B c]]", Some((2, "B c"))), ("[x] = 1", None), ("[[A]] x", None), ("[[A]", None), ("[]", None),]
+        );
     }
 }
