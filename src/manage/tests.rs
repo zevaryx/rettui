@@ -142,9 +142,14 @@ fn harness_with(name: &str, limits: Limits, node: bool) -> Harness {
 
 /// A harness whose listener started at `started_at` (unix seconds).
 fn harness_started(name: &str, limits: Limits, node: bool, started_at: u64) -> Harness {
+    harness_marked(name, limits, node, started_at, None)
+}
+
+/// A harness that keeps the highest request time accepted in `mark`.
+fn harness_marked(name: &str, limits: Limits, node: bool, started_at: u64, mark: Option<PathBuf>) -> Harness {
     let dir = test_dir(name);
     let (jobs_tx, jobs) = mpsc::channel(limits.queue);
-    let router = router(secret(), jobs_tx, limits, started_at);
+    let router = router(secret(), jobs_tx, limits, started_at, mark);
     let owners = if node {
         let (app, _commands) = crate::app::test_app_with_net(&dir, Settings { pn_enabled: true, ..Settings::default() }, Store::default());
         let owner = Owner::new(&app.paths);
@@ -309,7 +314,9 @@ async fn a_nonce_works_once() {
     assert_eq!(h.send(&signing).await.status, StatusCode::OK);
     let again = h.send(&signing).await;
     assert_eq!((again.status, again.code()), (StatusCode::UNAUTHORIZED, "unauthorised"));
-    assert!(again.signed_for(&signing.nonce));
+    // Unsigned: on the way, it can't stand in for the answer the first one got.
+    assert!(again.headers.get(wire::SIGNATURE).is_none());
+    assert!(!again.signed_for(&signing.nonce));
     assert_eq!(h.ops(), [Op::Restart], "the replay did nothing");
 }
 
@@ -422,21 +429,44 @@ async fn a_burst_of_bad_signatures_locks_out_only_unsigned_requests() {
     assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
     assert!(answer.signed_for(&right.nonce));
     assert_eq!(h.ops(), [Op::AuthFailures { count: 20 }, Op::State]);
-    // The flood is still counted while it lasts: 18 more make another burst.
-    for _ in 0..18 {
+    // A flood while it lasts keeps it going, but is neither logged nor
+    // written to the audit log again for every 20 (the pentest's flood
+    // rewrote the audit file for each).
+    for _ in 0..200 {
         wrong.nonce = fresh_nonce();
         assert_eq!(h.send(&wrong).await.status, StatusCode::TOO_MANY_REQUESTS);
     }
-    assert_eq!(h.ops().len(), 3);
-    assert_eq!(h.ops()[2], Op::AuthFailures { count: 20 });
+    assert_eq!(h.ops(), [Op::AuthFailures { count: 20 }, Op::State], "one report for the lockout");
     assert_eq!(h.send(&Signing::get("/manage/v1/state")).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_flood_on_a_real_node_writes_the_audit_log_once() {
+    let mut h = node("flood");
+    let audit = h.dir.join("manage/audit.jsonl");
+    let mut wrong = Signing::get("/manage/v1/state");
+    wrong.secret = Secret::parse(&"w".repeat(40)).unwrap();
+    let mut written = None;
+    for n in 0..300 {
+        wrong.nonce = fresh_nonce();
+        h.send(&wrong).await;
+        if n == 19 {
+            written = Some(std::fs::metadata(&audit).and_then(|m| m.modified()).expect("the lockout is in the audit log"));
+        }
+    }
+    assert_eq!(std::fs::metadata(&audit).and_then(|m| m.modified()).ok(), written, "the audit log was written again");
+    let entries: Vec<Value> = std::fs::read_to_string(&audit).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!((entries[0]["op"].as_str(), entries[0]["count"].as_u64()), (Some("auth_failures"), Some(20)));
+    let logged = h.app().log.iter().filter(|l| l.contains("requests with a bad signature")).count();
+    assert_eq!(logged, 1, "{:?}", h.app().log);
 }
 
 #[test]
 fn a_lockout_turns_away_unsigned_requests_only() {
     let limits = Limits { failures: 2, ..Limits::default() };
     let (jobs, _received) = mpsc::channel(limits.queue);
-    let shared = Shared { secret: secret(), jobs, guard: Mutex::new(Guard::default()), limits, started_at: started() };
+    let shared = Shared::new(secret(), jobs, limits, started(), None);
     let signed = || {
         let signing = Signing::get("/manage/v1/state");
         wire::Signed::parse(signing.request().headers())
@@ -455,19 +485,58 @@ fn the_lockout_ends_and_failures_count_within_a_minute() {
     let start = Instant::now();
     // Failures spread over more than a minute don't add up.
     for n in 0..40u64 {
-        let (first, locked) = guard.fail(start + Duration::from_secs(n * 4), &limits);
-        assert!(!locked, "{n}");
-        assert_eq!(first, n == 0, "only the start of a burst is logged ({n})");
+        let failure = guard.fail(start + Duration::from_secs(n * 4), &limits);
+        assert_eq!(failure.report, None, "{n}");
+        assert_eq!(failure.first, n == 0, "only the start of a burst is logged ({n})");
     }
     let mut guard = Guard::default();
     for n in 0..19 {
-        assert!(!guard.fail(start, &limits).1, "{n}");
+        assert_eq!(guard.fail(start, &limits).report, None, "{n}");
     }
-    assert!(guard.fail(start, &limits).1);
+    assert_eq!(guard.fail(start, &limits).report, Some(20));
     assert_eq!(guard.locked(start + Duration::from_secs(59)), Some(Duration::from_secs(1)));
     assert_eq!(guard.locked(start + Duration::from_secs(60)), None);
     assert_eq!(guard.locked(start + Duration::from_secs(61)), None);
     assert_eq!((seconds(Duration::ZERO), seconds(Duration::from_millis(1)), seconds(Duration::from_secs(60))), (1, 1, 60));
+}
+
+#[test]
+fn a_lockout_is_reported_when_it_starts_and_then_once_a_while() {
+    let limits = Limits::default();
+    let mut guard = Guard::default();
+    let start = Instant::now();
+    let at = |ms: u64| start + Duration::from_millis(ms);
+    let mut reports = Vec::new();
+    // A flood of one bad signature every 10 ms for 25 minutes.
+    for n in 0..150_000u64 {
+        let failure = guard.fail(at(n * 10), &limits);
+        assert!(!failure.first || n == 0, "the start of a burst is logged once while it lasts ({n})");
+        if let Some(count) = failure.report {
+            reports.push((n, count));
+        }
+    }
+    // When it starts, then every 10 minutes, each with what came since.
+    assert_eq!(reports.len(), 3, "{reports:?}");
+    assert_eq!(reports[0], (19, 20));
+    assert!(reports[1].0 * 10 >= 600_000 && reports[1].0 * 10 < 601_000, "{reports:?}");
+    assert!(reports[1].1 > 50_000, "the real count since the last report, not 20: {reports:?}");
+    // Nothing more while it lasts and the window isn't over; once the flood
+    // stops and the lockout ends, the rest is reported, so every one is
+    // counted, once.
+    assert_eq!(guard.flush(at(150_000 * 10), &limits), None);
+    let later = at(150_000 * 10 + 120_000);
+    let rest = guard.flush(later, &limits).expect("the rest is owed");
+    assert_eq!(reports.iter().map(|(_, count)| count).sum::<usize>() + rest, 150_000);
+    assert_eq!(guard.flush(later, &limits), None, "reported once");
+    // A new lockout after the last one ended is reported at once; failures
+    // that didn't make a burst don't count towards it.
+    assert!(guard.locked(later).is_none());
+    for n in 0..5u64 {
+        assert_eq!(guard.fail(later + Duration::from_secs(n), &limits).report, None);
+    }
+    let again = later + Duration::from_secs(120);
+    let reported: Vec<_> = (0..20u64).filter_map(|n| guard.fail(again + Duration::from_millis(n), &limits).report).collect();
+    assert_eq!(reported, [20]);
 }
 
 #[tokio::test]
@@ -641,8 +710,14 @@ fn refused_connections_are_logged_once_a_minute() {
 #[tokio::test]
 async fn one_address_can_hold_only_a_few_connections() {
     use tokio::io::AsyncWriteExt;
-    let limits = Limits { connections: 8, connections_per_peer: 2, connection_lifetime: Duration::from_secs(10), ..Limits::default() };
-    let (bound, task, _jobs) = serve_with(Listen { address: "127.0.0.1:0".into(), secret: secret() }, limits).await.unwrap();
+    let limits = Limits {
+        connections: 8,
+        connections_per_peer: 2,
+        connection_lifetime: Duration::from_secs(10),
+        request_within: Duration::from_secs(10),
+        ..Limits::default()
+    };
+    let (bound, task, _jobs) = serve_with(listen_on("127.0.0.1:0", vec![]), limits, None).await.unwrap();
     let hold = || async {
         let mut slow = TcpStream::connect(bound).await.unwrap();
         slow.write_all(b"GET /manage/v1/state HTTP/1.1\r\nHost: x\r\n").await.unwrap();
@@ -692,7 +767,7 @@ async fn other_paths_and_methods_are_404_and_405() {
 async fn a_full_queue_or_a_slow_owner_is_said_plainly() {
     let limits = Limits { queue: 1, answer_within: Duration::from_millis(100), ..Limits::default() };
     let (jobs_tx, mut jobs) = mpsc::channel(limits.queue);
-    let router = router(secret(), jobs_tx, limits, started());
+    let router = router(secret(), jobs_tx, limits, started(), None);
     // Nobody runs the jobs: the first waits and times out, and stays queued.
     let signing = Signing::get("/manage/v1/state");
     let response = router.clone().oneshot(signing.request()).await.unwrap();
@@ -807,38 +882,73 @@ fn only_private_addresses_are_listened_on() {
 
 #[tokio::test]
 async fn serving_refuses_bad_and_public_addresses() {
-    let listen = |address: &str| Listen { address: address.into(), secret: secret() };
-    let error = serve(listen("not an address")).await.unwrap_err().to_string();
+    let dir = test_dir("serve-refuses");
+    let paths = crate::config::Paths::new(Some(dir.join("data"))).unwrap();
+    let listen = |address: &str| listen_on(address, vec![]);
+    let error = serve(listen("not an address"), &paths).await.unwrap_err().to_string();
     assert!(error.contains("--manage-listen expects"), "{error}");
-    assert!(serve(listen("8.8.8.8:8750")).await.unwrap_err().to_string().contains("public"));
+    assert!(serve(listen("8.8.8.8:8750"), &paths).await.unwrap_err().to_string().contains("public"));
     // A port taken already.
     let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = taken.local_addr().unwrap().to_string();
-    assert!(format!("{:#}", serve(listen(&address)).await.unwrap_err()).contains("could not listen"));
+    assert!(format!("{:#}", serve(listen(&address), &paths).await.unwrap_err()).contains("could not listen"));
     // Debug never shows the secret.
     let shown = format!("{:?}", listen("127.0.0.1:0"));
     assert!(shown.contains("Secret(..)") && !shown.contains(SECRET), "{shown}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn listen_on(address: &str, allow: Vec<Network>) -> Listen {
+    Listen { address: address.into(), secret: secret(), allow }
 }
 
 #[test]
 fn the_secret_file_is_read_trimmed_and_never_repeated() {
     let dir = test_dir("secret-file");
     let file = dir.join("secret");
-    std::fs::write(&file, format!("  {SECRET}\n")).unwrap();
+    let write = |bytes: &[u8]| crate::config::write_private(&file, bytes).unwrap();
+    write(format!("  {SECRET}\n").as_bytes());
     assert!(load_secret(&file).unwrap().is_in(SECRET));
     for (text, why) in [("short-secret-value", "at least 32"), (&*format!("{SECRET} with spaces"), "no spaces")] {
-        std::fs::write(&file, text).unwrap();
+        write(text.as_bytes());
         let error = format!("{:#}", load_secret(&file).unwrap_err());
         assert!(error.contains("--manage-secret-file") && error.contains(why), "{error}");
         assert!(!error.contains(text.trim()), "{error}");
     }
     // Too big to be a secret: refused without reading it all.
-    std::fs::write(&file, "a".repeat(10_000)).unwrap();
+    write("a".repeat(10_000).as_bytes());
     assert!(format!("{:#}", load_secret(&file).unwrap_err()).contains("at most 256"));
-    std::fs::write(&file, [0xff, 0xfe, 0x00]).unwrap();
+    write(&[0xff, 0xfe, 0x00]);
     assert!(format!("{:#}", load_secret(&file).unwrap_err()).contains("could not read the manage secret file"));
     let error = format!("{:#}", load_secret(&dir.join("missing")).unwrap_err());
     assert!(error.contains("could not read the manage secret file"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_secret_file_others_can_read_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = test_dir("secret-mode");
+    let file = dir.join("secret");
+    crate::config::write_private(&file, SECRET.as_bytes()).unwrap();
+    // Read or written by its group or others: whoever writes it chooses the secret.
+    for mode in [0o640, 0o604, 0o644, 0o444, 0o660, 0o620, 0o602, 0o622] {
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+        let error = format!("{:#}", load_secret(&file).unwrap_err());
+        assert!(error.contains("can be read or changed by other users") && error.contains("chmod 600"), "{mode:o}: {error}");
+        assert!(!error.contains(SECRET), "{error}");
+    }
+    for mode in [0o600, 0o400, 0o700] {
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+        assert!(load_secret(&file).unwrap().is_in(SECRET), "{mode:o}");
+    }
+    // Through a link, it is the file itself that is checked.
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+    assert!(load_secret(&link).is_ok());
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(format!("{:#}", load_secret(&link).unwrap_err()).contains("chmod 600"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -865,7 +975,7 @@ async fn read_until_closed(stream: &mut TcpStream, wait: Duration) -> Option<Vec
 async fn a_slow_or_idle_connection_is_closed_and_connections_are_capped() {
     use tokio::io::AsyncWriteExt;
     let limits = Limits { connections: 1, connection_lifetime: Duration::from_millis(300), ..Limits::default() };
-    let (bound, task, _jobs) = serve_with(Listen { address: "127.0.0.1:0".into(), secret: secret() }, limits).await.unwrap();
+    let (bound, task, _jobs) = serve_with(listen_on("127.0.0.1:0", vec![]), limits, None).await.unwrap();
     // Headers that never end: closed when the connection's time is up.
     let mut slow = TcpStream::connect(bound).await.unwrap();
     slow.write_all(b"GET /manage/v1/state HTTP/1.1\r\nHost: x\r\n").await.unwrap();
@@ -882,4 +992,388 @@ async fn a_slow_or_idle_connection_is_closed_and_connections_are_capped() {
     let text = String::from_utf8_lossy(&answer).to_lowercase();
     assert!(text.starts_with("http/1.1 404") && text.contains("connection: close") && text.contains("cache-control: no-store"), "{text}");
     task.abort();
+}
+
+#[tokio::test]
+async fn the_state_over_the_router_carries_the_redacted_reticulum_config_and_is_signed() {
+    let mut h = node("reticulum-config");
+    let rns = h.dir.join("rns");
+    std::fs::create_dir_all(&rns).unwrap();
+    let secrets = ["fake-passphrase-1", "fake-network-name-2", "/dev/fake-port-3", "fake-password-4", "fake-ifac-5", "fake-command-6"];
+    let config = format!(
+        "[reticulum]\n enable_transport = yes\n[interfaces]\n [[Radio]]\n  type = RNodeInterface\n  port = {}\n  passphrase = {}\n  network_name = {}\n  password = {}\n  ifac_netkey = {}\n [[Shell]]\n  type = PipeInterface\n  command = {}\n",
+        secrets[2], secrets[0], secrets[1], secrets[3], secrets[4], secrets[5]
+    );
+    std::fs::write(rns.join("config"), config).unwrap();
+    h.app().settings.rns_config = Some(rns.display().to_string());
+    let signing = Signing::get("/manage/v1/state");
+    let answer = h.send(&signing).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    assert!(answer.signed_for(&signing.nonce));
+    let text = String::from_utf8_lossy(&answer.bytes).into_owned();
+    for fake in secrets {
+        assert!(!text.contains(fake), "{fake} leaked: {text}");
+    }
+    assert!(!text.contains("\"command\""), "a pipe's other keys are not even named: {text}");
+    let block = &answer.json["reticulum"];
+    assert_eq!(block["revision"].as_str().map(str::len), Some(32));
+    assert_eq!(block["shared_instance"], false);
+    let sections = block["sections"].as_array().unwrap();
+    let shell = sections.iter().find(|s| s["path"] == json!(["interfaces", "Shell"])).unwrap();
+    assert_eq!(shell["keys"], json!([{ "key": "type", "value": "PipeInterface", "set": true }]));
+    let radio = sections.iter().find(|s| s["path"] == json!(["interfaces", "Radio"])).unwrap();
+    assert!(radio["keys"].as_array().unwrap().contains(&json!({ "key": "passphrase", "value": null, "set": true })));
+    // Another read gives the same revision.
+    assert_eq!(h.state().await["reticulum"]["revision"], block["revision"]);
+}
+
+#[tokio::test]
+async fn a_huge_reticulum_config_keeps_the_state_small() {
+    let mut h = node("reticulum-huge");
+    let rns = h.dir.join("rns");
+    std::fs::create_dir_all(&rns).unwrap();
+    let mut config = String::from("[interfaces]\n");
+    for i in 0..128 {
+        config.push_str(&format!("[[Interface {i:03}]]\ntype = TCPClientInterface\n"));
+        for k in 0..64 {
+            config.push_str(&format!("setting_{k:02} = {}\n", "v".repeat(100)));
+        }
+    }
+    std::fs::write(rns.join("config"), config).unwrap();
+    h.app().settings.rns_config = Some(rns.display().to_string());
+    let signing = Signing::get("/manage/v1/state");
+    let answer = h.send(&signing).await;
+    assert_eq!(answer.status, StatusCode::OK);
+    assert!(answer.bytes.len() < 64 * 1024, "{}", answer.bytes.len());
+    assert_eq!(answer.json["reticulum"]["truncated"], true);
+}
+
+#[tokio::test]
+async fn a_request_dated_ahead_cant_be_replayed_after_a_restart() {
+    // The pentest's: a request signed 280 seconds ahead of the node's clock,
+    // accepted, the node restarted, and the same request sent again.
+    let keep = test_dir("mark");
+    let mark = keep.join("manage").join(MARK_FILE);
+    let now = unix_now();
+    let mut first_run = harness_marked("mark-run1", Limits::default(), false, now - 100, Some(mark.clone()));
+    let mut ahead = Signing::post("/manage/v1/restart", &json!({}));
+    ahead.timestamp = now + 280;
+    assert_eq!(first_run.send(&ahead).await.status, StatusCode::OK);
+    assert_eq!(std::fs::read_to_string(&mark).unwrap(), format!("{}\n", now + 280), "kept before it was carried out");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&mark).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    // An older one doesn't move it back.
+    assert_eq!(first_run.send(&Signing::get("/manage/v1/state")).await.status, StatusCode::OK);
+    assert_eq!(std::fs::read_to_string(&mark).unwrap().trim(), (now + 280).to_string());
+    drop(first_run);
+
+    // The next run starts a few seconds later, before that time.
+    let mut second_run = harness_marked("mark-run2", Limits::default(), false, now + 5, Some(mark.clone()));
+    let answer = second_run.send(&ahead).await;
+    assert_eq!((answer.status, answer.code()), (StatusCode::UNAUTHORIZED, "before_start"), "{answer:?}");
+    assert_eq!((answer.json["started_at"].as_u64(), answer.json["signed_after"].as_u64()), (Some(now + 5), Some(now + 280)));
+    // Without the mark, the start alone wouldn't have held it back.
+    let mut unmarked = harness_started("mark-none", Limits::default(), false, now + 5);
+    assert_eq!(unmarked.send(&ahead).await.status, StatusCode::OK);
+    drop(unmarked);
+    // Signed at that time exactly is refused too; signed after it, taken.
+    let mut same = Signing::get("/manage/v1/state");
+    same.timestamp = now + 280;
+    assert_eq!(second_run.send(&same).await.code(), "before_start");
+    let mut later = Signing::get("/manage/v1/state");
+    later.timestamp = now + 281;
+    assert_eq!(second_run.send(&later).await.status, StatusCode::OK);
+    assert_eq!(second_run.ops(), [Op::State], "the replay did nothing");
+    drop(second_run);
+    let _ = std::fs::remove_dir_all(&keep);
+}
+
+#[test]
+fn the_kept_time_is_read_safely() {
+    let dir = test_dir("mark-read");
+    let path = dir.join(MARK_FILE);
+    assert_eq!(load_mark(&path), 0, "none kept yet");
+    for (text, read) in [("1800000000\n", 1_800_000_000), (" 42 ", 42)] {
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(load_mark(&path), read, "{text:?}");
+    }
+    for bad in ["", "abc", "-5", "1e9", "99999999999999999999999", "12 34", "\u{0}"] {
+        std::fs::write(&path, bad).unwrap();
+        assert_eq!(load_mark(&path), 0, "{bad:?}");
+    }
+    std::fs::write(&path, "1".repeat(1000)).unwrap();
+    assert_eq!(load_mark(&path), 0, "too long to be one");
+    std::fs::write(&path, [0xff, 0xfe]).unwrap();
+    assert_eq!(load_mark(&path), 0, "not text");
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir_all(&path).unwrap();
+    assert_eq!(load_mark(&path), 0, "a folder");
+    // A time from the past changes nothing; one far ahead (a clock that was
+    // wrong) holds requests back for five minutes at most.
+    assert_eq!(floor_of(1000, 0), 1000);
+    assert_eq!(floor_of(1000, 900), 1000);
+    assert_eq!(floor_of(1000, 1200), 1200);
+    assert_eq!(floor_of(1000, u64::MAX), 1000 + MAX_SKEW);
+    assert_eq!(floor_of(u64::MAX, u64::MAX), u64::MAX);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_mark_that_cant_be_kept_doesnt_stop_management() {
+    let dir = test_dir("mark-unsaved");
+    // Its folder is a file, so it can't be made.
+    std::fs::write(dir.join("manage"), "x").unwrap();
+    let mut h = harness_marked("mark-unsaved-h", Limits::default(), false, started(), Some(dir.join("manage").join(MARK_FILE)));
+    assert_eq!(h.send(&Signing::get("/manage/v1/state")).await.status, StatusCode::OK);
+    assert_eq!(h.send(&Signing::get("/manage/v1/state")).await.status, StatusCode::OK);
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn allowed_addresses_and_networks_are_read_and_matched() {
+    let net = |text: &str| Network::parse(text).unwrap();
+    let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+    let website = net("10.0.0.5");
+    assert_eq!(website.to_string(), "10.0.0.5/32");
+    assert!(website.contains(ip("10.0.0.5")) && website.contains(ip("::ffff:10.0.0.5")));
+    assert!(!website.contains(ip("10.0.0.6")) && !website.contains(ip("::1")));
+    let lan = net("10.0.0.77/24");
+    assert_eq!(lan.to_string(), "10.0.0.0/24", "bits after the prefix are ignored");
+    assert!(lan.contains(ip("10.0.0.1")) && lan.contains(ip("10.0.0.255")) && !lan.contains(ip("10.0.1.1")));
+    let v6 = net("fd00:1:2:3::9/64");
+    assert_eq!(v6.to_string(), "fd00:1:2:3::/64");
+    assert!(v6.contains(ip("fd00:1:2:3:ffff::1")) && !v6.contains(ip("fd00:1:2:4::1")) && !v6.contains(ip("10.0.0.1")));
+    assert_eq!(net("::ffff:10.0.0.0/120"), net("10.0.0.0/24"), "IPv4 written as IPv6");
+    assert_eq!(net("::ffff:10.0.0.5"), website);
+    assert!(net("0.0.0.0/0").contains(ip("8.8.8.8")) && !net("0.0.0.0/0").contains(ip("::1")));
+    assert!(net("::/0").contains(ip("2001:db8::1")));
+    assert!(net("192.168.1.1/32").contains(ip("192.168.1.1")) && net("::1/128").contains(ip("::1")));
+    for bad in [
+        "",
+        "website.example",
+        "10.0.0.1/",
+        "10.0.0.1/33",
+        "fd00::/129",
+        "10.0.0.1/-1",
+        "10.0.0.1/+8",
+        "10.0.0.1/0x8",
+        "10.0.0.1/24/8",
+        "10.0.0.1:8750",
+        "[fd00::1]",
+        " 10.0.0.1",
+        "::ffff:10.0.0.0/95",
+        "10.0.0.1/0008",
+    ] {
+        let error = Network::parse(bad).unwrap_err();
+        assert!(error.contains("10.0.0.0/24"), "{bad:?}: {error}");
+    }
+    assert_eq!(
+        started_line("127.0.0.1:8750".parse().unwrap(), &[]),
+        "Remote management at http://127.0.0.1:8750/manage/v1/ (signed requests only)"
+    );
+    assert!(started_line("127.0.0.1:8750".parse().unwrap(), &[website, v6]).ends_with("from 10.0.0.5/32, fd00:1:2:3::/64 only)"));
+}
+
+/// Send `bytes` on a new connection to `bound`; what came back before it
+/// closed (None if still open after `wait`).
+async fn exchange(bound: SocketAddr, bytes: &[u8], wait: Duration) -> Option<Vec<u8>> {
+    use tokio::io::AsyncWriteExt;
+    let mut stream = TcpStream::connect(bound).await.ok()?;
+    let _ = stream.write_all(bytes).await;
+    read_until_closed(&mut stream, wait).await
+}
+
+#[tokio::test]
+async fn a_connection_from_an_address_not_allowed_is_closed_unread() {
+    // Only 10.9.9.9 may connect: this test, on loopback, may not.
+    let limits = Limits { connections: 1, connections_per_peer: 1, ..Limits::default() };
+    let (bound, task, _jobs) = serve_with(listen_on("127.0.0.1:0", vec![Network::parse("10.9.9.9").unwrap()]), limits, None).await.unwrap();
+    for _ in 0..5 {
+        let read = exchange(bound, b"GET /nothing HTTP/1.1\r\nHost: x\r\n\r\n", Duration::from_secs(2)).await;
+        assert_eq!(read, Some(vec![]), "answered, or left open");
+    }
+    task.abort();
+    // Allowed, the same request is answered; and the places weren't taken by the refused ones.
+    let (bound, task, _jobs) =
+        serve_with(listen_on("127.0.0.1:0", vec![Network::parse("127.0.0.0/8").unwrap()]), limits, None).await.unwrap();
+    for _ in 0..3 {
+        let read = exchange(bound, b"GET /nothing HTTP/1.1\r\nHost: x\r\n\r\n", Duration::from_secs(5)).await.unwrap();
+        assert!(String::from_utf8_lossy(&read).to_lowercase().starts_with("http/1.1 404"), "{read:?}");
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn idle_and_half_sent_requests_are_closed_after_a_few_seconds() {
+    // The pentest's: every place held by connections that send nothing or
+    // half a request, renewed as they close. Each is closed once its
+    // request is late, long before the connection's own time is up.
+    use tokio::io::AsyncWriteExt;
+    let limits = Limits {
+        connections: 4,
+        connections_per_peer: 4,
+        connection_lifetime: Duration::from_secs(30),
+        request_within: Duration::from_millis(400),
+        ..Limits::default()
+    };
+    let (bound, task, mut jobs) = serve_with(listen_on("127.0.0.1:0", vec![]), limits, None).await.unwrap();
+    let started = Instant::now();
+    let mut held = Vec::new();
+    for send in [
+        &b""[..],
+        b"",
+        b"GET /manage/v1/state HTTP/1.1\r\nHost: x\r\n",
+        b"POST /manage/v1/restart HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n{",
+    ] {
+        let mut stream = TcpStream::connect(bound).await.unwrap();
+        stream.write_all(send).await.unwrap();
+        held.push(stream);
+    }
+    let mut answers = Vec::new();
+    for stream in &mut held {
+        answers.push(read_until_closed(stream, Duration::from_secs(5)).await.expect("still open after 5 seconds"));
+    }
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    // The one whose body was late is told so; the rest are just closed.
+    let late = String::from_utf8_lossy(&answers[3]).to_lowercase();
+    assert!(late.starts_with("http/1.1 408") && late.contains("request_timeout"), "{late}");
+    assert!(answers[..3].iter().all(|a| a.is_empty() || String::from_utf8_lossy(a).to_lowercase().starts_with("http/1.1 408")));
+    // The places are free: a signed request is answered, though its
+    // answer takes longer than the request had to arrive. (Signed a little
+    // after the listener started, as a request signed then is refused.)
+    let mut signing = Signing::get("/manage/v1/state");
+    signing.timestamp += 2;
+    let request = format!(
+        "GET /manage/v1/state HTTP/1.1\r\nHost: x\r\n{}: {}\r\n{}: {}\r\n{}: alice\r\n{}: {}\r\n\r\n",
+        wire::TIMESTAMP,
+        signing.timestamp,
+        wire::NONCE,
+        signing.nonce,
+        wire::ACTOR,
+        wire::SIGNATURE,
+        signing.signature()
+    );
+    let owner = tokio::spawn(async move {
+        let job = jobs.recv().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let _ = job.reply.send(Reply::new(StatusCode::OK, json!({ "ok": true })));
+        jobs
+    });
+    let read = exchange(bound, request.as_bytes(), Duration::from_secs(5)).await.unwrap();
+    let text = String::from_utf8_lossy(&read).to_lowercase();
+    assert!(text.starts_with("http/1.1 200") && text.contains(r#"{"ok":true}"#), "{text}");
+    let _ = owner.await;
+    task.abort();
+}
+
+#[tokio::test]
+async fn http2_is_not_spoken() {
+    // The pentest's: `curl --http2-prior-knowledge` got an HTTP/2 answer,
+    // which carries many requests on one connection.
+    let (bound, task, _jobs) = serve_with(listen_on("127.0.0.1:0", vec![]), Limits::default(), None).await.unwrap();
+    // The HTTP/2 preface, then an empty SETTINGS frame.
+    let mut preface = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec();
+    preface.extend_from_slice(&[0, 0, 0, 4, 0, 0, 0, 0, 0]);
+    let read = exchange(bound, &preface, Duration::from_secs(5)).await.expect("left open");
+    // An HTTP/2 server answers with its own SETTINGS frame (type 4); this one
+    // answers as HTTP/1.1, or not at all.
+    assert!(read.is_empty() || read.starts_with(b"HTTP/1.1 "), "{read:?}");
+    assert!(!(read.len() >= 9 && read[3] == 4), "{read:?}");
+    // An upgrade to h2c is not taken either.
+    let read = exchange(
+        bound,
+        b"GET /nothing HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\nUpgrade: h2c\r\nHTTP2-Settings: AAMAAABkAAQCAAAAAAIAAAAA\r\n\r\n",
+        Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
+    let text = String::from_utf8_lossy(&read).to_lowercase();
+    assert!(text.starts_with("http/1.1 404") && !text.contains("101 switching"), "{text}");
+    task.abort();
+}
+
+#[tokio::test]
+async fn an_audit_page_fits_what_a_website_takes() {
+    // The review's: long greetings saved a few times made a default page
+    // of 50 bigger than the 64 KiB a website takes.
+    let mut h = harness_with("audit-budget", Limits { writes_per_minute: 1000, ..Limits::default() }, true);
+    for n in 0..12 {
+        let state = h.state().await;
+        let revision = state["settings_revision"].as_str().unwrap().to_string();
+        let greeting = format!("{n}{}", "g".repeat(4000));
+        let peers: Vec<String> = (0..100).map(|i| format!("{:032x}", n * 1000 + i)).collect();
+        let changes = json!({ "hub_greeting": greeting, "pn_static_peers": peers.join(",") });
+        let answer = h.send(&Signing::post("/manage/v1/settings", &json!({ "revision": revision, "changes": changes }))).await;
+        assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    }
+    let answer = h.send(&Signing::get("/manage/v1/audit")).await;
+    assert_eq!(answer.status, StatusCode::OK);
+    assert!(answer.bytes.len() < 48 * 1024 + 64, "{}", answer.bytes.len());
+    let entries = answer.json["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 12);
+    assert_eq!(answer.json["more"], false);
+    assert!(entries[0]["changes"][0]["to"].as_str().unwrap().ends_with('…'));
+    // A rollback still has the whole value to go back to.
+    let id = entries[0]["id"].as_str().unwrap();
+    let answer = h.send(&Signing::post("/manage/v1/rollback", &json!({ "id": id }))).await;
+    assert_eq!(answer.status, StatusCode::OK, "{answer:?}");
+    let greeting = h.app().settings.hub_greeting.clone().unwrap();
+    assert!(greeting.starts_with("10") && greeting.len() == 4002, "{}", greeting.len());
+}
+
+#[tokio::test]
+async fn bad_signatures_owed_when_a_flood_stops_are_reported_with_their_real_count() {
+    let limits = Limits { failures: 3, lockout: Duration::from_millis(100), ..Limits::default() };
+    let (jobs, mut received) = mpsc::channel(limits.queue);
+    let shared = Shared::new(secret(), jobs, limits, started(), None);
+    for _ in 0..10 {
+        let _ = admit(&shared, None, false);
+    }
+    let first = received.try_recv().expect("the lockout is reported when it starts");
+    assert_eq!(first.op, Op::AuthFailures { count: 3 });
+    assert!(received.try_recv().is_err(), "not again for each burst");
+    // Nothing is owed while it lasts; once it has ended, the other 7 are.
+    shared.flush_failures();
+    assert!(received.try_recv().is_err());
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    shared.flush_failures();
+    assert_eq!(received.try_recv().expect("the rest").op, Op::AuthFailures { count: 7 });
+    shared.flush_failures();
+    assert!(received.try_recv().is_err(), "once");
+}
+
+#[tokio::test]
+async fn the_listener_reports_what_is_owed_by_itself() {
+    // With nobody sending anything more, the listener's own timer reports
+    // the rest of a flood once its lockout has ended.
+    let limits = Limits { failures: 2, lockout: Duration::from_millis(50), ..Limits::default() };
+    let (bound, task, mut jobs) = serve_with(listen_on("127.0.0.1:0", vec![]), limits, None).await.unwrap();
+    for _ in 0..5 {
+        exchange(bound, b"GET /manage/v1/state HTTP/1.1\r\nHost: x\r\n\r\n", Duration::from_secs(5)).await.unwrap();
+    }
+    let mut counts = Vec::new();
+    let until = Instant::now() + Duration::from_secs(12);
+    while counts.iter().sum::<usize>() < 5 && Instant::now() < until {
+        if let Ok(Some(job)) = tokio::time::timeout(Duration::from_millis(500), jobs.recv()).await
+            && let Op::AuthFailures { count } = job.op
+        {
+            counts.push(count);
+        }
+    }
+    assert_eq!((counts.first(), counts.iter().sum::<usize>()), (Some(&2), 5), "{counts:?}");
+    task.abort();
+}
+
+#[test]
+fn starting_without_manage_allow_warns() {
+    let warning = allow_warning(&[]).unwrap();
+    assert!(
+        warning.contains("no --manage-allow") && warning.contains("website's address") && warning.contains("connection places"),
+        "{warning}"
+    );
+    assert_eq!(allow_warning(&[Network::parse("10.0.0.1").unwrap()]), None);
 }

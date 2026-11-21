@@ -14,6 +14,7 @@ use super::fields::{self, MANAGE_FIELDS, Refusal};
 use super::{Job, Op, Reply, unix_now};
 use crate::app::{App, NetState};
 use crate::config::{self, FieldKind, Paths, Settings};
+use crate::reticulum::redact;
 
 /// One Reticulum restart per this long at most.
 pub const RESTART_EVERY: Duration = Duration::from_secs(300);
@@ -22,6 +23,9 @@ pub const HEALTH_WITHIN: Duration = Duration::from_secs(90);
 /// The most problems a restart reports, and the longest each.
 const MAX_PROBLEMS: usize = 32;
 const MAX_PROBLEM: usize = 120;
+/// The most bytes of entries in an `/audit` answer: well under the 64 KiB a
+/// website takes, with room for the rest of the answer.
+const MAX_AUDIT_PAGE: usize = 48 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Health {
@@ -112,7 +116,7 @@ impl Owner {
             Op::Audit { before, limit } => self.audit_page(before, limit),
             Op::AuthFailures { count } => {
                 app.log(format!(
-                    "Remote management: {count} requests with a bad signature within a minute; requests without a valid signature are refused for 60 seconds"
+                    "Remote management: {count} requests with a bad signature; after 20 within a minute, requests without a valid signature are refused for 60 seconds (logged again in 10 minutes at most while they go on)"
                 ));
                 if let Err(e) = self.audit.auth_failures(&new_id(), count as u64, unix_now()) {
                     tracing::warn!("Remote management: {e}");
@@ -234,6 +238,11 @@ impl Owner {
         };
         let restart =
             self.restart.as_ref().map(|r| json!({ "id": r.id, "state": r.health.as_str(), "started": r.started, "problems": r.problems }));
+        // The redacted Reticulum config; `null` when it can't be read. The
+        // read and the parse run here in the owner loop, and are capped (1
+        // MiB read, a small number of lines, sections and keys).
+        let shared = app.uses_external_shared_instance();
+        let reticulum = redact::view_of_file(&crate::reticulum::config_path(app.settings.rns_config.as_deref()), shared);
         Reply::new(
             StatusCode::OK,
             json!({
@@ -244,10 +253,11 @@ impl Owner {
                 "settings": settings,
                 "network": {
                     "state": network,
-                    "shared_instance": app.uses_external_shared_instance(),
+                    "shared_instance": shared,
                     "interfaces_total": app.interfaces.len(),
                     "interfaces_online": app.interfaces.iter().filter(|i| i.online).count(),
                 },
+                "reticulum": reticulum,
                 "restart": restart,
                 "restart_allowed_at": self.restart_allowed_at(),
                 "pending": null,
@@ -391,7 +401,7 @@ impl Owner {
     }
 
     fn audit_page(&self, before: Option<u64>, limit: usize) -> Reply {
-        let (entries, more) = self.audit.page(before, limit);
+        let (entries, more) = self.audit.page_within(before, limit, MAX_AUDIT_PAGE);
         Reply::new(StatusCode::OK, json!({ "entries": entries, "more": more }))
     }
 }
@@ -469,7 +479,7 @@ mod tests {
         assert_eq!(state["version"], crate::VERSION);
         assert!(state["node_time"].as_u64().unwrap() > 1_700_000_000);
         assert_eq!(state["pending"], Value::Null);
-        assert!(state.get("reticulum").is_none(), "phase 1 has no Reticulum config view");
+        assert_eq!(state["reticulum"], Value::Null, "no config file to read here");
         assert_eq!(state["restart"], Value::Null);
         assert_eq!(state["restart_allowed_at"], Value::Null);
         assert_eq!(
@@ -505,6 +515,30 @@ mod tests {
         assert_eq!(node.state()["network"]["state"], "running");
         node.app.net_state = NetState::Failed("no".into());
         assert_eq!(node.state()["network"]["state"], "failed");
+    }
+
+    #[test]
+    fn the_state_carries_the_redacted_reticulum_config() {
+        let mut node = Node::new("reticulum", Settings::default());
+        let dir = node.dir.clone();
+        let rns = dir.join("rns");
+        std::fs::create_dir_all(&rns).unwrap();
+        let text = "[reticulum]\n enable_transport = yes\n[interfaces]\n [[TCP]]\n  type = TCPServerInterface\n  listen_port = 4242\n  passphrase = fake-secret-passphrase\n  network_name = fake-secret-network\n";
+        std::fs::write(rns.join("config"), text).unwrap();
+        node.app.settings.rns_config = Some(rns.display().to_string());
+        node.app.interfaces = vec![InterfaceInfo { name: "Shared Instance[37428]".into(), online: true, ..Default::default() }];
+        let state = node.state();
+        let shown = state["reticulum"].to_string();
+        assert!(!shown.contains("fake-secret"), "{shown}");
+        assert!(!shown.contains(dir.to_str().unwrap()), "{shown}");
+        assert_eq!(state["reticulum"]["shared_instance"], true);
+        assert_eq!(state["reticulum"]["revision"].as_str().unwrap().len(), 32);
+        let tcp = &state["reticulum"]["sections"].as_array().unwrap().iter().find(|s| s["path"] == json!(["interfaces", "TCP"])).unwrap();
+        assert!(tcp["keys"].as_array().unwrap().contains(&json!({ "key": "passphrase", "value": null, "set": true })));
+        assert!(tcp["keys"].as_array().unwrap().contains(&json!({ "key": "listen_port", "value": "4242", "set": true })));
+        // The same config gives the same revision; the audit log has nothing from it.
+        assert_eq!(node.state()["reticulum"]["revision"], state["reticulum"]["revision"]);
+        assert!(node.audit().is_empty());
     }
 
     #[test]
@@ -717,7 +751,7 @@ mod tests {
         );
         assert!(audit[0]["error"].as_str().unwrap().starts_with("20 requests"));
         assert_eq!(audit[0]["count"], 20);
-        assert!(node.app.log.iter().any(|l| l.contains("20 requests with a bad signature within a minute")));
+        assert!(node.app.log.iter().any(|l| l.contains("20 requests with a bad signature; after 20 within a minute")));
         // The next burst counts in the same entry.
         node.ask(Op::AuthFailures { count: 20 });
         let audit = node.audit();

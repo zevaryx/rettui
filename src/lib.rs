@@ -843,6 +843,10 @@ mod tests {
             "10.200.0.2:8750",
             "--manage-secret-file",
             "/run/secrets/manage",
+            "--manage-allow",
+            "10.200.0.1",
+            "--manage-allow",
+            "fd00::/64",
             "--data-dir",
             "/srv/rettui",
         ]) else {
@@ -853,6 +857,8 @@ mod tests {
         assert!(args.stats_logs);
         assert_eq!(args.manage_listen.as_deref(), Some("10.200.0.2:8750"));
         assert_eq!(args.manage_secret_file, Some(std::path::PathBuf::from("/run/secrets/manage")));
+        let allowed: Vec<String> = args.manage_allow.iter().map(ToString::to_string).collect();
+        assert_eq!(allowed, ["10.200.0.1/32", "fd00::/64"]);
         assert_eq!(dir, std::path::PathBuf::from("/srv/rettui"));
         assert_eq!(args.entry_point, Some(4965));
         assert_eq!(args.listen_ip, Some("::".parse().unwrap()));
@@ -869,6 +875,9 @@ mod tests {
             &["--stats-token-file", "/x"],
             &["--manage-listen", "127.0.0.1:8750"],
             &["--manage-secret-file", "/x"],
+            &["--manage-allow", "10.0.0.1"],
+            &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-allow", "website.example"],
+            &["--manage-listen", "127.0.0.1:8750", "--manage-secret-file", "/x", "--manage-allow", "10.0.0.0/33"],
             &["--stats-logs"],
         ] {
             assert!(node(wrong).is_err(), "{wrong:?}");

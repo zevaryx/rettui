@@ -91,6 +91,22 @@ if [ -n "$MANAGE_LISTEN" ] && [ "${1:-}" != node ]; then
     echo "rettui: MANAGE_LISTEN only works with the node command" >&2
     exit 1
 fi
+# MANAGE_ALLOW (optional, needs MANAGE_LISTEN) is the website's address, or
+# several addresses and networks separated by commas, such as
+# 172.20.0.5,fd00::/64 (--manage-allow, see wiki/Docker.md): connections from
+# anywhere else are closed. Only characters an address or a network has are
+# allowed.
+MANAGE_ALLOW="${MANAGE_ALLOW:-}"
+case "$MANAGE_ALLOW" in
+    *[!0-9a-fA-F.:/,]* | ,* | *, | *,,*)
+        echo "rettui: MANAGE_ALLOW must be addresses or networks separated by commas, like 172.20.0.5 or 10.0.0.0/24 (got '$MANAGE_ALLOW')" >&2
+        exit 1
+        ;;
+esac
+if [ -n "$MANAGE_ALLOW" ] && [ -z "$MANAGE_LISTEN" ]; then
+    echo "rettui: MANAGE_ALLOW needs MANAGE_LISTEN" >&2
+    exit 1
+fi
 
 mkdir -p "$DATA/reticulum"
 # First start: keep the Reticulum config in the data directory too. To use
@@ -119,6 +135,16 @@ if [ "${1:-}" = node ]; then
     fi
     if [ -n "$STATS_LOGS" ]; then
         set -- --stats-logs "$@"
+    fi
+    if [ -n "$MANAGE_ALLOW" ]; then
+        # One --manage-allow for each (their order doesn't matter). The
+        # check above leaves no characters a shell would expand.
+        old_ifs="$IFS"
+        IFS=,
+        for network in $MANAGE_ALLOW; do
+            set -- --manage-allow "$network" "$@"
+        done
+        IFS="$old_ifs"
     fi
     if [ -n "$MANAGE_LISTEN" ]; then
         set -- --manage-listen "$MANAGE_LISTEN" --manage-secret-file "$MANAGE_SECRET_FILE" "$@"

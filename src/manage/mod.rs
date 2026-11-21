@@ -18,9 +18,16 @@
 //! A nonce is remembered for as long as its request's time is accepted, so
 //! a request can't be replayed within a run; one signed before the run
 //! started is refused, as its nonce may have been used in the last run.
-//! Within the 5 minutes a request's time is accepted, a request held back
-//! on the way can still be delivered once, which is why the link must be
-//! private.
+//! The highest request time accepted is kept on disk too
+//! (`manage/last-request`), so a request dated ahead of the node's clock
+//! can't be replayed after a restart either. Within the 5 minutes a
+//! request's time is accepted, a request held back on the way can still be
+//! delivered once, which is why the link must be private.
+//!
+//! The listener speaks HTTP/1.1 only, one request per connection. A
+//! connection from an address outside `--manage-allow` (if given) is closed
+//! before anything is read, and a request must have arrived whole within 5
+//! seconds of connecting.
 
 mod audit;
 pub mod fields;
@@ -30,8 +37,9 @@ pub(crate) mod wire;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -63,11 +71,75 @@ pub const MAX_SKEW: u64 = 300;
 /// remembered, in seconds, for a clock that steps while it is checked.
 const NONCE_MARGIN: u64 = 5;
 
-/// Where to listen, and the secret requests are signed with.
+/// The file in the management folder that keeps the highest request time
+/// accepted (unix seconds).
+const MARK_FILE: &str = "last-request";
+
+/// Where to listen, the secret requests are signed with, and the addresses
+/// a connection may come from (any if empty).
 #[derive(Debug, Clone)]
 pub struct Listen {
     pub address: String,
     pub secret: Secret,
+    pub allow: Vec<Network>,
+}
+
+/// An address or a network a connection may come from (`--manage-allow`):
+/// `10.0.0.5`, `10.0.0.0/24` or `fd00::/64`. An IPv4 address written as IPv6
+/// is the IPv4 one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Network {
+    ip: IpAddr,
+    prefix: u8,
+}
+
+/// `ip` with all but its first `prefix` bits cleared.
+fn masked(ip: IpAddr, prefix: u8) -> IpAddr {
+    match ip {
+        IpAddr::V4(v4) => IpAddr::V4((u32::from(v4) & u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0)).into()),
+        IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0)).into()),
+    }
+}
+
+impl Network {
+    /// Read `--manage-allow`'s value. Bits after the prefix are ignored, as
+    /// firewalls do (`10.0.0.5/24` is `10.0.0.0/24`).
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let bad = || format!("expected an address or a network, as 10.0.0.5, 10.0.0.0/24 or fd00::/64, not {text:?}");
+        let (address, prefix) = match text.split_once('/') {
+            Some((address, prefix)) => (address, Some(prefix)),
+            None => (text, None),
+        };
+        let written: IpAddr = address.parse().map_err(|_| bad())?;
+        let ip = peer_ip(written);
+        let longest = if written.is_ipv4() { 32 } else { 128 };
+        let prefix = match prefix {
+            None => longest,
+            Some(p) if !p.is_empty() && p.len() <= 3 && p.bytes().all(|b| b.is_ascii_digit()) => p.parse::<u8>().map_err(|_| bad())?,
+            Some(_) => return Err(bad()),
+        };
+        if prefix > longest {
+            return Err(bad());
+        }
+        // `::ffff:10.0.0.0/120` is `10.0.0.0/24`.
+        let prefix = match (written, ip) {
+            (IpAddr::V6(_), IpAddr::V4(_)) => prefix.checked_sub(96).ok_or_else(bad)?,
+            _ => prefix,
+        };
+        Ok(Self { ip: masked(ip, prefix), prefix })
+    }
+
+    /// Whether a connection from `ip` is in this network.
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        let ip = peer_ip(ip);
+        ip.is_ipv4() == self.ip.is_ipv4() && masked(ip, self.prefix) == self.ip
+    }
+}
+
+impl std::fmt::Display for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.ip, self.prefix)
+    }
 }
 
 /// What a request asks the owner loop to do.
@@ -132,19 +204,38 @@ pub(crate) fn unix_now() -> u64 {
 }
 
 /// The secret in `path` (`--manage-secret-file`), its contents trimmed. An
-/// error never repeats what the file holds. Warns if others can read it.
+/// error never repeats what the file holds. A file its group or other users
+/// can read or write is refused (on Unix), as whoever reads it can manage
+/// the node, and whoever writes it can choose the secret.
 pub fn load_secret(path: &Path) -> Result<Secret> {
-    if crate::stats::readable_by_others(path) {
-        eprintln!(
-            "warning: the manage secret file {} can be read by other users; make it readable by you only (chmod 600)",
+    let unreadable = || format!("could not read the manage secret file {}", path.display());
+    let file = std::fs::File::open(path).with_context(unreadable)?;
+    // The file opened, not the path again, so it can't be swapped between the check and the read.
+    if open_to_others(&file).with_context(unreadable)? {
+        bail!(
+            "the manage secret file {} can be read or changed by other users, so they could manage this node: make it readable by you only (chmod 600 {})",
+            path.display(),
             path.display()
         );
     }
     let mut text = Zeroizing::new(String::new());
     // A little more than the longest, so a file that is too big is refused without reading it all.
-    let read = std::fs::File::open(path).and_then(|f| f.take(wire::SECRET_MAX as u64 + 1024).read_to_string(&mut text));
-    read.with_context(|| format!("could not read the manage secret file {}", path.display()))?;
+    file.take(wire::SECRET_MAX as u64 + 1024).read_to_string(&mut text).with_context(unreadable)?;
     Secret::parse(text.trim()).map_err(|reason| anyhow!("--manage-secret-file: {reason}"))
+}
+
+/// Whether its group or other users can read or write `file` (Unix only).
+fn open_to_others(file: &std::fs::File) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(file.metadata()?.permissions().mode() & 0o066 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        Ok(false)
+    }
 }
 
 /// Whether the listener may use `address`: loopback and private addresses
@@ -168,6 +259,13 @@ pub fn check_bind(address: &SocketAddr) -> Result<Option<String>> {
     Ok(None)
 }
 
+/// The warning when connections aren't limited to the website's address.
+fn allow_warning(allow: &[Network]) -> Option<String> {
+    allow.is_empty().then(|| {
+        "no --manage-allow given: any address that can reach the manage port can hold its connection places and keep the website out; give --manage-allow with the website's address".to_string()
+    })
+}
+
 /// The listener's limits (smaller in tests).
 #[derive(Debug, Clone, Copy)]
 struct Limits {
@@ -187,6 +285,12 @@ struct Limits {
     connections: usize,
     connections_per_peer: usize,
     connection_lifetime: Duration,
+    /// How long after connecting the whole request (headers and body) must
+    /// be in, so idle or slow connections can't hold the places.
+    request_within: Duration,
+    /// While requests without a valid signature are refused, how often the
+    /// bad ones still coming are logged and added to the audit log.
+    report_every: Duration,
 }
 
 impl Default for Limits {
@@ -201,6 +305,8 @@ impl Default for Limits {
             connections: 32,
             connections_per_peer: 4,
             connection_lifetime: Duration::from_secs(15),
+            request_within: Duration::from_secs(5),
+            report_every: Duration::from_secs(600),
         }
     }
 }
@@ -217,6 +323,20 @@ struct Guard {
     writes: VecDeque<Instant>,
     failures: VecDeque<Instant>,
     locked_until: Option<Instant>,
+    /// Bad signatures since the last report (log line and audit entry), and
+    /// when that was.
+    unreported: usize,
+    reported_at: Option<Instant>,
+}
+
+/// What a bad signature calls for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Failure {
+    /// It starts a burst (logged, once).
+    first: bool,
+    /// The lockout starts, or has gone on for a while: log this many bad
+    /// signatures and add them to the audit log.
+    report: Option<usize>,
 }
 
 enum Nonce {
@@ -250,18 +370,46 @@ impl Guard {
         }
     }
 
-    /// Count a bad signature: whether it starts a burst (the only one
-    /// logged), and whether it starts (or extends) the lockout.
-    fn fail(&mut self, now: Instant, limits: &Limits) -> (bool, bool) {
+    /// Count a bad signature. A burst of them starts (or extends) the
+    /// lockout. Only the first of a burst is logged, and the lockout is
+    /// reported when it starts and then once every `report_every` while a
+    /// flood keeps it going, never for every burst: each report is a log
+    /// line and an audit log write.
+    fn fail(&mut self, now: Instant, limits: &Limits) -> Failure {
+        // What an earlier lockout, or this one's window, still owes first.
+        let mut report = self.flush(now, limits);
+        let was_locked = self.locked(now).is_some();
         forget_older(&mut self.failures, now, MINUTE);
-        let first = self.failures.is_empty();
+        let first = self.failures.is_empty() && !was_locked;
+        if first {
+            self.unreported = 0;
+        }
         self.failures.push_back(now);
+        self.unreported = self.unreported.saturating_add(1);
         if self.failures.len() >= limits.failures {
             self.failures.clear();
             self.locked_until = Some(now + limits.lockout);
-            return (first, true);
+            let due = !was_locked || self.reported_at.is_none_or(|at| now.saturating_duration_since(at) >= limits.report_every);
+            if due {
+                report = Some(report.unwrap_or(0).saturating_add(std::mem::take(&mut self.unreported)));
+                self.reported_at = Some(now);
+            }
         }
-        (first, false)
+        Failure { first, report }
+    }
+
+    /// The bad signatures counted since a lockout was last reported, once
+    /// they are due: when that lockout has ended, or `report_every` after
+    /// the last report while it goes on. So every one is reported, once,
+    /// even when a flood stops between reports.
+    fn flush(&mut self, now: Instant, limits: &Limits) -> Option<usize> {
+        let at = self.reported_at?;
+        let locked = self.locked(now).is_some();
+        if locked && now.saturating_duration_since(at) < limits.report_every {
+            return None;
+        }
+        self.reported_at = locked.then_some(now);
+        Some(std::mem::take(&mut self.unreported)).filter(|count| *count > 0)
     }
 
     /// Check `nonce`, from a request signed at `timestamp`, at unix second
@@ -304,9 +452,120 @@ struct Shared {
     jobs: mpsc::Sender<Job>,
     guard: Mutex<Guard>,
     limits: Limits,
-    /// When this run started listening (unix seconds): a request signed
-    /// then or before is refused, as the nonces of the last run are gone.
+    /// When this run started listening (unix seconds), and the time a
+    /// request must be signed after: the later of that and the highest time
+    /// accepted in an earlier run (at most [`MAX_SKEW`] past the start, so a
+    /// clock that was ahead can't lock the website out for long). The
+    /// nonces of the last run are gone, so anything older may be a replay.
     started_at: u64,
+    floor: u64,
+    /// Where the highest time accepted is kept, if anywhere, and that time.
+    mark: Option<PathBuf>,
+    highest: tokio::sync::Mutex<u64>,
+    /// When a mark that couldn't be saved may be logged again.
+    mark_quiet: Mutex<Option<Instant>>,
+}
+
+/// The highest request time an earlier run accepted, from `path`: 0 if there
+/// is none, or if it can't be read (said in the log; the start time still
+/// holds back what came before this run).
+fn load_mark(path: &Path) -> u64 {
+    let text = match crate::config::read_limited_text(path, 64) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
+        Err(e) => {
+            tracing::warn!(
+                "Remote management: the time of the last request can't be read ({e}), so only requests signed before this start are refused"
+            );
+            return 0;
+        }
+    };
+    let text = text.trim();
+    match text.parse::<u64>() {
+        Ok(mark) if !text.is_empty() && text.len() <= 20 && text.bytes().all(|b| b.is_ascii_digit()) => mark,
+        _ => {
+            tracing::warn!(
+                "Remote management: the time of the last request isn't a number, so only requests signed before this start are refused"
+            );
+            0
+        }
+    }
+}
+
+/// Keep `mark` in `path`, readable by the node's user only.
+fn save_mark(path: &Path, mark: u64) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        audit::make_private_dir(dir)?;
+    }
+    crate::config::write_private(path, format!("{mark}\n").as_bytes())
+}
+
+/// The time a request must be signed after, for a run that started at
+/// `started_at` after one that accepted up to `mark`.
+fn floor_of(started_at: u64, mark: u64) -> u64 {
+    started_at.max(mark.min(started_at.saturating_add(MAX_SKEW)))
+}
+
+impl Shared {
+    /// Log `count` bad signatures and send them to the audit log.
+    fn report_failures(&self, count: usize) {
+        tracing::warn!(
+            "Remote management: {count} requests with a bad signature; refusing requests without a valid signature for a minute after each {} (logged again in {} minutes at most)",
+            self.limits.failures,
+            self.limits.report_every.as_secs() / 60
+        );
+        let (reply, _) = oneshot::channel();
+        let _ = self.jobs.try_send(Job { actor: "-".into(), op: Op::AuthFailures { count }, reply });
+    }
+
+    /// Report the bad signatures that are due, if any (see [`Guard::flush`]).
+    fn flush_failures(&self) {
+        let due = self.guard.lock().unwrap_or_else(PoisonError::into_inner).flush(Instant::now(), &self.limits);
+        if let Some(count) = due {
+            self.report_failures(count);
+        }
+    }
+
+    fn new(secret: Secret, jobs: mpsc::Sender<Job>, limits: Limits, started_at: u64, mark: Option<PathBuf>) -> Self {
+        let highest = mark.as_deref().map_or(0, load_mark);
+        Self {
+            secret,
+            jobs,
+            guard: Mutex::new(Guard::default()),
+            limits,
+            started_at,
+            floor: floor_of(started_at, highest),
+            mark,
+            highest: tokio::sync::Mutex::new(highest),
+            mark_quiet: Mutex::new(None),
+        }
+    }
+
+    /// Keep `timestamp` on disk if it is the highest accepted yet, before
+    /// the request is carried out, so it can't be replayed after a restart.
+    /// A mark that can't be saved is logged and the request still goes on:
+    /// the start time holds back what came before a restart all the same,
+    /// and the node must stay manageable (to turn things off) on a full disk.
+    async fn keep_mark(&self, timestamp: u64) {
+        let Some(path) = &self.mark else { return };
+        let mut highest = self.highest.lock().await;
+        if timestamp <= *highest {
+            return;
+        }
+        let path = path.clone();
+        let saved = tokio::task::spawn_blocking(move || save_mark(&path, timestamp)).await;
+        *highest = timestamp;
+        let error = match saved {
+            Ok(Ok(())) => return,
+            Ok(Err(e)) => format!("{e:#}"),
+            Err(e) => e.to_string(),
+        };
+        if log_now(&mut self.mark_quiet.lock().unwrap_or_else(PoisonError::into_inner), Instant::now()) {
+            tracing::warn!(
+                "Remote management: couldn't keep the time of the last request ({error}); more in the next minute aren't logged"
+            );
+        }
+    }
 }
 
 /// The paths there are, and the method each takes.
@@ -514,19 +773,14 @@ fn admit(shared: &Shared, signed: Option<wire::Signed>, write: bool) -> Result<w
         // can reach the port can't lock the website out by sending bad ones.
         // They are still counted while it lasts, so a flood keeps it going.
         let was_locked = guard.locked(now).is_some();
-        let (first, locked) = guard.fail(now, limits);
+        let failure = guard.fail(now, limits);
         let wait = if was_locked { guard.locked(now) } else { None };
         drop(guard);
-        if first {
+        if failure.first {
             tracing::warn!("Remote management: a request with a bad or missing signature (more in the next minute aren't logged)");
         }
-        if locked {
-            tracing::warn!(
-                "Remote management: {} requests with a bad signature in a minute; refusing requests without a valid signature for a minute",
-                limits.failures
-            );
-            let (reply, _) = oneshot::channel();
-            let _ = shared.jobs.try_send(Job { actor: "-".into(), op: Op::AuthFailures { count: limits.failures }, reply });
+        if let Some(count) = failure.report {
+            shared.report_failures(count);
         }
         if let Some(wait) = wait {
             let message = "Too many requests with a bad signature: requests without a valid signature are refused for a minute";
@@ -551,20 +805,28 @@ fn admit(shared: &Shared, signed: Option<wire::Signed>, write: bool) -> Result<w
             &json!({ "error": "clock_skew", "message": message, "node_time": node_time }),
         )));
     }
-    if signed.timestamp <= shared.started_at {
+    if signed.timestamp <= shared.floor {
         let message =
             "This request was signed before the node last started, so it may have been sent before: sign it again with the current time";
         return Err(Box::new(answer(
             signer,
             StatusCode::UNAUTHORIZED,
-            &json!({ "error": "before_start", "message": message, "node_time": node_time, "started_at": shared.started_at }),
+            &json!({
+                "error": "before_start",
+                "message": message,
+                "node_time": node_time,
+                "started_at": shared.started_at,
+                "signed_after": shared.floor,
+            }),
         )));
     }
     match guard.nonce(&signed.nonce, signed.timestamp, node_time, limits) {
         Nonce::Fresh => {}
         Nonce::Seen => {
+            // Not signed: a signed refusal for this nonce could be handed to
+            // the website in place of the real answer, which was carried out.
             return Err(Box::new(error(
-                signer,
+                None,
                 StatusCode::UNAUTHORIZED,
                 "unauthorised",
                 "This request was sent before: each nonce works once",
@@ -591,9 +853,18 @@ fn admit(shared: &Shared, signed: Option<wire::Signed>, write: bool) -> Result<w
     Ok(signed)
 }
 
+/// When a connection's request must be in by, and the flag that says it is
+/// (which lifts that deadline for the answer).
+#[derive(Debug, Clone)]
+struct Arrival {
+    by: Instant,
+    received: Arc<AtomicBool>,
+}
+
 /// Answer one request (see the module docs for the order of checks).
 async fn handle(shared: Arc<Shared>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
+    let arrival = parts.extensions.get::<Arrival>().cloned();
     let Some(route) = Route::find(parts.uri.path()) else {
         return error(None, StatusCode::NOT_FOUND, "not_found", "There's nothing at this path");
     };
@@ -607,13 +878,29 @@ async fn handle(shared: Arc<Shared>, request: Request) -> Response {
     if declared.is_some_and(|length| length > MAX_BODY as u64) {
         return too_large();
     }
-    let Ok(body) = axum::body::to_bytes(body, MAX_BODY).await else { return too_large() };
+    let read = axum::body::to_bytes(body, MAX_BODY);
+    let read = match &arrival {
+        Some(arrival) => tokio::time::timeout_at(arrival.by.into(), read).await.ok(),
+        None => Some(read.await),
+    };
+    let late = arrival.as_ref().is_some_and(|a| Instant::now() >= a.by);
+    let body = match read {
+        Some(Ok(body)) => body,
+        _ if late => {
+            return error(None, StatusCode::REQUEST_TIMEOUT, "request_timeout", "The request has to arrive within 5 seconds of connecting");
+        }
+        _ => return too_large(),
+    };
+    if let Some(arrival) = &arrival {
+        arrival.received.store(true, Ordering::Release);
+    }
     let target = parts.uri.path_and_query().map_or_else(|| parts.uri.path(), |pq| pq.as_str());
     let signed = wire::Signed::parse(&parts.headers).filter(|s| s.verify(&shared.secret, parts.method.as_str(), target, &body));
     let signed = match admit(&shared, signed, route == Route::Settings || route == Route::Restart || route == Route::Rollback) {
         Ok(signed) => signed,
         Err(refused) => return *refused,
     };
+    shared.keep_mark(signed.timestamp).await;
     let signer = Some((&shared.secret, signed.nonce.as_str()));
     let limits = shared.limits;
     let op = match parse_op(route, parts.uri.query(), &parts.headers, &body) {
@@ -635,9 +922,15 @@ async fn handle(shared: Arc<Shared>, request: Request) -> Response {
     }
 }
 
-/// The router for a run that started listening at `started_at` (unix seconds).
-fn router(secret: Secret, jobs: mpsc::Sender<Job>, limits: Limits, started_at: u64) -> Router {
-    let shared = Arc::new(Shared { secret, jobs, guard: Mutex::new(Guard::default()), limits, started_at });
+/// The router for a run that started listening at `started_at` (unix
+/// seconds), keeping the highest request time accepted in `mark`, if given
+/// (for tests, which drive it without a listener).
+#[cfg(test)]
+fn router(secret: Secret, jobs: mpsc::Sender<Job>, limits: Limits, started_at: u64, mark: Option<PathBuf>) -> Router {
+    router_for(Arc::new(Shared::new(secret, jobs, limits, started_at, mark)))
+}
+
+fn router_for(shared: Arc<Shared>) -> Router {
     Router::new().fallback(move |request: Request| handle(shared.clone(), request))
 }
 
@@ -700,16 +993,19 @@ fn log_now(quiet_until: &mut Option<Instant>, now: Instant) -> bool {
     true
 }
 
-/// The management listener's connections: at most so many at once, and so
-/// many from one address (more are closed at once), each closed when its
-/// time is up, so a client that sends slowly or not at all can't hold the
-/// listener, and one address can't take every place.
+/// The management listener's connections: only from the addresses allowed
+/// (if any are given), at most so many at once, and so many from one
+/// address (more are closed at once), each closed when its time is up, so a
+/// client that sends slowly or not at all can't hold the listener, and one
+/// address can't take every place.
 struct Bounded {
     listener: TcpListener,
+    allow: Vec<Network>,
     slots: Arc<Semaphore>,
     peers: Arc<Peers>,
     per_peer: usize,
     lifetime: Duration,
+    request_within: Duration,
     /// When a refused connection may be logged again.
     quiet_until: Option<Instant>,
 }
@@ -720,13 +1016,9 @@ impl Bounded {
             tracing::warn!("Remote management: refused a connection: {why} (more in the next minute aren't logged)");
         }
     }
-}
 
-impl axum::serve::Listener for Bounded {
-    type Io = Deadline;
-    type Addr = SocketAddr;
-
-    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+    /// The next connection that may be served, with when its request must be in by.
+    async fn accept(&mut self) -> (Deadline, Arrival) {
         loop {
             let (tcp, peer) = match self.listener.accept().await {
                 Ok(accepted) => accepted,
@@ -737,6 +1029,12 @@ impl axum::serve::Listener for Bounded {
                 }
             };
             let ip = peer_ip(peer.ip());
+            // Closed before it takes a place or anything is read from it.
+            if !self.allow.is_empty() && !self.allow.iter().any(|network| network.contains(ip)) {
+                drop(tcp);
+                self.refused(format_args!("{ip} isn't in --manage-allow"));
+                continue;
+            }
             let Some(peer_slot) = self.peers.take(ip, self.per_peer) else {
                 let per_peer = self.per_peer;
                 self.refused(format_args!("{ip} has {per_peer} open already"));
@@ -748,21 +1046,24 @@ impl axum::serve::Listener for Bounded {
                 continue;
             };
             let _ = tcp.set_nodelay(true);
+            let now = Instant::now();
+            let arrival = Arrival { by: now + self.request_within, received: Arc::default() };
             let deadline = Box::pin(tokio::time::sleep(self.lifetime));
-            return (Deadline { io: tcp, deadline, _slot: slot, _peer: peer_slot }, peer);
+            let request_by = Box::pin(tokio::time::sleep_until(arrival.by.into()));
+            let io = Deadline { io: tcp, deadline, request_by, received: arrival.received.clone(), _slot: slot, _peer: peer_slot };
+            return (io, arrival);
         }
-    }
-
-    fn local_addr(&self) -> std::io::Result<Self::Addr> {
-        self.listener.local_addr()
     }
 }
 
-/// A connection that fails every read and write once its time is up. Its
-/// places are given back when it is dropped.
+/// A connection that fails every read and write once its time is up, and
+/// every read once its request is late (until it is in). Its places are
+/// given back when it is dropped.
 struct Deadline {
     io: TcpStream,
     deadline: Pin<Box<tokio::time::Sleep>>,
+    request_by: Pin<Box<tokio::time::Sleep>>,
+    received: Arc<AtomicBool>,
     _slot: OwnedSemaphorePermit,
     _peer: PeerSlot,
 }
@@ -771,12 +1072,17 @@ impl Deadline {
     fn expired(&mut self, cx: &mut TaskContext<'_>) -> Option<std::io::Error> {
         self.deadline.as_mut().poll(cx).is_ready().then(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "the connection's time is up"))
     }
+
+    fn late(&mut self, cx: &mut TaskContext<'_>) -> Option<std::io::Error> {
+        (!self.received.load(Ordering::Acquire) && self.request_by.as_mut().poll(cx).is_ready())
+            .then(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "the request didn't arrive in time"))
+    }
 }
 
 impl AsyncRead for Deadline {
     fn poll_read(self: Pin<&mut Self>, cx: &mut TaskContext<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         let this = self.get_mut();
-        if let Some(e) = this.expired(cx) {
+        if let Some(e) = this.expired(cx).or_else(|| this.late(cx)) {
             return Poll::Ready(Err(e));
         }
         Pin::new(&mut this.io).poll_read(cx, buf)
@@ -808,39 +1114,78 @@ impl AsyncWrite for Deadline {
 /// Listen on `listen.address` and serve until the task is stopped. Fails
 /// now if the address can't be used or is a public one, so the node doesn't
 /// start without what was asked. The jobs come out of the receiver, for the
-/// owner loop to run with [`Owner::run`].
-pub async fn serve(listen: Listen) -> Result<(SocketAddr, tokio::task::JoinHandle<()>, mpsc::Receiver<Job>)> {
-    serve_with(listen, Limits::default()).await
+/// owner loop to run with [`Owner::run`]. The highest request time accepted
+/// is kept in the data directory of `paths` (`manage/last-request`).
+pub async fn serve(listen: Listen, paths: &crate::config::Paths) -> Result<(SocketAddr, tokio::task::JoinHandle<()>, mpsc::Receiver<Job>)> {
+    serve_with(listen, Limits::default(), Some(paths.root.join("manage").join(MARK_FILE))).await
 }
 
-async fn serve_with(listen: Listen, limits: Limits) -> Result<(SocketAddr, tokio::task::JoinHandle<()>, mpsc::Receiver<Job>)> {
+/// Serve one connection: HTTP/1.1 only (no HTTP/2, which would carry many
+/// requests on one connection past the limits), one request, then closed.
+async fn serve_connection(io: Deadline, arrival: Arrival, app: Router) {
+    use hyper::service::Service as _;
+    let service = hyper_util::service::TowerToHyperService::new(app);
+    let service = hyper::service::service_fn(move |mut request: hyper::Request<hyper::body::Incoming>| {
+        request.extensions_mut().insert(arrival.clone());
+        service.call(request)
+    });
+    let served =
+        hyper::server::conn::http1::Builder::new().keep_alive(false).serve_connection(hyper_util::rt::TokioIo::new(io), service).await;
+    if let Err(e) = served {
+        tracing::debug!("remote management connection: {e}");
+    }
+}
+
+async fn serve_with(
+    listen: Listen,
+    limits: Limits,
+    mark: Option<PathBuf>,
+) -> Result<(SocketAddr, tokio::task::JoinHandle<()>, mpsc::Receiver<Job>)> {
     let address: SocketAddr =
         listen.address.parse().with_context(|| format!("--manage-listen expects an address like 10.0.0.2:8750, not {}", listen.address))?;
-    if let Some(warning) = check_bind(&address)? {
+    for warning in check_bind(&address)?.into_iter().chain(allow_warning(&listen.allow)) {
         eprintln!("warning: {warning}");
         tracing::warn!("{warning}");
     }
     let listener = TcpListener::bind(address).await.with_context(|| format!("could not listen for remote management on {address}"))?;
     let bound = listener.local_addr()?;
     let (jobs, received) = mpsc::channel(limits.queue);
-    let app = router(listen.secret, jobs, limits, unix_now());
-    let listener = Bounded {
+    let shared = Arc::new(Shared::new(listen.secret, jobs, limits, unix_now(), mark));
+    let app = router_for(shared.clone());
+    let mut listener = Bounded {
         listener,
+        allow: listen.allow,
         slots: Arc::new(Semaphore::new(limits.connections)),
         peers: Arc::default(),
         per_peer: limits.connections_per_peer,
         lifetime: limits.connection_lifetime,
+        request_within: limits.request_within,
         quiet_until: None,
     };
     let task = tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
+        // Bad signatures still owed to the log when a flood stops are
+        // reported within this long.
+        let mut flush = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                (io, arrival) = listener.accept() => {
+                    tokio::spawn(serve_connection(io, arrival, app.clone()));
+                }
+                _ = flush.tick() => shared.flush_failures(),
+            }
+        }
     });
     Ok((bound, task, received))
 }
 
-/// What is printed when the listener is up.
-pub fn started_line(bound: SocketAddr) -> String {
-    format!("Remote management at http://{bound}/manage/v1/ (signed requests only)")
+/// What is printed when the listener is up, with the addresses allowed (if
+/// limited).
+pub fn started_line(bound: SocketAddr, allow: &[Network]) -> String {
+    if allow.is_empty() {
+        return format!("Remote management at http://{bound}/manage/v1/ (signed requests only)");
+    }
+    let from: Vec<String> = allow.iter().map(Network::to_string).collect();
+    format!("Remote management at http://{bound}/manage/v1/ (signed requests only, from {} only)", from.join(", "))
 }
 
 /// The next job for the owner loop, or never if management is off.

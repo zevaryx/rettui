@@ -10,6 +10,7 @@ pub mod doc;
 pub mod history;
 pub mod lora;
 pub mod profiles;
+pub mod redact;
 pub mod schema;
 
 use std::collections::{BTreeMap, BTreeSet};

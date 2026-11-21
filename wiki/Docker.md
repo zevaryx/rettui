@@ -112,9 +112,24 @@ docker compose logs rettui   # the login link (http://127.0.0.1:8740/?token=…)
   `/run/secrets/manage_secret`) to let a website you run change a few
   settings and restart Reticulum, with signed requests. Each needs the
   other, and the container refuses to start without `command: node` ("only
-  works with the node command"). Publish the port only to the network the
-  website is on (for example `"10.200.0.2:8750:8750"` under `ports:`), never
-  to the internet: the node warns that `0.0.0.0` is every address in the
-  container. There is no variable for the secret itself. See
+  works with the node command"). The secret file must be readable by the
+  container's user only (`chmod 600` on the host, owned by `PUID`): one its
+  group or others can read or write stops the node. Without `MANAGE_ALLOW`
+  the node warns at start that any address can hold its connection places. There is no variable for the
+  secret itself.
+
+  Only the website may reach the port, and this is required, not optional:
+  publish it only to the network the website is on (for example
+  `"10.200.0.2:8750:8750"` under `ports:`), never to the internet, and set
+  `MANAGE_ALLOW` to the address the node sees the website's connections come
+  from, or several addresses and networks separated by commas (for example
+  `172.20.0.5` or `172.20.0.5,10.200.0.0/24`; it becomes `--manage-allow`
+  for each, and needs `MANAGE_LISTEN`). Connections from anywhere else are
+  closed before anything is read. Behind a published port, Docker may hand
+  the node its network's gateway address instead of the website's (check
+  the address in the node's "refused a connection" log line): then allow
+  that address and firewall the published port on the host. The node warns
+  that `0.0.0.0` is every address in the container. Only digits, letters
+  a to f, `.`, `:`, `/` and `,` are taken in `MANAGE_ALLOW`. See
   [Hosting a Node](Hosting-a-Node#remote-management).
 - `docker compose down` stops rettui cleanly; it saves on SIGTERM.

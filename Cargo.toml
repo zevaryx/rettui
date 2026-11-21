@@ -59,6 +59,11 @@ ciborium = "0.2"
 rand = "0.8"
 # Web UI (`--web`).
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+# The remote management listener serves HTTP/1.1 only, so it runs hyper's
+# HTTP/1 server itself (axum's serve answers HTTP/2 too, when another crate
+# turns it on). Both are in the tree already through axum.
+hyper = { version = "1.11", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["service", "tokio"] }
 # Web Push (RFC 8291/8292) for the web UI: VAPID keys and message
 # encryption, and HTTPS to the browsers' push services (rustls with bundled
 # roots, so no system certificates or OpenSSL are needed).

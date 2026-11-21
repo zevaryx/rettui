@@ -1827,6 +1827,57 @@ fn optional(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
+/// Whether `c` may not be in a text setting: a control character (C0, DEL
+/// or C1, such as a line break, a tab, an escape or a NUL), one that
+/// overrides or isolates the text's direction (U+202A to U+202E, U+2066 to
+/// U+2069), or an invisible one (zero-width spaces, direction marks, line
+/// and paragraph separators, the byte order mark, Hangul fillers, tag
+/// characters and the like). Names and the hub greeting are announced or
+/// sent to others, and these could break a line, colour a terminal, or make
+/// a name read as another or look empty. The zero-width joiner (U+200D) and
+/// the emoji variation selector (U+FE0F) are kept, as emoji are built with
+/// them.
+pub(crate) fn unsafe_in_text(c: char) -> bool {
+    if matches!(c, '\u{200d}' | '\u{fe0f}') {
+        return false;
+    }
+    c.is_control()
+        || crate::stats::is_invisible(c)
+        || matches!(
+            c,
+            '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{061c}'
+                | '\u{feff}'
+                | '\u{115f}'
+                | '\u{1160}'
+                | '\u{3164}'
+                | '\u{ffa0}'
+                | '\u{fff9}'..='\u{fffb}'
+                | '\u{e0000}'..='\u{e007f}'
+        )
+}
+
+/// Whether `text` shows nothing: only spaces and characters that are kept
+/// but draw nothing on their own (the joiner, the variation selector, the
+/// blank Braille pattern).
+fn blank(text: &str) -> bool {
+    text.chars().all(|c| c.is_whitespace() || matches!(c, '\u{200d}' | '\u{fe0f}' | '\u{2800}'))
+}
+
+/// The control characters a text setting may hold all the same. rngit
+/// access rules are written as in a `.allowed` file: one a line (perhaps
+/// with Windows line ends) or separated by commas, with words separated by
+/// spaces or tabs, and rngit reads them that way.
+fn controls_kept(key: &str) -> &'static [char] {
+    match key {
+        "git_host_access" => &['\n', '\r', '\t'],
+        _ => &[],
+    }
+}
+
 impl Settings {
     /// A setting as text, the way the editors show and edit it (toggles are
     /// `true` / `false`, unset optional values are empty).
@@ -1936,6 +1987,36 @@ impl Settings {
     pub fn set_field(&mut self, key: &str, value: &str) -> Result<(), String> {
         let label = field(key).map_or(key, |f| f.label);
         let fail = |e: String| format!("{label}: {e}");
+        // The greeting keeps a line break as `\n` (how the editors write
+        // one, and what the hub turns back into a line break), so one typed
+        // or pasted as it is, or saved that way by hand, still works.
+        let greeting;
+        let value = if key == "hub_greeting" && value.contains(['\n', '\r']) {
+            greeting = value.trim().replace("\r\n", "\\n").replace(['\n', '\r'], "\\n");
+            greeting.as_str()
+        } else {
+            value
+        };
+        // For every caller (the TUI, the web UI, remote management). Space
+        // around the value is trimmed, as each text setting does. A value
+        // that is what's saved already is kept as it is, so a settings.json
+        // written by hand or by an older version can still be saved again.
+        let kept = controls_kept(key);
+        if field(key).is_some_and(|f| matches!(f.kind, FieldKind::Text | FieldKind::Optional))
+            && value.trim() != self.field_value(key).trim()
+            && value.trim().chars().any(|c| unsafe_in_text(c) && !kept.contains(&c))
+        {
+            return Err(fail(
+                "can't hold control characters (such as a tab or an escape), invisible characters, or characters that change the text's direction".into(),
+            ));
+        }
+        if field(key).is_some_and(|f| matches!(f.kind, FieldKind::Text | FieldKind::Optional))
+            && value.trim() != self.field_value(key).trim()
+            && !value.trim().is_empty()
+            && blank(value.trim())
+        {
+            return Err(fail("can't be only spaces or invisible characters".into()));
+        }
         match key {
             "display_name" => {
                 let name = value.trim();
@@ -2492,6 +2573,139 @@ mod tests {
         assert_eq!(read(r#"{"ignore_unknown_senders": true, "unknown_senders": "requests"}"#), "requests");
         assert_eq!(read("{}"), "show");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn text_settings_refuse_control_and_direction_characters() {
+        let mut settings = Settings::default();
+        let texts: Vec<&str> = FIELDS.iter().filter(|f| matches!(f.kind, FieldKind::Text | FieldKind::Optional)).map(|f| f.key).collect();
+        for key in ["display_name", "hub_greeting", "hub_name", "pn_name", "node_name", "git_host_name"] {
+            assert!(texts.contains(&key), "{key} is a text setting");
+        }
+        for key in &texts {
+            // The greeting keeps line breaks (as \n); rngit rules keep them and tabs.
+            let kept = if *key == "hub_greeting" { &['\n', '\r'][..] } else { controls_kept(key) };
+            for bad in [
+                "A\nB",
+                "A\r\nB",
+                "A\tB",
+                "a\u{1b}[31mred",
+                "nul\0",
+                "del\u{7f}",
+                "c1\u{85}x",
+                "c1\u{9b}31m",
+                "\u{202e}desrever",
+                "a\u{202a}b",
+                "a\u{2066}b\u{2069}",
+            ] {
+                if bad.chars().filter(|c| unsafe_in_text(*c)).all(|c| kept.contains(&c)) {
+                    continue;
+                }
+                let before = settings.field_value(key);
+                let error = settings.set_field(key, bad).unwrap_err();
+                assert!(error.contains("control characters"), "{key} {bad:?}: {error}");
+                assert_eq!(settings.field_value(key), before, "{key} {bad:?} changed it");
+            }
+        }
+        // The pentest's value, as it came.
+        let nasty = "A\nB\r\n\u{1b}[31mRED\u{1b}[0m\u{202e}RTL\0NUL<script>";
+        for key in ["display_name", "hub_greeting"] {
+            assert!(settings.set_field(key, nasty).is_err(), "{key}");
+        }
+        // A line break in the greeting is kept as \n, as the editors write it.
+        settings.set_field("hub_greeting", "Welcome\r\nto the hill\nall \n").unwrap();
+        assert_eq!(settings.hub_greeting.as_deref(), Some(r"Welcome\nto the hill\nall"));
+        assert!(settings.set_field("hub_greeting", "a\nb\tc").is_err(), "a tab is still refused");
+        // What people write is still fine: other scripts, emoji with joiners,
+        // marks of direction, the greeting's \n, and space around the value.
+        for (key, fine) in [
+            ("display_name", "Zoë 🧑‍🤝‍🧑"),
+            ("display_name", "עברית"),
+            ("display_name", "👩\u{200d}💻 ❤\u{fe0f}"),
+            ("hub_name", "日本語"),
+            ("hub_greeting", r"Welcome\nand hello"),
+            ("pn_name", "  Hilltop \n"),
+        ] {
+            settings.set_field(key, fine).unwrap_or_else(|e| panic!("{key} {fine:?}: {e}"));
+        }
+        assert_eq!(settings.pn_name.as_deref(), Some("Hilltop"));
+        // Only text settings: a toggle or number says what it takes.
+        assert!(!settings.set_field("pn_max_peers", "1\n2").unwrap_err().contains("control characters"));
+        assert!(unsafe_in_text('\u{9f}') && !unsafe_in_text('\u{200d}') && !unsafe_in_text('\u{fe0f}') && !unsafe_in_text('é'));
+        // Invisible characters, as the re-test sent them.
+        for c in [
+            '\u{200b}',
+            '\u{200c}',
+            '\u{200e}',
+            '\u{200f}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{061c}',
+            '\u{feff}',
+            '\u{3164}',
+            '\u{115f}',
+            '\u{ffa0}',
+            '\u{fff9}',
+            '\u{fffb}',
+            '\u{e0000}',
+            '\u{e0001}',
+            '\u{e0041}',
+            '\u{e007f}',
+            '\u{ad}',
+            '\u{2060}',
+            '\u{180e}',
+        ] {
+            assert!(unsafe_in_text(c), "{:x}", u32::from(c));
+            let error = settings.set_field("display_name", &format!("Ze{c}v")).unwrap_err();
+            assert!(error.contains("invisible"), "{:x}: {error}", u32::from(c));
+            assert!(settings.set_field("hub_name", &format!("a{c}{c}b")).is_err(), "{:x}", u32::from(c));
+        }
+        // A value that shows nothing.
+        for blank in ["\u{200d}", "\u{fe0f}\u{200d}", "\u{2800}", " \u{2800} \u{200d} ", "\u{3000}\u{200d}"] {
+            let error = settings.set_field("display_name", blank).unwrap_err();
+            assert!(error.contains("only spaces or invisible"), "{blank:?}: {error}");
+            assert!(settings.set_field("pn_name", blank).is_err(), "{blank:?}");
+        }
+        settings.set_field("display_name", "\u{2800}Zev").unwrap();
+        // Empty clears an optional one, as before.
+        settings.set_field("pn_name", "   ").unwrap();
+        assert_eq!(settings.pn_name, None);
+        // A value saved already (by hand, or by an older version) can be saved again unchanged.
+        let mut old = Settings { voice_recorder: Some("rec\t-q".into()), ..Settings::default() };
+        old.set_field("voice_recorder", "rec\t-q").unwrap();
+        assert!(old.set_field("voice_recorder", "rec\t-r").is_err(), "but not changed to another");
+    }
+
+    /// rngit access rules saved one a line (as in a `.allowed` file), with
+    /// Windows line ends and tabs, still load, read as the same rules, can
+    /// be saved again from the editors and edited, as before.
+    #[test]
+    fn multi_line_rngit_access_rules_load_and_work_as_before() {
+        let dir = std::env::temp_dir().join(format!("rettui-git-access-lines-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let id = "ab".repeat(16);
+        let rules = format!("r:all\r\nrw\tp:{id}\n");
+        fs::write(&path, serde_json::json!({ "git_host_access": rules }).to_string()).unwrap();
+        let mut settings = Settings::load(&path).unwrap();
+        assert_eq!(settings.git_host_access.as_deref(), Some(rules.as_str()));
+        assert_eq!(rngit::server::Rule::parse(&settings.field_value("git_host_access")).len(), 2);
+        // Saved again as the editor shows it, then edited with lines and tabs.
+        let shown = settings.field_value("git_host_access");
+        settings.set_field("git_host_access", &shown).unwrap();
+        let edited = format!("r:all\nr\tw:{id}");
+        settings.set_field("git_host_access", &edited).unwrap();
+        assert_eq!(settings.git_host_access.as_deref(), Some(edited.as_str()));
+        assert_eq!(rngit::server::Rule::parse(settings.git_host_access.as_deref().unwrap()).len(), 2);
+        // Other control characters are still refused, and so is a bad rule.
+        assert!(settings.set_field("git_host_access", "r:all\u{1b}[31m").unwrap_err().contains("control characters"));
+        assert!(settings.set_field("git_host_access", "r:all\nnonsense").is_err());
+        // Other settings change beside it, and it survives a save and a load.
+        settings.set_field("display_name", "Hilltop").unwrap();
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().git_host_access.as_deref(), Some(edited.as_str()));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

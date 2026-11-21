@@ -89,6 +89,11 @@ pub struct NodeArgs {
     /// Not saved.
     #[arg(long, value_name = "PATH", requires = "manage_listen")]
     pub manage_secret_file: Option<std::path::PathBuf>,
+    /// Take management connections only from this address or network (as
+    /// 10.0.0.5 or 10.0.0.0/24), the website's. Give it once for each; any
+    /// other is closed before anything is read. Not saved.
+    #[arg(long, value_name = "ADDRESS", requires = "manage_listen", value_parser = crate::remote_manage::Network::parse)]
+    pub manage_allow: Vec<crate::remote_manage::Network>,
 }
 
 /// The variables that stand for the node's flags (not `--stats-listen`, which is for one run).
@@ -490,7 +495,11 @@ pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args:
             if let Ok(address) = address.parse() {
                 crate::remote_manage::check_bind(&address)?;
             }
-            Some(crate::remote_manage::Listen { address: address.clone(), secret: crate::remote_manage::load_secret(file)? })
+            Some(crate::remote_manage::Listen {
+                address: address.clone(),
+                secret: crate::remote_manage::load_secret(file)?,
+                allow: args.manage_allow.clone(),
+            })
         }
         _ => None,
     };
@@ -575,8 +584,9 @@ pub(crate) async fn serve(
     };
     let (manage_server, mut manage_jobs, mut owner) = match manage {
         Some(listen) => {
-            let (bound, task, jobs) = crate::remote_manage::serve(listen).await?;
-            println!("{}", crate::remote_manage::started_line(bound));
+            let allow = listen.allow.clone();
+            let (bound, task, jobs) = crate::remote_manage::serve(listen, &paths).await?;
+            println!("{}", crate::remote_manage::started_line(bound, &allow));
             (Some(task), Some(jobs), Some(crate::remote_manage::Owner::new(&paths)))
         }
         None => (None, None, None),
@@ -1194,7 +1204,8 @@ mod tests {
         let paths = Paths::new(Some(dir.join("data"))).unwrap();
         let identity = crate::config::load_identity(&paths.identity).unwrap();
         let file = dir.join("secret");
-        std::fs::write(&file, "too short to be a secret\n").unwrap();
+        let write = |text: &str| crate::config::write_private(&file, text.as_bytes()).unwrap();
+        write("too short to be a secret\n");
         let args = NodeArgs { manage_listen: Some("127.0.0.1:0".into()), manage_secret_file: Some(file.clone()), ..NodeArgs::default() };
         let run = |args: NodeArgs| {
             let (paths, identity) = (paths.clone(), identity.clone());
@@ -1207,7 +1218,7 @@ mod tests {
         let message = format!("{:#}", run(args.clone()).unwrap_err());
         assert!(message.contains("--manage-secret-file") && message.contains("at least 32") && !message.contains("too short"), "{message}");
         // A public address is refused too, before anything is set up.
-        std::fs::write(&file, "a-manage-secret-long-enough-0123456789").unwrap();
+        write("a-manage-secret-long-enough-0123456789");
         let public = NodeArgs { manage_listen: Some("8.8.8.8:8750".into()), ..args.clone() };
         assert!(format!("{:#}", run(public).unwrap_err()).contains("refuses a public address"));
         // The stats token can't be the manage secret too; the error doesn't repeat either.
@@ -1216,6 +1227,15 @@ mod tests {
         let shared = NodeArgs { stats_listen: Some("127.0.0.1:0".into()), stats_token_file: Some(token.clone()), ..args.clone() };
         let message = format!("{:#}", run(shared).unwrap_err());
         assert!(message.contains("same text as the stats token") && !message.contains("long-enough"), "{message}");
+        // A secret its group or others can read is refused, saying how to fix it.
+        #[cfg(unix)]
+        for mode in [0o640, 0o604, 0o644] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+            let message = format!("{:#}", run(args.clone()).unwrap_err());
+            assert!(message.contains("can be read or changed by other users") && message.contains("chmod 600"), "{mode:o}: {message}");
+            assert!(!message.contains("long-enough"), "{message}");
+        }
         assert!(!paths.settings.exists(), "the node changed its settings before refusing");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1231,6 +1251,7 @@ mod tests {
         let manage = |secret: &str| crate::remote_manage::Listen {
             address: "127.0.0.1:0".into(),
             secret: crate::remote_manage::Secret::parse(secret).unwrap(),
+            allow: vec![],
         };
         let same = check_secrets_differ(Some(&stats(MANAGE_SECRET)), Some(&manage(MANAGE_SECRET))).unwrap_err().to_string();
         assert!(same.contains("same text as the stats token") && !same.contains(MANAGE_SECRET), "{same}");
@@ -1296,6 +1317,7 @@ mod tests {
             let listen = crate::remote_manage::Listen {
                 address: format!("127.0.0.1:{port}"),
                 secret: crate::remote_manage::Secret::parse(MANAGE_SECRET).unwrap(),
+                allow: vec![crate::remote_manage::Network::parse("127.0.0.0/8").unwrap()],
             };
             let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
             let settings_file = paths.settings.clone();
@@ -1342,6 +1364,9 @@ mod tests {
             assert_eq!(Settings::load(&settings_file).unwrap().pn_name.as_deref(), Some("Managed"));
             let saved = std::fs::read_to_string(root.join("data/manage/audit.jsonl")).unwrap();
             assert!(saved.contains("\"actor\":\"alice\"") && !saved.contains(MANAGE_SECRET), "{saved}");
+            // The time of the last request is kept for the next run.
+            let mark: u64 = std::fs::read_to_string(root.join("data/manage/last-request")).unwrap().trim().parse().unwrap();
+            assert!(mark.abs_diff(crate::remote_manage::unix_now()) < 60, "{mark}");
             let _ = std::fs::remove_dir_all(&dir);
             return;
         }

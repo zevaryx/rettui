@@ -6403,6 +6403,8 @@ dependencies = [
  "hex",
  "hkdf 0.12.4",
  "hmac 0.12.1",
+ "hyper",
+ "hyper-util",
  "image",
  "jiff",
  "jni 0.19.0",

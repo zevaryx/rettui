@@ -137,7 +137,7 @@ rettui --web [ADDRESS] --stats-listen ADDRESS           # also a read-only stats
 rettui node --stats-listen ADDRESS                      # the same, for a node with no UI
 rettui node --stats-listen ADDRESS --stats-token-file PATH   # and a peer list for whoever has the token (or RETTUI_STATS_TOKEN)
 rettui node --stats-listen ADDRESS --stats-token-file PATH --stats-logs   # and the end of the log at /logs, for the token
-rettui node --manage-listen ADDRESS --manage-secret-file PATH   # let your website change a few settings and restart Reticulum, with signed requests (see Hosting a Node)
+rettui node --manage-listen ADDRESS --manage-secret-file PATH --manage-allow WEBSITE   # let your website change a few settings and restart Reticulum, with signed requests (see Hosting a Node)
 rettui fetch <hash>[:/page/x.mu] [--raw] [--identify] [-o FILE]
 rettui send <address> "text" [-a FILE]... [--mode auto|direct|propagated|paper]  # address or lxma:// link
 rettui listen [--seconds N]  # announce, then print incoming messages
@@ -167,12 +167,20 @@ Reticulum config.
 `rettui node` only, not saved) lets a website you run manage the node: read
 its state, change a short list of settings, turn services off (never on),
 restart Reticulum and roll a settings change back, each request signed with
-the secret in the file, which must not be the stats token. The address must
-be a loopback or private one (`0.0.0.0` and `::` with a warning); a public
-one stops the node at start. Firewall the port so only the website can
-connect: anyone else who reaches it can keep the website out while they keep
-connecting. A replayed request is refused, but one held back on the way can
-still arrive up to 5 minutes late, so keep the link private. See
+the secret in the file, which must not be the stats token and must be
+readable by you only (on Linux and macOS a file its group or others can read
+or write stops the node: `chmod 600` it). The address must be a loopback or private
+one (`0.0.0.0` and `::` with a warning); a public one stops the node at
+start. Only the website may reach the port, and this is required: give
+`--manage-allow ADDRESS` with the website's address or network (such as
+`10.200.0.1` or `10.200.0.0/24`; once for each, not saved), firewall the
+port, or both. With `--manage-allow`, connections from any other address are
+closed before anything is read; without it, every address may connect (the
+node warns at start), and anyone who reaches the port can keep the website
+out while they keep connecting. The listener speaks HTTP/1.1 only, and a request must arrive
+whole within 5 seconds of connecting. A replayed request is refused, also
+after a restart, but one held back on the way can still arrive up to 5
+minutes late, so keep the link private. See
 [Hosting a Node](Hosting-a-Node#remote-management).
 
 `path` and `probe` take any destination's address: an LXMF address, a

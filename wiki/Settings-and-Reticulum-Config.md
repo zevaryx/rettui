@@ -15,7 +15,19 @@ of the Reticulum instance it uses. Where files are kept is in
   `←` `→`) moves between them. In the web UI, a group with changes not yet
   saved is marked •; *Save* saves them all, whichever group they're in.
   Values are checked before saving, and most changes apply straight away (the
-  editor says which ones wait for the next start).
+  editor says which ones wait for the next start). Text settings (names, the
+  hub greeting, paths and commands) can't hold control characters, such as a
+  line break, a tab or an escape, invisible characters (zero-width spaces,
+  direction marks, Hangul fillers, tag characters and the like), or
+  characters that change the text's direction, and can't be made only of
+  spaces and characters that show nothing: names and the greeting are
+  announced or sent to others. The zero-width joiner and the emoji
+  variation selector are fine, so emoji work (flags of regions such as
+  England's, made with tag characters, don't). A line
+  break in the hub greeting is kept as `\n` (how you write one), and rngit
+  access rules may be one a line, with tabs between words, as in a
+  `.allowed` file. A value already in `settings.json` (written by hand, or by
+  an older version) is kept, and can be saved again as it is.
 - **What the web UI can't change:** the Reticulum config directory and the
   node folder, *Script PATH* (where page scripts look for programs), *Who may
   send files* and *Received files folder* (for rncp), nor

@@ -80,6 +80,38 @@ pub fn revision(settings: &Settings) -> String {
     hex::encode(&hash.finalize()[..16])
 }
 
+/// The least `pn_storage_mb` a remote change may set: a smaller store can
+/// make the propagation node drop messages it holds, which a rollback
+/// doesn't bring back.
+pub const MIN_REMOTE_STORAGE_MB: u64 = 32;
+/// The most detailed `log_level` a remote change may set: `trace` can
+/// record peer addresses and message details.
+pub const MAX_REMOTE_LOG_LEVEL: &str = "debug";
+
+/// Why a value the setting itself takes is still refused remotely (only
+/// the terminal may set it), if it is.
+fn remote_limit(key: &str, before: &Settings, after: &Settings) -> Option<String> {
+    match key {
+        "log_level" if after.log_level == "trace" => Some(format!(
+            "Log level can be set to {MAX_REMOTE_LOG_LEVEL} at most remotely: trace can record peer addresses and message details, so set it in the terminal"
+        )),
+        "pn_max_peers" if after.pn_max_peers == 0 => Some(
+            "Propagation peers can't be set to 0 remotely: the node would stop passing messages on to other propagation nodes, so set it in the terminal"
+                .to_string(),
+        ),
+        "pn_storage_mb" if after.pn_storage_mb < MIN_REMOTE_STORAGE_MB => Some(format!(
+            "Propagation storage can be set to {MIN_REMOTE_STORAGE_MB} MB at least remotely: less can make the node drop messages it holds, so set it in the terminal"
+        )),
+        // A big cut can drop much of what is stored, which a rollback doesn't bring back.
+        "pn_storage_mb" if after.pn_storage_mb.saturating_mul(2) < before.pn_storage_mb => Some(format!(
+            "Propagation storage can be cut to half of what it is at most remotely (from {} MB to {} MB): a bigger cut can make the node drop messages it holds, so make it in the terminal",
+            before.pn_storage_mb,
+            before.pn_storage_mb.div_ceil(2)
+        )),
+        _ => None,
+    }
+}
+
 /// Why a change was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
@@ -92,8 +124,11 @@ pub enum Refusal {
 }
 
 /// Check `changes` against `before` (the settings as saved): every key is on
-/// the list, every value is one its setting takes, and no service is turned
-/// on. The managed settings that would change, with their old and new values.
+/// the list, every value is one its setting takes, no service is turned on,
+/// and no value goes past what may be set remotely ([`MAX_REMOTE_LOG_LEVEL`],
+/// [`MIN_REMOTE_STORAGE_MB`] and no less than half the storage there is, at
+/// least one propagation peer). The managed
+/// settings that would change, with their old and new values.
 pub fn check(before: &Settings, changes: &[(&str, &str)]) -> Result<Vec<Change>, Refusal> {
     let mut after = before.clone();
     for (key, value) in changes {
@@ -118,6 +153,9 @@ pub fn check(before: &Settings, changes: &[(&str, &str)]) -> Result<Vec<Change>,
                 key: key.to_string(),
                 message: format!("{label} can only be turned on in the terminal: a service turned on remotely could expose data"),
             });
+        }
+        if let Some(message) = remote_limit(key, before, &after) {
+            return Err(Refusal::NotAllowed { key: key.to_string(), message });
         }
         applied.push(Change { key: key.to_string(), from, to });
     }
@@ -247,6 +285,52 @@ mod tests {
             // On when it is on already changes nothing either.
             assert_eq!(check(&on, &[(key, "true")]), Err(Refusal::NoChange));
         }
+    }
+
+    #[test]
+    fn remote_changes_stop_at_debug_and_keep_the_propagation_node_whole() {
+        let before = Settings::default();
+        let refused = |changes: &[(&str, &str)]| match check(&before, changes) {
+            Err(Refusal::NotAllowed { key, message }) => (key, message),
+            other => panic!("{changes:?}: {other:?}"),
+        };
+        let (key, message) = refused(&[("log_level", "trace")]);
+        assert_eq!(key, "log_level");
+        assert!(message.contains("debug at most") && message.contains("terminal"), "{message}");
+        let (key, message) = refused(&[("pn_name", "Fine"), ("pn_max_peers", "0")]);
+        assert_eq!(key, "pn_max_peers");
+        assert!(message.contains("can't be set to 0 remotely"), "{message}");
+        for small in ["1", "31"] {
+            let (key, message) = refused(&[("pn_storage_mb", small)]);
+            assert_eq!(key, "pn_storage_mb");
+            assert!(message.contains("32 MB at least"), "{message}");
+        }
+        // A cut to less than half the storage there is, too, however big.
+        assert_eq!(before.pn_storage_mb, 500);
+        let (key, message) = refused(&[("pn_storage_mb", "249")]);
+        assert_eq!(key, "pn_storage_mb");
+        assert!(message.contains("half") && message.contains("from 500 MB to 250 MB") && message.contains("terminal"), "{message}");
+        assert_eq!(check(&before, &[("pn_storage_mb", "250")]).unwrap()[0].to, "250");
+        assert_eq!(check(&before, &[("pn_storage_mb", "100000")]).unwrap()[0].to, "100000", "a raise is fine");
+        let big = Settings { pn_storage_mb: 100_000, ..Settings::default() };
+        assert!(matches!(check(&big, &[("pn_storage_mb", "500")]), Err(Refusal::NotAllowed { .. })));
+        let odd = Settings { pn_storage_mb: 41, ..Settings::default() };
+        assert!(check(&odd, &[("pn_storage_mb", "21")]).is_err(), "under 32 all the same");
+        assert_eq!(check(&Settings { pn_storage_mb: 63, ..Settings::default() }, &[("pn_storage_mb", "32")]).unwrap()[0].to, "32");
+        // Up to the limits is fine.
+        assert_eq!(check(&before, &[("log_level", "debug")]).unwrap()[0].to, "debug");
+        assert_eq!(check(&before, &[("pn_max_peers", "1")]).unwrap()[0].to, "1");
+        let small = Settings { pn_storage_mb: 64, ..Settings::default() };
+        assert_eq!(check(&small, &[("pn_storage_mb", "32")]).unwrap()[0].to, "32");
+        // The terminal can still set them; a value set there already isn't
+        // refused when something else changes remotely.
+        let mut terminal = Settings::default();
+        for (key, value) in [("log_level", "trace"), ("pn_max_peers", "0"), ("pn_storage_mb", "1")] {
+            terminal.set_field(key, value).unwrap();
+        }
+        assert_eq!(check(&terminal, &[("pn_name", "Hilltop")]).unwrap().len(), 1);
+        // Down from trace is fine.
+        assert_eq!(check(&terminal, &[("log_level", "info")]).unwrap()[0].from, "trace");
     }
 
     #[test]

@@ -14,7 +14,7 @@ enum Kind {
 }
 
 /// The text before a `#` that is not inside quotes.
-fn strip_comment(line: &str) -> &str {
+pub(crate) fn strip_comment(line: &str) -> &str {
     let mut quote: Option<char> = None;
     for (i, c) in line.char_indices() {
         match (quote, c) {
@@ -27,7 +27,7 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
-fn unquote(text: &str) -> String {
+pub(crate) fn unquote(text: &str) -> String {
     let text = text.trim();
     for q in ['"', '\''] {
         if text.len() >= 2 && text.starts_with(q) && text.ends_with(q) {

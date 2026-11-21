@@ -25,6 +25,9 @@ const MAX_REFUSED_VALUE: usize = 256;
 /// How long an `auth_failures` entry takes in more bursts, in seconds.
 const AUTH_FAILURES_WITHIN: u64 = 3600;
 const AUTH_FAILURES: &str = "auth_failures";
+/// The most bytes a value takes in an `/audit` answer, as JSON. A rollback
+/// reads the whole value from the log, not from the answer.
+const MAX_PAGE_VALUE: usize = 200;
 
 /// One setting changed: its key, and its value before and after, as the
 /// settings editors show them.
@@ -238,6 +241,31 @@ impl Audit {
         (page, more)
     }
 
+    /// Like [`Audit::page`], for an answer: each value cut to
+    /// [`MAX_PAGE_VALUE`] bytes of JSON, and no more entries than fit in
+    /// `max_bytes` of JSON (at least one, which is well under it), so a few
+    /// long greetings can't make a page bigger than a website takes. Whether
+    /// there are older ones still, including those that didn't fit.
+    pub fn page_within(&self, before: Option<u64>, limit: usize, max_bytes: usize) -> (Vec<Entry>, bool) {
+        let (entries, more) = self.page(before, limit);
+        let mut page = Vec::with_capacity(entries.len());
+        let mut used = 0;
+        for entry in entries {
+            let mut shown = entry.clone();
+            for change in &mut shown.changes {
+                change.from = cut_json(&change.from, MAX_PAGE_VALUE);
+                change.to = cut_json(&change.to, MAX_PAGE_VALUE);
+            }
+            let size = serde_json::to_string(&shown).map_or(max_bytes, |line| line.len() + 1);
+            if !page.is_empty() && used + size > max_bytes {
+                return (page, true);
+            }
+            used += size;
+            page.push(shown);
+        }
+        (page, more)
+    }
+
     /// The settings change (or rollback) with this id that was applied.
     pub fn applied_change(&self, id: &str) -> Option<&Entry> {
         self.entries
@@ -253,6 +281,33 @@ impl Audit {
     }
 }
 
+/// How many bytes `c` takes in a JSON string (as serde_json writes it).
+fn json_len(c: char) -> usize {
+    match c {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        c if u32::from(c) < 0x20 => 6,
+        c => c.len_utf8(),
+    }
+}
+
+/// `text`, cut (with an ellipsis) to take at most `max` bytes in a JSON string.
+fn cut_json(text: &str, max: usize) -> String {
+    if text.chars().map(json_len).sum::<usize>() <= max {
+        return text.to_string();
+    }
+    let room = max.saturating_sub('…'.len_utf8());
+    let mut used = 0;
+    let mut cut: String = text
+        .chars()
+        .take_while(|c| {
+            used += json_len(*c);
+            used <= room
+        })
+        .collect();
+    cut.push('…');
+    cut
+}
+
 fn line_of(entry: &Entry) -> Result<String, String> {
     serde_json::to_string(entry).map(|line| line + "\n").map_err(|e| format!("the audit entry couldn't be written: {e}"))
 }
@@ -264,7 +319,7 @@ fn auth_failures_text(count: u64) -> String {
 }
 
 /// Make `dir`, readable by its owner only (on Unix), as the data directory is.
-fn make_private_dir(dir: &Path) -> std::io::Result<()> {
+pub(super) fn make_private_dir(dir: &Path) -> std::io::Result<()> {
     if !dir.is_dir() {
         std::fs::create_dir_all(dir)?;
         #[cfg(unix)]
@@ -458,6 +513,62 @@ mod tests {
         let entry = audit.record(record("o", Outcome::Ok, vec![change("hub_greeting", "old", &long)]), 1).unwrap();
         assert_eq!(entry.changes[0].to, long);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_page_for_an_answer_is_kept_to_a_byte_budget() {
+        let dir = test_dir("budget");
+        let mut audit = Audit::load(dir.join("audit.jsonl"));
+        // Long greetings saved over and over: each entry keeps them whole.
+        let long = "g".repeat(4096);
+        for n in 0..50 {
+            audit.record(record(&format!("{n:016x}"), Outcome::Ok, vec![change("hub_greeting", &long, &long)]), n).unwrap();
+        }
+        let whole = serde_json::to_string(&audit.page(None, 50).0).unwrap();
+        assert!(whole.len() > 64 * 1024, "the page as kept is too big for a website: {}", whole.len());
+        let (page, more) = audit.page_within(None, 50, 48 * 1024);
+        let shown = serde_json::to_string(&page).unwrap();
+        assert!(shown.len() <= 48 * 1024, "{}", shown.len());
+        assert!(page.len() == 50 && !more, "cut values make all 50 fit: {}", page.len());
+        assert!(page.iter().all(|e| e.changes.iter().all(|c| c.to.len() <= MAX_PAGE_VALUE && c.to.ends_with('…'))));
+        // The log itself keeps the whole value, for a rollback.
+        assert_eq!(audit.applied_change(&format!("{:016x}", 3)).unwrap().changes[0].from, long);
+        // Too many to fit: fewer, newest first, and `more` says so; the next page goes on from there.
+        let (page, more) = audit.page_within(None, 50, 8 * 1024);
+        assert!(more && !page.is_empty() && page.len() < 50, "{}", page.len());
+        assert!(serde_json::to_string(&page).unwrap().len() <= 8 * 1024);
+        let last = page.last().unwrap().seq;
+        let (next, _) = audit.page_within(Some(last), 50, 8 * 1024);
+        assert_eq!(next[0].seq, last - 1);
+        // One entry is always given, even over the budget.
+        assert_eq!(audit.page_within(None, 50, 10).0.len(), 1);
+        // The end of the log: no more.
+        assert_eq!(audit.page_within(Some(2), 50, 48 * 1024), (vec![page_entry(&audit, 1)], false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn page_entry(audit: &Audit, seq: u64) -> Entry {
+        let mut entry = audit.page(Some(seq + 1), 1).0[0].clone();
+        for change in &mut entry.changes {
+            change.from = cut_json(&change.from, MAX_PAGE_VALUE);
+            change.to = cut_json(&change.to, MAX_PAGE_VALUE);
+        }
+        entry
+    }
+
+    #[test]
+    fn values_are_cut_by_their_size_in_json() {
+        assert_eq!(cut_json("short", 200), "short");
+        assert_eq!(cut_json("", 0), "");
+        let cut = cut_json(&"a".repeat(300), 200);
+        assert_eq!((cut.len(), cut.ends_with('…')), (200, true));
+        // Escapes count as what they take in JSON.
+        for text in ["\u{1}".repeat(300), "\"".repeat(300), "é".repeat(300), "😀".repeat(300)] {
+            let cut = cut_json(&text, 200);
+            let json = serde_json::to_string(&cut).unwrap();
+            assert!(json.len() - 2 <= 200, "{} for {:?}", json.len(), &text[..4]);
+            assert!(cut.ends_with('…'));
+        }
     }
 
     #[test]

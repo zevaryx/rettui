@@ -439,6 +439,34 @@ mod tests {
     use super::*;
     use crate::store::Store;
 
+    /// A settings.json with rngit access rules one a line, and a greeting
+    /// with real line breaks (both written by hand), works as before: the
+    /// app starts with them, other settings can be changed beside them, and
+    /// the terminal's editor can save them again, as they are or edited.
+    #[test]
+    fn hand_written_line_breaks_in_settings_still_work() {
+        let dir = std::env::temp_dir().join(format!("rettui-settings-lines-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rules = format!("r:all\r\nrw\tp:{}\n", "ab".repeat(16));
+        let settings = Settings { git_host_access: Some(rules.clone()), hub_greeting: Some("Hello\nthere".into()), ..Settings::default() };
+        let mut app = crate::app::test_app(&dir, settings, Store::default());
+        assert_eq!(app.saved_settings().unwrap().git_host_access.as_deref(), Some(rules.as_str()));
+        app.update_settings(&[("display_name", "Hilltop")]).unwrap();
+        assert_eq!(app.saved_settings().unwrap().git_host_access.as_deref(), Some(rules.as_str()));
+        // Saved again from the editor, unchanged, then edited.
+        let shown = app.settings.field_value("git_host_access");
+        app.update_settings(&[("git_host_access", shown.as_str())]).unwrap();
+        let edited = format!("r:all\nr\tw:{}", "cd".repeat(16));
+        app.update_settings(&[("git_host_access", edited.as_str())]).unwrap();
+        assert_eq!(app.settings.git_host_access.as_deref(), Some(edited.as_str()), "the running app has it");
+        let greeting = app.settings.field_value("hub_greeting");
+        app.update_settings(&[("hub_greeting", greeting.as_str())]).unwrap();
+        app.update_settings(&[("hub_greeting", "Hello\nagain")]).unwrap();
+        assert_eq!(app.saved_settings().unwrap().hub_greeting.as_deref(), Some(r"Hello\nagain"));
+        assert!(app.update_settings(&[("hub_name", "a\nb")]).is_err(), "a name still can't hold one");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A setting that says it applies now is the running app's at once,
     /// not only settings.json's (as Location and Map tiles once weren't).
     #[test]
