@@ -23,6 +23,9 @@ rns-crypto = { path = "deps/rsReticulum/crates/rns-crypto" }
 rns-transport = { path = "deps/rsReticulum/crates/rns-transport" }
 # A packet's hash, to ask how it was heard.
 rns-wire = { path = "deps/rsReticulum/crates/rns-wire" }
+# HDLC and KISS framing, for the self-test of a config change made from
+# afar (already built as part of rns-runtime).
+rns-interface = { path = "deps/rsReticulum/crates/rns-interface" }
 lxmf-core = { path = "deps/rsLXMF/crates/lxmf-core" }
 # Hosting an RRC hub: rsRRCD's hub logic (it expects rsReticulum and rsRRC
 # as its siblings), and the YAML its configuration file is written in.

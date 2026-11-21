@@ -12,7 +12,8 @@
 //! config too ([`rnsedit`]: Transport node, and an interface's `enabled`,
 //! mode, announce cap, bitrate and ingress control), on probation: the
 //! website must confirm the change (`/confirm`) once Reticulum is back with
-//! it, or the node puts the old text back by itself, as it does at the next
+//! it and answers a test request on each listener it has to keep
+//! ([`selftest`]), or the node puts the old text back by itself, as it does at the next
 //! start if it stopped meanwhile (see [`pending`]). It can't run programs,
 //! read or change keys, or change any other part of the Reticulum config,
 //! nor an interface that runs a program. Requests are checked in this order:
@@ -40,6 +41,7 @@ pub mod fields;
 mod owner;
 pub(crate) mod pending;
 mod rnsedit;
+pub(crate) mod selftest;
 pub(crate) mod wire;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -66,6 +68,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use zeroize::Zeroizing;
 
 pub use owner::Owner;
+#[cfg(test)]
+pub(crate) use owner::Timing;
 pub use pending::recover;
 pub use rnsedit::{MAX_RNS_CHANGES, RnsChange};
 pub use wire::Secret;

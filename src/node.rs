@@ -533,7 +533,22 @@ pub async fn run(mut settings: Settings, paths: Paths, identity: Identity, args:
     for line in exposed_services(&settings) {
         println!("{line}");
     }
-    serve(settings, paths, identity, stop, STATUS_EVERY, Listeners { stats, manage, recovered: true }, |_| {}).await
+    serve(
+        settings,
+        paths,
+        identity,
+        stop,
+        STATUS_EVERY,
+        Listeners {
+            stats,
+            manage,
+            recovered: true,
+            #[cfg(test)]
+            tuning: None,
+        },
+        |_| {},
+    )
+    .await
 }
 
 /// Refuse a manage secret that is the stats token too. The stats token is
@@ -559,6 +574,9 @@ pub(crate) struct Listeners<'a> {
     pub stats: Option<crate::stats::Listen<'a>>,
     pub manage: Option<crate::remote_manage::Listen>,
     pub recovered: bool,
+    /// Shorter timings, and other self-test probes, for remote management.
+    #[cfg(test)]
+    pub tuning: Option<(crate::remote_manage::Timing, crate::remote_manage::selftest::Prober)>,
 }
 
 /// The node, until `stop`: what the web UI runs, without its HTTP server.
@@ -575,7 +593,9 @@ pub(crate) async fn serve(
     listeners: Listeners<'_>,
     stopping: impl FnOnce(&mut App),
 ) -> Result<()> {
-    let Listeners { stats, manage, recovered } = listeners;
+    let Listeners { stats, manage, recovered, .. } = listeners;
+    #[cfg(test)]
+    let tuning = listeners.tuning;
     // Before Reticulum starts: a config change from afar left unconfirmed
     // by the last run is put back (whether or not management is on now).
     if !recovered {
@@ -616,7 +636,13 @@ pub(crate) async fn serve(
                     "warning: remote management may turn interfaces and transport on (--manage-allow-enable): whoever holds the manage secret can open this node to others"
                 );
             }
-            (Some(task), Some(jobs), Some(crate::remote_manage::Owner::new(&paths).allow_enable(allow_enable)))
+            let owner = crate::remote_manage::Owner::new(&paths).allow_enable(allow_enable);
+            #[cfg(test)]
+            let owner = match tuning {
+                Some((timing, prober)) => owner.tuned(timing, prober),
+                None => owner,
+            };
+            (Some(task), Some(jobs), Some(owner))
         }
         None => (None, None, None),
     };
@@ -1187,8 +1213,10 @@ mod tests {
         let dir = test_dir("bad-stats");
         let paths = Paths::new(Some(dir.join("data"))).unwrap();
         let identity = crate::config::load_identity(&paths.identity).unwrap();
+        // Its own Reticulum config folder, not the one in the home folder.
+        let settings = Settings { rns_config: Some(dir.join("rns").display().to_string()), ..Settings::default() };
         let result = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(serve(
-            Settings::default(),
+            settings,
             paths,
             identity,
             std::future::pending::<()>(),
@@ -1197,6 +1225,7 @@ mod tests {
                 stats: Some(crate::stats::Listen { address: "not an address", token: None, logs: false }),
                 manage: None,
                 recovered: false,
+                ..Default::default()
             },
             |_| {},
         ));
@@ -1365,7 +1394,7 @@ mod tests {
                         let _ = stop_rx.await;
                     },
                     Duration::from_secs(60),
-                    Listeners { stats: None, manage: Some(listen), recovered: false },
+                    Listeners { stats: None, manage: Some(listen), recovered: false, ..Default::default() },
                     |_| {},
                 ))
             });
@@ -1420,6 +1449,14 @@ mod tests {
         /// Reticulum config directory is `root/rns`, and wait until its
         /// listener answers: `None` if it doesn't (a port taken meanwhile).
         fn start(root: &std::path::Path) -> Option<Self> {
+            Self::start_tuned(root, None)
+        }
+
+        /// [`Managed::start`], with remote management's timings and self-test probes.
+        fn start_tuned(
+            root: &std::path::Path,
+            tuning: Option<(crate::remote_manage::Timing, crate::remote_manage::selftest::Prober)>,
+        ) -> Option<Self> {
             let paths = Paths::new(Some(root.join("data"))).unwrap();
             let settings = Settings {
                 update_check: false,
@@ -1446,7 +1483,7 @@ mod tests {
                         let _ = stop_rx.await;
                     },
                     Duration::from_secs(60),
-                    Listeners { stats: None, manage: Some(listen), recovered: false },
+                    Listeners { stats: None, manage: Some(listen), recovered: false, tuning },
                     |_| {},
                 ))
             });
@@ -1459,9 +1496,9 @@ mod tests {
             None
         }
 
-        /// The state, once `ready` says it is what's waited for (within 30 seconds).
+        /// The state, once `ready` says it is what's waited for (within 60 seconds).
         fn state_when(&self, ready: impl Fn(&serde_json::Value) -> bool) -> Option<serde_json::Value> {
-            let until = std::time::Instant::now() + Duration::from_secs(30);
+            let until = std::time::Instant::now() + Duration::from_secs(60);
             while std::time::Instant::now() < until && !self.running.is_finished() {
                 // A request signed in the second the listener started is refused (`before_start`): sign another.
                 if let Some((200, state)) = manage(self.port, "GET", "/manage/v1/state", "")
@@ -1496,8 +1533,10 @@ mod tests {
     }
 
     /// A Reticulum config change through the node: tested once Reticulum is
-    /// back, then kept when the website confirms it. Reticulum's interface
-    /// names are the config's section names, which the health check needs.
+    /// back (and answering a path request on its TCP server, from a client
+    /// the node runs), then kept when the website confirms it. Reticulum's
+    /// interface names are the config's section names, which the health
+    /// check needs.
     #[test]
     fn a_reticulum_change_through_the_node_is_tested_and_kept() {
         let dir = test_dir("manage-rns");
@@ -1522,6 +1561,11 @@ mod tests {
             let id = applied["id"].as_str().unwrap().to_string();
             let probation = node.state_when(|s| s["pending"]["state"] == "probation").expect("the change never reached probation");
             assert_eq!(probation["pending"]["id"], applied["id"]);
+            assert_eq!(
+                probation["pending"]["checks"],
+                serde_json::json!([{ "interface": "Hilltop TCP", "kind": "self_test", "result": "passed" }]),
+                "{probation}"
+            );
             // The interface that was online had to be back, by its section's name.
             let pending = crate::remote_manage::pending::load(&Paths::new(Some(root.join("data"))).unwrap()).unwrap().unwrap();
             assert_eq!(pending.required, ["Hilltop TCP"], "InterfaceInfo.name isn't the section's name");
@@ -1538,6 +1582,73 @@ mod tests {
             assert!(!root.join("data/manage/pending.json").exists());
             let audit = std::fs::read_to_string(root.join("data/manage/audit.jsonl")).unwrap();
             assert!(audit.contains(&format!("\"id\":\"{id}\",\"actor\":\"alice\",\"op\":\"confirm\"")), "{audit}");
+            let confirmed = audit.lines().find(|line| line.contains("\"op\":\"confirm\"")).unwrap();
+            assert!(confirmed.contains("\"notes\":[\"Checks: Hilltop TCP self_test passed\"]"), "{confirmed}");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        panic!("the node didn't start on any of three ports");
+    }
+
+    /// A change after which the TCP server's port still takes connections
+    /// but Reticulum doesn't answer there is rolled back: the self-test is
+    /// sent to a listener that accepts and says nothing, in place of
+    /// Reticulum's. After the rollback the old config is tested too (with
+    /// Reticulum's own listener), for the record.
+    #[test]
+    fn a_change_reticulum_doesnt_answer_on_is_rolled_back() {
+        let dir = test_dir("manage-rns-silent");
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let silent_address = silent.local_addr().unwrap();
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = accepted.clone();
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            for socket in silent.incoming().flatten() {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                kept.push(socket);
+            }
+        });
+        for attempt in 0..3 {
+            let root = dir.join(attempt.to_string());
+            let rns_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let before = hilltop(rns_port);
+            std::fs::create_dir_all(root.join("rns")).unwrap();
+            std::fs::write(root.join("rns/config"), &before).unwrap();
+            let timing = crate::remote_manage::Timing {
+                health_within: Duration::from_secs(6),
+                rollback_within: Duration::from_secs(30),
+                self_test_attempt: Duration::from_secs(2),
+                ..Default::default()
+            };
+            let prober = crate::remote_manage::selftest::Prober::Redirect([("Hilltop TCP".to_string(), silent_address)].into());
+            let Some(node) = Managed::start_tuned(&root, Some((timing, prober))) else { continue };
+            let Some(state) = node.state_when(online) else {
+                node.stop();
+                continue;
+            };
+            let body = serde_json::json!({
+                "revision": state["reticulum"]["revision"],
+                "confirm_seconds": 60,
+                "changes": [{ "path": ["reticulum"], "key": "enable_transport", "value": "yes" }],
+            });
+            let (status, applied) = node.post("/manage/v1/reticulum", &body);
+            assert_eq!(status, 202, "{applied}");
+            let id = applied["id"].as_str().unwrap().to_string();
+            let done = node.state_when(|s| s["reticulum_result"]["id"] == applied["id"]).expect("the change was never ended");
+            assert_eq!(done["reticulum_result"]["outcome"], "rolled_back", "{done}");
+            assert_eq!(done["reticulum_result"]["message"], "Reticulum on Hilltop TCP did not answer a test request");
+            assert!(accepted.load(std::sync::atomic::Ordering::SeqCst) >= 1, "the self-test never came");
+            node.stop();
+            assert_eq!(std::fs::read_to_string(root.join("rns/config")).unwrap(), before, "the old bytes are back");
+            let audit = std::fs::read_to_string(root.join("data/manage/audit.jsonl")).unwrap();
+            let line = audit.lines().last().unwrap();
+            assert!(line.contains(&format!("\"id\":\"{id}\"")) && line.contains("\"op\":\"auto_rollback\""), "{audit}");
+            assert!(line.contains("\"result\":\"rolled_back\""), "{line}");
+            assert!(
+                line.contains("\"notes\":[\"Checks with the change: Hilltop TCP self_test failed\",\"Checks after the rollback: Hilltop TCP self_test passed\"]"),
+                "{line}"
+            );
             let _ = std::fs::remove_dir_all(&dir);
             return;
         }
@@ -1638,6 +1749,7 @@ mod tests {
                         }),
                         manage: None,
                         recovered: false,
+                        ..Default::default()
                     },
                     stopping,
                 ))

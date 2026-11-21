@@ -5,8 +5,9 @@
 //!
 //! A Reticulum config change ([`super::rnsedit`]) is saved, and Reticulum
 //! restarted with it, on probation: once Reticulum is back with every
-//! interface that was online (but those the change turns off), the website
-//! has `confirm_seconds` to confirm it. A change that isn't confirmed in time,
+//! interface that was online (but those the change turns off), and answers
+//! a test request on each of them that takes clients ([`super::selftest`]),
+//! the website has `confirm_seconds` to confirm it. A change that isn't confirmed in time,
 //! or with which Reticulum isn't back within [`HEALTH_WITHIN`], is put back
 //! by the node itself, from the copy of the old text the config history
 //! keeps (see [`super::pending`]). If it can't be written back, the node
@@ -29,6 +30,7 @@ use super::audit::{Audit, Change, Outcome, Record};
 use super::fields::{self, MANAGE_FIELDS, Refusal};
 use super::pending::{self, Pending, RestoreError, State};
 use super::rnsedit::{self, RnsChange, RnsRefusal};
+use super::selftest::{self, Prober, Run};
 use super::{Job, Op, Reply, unix_now};
 use crate::app::{App, NetState};
 use crate::config::{self, FieldKind, Paths, Settings};
@@ -55,7 +57,7 @@ const NOT_SAVED: &str = "The change couldn't be saved on the node (see the node'
 
 /// How long things may take (shorter in tests).
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Timing {
+pub(crate) struct Timing {
     /// Reticulum restarts from afar, at most one in this long.
     pub restart_every: Duration,
     /// How long a restart or a config change has to bring Reticulum back.
@@ -67,6 +69,8 @@ pub(super) struct Timing {
     pub apply_window: Duration,
     /// How long the next change waits after one was put back by itself.
     pub hold_after_rollback: Duration,
+    /// How long a self-test request waits for its answer before another is sent.
+    pub self_test_attempt: Duration,
 }
 
 impl Default for Timing {
@@ -78,12 +82,13 @@ impl Default for Timing {
             applies: APPLIES_PER_HOUR,
             apply_window: Duration::from_secs(3600),
             hold_after_rollback: HOLD_AFTER_ROLLBACK,
+            self_test_attempt: selftest::ATTEMPT,
         }
     }
 }
 /// The most problems a restart reports, and the longest each.
 const MAX_PROBLEMS: usize = 32;
-const MAX_PROBLEM: usize = 120;
+pub(super) const MAX_PROBLEM: usize = 120;
 /// The most bytes of entries in an `/audit` answer: well under the 64 KiB a
 /// website takes, with room for the rest of the answer.
 const MAX_AUDIT_PAGE: usize = 48 * 1024;
@@ -136,12 +141,33 @@ struct Live {
     restored: bool,
     /// Whether a failure to write it back was logged (once is enough).
     told: bool,
+    /// The checks of the interfaces it needs: with the change, then, once
+    /// put back, with the old config (for the record only).
+    test: Run,
+    /// How the checks with the change went, once it is put back.
+    tested: Option<String>,
 }
 
 impl Live {
     fn new(record: Pending) -> Self {
-        Self { record, since: Instant::now(), deadline: None, problems: Vec::new(), reason: String::new(), restored: false, told: false }
+        Self {
+            record,
+            since: Instant::now(),
+            deadline: None,
+            problems: Vec::new(),
+            reason: String::new(),
+            restored: false,
+            told: false,
+            test: Run::default(),
+            tested: None,
+        }
     }
+}
+
+/// Why a change is put back when Reticulum didn't answer on an interface:
+/// a fixed sentence (what the probe met stays on the node).
+fn did_not_answer(name: &str) -> String {
+    format!("Reticulum on {} did not answer a test request", cut(name, MAX_PROBLEM))
 }
 
 /// How the last Reticulum config change ended.
@@ -172,6 +198,8 @@ pub struct Owner {
     applies: VecDeque<Instant>,
     /// No config change until then (one was put back by itself).
     held_until: Option<Instant>,
+    /// Where the self-test of a change dials.
+    prober: Prober,
 }
 
 /// A new change id: 16 hex characters.
@@ -179,7 +207,7 @@ fn new_id() -> String {
     hex::encode(rand::random::<[u8; 8]>())
 }
 
-fn cut(text: &str, max: usize) -> String {
+pub(super) fn cut(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }
 
@@ -229,7 +257,16 @@ impl Owner {
             allow_enable: false,
             applies: VecDeque::new(),
             held_until: None,
+            prober: Prober::default(),
         }
+    }
+
+    /// The same, with other timings and self-test probes (for tests of the node).
+    #[cfg(test)]
+    pub(crate) fn tuned(mut self, timing: Timing, prober: Prober) -> Self {
+        self.timing = timing;
+        self.prober = prober;
+        self
     }
 
     /// Let config changes turn interfaces and transport on (off unless the
@@ -432,6 +469,7 @@ impl Owner {
                 "confirm_by": p.confirm_by,
                 "changes": p.changes,
                 "problems": live.problems,
+                "checks": live.test.to_json(),
             })
         });
         let result = self.result.as_ref().map(|r| json!({ "id": r.id, "outcome": r.outcome, "at": r.at, "message": r.message }));
@@ -779,7 +817,9 @@ impl Owner {
             "notes": planned.notes,
             "reticulum_revision": redact::redact(&planned.after).revision(),
         });
-        self.pending = Some(Live::new(record));
+        let mut live = Live::new(record);
+        live.test = Run::plan(&planned.after, &live.record.required);
+        self.pending = Some(live);
         Reply::new(StatusCode::ACCEPTED, body)
     }
 
@@ -851,7 +891,8 @@ impl Owner {
         for e in [saved.err(), removed.err()].into_iter().flatten() {
             app.log(e);
         }
-        self.record(app, Record { id, actor, op: "confirm", changes, outcome: Outcome::Ok, error: None });
+        let notes = live.test.summary().map(|checks| format!("Checks: {checks}")).into_iter().collect();
+        self.record_noted(app, Record { id, actor, op: "confirm", changes, outcome: Outcome::Ok, error: None }, notes);
         self.result = Some(ChangeResult { id: id.to_string(), outcome: "committed", at: unix_now(), message: "Kept".into() });
         Reply::new(StatusCode::OK, json!({ "id": id, "state": "committed" }))
     }
@@ -865,6 +906,7 @@ impl Owner {
         let online: HashSet<&str> = app.interfaces.iter().filter(|i| i.online).map(|i| i.name.as_str()).collect();
         match live.record.state {
             State::Restarting => {
+                live.test.poll(&app.interfaces);
                 let mut problems: Vec<String> = live
                     .record
                     .required
@@ -874,6 +916,39 @@ impl Owner {
                     .collect();
                 if app.uses_external_shared_instance() {
                     problems.push("Another program's shared instance is in use now".into());
+                }
+                let elapsed = live.since.elapsed();
+                let within = self.timing.health_within;
+                // Back as it was: now Reticulum must answer on what takes clients.
+                if matches!(app.net_state, NetState::Online) && problems.is_empty() {
+                    if !live.test.started() {
+                        live.test.start(app.lxmf_hash, within.saturating_sub(elapsed), self.timing.self_test_attempt, &self.prober, false);
+                        live.test.poll(&app.interfaces);
+                    }
+                    if let Some(name) = live.test.failed() {
+                        let reason = did_not_answer(name);
+                        self.roll_back(app, reason);
+                        return;
+                    }
+                    let waiting: Vec<String> = live.test.waiting().map(String::from).collect();
+                    if !live.test.started() || !waiting.is_empty() {
+                        if elapsed >= within {
+                            let reason = match waiting.first().filter(|_| live.test.started()) {
+                                Some(name) => did_not_answer(name),
+                                None => "Reticulum isn't back as it was: it has no address to test".to_string(),
+                            };
+                            self.roll_back(app, reason);
+                        } else if live.test.started() {
+                            live.problems = waiting
+                                .iter()
+                                .map(|name| format!("Waiting for Reticulum on {} to answer a test request", cut(name, MAX_PROBLEM)))
+                                .collect();
+                            live.problems.truncate(MAX_PROBLEMS);
+                        } else {
+                            live.problems = vec!["Waiting for Reticulum's address, to test it".into()];
+                        }
+                        return;
+                    }
                 }
                 match &app.net_state {
                     NetState::Online if problems.is_empty() => {
@@ -914,6 +989,7 @@ impl Owner {
                 }
             }
             State::Probation => {
+                live.test.poll(&app.interfaces);
                 if let NetState::Failed(e) = &app.net_state {
                     tracing::warn!("Remote management: Reticulum stopped with change {} on probation: {}", live.record.id, printable(e));
                     self.roll_back(app, "Reticulum stopped while the change was on probation (see the node's log)".into());
@@ -925,7 +1001,25 @@ impl Owner {
             State::RollingBack => {
                 let reason = live.reason.clone();
                 match &app.net_state {
-                    NetState::Online => self.finish(app, Outcome::RolledBack, "rolled_back", &reason),
+                    // The old config is tested too, for the record: it is kept however that goes.
+                    NetState::Online => {
+                        let elapsed = live.since.elapsed();
+                        let within = self.timing.rollback_within;
+                        if !live.test.started() {
+                            live.test.start(
+                                app.lxmf_hash,
+                                within.saturating_sub(elapsed),
+                                self.timing.self_test_attempt,
+                                &self.prober,
+                                true,
+                            );
+                        }
+                        live.test.poll(&app.interfaces);
+                        let done = live.test.started() && live.test.waiting().next().is_none();
+                        if done || elapsed >= within {
+                            self.finish(app, Outcome::RolledBack, "rolled_back", &reason);
+                        }
+                    }
                     NetState::Failed(e) => {
                         tracing::warn!("Remote management: Reticulum didn't start with the old config: {}", printable(e));
                         let message = format!("Rolled back ({reason}), but Reticulum isn't back as it was: {NOT_STARTED}");
@@ -953,6 +1047,9 @@ impl Owner {
         tracing::warn!("Remote management: rolling back change {}: {}", live.record.id, printable(&reason));
         live.reason = cut(&reason, MAX_MESSAGE);
         live.problems = vec![live.reason.clone()];
+        live.test.close();
+        live.tested = live.test.summary();
+        live.test = Run::default();
         live.record.state = State::RollingBack;
         live.restored = false;
         live.since = Instant::now();
@@ -988,6 +1085,9 @@ impl Owner {
                 live.restored = true;
                 live.since = Instant::now();
                 live.problems = vec![reason];
+                if let Some((text, _)) = redact::read_capped(&live.record.config) {
+                    live.test = Run::plan(&text, &live.record.required);
+                }
                 app.rns_reload();
                 app.request_rns_restart();
                 self.mark_restart();
@@ -1025,10 +1125,18 @@ impl Owner {
     /// End the pending change: audit it as `op` with `outcome`, keep the
     /// result for `/state`, and remove `pending.json`.
     fn finish_as(&mut self, app: &mut App, op: &'static str, outcome: Outcome, result: &'static str, message: &str) {
-        let Some(live) = self.pending.take() else { return };
+        let Some(mut live) = self.pending.take() else { return };
+        live.test.close();
         let p = &live.record;
         let error = (outcome != Outcome::Ok).then_some(message);
-        self.record(app, Record { id: &p.id, actor: &p.actor, op, changes: p.changes.clone(), outcome, error });
+        let notes = [
+            live.tested.as_ref().map(|checks| format!("Checks with the change: {checks}")),
+            live.test.summary().filter(|_| p.state == State::RollingBack).map(|checks| format!("Checks after the rollback: {checks}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        self.record_noted(app, Record { id: &p.id, actor: &p.actor, op, changes: p.changes.clone(), outcome, error }, notes);
         self.result = Some(ChangeResult { id: p.id.clone(), outcome: result, at: unix_now(), message: cut(message, MAX_MESSAGE) });
         if let Err(e) = pending::remove(&app.paths) {
             app.log(e);
@@ -1043,6 +1151,8 @@ impl Owner {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use tokio::sync::oneshot;
 
     use super::*;
@@ -1072,7 +1182,9 @@ mod tests {
                 hold_after_rollback: Duration::ZERO,
                 ..Timing::default()
             };
-            let owner = Owner::with_timing(&app.paths, timing).allow_enable(true);
+            let mut owner = Owner::with_timing(&app.paths, timing).allow_enable(true);
+            // Reticulum answers on the TCP server, unless a test says otherwise.
+            owner.prober = Prober::Fixed(HashMap::from([(HILL.to_string(), true)]));
             Self { app, owner, dir }
         }
 
@@ -1111,6 +1223,7 @@ mod tests {
             std::fs::write(rns.join("config"), text).unwrap();
             node.app.settings.rns_config = Some(rns.display().to_string());
             node.app.net_state = NetState::Online;
+            node.app.lxmf_hash = Some([7; 16]);
             node.app.interfaces = vec![InterfaceInfo { name: HILL.into(), online: true, ..Default::default() }];
             node
         }
@@ -1724,6 +1837,136 @@ mod tests {
         assert_eq!(node.state()["pending"]["state"], "probation");
     }
 
+    /// [`RNS`] with a radio too, which can't be dialled.
+    fn with_radio() -> String {
+        format!("{RNS}  [[Radio]]\n    type = RNodeInterface\n    enabled = yes\n    port = /dev/ttyUSB0\n")
+    }
+
+    #[test]
+    fn a_change_is_on_probation_only_once_reticulum_answers_on_its_listeners() {
+        let rns = with_radio();
+        let mut node = Node::with_rns("rns-self-test", &rns);
+        node.app.interfaces.push(InterfaceInfo { name: "Radio".into(), online: true, ..Default::default() });
+        let reply = node.apply(300, &[(&["reticulum"], "enable_transport", "yes")]);
+        assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.body);
+        let id = reply.body["id"].as_str().unwrap().to_string();
+        assert_eq!(node.pending_file().unwrap().required, [HILL, "Radio"]);
+        // Known before Reticulum is back: what each needs.
+        assert_eq!(
+            node.state()["pending"]["checks"],
+            json!([
+                { "interface": HILL, "kind": "self_test", "result": "waiting" },
+                { "interface": "Radio", "kind": "online", "result": "waiting" },
+            ])
+        );
+        // Back with both, but not answering yet: still restarting.
+        node.owner.prober = Prober::Fixed(HashMap::new());
+        node.restarted(&[HILL, "Radio"]);
+        node.tick();
+        let state = node.state();
+        assert_eq!(state["pending"]["state"], "restarting");
+        assert_eq!(state["pending"]["problems"], json!(["Waiting for Reticulum on Hilltop TCP to answer a test request"]));
+        assert_eq!(state["pending"]["checks"][1], json!({ "interface": "Radio", "kind": "online", "result": "no_traffic" }));
+        // Not answered within the time: rolled back, with a fixed reason.
+        std::thread::sleep(Duration::from_millis(250));
+        node.tick();
+        assert_eq!(node.config_text(), rns);
+        assert_eq!(node.state()["pending"]["problems"], json!(["Reticulum on Hilltop TCP did not answer a test request"]));
+        // The old config is tested too, for the record; it is kept however that goes.
+        node.restarted(&[HILL, "Radio"]);
+        node.tick();
+        assert_eq!(node.state()["pending"]["state"], "rolling_back", "waiting for the test of the old config");
+        assert_eq!(node.state()["pending"]["checks"][0]["result"], "waiting");
+        std::thread::sleep(Duration::from_millis(250));
+        node.tick();
+        let state = node.state();
+        assert_eq!(state["pending"], Value::Null);
+        assert_eq!(
+            (state["reticulum_result"]["outcome"].as_str(), state["reticulum_result"]["message"].as_str()),
+            (Some("rolled_back"), Some("Reticulum on Hilltop TCP did not answer a test request"))
+        );
+        let audit = node.audit();
+        assert_eq!(
+            (audit[0]["op"].as_str(), audit[0]["id"].as_str(), audit[0]["result"].as_str()),
+            (Some("auto_rollback"), Some(id.as_str()), Some("rolled_back"))
+        );
+        assert_eq!(
+            audit[0]["notes"],
+            json!([
+                "Checks with the change: Hilltop TCP self_test failed; Radio online no_traffic",
+                "Checks after the rollback: Hilltop TCP self_test failed; Radio online no_traffic",
+            ])
+        );
+
+        // A test request that fails is rolled back at once.
+        node.owner.timing.restart_every = Duration::ZERO;
+        node.owner.timing.health_within = Duration::from_secs(60);
+        node.owner.prober = Prober::Fixed(HashMap::from([(HILL.to_string(), false)]));
+        let reply = node.apply(300, &[(&["reticulum"], "enable_transport", "yes")]);
+        let id = reply.body["id"].as_str().unwrap().to_string();
+        node.restarted(&[HILL, "Radio"]);
+        node.tick();
+        assert_eq!(node.config_text(), rns, "rolled back without waiting for the time");
+        node.owner.prober = Prober::Fixed(HashMap::from([(HILL.to_string(), true)]));
+        node.restarted(&[HILL, "Radio"]);
+        node.tick();
+        assert_eq!(node.state()["reticulum_result"]["id"], json!(id));
+        assert_eq!(node.audit()[0]["notes"][1], "Checks after the rollback: Hilltop TCP self_test passed; Radio online no_traffic");
+
+        // Answered: on probation, and kept, with the checks in the record.
+        node.owner.timing.hold_after_rollback = Duration::ZERO;
+        let reply = node.apply(300, &[(&["reticulum"], "enable_transport", "yes")]);
+        assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.body);
+        let id = reply.body["id"].as_str().unwrap().to_string();
+        node.restarted(&[HILL, "Radio"]);
+        node.tick();
+        let state = node.state();
+        assert_eq!(state["pending"]["state"], "probation", "{state}");
+        assert_eq!(state["pending"]["checks"][0], json!({ "interface": HILL, "kind": "self_test", "result": "passed" }));
+        // What is heard on the radio is said, but never needed.
+        node.app.interfaces[1].rx_bytes = 300;
+        node.tick();
+        assert_eq!(node.state()["pending"]["checks"][1]["result"], "traffic");
+        node.app.interfaces[1].rx_bytes = 0;
+        node.tick();
+        assert_eq!(node.state()["pending"]["checks"][1]["result"], "traffic", "heard once is heard");
+        assert_eq!(node.ask(Op::Confirm { id: id.clone() }).status, StatusCode::OK);
+        let confirmed = node.audit().into_iter().find(|e| e["id"] == json!(id) && e["op"] == "confirm").unwrap();
+        assert_eq!(confirmed["notes"], json!(["Checks: Hilltop TCP self_test passed; Radio online traffic"]));
+    }
+
+    #[test]
+    fn reticulum_without_its_address_is_not_tested_yet() {
+        let mut node = Node::with_rns("rns-no-address", RNS);
+        node.apply(300, &[(&["reticulum"], "enable_transport", "yes")]);
+        node.restarted(&[HILL]);
+        node.app.lxmf_hash = None;
+        node.tick();
+        assert_eq!(node.state()["pending"]["problems"], json!(["Waiting for Reticulum's address, to test it"]));
+        assert_eq!(node.state()["pending"]["checks"][0]["result"], "waiting");
+        node.app.lxmf_hash = Some([7; 16]);
+        node.tick();
+        assert_eq!(node.state()["pending"]["state"], "probation");
+        // A change that needs nothing dialled doesn't wait for it.
+        let mut node = Node::with_rns("rns-no-address-off", RNS);
+        node.apply(300, &[(&["interfaces", HILL], "enabled", "no")]);
+        node.restarted(&[]);
+        node.app.lxmf_hash = None;
+        node.tick();
+        assert_eq!(node.state()["pending"]["state"], "probation");
+        assert_eq!(node.state()["pending"]["checks"], json!([]));
+        // Never told within the time: rolled back.
+        let mut node = Node::with_rns("rns-no-address-ever", RNS);
+        node.apply(300, &[(&["reticulum"], "enable_transport", "yes")]);
+        node.restarted(&[HILL]);
+        node.app.lxmf_hash = None;
+        node.tick();
+        std::thread::sleep(Duration::from_millis(250));
+        node.tick();
+        assert_eq!(node.config_text(), RNS);
+        assert_eq!(node.state()["pending"]["problems"], json!(["Reticulum isn't back as it was: it has no address to test"]));
+    }
+
     #[test]
     fn a_config_changed_here_meanwhile_is_left_and_a_missing_backup_is_said() {
         let mut node = Node::with_rns("rns-left", RNS);
@@ -1983,7 +2226,7 @@ mod tests {
         record.state = State::RollingBack;
         pending::save(&node.app.paths, &record).unwrap();
         // A new run: the start couldn't write the old config, so it is still to be rolled back.
-        node.owner = Owner::with_timing(&node.app.paths, node.owner.timing);
+        node.owner = Owner::with_timing(&node.app.paths, node.owner.timing).tuned(node.owner.timing, node.owner.prober.clone());
         assert_eq!(node.state()["pending"]["state"], "rolling_back");
         node.tick();
         assert_eq!(node.config_text(), RNS);

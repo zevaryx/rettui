@@ -66,7 +66,8 @@ pub struct Entry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count: Option<u64>,
     /// What a Reticulum config change turned on, a sentence each (such as
-    /// what it opens to others).
+    /// what it opens to others); for its `confirm` and `auto_rollback`, how
+    /// the checks of its interfaces went.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }

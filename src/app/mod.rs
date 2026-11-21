@@ -104,6 +104,12 @@ pub(crate) fn test_app_with_net(
     store: Store,
 ) -> (App, tokio::sync::mpsc::UnboundedReceiver<NetCommand>) {
     let paths = Paths::new(Some(dir.to_path_buf())).unwrap();
+    // The Reticulum config is the test's own, never the one in the home
+    // folder (`~/.reticulum`, `~/.rsReticulum`) of whoever runs the tests.
+    let mut settings = settings;
+    if settings.rns_config.is_none() {
+        settings.rns_config = Some(dir.join("rns").display().to_string());
+    }
     settings.save(&paths.settings).unwrap();
     let (net, commands) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(settings, paths, store, net, None, [0; 16]);

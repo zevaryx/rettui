@@ -867,12 +867,14 @@ node come back with it:
    (readable by the node's user only; it holds checksums of the file before
    and after, not its text). Reticulum restarts with it.
 4. Once Reticulum runs again with every interface that was online before
-   (but those the change turns off), the change is on probation until
-   `confirm_seconds` later. The website checks it can still reach the node
-   and then confirms the change, as the website user who made it: then it is
-   kept. Settings can change meanwhile; another Reticulum change or a restart
-   waits (`pending`).
-5. If Reticulum isn't back within 90 seconds, fails, or the change isn't
+   (but those the change turns off), and answers a test request on each of
+   them that takes connections (see [What the node checks before a change
+   can be kept](#what-the-node-checks-before-a-change-can-be-kept)), the
+   change is on probation until `confirm_seconds` later. The website checks
+   it can still reach the node and then confirms the change, as the website
+   user who made it: then it is kept. Settings can change meanwhile; another
+   Reticulum change or a restart waits (`pending`).
+5. If Reticulum isn't back and answering within 90 seconds, fails, or the change isn't
    confirmed in time, the node puts the old text back by itself and restarts
    Reticulum with it (this restart isn't held back by the 5-minute limit,
    but a new change after it is). If the file was changed on this computer
@@ -881,6 +883,61 @@ node come back with it:
    says so once in its log and tries again every half second, and at the
    next start; only a change whose old text is nowhere to be found is given
    up (`rollback_failed`, said loudly in the log).
+
+#### What the node checks before a change can be kept
+
+A port that takes connections doesn't mean Reticulum works on it, so the
+node tests Reticulum itself. Once Reticulum is back with the change, for
+each interface that has to be back and that takes connections (a
+`TCPServerInterface`, or a `BackboneInterface` that listens), the node
+connects to it as a Reticulum client would: on `127.0.0.1` (or `::1`) if it
+listens on all addresses, else on its `listen_ip`, with the interface's
+framing (HDLC, or KISS with `kiss_framing`) and its IFAC (`network_name`,
+`passphrase`), and a stamp if the config enforces them (up to a cost of 16;
+a stamp not found in time means no request that round, not a failure). It asks for a path
+to the node's own LXMF address. Reticulum answers that at once, on the
+interface the request came in on, with an announce of the address signed by
+the node's identity: the test passes when that announce arrives and its
+signature checks out. The announce must be a path response made after the test began, so an
+old announce played back doesn't count. A listener given by a host name
+rather than an IP address isn't looked up: it only has to be online. A
+request goes again every 10 seconds, within the 90
+seconds Reticulum has to come back. If one interface doesn't answer in
+time, the change is rolled back, with "Reticulum on <name> did not answer a
+test request" as the reason.
+
+An interface that can't be dialled this way (a radio, a serial line, an
+AutoInterface, a client of another node, a listener bound to a `device` or
+given by a host name, one with `outgoing = no`, or one whose path request
+stamps cost more than 16)
+only has to be online, as before. Whether anything was received on it since
+the restart is noted, but doesn't decide anything. After a rollback, the
+old config is tested the same way, for the record only: the old text stays
+whatever the test says.
+
+`/manage/v1/state` lists the checks under `pending.checks` (32 at most):
+
+```json
+"checks": [
+  {"interface": "Hilltop TCP", "kind": "self_test", "result": "passed"},
+  {"interface": "LoRa", "kind": "online", "result": "traffic"}
+]
+```
+
+`kind` is `self_test` or `online`; `result` is `waiting`, `passed` or
+`failed` (a self-test, or an interface that never came online), or
+`traffic` or `no_traffic` (online, with or without anything received). The
+audit log's `confirm` and `auto_rollback` entries keep the same summary in
+their `notes` ("Checks: Hilltop TCP self_test passed", "Checks with the
+change: ...", "Checks after the rollback: ..."). A Backbone listener blocks
+an address that connects and leaves within its `fast_flapping_threshold`
+too often, so the test stays connected at least that long, and opens 3
+connections at most; a Backbone listener whose threshold is over 2 minutes
+is only checked to be online. Even so, several rolled-back changes in a row
+(each Reticulum restart and test counts) can make a Backbone listener block
+`127.0.0.1` for its `fast_flapping_block_time` (12 hours by default), which
+also blocks anything else on this computer that connects to it; restarting
+rettui clears it.
 
 **If the node stops during the test** (a crash, a reboot, `systemctl stop`),
 the change isn't kept: at the next start of rettui (as a node, or the
